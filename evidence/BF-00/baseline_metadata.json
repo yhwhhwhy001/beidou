@@ -1,0 +1,107 @@
+{
+  "evidence_bundle_id": "BF-00-20260806",
+  "bundle_type": "BASELINE_FREEZE",
+  "generated_at": "2026-08-06T00:00:00+08:00",
+  "analysis_date": "2026-08-06",
+  "repository": "yhwhhwhy001/beidou",
+  "branch": "main",
+  "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+  "commit_date": "2026-08-06T00:18:05+08:00",
+  "commit_message": "fix: 修复启动门禁误判、缺失导出与无人值守阻塞问题",
+
+  "config_hashes": {
+    "pyproject.toml": "d92accdd64c8efb1267f7015c4d372f831c515b2d06692a4edc41f89c15eced4",
+    "config/env.testnet.yaml": "49966ab3048b4cdc51295962ecdfd53ca040f249db50a15ac6c399e77db2aedf",
+    "config/env.template.yaml": "56dfa3792285066aac229bf309bf5cddf45141de3e20dc0b5760ccad666a2323",
+    "config/performance_budget.yaml": "4ce7821758206986c55d8f34aa14a36a67f21da3da208da6b2ea915e57dfee45",
+    ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
+    "docker-compose.yml": "c9ad2134d3251b110d21d6e7900355856a1d34e6280c0f91c8946ef8f6269ff5",
+    ".github/workflows/ci.yml": "6d8598971e6c10da7a6096702d358bbec5f1a5f4cc3fb7ba9b1831fa7c5c628d"
+  },
+
+  "uncommitted_changes": [
+    "beidou_core/engine.py",
+    "beidou_core/feed.py",
+    "evidence/BD-00/startup_audit.json"
+  ],
+
+  "factor_registration": {
+    "registered_factors": 8,
+    "factor_ids": [
+      "meanrev_entry_v1",
+      "momentum_filter_v1",
+      "trend_entry_v1",
+      "breakout_entry_v1",
+      "volatility_filter_v1",
+      "volume_filter_v1",
+      "trailing_exit_v1",
+      "time_exit_v1"
+    ],
+    "lifecycle_state": "所有因子在 __init__ 中直接推进到 CHALLENGER，无证据绑定"
+  },
+
+  "test_suite": {
+    "total": 477,
+    "passed": 475,
+    "failed": 2,
+    "failed_tests": [
+      "tests/integration/test_startup_guard.py::TestTestnetCertificateMissing::test_full_mode_without_g5_certificate_fails",
+      "tests/unit/test_guard.py::TestFullModeRequirements::test_full_mode_requires_g5_certificate"
+    ],
+    "python_version": "3.14.6",
+    "pytest_version": "9.1.1"
+  },
+
+  "dependencies_installed": [
+    "PyJWT==2.13.0", "PyYAML==6.0.3", "annotated-types==0.8.0", "anyio==4.14.2",
+    "black==26.5.1", "certifi==2026.7.22", "cffi==2.1.1", "click==8.4.2",
+    "coverage==7.15.3", "cryptography==50.0.0", "h11==0.16.0", "httpcore==1.0.9",
+    "httpx==0.28.1", "hypothesis==6.165.1", "msgpack==1.2.1", "mypy==2.3.0",
+    "pre_commit==4.6.1", "prometheus_client==0.26.0", "psycopg==3.3.4",
+    "pydantic==2.13.4", "pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-cov==7.1.0",
+    "ruff==0.16.1", "structlog==26.1.0", "tenacity==9.1.4"
+  ],
+
+  "timing_mismatch_evidence": {
+    "status": "CONFIRMED",
+    "test_file": "tests/unit/test_bf00_timing_mismatch.py",
+    "tests_passed": 7,
+    "key_finding": "prediction(t) 与 return(t-1, t) 配对，而非 forward_return(t, t+h)",
+    "impact": "所有在线 IC/RankIC/ICIR 不能作为因子晋级证据",
+    "source_location": "beidou_core/engine.py lines 1301-1309 (_nearline_tick) 和 1459-1482 (_offline_tick)",
+    "reproduction_commands": [
+      "python -m pytest tests/unit/test_bf00_timing_mismatch.py -v -s"
+    ]
+  },
+
+  "known_defects_confirmed": [
+    {
+      "id": "F-P0-01",
+      "title": "预测与标签时间错配",
+      "confirmed": true,
+      "evidence": "test_prediction_paired_with_past_return_in_current_engine, test_current_engine_returns_are_past_not_forward"
+    },
+    {
+      "id": "F-P0-02",
+      "title": "收益序列没有按 symbol/timeframe/horizon 隔离",
+      "confirmed": true,
+      "evidence": "test_factor_predictions_not_isolated_by_symbol"
+    },
+    {
+      "id": "F-P0-04",
+      "title": "compute_ic() 第二个返回值是收益标准差而非 IC 标准差",
+      "confirmed": true,
+      "evidence": "test_ic_std_is_return_std_not_ic_std"
+    },
+    {
+      "id": "F-P1-01",
+      "title": "扩展窗口 ICIR 被显著高估",
+      "confirmed": true,
+      "evidence": "test_extended_window_icir_is_biased (ICIR inflated ~13x in test scenario)"
+    }
+  ],
+
+  "verdict": "INVALID_FOR_PROMOTION",
+  "verdict_reason": "当前因子评估存在时间错配（F-P0-01）、统计定义错误（F-P0-04）、评估方法偏差（ICIR高估13x）和品种不隔离（F-P0-02）。所有在线 IC/RankIC/ICIR 结果不可用于因子晋级决策。",
+  "bundle_sha256": "5533f0dc5095bc2d134cc0c62125136b69426f5bac63ab51d79c43df0a318db5"
+}

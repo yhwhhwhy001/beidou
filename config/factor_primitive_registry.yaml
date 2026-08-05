@@ -1,0 +1,94 @@
+# BF-03: 因子原始操作注册表
+# 白名单管理 — 因子挖掘只能使用此注册表中的操作
+
+registry_version: "2.0.0"
+
+primitives:
+  - name: close
+    type: PRICE
+    description: "收盘价"
+    min_window: 1
+    max_window: 500
+
+  - name: log_return
+    type: RETURN
+    description: "对数收益"
+    min_window: 1
+    max_window: 500
+
+  - name: volume
+    type: VOLUME
+    description: "成交量"
+    min_window: 1
+    max_window: 500
+
+  - name: rsi
+    type: RATE
+    description: "相对强弱指标"
+    min_window: 5
+    max_window: 200
+
+  - name: spread
+    type: RATE
+    description: "买卖价差"
+    min_window: 1
+    max_window: 200
+
+  - name: funding_rate
+    type: RATE
+    description: "资金费率"
+    min_window: 1
+    max_window: 200
+
+  - name: open_interest
+    type: VOLUME
+    description: "未平仓合约"
+    min_window: 1
+    max_window: 500
+
+  - name: bid_depth
+    type: DEPTH
+    description: "买盘深度"
+    min_window: 1
+    max_window: 100
+
+  - name: ask_depth
+    type: DEPTH
+    description: "卖盘深度"
+    min_window: 1
+    max_window: 100
+
+  - name: realized_vol
+    type: VOLATILITY
+    description: "已实现波动率"
+    min_window: 5
+    max_window: 200
+
+operators:
+  - lag
+  - diff
+  - pct_change
+  - rolling_mean
+  - rolling_std
+  - rolling_median
+  - rolling_mad
+  - rolling_quantile
+  - ema
+  - ts_rank
+  - cs_rank
+  - zscore
+  - robust_zscore
+  - safe_div
+  - signed_log1p
+  - signed_sqrt
+  - clip
+  - residualize
+  - where
+
+forbidden:
+  - eval
+  - exec
+  - __import__
+  - compile
+  - open
+  - type

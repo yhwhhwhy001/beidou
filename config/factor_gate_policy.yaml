@@ -1,0 +1,83 @@
+# BF-07: 因子晋级门禁 Policy
+# 所有晋级阈值必须来自此版本化 policy
+
+policy_version: "2.0.0"
+
+# ----------------------------------------------------------
+# 生命周期 Gate
+# ----------------------------------------------------------
+gates:
+  IDEA_to_GENERATED:
+    required_evidence:
+      - candidate_spec
+      - ast_valid
+      - generator_version
+      - parent_lineage
+
+  GENERATED_to_SANITY_PASSED:
+    required_evidence:
+      - data_quality_pass
+      - no_leakage
+      - deterministic
+      - complexity_check
+      - sample_check
+    complexity_max: 20.0
+    min_samples: 30
+
+  SANITY_to_RESEARCH_VALIDATED:
+    required_evidence:
+      - fast_screen_pass
+      - ic_significant
+      - icir_minimum
+      - multiple_testing_pass
+    icir_minimum: 0.10
+    ic_significance_alpha: 0.05
+
+  RESEARCH_to_OOS_VERIFIED:
+    required_evidence:
+      - purged_wfo_complete
+      - cpcv_complete
+      - fold_consistency_min
+      - pbo_max
+      - dsr_significant
+    fold_consistency_min: 0.60
+    pbo_max: 0.30
+    dsr_pvalue_max: 0.05
+
+  OOS_to_COST_CAPACITY:
+    required_evidence:
+      - cost_model_valid
+      - net_return_positive
+      - capacity_assessed
+      - cost_stress_pass
+    cost_model_unknown_block: true
+
+  COST_to_PAPER:
+    required_evidence:
+      - immutable_artifact
+      - strategy_binding
+      - rollback_plan
+    min_paper_duration_hours: 168  # 7 days
+
+  PAPER_to_CHALLENGER:
+    required_evidence:
+      - min_runtime_hours
+      - min_effective_events
+      - deviation_within_threshold
+    min_runtime_hours: 168
+    min_effective_events: 50
+    max_deviation_pct: 30.0
+
+  CHALLENGER_to_ACTIVE:
+    required_evidence:
+      - champion_comparison
+      - incremental_contribution_positive
+      - risk_assessment
+      - failure_scenarios_documented
+    min_incremental_sharpe: 0.05
+
+  degradation_triggers:
+    rolling_icir_min: 0.10
+    rolling_icir_window: 20
+    cost_increase_pct: 50.0
+    max_consecutive_failures: 5

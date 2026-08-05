@@ -15,10 +15,20 @@ from beidou_shared.types import InstrumentId, SchemaVersion, StrategyId, VenueId
 
 
 class FactorLifecycle(str, Enum):
-    """因子生命周期。退役后重新启用等同新 Challenger。"""
+    """因子生命周期。退役后重新启用等同新 Challenger。
+
+    BF-07 新状态机 (Section 10):
+    IDEA → GENERATED → SANITY_PASSED → RESEARCH_VALIDATED
+    → OOS_VERIFIED → COST_CAPACITY_VERIFIED → PAPER_TRADING
+    → CHALLENGER → ACTIVE → DEGRADED → SUSPENDED → RETIRED
+    """
+    # 新状态 (BF-07)
     IDEA = "IDEA"
-    RESEARCH = "RESEARCH"
-    BACKTEST = "BACKTEST"
+    GENERATED = "GENERATED"                     # 候选已生成
+    SANITY_PASSED = "SANITY_PASSED"             # DQ/泄漏/复杂度通过
+    RESEARCH_VALIDATED = "RESEARCH_VALIDATED"   # 统计显著性+多重检验通过
+    OOS_VERIFIED = "OOS_VERIFIED"              # Purged WFO/CPCV 通过
+    COST_CAPACITY_VERIFIED = "COST_CAPACITY_VERIFIED"  # 成本/容量通过
     PAPER_TRADING = "PAPER_TRADING"
     CHALLENGER = "CHALLENGER"
     ACTIVE = "ACTIVE"
@@ -26,18 +36,29 @@ class FactorLifecycle(str, Enum):
     SUSPENDED = "SUSPENDED"
     RETIRED = "RETIRED"
 
+    # 兼容旧状态（标记为 LEGACY）
+    RESEARCH = "RESEARCH"           # DEPRECATED: 使用 RESEARCH_VALIDATED
+    BACKTEST = "BACKTEST"           # DEPRECATED: 使用 OOS_VERIFIED
 
-# 合法生命周期转换
+
+# 合法生命周期转换 (BF-07 更新)
 FACTOR_LIFECYCLE_TRANSITIONS: dict[FactorLifecycle, set[FactorLifecycle]] = {
-    FactorLifecycle.IDEA: {FactorLifecycle.RESEARCH, FactorLifecycle.RETIRED},
-    FactorLifecycle.RESEARCH: {FactorLifecycle.BACKTEST, FactorLifecycle.RETIRED},
-    FactorLifecycle.BACKTEST: {FactorLifecycle.PAPER_TRADING, FactorLifecycle.RETIRED},
+    # 新路径 (含旧状态兼容)
+    FactorLifecycle.IDEA: {FactorLifecycle.GENERATED, FactorLifecycle.RESEARCH, FactorLifecycle.RESEARCH_VALIDATED, FactorLifecycle.RETIRED},
+    FactorLifecycle.GENERATED: {FactorLifecycle.SANITY_PASSED, FactorLifecycle.RETIRED},
+    FactorLifecycle.SANITY_PASSED: {FactorLifecycle.RESEARCH_VALIDATED, FactorLifecycle.RETIRED},
+    FactorLifecycle.RESEARCH_VALIDATED: {FactorLifecycle.OOS_VERIFIED, FactorLifecycle.RETIRED},
+    FactorLifecycle.OOS_VERIFIED: {FactorLifecycle.COST_CAPACITY_VERIFIED, FactorLifecycle.RETIRED},
+    FactorLifecycle.COST_CAPACITY_VERIFIED: {FactorLifecycle.PAPER_TRADING, FactorLifecycle.RETIRED},
     FactorLifecycle.PAPER_TRADING: {FactorLifecycle.CHALLENGER, FactorLifecycle.RETIRED},
     FactorLifecycle.CHALLENGER: {FactorLifecycle.ACTIVE, FactorLifecycle.RETIRED},
     FactorLifecycle.ACTIVE: {FactorLifecycle.DEGRADED, FactorLifecycle.SUSPENDED, FactorLifecycle.RETIRED},
     FactorLifecycle.DEGRADED: {FactorLifecycle.ACTIVE, FactorLifecycle.SUSPENDED, FactorLifecycle.RETIRED},
-    FactorLifecycle.SUSPENDED: {FactorLifecycle.CHALLENGER, FactorLifecycle.RETIRED},  # 重启=新Challenger
-    FactorLifecycle.RETIRED: set(),  # 退役后不能直接激活；重新提交=新IDEA
+    FactorLifecycle.SUSPENDED: {FactorLifecycle.CHALLENGER, FactorLifecycle.RETIRED},
+    FactorLifecycle.RETIRED: set(),
+    # 兼容旧路径 (DEPRECATED)
+    FactorLifecycle.RESEARCH: {FactorLifecycle.BACKTEST, FactorLifecycle.RESEARCH_VALIDATED, FactorLifecycle.RETIRED},
+    FactorLifecycle.BACKTEST: {FactorLifecycle.PAPER_TRADING, FactorLifecycle.OOS_VERIFIED, FactorLifecycle.RETIRED},
 }
 
 
