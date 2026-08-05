@@ -247,6 +247,40 @@ class MarketDataFeed:
         avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else sum(losses) / max(len(losses), 1)
         rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
 
+        # Bollinger Bands (20, 2)
+        bb_std = (sum((c - sma_20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+        bb_upper = sma_20 + 2 * bb_std
+        bb_lower = sma_20 - 2 * bb_std
+
+        # 20-period high/low for breakout detection
+        highest_20 = max(highs[-20:])
+        lowest_20 = min(lows[-20:])
+
+        # EMA (12, 26) and MACD
+        def _ema(values: list[float], period: int) -> float:
+            if len(values) < period:
+                return sum(values) / len(values)
+            k = 2.0 / (period + 1)
+            ema = sum(values[:period]) / period
+            for v in values[period:]:
+                ema = v * k + ema * (1 - k)
+            return ema
+
+        ema_12 = _ema(closes, 12)
+        ema_26 = _ema(closes, 26)
+        macd = ema_12 - ema_26
+        # MACD signal line: 9-period EMA of MACD (approximate with trailing closes)
+        macd_signal = ema_12 * 0.2 + ema_26 * 0.8 - (ema_12 - ema_26) * 0.2  # simplified
+
+        # Spread (from ticker if available)
+        spread_bps_val = 1.0  # default
+        ticker = self._last_ticker.get(symbol, {})
+        if ticker:
+            bid = float(ticker.get("bid", 0))
+            ask = float(ticker.get("ask", 0))
+            if bid > 0 and ask > 0:
+                spread_bps_val = (ask - bid) / ((bid + ask) / 2) * 10000
+
         return {
             "close": closes[-1],
             "sma_5": sma_5,
@@ -259,6 +293,16 @@ class MarketDataFeed:
             "trend_20_pct": trend_20 * 100,
             "rsi_14": rsi,
             "n_candles": n,
+            "bb_upper": bb_upper,
+            "bb_mid": sma_20,
+            "bb_lower": bb_lower,
+            "highest_20": highest_20,
+            "lowest_20": lowest_20,
+            "ema_12": ema_12,
+            "ema_26": ema_26,
+            "macd": macd,
+            "macd_signal": macd_signal,
+            "spread_bps": spread_bps_val,
         }
 
     def get_feature_store(self) -> FeatureStore:

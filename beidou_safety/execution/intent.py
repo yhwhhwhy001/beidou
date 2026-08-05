@@ -33,7 +33,10 @@ class IntentOutbox:
         self._inbox.pop(intent_id, None)
 
     def unacked(self) -> list[OrderIntent]:
-        return [v for k, v in self._inbox.items() if k not in self._processed]
+        # Check both _inbox and _outbox for unprocessed intents
+        inbox_unacked = [v for k, v in self._inbox.items() if k not in self._processed]
+        outbox_unacked = [i for i in self._outbox if i.intent_id not in self._processed]
+        return inbox_unacked + outbox_unacked
 
     def pending_count(self) -> int:
         return len(self._outbox) - len(self._processed)

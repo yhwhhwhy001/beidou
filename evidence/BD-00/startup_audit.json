@@ -1,34 +1,69 @@
 [
   {
-    "timestamp": "2026-08-05T16:16:11.645350+00:00",
-    "event_type": "STARTUP_GATE",
-    "environment": "testnet",
-    "commit": "1a0e7dd6e07706abeb79141a625df565ffc6e5a8",
-    "config_hash": "49966ab3048b4cdc",
+    "timestamp": "2026-08-05T17:35:39.336212+00:00",
+    "event_type": "PRODUCTION_BLOCKED",
+    "environment": "production",
+    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
     "control_state": "NO_NEW_RISK",
     "details": {
-      "all_checks_passed": true,
-      "checks": {
-        "production_blocked": true,
-        "mainnet_url_blocked": true,
-        "valid_mode": true,
-        "credentials_valid": true,
-        "full_mode_requirements": true
-      },
-      "failures": []
+      "reason": "PIVOT \u2014 production is permanently prohibited until package completion",
+      "decision": "PIVOT",
+      "mainnet_allowed": false
     }
   },
   {
-    "timestamp": "2026-08-05T16:16:11.645701+00:00",
-    "event_type": "STARTUP",
-    "environment": "testnet",
-    "commit": "1a0e7dd6e07706abeb79141a625df565ffc6e5a8",
-    "config_hash": "49966ab3048b4cdc",
+    "timestamp": "2026-08-05T17:35:39.336245+00:00",
+    "event_type": "CREDENTIAL_MISSING",
+    "environment": "production",
+    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
     "control_state": "NO_NEW_RISK",
-    "details": {}
+    "details": {
+      "reason": "API key missing or too short for non-paper mode"
+    }
+  },
+  {
+    "timestamp": "2026-08-05T17:35:39.336249+00:00",
+    "event_type": "FULL_MODE_BLOCKED",
+    "environment": "production",
+    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "config_hash": "NO_CONFIG",
+    "certificate_status": "NOT_PRESENT",
+    "account_capability": "UNKNOWN",
+    "control_state": "NO_NEW_RISK",
+    "details": {
+      "blocker": "missing_credentials"
+    }
+  },
+  {
+    "timestamp": "2026-08-05T17:35:39.336251+00:00",
+    "event_type": "STARTUP_GATE",
+    "environment": "production",
+    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "config_hash": "NO_CONFIG",
+    "certificate_status": "NOT_PRESENT",
+    "account_capability": "UNKNOWN",
+    "control_state": "NO_NEW_RISK",
+    "details": {
+      "all_checks_passed": false,
+      "checks": {
+        "production_blocked": false,
+        "mainnet_url_blocked": true,
+        "valid_mode": false,
+        "credentials_valid": false,
+        "full_mode_requirements": false
+      },
+      "failures": [
+        "PRODUCTION mode is permanently prohibited",
+        "Invalid mode: production",
+        "Trading credentials missing or invalid",
+        "Full mode requirements not met"
+      ]
+    }
   }
 ]

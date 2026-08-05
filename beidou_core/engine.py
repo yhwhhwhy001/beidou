@@ -137,7 +137,7 @@ class MomentumFilter(AlphaComponent):
         ann_vol = features.get("ann_volatility", 0.3)
 
         # 高波动时否决一切信号
-        if ann_vol > 0.5:
+        if ann_vol > 0.8:
             signal = AlphaSignal(
                 strategy_id=StrategyId("momentum_filter_v1"),
                 component_type=self.component_type,
@@ -172,6 +172,380 @@ class MomentumFilter(AlphaComponent):
         return True
 
 
+class TrendFollowingEntry(AlphaComponent):
+    """趋势跟踪入场 — SMA5/SMA20 金叉死叉 + 趋势强度确认。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.ENTRY,
+            component_id="trend_entry_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        features = context.get("features", {})
+        sma_5 = features.get("sma_5", 0)
+        sma_20 = features.get("sma_20", 0)
+        trend_20 = features.get("trend_20_pct", 0)
+        rsi = features.get("rsi_14", 50)
+
+        # SMA crossover signal
+        crossover = sma_5 - sma_20
+        trend_strength = abs(trend_20) / 5.0  # normalize to [0,1]
+
+        if crossover > 0 and trend_20 > 0.5 and rsi < 70:
+            direction = SignalDirection.LONG
+            strength = min(0.8, trend_strength + abs(crossover) / sma_20 * 10)
+        elif crossover < 0 and trend_20 < -0.5 and rsi > 30:
+            direction = SignalDirection.SHORT
+            strength = min(0.8, trend_strength + abs(crossover) / sma_20 * 10)
+        else:
+            direction = SignalDirection.NO_ACTION
+            strength = 0.05
+            # Weak trend — still report direction for context
+            if crossover > 0.001:
+                direction = SignalDirection.LONG
+                strength = max(0.05, min(0.3, abs(crossover) / sma_20 * 10))
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("trend_following_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=0.5 + strength * 0.4,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"crossover": crossover, "trend_20": trend_20, "rsi": rsi},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["trend_entry_v1"] = crossover / max(sma_20, 1)
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
+class BreakoutEntry(AlphaComponent):
+    """突破入场 — 价格突破 20 期最高/最低 + 波动率扩张确认。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.ENTRY,
+            component_id="breakout_entry_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        features = context.get("features", {})
+        close = features.get("close", 0)
+        highest_20 = features.get("highest_20", close)
+        lowest_20 = features.get("lowest_20", close)
+        ann_vol = features.get("ann_volatility", 0.3)
+        vol_ratio = features.get("vol_ratio", 1.0)
+        atr_pct = features.get("atr_pct", 1.0)
+
+        breakout_up = close > highest_20 * 1.001  # 0.1% tolerance
+        breakout_down = close < lowest_20 * 0.999
+        vol_expanding = ann_vol > 0.2 and vol_ratio > 1.2
+
+        if breakout_up and vol_expanding:
+            direction = SignalDirection.LONG
+            breakout_pct = (close - highest_20) / highest_20 * 100
+            strength = min(0.9, breakout_pct / 2.0 + atr_pct / 5.0)
+        elif breakout_down and vol_expanding:
+            direction = SignalDirection.SHORT
+            breakout_pct = (lowest_20 - close) / lowest_20 * 100
+            strength = min(0.9, breakout_pct / 2.0 + atr_pct / 5.0)
+        else:
+            direction = SignalDirection.NO_ACTION
+            strength = 0.05
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("breakout_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=0.45 + strength * 0.35,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"breakout_up": breakout_up, "breakout_down": breakout_down,
+                       "vol_expanding": vol_expanding},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["breakout_entry_v1"] = (close - highest_20) / max(highest_20, 1)
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
+class VolatilityFilter(AlphaComponent):
+    """波动率过滤器 — ATR 分级：高波动否决，低波动放行，中等波动降级。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.FILTER,
+            component_id="volatility_filter_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        features = context.get("features", {})
+        ann_vol = features.get("ann_volatility", 0.3)
+        atr_pct = features.get("atr_pct", 1.0)
+        rsi = features.get("rsi_14", 50)
+
+        if ann_vol > 0.6 or atr_pct > 5.0:
+            # Extreme volatility — veto everything
+            direction = SignalDirection.NO_ACTION
+            strength = 0.0
+            confidence = 0.9
+            reason = "extreme_volatility"
+        elif ann_vol > 0.4:
+            # Elevated — reduce conviction
+            direction = SignalDirection.LONG  # pass-through with reduced weight
+            strength = 0.15
+            confidence = 0.5
+            reason = "elevated_volatility"
+        else:
+            # Normal — confirm direction via RSI
+            direction = SignalDirection.LONG if rsi > 30 else SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
+            strength = 0.2
+            confidence = 0.6
+            reason = "normal"
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("volatility_filter_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=confidence,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"ann_vol": ann_vol, "atr_pct": atr_pct, "reason": reason},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["volatility_filter_v1"] = -1.0 if reason == "extreme_volatility" else ann_vol
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
+class VolumeFilter(AlphaComponent):
+    """成交量过滤器 — 量比确认：放量增强，缩量降级，无量否决。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.FILTER,
+            component_id="volume_filter_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        features = context.get("features", {})
+        vol_ratio = features.get("vol_ratio", 1.0)
+        trend_20 = features.get("trend_20_pct", 0)
+        ann_vol = features.get("ann_volatility", 0.2)
+
+        if vol_ratio < 0.25:
+            # Dead volume — veto
+            direction = SignalDirection.NO_ACTION
+            strength = 0.0
+            confidence = 0.85
+            reason = "dead_volume"
+        elif vol_ratio < 0.5:
+            # Low volume — degrade signal
+            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            strength = 0.08
+            confidence = 0.45
+            reason = "low_volume"
+        elif vol_ratio > 1.5 and ann_vol > 0.15:
+            # Surge volume — strong confirmation
+            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            strength = min(0.25, vol_ratio / 10)
+            confidence = 0.65
+            reason = "volume_surge"
+        else:
+            # Normal volume — neutral pass-through
+            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            strength = 0.12
+            confidence = 0.5
+            reason = "normal"
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("volume_filter_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=confidence,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"vol_ratio": vol_ratio, "reason": reason},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["volume_filter_v1"] = -1.0 if reason == "dead_volume" else vol_ratio
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
+class TrailingExit(AlphaComponent):
+    """ATR 跟踪止损止盈 — 回撤超过 2× ATR 触发退出。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.EXIT,
+            component_id="trailing_exit_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        features = context.get("features", {})
+        close = features.get("close", 0)
+        atr_pct = features.get("atr_pct", 1.0)
+        sma_20 = features.get("sma_20", close)
+        rsi = features.get("rsi_14", 50)
+
+        # Check if there's a position to manage
+        position_info = context.get("_position_info", {})
+        has_position = position_info.get("has_position", False)
+        entry_price = position_info.get("entry_price", 0)
+        position_side = position_info.get("side", "")
+
+        if not has_position or entry_price <= 0:
+            # No position — return neutral
+            direction = SignalDirection.FLAT
+            strength = 0.0
+            reason = "no_position"
+        else:
+            # Compute drawdown from entry
+            if position_side == "LONG":
+                pnl_pct = (close - entry_price) / entry_price * 100
+            else:
+                pnl_pct = (entry_price - close) / entry_price * 100
+
+            # Trail stop: exit if drawdown > 2× ATR from peak
+            trailing_stop = 2.0 * atr_pct
+            if pnl_pct < -trailing_stop:
+                direction = SignalDirection.FLAT
+                strength = 0.9
+                reason = f"stop_loss: {pnl_pct:.2f}% < -{trailing_stop:.2f}%"
+            elif pnl_pct > 3.0 * atr_pct and rsi > 70:
+                # Take profit: 3× ATR + overbought
+                direction = SignalDirection.FLAT
+                strength = 0.7
+                reason = f"take_profit: {pnl_pct:.2f}% > {3.0*atr_pct:.2f}%"
+            elif close < sma_20 and position_side == "LONG":
+                # Trend breakdown — exit long
+                direction = SignalDirection.FLAT
+                strength = 0.5
+                reason = "trend_breakdown_sma20"
+            elif close > sma_20 and position_side == "SHORT":
+                # Trend reversal — exit short
+                direction = SignalDirection.FLAT
+                strength = 0.5
+                reason = "trend_reversal_sma20"
+            else:
+                direction = SignalDirection.NO_ACTION
+                strength = 0.0
+                reason = f"hold: pnl={pnl_pct:.2f}%"
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("trailing_exit_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=0.7,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"reason": reason, "atr_pct": atr_pct},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["trailing_exit_v1"] = strength if direction == SignalDirection.FLAT else 0.0
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
+class TimeExit(AlphaComponent):
+    """持仓时间退出 — 超时强制退出，避免过夜风险累积。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            component_type=AlphaComponentType.EXIT,
+            component_id="time_exit_v1",
+            version=SchemaVersion("2.0.0"),
+        )
+
+    async def generate(self, context: dict) -> Any:
+        from beidou_strategy.alpha import AlphaSignal
+        import time as _time
+        features = context.get("features", {})
+        close = features.get("close", 0)
+
+        position_info = context.get("_position_info", {})
+        has_position = position_info.get("has_position", False)
+        entry_time = position_info.get("entry_time", 0)
+        pnl_pct = position_info.get("pnl_pct", 0)
+
+        if not has_position or entry_time <= 0:
+            direction = SignalDirection.FLAT
+            strength = 0.0
+            reason = "no_position"
+        else:
+            hold_hours = (_time.time() - entry_time) / 3600
+            if hold_hours > 48:
+                # 48h+ — force exit regardless
+                direction = SignalDirection.FLAT
+                strength = 0.95
+                reason = f"max_hold: {hold_hours:.1f}h > 48h"
+            elif hold_hours > 24 and pnl_pct < 0:
+                # 24h+ underwater — exit
+                direction = SignalDirection.FLAT
+                strength = 0.7
+                reason = f"time_stop: {hold_hours:.1f}h pnl={pnl_pct:.2f}%"
+            elif hold_hours > 12 and pnl_pct > 5.0:
+                # 12h+ with good profit — take it
+                direction = SignalDirection.FLAT
+                strength = 0.4
+                reason = f"time_take_profit: {hold_hours:.1f}h pnl={pnl_pct:.2f}%"
+            else:
+                direction = SignalDirection.NO_ACTION
+                strength = 0.0
+                reason = f"ok: {hold_hours:.1f}h"
+
+        signal = AlphaSignal(
+            strategy_id=StrategyId("time_exit_v1"),
+            component_type=self.component_type,
+            direction=direction,
+            strength=strength,
+            confidence=0.75,
+            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
+            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            model_version=SchemaVersion("2.0.0"),
+            metadata={"reason": reason},
+        )
+        context["_predictions"] = context.get("_predictions", {})
+        context["_predictions"]["time_exit_v1"] = strength if direction == SignalDirection.FLAT else 0.0
+        return signal
+
+    def validate(self) -> bool:
+        return True
+
+
 # ================================================================
 # 真实市场状态估算
 # ================================================================
@@ -192,7 +566,7 @@ class RealMarketStateEstimator:
         else:
             direction = "RANGING"
 
-        if ann_vol > 0.5:
+        if ann_vol > 0.8:
             stress = "HIGH"
         elif ann_vol > 0.3:
             stress = "NORMAL"
@@ -288,57 +662,142 @@ class AutonomousEngine:
         # === NEW: Factor Registry + Evaluator ===
         self._factor_registry = FactorRegistry()
         self._factor_evaluator = FactorEvaluator()
-        # Register factors that are in the live alpha graph
-        self._factor_registry.register(FactorDefinition(
-            factor_id="meanrev_entry_v1",
-            name="Mean Reversion Entry",
-            version=SchemaVersion("2.0.0"),
-            description="Short-term price deviation from SMA for entry signals",
-            author="beidou-autopilot",
-            category="mean_reversion",
-            universe=frozenset({VenueId("BINANCE")}),
-            instrument_types=frozenset({"perpetual"}),
-            economic_rationale="Prices revert to mean in ranging markets",
-            lookback_period="5h",
-            rebalance_interval="5min",
-            parameters={"deviation_threshold_pct": 1.0, "rsi_oversold": 40, "rsi_overbought": 60},
-        ))
-        self._factor_registry.register(FactorDefinition(
-            factor_id="momentum_filter_v1",
-            name="Momentum Filter",
-            version=SchemaVersion("2.0.0"),
-            description="20-period trend confirmation and volatility gate",
-            author="beidou-autopilot",
-            category="momentum",
-            universe=frozenset({VenueId("BINANCE")}),
-            instrument_types=frozenset({"perpetual"}),
-            economic_rationale="Trend-following filter prevents counter-trend entries in strong trends",
-            lookback_period="20h",
-            rebalance_interval="5min",
-            parameters={"vol_threshold": 0.5, "trend_periods": 20},
-        ))
-        # Promote through valid lifecycle chain: IDEA → RESEARCH → BACKTEST → PAPER_TRADING → CHALLENGER
-        for fid in ["meanrev_entry_v1", "momentum_filter_v1"]:
+
+        # ================================================================
+        # Factor Registry — 8-factor suite
+        # ================================================================
+        factor_defs = [
+            FactorDefinition(
+                factor_id="meanrev_entry_v1", name="Mean Reversion Entry",
+                version=SchemaVersion("2.0.0"),
+                description="Short-term price deviation from SMA for entry signals",
+                author="beidou-autopilot", category="mean_reversion",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Prices revert to mean in ranging markets",
+                lookback_period="5h", rebalance_interval="5min",
+                parameters={"deviation_threshold_pct": 1.0, "rsi_oversold": 40, "rsi_overbought": 60},
+            ),
+            FactorDefinition(
+                factor_id="momentum_filter_v1", name="Momentum Filter",
+                version=SchemaVersion("2.0.0"),
+                description="20-period trend confirmation and volatility gate",
+                author="beidou-autopilot", category="momentum",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Trend-following filter prevents counter-trend entries",
+                lookback_period="20h", rebalance_interval="5min",
+                parameters={"vol_threshold": 0.5, "trend_periods": 20},
+            ),
+            FactorDefinition(
+                factor_id="trend_entry_v1", name="Trend Following Entry",
+                version=SchemaVersion("2.0.0"),
+                description="SMA5/SMA20 golden/death cross with trend strength confirmation",
+                author="beidou-autopilot", category="trend_following",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Captures directional momentum at trend initiation",
+                lookback_period="20h", rebalance_interval="5min",
+                parameters={"crossover_threshold": 0.001, "trend_min_pct": 0.5},
+            ),
+            FactorDefinition(
+                factor_id="breakout_entry_v1", name="Breakout Entry",
+                version=SchemaVersion("2.0.0"),
+                description="20-period high/low breakout with volatility expansion confirmation",
+                author="beidou-autopilot", category="breakout",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Breakouts with volume/volatility expansion signal regime shifts",
+                lookback_period="20h", rebalance_interval="5min",
+                parameters={"lookback_periods": 20, "vol_expansion_min": 1.2},
+            ),
+            FactorDefinition(
+                factor_id="volatility_filter_v1", name="Volatility Regime Filter",
+                version=SchemaVersion("2.0.0"),
+                description="ATR-based volatility regime: extreme→veto, elevated→degrade, normal→pass",
+                author="beidou-autopilot", category="volatility",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Avoid trading in unpredictable volatility regimes",
+                lookback_period="14h", rebalance_interval="5min",
+                parameters={"extreme_vol": 0.6, "elevated_vol": 0.4, "extreme_atr_pct": 5.0},
+            ),
+            FactorDefinition(
+                factor_id="volume_filter_v1", name="Volume Confirmation Filter",
+                version=SchemaVersion("2.0.0"),
+                description="Volume ratio (5/20) confirmation: surge→boost, low→degrade, dead→veto",
+                author="beidou-autopilot", category="volume",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Volume validates price action; low-volume moves are unreliable",
+                lookback_period="20h", rebalance_interval="5min",
+                parameters={"dead_ratio": 0.25, "low_ratio": 0.5, "surge_ratio": 1.5},
+            ),
+            FactorDefinition(
+                factor_id="trailing_exit_v1", name="ATR Trailing Stop Exit",
+                version=SchemaVersion("2.0.0"),
+                description="2× ATR trailing stop-loss + 3× ATR take-profit + SMA20 trend exit",
+                author="beidou-autopilot", category="risk_management",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Dynamic exit based on realized volatility prevents large drawdowns",
+                lookback_period="14h", rebalance_interval="5min",
+                parameters={"trailing_atr_mult": 2.0, "profit_atr_mult": 3.0},
+            ),
+            FactorDefinition(
+                factor_id="time_exit_v1", name="Time-Based Exit",
+                version=SchemaVersion("2.0.0"),
+                description="Maximum hold time exit: 48h force, 24h underwater, 12h profit lock",
+                author="beidou-autopilot", category="risk_management",
+                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                economic_rationale="Time decay and funding costs erode edge; stale positions increase risk",
+                lookback_period="48h", rebalance_interval="5min",
+                parameters={"max_hold_hours": 48, "underwater_hours": 24, "profit_lock_hours": 12},
+            ),
+        ]
+        all_factor_ids = []
+        for fd in factor_defs:
+            self._factor_registry.register(fd)
+            all_factor_ids.append(fd.factor_id)
+
+        # Promote all factors through lifecycle chain to CHALLENGER
+        for fid in all_factor_ids:
             rec = self._factor_registry.get(fid)
             for target in [FactorLifecycle.RESEARCH, FactorLifecycle.BACKTEST,
                           FactorLifecycle.PAPER_TRADING, FactorLifecycle.CHALLENGER]:
                 if not rec.transition(target):
                     break
-        active_challengers = [fid for fid, r in self._factor_registry._factors.items()
-                             if r.lifecycle == FactorLifecycle.CHALLENGER]
         print(f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}")
 
         # Factor tracking: rolling predictions vs actual returns
-        self._factor_predictions: dict[str, list[float]] = {"meanrev_entry_v1": [], "momentum_filter_v1": []}
+        self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}
         self._factor_returns: list[float] = []  # forward returns for IC computation
         self._last_factor_close: dict[str, float] = {}  # symbol → last close for return calc
 
-        # Alpha graph setup — with DAG connection
+        # ================================================================
+        # Alpha Graph — 8-component DAG
+        # ================================================================
         self._alpha_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
         self._alpha_graph.add_component(MeanReversionEntry())
+        self._alpha_graph.add_component(TrendFollowingEntry())
+        self._alpha_graph.add_component(BreakoutEntry())
         self._alpha_graph.add_component(MomentumFilter())
-        # Connect: ENTRY → FILTER (entry signal passes through momentum filter)
+        self._alpha_graph.add_component(VolatilityFilter())
+        self._alpha_graph.add_component(VolumeFilter())
+        self._alpha_graph.add_component(TrailingExit())
+        self._alpha_graph.add_component(TimeExit())
+        # DAG topology: ENTRY → FILTER → EXIT
+        # meanrev → momentum_filter, volatility_filter, volume_filter
         self._alpha_graph.connect("meanrev_entry_v1", "momentum_filter_v1")
+        self._alpha_graph.connect("meanrev_entry_v1", "volatility_filter_v1")
+        self._alpha_graph.connect("meanrev_entry_v1", "volume_filter_v1")
+        # trend → same filters
+        self._alpha_graph.connect("trend_entry_v1", "momentum_filter_v1")
+        self._alpha_graph.connect("trend_entry_v1", "volatility_filter_v1")
+        self._alpha_graph.connect("trend_entry_v1", "volume_filter_v1")
+        # breakout → same filters
+        self._alpha_graph.connect("breakout_entry_v1", "momentum_filter_v1")
+        self._alpha_graph.connect("breakout_entry_v1", "volatility_filter_v1")
+        self._alpha_graph.connect("breakout_entry_v1", "volume_filter_v1")
+        # filters → exits (only evaluated when position active)
+        self._alpha_graph.connect("momentum_filter_v1", "trailing_exit_v1")
+        self._alpha_graph.connect("volatility_filter_v1", "trailing_exit_v1")
+        self._alpha_graph.connect("volume_filter_v1", "time_exit_v1")
+        order = self._alpha_graph.topological_order()
+        print(f"[beidou-autopilot] DAG order: {order}")
 
         # Strategy performance tracking
         self._autopilot_strategy_id = StrategyId("autopilot")
@@ -382,7 +841,11 @@ class AutonomousEngine:
         import urllib.error
 
         url = self._rest_url + path
-        headers = {"X-MBX-APIKEY": self._api_key}
+        headers = {
+            "X-MBX-APIKEY": self._api_key,
+            "Connection": "close",
+            "User-Agent": "beidou-autopilot/2.0",
+        }
         if params is None:
             params = {}
         if signed:
@@ -407,7 +870,23 @@ class AutonomousEngine:
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    return json.loads(resp.read())
+                    # Read in chunks to handle large responses (>256KB)
+                    chunks = []
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    raw = b"".join(chunks)
+                    data = json.loads(raw)
+                    # Normalize /fapi/v2/balance response to account format
+                    if path == "/fapi/v2/balance" and isinstance(data, list):
+                        total_wallet = sum(
+                            float(a.get("crossWalletBalance", 0))
+                            for a in data
+                        )
+                        data = {"totalWalletBalance": str(total_wallet), "assets": data}
+                    return data
             except urllib.error.HTTPError as e:
                 if e.code == 429:
                     time.sleep(1 * (attempt + 1))
@@ -597,6 +1076,8 @@ class AutonomousEngine:
             self._active_order_ids.add(str(order["orderId"]))
             self._outbox.ack(intent.intent_id)
             self._order_count += 1
+            print(f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price','MKT')} "
+                  f"orderId={order['orderId']}")
 
             self._store.save_order_state(
                 str(order["orderId"]), symbol, side, order_type,
@@ -709,7 +1190,7 @@ class AutonomousEngine:
     async def _reconcile(self) -> None:
         """对账：系统状态 vs 交易所状态。"""
         try:
-            account = self._api("/fapi/v2/account", signed=True)
+            account = self._api("/fapi/v2/balance", signed=True)
             if "totalWalletBalance" not in account:
                 return
 
@@ -810,12 +1291,32 @@ class AutonomousEngine:
                     continue
 
                 # === 3. Execute full AlphaGraph DAG in topological order ===
+                # Inject position info for EXIT components
+                positions = self._protection.all_positions()
+                symbol_positions = {k: v for k, v in positions.items() if v.get("symbol") == symbol}
+                pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
+                if symbol_positions:
+                    # Use the first matching position
+                    pos = list(symbol_positions.values())[0]
+                    entry_price = float(pos.get("entry_price", 0) or 0)
+                    pos_side = str(pos.get("side", ""))
+                    pos_info["has_position"] = True
+                    pos_info["entry_price"] = entry_price
+                    pos_info["side"] = pos_side
+                    pos_info["entry_time"] = float(pos.get("entry_time", 0) or 0)
+                    if entry_price > 0 and close > 0:
+                        if pos_side == "LONG":
+                            pos_info["pnl_pct"] = (close - entry_price) / entry_price * 100
+                        elif pos_side == "SHORT":
+                            pos_info["pnl_pct"] = (entry_price - close) / entry_price * 100
+
                 context = {
                     "features": features,
                     "instrument_id": instrument_id,
                     "venue_id": venue_id,
                     "state": state,
                     "_predictions": {},
+                    "_position_info": pos_info,
                 }
 
                 # Track factor predictions for later IC computation
@@ -854,7 +1355,7 @@ class AutonomousEngine:
                     continue
 
                 # Check if entry signal is actionable
-                entry_signals = [s for s in all_signals if s.direction != SignalDirection.NO_ACTION and s.strength >= 0.3]
+                entry_signals = [s for s in all_signals if s.direction != SignalDirection.NO_ACTION and s.strength >= 0.15]
                 if not entry_signals:
                     print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
                     continue
@@ -911,7 +1412,7 @@ class AutonomousEngine:
                     urgency=0.3, spread_bps=spread_bps,
                 )
 
-                if cost_est.total_fee_bps > 10:
+                if cost_est.total_fee_bps > 30:
                     print(f"[nearline] {symbol}: SKIP (cost too high: {cost_est.total_fee_bps}bps)")
                     continue
 
@@ -1157,7 +1658,7 @@ class AutonomousEngine:
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access
-        account = self._api("/fapi/v2/account", signed=True)
+        account = self._api("/fapi/v2/balance", signed=True)
         if "totalWalletBalance" not in account:
             print("[beidou-autopilot] FATAL: Cannot access account")
             self._lifecycle.transition(ModuleState.FAILED)
