@@ -15,7 +15,9 @@
 import sys, os, json, hashlib, hmac, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Ensure project root is on path
+_proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _proj_root)
 
 import yaml
 
@@ -115,11 +117,17 @@ else:
     check('1.3 Klines趋势', False, 'klines data unavailable')
 
 account = api('/fapi/v2/account', signed=True)
+if 'error' in account:
+    print(f'  ERROR: 账户查询失败: {account["msg"]}')
+    sys.exit(1)
 positions = [p for p in account.get('positions', []) if float(p.get('positionAmt', 0)) != 0]
 total_balance = float(account.get('totalWalletBalance', 0))
 available_balance = float(account.get('availableBalance', 0))
-check('1.4 账户快照', 'error' not in account,
+check('1.4 账户快照', total_balance > 0,
       f'equity={total_balance:.2f}  available={available_balance:.2f}  positions={len(positions)}')
+if total_balance <= 0:
+    print('ERROR: 账户余额为0，无法继续')
+    sys.exit(1)
 for p in positions:
     pnl = float(p.get('unrealizedProfit', 0))
     print(f'      {p["symbol"]:>10s}  amt={p["positionAmt"]:>10s}  entry={p["entryPrice"]}  '
@@ -247,7 +255,7 @@ snapshot = RiskSnapshot(
     total_exposure=order_notional, margin_used=order_notional / 2,
     margin_total=total_balance, position_count=len(positions)+1,
     pending_orders=1, leverage=2.0,
-    concentration_pct=order_notional / total_balance * 100,
+    concentration_pct=order_notional / max(total_balance, 1) * 100,
 )
 check('3.2 R0-R10评估', snapshot.leverage <= 3.0 and snapshot.concentration_pct < 50.0,
       f'leverage={snapshot.leverage:.1f}x  concentration={snapshot.concentration_pct:.1f}%')

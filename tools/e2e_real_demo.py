@@ -14,8 +14,8 @@ from __future__ import annotations
 import sys, os, json, hashlib, hmac, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 
-# Ensure project root is on sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _proj_root)
 
 import yaml
 
