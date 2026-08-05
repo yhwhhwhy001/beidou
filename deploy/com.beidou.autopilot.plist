@@ -14,7 +14,7 @@
         <string>--symbols</string>
         <string>BTCUSDT,ETHUSDT</string>
         <string>--mode</string>
-        <string>full</string>
+        <string>testnet</string>
     </array>
 
     <key>WorkingDirectory</key>

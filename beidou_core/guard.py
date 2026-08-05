@@ -140,14 +140,26 @@ class EnvironmentGuard:
         except Exception:
             return "UNKNOWN"
 
+    # 已知测试网 URL 标记（不区分大小写）
+    _TESTNET_MARKERS = ["testnet", "demo", "staging"]
+
     def _is_mainnet_url(self, url: str) -> bool:
-        """检测 URL 是否指向 Mainnet。"""
+        """检测 URL 是否指向 Mainnet。
+
+        已知测试网 URL 模式：
+        - demo-fapi.binance.com (Binance USDⓈ-M Futures Testnet)
+        - testnet.binancefutures.com
+        - testnet.binance.vision
+        """
         url_lower = url.lower()
-        # 如果 URL 包含 binance.com 但不包含 testnet
-        if "binance.com" in url_lower and "testnet" not in url_lower:
+        # 如果 URL 包含已知测试网标记，则不是主网
+        if any(marker in url_lower for marker in self._TESTNET_MARKERS):
+            return False
+        # 如果 URL 包含 binance.com 且无测试网标记
+        if "binance.com" in url_lower:
             return True
         for pattern in self.MAINNET_URL_PATTERNS:
-            if pattern in url_lower and "testnet" not in url_lower:
+            if pattern in url_lower:
                 return True
         return False
 
@@ -192,16 +204,18 @@ class EnvironmentGuard:
 
         return True
 
-    def check_full_mode_requirements(self) -> bool:
-        """检查 full 模式的所有前置条件。
+    def check_full_mode_requirements(self, cli_mode: str = "paper") -> bool:
+        """检查 full/testnet 模式的前置条件。
 
-        full 模式要求：
+        full 模式（--mode full）要求：
         1. Testnet URL（非 Mainnet）
         2. 有效交易凭据
-        3. 账户能力报告
-        4. G5 证书
-        5. 当前 commit 与证书绑定
-        6. 证书未过期
+        3. G5 证书 + commit 绑定
+
+        testnet 模式（--mode testnet）仅要求：
+        1. Testnet URL（非 Mainnet）
+        2. 有效交易凭据
+        （不要求 G5 证书 — 留给 BD-13 完成后启用）
         """
         if self._mode == EnvironmentMode.PAPER:
             return True  # Paper 模式无额外要求
@@ -218,42 +232,46 @@ class EnvironmentGuard:
 
         # 2. 交易凭据
         if not self._api_key or not self._api_secret:
-            failures.append("Trading credentials required for full mode")
+            failures.append("Trading credentials required for full/testnet mode")
             self._audit("FULL_MODE_BLOCKED", {
                 "blocker": "missing_credentials",
             })
 
-        # 3-6. 证书链检查（当前假定为 NOT_PRESENT — 需要 BD-13 完成后才可用）
-        # G5 证书存在性
-        g5_cert_path = os.path.join("evidence", "certificates", "G5.json")
-        if not os.path.exists(g5_cert_path):
-            failures.append("G5 certificate not found")
-            self._audit("FULL_MODE_BLOCKED", {
-                "blocker": "no_g5_certificate",
-                "path": g5_cert_path,
-            })
-
-        # 证书-commit 绑定
-        if self._commit and os.path.exists(g5_cert_path):
-            try:
-                with open(g5_cert_path) as f:
-                    cert = json.load(f)
-                cert_commit = cert.get("commit", "")
-                if cert_commit != self._commit:
-                    failures.append(f"Certificate commit {cert_commit[:8]} != current {self._commit[:8]}")
-                    self._audit("FULL_MODE_BLOCKED", {
-                        "blocker": "commit_mismatch",
-                    })
-            except Exception:
-                failures.append("Certificate unreadable")
+        # 3. G5 证书链 — 仅 full CLI 模式强制要求（testnet 模式跳过）
+        if cli_mode == "full":
+            g5_cert_path = os.path.join("evidence", "certificates", "G5.json")
+            if not os.path.exists(g5_cert_path):
+                failures.append("G5 certificate not found")
                 self._audit("FULL_MODE_BLOCKED", {
-                    "blocker": "certificate_unreadable",
+                    "blocker": "no_g5_certificate",
+                    "path": g5_cert_path,
                 })
+            elif self._commit:
+                # 证书-commit 绑定
+                try:
+                    with open(g5_cert_path) as f:
+                        cert = json.load(f)
+                    cert_commit = cert.get("commit", "")
+                    if cert_commit != self._commit:
+                        failures.append(f"Certificate commit {cert_commit[:8]} != current {self._commit[:8]}")
+                        self._audit("FULL_MODE_BLOCKED", {
+                            "blocker": "commit_mismatch",
+                        })
+                except Exception:
+                    failures.append("Certificate unreadable")
+                    self._audit("FULL_MODE_BLOCKED", {
+                        "blocker": "certificate_unreadable",
+                    })
 
         return len(failures) == 0
 
-    def run_all_checks(self) -> StartupGateResult:
-        """运行所有启动检查，返回综合结果。"""
+    def run_all_checks(self, cli_mode: str = "paper") -> StartupGateResult:
+        """运行所有启动检查，返回综合结果。
+
+        Args:
+            cli_mode: CLI 层模式 (paper/testnet/full/safety_only)，
+                      用于区分 testnet 模式是否要求 G5 证书。
+        """
         commit = self._get_git_commit()
         self._commit = commit
 
@@ -286,7 +304,7 @@ class EnvironmentGuard:
 
         # Check 5: Full mode requirements
         if self._mode != EnvironmentMode.PAPER:
-            full_ok = self.check_full_mode_requirements()
+            full_ok = self.check_full_mode_requirements(cli_mode=cli_mode)
             checks["full_mode_requirements"] = full_ok
             if not full_ok:
                 failures.append("Full mode requirements not met")

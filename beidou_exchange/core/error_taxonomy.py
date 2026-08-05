@@ -1,6 +1,86 @@
 """交易所错误分类体系 — 将各交易所专有错误码归一化为统一语义。"""
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Generic, TypeVar
+
 from beidou_shared.errors import ErrorCategory, FaultSeverity, RecoveryAction, DomainError
+
+# 重新导出 — 供 exchange adapter 层统一导入
+__all__ = [
+    "ErrorCategory",
+    "AdapterError",
+    "Result",
+    "classify_http_error",
+    "ErrorNormalizer",
+]
+
+T = TypeVar("T")
+
+
+@dataclass
+class AdapterError(Exception):
+    """交易所适配器统一错误类型。
+
+    封装原始异常、HTTP 状态码和归一化分类。
+    """
+    message: str
+    http_status: int = 0
+    category: ErrorCategory = ErrorCategory.UNKNOWN
+    retryable: bool = False
+    raw: Any = None
+
+    def __str__(self) -> str:
+        return f"[{self.category.value}] HTTP {self.http_status}: {self.message}"
+
+
+@dataclass
+class Result(Generic[T]):
+    """Result 模式 — 适配器操作的统一返回类型。
+
+    ok=True 时 data 有效；ok=False 时 error 有效。
+    """
+    ok: bool
+    data: T | None = None
+    error: AdapterError | None = None
+
+    @classmethod
+    def success(cls, data: T) -> "Result[T]":
+        return cls(ok=True, data=data)
+
+    @classmethod
+    def failure(cls, message: str, http_status: int = 0,
+                category: ErrorCategory = ErrorCategory.UNKNOWN,
+                retryable: bool = False, raw: Any = None) -> "Result[T]":
+        return cls(
+            ok=False,
+            error=AdapterError(
+                message=message,
+                http_status=http_status,
+                category=category,
+                retryable=retryable,
+                raw=raw,
+            ),
+        )
+
+
+def classify_http_error(http_status: int, response_body: str = "") -> tuple[ErrorCategory, bool]:
+    """根据 HTTP 状态码分类错误。
+
+    Returns:
+        (ErrorCategory, retryable)
+    """
+    if http_status == 429:
+        return (ErrorCategory.RATE_LIMIT, True)
+    if http_status == 418:
+        return (ErrorCategory.RATE_LIMIT, True)
+    if http_status in (401, 403):
+        return (ErrorCategory.AUTH_FAILURE, False)
+    if http_status >= 500:
+        return (ErrorCategory.EXCHANGE_UNAVAILABLE, True)
+    if http_status >= 400:
+        return (ErrorCategory.ORDER_REJECTED, False)
+    return (ErrorCategory.UNKNOWN, False)
 
 
 class ErrorNormalizer:

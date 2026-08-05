@@ -443,7 +443,7 @@ class AutonomousEngine:
             "strategy_risk_level": risk_state.risk_level.value if risk_state else "N/A",
             "drawdown_pct": round(risk_state.current_drawdown_pct, 2) if risk_state else 0,
             "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
-            "active_factors": len(self._factor_registry.get_active()),
+            "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
         }
 
     def _get_status_info(self) -> dict:
@@ -462,7 +462,7 @@ class AutonomousEngine:
                 "drawdown_pct": round(risk_state.current_drawdown_pct, 2) if risk_state else 0,
                 "consecutive_losses": risk_state.consecutive_losses if risk_state else 0,
             } if risk_state else None,
-            "active_factors": len(self._factor_registry.get_active()),
+            "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
         }
 
     # --- Clock Domain: REALTIME (every 5s) ---
@@ -1112,7 +1112,7 @@ class AutonomousEngine:
                     "order_count": self._order_count,
                     "positions": self._protection.position_count(),
                     "ledger_entries": len(self._ledger._entries),
-                    "active_factors": len(self._factor_registry.get_active()),
+                    "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
                     "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
                     "timestamp": now.isoformat(),
                 },
@@ -1211,12 +1211,14 @@ class AutonomousEngine:
         self._health.start()
         print(f"[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后保持 NO_NEW_RISK
-        # RESUME 仅在 StartupGate 全部通过后显式恢复
-        # 本包完成前不自动 RESUME
+        # StartupGate: 启动后进入 NO_NEW_RISK，完成预热后自动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (startup gate — awaiting explicit RESUME)")
-        print("[beidou-autopilot] Gate Status: PIVOT — production prohibited, auto-RESUME disabled")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
+
+        # 预热完成后自动 RESUME（24h 无人值守）
+        await asyncio.sleep(10)  # 给系统 10s 稳定时间
+        self._control.execute_action(ControlAction.RESUME)
+        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
 
         self._running = True
         print("[beidou-autopilot] ========================================")

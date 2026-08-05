@@ -111,7 +111,7 @@ def main() -> None:
         commit=commit,
         config_path=config_path if 'config_path' in dir() else "",
     )
-    gate_result = guard.run_all_checks()
+    gate_result = guard.run_all_checks(cli_mode=args.mode)
 
     if gate_result.status == StartupGateStatus.FAIL:
         print("=" * 60)
