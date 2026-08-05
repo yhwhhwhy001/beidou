@@ -12,7 +12,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 
 class OutboxStatus(str, Enum):
@@ -27,6 +26,7 @@ class OutboxStatus(str, Enum):
 @dataclass
 class OutboxMessage:
     """Outbox 消息。"""
+
     aggregate_type: str
     aggregate_id: str
     event_type: str
@@ -86,10 +86,7 @@ class TransactionalOutbox:
     def poll_pending(self, batch_size: int = 100) -> list[OutboxMessage]:
         """拉取待发送消息（按 next_attempt_at 排序）。"""
         now = time.monotonic()
-        pending = [
-            m for m in self._messages.values()
-            if m.status == OutboxStatus.PENDING and m.next_attempt_at <= now
-        ]
+        pending = [m for m in self._messages.values() if m.status == OutboxStatus.PENDING and m.next_attempt_at <= now]
         pending.sort(key=lambda m: m.next_attempt_at)
         return pending[:batch_size]
 
@@ -110,7 +107,7 @@ class TransactionalOutbox:
             message.dead_letter_reason = f"Exceeded max retries ({message.retry_count})"
         else:
             message.status = OutboxStatus.PENDING
-            backoff = min(2 ** message.retry_count, 300)
+            backoff = min(2**message.retry_count, 300)
             message.next_attempt_at = time.monotonic() + backoff
         return message.status
 
@@ -121,14 +118,11 @@ class TransactionalOutbox:
 
     def get_dead_letters(self) -> list[OutboxMessage]:
         """获取所有死信消息。"""
-        return [m for m in self._messages.values()
-                if m.status == OutboxStatus.DEAD_LETTER]
+        return [m for m in self._messages.values() if m.status == OutboxStatus.DEAD_LETTER]
 
     def get_quarantined(self) -> list[OutboxMessage]:
         """获取所有隔离消息。"""
-        return [m for m in self._messages.values()
-                if m.status == OutboxStatus.QUARANTINED]
+        return [m for m in self._messages.values() if m.status == OutboxStatus.QUARANTINED]
 
     def size(self) -> int:
-        return len([m for m in self._messages.values()
-                    if m.status == OutboxStatus.PENDING])
+        return len([m for m in self._messages.values() if m.status == OutboxStatus.PENDING])

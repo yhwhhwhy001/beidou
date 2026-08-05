@@ -20,8 +20,8 @@ class ProtectionType(str, Enum):
 
 class ProtectionStatus(str, Enum):
     PENDING = "PENDING"
-    CREATED = "CREATED"      # 已下单，等待 ACK
-    ACKED = "ACKED"          # 交易所已确认
+    CREATED = "CREATED"  # 已下单，等待 ACK
+    ACKED = "ACKED"  # 交易所已确认
     TRIGGERED = "TRIGGERED"
     CANCELED = "CANCELED"
     FAILED = "FAILED"
@@ -30,6 +30,7 @@ class ProtectionStatus(str, Enum):
 @dataclass
 class ProtectionOrder:
     """交易所原生保护单。"""
+
     protection_id: str
     position_id: str
     instrument_id: str
@@ -57,14 +58,21 @@ class ExchangeProtectionManager:
     - 处理 one-way/hedge mode、人工平仓、保护触发与撤单竞态
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._protections: dict[str, ProtectionOrder] = {}
         self._position_protections: dict[str, list[str]] = {}  # pos_id → [prot_id, ...]
 
-    def create_for_position(self, position_id: str, instrument_id: str,
-                            venue_id: str, entry_price: float, quantity: float,
-                            side: str, stop_pct: float = 2.0,
-                            take_profit_rr: float = 2.0) -> list[ProtectionOrder]:
+    def create_for_position(
+        self,
+        position_id: str,
+        instrument_id: str,
+        venue_id: str,
+        entry_price: float,
+        quantity: float,
+        side: str,
+        stop_pct: float = 2.0,
+        take_profit_rr: float = 2.0,
+    ) -> list[ProtectionOrder]:
         """开仓后立即创建保护单对。"""
 
         protections = []
@@ -81,7 +89,8 @@ class ExchangeProtectionManager:
         sl = ProtectionOrder(
             protection_id=f"sl-{position_id}",
             position_id=position_id,
-            instrument_id=instrument_id, venue_id=venue_id,
+            instrument_id=instrument_id,
+            venue_id=venue_id,
             order_type=ProtectionType.STOP_MARKET,
             side="SELL" if side == "LONG" else "BUY",
             trigger_price=round(stop_price, 8),
@@ -95,7 +104,8 @@ class ExchangeProtectionManager:
         tp = ProtectionOrder(
             protection_id=f"tp-{position_id}",
             position_id=position_id,
-            instrument_id=instrument_id, venue_id=venue_id,
+            instrument_id=instrument_id,
+            venue_id=venue_id,
             order_type=ProtectionType.TAKE_PROFIT_MARKET,
             side="SELL" if side == "LONG" else "BUY",
             trigger_price=round(tp_price, 8),
@@ -129,17 +139,14 @@ class ExchangeProtectionManager:
         """仓位是否有 ACKed 保护。"""
         prot_ids = self._position_protections.get(position_id, [])
         return any(
-            self._protections.get(pid, ProtectionOrder("", "", "", "",
-                ProtectionType.STOP_MARKET, "")).status == ProtectionStatus.ACKED
+            self._protections.get(pid, ProtectionOrder("", "", "", "", ProtectionType.STOP_MARKET, "", 0.0, 0.0)).status
+            == ProtectionStatus.ACKED
             for pid in prot_ids
         )
 
     def all_positions_covered(self) -> bool:
         """所有仓位是否都有保护覆盖。"""
-        for pos_id in self._position_protections:
-            if not self.has_coverage(pos_id):
-                return False
-        return True
+        return all(self.has_coverage(pos_id) for pos_id in self._position_protections)
 
     def coverage_report(self) -> dict:
         """保护覆盖报告。"""

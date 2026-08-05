@@ -1,9 +1,12 @@
 """错误语义与故障恢复类型。查询失败≠空结果。UNKNOWN 时必须 Fail-Closed。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
 
 class ErrorCategory(str, Enum):
     NETWORK = "NETWORK"
@@ -31,10 +34,12 @@ class ErrorCategory(str, Enum):
     STATE_CORRUPTION = "STATE_CORRUPTION"
     UNKNOWN = "UNKNOWN"
 
+
 class FaultSeverity(str, Enum):
     P0_CRITICAL = "P0_CRITICAL"
     P1_MAJOR = "P1_MAJOR"
     P2_MINOR = "P2_MINOR"
+
 
 class RecoveryAction(str, Enum):
     NOOP = "NOOP"
@@ -46,6 +51,7 @@ class RecoveryAction(str, Enum):
     LOCK = "LOCK"
     ALERT_ONLY = "ALERT_ONLY"
     MANUAL = "MANUAL"
+
 
 @dataclass(frozen=True, slots=True)
 class DomainError:

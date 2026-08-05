@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 from datetime import datetime, timezone
 
-from beidou_shared.types import (
-    DataQualityTier,
-    FactorId,
-    InstrumentId,
-    SchemaVersion,
-    VenueId,
-)
+import pytest
+
 from beidou_research.mining.contracts import (
     DatasetManifest,
     HorizonUnit,
@@ -22,13 +16,18 @@ from beidou_research.mining.contracts import (
     PredictionRecord,
     PriceType,
     ReturnType,
-    TimeframeGranularity,
 )
-
+from beidou_shared.types import (
+    FactorId,
+    InstrumentId,
+    SchemaVersion,
+    VenueId,
+)
 
 # ================================================================
 # Fixtures
 # ================================================================
+
 
 @pytest.fixture
 def sample_prediction_key() -> PredictionKey:
@@ -65,6 +64,7 @@ def sample_label_record(sample_prediction_key) -> LabelRecord:
 # ================================================================
 # PredictionKey tests
 # ================================================================
+
 
 class TestPredictionKey:
     """PredictionKey 验收测试。"""
@@ -110,40 +110,52 @@ class TestPredictionKey:
     def test_timeframe_matches_same(self):
         """相同 timeframe 匹配。"""
         pk1 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         pk2 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert pk1.timeframe_matches(pk2)
 
     def test_timeframe_mismatch_detected(self):
         """不同 timeframe 不匹配 — 1h vs 5m 不得交叉配对。"""
         pk_1h = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=1, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=1,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         pk_5m = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="5m",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=12, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=12,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert not pk_1h.timeframe_matches(pk_5m)
         assert not pk_5m.timeframe_matches(pk_1h)
@@ -151,60 +163,78 @@ class TestPredictionKey:
     def test_symbol_matches_same_venue_symbol(self):
         """相同 venue+symbol 匹配。"""
         pk1 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         pk2 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert pk1.symbol_matches(pk2)
 
     def test_symbol_mismatch_different_symbol(self):
         """不同 symbol 不匹配。"""
         pk_btc = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         pk_eth = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("ETHUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("ETHUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert not pk_btc.symbol_matches(pk_eth)
 
     def test_sort_key_ordering(self):
         """to_sort_key 提供一致的排序。"""
         pk1 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("AAVEUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("AAVEUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         pk2 = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         # AAVEUSDT < BTCUSDT 字母顺序
         assert pk1.to_sort_key() < pk2.to_sort_key()
@@ -218,6 +248,7 @@ class TestPredictionKey:
 # ================================================================
 # LabelRecord tests
 # ================================================================
+
 
 class TestLabelRecord:
     """LabelRecord 验收测试。"""
@@ -265,18 +296,26 @@ class TestLabelRecord:
         t4 = datetime(2026, 1, 15, 16, 0, tzinfo=timezone.utc)
 
         label_a = LabelRecord(
-            label_id="a", prediction_key=sample_prediction_key,
-            label_start_time=t0, label_end_time=t4,
+            label_id="a",
+            prediction_key=sample_prediction_key,
+            label_start_time=t0,
+            label_end_time=t4,
             label_available_time=t4,
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.01,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.01,
         )
         label_b = LabelRecord(
-            label_id="b", prediction_key=sample_prediction_key,
-            label_start_time=t2, label_end_time=datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc),
+            label_id="b",
+            prediction_key=sample_prediction_key,
+            label_start_time=t2,
+            label_end_time=datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc),
             label_available_time=datetime(2026, 1, 15, 18, 0, tzinfo=timezone.utc),
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.02,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.02,
         )
         # a: [12, 16), b: [14, 18) → 重叠 [14, 16)
         assert label_a.overlaps_with(label_b)
@@ -289,18 +328,26 @@ class TestLabelRecord:
         t4 = datetime(2026, 1, 15, 16, 0, tzinfo=timezone.utc)
 
         label_a = LabelRecord(
-            label_id="a", prediction_key=sample_prediction_key,
-            label_start_time=t0, label_end_time=t2,
+            label_id="a",
+            prediction_key=sample_prediction_key,
+            label_start_time=t0,
+            label_end_time=t2,
             label_available_time=t2,
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.01,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.01,
         )
         label_b = LabelRecord(
-            label_id="b", prediction_key=sample_prediction_key,
-            label_start_time=t2, label_end_time=t4,
+            label_id="b",
+            prediction_key=sample_prediction_key,
+            label_start_time=t2,
+            label_end_time=t4,
             label_available_time=t4,
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.02,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.02,
         )
         # a: [12, 14), b: [14, 16) → 无重叠（边界接触不算）
         assert not label_a.overlaps_with(label_b)
@@ -308,29 +355,40 @@ class TestLabelRecord:
     def test_overlaps_different_symbols_never_overlap(self, sample_prediction_key):
         """不同 symbol 的标签永不重叠。"""
         pk_eth = PredictionKey(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("ETHUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("ETHUSDT"),
             timeframe="1h",
             prediction_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         t0 = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         t4 = datetime(2026, 1, 15, 16, 0, tzinfo=timezone.utc)
 
         label_a = LabelRecord(
-            label_id="a", prediction_key=sample_prediction_key,
-            label_start_time=t0, label_end_time=t4,
+            label_id="a",
+            prediction_key=sample_prediction_key,
+            label_start_time=t0,
+            label_end_time=t4,
             label_available_time=t4,
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.01,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.01,
         )
         label_b = LabelRecord(
-            label_id="b", prediction_key=pk_eth,
-            label_start_time=t0, label_end_time=t4,
+            label_id="b",
+            prediction_key=pk_eth,
+            label_start_time=t0,
+            label_end_time=t4,
             label_available_time=t4,
-            entry_price_type=PriceType.CLOSE, exit_price_type=PriceType.CLOSE,
-            cost_model_version="v1", label_value=0.02,
+            entry_price_type=PriceType.CLOSE,
+            exit_price_type=PriceType.CLOSE,
+            cost_model_version="v1",
+            label_value=0.02,
         )
         assert not label_a.overlaps_with(label_b)
 
@@ -371,6 +429,7 @@ class TestLabelRecord:
 # ================================================================
 # PredictionRecord tests
 # ================================================================
+
 
 class TestPredictionRecord:
     """PredictionRecord 验收测试。"""
@@ -426,6 +485,7 @@ class TestPredictionRecord:
 # DatasetManifest tests
 # ================================================================
 
+
 class TestDatasetManifest:
     """DatasetManifest 验收测试。"""
 
@@ -451,8 +511,10 @@ class TestDatasetManifest:
             timeframe="1h",
             prediction_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert sample_manifest.contains(pk)
 
@@ -464,8 +526,10 @@ class TestDatasetManifest:
             timeframe="1h",
             prediction_time=datetime(2025, 12, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2025, 12, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert not sample_manifest.contains(pk)
 
@@ -477,8 +541,10 @@ class TestDatasetManifest:
             timeframe="1h",
             prediction_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=4, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=4,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert not sample_manifest.contains(pk)
 
@@ -490,8 +556,10 @@ class TestDatasetManifest:
             timeframe="5m",
             prediction_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
             data_available_time=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
-            horizon=48, horizon_unit=HorizonUnit.BAR,
-            factor_id=FactorId("f1"), factor_version=SchemaVersion("1.0"),
+            horizon=48,
+            horizon_unit=HorizonUnit.BAR,
+            factor_id=FactorId("f1"),
+            factor_version=SchemaVersion("1.0"),
         )
         assert not sample_manifest.contains(pk)
 
@@ -499,6 +567,7 @@ class TestDatasetManifest:
 # ================================================================
 # LabelSpec tests
 # ================================================================
+
 
 class TestLabelSpec:
     """LabelSpec 验收测试。"""

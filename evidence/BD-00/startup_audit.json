@@ -1,9 +1,9 @@
 [
   {
-    "timestamp": "2026-08-05T17:35:39.336212+00:00",
+    "timestamp": "2026-08-05T18:03:00.674530+00:00",
     "event_type": "PRODUCTION_BLOCKED",
     "environment": "production",
-    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -15,10 +15,10 @@
     }
   },
   {
-    "timestamp": "2026-08-05T17:35:39.336245+00:00",
+    "timestamp": "2026-08-05T18:03:00.674575+00:00",
     "event_type": "CREDENTIAL_MISSING",
     "environment": "production",
-    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -28,10 +28,10 @@
     }
   },
   {
-    "timestamp": "2026-08-05T17:35:39.336249+00:00",
+    "timestamp": "2026-08-05T18:03:00.674580+00:00",
     "event_type": "FULL_MODE_BLOCKED",
     "environment": "production",
-    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -41,10 +41,10 @@
     }
   },
   {
-    "timestamp": "2026-08-05T17:35:39.336251+00:00",
+    "timestamp": "2026-08-05T18:03:00.674582+00:00",
     "event_type": "STARTUP_GATE",
     "environment": "production",
-    "commit": "24b3c9c631597618408e21bc699bb16b7c9e1aac",
+    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",

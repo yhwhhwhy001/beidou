@@ -1,15 +1,27 @@
 """组合优化与策略资本归属。多策略目标贡献、资本预算、退出义务和接管规则。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
 from beidou_shared.types import InstrumentId, MonetaryValue, Quantity, StrategyId, VenueId
 
+
 class CapitalAllocationMode(str, Enum):
-    EQUAL_WEIGHT = "EQUAL_WEIGHT"; RISK_PARITY = "RISK_PARITY"; KELLY_FRACTIONAL = "KELLY_FRACTIONAL"; MANUAL = "MANUAL"; ADAPTIVE = "ADAPTIVE"
+    EQUAL_WEIGHT = "EQUAL_WEIGHT"
+    RISK_PARITY = "RISK_PARITY"
+    KELLY_FRACTIONAL = "KELLY_FRACTIONAL"
+    MANUAL = "MANUAL"
+    ADAPTIVE = "ADAPTIVE"
+
 
 class PositionOwnership(str, Enum):
-    EXCLUSIVE = "EXCLUSIVE"; SHARED = "SHARED"; DELEGATED = "DELEGATED"
+    EXCLUSIVE = "EXCLUSIVE"
+    SHARED = "SHARED"
+    DELEGATED = "DELEGATED"
+
 
 @dataclass(frozen=True, slots=True)
 class PortfolioTarget:
@@ -25,6 +37,7 @@ class PortfolioTarget:
     takeover_strategy: StrategyId | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+
 @dataclass
 class PortfolioState:
     net_positions: dict[str, Quantity] = field(default_factory=dict)
@@ -33,4 +46,6 @@ class PortfolioState:
     available_margin: MonetaryValue | None = None
     total_risk_score: float = 0.0
 
-from .optimizer import PortfolioOptimizerImpl as PortfolioOptimizer, OptimizationResult  # noqa: E402
+
+from .optimizer import OptimizationResult
+from .optimizer import PortfolioOptimizerImpl as PortfolioOptimizer

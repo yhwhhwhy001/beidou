@@ -1,9 +1,13 @@
 """模块生命周期状态机。PROVISIONING→...→ACTIVE/DEGRADED/FAILED/LOCKED。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
 from beidou_shared.types import CorrelationId, ResultStatus
+
 
 class ModuleState(str, Enum):
     PROVISIONING = "PROVISIONING"
@@ -17,11 +21,13 @@ class ModuleState(str, Enum):
     FAILED = "FAILED"
     LOCKED = "LOCKED"
 
+
 class DegradationLevel(str, Enum):
     ACTIVE = "ACTIVE"
     NO_NEW_RISK = "NO_NEW_RISK"
     EXIT_ONLY = "EXIT_ONLY"
     LOCKED = "LOCKED"
+
 
 DEGRADATION_PRIORITY = {
     DegradationLevel.ACTIVE: 0,
@@ -51,6 +57,7 @@ VALID_TRANSITIONS: dict[ModuleState, set[ModuleState]] = {
     ModuleState.LOCKED: set(),
 }
 
+
 @dataclass(frozen=True, slots=True)
 class HealthEvidence:
     module_name: str
@@ -72,9 +79,8 @@ class HealthEvidence:
             return False
         if not all(self.dependencies_healthy.values()):
             return False
-        if self.active_incidents:
-            return False
-        return True
+        return not self.active_incidents
+
 
 class ModuleLifecycle:
     """模块生命周期管理器。恢复后必须经过验证，不得直接 ACTIVE。"""

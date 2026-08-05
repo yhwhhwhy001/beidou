@@ -20,6 +20,7 @@ from typing import Any, Callable
 @dataclass
 class GPConfig:
     """遗传编程配置。"""
+
     population_size: int = 100
     generations: int = 20
     tournament_size: int = 3
@@ -35,6 +36,7 @@ class GPConfig:
 @dataclass
 class GPIndividual:
     """遗传编程个体。"""
+
     individual_id: str
     expression_hash: str
     tree_depth: int
@@ -71,19 +73,19 @@ class SymbolicGPGenerator:
         for i in range(cfg.population_size):
             depth = self._rng.randint(1, min(3, cfg.max_tree_depth))
             primitive = self._rng.choice(primitives)
-            expr_hash = hashlib.sha256(
-                f"gp:{primitive}:d{depth}:g0:i{i}".encode()
-            ).hexdigest()[:20]
+            expr_hash = hashlib.sha256(f"gp:{primitive}:d{depth}:g0:i{i}".encode()).hexdigest()[:20]
 
             if expr_hash not in self._seen_hashes:
                 self._seen_hashes.add(expr_hash)
-                population.append(GPIndividual(
-                    individual_id=f"gp_g0_i{i}",
-                    expression_hash=expr_hash,
-                    tree_depth=depth,
-                    node_count=depth * 2,
-                    complexity_score=depth * 1.5,
-                ))
+                population.append(
+                    GPIndividual(
+                        individual_id=f"gp_g0_i{i}",
+                        expression_hash=expr_hash,
+                        tree_depth=depth,
+                        node_count=depth * 2,
+                        complexity_score=depth * 1.5,
+                    )
+                )
 
         self._population = population
         return population
@@ -113,14 +115,10 @@ class SymbolicGPGenerator:
     def select_parent(self, population: list[GPIndividual]) -> GPIndividual:
         """锦标赛选择。"""
         cfg = self.config
-        candidates = self._rng.sample(
-            population, min(cfg.tournament_size, len(population))
-        )
+        candidates = self._rng.sample(population, min(cfg.tournament_size, len(population)))
         return max(candidates, key=lambda ind: ind.fitness.get("sharpe", -999))
 
-    def crossover(
-        self, parent1: GPIndividual, parent2: GPIndividual
-    ) -> GPIndividual:
+    def crossover(self, parent1: GPIndividual, parent2: GPIndividual) -> GPIndividual:
         """类型化子树交叉。"""
         new_hash = hashlib.sha256(
             f"cx:{parent1.expression_hash[:8]}:{parent2.expression_hash[:8]}:g{self._generation}".encode()
@@ -138,9 +136,7 @@ class SymbolicGPGenerator:
 
     def mutate(self, individual: GPIndividual) -> GPIndividual:
         """点突变。"""
-        new_hash = hashlib.sha256(
-            f"mut:{individual.expression_hash[:8]}:g{self._generation}".encode()
-        ).hexdigest()[:20]
+        new_hash = hashlib.sha256(f"mut:{individual.expression_hash[:8]}:g{self._generation}".encode()).hexdigest()[:20]
 
         return GPIndividual(
             individual_id=f"gp_g{self._generation}_mut",
@@ -165,7 +161,7 @@ class SymbolicGPGenerator:
         # Elitism
         evaluated = self.evaluate_fitness(pop, evaluator)
         evaluated.sort(key=lambda i: i.fitness.get("sharpe", -999), reverse=True)
-        new_pop.extend(evaluated[:cfg.elitism_count])
+        new_pop.extend(evaluated[: cfg.elitism_count])
 
         # Generate offspring
         while len(new_pop) < cfg.population_size:
@@ -181,7 +177,7 @@ class SymbolicGPGenerator:
                 self._seen_hashes.add(child.expression_hash)
                 new_pop.append(child)
 
-        self._population = new_pop[:cfg.population_size]
+        self._population = new_pop[: cfg.population_size]
         return self._population
 
     def run(
@@ -212,7 +208,7 @@ class SymbolicGPGenerator:
             self._generation = gen
             try:
                 self.evolve_one_generation(evaluator)
-            except Exception as e:
+            except Exception:
                 # 单代失败不终止搜索
                 continue
 

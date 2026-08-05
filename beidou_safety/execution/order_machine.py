@@ -36,7 +36,13 @@ VALID_TRANSITIONS: dict[OrderState, set[OrderState]] = {
     OrderState.CANCELED: set(),
     OrderState.REJECTED: set(),
     OrderState.EXPIRED: set(),
-    OrderState.UNKNOWN: {OrderState.ACKED, OrderState.PARTIAL, OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED},
+    OrderState.UNKNOWN: {
+        OrderState.ACKED,
+        OrderState.PARTIAL,
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.REJECTED,
+    },
 }
 
 TERMINAL_STATES = {OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, OrderState.EXPIRED}
@@ -45,6 +51,7 @@ TERMINAL_STATES = {OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, 
 @dataclass
 class OrderAggregate:
     """订单聚合 — 完整生命周期跟踪。"""
+
     order_id: str
     client_order_id: str
     instrument_id: str
@@ -70,15 +77,13 @@ class OrderAggregate:
         self.updated_at = datetime.now(timezone.utc)
         return True
 
-    def apply_fill(self, quantity: float, price: float, commission: float = 0.0,
-                   trade_id: str = "") -> bool:
+    def apply_fill(self, quantity: float, price: float, commission: float = 0.0, trade_id: str = "") -> bool:
         """应用成交更新。重复 trade_id 被幂等忽略。"""
         if trade_id and trade_id in self.trade_ids:
             return False  # 幂等去重
         self.executed_quantity += quantity
         if self.executed_quantity > 0:
-            total_value = (self.avg_fill_price * (self.executed_quantity - quantity) +
-                          price * quantity)
+            total_value = self.avg_fill_price * (self.executed_quantity - quantity) + price * quantity
             self.avg_fill_price = total_value / self.executed_quantity
         self.total_commission += commission
         if trade_id:
@@ -132,17 +137,11 @@ class OrderStateMachine:
 
     def has_unknown_for_symbol(self, symbol: str) -> bool:
         """检查是否有 UNKNOWN 状态的订单（未闭合）。"""
-        return any(
-            o.state == OrderState.UNKNOWN and o.instrument_id == symbol
-            for o in self._orders.values()
-        )
+        return any(o.state == OrderState.UNKNOWN and o.instrument_id == symbol for o in self._orders.values())
 
     def active_orders(self) -> list[OrderAggregate]:
         return [o for o in self._orders.values() if not o.is_terminal]
 
     def total_slice_quantity(self, approval_id: str) -> float:
         """计算某 Approval 下所有 slice 的总数量。"""
-        return sum(
-            o.original_quantity for o in self._orders.values()
-            if o.approval_id == approval_id
-        )
+        return sum(o.original_quantity for o in self._orders.values() if o.approval_id == approval_id)

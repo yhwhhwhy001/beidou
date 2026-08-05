@@ -1,5 +1,7 @@
 """统一遥测基础设施 — 贯穿 market event→decision→approval→intent→order→fill→ledger。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -147,10 +149,9 @@ class AlertSuppressor:
             return False  # P0 永不抑制
         now = datetime.now(timezone.utc)
         self._recent_alerts = [
-            (t, s, k) for t, s, k in self._recent_alerts
-            if (now - t).total_seconds() < self._window_seconds
+            (t, s, k) for t, s, k in self._recent_alerts if (now - t).total_seconds() < self._window_seconds
         ]
-        for t, s, k in self._recent_alerts:
+        for _t, _s, k in self._recent_alerts:
             if k == alert_key:
                 return True
         self._recent_alerts.append((now, severity, alert_key))

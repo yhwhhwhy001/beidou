@@ -1,11 +1,15 @@
-
 """Trading Cell 单活 Executor。Lease、Fencing 与性能预算。"""
+
 from __future__ import annotations
-from datetime import datetime, timezone, timedelta
-from beidou_shared.types import CorrelationId, OrderId, ExecutionId, ResultStatus
+
+from datetime import datetime, timezone
+
+from beidou_shared.types import ResultStatus
+
 
 class LeaseManager:
     """租约管理器。防止双主。"""
+
     def __init__(self, lease_timeout: float = 30.0):
         self._leases: dict[str, datetime] = {}
         self._timeout = lease_timeout
@@ -35,9 +39,11 @@ class LeaseManager:
             return False
         return (datetime.now(timezone.utc) - existing).total_seconds() < self._timeout
 
+
 class FencingProtection:
     """Fencing 保护。旧 Executor 不能发送订单。"""
-    def __init__(self):
+
+    def __init__(self) -> None:
         self._active_generation: dict[str, int] = {}
         self._fenced: set[str] = set()
 

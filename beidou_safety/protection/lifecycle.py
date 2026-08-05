@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 @dataclass
 class PositionAggregate:
     """仓位聚合 — 完整生命周期。"""
+
     position_id: str
     instrument_id: str
     venue_id: str
@@ -68,7 +69,7 @@ class PositionManager:
     - 双向持仓和人工平仓竞态不反向开仓
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._positions: dict[str, PositionAggregate] = {}
 
     def open(self, pos: PositionAggregate) -> PositionAggregate:

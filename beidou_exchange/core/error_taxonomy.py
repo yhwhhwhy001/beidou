@@ -1,18 +1,19 @@
 """交易所错误分类体系 — 将各交易所专有错误码归一化为统一语义。"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from beidou_shared.errors import ErrorCategory, FaultSeverity, RecoveryAction, DomainError
+from beidou_shared.errors import DomainError, ErrorCategory, FaultSeverity, RecoveryAction
 
 # 重新导出 — 供 exchange adapter 层统一导入
 __all__ = [
-    "ErrorCategory",
     "AdapterError",
+    "ErrorCategory",
+    "ErrorNormalizer",
     "Result",
     "classify_http_error",
-    "ErrorNormalizer",
 ]
 
 T = TypeVar("T")
@@ -24,6 +25,7 @@ class AdapterError(Exception):
 
     封装原始异常、HTTP 状态码和归一化分类。
     """
+
     message: str
     http_status: int = 0
     category: ErrorCategory = ErrorCategory.UNKNOWN
@@ -40,6 +42,7 @@ class Result(Generic[T]):
 
     ok=True 时 data 有效；ok=False 时 error 有效。
     """
+
     ok: bool
     data: T | None = None
     error: AdapterError | None = None
@@ -49,9 +52,14 @@ class Result(Generic[T]):
         return cls(ok=True, data=data)
 
     @classmethod
-    def failure(cls, message: str, http_status: int = 0,
-                category: ErrorCategory = ErrorCategory.UNKNOWN,
-                retryable: bool = False, raw: Any = None) -> "Result[T]":
+    def failure(
+        cls,
+        message: str,
+        http_status: int = 0,
+        category: ErrorCategory = ErrorCategory.UNKNOWN,
+        retryable: bool = False,
+        raw: Any = None,
+    ) -> "Result[T]":
         return cls(
             ok=False,
             error=AdapterError(
@@ -106,7 +114,10 @@ class ErrorNormalizer:
 
     @classmethod
     def normalize(
-        cls, venue_id: str, error_code: int, raw_message: str,
+        cls,
+        venue_id: str,
+        error_code: int,
+        raw_message: str,
         correlation_id: str | None = None,
     ) -> DomainError:
         venue_map = cls._NORMALIZATION_MAP.get(venue_id.upper(), {})
@@ -135,7 +146,8 @@ class ErrorNormalizer:
 
     @classmethod
     def register_venue_errors(
-        cls, venue_id: str,
+        cls,
+        venue_id: str,
         mapping: dict[int, tuple[ErrorCategory, FaultSeverity, RecoveryAction]],
     ) -> None:
         venue_id = venue_id.upper()

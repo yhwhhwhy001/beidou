@@ -1,18 +1,20 @@
-
 """生产高可用配置。事实源、RPO/RTO、灾备恢复与健康探针。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
-from beidou_shared.types import CorrelationId, ResultStatus
+
 from beidou_lifecycle import DegradationLevel
+
 
 class DatabaseRole(str, Enum):
     PRIMARY = "PRIMARY"
     REPLICA = "REPLICA"
     ANALYTICS = "ANALYTICS"
     DR = "DR"
+
 
 class FactSource(str, Enum):
     POSTGRESQL = "POSTGRESQL"
@@ -22,6 +24,7 @@ class FactSource(str, Enum):
 
     def is_authoritative(self) -> bool:
         return self in (FactSource.POSTGRESQL, FactSource.KAFKA)
+
 
 FACT_SOURCE_AUTHORITY = {
     "orders": FactSource.POSTGRESQL,
@@ -33,6 +36,7 @@ FACT_SOURCE_AUTHORITY = {
     "backups": FactSource.OBJECT_STORE,
 }
 
+
 @dataclass(frozen=True, slots=True)
 class RPO_RTO_Target:
     data_domain: str
@@ -40,6 +44,7 @@ class RPO_RTO_Target:
     rto_seconds: int
     measurement_method: str
     last_verified: datetime | None = None
+
 
 @dataclass
 class BackupVerification:
@@ -53,7 +58,13 @@ class BackupVerification:
     reconciliation_passed: bool = False
 
     def is_valid(self) -> bool:
-        return self.restore_successful and self.ledger_balanced and self.intent_integrity and all(self.invariants_check.values())
+        return (
+            self.restore_successful
+            and self.ledger_balanced
+            and self.intent_integrity
+            and all(self.invariants_check.values())
+        )
+
 
 @dataclass
 class InfrastructureTopology:
@@ -67,6 +78,7 @@ class InfrastructureTopology:
 
     def get_authoritative_source(self, data_domain: str) -> FactSource:
         return FACT_SOURCE_AUTHORITY.get(data_domain, FactSource.POSTGRESQL)
+
 
 @dataclass
 class DisasterRecoveryPlan:
@@ -83,10 +95,10 @@ class DisasterRecoveryPlan:
 
     def can_resume_trading(self) -> bool:
         account_facts_restored = any(
-            bv.data_domain == "account_facts" and bv.is_valid()
-            for bv in self.backup_verifications
+            bv.data_domain == "account_facts" and bv.is_valid() for bv in self.backup_verifications
         )
         return account_facts_restored
+
 
 @dataclass(frozen=True, slots=True)
 class StartupProbe:
@@ -97,6 +109,7 @@ class StartupProbe:
     def is_ready(self) -> bool:
         return all([self.dependencies_ready, self.config_loaded, self.migrations_applied])
 
+
 @dataclass(frozen=True, slots=True)
 class LivenessProbe:
     process_alive: bool
@@ -105,6 +118,7 @@ class LivenessProbe:
 
     def is_alive(self) -> bool:
         return all([self.process_alive, self.event_loop_responsive])
+
 
 @dataclass(frozen=True, slots=True)
 class ReadinessProbe:

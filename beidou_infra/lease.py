@@ -27,6 +27,7 @@ class FencingLease:
     使用 generation 递增门控：新实例启动时 generation+1，
     旧实例检测到 generation 落后时自动 FENCED。
     """
+
     instance_id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
     generation: int = 1
     ttl_seconds: int = 30
@@ -110,6 +111,7 @@ class LeaseManager:
         """通过 Redis 获取租约（需要 redis 库）。"""
         try:
             import redis
+
             r = redis.Redis(host="localhost", port=6379, socket_timeout=2)
             key = f"beidou:lease:{LeaseManager.LEASE_KEY}"
             acquired = r.set(key, lease.instance_id, nx=True, ex=lease.ttl_seconds)
@@ -131,6 +133,7 @@ class LeaseManager:
         """通过 PostgreSQL advisory lock 获取租约。"""
         try:
             import psycopg
+
             conn = psycopg.connect(os.environ.get("DATABASE_URL", ""))
             cur = conn.execute(
                 "SELECT pg_try_advisory_lock(%s)",

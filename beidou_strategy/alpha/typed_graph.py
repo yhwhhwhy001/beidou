@@ -19,22 +19,26 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from beidou_shared.types import (
-    InstrumentId, ModelId, SchemaVersion, StrategyId, VenueId,
+    InstrumentId,
+    StrategyId,
+    VenueId,
 )
 from beidou_strategy.alpha.contracts import (
-    EntryProposal, FilterDecision, FilterResult, StrategyProposal,
-    FeatureSnapshot, DataQualityTier,
+    DataQualityTier,
+    EntryProposal,
+    FilterDecision,
+    FilterResult,
+    StrategyProposal,
 )
-
 
 # ================================================================
 # 节点类型
 # ================================================================
+
 
 class NodeType(str, Enum):
     FEATURE = "FEATURE"
@@ -48,22 +52,24 @@ class NodeType(str, Enum):
 
 
 class NodeFailurePolicy(str, Enum):
-    FAIL_CLOSED = "FAIL_CLOSED"      # 节点失败 = VETO
-    SKIP = "SKIP"                     # 节点失败 = 跳过（不推荐）
-    DEGRADE = "DEGRADE"              # 节点失败 = DEGRADE
+    FAIL_CLOSED = "FAIL_CLOSED"  # 节点失败 = VETO
+    SKIP = "SKIP"  # 节点失败 = 跳过（不推荐）
+    DEGRADE = "DEGRADE"  # 节点失败 = DEGRADE
 
 
 # ================================================================
 # 节点输出类型
 # ================================================================
 
+
 @dataclass(frozen=True)
 class TypedNodeOutput:
     """类型化节点输出 — 每个节点输出带 hash 和版本追溯。"""
+
     node_id: str
     node_type: NodeType
-    output_hash: str         # 输出的确定性哈希
-    data: Any                 # 实际输出数据
+    output_hash: str  # 输出的确定性哈希
+    data: Any  # 实际输出数据
     dq_tier: DataQualityTier = DataQualityTier.UNKNOWN
     policy_version: str = ""
     factor_version: str = ""
@@ -71,19 +77,24 @@ class TypedNodeOutput:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def compute_hash(self) -> str:
-        content = json.dumps({
-            "node_id": self.node_id,
-            "node_type": self.node_type.value,
-            "data": str(self.data),
-            "dq_tier": self.dq_tier.value,
-            "policy_version": self.policy_version,
-        }, sort_keys=True, default=str)
+        content = json.dumps(
+            {
+                "node_id": self.node_id,
+                "node_type": self.node_type.value,
+                "data": str(self.data),
+                "dq_tier": self.dq_tier.value,
+                "policy_version": self.policy_version,
+            },
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
 # ================================================================
 # 类型化图节点
 # ================================================================
+
 
 class TypedGraphNode(ABC):
     """类型化 DAG 节点基类。"""
@@ -114,6 +125,7 @@ class TypedGraphNode(ABC):
 # 具体节点实现
 # ================================================================
 
+
 class FeatureNode(TypedGraphNode):
     """特征节点 — 从 FeatureStore 读取点时可得的特征快照。"""
 
@@ -124,9 +136,9 @@ class FeatureNode(TypedGraphNode):
     async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
         features = context.get("features", {})
         values = {name: features.get(name, 0.0) for name in self.feature_names}
-        dq_tier = DataQualityTier.PASS if all(
-            name in features for name in self.feature_names
-        ) else DataQualityTier.DEGRADED
+        dq_tier = (
+            DataQualityTier.PASS if all(name in features for name in self.feature_names) else DataQualityTier.DEGRADED
+        )
 
         return TypedNodeOutput(
             node_id=self.node_id,
@@ -180,8 +192,10 @@ class EntryNode(TypedGraphNode):
         except Exception as e:
             if self.failure_policy == NodeFailurePolicy.FAIL_CLOSED:
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.ENTRY,
-                    output_hash="error", data=None,
+                    node_id=self.node_id,
+                    node_type=NodeType.ENTRY,
+                    output_hash="error",
+                    data=None,
                     dq_tier=DataQualityTier.BLOCK,
                     metadata={"error": str(e)},
                 )
@@ -248,8 +262,10 @@ class FilterNode(TypedGraphNode):
                     component_id=self.node_id,
                 )
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.FILTER,
-                    output_hash="error_veto", data=fail_result,
+                    node_id=self.node_id,
+                    node_type=NodeType.FILTER,
+                    output_hash="error_veto",
+                    data=fail_result,
                     dq_tier=DataQualityTier.BLOCK,
                     metadata={"error": str(e)},
                 )
@@ -284,12 +300,16 @@ class FusionNode(TypedGraphNode):
 
         if entry_proposal is None:
             return TypedNodeOutput(
-                node_id=self.node_id, node_type=NodeType.FUSION,
+                node_id=self.node_id,
+                node_type=NodeType.FUSION,
                 output_hash="no_entry",
                 data=StrategyProposal(
                     strategy_id=StrategyId("no_entry"),
-                    instrument_id=instrument, venue_id=venue,
-                    direction="NO_ACTION", strength=0.0, confidence=0.0,
+                    instrument_id=instrument,
+                    venue_id=venue,
+                    direction="NO_ACTION",
+                    strength=0.0,
+                    confidence=0.0,
                 ),
                 dq_tier=DataQualityTier.DEGRADED,
             )
@@ -300,12 +320,16 @@ class FusionNode(TypedGraphNode):
         # UNKNOWN DQ → 不新增风险
         if any(inp.dq_tier == DataQualityTier.BLOCK for inp in inputs.values()):
             return TypedNodeOutput(
-                node_id=self.node_id, node_type=NodeType.FUSION,
+                node_id=self.node_id,
+                node_type=NodeType.FUSION,
                 output_hash="dq_blocked",
                 data=StrategyProposal(
                     strategy_id=StrategyId("dq_blocked"),
-                    instrument_id=instrument, venue_id=venue,
-                    direction="NO_ACTION", strength=0.0, confidence=0.0,
+                    instrument_id=instrument,
+                    venue_id=venue,
+                    direction="NO_ACTION",
+                    strength=0.0,
+                    confidence=0.0,
                 ),
                 dq_tier=DataQualityTier.BLOCK,
             )
@@ -314,12 +338,16 @@ class FusionNode(TypedGraphNode):
         vetoes = [f for f in filter_results if f.decision == FilterDecision.VETO]
         if vetoes:
             return TypedNodeOutput(
-                node_id=self.node_id, node_type=NodeType.FUSION,
+                node_id=self.node_id,
+                node_type=NodeType.FUSION,
                 output_hash="vetoed",
                 data=StrategyProposal(
                     strategy_id=StrategyId("vetoed"),
-                    instrument_id=instrument, venue_id=venue,
-                    direction="NO_ACTION", strength=0.0, confidence=0.0,
+                    instrument_id=instrument,
+                    venue_id=venue,
+                    direction="NO_ACTION",
+                    strength=0.0,
+                    confidence=0.0,
                     filter_results=filter_results,
                 ),
                 dq_tier=DataQualityTier.PASS,
@@ -355,15 +383,18 @@ class FusionNode(TypedGraphNode):
         )
 
         output = TypedNodeOutput(
-            node_id=self.node_id, node_type=NodeType.FUSION,
+            node_id=self.node_id,
+            node_type=NodeType.FUSION,
             output_hash="",
             data=proposal,
             dq_tier=DataQualityTier.PASS,
         )
         output = TypedNodeOutput(
-            node_id=output.node_id, node_type=output.node_type,
+            node_id=output.node_id,
+            node_type=output.node_type,
             output_hash=output.compute_hash(),
-            data=output.data, dq_tier=output.dq_tier,
+            data=output.data,
+            dq_tier=output.dq_tier,
         )
         return output
 
@@ -371,6 +402,7 @@ class FusionNode(TypedGraphNode):
 # ================================================================
 # TypedAlphaGraph
 # ================================================================
+
 
 class TypedAlphaGraph:
     """类型化 Alpha DAG 执行器。
@@ -381,7 +413,7 @@ class TypedAlphaGraph:
     def __init__(self, strategy_id: StrategyId) -> None:
         self.strategy_id = strategy_id
         self._nodes: dict[str, TypedGraphNode] = {}
-        self._edges: dict[str, list[str]] = {}    # from → [to, ...]
+        self._edges: dict[str, list[str]] = {}  # from → [to, ...]
 
     def add_node(self, node: TypedGraphNode) -> None:
         if node.node_id in self._nodes:
@@ -399,8 +431,8 @@ class TypedAlphaGraph:
 
     def topological_order(self) -> list[str]:
         """Kahn 拓扑排序。"""
-        in_deg = {n: 0 for n in self._nodes}
-        for src, tgts in self._edges.items():
+        in_deg = dict.fromkeys(self._nodes, 0)
+        for _src, tgts in self._edges.items():
             for t in tgts:
                 in_deg[t] = in_deg.get(t, 0) + 1
 
@@ -434,11 +466,7 @@ class TypedAlphaGraph:
             node = self._nodes[node_id]
 
             # 收集上游输出
-            upstream_outputs = {
-                dep: outputs[dep]
-                for dep in node._input_nodes
-                if dep in outputs
-            }
+            upstream_outputs = {dep: outputs[dep] for dep in node._input_nodes if dep in outputs}
 
             # 执行节点
             output = await node.execute(upstream_outputs, context)
@@ -446,8 +474,7 @@ class TypedAlphaGraph:
 
             # 强制 VETO 短路
             if isinstance(node, FilterNode) and node.is_mandatory:
-                if (isinstance(output.data, FilterResult)
-                        and output.data.decision == FilterDecision.VETO):
+                if isinstance(output.data, FilterResult) and output.data.decision == FilterDecision.VETO:
                     # 返回否决结果，不再执行后续节点
                     return None
 
@@ -463,18 +490,19 @@ class TypedAlphaGraph:
 
     def compute_graph_hash(self) -> str:
         """计算图结构的确定性哈希（用于 parity 验证）。"""
-        nodes_info = sorted([
-            {"id": nid, "type": node.node_type.value}
-            for nid, node in self._nodes.items()
-        ], key=lambda x: x["id"])
-        edges_info = sorted([
-            {"from": src, "to": tgt}
-            for src, tgts in self._edges.items()
-            for tgt in tgts
-        ], key=lambda x: (x["from"], x["to"]))
-        content = json.dumps({
-            "strategy_id": str(self.strategy_id),
-            "nodes": nodes_info,
-            "edges": edges_info,
-        }, sort_keys=True)
+        nodes_info = sorted(
+            [{"id": nid, "type": node.node_type.value} for nid, node in self._nodes.items()], key=lambda x: x["id"]
+        )
+        edges_info = sorted(
+            [{"from": src, "to": tgt} for src, tgts in self._edges.items() for tgt in tgts],
+            key=lambda x: (x["from"], x["to"]),
+        )
+        content = json.dumps(
+            {
+                "strategy_id": str(self.strategy_id),
+                "nodes": nodes_info,
+                "edges": edges_info,
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]

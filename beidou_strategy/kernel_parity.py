@@ -12,9 +12,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Protocol
-
-from beidou_shared.types import StrategyId
+from typing import Any
 
 
 class KernelMode(str, Enum):
@@ -32,6 +30,7 @@ class ParityStatus(str, Enum):
 @dataclass
 class ParityResult:
     """策略内核一致性验证结果。"""
+
     backtest_hash: str = ""
     paper_hash: str = ""
     testnet_hash: str = ""
@@ -54,11 +53,15 @@ class StrategyKernelContract:
     @staticmethod
     def compute_proposal_hash(proposal: Any) -> str:
         """计算 StrategyProposal 的确定性哈希。"""
-        content = json.dumps({
-            "direction": getattr(proposal, "direction", ""),
-            "strength": getattr(proposal, "strength", 0),
-            "confidence": getattr(proposal, "confidence", 0),
-        }, sort_keys=True, default=str)
+        content = json.dumps(
+            {
+                "direction": getattr(proposal, "direction", ""),
+                "strength": getattr(proposal, "strength", 0),
+                "confidence": getattr(proposal, "confidence", 0),
+            },
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     @staticmethod
@@ -71,19 +74,13 @@ class StrategyKernelContract:
         result = ParityResult()
 
         if backtest_result is not None:
-            result.backtest_hash = StrategyKernelContract.compute_proposal_hash(
-                backtest_result
-            )
+            result.backtest_hash = StrategyKernelContract.compute_proposal_hash(backtest_result)
 
         if paper_result is not None:
-            result.paper_hash = StrategyKernelContract.compute_proposal_hash(
-                paper_result
-            )
+            result.paper_hash = StrategyKernelContract.compute_proposal_hash(paper_result)
 
         if testnet_result is not None:
-            result.testnet_hash = StrategyKernelContract.compute_proposal_hash(
-                testnet_result
-            )
+            result.testnet_hash = StrategyKernelContract.compute_proposal_hash(testnet_result)
 
         # 比较
         if result.backtest_hash and result.paper_hash:
@@ -91,9 +88,7 @@ class StrategyKernelContract:
                 result.status = ParityStatus.MATCH
             else:
                 result.status = ParityStatus.DISCREPANCY
-                result.discrepancies.append(
-                    f"Backtest {result.backtest_hash} != Paper {result.paper_hash}"
-                )
+                result.discrepancies.append(f"Backtest {result.backtest_hash} != Paper {result.paper_hash}")
         else:
             result.status = ParityStatus.NOT_RUN
 
@@ -111,7 +106,9 @@ def parity_check(
         (passed, ParityResult)
     """
     result = StrategyKernelContract.verify_parity(
-        backtest_proposal, paper_proposal, testnet_proposal,
+        backtest_proposal,
+        paper_proposal,
+        testnet_proposal,
     )
     passed = result.status == ParityStatus.MATCH or result.status == ParityStatus.NOT_RUN
     return passed, result

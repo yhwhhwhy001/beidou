@@ -30,10 +30,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Sequence
 
-
 # ================================================================
 # 类型系统
 # ================================================================
+
 
 class ExprType(str, Enum):
     """表达式类型 — 每个表达式输出的量纲。
@@ -41,6 +41,7 @@ class ExprType(str, Enum):
     类型检查依据：相同量纲才能相加/相减，乘法要求至少一侧为
     SCALAR（PRICE × PRICE 等不同量纲乘法在构建时拒绝）。
     """
+
     PRICE = "PRICE"
     RETURN = "RETURN"
     VOLUME = "VOLUME"
@@ -59,6 +60,7 @@ class ExprType(str, Enum):
 # ================================================================
 # 异常
 # ================================================================
+
 
 class ExpressionError(ValueError):
     """表达式系统错误基类。"""
@@ -79,6 +81,7 @@ class UnsupportedExpressionError(ExpressionParseError):
 # ================================================================
 # 基类与工具
 # ================================================================
+
 
 def _num(v: float | None) -> float:
     """None → NaN，其余转 float。"""
@@ -175,8 +178,8 @@ class Expression(ABC):
     所有子类均为 frozen dataclass，构造时执行类型检查。
     """
 
-    OP_NAME: str = ""            # 序列化/白名单操作名
-    COMPLEXITY_WEIGHT: int = 0   # 算子复杂度权重
+    OP_NAME: str = ""  # 序列化/白名单操作名
+    COMPLEXITY_WEIGHT: int = 0  # 算子复杂度权重
 
     # ---- 类型系统 ----
 
@@ -201,9 +204,7 @@ class Expression(ABC):
         内存地址等实现细节；特征名属于语义内容，参与哈希。
         """
         canon = self.canonicalize()
-        return hashlib.sha256(
-            _stable_dumps(canon.to_dict()).encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha256(_stable_dumps(canon.to_dict()).encode("utf-8")).hexdigest()
 
     # ---- 复杂度与回溯期 ----
 
@@ -214,11 +215,7 @@ class Expression(ABC):
 
     def complexity_score(self) -> int:
         """复杂度评分：每个节点 1 分 + 算子复杂度权重之和。"""
-        return (
-            1
-            + self.COMPLEXITY_WEIGHT
-            + sum(child.complexity_score() for child in self.children)
-        )
+        return 1 + self.COMPLEXITY_WEIGHT + sum(child.complexity_score() for child in self.children)
 
     def max_lookback(self) -> int:
         """最大回溯期：所有 Lag/Diff/Rolling* 窗口的最大值。"""
@@ -262,9 +259,7 @@ class Expression(ABC):
         data: Mapping[str, Sequence[float | None]],
     ) -> list[float]:
         """单标的求值便利方法：特征名 → 时间序列。"""
-        nested: dict[str, list[list[float | None]]] = {
-            name: [list(series)] for name, series in data.items()
-        }
+        nested: dict[str, list[list[float | None]]] = {name: [list(series)] for name, series in data.items()}
         return list(self._eval(nested)[0])
 
     @abstractmethod
@@ -275,6 +270,7 @@ class Expression(ABC):
 # ================================================================
 # 叶子节点
 # ================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class Constant(Expression):
@@ -370,6 +366,7 @@ class Feature(Expression):
 # 时序算子
 # ================================================================
 
+
 def _validate_int_param(name: str, value: object) -> None:
     """窗口/期数等整数参数的验证（排除 bool）。"""
     if isinstance(value, bool) or not isinstance(value, int):
@@ -415,8 +412,7 @@ class Lag(Expression):
 
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
         return [
-            [float("nan")] * self.n + list(row[:-self.n]) if self.n else list(row)
-            for row in self.expr._eval(data)
+            [float("nan")] * self.n + list(row[: -self.n]) if self.n else list(row) for row in self.expr._eval(data)
         ]
 
 
@@ -567,10 +563,7 @@ class RollingMean(Expression):
         return RollingMean(from_dict(data["expr"]), data["window"])
 
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
-        return [
-            _rolling_apply(row, self.window, lambda vals: sum(vals) / len(vals))
-            for row in self.expr._eval(data)
-        ]
+        return [_rolling_apply(row, self.window, lambda vals: sum(vals) / len(vals)) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -613,10 +606,7 @@ class RollingStd(Expression):
         return RollingStd(from_dict(data["expr"]), data["window"])
 
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
-        return [
-            _rolling_apply(row, self.window, _std)
-            for row in self.expr._eval(data)
-        ]
+        return [_rolling_apply(row, self.window, _std) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -658,10 +648,7 @@ class RollingMedian(Expression):
         return RollingMedian(from_dict(data["expr"]), data["window"])
 
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
-        return [
-            _rolling_apply(row, self.window, _median)
-            for row in self.expr._eval(data)
-        ]
+        return [_rolling_apply(row, self.window, _median) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,10 +693,8 @@ class RollingMAD(Expression):
         def _mad(vals: Sequence[float]) -> float:
             med = _median(vals)
             return _median([abs(v - med) for v in vals])
-        return [
-            _rolling_apply(row, self.window, _mad)
-            for row in self.expr._eval(data)
-        ]
+
+        return [_rolling_apply(row, self.window, _mad) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -758,10 +743,7 @@ class RollingQuantile(Expression):
         return RollingQuantile(from_dict(data["expr"]), data["window"], data["q"])
 
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
-        return [
-            _rolling_apply(row, self.window, lambda vals: _quantile(vals, self.q))
-            for row in self.expr._eval(data)
-        ]
+        return [_rolling_apply(row, self.window, lambda vals: _quantile(vals, self.q)) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -812,10 +794,7 @@ class EMA(Expression):
             out: list[float] = []
             prev = float("nan")
             for v in row:
-                if _is_nan(prev):
-                    prev = v
-                else:
-                    prev = alpha * v + (1.0 - alpha) * prev
+                prev = v if _is_nan(prev) else alpha * v + (1.0 - alpha) * prev
                 out.append(prev)
             rows.append(out)
         return rows
@@ -863,10 +842,8 @@ class TsRank(Expression):
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
         def _rank(vals: Sequence[float]) -> float:
             return _rank_of(vals, vals[-1])
-        return [
-            _rolling_apply(row, self.window, _rank)
-            for row in self.expr._eval(data)
-        ]
+
+        return [_rolling_apply(row, self.window, _rank) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -970,10 +947,8 @@ class ZScore(Expression):
             if _is_nan(sd) or sd == 0.0:
                 return float("nan")
             return (vals[-1] - m) / sd
-        return [
-            _rolling_apply(row, self.window, _zs)
-            for row in self.expr._eval(data)
-        ]
+
+        return [_rolling_apply(row, self.window, _zs) for row in self.expr._eval(data)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1024,15 +999,14 @@ class RobustZScore(Expression):
             if _is_nan(mad) or mad <= 1e-12:
                 return float("nan")
             return (vals[-1] - med) / mad
-        return [
-            _rolling_apply(row, self.window, _rzs)
-            for row in self.expr._eval(data)
-        ]
+
+        return [_rolling_apply(row, self.window, _rzs) for row in self.expr._eval(data)]
 
 
 # ================================================================
 # 数学变换
 # ================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class SafeDiv(Expression):
@@ -1075,8 +1049,10 @@ class SafeDiv(Expression):
         b = self.b.canonicalize()
         # 常数折叠
         if (
-            isinstance(a, Constant) and isinstance(b, Constant)
-            and a.dtype is not ExprType.BOOLEAN and b.dtype is not ExprType.BOOLEAN
+            isinstance(a, Constant)
+            and isinstance(b, Constant)
+            and a.dtype is not ExprType.BOOLEAN
+            and b.dtype is not ExprType.BOOLEAN
         ):
             den = float(b.value)
             if abs(den) > self.epsilon:
@@ -1159,10 +1135,7 @@ class SignedLog1p(Expression):
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
         out: list[list[float]] = []
         for row in self.expr._eval(data):
-            out.append([
-                math.copysign(math.log1p(abs(v)), v) if v != 0.0 else 0.0
-                for v in row
-            ])
+            out.append([math.copysign(math.log1p(abs(v)), v) if v != 0.0 else 0.0 for v in row])
         return out
 
 
@@ -1204,10 +1177,7 @@ class SignedSqrt(Expression):
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
         out: list[list[float]] = []
         for row in self.expr._eval(data):
-            out.append([
-                math.copysign(math.sqrt(abs(v)), v) if v != 0.0 else 0.0
-                for v in row
-            ])
+            out.append([math.copysign(math.sqrt(abs(v)), v) if v != 0.0 else 0.0 for v in row])
         return out
 
 
@@ -1225,9 +1195,7 @@ class Clip(Expression):
                 raise ExpressionTypeError(f"Clip.{name} 必须为数值, 收到 {v!r}")
             object.__setattr__(self, name, float(v))
         if self.lower > self.upper:
-            raise ExpressionTypeError(
-                f"Clip.lower ({self.lower}) 不能大于 upper ({self.upper})"
-            )
+            raise ExpressionTypeError(f"Clip.lower ({self.lower}) 不能大于 upper ({self.upper})")
         self.validate_types()
 
     def output_type(self) -> ExprType:
@@ -1259,10 +1227,7 @@ class Clip(Expression):
     def _eval(self, data: Mapping[str, Sequence[Sequence[float | None]]]) -> list[list[float]]:
         out: list[list[float]] = []
         for row in self.expr._eval(data):
-            out.append([
-                v if _is_nan(v) else min(max(v, self.lower), self.upper)
-                for v in row
-            ])
+            out.append([v if _is_nan(v) else min(max(v, self.lower), self.upper) for v in row])
         return out
 
 
@@ -1280,9 +1245,7 @@ class Residualize(Expression):
     controls: tuple[Expression, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.controls, tuple) or not all(
-            isinstance(c, Expression) for c in self.controls
-        ):
+        if not isinstance(self.controls, tuple) or not all(isinstance(c, Expression) for c in self.controls):
             raise ExpressionTypeError("Residualize.controls 必须为表达式元组")
         object.__setattr__(self, "controls", tuple(self.controls))
         self.validate_types()
@@ -1352,8 +1315,10 @@ class Residualize(Expression):
 
                 # 过滤 None/NaN
                 valid = [
-                    (yt, xt) for yt, xt in zip(y_col, x_col)
-                    if yt is not None and xt is not None
+                    (yt, xt)
+                    for yt, xt in zip(y_col, x_col, strict=False)
+                    if yt is not None
+                    and xt is not None
                     and not (isinstance(yt, float) and (math.isnan(yt) or math.isinf(yt)))
                     and not (isinstance(xt, float) and (math.isnan(xt) or math.isinf(xt)))
                 ]
@@ -1397,13 +1362,9 @@ class Where(Expression):
 
     def validate_types(self) -> None:
         if self.condition.output_type() is not ExprType.BOOLEAN:
-            raise ExpressionTypeError(
-                f"Where.condition 必须为 BOOLEAN 类型, 收到 {self.condition.output_type()}"
-            )
+            raise ExpressionTypeError(f"Where.condition 必须为 BOOLEAN 类型, 收到 {self.condition.output_type()}")
         if self.a.output_type() is not self.b.output_type():
-            raise ExpressionTypeError(
-                f"Where 两个分支类型不一致: {self.a.output_type()} vs {self.b.output_type()}"
-            )
+            raise ExpressionTypeError(f"Where 两个分支类型不一致: {self.a.output_type()} vs {self.b.output_type()}")
 
     def canonicalize(self) -> Expression:
         return Where(
@@ -1455,6 +1416,7 @@ class Where(Expression):
 # 算术与比较算子
 # ================================================================
 
+
 def _validate_mixing(name: str, a: Expression, b: Expression) -> ExprType:
     """加减与比较的混合类型规则。
 
@@ -1468,9 +1430,7 @@ def _validate_mixing(name: str, a: Expression, b: Expression) -> ExprType:
         return tb
     if tb is ExprType.SCALAR:
         return ta
-    raise ExpressionTypeError(
-        f"{name} 非法量纲组合: {ta.value} {name} {tb.value}"
-    )
+    raise ExpressionTypeError(f"{name} 非法量纲组合: {ta.value} {name} {tb.value}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1578,10 +1538,7 @@ class Sub(Expression):
         if a == b:
             return Constant(0.0, a.output_type())
         # 常数折叠
-        if (
-            isinstance(a, Constant) and isinstance(b, Constant)
-            and a.dtype is b.dtype and a.dtype.is_numeric
-        ):
+        if isinstance(a, Constant) and isinstance(b, Constant) and a.dtype is b.dtype and a.dtype.is_numeric:
             return Constant(float(a.value) - float(b.value), a.dtype)
         return Sub(a, b)
 
@@ -1621,9 +1578,7 @@ class Mul(Expression):
         if not ta.is_numeric or not tb.is_numeric:
             raise ExpressionTypeError("Mul 只接受数值类型操作数")
         if ta is not ExprType.SCALAR and tb is not ExprType.SCALAR:
-            raise ExpressionTypeError(
-                f"非法乘法量纲组合: {ta.value} * {tb.value}（至少一侧必须为 SCALAR）"
-            )
+            raise ExpressionTypeError(f"非法乘法量纲组合: {ta.value} * {tb.value}（至少一侧必须为 SCALAR）")
 
     def canonicalize(self) -> Expression:
         parts: list[Expression] = []
@@ -1727,10 +1682,7 @@ def _binary_eval(
     op,
 ) -> list[list[float]]:
     """逐单元格二元运算（NaN 自然传播）。"""
-    return [
-        [op(ra[s][t], rb[s][t]) for t in range(len(ra[s]))]
-        for s in range(len(ra))
-    ]
+    return [[op(ra[s][t], rb[s][t]) for t in range(len(ra[s]))] for s in range(len(ra))]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2012,9 +1964,7 @@ ALL_NODE_TYPES: tuple[type[Expression], ...] = (
     Ne,
 )
 
-NODE_BY_OP: dict[str, type[Expression]] = {
-    cls.OP_NAME: cls for cls in ALL_NODE_TYPES
-}
+NODE_BY_OP: dict[str, type[Expression]] = {cls.OP_NAME: cls for cls in ALL_NODE_TYPES}
 
 
 def from_dict(data: dict) -> Expression:
@@ -2023,43 +1973,43 @@ def from_dict(data: dict) -> Expression:
 
 
 __all__ = [
+    "EMA",
+    "NODE_BY_OP",
+    "Add",
+    "Clip",
+    "Constant",
+    "CsRank",
+    "Diff",
+    "Eq",
     "ExprType",
     "Expression",
-    "Constant",
+    "ExpressionError",
+    "ExpressionParseError",
+    "ExpressionTypeError",
     "Feature",
+    "Ge",
+    "Gt",
     "Lag",
-    "Diff",
+    "Le",
+    "Lt",
+    "Mul",
+    "Ne",
+    "Neg",
     "PctChange",
-    "RollingMean",
-    "RollingStd",
-    "RollingMedian",
-    "RollingMAD",
-    "RollingQuantile",
-    "EMA",
-    "TsRank",
-    "CsRank",
-    "ZScore",
+    "Residualize",
     "RobustZScore",
+    "RollingMAD",
+    "RollingMean",
+    "RollingMedian",
+    "RollingQuantile",
+    "RollingStd",
     "SafeDiv",
     "SignedLog1p",
     "SignedSqrt",
-    "Clip",
-    "Residualize",
-    "Where",
-    "Add",
     "Sub",
-    "Mul",
-    "Neg",
-    "Lt",
-    "Le",
-    "Gt",
-    "Ge",
-    "Eq",
-    "Ne",
-    "ExpressionError",
-    "ExpressionTypeError",
-    "ExpressionParseError",
+    "TsRank",
     "UnsupportedExpressionError",
-    "NODE_BY_OP",
+    "Where",
+    "ZScore",
     "from_dict",
 ]

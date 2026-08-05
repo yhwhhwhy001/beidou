@@ -13,17 +13,17 @@ import math
 import pytest
 
 from beidou_research.mining.expression_ast import (
+    EMA,
     Add,
     Clip,
     Constant,
     CsRank,
     Diff,
-    EMA,
     Eq,
-    ExprType,
     ExpressionError,
     ExpressionParseError,
     ExpressionTypeError,
+    ExprType,
     Feature,
     Gt,
     Lag,
@@ -54,10 +54,10 @@ from beidou_research.mining.primitive_library import (
     parse_expression,
 )
 
-
 # ================================================================
 # 测试工具
 # ================================================================
+
 
 def close(t: ExprType = ExprType.PRICE) -> Feature:
     return Feature("close", t)
@@ -74,6 +74,7 @@ def isnan(v: float) -> bool:
 # ================================================================
 # 基本构建与求值
 # ================================================================
+
 
 class TestBasicEvaluation:
     """基本表达式构建与求值。"""
@@ -105,18 +106,14 @@ class TestBasicEvaluation:
         assert isnan(result[2])
 
     def test_rolling_mean(self):
-        result = RollingMean(close(), 3).evaluate_series(
-            {"close": [1.0, 2.0, 4.0, 8.0, 16.0]}
-        )
+        result = RollingMean(close(), 3).evaluate_series({"close": [1.0, 2.0, 4.0, 8.0, 16.0]})
         assert isnan(result[0]) and isnan(result[1])
         assert abs(result[2] - 7.0 / 3.0) < 1e-12
         assert abs(result[3] - 14.0 / 3.0) < 1e-12
         assert abs(result[4] - 28.0 / 3.0) < 1e-12
 
     def test_rolling_median(self):
-        result = RollingMedian(close(), 3).evaluate_series(
-            {"close": [5.0, 1.0, 3.0, 10.0, 2.0]}
-        )
+        result = RollingMedian(close(), 3).evaluate_series({"close": [5.0, 1.0, 3.0, 10.0, 2.0]})
         assert result[2] == 3.0
         assert result[3] == 3.0
         assert result[4] == 3.0
@@ -170,10 +167,12 @@ class TestBasicEvaluation:
         """Residualize OLS 求值（逐步去相关）。"""
         expr = Residualize(close(), (volume(),))
         # 完美线性相关 → OLS 残差化后接近 0
-        result = expr._eval({
-            "close": [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0], [5.0, 50.0]],
-            "volume": [[2.0, 20.0], [4.0, 40.0], [6.0, 60.0], [8.0, 80.0], [10.0, 100.0]],
-        })
+        result = expr._eval(
+            {
+                "close": [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0], [4.0, 40.0], [5.0, 50.0]],
+                "volume": [[2.0, 20.0], [4.0, 40.0], [6.0, 60.0], [8.0, 80.0], [10.0, 100.0]],
+            }
+        )
         # 两个 symbol 都与 volume 完美线性相关 → 残差为 0
         for row in result:
             for v in row:
@@ -183,6 +182,7 @@ class TestBasicEvaluation:
 # ================================================================
 # 类型检查
 # ================================================================
+
 
 class TestTypeChecking:
     """不同量纲的非法运算在构建时拒绝。"""
@@ -250,6 +250,7 @@ class TestTypeChecking:
 # ================================================================
 # 规格化与常数折叠
 # ================================================================
+
 
 class TestCanonicalization:
     """等价表达式产生相同 canonical_hash。"""
@@ -332,14 +333,13 @@ class TestCanonicalization:
         assert Add(close(), other).canonical_hash() != Sub(close(), other).canonical_hash()
 
     def test_hash_distinguishes_features(self):
-        assert Feature("close", ExprType.PRICE).canonical_hash() != Feature(
-            "open", ExprType.PRICE
-        ).canonical_hash()
+        assert Feature("close", ExprType.PRICE).canonical_hash() != Feature("open", ExprType.PRICE).canonical_hash()
 
 
 # ================================================================
 # 复杂度评分
 # ================================================================
+
 
 class TestComplexityScore:
     """每个节点 1 分 + 算子复杂度权重。"""
@@ -364,7 +364,7 @@ class TestComplexityScore:
         assert Residualize(close(), (volume(),)).complexity_score() == 8  # 1 + 5 + 1 + 1
 
     def test_nested(self):
-        inner = EMA(close(), 5)          # 4
+        inner = EMA(close(), 5)  # 4
         outer = RollingQuantile(inner, 10, 0.5)  # 4 + 4
         assert outer.complexity_score() == 8
 
@@ -372,6 +372,7 @@ class TestComplexityScore:
 # ================================================================
 # max_lookback 推导
 # ================================================================
+
 
 class TestMaxLookback:
     """最大回溯期推导。"""
@@ -412,6 +413,7 @@ class TestMaxLookback:
 # ================================================================
 # 序列化
 # ================================================================
+
 
 class TestSerialization:
     """to_dict / from_dict 往返。"""
@@ -456,13 +458,12 @@ class TestSerialization:
 # 安全除法与符号变换边界
 # ================================================================
 
+
 class TestSafeMath:
     """SafeDiv / SignedLog1p / SignedSqrt 边界条件。"""
 
     def test_safe_div_zero_denominator_no_nan(self):
-        result = SafeDiv(close(), Lag(close(), 1)).evaluate_series(
-            {"close": [5.0, 10.0, 0.0, 3.0]}
-        )
+        result = SafeDiv(close(), Lag(close(), 1)).evaluate_series({"close": [5.0, 10.0, 0.0, 3.0]})
         # t1: 10/5 = 2.0; t2: 0/10 = 0.0; t3: 3/0 → 0.0（不传播 NaN/inf）
         assert result[1] == 2.0
         assert result[2] == 0.0
@@ -470,16 +471,12 @@ class TestSafeMath:
         assert not any(isnan(v) for v in result)
 
     def test_safe_div_small_denominator_clamped(self):
-        result = SafeDiv(close(), close(), epsilon=1.0).evaluate_series(
-            {"close": [1.0, 2.0, 3.0]}
-        )
+        result = SafeDiv(close(), close(), epsilon=1.0).evaluate_series({"close": [1.0, 2.0, 3.0]})
         # |close| 未必 > 1.0 阈值时返回 0.0
         assert all(v == 0.0 or abs(v - 1.0) < 1e-12 for v in result)
 
     def test_safe_div_numerator_nan_propagates(self):
-        result = SafeDiv(Lag(close(), 1), close()).evaluate_series(
-            {"close": [1.0, 2.0, 3.0]}
-        )
+        result = SafeDiv(Lag(close(), 1), close()).evaluate_series({"close": [1.0, 2.0, 3.0]})
         # t0: 分子 NaN（Lag 暖机），分母 1 → NaN 传播（分母非零）
         assert isnan(result[0])
         assert result[1] == 0.5
@@ -517,6 +514,7 @@ class TestSafeMath:
 # 安全解析
 # ================================================================
 
+
 class TestSafeParse:
     """parse_expression 的安全性与功能。"""
 
@@ -538,9 +536,7 @@ class TestSafeParse:
         assert isinstance(expr, SafeDiv)
 
     def test_parse_function_calls(self, feature_types):
-        expr = parse_expression(
-            "where(close > ema(close, 5), 1, 0)", feature_types
-        )
+        expr = parse_expression("where(close > ema(close, 5), 1, 0)", feature_types)
         assert isinstance(expr, Where)
         assert isinstance(expr.condition, Gt)
         assert isinstance(expr.condition.b, EMA)
@@ -633,9 +629,7 @@ class TestSafeParse:
             parse_expression("1 < close < 3", feature_types)
 
     def test_parsed_expr_roundtrip(self, feature_types):
-        expr = parse_expression(
-            "rolling_mean(close, 20) - rolling_mean(close, 5)", feature_types
-        )
+        expr = parse_expression("rolling_mean(close, 20) - rolling_mean(close, 5)", feature_types)
         assert from_dict(expr.to_dict()) == expr
 
     def test_parsed_expr_can_evaluate(self, feature_types):
@@ -648,16 +642,22 @@ class TestSafeParse:
 # PrimitiveRegistry
 # ================================================================
 
+
 class TestPrimitiveRegistry:
     """特征注册与注册表解析。"""
 
     @pytest.fixture
     def registry(self) -> PrimitiveRegistry:
         reg = PrimitiveRegistry()
-        reg.register(FeatureDef(
-            name="close", type=ExprType.PRICE,
-            description="收盘价", min_window=1, max_window=500,
-        ))
+        reg.register(
+            FeatureDef(
+                name="close",
+                type=ExprType.PRICE,
+                description="收盘价",
+                min_window=1,
+                max_window=500,
+            )
+        )
         reg.register_feature("volume", ExprType.VOLUME)
         return reg
 

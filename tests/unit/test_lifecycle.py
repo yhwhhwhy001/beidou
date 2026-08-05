@@ -1,11 +1,16 @@
-
 """PKG-02: Module Lifecycle 测试。状态机、降级传播、能力协商。"""
+
 from beidou_lifecycle import (
-    ModuleLifecycle, ModuleState, DegradationLevel,
-    HealthEvidence, CapabilityRegistry, CapabilityVersion, CapabilityNegotiation,
+    CapabilityRegistry,
+    CapabilityVersion,
     CompatibilityResult,
+    DegradationLevel,
+    HealthEvidence,
+    ModuleLifecycle,
+    ModuleState,
 )
 from beidou_shared.types import ResultStatus, SchemaVersion
+
 
 class TestModuleStateMachine:
     def test_normal_boot_sequence(self):
@@ -62,7 +67,9 @@ class TestDegradation:
 
     def test_resolve_most_restrictive(self):
         lm = ModuleLifecycle("test")
-        result = lm.resolve_degradation([DegradationLevel.ACTIVE, DegradationLevel.LOCKED, DegradationLevel.NO_NEW_RISK])
+        result = lm.resolve_degradation(
+            [DegradationLevel.ACTIVE, DegradationLevel.LOCKED, DegradationLevel.NO_NEW_RISK]
+        )
         assert result == DegradationLevel.LOCKED
 
     def test_resolve_empty_defaults_active(self):
@@ -74,37 +81,54 @@ class TestDegradation:
 class TestHealthEvidence:
     def test_unhealthy_when_invariants_invalid(self):
         evidence = HealthEvidence(
-            module_name="test", state=ModuleState.ACTIVE,
-            dependencies_healthy={"db": True}, data_freshness_seconds={"orderbook": 0.1},
-            checkpoint_lag=0, invariants_valid=False, schema_version="2.0.0",
+            module_name="test",
+            state=ModuleState.ACTIVE,
+            dependencies_healthy={"db": True},
+            data_freshness_seconds={"orderbook": 0.1},
+            checkpoint_lag=0,
+            invariants_valid=False,
+            schema_version="2.0.0",
             leadership_status="LEADER",
         )
         assert not evidence.is_healthy()
 
     def test_unhealthy_when_not_active(self):
         evidence = HealthEvidence(
-            module_name="test", state=ModuleState.DEGRADED,
-            dependencies_healthy={"db": True}, data_freshness_seconds={"orderbook": 0.1},
-            checkpoint_lag=0, invariants_valid=True, schema_version="2.0.0",
+            module_name="test",
+            state=ModuleState.DEGRADED,
+            dependencies_healthy={"db": True},
+            data_freshness_seconds={"orderbook": 0.1},
+            checkpoint_lag=0,
+            invariants_valid=True,
+            schema_version="2.0.0",
             leadership_status="LEADER",
         )
         assert not evidence.is_healthy()
 
     def test_healthy_when_all_ok(self):
         evidence = HealthEvidence(
-            module_name="test", state=ModuleState.ACTIVE,
-            dependencies_healthy={"db": True}, data_freshness_seconds={"orderbook": 0.1},
-            checkpoint_lag=0, invariants_valid=True, schema_version="2.0.0",
+            module_name="test",
+            state=ModuleState.ACTIVE,
+            dependencies_healthy={"db": True},
+            data_freshness_seconds={"orderbook": 0.1},
+            checkpoint_lag=0,
+            invariants_valid=True,
+            schema_version="2.0.0",
             leadership_status="LEADER",
         )
         assert evidence.is_healthy()
 
     def test_unhealthy_with_incidents(self):
         evidence = HealthEvidence(
-            module_name="test", state=ModuleState.ACTIVE,
-            dependencies_healthy={"db": True}, data_freshness_seconds={"orderbook": 0.1},
-            checkpoint_lag=0, invariants_valid=True, schema_version="2.0.0",
-            leadership_status="LEADER", active_incidents=["INC-001"],
+            module_name="test",
+            state=ModuleState.ACTIVE,
+            dependencies_healthy={"db": True},
+            data_freshness_seconds={"orderbook": 0.1},
+            checkpoint_lag=0,
+            invariants_valid=True,
+            schema_version="2.0.0",
+            leadership_status="LEADER",
+            active_incidents=["INC-001"],
         )
         assert not evidence.is_healthy()
 
@@ -112,10 +136,15 @@ class TestHealthEvidence:
 class TestCapabilityNegotiation:
     def test_exact_match_compatible(self):
         registry = CapabilityRegistry()
-        registry.register_provider("kafka", CapabilityVersion(
-            capability_name="kafka", schema_version=SchemaVersion("2.0.0"),
-            min_compatible_version=SchemaVersion("1.0.0"), contract_hash="abc123",
-        ))
+        registry.register_provider(
+            "kafka",
+            CapabilityVersion(
+                capability_name="kafka",
+                schema_version=SchemaVersion("2.0.0"),
+                min_compatible_version=SchemaVersion("1.0.0"),
+                contract_hash="abc123",
+            ),
+        )
         consumer = CapabilityVersion("kafka", SchemaVersion("2.0.0"), SchemaVersion("1.0.0"), "abc123")
         negotiation = registry.negotiate("kafka", consumer)
         assert negotiation.result == CompatibilityResult.COMPATIBLE
@@ -123,20 +152,30 @@ class TestCapabilityNegotiation:
 
     def test_backward_compatible(self):
         registry = CapabilityRegistry()
-        registry.register_provider("kafka", CapabilityVersion(
-            capability_name="kafka", schema_version=SchemaVersion("3.0.0"),
-            min_compatible_version=SchemaVersion("1.0.0"), contract_hash="def456",
-        ))
+        registry.register_provider(
+            "kafka",
+            CapabilityVersion(
+                capability_name="kafka",
+                schema_version=SchemaVersion("3.0.0"),
+                min_compatible_version=SchemaVersion("1.0.0"),
+                contract_hash="def456",
+            ),
+        )
         consumer = CapabilityVersion("kafka", SchemaVersion("2.0.0"), SchemaVersion("2.0.0"), "old")
         negotiation = registry.negotiate("kafka", consumer)
         assert negotiation.result in (CompatibilityResult.BACKWARD_COMPATIBLE, CompatibilityResult.COMPATIBLE)
 
     def test_incompatible(self):
         registry = CapabilityRegistry()
-        registry.register_provider("kafka", CapabilityVersion(
-            capability_name="kafka", schema_version=SchemaVersion("2.0.0"),
-            min_compatible_version=SchemaVersion("2.0.0"), contract_hash="abc",
-        ))
+        registry.register_provider(
+            "kafka",
+            CapabilityVersion(
+                capability_name="kafka",
+                schema_version=SchemaVersion("2.0.0"),
+                min_compatible_version=SchemaVersion("2.0.0"),
+                contract_hash="abc",
+            ),
+        )
         consumer = CapabilityVersion("kafka", SchemaVersion("1.0.0"), SchemaVersion("1.0.0"), "old")
         negotiation = registry.negotiate("kafka", consumer)
         assert negotiation.can_join_consumer_group() is False

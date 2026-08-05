@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import time
@@ -19,8 +20,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable
-
-from beidou_shared.types import GateResult
 
 
 class MiningRunStatus(str, Enum):
@@ -36,23 +35,28 @@ class MiningRunStatus(str, Enum):
 @dataclass
 class MiningRunConfig:
     """挖掘运行配置。"""
+
     run_id: str = ""
     dataset_manifest_hash: str = ""
     label_spec_hash: str = ""
     max_candidates: int = 10000
     max_complexity: float = 20.0
     random_seed: int = 42
-    checkpoint_interval: int = 100   # 每 N 个候选保存检查点
-    time_budget_minutes: int = 120    # 时间预算
+    checkpoint_interval: int = 100  # 每 N 个候选保存检查点
+    time_budget_minutes: int = 120  # 时间预算
     memory_limit_mb: int = 4096
-    generators: list[str] = field(default_factory=lambda: [
-        "template_grid", "interaction",
-    ])
+    generators: list[str] = field(
+        default_factory=lambda: [
+            "template_grid",
+            "interaction",
+        ]
+    )
 
 
 @dataclass
 class MiningRunState:
     """挖掘运行状态（可序列化用于 checkpoint）。"""
+
     run_id: str
     status: MiningRunStatus = MiningRunStatus.CREATED
     candidates_generated: int = 0
@@ -154,11 +158,13 @@ class MiningOrchestrator:
 
             if passed:
                 self.state.candidates_passed += 1
-                results.append({
-                    "candidate": candidate,
-                    "evidence": evidence,
-                    "passed": True,
-                })
+                results.append(
+                    {
+                        "candidate": candidate,
+                        "evidence": evidence,
+                        "passed": True,
+                    }
+                )
 
             if i > 0 and i % self.config.checkpoint_interval == 0:
                 self._save_checkpoint()
@@ -169,10 +175,7 @@ class MiningOrchestrator:
 
     def get_failure_taxonomy(self) -> dict[str, int]:
         """失败候选分类统计。"""
-        return {
-            reason: len(ids)
-            for reason, ids in self._candidate_failures.items()
-        }
+        return {reason: len(ids) for reason, ids in self._candidate_failures.items()}
 
     def generate_evidence_bundle(self) -> dict[str, Any]:
         """生成最终证据包。"""
@@ -193,9 +196,7 @@ class MiningOrchestrator:
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
         bundle_json = json.dumps(bundle, sort_keys=True, default=str)
-        self.state.evidence_bundle_hash = hashlib.sha256(
-            bundle_json.encode()
-        ).hexdigest()[:16]
+        self.state.evidence_bundle_hash = hashlib.sha256(bundle_json.encode()).hexdigest()[:16]
         bundle["bundle_hash"] = self.state.evidence_bundle_hash
         return bundle
 
@@ -203,10 +204,8 @@ class MiningOrchestrator:
         """保存检查点。"""
         self.state.last_checkpoint = datetime.now(timezone.utc)
         for cb in self._checkpoint_callbacks:
-            try:
+            with contextlib.suppress(Exception):
                 cb(self.state)
-            except Exception:
-                pass
 
     def cancel(self) -> None:
         self.state.status = MiningRunStatus.CANCELLED

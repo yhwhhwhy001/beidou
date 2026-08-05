@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import signal
 import subprocess
 import sys
-import time
 
 
 def _get_git_commit() -> str:
@@ -32,7 +30,9 @@ def _get_git_commit() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else "UNKNOWN"
     except Exception:
@@ -41,14 +41,17 @@ def _get_git_commit() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="北斗 V2.0 Autopilot")
-    parser.add_argument("--symbols", type=str, default="BTCUSDT,ETHUSDT",
-                        help="交易品种，逗号分隔 (默认: BTCUSDT,ETHUSDT)")
-    parser.add_argument("--mode", type=str, default="paper",
-                        choices=["full", "paper", "testnet", "safety_only"],
-                        help="运行模式: paper=纸上交易(默认), testnet=测试网, "
-                             "full=全自动(需证书), safety_only=仅安全监控")
-    parser.add_argument("--port", type=int, default=9090,
-                        help="健康检查端口 (默认: 9090)")
+    parser.add_argument(
+        "--symbols", type=str, default="BTCUSDT,ETHUSDT", help="交易品种，逗号分隔 (默认: BTCUSDT,ETHUSDT)"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="paper",
+        choices=["full", "paper", "testnet", "safety_only"],
+        help="运行模式: paper=纸上交易(默认), testnet=测试网, full=全自动(需证书), safety_only=仅安全监控",
+    )
+    parser.add_argument("--port", type=int, default=9090, help="健康检查端口 (默认: 9090)")
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -85,8 +88,8 @@ def main() -> None:
     # 从配置加载 REST URL（用于 Mainnet 检测）
     try:
         import yaml
-        config_path = os.path.join(proj_root, "config",
-                                   f"env.{os.environ.get('BEIDOU_ENV', 'testnet')}.yaml")
+
+        config_path = os.path.join(proj_root, "config", f"env.{os.environ.get('BEIDOU_ENV', 'testnet')}.yaml")
         if os.path.exists(config_path):
             with open(config_path) as f:
                 cfg = yaml.safe_load(f)
@@ -109,7 +112,7 @@ def main() -> None:
         api_key=api_key,
         api_secret=api_secret,
         commit=commit,
-        config_path=config_path if 'config_path' in dir() else "",
+        config_path=config_path if "config_path" in dir() else "",
     )
     gate_result = guard.run_all_checks(cli_mode=args.mode)
 

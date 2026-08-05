@@ -12,8 +12,7 @@ import hashlib
 import hmac
 import os
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +21,7 @@ class SignedApproval:
 
     任何字段被修改后，verify() 返回 False。
     """
+
     approval_id: str
     intent_hash: str
     portfolio_decision_hash: str
@@ -76,9 +76,15 @@ class ApprovalSigner:
         if not self._key:
             raise ValueError("BEIDOU_SIGNING_KEY not set — cannot sign approvals")
 
-    def create_approval(self, approval_id: str, intent_hash: str,
-                        portfolio_hash: str, account_version: str,
-                        policy_version: str, ttl_seconds: int = 300) -> SignedApproval:
+    def create_approval(
+        self,
+        approval_id: str,
+        intent_hash: str,
+        portfolio_hash: str,
+        account_version: str,
+        policy_version: str,
+        ttl_seconds: int = 300,
+    ) -> SignedApproval:
         """创建并签名 Approval。"""
         now = time.time()
         unsigned = SignedApproval(

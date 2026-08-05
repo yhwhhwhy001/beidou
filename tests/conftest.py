@@ -14,7 +14,6 @@ from typing import Generator
 import pytest
 
 from beidou_shared.types import (
-    AccountId,
     ClockDomain,
     CorrelationId,
     InstrumentId,

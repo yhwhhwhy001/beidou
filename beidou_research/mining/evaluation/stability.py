@@ -21,19 +21,21 @@ from typing import Any
 @dataclass
 class StabilityResult:
     """稳健性评估结果。"""
+
     dimension: str
     metric_name: str
     full_sample_value: float
     sub_sample_value: float
-    degradation_pct: float          # 正数=退化，负数=改善
-    is_stable: bool                  # 退化 < threshold 认为稳定
-    threshold: float = 0.30          # 30% 退化阈值
+    degradation_pct: float  # 正数=退化，负数=改善
+    is_stable: bool  # 退化 < threshold 认为稳定
+    threshold: float = 0.30  # 30% 退化阈值
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class StabilityReport:
     """综合稳健性报告。"""
+
     results: list[StabilityResult] = field(default_factory=list)
     stable_dimensions: int = 0
     unstable_dimensions: int = 0
@@ -106,10 +108,10 @@ class StabilityEvaluator:
         if high_vol_threshold is None:
             high_vol_threshold = sorted(volatility_indicators)[int(0.7 * len(volatility_indicators))]
 
-        high_vol_pred = [p for p, v in zip(predictions, volatility_indicators) if v >= high_vol_threshold]
-        high_vol_ret = [r for r, v in zip(returns, volatility_indicators) if v >= high_vol_threshold]
-        low_vol_pred = [p for p, v in zip(predictions, volatility_indicators) if v < high_vol_threshold]
-        low_vol_ret = [r for r, v in zip(returns, volatility_indicators) if v < high_vol_threshold]
+        high_vol_pred = [p for p, v in zip(predictions, volatility_indicators, strict=False) if v >= high_vol_threshold]
+        high_vol_ret = [r for r, v in zip(returns, volatility_indicators, strict=False) if v >= high_vol_threshold]
+        low_vol_pred = [p for p, v in zip(predictions, volatility_indicators, strict=False) if v < high_vol_threshold]
+        low_vol_ret = [r for r, v in zip(returns, volatility_indicators, strict=False) if v < high_vol_threshold]
 
         ic_high = _compute_ic(high_vol_pred, high_vol_ret) if len(high_vol_pred) > 10 else 0.0
         ic_low = _compute_ic(low_vol_pred, low_vol_ret) if len(low_vol_pred) > 10 else 0.0
@@ -146,10 +148,10 @@ class StabilityEvaluator:
         """趋势/震荡分段稳健性。"""
         median_abs_trend = sorted([abs(t) for t in trend_indicators])[len(trend_indicators) // 2]
 
-        trending_pred = [p for p, t in zip(predictions, trend_indicators) if abs(t) > median_abs_trend]
-        trending_ret = [r for r, t in zip(returns, trend_indicators) if abs(t) > median_abs_trend]
-        ranging_pred = [p for p, t in zip(predictions, trend_indicators) if abs(t) <= median_abs_trend]
-        ranging_ret = [r for r, t in zip(returns, trend_indicators) if abs(t) <= median_abs_trend]
+        trending_pred = [p for p, t in zip(predictions, trend_indicators, strict=False) if abs(t) > median_abs_trend]
+        trending_ret = [r for r, t in zip(returns, trend_indicators, strict=False) if abs(t) > median_abs_trend]
+        ranging_pred = [p for p, t in zip(predictions, trend_indicators, strict=False) if abs(t) <= median_abs_trend]
+        ranging_ret = [r for r, t in zip(returns, trend_indicators, strict=False) if abs(t) <= median_abs_trend]
 
         ic_trend = _compute_ic(trending_pred, trending_ret) if len(trending_pred) > 10 else 0.0
         ic_range = _compute_ic(ranging_pred, ranging_ret) if len(ranging_pred) > 10 else 0.0
@@ -190,7 +192,7 @@ class StabilityEvaluator:
         perturbed_ics = []
         for perturbed in perturbed_predictions_list:
             if len(perturbed) > 10:
-                ic = _compute_ic(perturbed, returns[:len(perturbed)])
+                ic = _compute_ic(perturbed, returns[: len(perturbed)])
                 perturbed_ics.append(ic)
 
         if not perturbed_ics:
@@ -205,8 +207,10 @@ class StabilityEvaluator:
 
         avg_perturbed_ic = sum(perturbed_ics) / len(perturbed_ics)
         ic_std_across_params = (
-            sum((ic - avg_perturbed_ic) ** 2 for ic in perturbed_ics) / len(perturbed_ics)
-        ) ** 0.5 if len(perturbed_ics) > 1 else 0.0
+            (sum((ic - avg_perturbed_ic) ** 2 for ic in perturbed_ics) / len(perturbed_ics)) ** 0.5
+            if len(perturbed_ics) > 1
+            else 0.0
+        )
 
         degradation = ic_std_across_params / max(abs(ic_base), 1e-10)
 
@@ -241,25 +245,24 @@ class StabilityEvaluator:
             cost_adjusted_returns = [r - cost_decimal for r in returns]
 
             sharpe_cost = _compute_sharpe(cost_adjusted_returns)
-            degradation = (
-                (sharpe_base - sharpe_cost) / max(abs(sharpe_base), 1e-10)
-                if sharpe_base > 0 else 1.0
-            )
+            degradation = (sharpe_base - sharpe_cost) / max(abs(sharpe_base), 1e-10) if sharpe_base > 0 else 1.0
 
-            results.append(StabilityResult(
-                dimension=f"cost_stress_{multiplier}x",
-                metric_name="sharpe",
-                full_sample_value=sharpe_base,
-                sub_sample_value=sharpe_cost,
-                degradation_pct=round(max(0, degradation), 4),
-                is_stable=sharpe_cost > 0 or multiplier <= 1.5,
-                threshold=0.50,
-                metadata={
-                    "base_cost_bps": base_cost_bps,
-                    "stressed_cost_bps": cost_bps,
-                    "multiplier": multiplier,
-                },
-            ))
+            results.append(
+                StabilityResult(
+                    dimension=f"cost_stress_{multiplier}x",
+                    metric_name="sharpe",
+                    full_sample_value=sharpe_base,
+                    sub_sample_value=sharpe_cost,
+                    degradation_pct=round(max(0, degradation), 4),
+                    is_stable=sharpe_cost > 0 or multiplier <= 1.5,
+                    threshold=0.50,
+                    metadata={
+                        "base_cost_bps": base_cost_bps,
+                        "stressed_cost_bps": cost_bps,
+                        "multiplier": multiplier,
+                    },
+                )
+            )
 
         return results
 
@@ -288,7 +291,7 @@ def _compute_sharpe(returns: list[float]) -> float:
         return 0.0
     mean = sum(returns) / n
     var = sum((r - mean) ** 2 for r in returns) / (n - 1)
-    std = var ** 0.5
+    std = var**0.5
     if std == 0:
         return 0.0
     return mean / std

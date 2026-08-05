@@ -1,10 +1,19 @@
 """手续费、滑点、冲击、资金费预测与容量模型。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
 from beidou_shared.types import (
-    InstrumentId, MonetaryValue, OrderSide, Price, Quantity, VenueId, VenueInstrument,
+    InstrumentId,
+    OrderSide,
+    Price,
+    Quantity,
+    VenueId,
+    VenueInstrument,
 )
+
 
 @dataclass(frozen=True, slots=True)
 class CostEstimate:
@@ -62,9 +71,12 @@ class CostModel:
         impact = self.estimate_impact(order_size_notional, avg_daily_volume, volatility)
         total = (fees["taker"] if is_taker else fees["maker"]) + slippage + impact
         return CostEstimate(
-            instrument_id=instrument_id, venue_id=venue_id,
-            fee_rate_maker=fees["maker"], fee_rate_taker=fees["taker"],
-            estimated_slippage_bps=slippage, estimated_impact_bps=impact,
+            instrument_id=instrument_id,
+            venue_id=venue_id,
+            fee_rate_maker=fees["maker"],
+            fee_rate_taker=fees["taker"],
+            estimated_slippage_bps=slippage,
+            estimated_impact_bps=impact,
             total_fee_bps=total,
         )
 

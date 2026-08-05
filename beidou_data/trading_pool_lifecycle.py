@@ -8,39 +8,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from enum import Enum
 
 
 class PoolStatus(str, Enum):
-    OBSERVING = "OBSERVING"    # 观察期，不可交易
-    PROMOTED = "PROMOTED"      # 晋级中，只读
-    ACTIVE = "ACTIVE"          # 可交易
+    OBSERVING = "OBSERVING"  # 观察期，不可交易
+    PROMOTED = "PROMOTED"  # 晋级中，只读
+    ACTIVE = "ACTIVE"  # 可交易
     QUARANTINED = "QUARANTINED"  # 隔离，仅平仓
-    DELISTED = "DELISTED"      # 下架
+    DELISTED = "DELISTED"  # 下架
 
 
 @dataclass
 class InstrumentScore:
     """标的综合评分。"""
+
     instrument_id: str
-    spread_score: float = 0.0     # 点差评分 (0-1, 越高越好)
-    depth_score: float = 0.0      # 深度评分
-    volume_score: float = 0.0     # 成交量评分
+    spread_score: float = 0.0  # 点差评分 (0-1, 越高越好)
+    depth_score: float = 0.0  # 深度评分
+    volume_score: float = 0.0  # 成交量评分
     stability_score: float = 0.0  # 稳定性评分 (拒单率等)
-    capacity_score: float = 0.0   # Alpha容量评分
+    capacity_score: float = 0.0  # Alpha容量评分
     overall: float = 0.0
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def compute_overall(self) -> float:
-        weights = {"spread": 0.25, "depth": 0.25, "volume": 0.20,
-                   "stability": 0.15, "capacity": 0.15}
+        weights = {"spread": 0.25, "depth": 0.25, "volume": 0.20, "stability": 0.15, "capacity": 0.15}
         self.overall = (
-            self.spread_score * weights["spread"] +
-            self.depth_score * weights["depth"] +
-            self.volume_score * weights["volume"] +
-            self.stability_score * weights["stability"] +
-            self.capacity_score * weights["capacity"]
+            self.spread_score * weights["spread"]
+            + self.depth_score * weights["depth"]
+            + self.volume_score * weights["volume"]
+            + self.stability_score * weights["stability"]
+            + self.capacity_score * weights["capacity"]
         )
         return self.overall
 
@@ -48,6 +48,7 @@ class InstrumentScore:
 @dataclass
 class PoolEntry:
     """交易池条目。"""
+
     instrument_id: str
     status: PoolStatus = PoolStatus.OBSERVING
     observing_since: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -66,9 +67,9 @@ class TradingPool:
     - 迟滞：降级后需要持续改进才能重新 promote
     """
 
-    PROMOTE_THRESHOLD = 0.6   # 综合评分 >= 0.6 才考虑晋级
-    DEGRADE_THRESHOLD = 0.3   # 综合评分 < 0.3 触发降级
-    DEGRADE_CONSECUTIVE = 3   # 连续3次低于阈值才降级（迟滞）
+    PROMOTE_THRESHOLD = 0.6  # 综合评分 >= 0.6 才考虑晋级
+    DEGRADE_THRESHOLD = 0.3  # 综合评分 < 0.3 触发降级
+    DEGRADE_CONSECUTIVE = 3  # 连续3次低于阈值才降级（迟滞）
 
     def __init__(self, max_instruments: int = 50):
         self._pool: dict[str, PoolEntry] = {}
@@ -89,11 +90,13 @@ class TradingPool:
 
         # 自动降级检查
         if entry.status == PoolStatus.ACTIVE:
-            recent = entry.scores[-self.DEGRADE_CONSECUTIVE:]
+            recent = entry.scores[-self.DEGRADE_CONSECUTIVE :]
             if len(recent) >= self.DEGRADE_CONSECUTIVE:
                 if all(s.overall < self.DEGRADE_THRESHOLD for s in recent):
                     entry.status = PoolStatus.QUARANTINED
-                    entry.quarantine_reason = f"Score below {self.DEGRADE_THRESHOLD} for {self.DEGRADE_CONSECUTIVE} consecutive evaluations"
+                    entry.quarantine_reason = (
+                        f"Score below {self.DEGRADE_THRESHOLD} for {self.DEGRADE_CONSECUTIVE} consecutive evaluations"
+                    )
 
     def try_promote(self, instrument_id: str) -> bool:
         """尝试晋级。需要观察期满 + 评分达标。"""
@@ -133,8 +136,7 @@ class TradingPool:
             entry.quarantine_reason = reason
 
     def active_instruments(self) -> list[str]:
-        return [iid for iid, e in self._pool.items()
-                if e.status == PoolStatus.ACTIVE]
+        return [iid for iid, e in self._pool.items() if e.status == PoolStatus.ACTIVE]
 
     def active_count(self) -> int:
         return len(self.active_instruments())

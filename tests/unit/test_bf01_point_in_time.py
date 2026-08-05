@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from beidou_shared.types import (
-    FactorId,
-    InstrumentId,
-    SchemaVersion,
-    VenueId,
-)
+import pytest
+
 from beidou_research.mining.contracts import (
     HorizonUnit,
     LabelQuality,
@@ -26,11 +21,17 @@ from beidou_research.mining.point_in_time import (
     IsolationValidator,
     PointInTimeJoin,
 )
-
+from beidou_shared.types import (
+    FactorId,
+    InstrumentId,
+    SchemaVersion,
+    VenueId,
+)
 
 # ================================================================
 # Fixtures
 # ================================================================
+
 
 def _t(hour: int, day: int = 15) -> datetime:
     return datetime(2026, 1, day, hour, 0, tzinfo=timezone.utc)
@@ -60,7 +61,9 @@ def _make_pk(
 
 def _make_pred(pk: PredictionKey, value: float = 0.01, revision: int = 0) -> PredictionRecord:
     return PredictionRecord(
-        prediction_key=pk, prediction_value=value, revision=revision,
+        prediction_key=pk,
+        prediction_value=value,
+        revision=revision,
     )
 
 
@@ -87,6 +90,7 @@ def _make_label(
 # ================================================================
 # PredictionKey 点时约束
 # ================================================================
+
 
 class TestPredictionKeyPITConstraint:
     """PredictionKey 强制执行 data_available_time ≤ prediction_time。"""
@@ -115,6 +119,7 @@ class TestPredictionKeyPITConstraint:
 # ================================================================
 # PointInTimeJoin tests
 # ================================================================
+
 
 class TestPointInTimeJoin:
     """点时连接引擎验收测试。"""
@@ -216,9 +221,11 @@ class TestPointInTimeJoin:
 
         # 注册未闭合的 K 线
         bar = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(11), close_time=_t(12),
+            open_time=_t(11),
+            close_time=_t(12),
             is_closed=False,  # 未闭合!
         )
         enforcer.register_bar(bar)
@@ -228,9 +235,11 @@ class TestPointInTimeJoin:
 
         # 而已闭合 K 线可用
         bar2 = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(11), close_time=_t(12),
+            open_time=_t(11),
+            close_time=_t(12),
             is_closed=True,
         )
         enforcer.register_bar(bar2)
@@ -277,7 +286,7 @@ class TestPointInTimeJoin:
         join.store_prediction(pred2)
         join.store_label(label1)
 
-        results, report = join.join_all(predictions=[pred1, pred2])
+        _results, report = join.join_all(predictions=[pred1, pred2])
 
         assert report.total_predictions == 2
         assert report.matched == 1
@@ -319,45 +328,58 @@ class TestPointInTimeJoin:
 # ClosedBarEnforcer tests
 # ================================================================
 
+
 class TestClosedBarEnforcer:
     """Closed-bar 强制器验收测试。"""
 
     def test_closed_bar_available(self):
         enforcer = ClosedBarEnforcer()
         bar = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(12), close_time=_t(13),
+            open_time=_t(12),
+            close_time=_t(13),
             is_closed=True,
         )
         enforcer.register_bar(bar)
 
         assert enforcer.is_bar_available(
-            VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-            _t(12), _t(14),  # query at 14:00, bar closed at 13:00
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            _t(12),
+            _t(14),  # query at 14:00, bar closed at 13:00
         )
 
     def test_open_bar_not_available(self):
         enforcer = ClosedBarEnforcer()
         bar = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(12), close_time=_t(13),
+            open_time=_t(12),
+            close_time=_t(13),
             is_closed=False,
         )
         enforcer.register_bar(bar)
 
         assert not enforcer.is_bar_available(
-            VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-            _t(12), _t(14),
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            _t(12),
+            _t(14),
         )
 
     def test_closed_but_too_early_not_available(self):
         enforcer = ClosedBarEnforcer()
         bar = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(12), close_time=_t(13),
+            open_time=_t(12),
+            close_time=_t(13),
             is_closed=True,
         )
         enforcer.register_bar(bar)
@@ -365,8 +387,11 @@ class TestClosedBarEnforcer:
         # 查询时间在 close_time 之前
         query_time = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
         assert not enforcer.is_bar_available(
-            VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-            _t(12), query_time,  # query at 12:30, bar closes at 13:00
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            _t(12),
+            query_time,  # query at 12:30, bar closes at 13:00
         )
 
     def test_future_data_injection_fails(self):
@@ -374,9 +399,11 @@ class TestClosedBarEnforcer:
         enforcer = ClosedBarEnforcer()
 
         bar = BarInfo(
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
             timeframe="1h",
-            open_time=_t(12), close_time=_t(13),
+            open_time=_t(12),
+            close_time=_t(13),
             is_closed=False,
         )
         enforcer.register_bar(bar)
@@ -384,8 +411,11 @@ class TestClosedBarEnforcer:
         # 在 bar 闭合前查询 → 不可用
         query_time = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
         assert not enforcer.is_bar_available(
-            VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-            _t(12), query_time,
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            _t(12),
+            query_time,
         )
 
     def test_enforce_prediction_with_bar(self):
@@ -396,8 +426,11 @@ class TestClosedBarEnforcer:
 
         # 注册一个已闭合 bar（在 data_available_time 之前）
         bar = BarInfo(
-            venue=pk.venue, symbol=pk.symbol, timeframe=pk.timeframe,
-            open_time=_t(11), close_time=_t(12),
+            venue=pk.venue,
+            symbol=pk.symbol,
+            timeframe=pk.timeframe,
+            open_time=_t(11),
+            close_time=_t(12),
             is_closed=True,
         )
         enforcer.register_bar(bar)
@@ -409,8 +442,11 @@ class TestClosedBarEnforcer:
         pred = _make_pred(pk)
 
         bar = BarInfo(
-            venue=pk.venue, symbol=pk.symbol, timeframe=pk.timeframe,
-            open_time=_t(11), close_time=_t(12),
+            venue=pk.venue,
+            symbol=pk.symbol,
+            timeframe=pk.timeframe,
+            open_time=_t(11),
+            close_time=_t(12),
             is_closed=False,
         )
         enforcer.register_bar(bar)
@@ -420,6 +456,7 @@ class TestClosedBarEnforcer:
 # ================================================================
 # FutureDataGuard tests
 # ================================================================
+
 
 class TestFutureDataGuard:
     """未来数据注入检测测试。"""
@@ -467,6 +504,7 @@ class TestFutureDataGuard:
 # ================================================================
 # IsolationValidator tests
 # ================================================================
+
 
 class TestIsolationValidator:
     """多品种多周期隔离验证测试。"""

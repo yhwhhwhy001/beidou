@@ -1,12 +1,35 @@
 """订单执行模块。单活 Executor、Lease 机制、Fencing 保护。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from beidou_shared.types import AccountRef, CorrelationId, ExecutionId, InstrumentId, MonetaryValue, OrderId, OrderSide, OrderStatus, OrderType, Quantity, Price, TimeInForce, VenueId
+
+from beidou_shared.types import (
+    AccountRef,
+    CorrelationId,
+    ExecutionId,
+    InstrumentId,
+    MonetaryValue,
+    OrderId,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Price,
+    Quantity,
+    TimeInForce,
+    VenueId,
+)
+
 
 class ExecutorState(str, Enum):
-    STANDBY = "STANDBY"; ACTIVE = "ACTIVE"; DEGRADED = "DEGRADED"; PAUSED = "PAUSED"; TERMINATED = "TERMINATED"
+    STANDBY = "STANDBY"
+    ACTIVE = "ACTIVE"
+    DEGRADED = "DEGRADED"
+    PAUSED = "PAUSED"
+    TERMINATED = "TERMINATED"
+
 
 @dataclass(frozen=True, slots=True)
 class OrderIntent:
@@ -24,6 +47,7 @@ class OrderIntent:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     risk_approval_id: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class ExecutionReport:
     execution_id: ExecutionId
@@ -36,6 +60,7 @@ class ExecutionReport:
     correlation_id: CorrelationId | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     raw_response: dict | None = None
+
 
 # Note: Concrete implementations are in submodules:
 # - beidou_safety.executor_impl: LeaseManager, FencingProtection

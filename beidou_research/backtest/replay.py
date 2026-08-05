@@ -1,10 +1,13 @@
-
 """全链路真实数据 Replay、反作弊与确定性认证。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
+
 from beidou_shared.types import CorrelationId
+
 
 class CheatDetection(str, Enum):
     FUTURE_FUNCTION = "FUTURE_FUNCTION"
@@ -15,14 +18,20 @@ class CheatDetection(str, Enum):
     UNREGISTERED_PARAM_CHANGE = "UNREGISTERED_PARAM_CHANGE"
     TEST_DATA_LEAKAGE = "TEST_DATA_LEAKAGE"
 
+
 @dataclass
 class ReplayResult:
-    replay_id: str; deterministic: bool; cheat_checks: dict[CheatDetection, bool] = field(default_factory=dict)
-    output_hash: str = ""; pnl_deviation_pct: float = 0.0
+    replay_id: str
+    deterministic: bool
+    cheat_checks: dict[CheatDetection, bool] = field(default_factory=dict)
+    output_hash: str = ""
+    pnl_deviation_pct: float = 0.0
     correlation_id: CorrelationId | None = None
+
 
 class ReplayValidator:
     """Replay 反作弊验证器。检查未来函数、幸存者偏差等。"""
+
     def __init__(self):
         self._baseline_hash: str | None = None
 
@@ -40,7 +49,7 @@ class ReplayValidator:
         """检查事件时间是否单调递增。"""
         inversions: list[int] = []
         for i in range(1, len(events)):
-            if events[i][0] < events[i-1][0]:
+            if events[i][0] < events[i - 1][0]:
                 inversions.append(i)
         return inversions
 
@@ -49,7 +58,8 @@ class ReplayValidator:
         return current_instruments - instruments_at_time
 
     def verify_determinism(self, result: ReplayResult) -> bool:
-        if self._baseline_hash is None: return True
+        if self._baseline_hash is None:
+            return True
         return result.output_hash == self._baseline_hash
 
     def all_checks_pass(self, result: ReplayResult) -> bool:

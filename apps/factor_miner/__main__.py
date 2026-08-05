@@ -15,13 +15,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
+
 import click
 
-from beidou_research.mining.runner import MiningRunner, PipelineConfig
-from beidou_research.mining.orchestrator import MiningOrchestrator, MiningRunConfig
 from beidou_research.mining.persistence import JSONFileFactorStore
-from beidou_research.mining.evidence import EvidenceBundle
 
 
 @click.group()
@@ -46,6 +43,7 @@ def run(policy: str, config: str | None, output_dir: str, dry_run: bool):
     if dry_run:
         click.echo("[factor_miner] DRY RUN — 仅验证配置")
         import yaml
+
         with open(policy) as f:
             cfg = yaml.safe_load(f)
         click.echo(f"  生成器: {cfg.get('generation', {}).get('generators', [])}")
@@ -77,6 +75,7 @@ def report(run_id: str, format: str):
 
     # 尝试加载已有证据
     import glob
+
     evidence_dir = "evidence/mining-runs"
     patterns = [
         f"{evidence_dir}/**/{run_id}*.json",

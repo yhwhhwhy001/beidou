@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable
 
 
@@ -47,27 +48,36 @@ class HealthServer:
 
             def do_GET(self):
                 if self.path == "/health":
-                    self._send_json(200, {
-                        "status": "ok",
-                        "uptime_seconds": round(server.uptime_seconds(), 1),
-                        "version": "2.0.0",
-                    })
+                    self._send_json(
+                        200,
+                        {
+                            "status": "ok",
+                            "uptime_seconds": round(server.uptime_seconds(), 1),
+                            "version": "2.0.0",
+                        },
+                    )
                 elif self.path == "/ready":
                     ready = server._readiness_check()
                     status_info = server._status_info()
-                    self._send_json(200 if ready else 503, {
-                        "ready": ready,
-                        **status_info,
-                    })
+                    self._send_json(
+                        200 if ready else 503,
+                        {
+                            "ready": ready,
+                            **status_info,
+                        },
+                    )
                 elif self.path == "/metrics":
                     metrics = server._metrics_collector()
                     self._send_prometheus(metrics)
                 elif self.path == "/status":
                     status_info = server._status_info()
-                    self._send_json(200, {
-                        "uptime_seconds": round(server.uptime_seconds(), 1),
-                        **status_info,
-                    })
+                    self._send_json(
+                        200,
+                        {
+                            "uptime_seconds": round(server.uptime_seconds(), 1),
+                            **status_info,
+                        },
+                    )
                 else:
                     self._send_json(404, {"error": "not found"})
 
@@ -93,7 +103,7 @@ class HealthServer:
                         lines.append(f"beidou_{safe_name} {value}")
                     elif isinstance(value, dict):
                         for k, v in value.items():
-                            lines.append(f"beidou_{safe_name}{{key=\"{k}\"}} {v}")
+                            lines.append(f'beidou_{safe_name}{{key="{k}"}} {v}')
 
                 body = "\n".join(lines).encode() + b"\n"
                 self.send_response(200)
@@ -103,6 +113,7 @@ class HealthServer:
                 self.wfile.write(body)
 
         self._server = HTTPServer(("0.0.0.0", self._port), Handler)
+        self._server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 

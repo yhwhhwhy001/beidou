@@ -17,8 +17,9 @@ def main() -> None:
     if "BEIDOU_ENV" not in os.environ:
         os.environ["BEIDOU_ENV"] = "testnet"
 
-    from beidou_core.engine import AutonomousEngine
     import asyncio
+
+    from beidou_core.engine import AutonomousEngine
 
     engine = AutonomousEngine(symbols=["BTCUSDT", "ETHUSDT"], mode="paper")
     asyncio.run(engine.run())

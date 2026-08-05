@@ -79,9 +79,14 @@ class MeanReversionEngine:
 
         return -math.log(2) / slope
 
-    def evaluate(self, price: float, prices: list[float],
-                 volatility: float, estimated_cost_bps: float,
-                 market_regime: str = "RANGING") -> ZScoreResult:
+    def evaluate(
+        self,
+        price: float,
+        prices: list[float],
+        volatility: float,
+        estimated_cost_bps: float,
+        market_regime: str = "RANGING",
+    ) -> ZScoreResult:
         """综合评估。"""
         z_score = self.compute_z_score(price, prices)
         half_life = self.estimate_half_life(prices)
@@ -103,7 +108,7 @@ class MeanReversionEngine:
             strength = 0.0
             confidence = 0.0
         elif z_score < -no_trade_band:
-            direction = "LONG"   # Oversold → buy
+            direction = "LONG"  # Oversold → buy
             strength = min(0.9, abs(z_score) / 5.0)
             confidence = 0.5 + strength * 0.3
         else:
@@ -126,11 +131,12 @@ class MeanReversionEngine:
 @dataclass
 class MomentumResult:
     """多周期动量过滤结果。"""
-    trend_direction: str   # UP / DOWN / FLAT
+
+    trend_direction: str  # UP / DOWN / FLAT
     trend_strength: float  # 0-1
-    persistence: float     # 连续同向周期比
+    persistence: float  # 连续同向周期比
     volatility_override: bool  # 高波动时否决
-    filter_decision: str   # ACCEPT / VETO / DEGRADE
+    filter_decision: str  # ACCEPT / VETO / DEGRADE
 
 
 class MultiPeriodMomentum:

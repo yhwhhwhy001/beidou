@@ -13,14 +13,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from beidou_shared.types import InstrumentId, VenueId
-from .contracts import PredictionKey, PredictionRecord
-from .point_in_time import BarInfo, ClosedBarEnforcer, FutureDataGuard
+from .contracts import PredictionRecord
+from .point_in_time import ClosedBarEnforcer, FutureDataGuard
 
 
 @dataclass
 class LeakageReport:
     """防泄漏检查报告。"""
+
     passed: bool = True
     checks: list[dict[str, Any]] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
@@ -58,10 +58,12 @@ class LeakageGuard:
             report.violations.append(
                 f"FUTURE_DATA: data_available={pk.data_available_time} > prediction={pk.prediction_time}"
             )
-        report.checks.append({
-            "check": "future_data",
-            "passed": pk.data_available_time <= pk.prediction_time,
-        })
+        report.checks.append(
+            {
+                "check": "future_data",
+                "passed": pk.data_available_time <= pk.prediction_time,
+            }
+        )
 
         # 2. Closed-bar 检查
         bar_ok = self._bar_enforcer.enforce(prediction, bar_provider)
@@ -74,10 +76,12 @@ class LeakageGuard:
         if not pk.prediction_time.tzinfo:
             report.passed = False
             report.violations.append("MISSING_TIMEZONE")
-        report.checks.append({
-            "check": "timezone",
-            "passed": pk.prediction_time.tzinfo is not None,
-        })
+        report.checks.append(
+            {
+                "check": "timezone",
+                "passed": pk.prediction_time.tzinfo is not None,
+            }
+        )
 
         self._reports.append(report)
         return report
@@ -128,9 +132,7 @@ class LeakageGuard:
 
         if train_end_time >= test_start_time:
             report.passed = False
-            report.violations.append(
-                f"OVERLAP: train_end={train_end_time} >= test_start={test_start_time}"
-            )
+            report.violations.append(f"OVERLAP: train_end={train_end_time} >= test_start={test_start_time}")
 
         if embargo_end_time and embargo_end_time > test_start_time:
             report.passed = False

@@ -1,13 +1,20 @@
 """止盈止损保护引擎测试。止损/止盈计算、移动止损、保护单生命周期。"""
+
 from __future__ import annotations
 
 import pytest
-from beidou_shared.types import InstrumentId, OrderSide, Price, Quantity, VenueId
+
 from beidou_safety.protection.engine import (
-    StopLossType, TakeProfitType, ProtectionStatus, ProtectionOrder,
-    PositionProtection, StopLossCalculator, TrailingStopUpdater,
-    TakeProfitCalculator, ProtectionManager,
+    PositionProtection,
+    ProtectionManager,
+    ProtectionStatus,
+    StopLossCalculator,
+    StopLossType,
+    TakeProfitCalculator,
+    TakeProfitType,
+    TrailingStopUpdater,
 )
+from beidou_shared.types import InstrumentId, OrderSide, VenueId
 
 
 class TestStopLossCalculator:
@@ -65,9 +72,12 @@ class TestTrailingStopUpdater:
     def test_trail_up_long(self):
         """Long仓位: 价格创新高，止损上移。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=95.0, current_price=105.0,
-            highest_price=105.0, lowest_price=None,
-            side=OrderSide.BUY, trail_pct=2.0,
+            current_stop=95.0,
+            current_price=105.0,
+            highest_price=105.0,
+            lowest_price=None,
+            side=OrderSide.BUY,
+            trail_pct=2.0,
         )
         # 105 * 0.98 = 102.9 > 95
         assert new_stop > 95.0
@@ -76,9 +86,12 @@ class TestTrailingStopUpdater:
     def test_trail_no_move_long(self):
         """Long仓位: 价格未创新高，止损不动。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=98.0, current_price=102.0,
-            highest_price=110.0, lowest_price=None,
-            side=OrderSide.BUY, trail_pct=2.0,
+            current_stop=98.0,
+            current_price=102.0,
+            highest_price=110.0,
+            lowest_price=None,
+            side=OrderSide.BUY,
+            trail_pct=2.0,
         )
         # highest_price=110 is above current, but stop was at 98
         # 110 * 0.98 = 107.8 > 98, so it should move up
@@ -87,9 +100,12 @@ class TestTrailingStopUpdater:
     def test_trail_never_goes_down_long(self):
         """止损只能上移，不能下移。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=102.0, current_price=100.0,
-            highest_price=100.0, lowest_price=None,
-            side=OrderSide.BUY, trail_pct=2.0,
+            current_stop=102.0,
+            current_price=100.0,
+            highest_price=100.0,
+            lowest_price=None,
+            side=OrderSide.BUY,
+            trail_pct=2.0,
         )
         # 100 * 0.98 = 98 < 102, so stay at 102
         assert new_stop == 102.0
@@ -97,9 +113,12 @@ class TestTrailingStopUpdater:
     def test_trail_down_short(self):
         """Short仓位: 价格创新低，止损下移。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=105.0, current_price=98.0,
-            highest_price=None, lowest_price=95.0,
-            side=OrderSide.SELL, trail_pct=2.0,
+            current_stop=105.0,
+            current_price=98.0,
+            highest_price=None,
+            lowest_price=95.0,
+            side=OrderSide.SELL,
+            trail_pct=2.0,
         )
         # 95 * 1.02 = 96.9 < 105
         assert new_stop < 105.0
@@ -108,9 +127,12 @@ class TestTrailingStopUpdater:
     def test_trail_never_goes_up_short(self):
         """Short止损只能下移。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=97.0, current_price=100.0,
-            highest_price=None, lowest_price=100.0,
-            side=OrderSide.SELL, trail_pct=2.0,
+            current_stop=97.0,
+            current_price=100.0,
+            highest_price=None,
+            lowest_price=100.0,
+            side=OrderSide.SELL,
+            trail_pct=2.0,
         )
         # 100 * 1.02 = 102 > 97, so stay at 97
         assert new_stop == 97.0
@@ -118,9 +140,13 @@ class TestTrailingStopUpdater:
     def test_min_trail_distance(self):
         """小于最小距离不更新。"""
         new_stop = TrailingStopUpdater.update(
-            current_stop=98.0, current_price=100.0,
-            highest_price=100.1, lowest_price=None,
-            side=OrderSide.BUY, trail_pct=2.0, min_trail_distance=1.0,
+            current_stop=98.0,
+            current_price=100.0,
+            highest_price=100.1,
+            lowest_price=None,
+            side=OrderSide.BUY,
+            trail_pct=2.0,
+            min_trail_distance=1.0,
         )
         # 100.1 * 0.98 = 98.098, distance = 100.1 - 98.098 = 2.002 > 1.0
         assert new_stop == 98.1  # rounded to 2 decimal
@@ -155,7 +181,11 @@ class TestTakeProfitCalculator:
 
     def test_calculate_entry_routing(self):
         result = TakeProfitCalculator.calculate(
-            TakeProfitType.FIXED_RR, 100.0, 95.0, OrderSide.BUY, rr_ratio=3.0,
+            TakeProfitType.FIXED_RR,
+            100.0,
+            95.0,
+            OrderSide.BUY,
+            rr_ratio=3.0,
         )
         assert len(result) == 1
         assert result[0]["price"] == 115.0  # 100 + 5*3
@@ -203,7 +233,9 @@ class TestProtectionManager:
             position_id="pos-short",
             instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=100.0, quantity=0.1, side=OrderSide.SELL,
+            entry_price=100.0,
+            quantity=0.1,
+            side=OrderSide.SELL,
             stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 3.0},
             take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
         )
@@ -249,7 +281,9 @@ class TestProtectionManager:
             position_id="pos-trail",
             instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=100.0, quantity=0.1, side=OrderSide.BUY,
+            entry_price=100.0,
+            quantity=0.1,
+            side=OrderSide.BUY,
             stop_loss_config={"type": "TRAILING", "stop_pct": 3.0},
             trailing_config={"trail_pct": 3.0, "min_trail_distance": 0.5},
         )
@@ -273,7 +307,9 @@ class TestProtectionManager:
             position_id="pos-multi",
             instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=100.0, quantity=0.3, side=OrderSide.BUY,
+            entry_price=100.0,
+            quantity=0.3,
+            side=OrderSide.BUY,
             stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 5.0},
             take_profit_config={
                 "type": "MULTI_TARGET",
@@ -296,7 +332,9 @@ class TestProtectionManager:
             position_id="pos-atr",
             instrument_id=InstrumentId("ETHUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=2000.0, quantity=0.5, side=OrderSide.BUY,
+            entry_price=2000.0,
+            quantity=0.5,
+            side=OrderSide.BUY,
             stop_loss_config={"type": "ATR_BASED", "atr": 50.0, "multiplier": 2.0},
         )
         sl_price = float(pp.stop_loss.trigger_price.amount)
@@ -330,7 +368,9 @@ class TestProtectionManager:
             position_id="pos-002",
             instrument_id=InstrumentId("ETHUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=2000.0, quantity=0.5, side=OrderSide.SELL,
+            entry_price=2000.0,
+            quantity=0.5,
+            side=OrderSide.SELL,
             stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 3.0},
         )
         active_sls = mgr.get_active_stop_losses()
@@ -338,9 +378,12 @@ class TestProtectionManager:
 
     def test_unrealized_pnl(self):
         pp = PositionProtection(
-            position_id="p1", instrument_id=InstrumentId("BTCUSDT"),
+            position_id="p1",
+            instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=100.0, quantity=1.0, side=OrderSide.BUY,
+            entry_price=100.0,
+            quantity=1.0,
+            side=OrderSide.BUY,
         )
         assert pp.unrealized_pnl_pct(105.0) == pytest.approx(5.0)
         assert pp.unrealized_pnl_pct(95.0) == pytest.approx(-5.0)
@@ -348,9 +391,12 @@ class TestProtectionManager:
 
     def test_unrealized_pnl_short(self):
         pp = PositionProtection(
-            position_id="p2", instrument_id=InstrumentId("BTCUSDT"),
+            position_id="p2",
+            instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            entry_price=100.0, quantity=1.0, side=OrderSide.SELL,
+            entry_price=100.0,
+            quantity=1.0,
+            side=OrderSide.SELL,
         )
         assert pp.unrealized_pnl_pct(95.0) == pytest.approx(5.0)  # short: price down = profit
         assert pp.unrealized_pnl_pct(105.0) == pytest.approx(-5.0)

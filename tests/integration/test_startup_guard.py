@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
-
-import pytest
 
 from beidou_core.guard import (
     EnvironmentGuard,
-    EnvironmentMode,
     StartupGateStatus,
 )
 
@@ -57,7 +51,7 @@ class TestTestnetCertificateMissing:
             api_secret="b" * 64,
         )
         # G5 certificate not present by default
-        assert not guard.check_full_mode_requirements()
+        assert not guard.check_full_mode_requirements(cli_mode="full")
 
     def test_paper_mode_without_certificate_passes(self):
         """Paper 模式不需要 G5 证书。"""
@@ -129,14 +123,16 @@ class TestNoAutoResume:
 
     def test_engine_starts_in_no_new_risk(self):
         """引擎启动时应保持 NO_NEW_RISK。"""
-        from beidou_control.plane import ControlPlane, ControlAction
+        from beidou_control.plane import ControlAction, ControlPlane
+
         cp = ControlPlane()
         # 初始状态就是 NO_NEW_RISK
         assert cp.get_status() == ControlAction.NO_NEW_RISK
 
     def test_resume_not_called_automatically(self):
         """不应有代码自动调用 RESUME。"""
-        from beidou_control.plane import ControlPlane, ControlAction
+        from beidou_control.plane import ControlAction, ControlPlane
+
         cp = ControlPlane()
         # 验证 RESUME 不是自动触发的
         initial = cp.get_status()

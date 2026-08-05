@@ -10,19 +10,23 @@ import hmac
 import json
 import os
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
 import yaml
 
-from beidou_shared.types import (
-    DataQualityTier, InstrumentId, Quantity, SchemaVersion, VenueId, VenueInstrument,
-)
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import KLineGenerator
-from beidou_data.quality import DQCheckResult, DQCheckType, DataQualityGate
+from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_shared.types import (
+    DataQualityTier,
+    InstrumentId,
+    SchemaVersion,
+    VenueId,
+    VenueInstrument,
+)
 
 
 class MarketDataFeed:
@@ -32,7 +36,8 @@ class MarketDataFeed:
         # Load config
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config", "env.testnet.yaml",
+            "config",
+            "env.testnet.yaml",
         )
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
@@ -59,8 +64,7 @@ class MarketDataFeed:
         total_errors = sum(self._error_count.values())
         return total_errors < 10
 
-    def api(self, path: str, method: str = "GET", signed: bool = False,
-            params: dict | None = None) -> Any:
+    def api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """直接调用 Binance REST API。与 tools/strategy_live_trade.py 相同模式。"""
         url = self._rest_url + path
         headers = {"X-MBX-APIKEY": self._api_key}
@@ -71,7 +75,9 @@ class MarketDataFeed:
             params["recvWindow"] = self._recv_window
             qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
             params["signature"] = hmac.new(
-                self._api_secret.encode(), qs.encode(), hashlib.sha256,
+                self._api_secret.encode(),
+                qs.encode(),
+                hashlib.sha256,
             ).hexdigest()
 
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -95,7 +101,7 @@ class MarketDataFeed:
                     continue
                 self._error_count["http"] = self._error_count.get("http", 0) + 1
                 return {"error": e.code, "msg": err_body}
-            except Exception as e:
+            except Exception:
                 self._error_count["network"] = self._error_count.get("network", 0) + 1
                 time.sleep(0.5 * (attempt + 1))
         return {"error": -1, "msg": "retry exhausted"}
@@ -117,21 +123,31 @@ class MarketDataFeed:
         return data
 
     def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[dict]:
-        raw = self.api("/fapi/v1/klines", params={
-            "symbol": symbol, "interval": interval, "limit": limit,
-        })
+        raw = self.api(
+            "/fapi/v1/klines",
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit,
+            },
+        )
         if not isinstance(raw, list):
             return []
         klines = []
         for k in raw:
-            klines.append({
-                "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                "open": float(k[1]), "high": float(k[2]),
-                "low": float(k[3]), "close": float(k[4]),
-                "volume": float(k[5]),
-                "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
-                "quote_volume": float(k[7]), "trades": k[8],
-            })
+            klines.append(
+                {
+                    "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                    "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
+                    "quote_volume": float(k[7]),
+                    "trades": k[8],
+                }
+            )
         return klines
 
     def fetch_account(self) -> dict:
@@ -171,30 +187,37 @@ class MarketDataFeed:
         # Data quality check
         gate = DataQualityGate(venue_instrument=vi)
         freshness_tier = DataQualityTier.PASS  # live data
-        gate.checks.append(DQCheckResult(
-            check_type=DQCheckType.FRESHNESS, tier=freshness_tier,
-            detail=f"live_ticker",
-        ))
+        gate.checks.append(
+            DQCheckResult(
+                check_type=DQCheckType.FRESHNESS,
+                tier=freshness_tier,
+                detail="live_ticker",
+            )
+        )
         if spread_bps < 100:  # reasonable spread
-            gate.checks.append(DQCheckResult(
-                check_type=DQCheckType.COMPLETENESS, tier=DataQualityTier.PASS,
-                detail=f"spread={spread_bps:.1f}bps",
-            ))
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.COMPLETENESS,
+                    tier=DataQualityTier.PASS,
+                    detail=f"spread={spread_bps:.1f}bps",
+                )
+            )
 
         # Store features
-        self._feature_store.store(FeatureVector(
-            name=f"{symbol.lower()}_live",
-            values=features,
-            timestamp=datetime.now(timezone.utc),
-            instrument_id=instrument_id,
-            venue_id=venue_id,
-            version=SchemaVersion("2.0.0"),
-        ))
+        self._feature_store.store(
+            FeatureVector(
+                name=f"{symbol.lower()}_live",
+                values=features,
+                timestamp=datetime.now(timezone.utc),
+                instrument_id=instrument_id,
+                venue_id=venue_id,
+                version=SchemaVersion("2.0.0"),
+            )
+        )
 
         return features
 
-    def get_kline_features(self, symbol: str, interval: str = "1h",
-                           lookback: int = 100) -> dict[str, float]:
+    def get_kline_features(self, symbol: str, interval: str = "1h", lookback: int = 100) -> dict[str, float]:
         """从 K 线计算技术特征。"""
         klines = self.fetch_klines(symbol, interval, lookback)
         if len(klines) < 20:
@@ -207,7 +230,7 @@ class MarketDataFeed:
         n = len(closes)
 
         # Returns
-        returns = [(closes[i] / closes[i-1] - 1) for i in range(1, n)]
+        returns = [(closes[i] / closes[i - 1] - 1) for i in range(1, n)]
 
         # SMA
         sma_5 = sum(closes[-5:]) / 5
@@ -224,8 +247,8 @@ class MarketDataFeed:
         for i in range(1, min(15, len(highs))):
             tr = max(
                 highs[-i] - lows[-i],
-                abs(highs[-i] - closes[-i-1]),
-                abs(lows[-i] - closes[-i-1]),
+                abs(highs[-i] - closes[-i - 1]),
+                abs(lows[-i] - closes[-i - 1]),
             )
             tr_list.append(tr)
         atr = sum(tr_list) / len(tr_list) if tr_list else 0

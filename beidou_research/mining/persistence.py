@@ -10,19 +10,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import sqlite3
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
-
+from typing import Protocol
 
 # ================================================================
 # 存储接口
 # ================================================================
+
 
 class FactorStore(Protocol):
     """因子存储接口。"""
@@ -46,6 +46,7 @@ class ArtifactStore(Protocol):
 # PostgreSQL Factor Store (生产)
 # ================================================================
 
+
 class PostgreSQLFactorStore:
     """基于 PostgreSQL 的因子存储。
 
@@ -66,6 +67,7 @@ class PostgreSQLFactorStore:
         """尝试连接数据库。连接失败时 Fail-Closed。"""
         try:
             import psycopg
+
             self._conn = psycopg.connect(self.conn_string)
             self._available = True
             self._init_schema()
@@ -197,8 +199,15 @@ class PostgreSQLFactorStore:
                     (factor_id,),
                 )
                 return [
-                    {"from_state": r[0], "to_state": r[1], "evidence_bundle_hash": r[2],
-                     "decision": r[3], "reason": r[4], "operator": r[5], "decided_at": str(r[6])}
+                    {
+                        "from_state": r[0],
+                        "to_state": r[1],
+                        "evidence_bundle_hash": r[2],
+                        "decision": r[3],
+                        "reason": r[4],
+                        "operator": r[5],
+                        "decided_at": str(r[6]),
+                    }
                     for r in cur.fetchall()
                 ]
         except Exception:
@@ -206,15 +215,14 @@ class PostgreSQLFactorStore:
 
     def close(self) -> None:
         if self._conn:
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.close()
-            except Exception:
-                pass
 
 
 # ================================================================
 # SQLite Factor Store (本地研究)
 # ================================================================
+
 
 @dataclass
 class SQLiteFactorStore:
@@ -259,8 +267,7 @@ class SQLiteFactorStore:
                     """INSERT OR REPLACE INTO factor_versions
                        (factor_id, version, data_json, created_at, artifact_hash)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (factor_id, version, data_json,
-                     datetime.now(timezone.utc).isoformat(), artifact_hash),
+                    (factor_id, version, data_json, datetime.now(timezone.utc).isoformat(), artifact_hash),
                 )
                 conn.commit()
             return True
@@ -299,10 +306,16 @@ class SQLiteFactorStore:
                        (factor_id, from_state, to_state, evidence_bundle_hash,
                         decision, reason, operator, decided_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (factor_id, decision.get("from_state", ""), decision.get("to_state", ""),
-                     decision.get("evidence_bundle_hash", ""), decision.get("decision", ""),
-                     decision.get("reason", ""), decision.get("operator", "system"),
-                     datetime.now(timezone.utc).isoformat()),
+                    (
+                        factor_id,
+                        decision.get("from_state", ""),
+                        decision.get("to_state", ""),
+                        decision.get("evidence_bundle_hash", ""),
+                        decision.get("decision", ""),
+                        decision.get("reason", ""),
+                        decision.get("operator", "system"),
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
                 conn.commit()
             return True
@@ -319,8 +332,15 @@ class SQLiteFactorStore:
                     (factor_id,),
                 ).fetchall()
             return [
-                {"from_state": r[0], "to_state": r[1], "evidence_bundle_hash": r[2],
-                 "decision": r[3], "reason": r[4], "operator": r[5], "decided_at": r[6]}
+                {
+                    "from_state": r[0],
+                    "to_state": r[1],
+                    "evidence_bundle_hash": r[2],
+                    "decision": r[3],
+                    "reason": r[4],
+                    "operator": r[5],
+                    "decided_at": r[6],
+                }
                 for r in rows
             ]
         except Exception:
@@ -330,6 +350,7 @@ class SQLiteFactorStore:
 # ================================================================
 # JSON File Factor Store (最小依赖)
 # ================================================================
+
 
 class JSONFileFactorStore:
     """基于 JSON 文件的因子存储。"""
@@ -344,10 +365,17 @@ class JSONFileFactorStore:
         path = os.path.join(factor_dir, f"{version}.json")
         try:
             with open(path, "w") as f:
-                json.dump({
-                    "factor_id": factor_id, "version": version, "data": data,
-                    "saved_at": datetime.now(timezone.utc).isoformat(),
-                }, f, indent=2, default=str)
+                json.dump(
+                    {
+                        "factor_id": factor_id,
+                        "version": version,
+                        "data": data,
+                        "saved_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                    indent=2,
+                    default=str,
+                )
             return True
         except Exception:
             return False
@@ -396,6 +424,7 @@ class JSONFileFactorStore:
 # ================================================================
 # 本地文件 Artifact Store
 # ================================================================
+
 
 class LocalArtifactStore:
     """本地文件 artifact 存储。"""

@@ -1,10 +1,13 @@
-
 """Venue×Instrument 动态交易池、生命周期与容量门禁。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from beidou_shared.types import AccountId, InstrumentId, ResultStatus, VenueId, VenueInstrument
+
+from beidou_shared.types import ResultStatus, VenueInstrument
+
 
 class PoolLifecycle(str, Enum):
     ACTIVE = "ACTIVE"
@@ -12,6 +15,7 @@ class PoolLifecycle(str, Enum):
     EXIT_ONLY = "EXIT_ONLY"
     QUARANTINED = "QUARANTINED"
     INACTIVE = "INACTIVE"
+
 
 @dataclass
 class TradingPoolEntry:
@@ -23,8 +27,10 @@ class TradingPoolEntry:
     added_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_traded_at: datetime | None = None
 
+
 class TradingPoolManager:
     """动态交易池管理器。容量门禁，生命周期控制。"""
+
     def __init__(self) -> None:
         self._pool: dict[str, TradingPoolEntry] = {}
 

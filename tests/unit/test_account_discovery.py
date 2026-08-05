@@ -1,10 +1,13 @@
-
 """PKG-00A: Account Discovery 测试。查询失败≠空仓。"""
+
 from beidou_exchange.account_discovery import (
-    AccountCapabilityChecker, AccountCapabilityReport,
-    AccountQueryResult, AccountQueryStatus,
+    AccountCapabilityChecker,
+    AccountCapabilityReport,
+    AccountQueryResult,
+    AccountQueryStatus,
 )
 from beidou_shared.types import AccountId, ResultStatus, VenueId
+
 
 class TestAccountQueryResult:
     def test_success_is_definitive(self):
@@ -77,16 +80,16 @@ class TestAccountCapabilityChecker:
 
 class TestAccountCapabilityReport:
     def make_report(self, **overrides) -> AccountCapabilityReport:
-        defaults = dict(
-            venue_id=VenueId("BINANCE"),
-            account_id=AccountId("test_account"),
-            can_read_balances=AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
-            can_read_positions=AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
-            can_read_open_orders=AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
-            can_trade=AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
-            can_withdraw=AccountQueryResult(status=AccountQueryStatus.EMPTY),
-            ip_whitelisted=True,
-        )
+        defaults = {
+            "venue_id": VenueId("BINANCE"),
+            "account_id": AccountId("test_account"),
+            "can_read_balances": AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
+            "can_read_positions": AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
+            "can_read_open_orders": AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
+            "can_trade": AccountQueryResult(status=AccountQueryStatus.KNOWN_NONEMPTY),
+            "can_withdraw": AccountQueryResult(status=AccountQueryStatus.EMPTY),
+            "ip_whitelisted": True,
+        }
         defaults.update(overrides)
         return AccountCapabilityReport(**defaults)
 
@@ -103,22 +106,16 @@ class TestAccountCapabilityReport:
         assert "WITHDRAW_PERMISSION_DETECTED" in report.trading_blockers()
 
     def test_balance_unknown_blocks(self):
-        report = self.make_report(
-            can_read_balances=AccountQueryResult(status=AccountQueryStatus.UNKNOWN)
-        )
+        report = self.make_report(can_read_balances=AccountQueryResult(status=AccountQueryStatus.UNKNOWN))
         assert not report.is_safe_for_trading()
         assert "BALANCE_QUERY_FAILED" in report.trading_blockers()
 
     def test_position_unknown_blocks(self):
-        report = self.make_report(
-            can_read_positions=AccountQueryResult(status=AccountQueryStatus.ERROR)
-        )
+        report = self.make_report(can_read_positions=AccountQueryResult(status=AccountQueryStatus.ERROR))
         assert not report.is_safe_for_trading()
 
     def test_owner_disconnected_no_auto_unlock(self):
         checker = AccountCapabilityChecker()
-        report = self.make_report(
-            can_read_balances=AccountQueryResult(status=AccountQueryStatus.UNKNOWN)
-        )
+        report = self.make_report(can_read_balances=AccountQueryResult(status=AccountQueryStatus.UNKNOWN))
         result = checker.owner_disconnected_check(report)
         assert result == ResultStatus.UNKNOWN

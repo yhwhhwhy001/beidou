@@ -1,15 +1,27 @@
-
 """PKG-07~10: Market Data 测试。订单簿、K线、数据质量。"""
-from datetime import datetime, timezone, timedelta
-from beidou_shared.types import VenueId, InstrumentId, Price, Quantity, VenueInstrument, DataQualityTier
-from beidou_data.market import OrderBookSnapshot, BookLevel, RawLayer, MarketEvent, MarketEventType, TradeTick
-from beidou_data.klines import KLineGenerator, OHLCV
-from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType, CrossSourceValidator, AutoRepair
+
+from datetime import datetime, timedelta, timezone
+
+from beidou_data.klines import KLineGenerator
+from beidou_data.market import BookLevel, MarketEvent, MarketEventType, OrderBookSnapshot, RawLayer
+from beidou_data.quality import AutoRepair, DataQualityGate, DQCheckResult, DQCheckType
+from beidou_shared.types import DataQualityTier, InstrumentId, Price, Quantity, VenueId, VenueInstrument
+
 
 class TestOrderBook:
     def make_book(self):
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
-        return OrderBookSnapshot(venue_instrument=vi, bids=[BookLevel(price=Price(amount="50000"), quantity=Quantity(amount="1.0")), BookLevel(price=Price(amount="49900"), quantity=Quantity(amount="2.0"))], asks=[BookLevel(price=Price(amount="50100"), quantity=Quantity(amount="1.5")), BookLevel(price=Price(amount="50200"), quantity=Quantity(amount="0.5"))])
+        return OrderBookSnapshot(
+            venue_instrument=vi,
+            bids=[
+                BookLevel(price=Price(amount="50000"), quantity=Quantity(amount="1.0")),
+                BookLevel(price=Price(amount="49900"), quantity=Quantity(amount="2.0")),
+            ],
+            asks=[
+                BookLevel(price=Price(amount="50100"), quantity=Quantity(amount="1.5")),
+                BookLevel(price=Price(amount="50200"), quantity=Quantity(amount="0.5")),
+            ],
+        )
 
     def test_best_bid_ask(self):
         book = self.make_book()
@@ -45,17 +57,22 @@ class TestOrderBook:
         assert book.best_bid() is None
         assert book.spread_bps() is None
 
+
 class TestRawLayer:
     def test_ingest_and_replay(self):
         layer = RawLayer()
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
         from beidou_shared.types import SchemaVersion
+
         t0 = datetime.now(timezone.utc)
-        evt = MarketEvent(event_type=MarketEventType.TRADE, venue_instrument=vi, event_time=t0, schema_version=SchemaVersion("2.0.0"))
+        evt = MarketEvent(
+            event_type=MarketEventType.TRADE, venue_instrument=vi, event_time=t0, schema_version=SchemaVersion("2.0.0")
+        )
         layer.ingest(evt)
         assert layer.event_count() == 1
         replays = layer.replay_range(t0 - timedelta(seconds=1), t0 + timedelta(seconds=1))
         assert len(replays) == 1
+
 
 class TestKLineGenerator:
     def test_klines_generated(self):
@@ -63,32 +80,47 @@ class TestKLineGenerator:
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
         t0 = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         gen.process_tick(vi, Price(amount="50000"), Quantity(amount="0.1"), t0)
-        result = gen.process_tick(vi, Price(amount="50100"), Quantity(amount="0.2"), t0 + timedelta(seconds=30))
+        gen.process_tick(vi, Price(amount="50100"), Quantity(amount="0.2"), t0 + timedelta(seconds=30))
         gen.process_tick(vi, Price(amount="49900"), Quantity(amount="0.1"), t0 + timedelta(minutes=1, seconds=1))
         klines = gen.get_klines(vi)
         assert len(klines) >= 1
 
     def test_invalid_interval(self):
         import pytest
+
         with pytest.raises(ValueError):
             KLineGenerator("2x")
 
+
 class TestDataQuality:
     def test_all_pass(self):
-        gate = DataQualityGate(checks=[DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.PASS, "OK", 0.5, 1.0), DQCheckResult(DQCheckType.COMPLETENESS, DataQualityTier.PASS, "OK", 1.0, 0.99)])
+        gate = DataQualityGate(
+            checks=[
+                DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.PASS, "OK", 0.5, 1.0),
+                DQCheckResult(DQCheckType.COMPLETENESS, DataQualityTier.PASS, "OK", 1.0, 0.99),
+            ]
+        )
         assert gate.overall_tier() == DataQualityTier.PASS
         assert gate.is_safe_for_trading()
 
     def test_any_fail_fails(self):
-        gate = DataQualityGate(checks=[DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.PASS, "OK"), DQCheckResult(DQCheckType.CONSISTENCY, DataQualityTier.FAIL, "Mismatch")])
+        gate = DataQualityGate(
+            checks=[
+                DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.PASS, "OK"),
+                DQCheckResult(DQCheckType.CONSISTENCY, DataQualityTier.FAIL, "Mismatch"),
+            ]
+        )
         assert gate.overall_tier() == DataQualityTier.FAIL
         assert not gate.is_safe_for_trading()
 
     def test_conditional_passes_for_research(self):
-        gate = DataQualityGate(checks=[DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.CONDITIONAL, "Stale", 60, 30)])
+        gate = DataQualityGate(
+            checks=[DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.CONDITIONAL, "Stale", 60, 30)]
+        )
         assert gate.overall_tier() == DataQualityTier.CONDITIONAL
         assert gate.is_safe_for_research()
         assert not gate.is_safe_for_trading()
+
 
 class TestAutoRepair:
     def test_gap_detection(self):

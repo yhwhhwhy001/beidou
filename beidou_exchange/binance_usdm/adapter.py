@@ -1,19 +1,38 @@
-
 """Binance USDⓈ-M 适配器实现。参考数据、交易规则、健康监控。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from beidou_shared.types import (
-    AccountId, AccountRef, CorrelationId, HealthStatus, InstrumentId,
-    MonetaryValue, OrderSide, OrderStatus, OrderType, Price, Quantity,
-    ResultStatus, TimeInForce, VenueId, VenueInstrument,
-)
-from beidou_exchange.core.protocol import (
-    AccountInfo, Capability, ExchangeAdapter, ExchangeInfo, OrderRequest, OrderResponse,
-)
+
 from beidou_exchange.core.error_taxonomy import ErrorNormalizer
+from beidou_exchange.core.protocol import (
+    AccountInfo,
+    Capability,
+    ExchangeAdapter,
+    ExchangeInfo,
+    OrderRequest,
+    OrderResponse,
+)
+from beidou_shared.types import (
+    AccountId,
+    AccountRef,
+    CorrelationId,
+    HealthStatus,
+    InstrumentId,
+    MonetaryValue,
+    OrderId,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Quantity,
+    ResultStatus,
+    VenueId,
+    VenueInstrument,
+)
+
 
 class InstrumentStatus(str, Enum):
     TRADING = "TRADING"
@@ -21,6 +40,7 @@ class InstrumentStatus(str, Enum):
     BREAK = "BREAK"
     EXIT_ONLY = "EXIT_ONLY"
     QUARANTINED = "QUARANTINED"
+
 
 @dataclass(frozen=True, slots=True)
 class TradingRuleChange:
@@ -30,6 +50,7 @@ class TradingRuleChange:
     new_value: Any
     detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: CorrelationId | None = None
+
 
 @dataclass
 class BinanceReferenceData:
@@ -68,7 +89,9 @@ class BinanceReferenceData:
             for key, val in rules.items():
                 old_val = old_rules.get(key)
                 if old_val is not None and old_val != val:
-                    changes.append(TradingRuleChange(instrument_id=inst_id, field=key, old_value=old_val, new_value=val))
+                    changes.append(
+                        TradingRuleChange(instrument_id=inst_id, field=key, old_value=old_val, new_value=val)
+                    )
         return changes
 
 
@@ -102,9 +125,7 @@ class BinanceHealthMonitor:
         self._last_error_time[key] = datetime.now(timezone.utc)
 
     def is_safe_for_new_risk(self) -> bool:
-        if self._venue_health in (HealthStatus.UNKNOWN, HealthStatus.UNAVAILABLE, HealthStatus.MAINTENANCE):
-            return False
-        return True
+        return self._venue_health not in (HealthStatus.UNKNOWN, HealthStatus.UNAVAILABLE, HealthStatus.MAINTENANCE)
 
     def instruments_requiring_action(self) -> dict[InstrumentId, InstrumentStatus]:
         result: dict[InstrumentId, InstrumentStatus] = {}
@@ -126,11 +147,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         self._account_id = account_id
         self._health_monitor = BinanceHealthMonitor(venue_id)
         self._reference_data = BinanceReferenceData(venue_id=venue_id)
-        self._capabilities = frozenset({
-            Capability.FUTURES_USD_M, Capability.WEBSOCKET_MARKET,
-            Capability.WEBSOCKET_USER, Capability.CONDITIONAL_ORDERS,
-            Capability.TRAILING_STOP, Capability.USER_DATA_STREAM,
-        })
+        self._capabilities = frozenset(
+            {
+                Capability.FUTURES_USD_M,
+                Capability.WEBSOCKET_MARKET,
+                Capability.WEBSOCKET_USER,
+                Capability.CONDITIONAL_ORDERS,
+                Capability.TRAILING_STOP,
+                Capability.USER_DATA_STREAM,
+            }
+        )
 
     @property
     def venue_id(self) -> VenueId:
@@ -163,7 +189,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
     async def get_account_info(self, account_ref: AccountRef) -> AccountInfo:
         return AccountInfo(
             account_ref=account_ref,
-            can_trade=True, can_deposit=False, can_withdraw=False,
+            can_trade=True,
+            can_deposit=False,
+            can_withdraw=False,
         )
 
     async def get_balances(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, MonetaryValue]]:
@@ -179,47 +207,75 @@ class BinanceUsdmAdapter(ExchangeAdapter):
     async def create_order(self, request: OrderRequest) -> OrderResponse:
         if not self._health_monitor.is_safe_for_new_risk():
             return OrderResponse(
-                venue_instrument=request.venue_instrument, account_ref=request.account_ref,
-                order_id="", client_order_id=request.client_order_id,
-                status=OrderStatus.REJECTED, side=request.side, order_type=request.order_type,
-                original_quantity=request.quantity, executed_quantity=Quantity(amount="0"),
-                average_price=None, commission=None, correlation_id=request.correlation_id,
+                venue_instrument=request.venue_instrument,
+                account_ref=request.account_ref,
+                order_id="",
+                client_order_id=request.client_order_id,
+                status=OrderStatus.REJECTED,
+                side=request.side,
+                order_type=request.order_type,
+                original_quantity=request.quantity,
+                executed_quantity=Quantity(amount="0"),
+                average_price=None,
+                commission=None,
+                correlation_id=request.correlation_id,
                 raw_response={"reason": "venue_health_unsafe"},
             )
-        from beidou_safety.execution.intent import IntentOutbox
         from beidou_safety.execution import OrderIntent
+        from beidou_safety.execution.intent import IntentOutbox
+
         ob = IntentOutbox()
         intent = OrderIntent(
             intent_id=f"binance-{request.client_order_id or 'auto'}",
-            account_ref=request.account_ref, instrument_id=request.venue_instrument.instrument_id,
-            side=request.side, order_type=request.order_type, quantity=request.quantity,
-            price=request.price, time_in_force=request.time_in_force,
-            client_order_id=request.client_order_id, correlation_id=request.correlation_id,
+            account_ref=request.account_ref,
+            instrument_id=request.venue_instrument.instrument_id,
+            side=request.side,
+            order_type=request.order_type,
+            quantity=request.quantity,
+            price=request.price,
+            time_in_force=request.time_in_force,
+            client_order_id=request.client_order_id,
+            correlation_id=request.correlation_id,
         )
         ob.commit(intent)
         return OrderResponse(
-            venue_instrument=request.venue_instrument, account_ref=request.account_ref,
-            order_id=intent.intent_id, client_order_id=request.client_order_id,
-            status=OrderStatus.NEW, side=request.side, order_type=request.order_type,
-            original_quantity=request.quantity, executed_quantity=Quantity(amount="0"),
-            average_price=None, commission=None, correlation_id=request.correlation_id,
+            venue_instrument=request.venue_instrument,
+            account_ref=request.account_ref,
+            order_id=intent.intent_id,
+            client_order_id=request.client_order_id,
+            status=OrderStatus.NEW,
+            side=request.side,
+            order_type=request.order_type,
+            original_quantity=request.quantity,
+            executed_quantity=Quantity(amount="0"),
+            average_price=None,
+            commission=None,
+            correlation_id=request.correlation_id,
         )
 
     async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:
-        from beidou_safety.execution.order_state import OrderStateTracker, OrderEvent
+        from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
+
         ts = OrderStateTracker(order_id=OrderId(order_id))
         ts.apply(OrderEvent.CANCEL_REQUESTED)
         ts.apply(OrderEvent.CANCELED)
         return OrderResponse(
-            venue_instrument=venue_instrument, account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
-            order_id=order_id, client_order_id=None,
-            status=ts.status, side=OrderSide.BUY, order_type=OrderType.MARKET,
-            original_quantity=Quantity(amount="0"), executed_quantity=Quantity(amount="0"),
-            average_price=None, commission=None,
+            venue_instrument=venue_instrument,
+            account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
+            order_id=order_id,
+            client_order_id=None,
+            status=ts.status,
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            original_quantity=Quantity(amount="0"),
+            executed_quantity=Quantity(amount="0"),
+            average_price=None,
+            commission=None,
         )
 
     async def get_order_status(self, order_id: str, venue_instrument: VenueInstrument) -> OrderStatus:
         from beidou_safety.execution.order_state import OrderStateTracker
+
         ts = OrderStateTracker(order_id=OrderId(order_id))
         if ts.is_terminal():
             return ts.status

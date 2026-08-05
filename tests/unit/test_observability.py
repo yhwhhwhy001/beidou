@@ -5,18 +5,13 @@ PKG-04: Observability 测试。
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
-
 from beidou_observability.telemetry import (
+    SEVERITY_AUTO_ACTIONS,
     AlertSeverity,
     AlertSuppressor,
     AutoAction,
     Incident,
     IncidentStatus,
-    SEVERITY_AUTO_ACTIONS,
-    Span,
     TraceContext,
 )
 from beidou_shared.types import CorrelationId

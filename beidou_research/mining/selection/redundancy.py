@@ -11,19 +11,18 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass
 class RedundancyResult:
     """冗余检测结果。"""
-    factor_pairs: list[tuple[str, str, float]]   # (f1, f2, correlation)
+
+    factor_pairs: list[tuple[str, str, float]]  # (f1, f2, correlation)
     high_correlation_pairs: list[tuple[str, str]]  # corr > 0.7
-    vif_scores: dict[str, float]                   # factor → VIF
-    clusters: list[list[str]]                      # 层次聚类结果
-    redundant_factors: list[str]                   # 建议淘汰的因子
+    vif_scores: dict[str, float]  # factor → VIF
+    clusters: list[list[str]]  # 层次聚类结果
+    redundant_factors: list[str]  # 建议淘汰的因子
     redundant_cluster_count: int = 0
 
 
@@ -95,7 +94,7 @@ class RedundancyDetector:
         n_samples = min(len(v) for v in factor_values.values())
 
         if n_samples < 10 or len(names) < 2:
-            return {n: 1.0 for n in names}
+            return dict.fromkeys(names, 1.0)
 
         vif_scores = {}
         for target in names:
@@ -169,10 +168,7 @@ class RedundancyDetector:
         clusters = self.hierarchical_clustering(corr_matrix)
 
         # 建议淘汰的因子（高 VIF 且在高相关对中）
-        redundant = [
-            n for n, vif in vif_scores.items()
-            if vif > self.vif_threshold
-        ]
+        redundant = [n for n, vif in vif_scores.items() if vif > self.vif_threshold]
 
         return RedundancyResult(
             factor_pairs=high_pairs,
@@ -224,6 +220,6 @@ def _ols_r_squared(y: list[float], X: list[list[float]]) -> float:
         alpha = mean_r - beta * mean_x
         residual = [residual[i] - (alpha + beta * x_col[i]) for i in range(n)]
 
-    ss_res = sum(r ** 2 for r in residual)
+    ss_res = sum(r**2 for r in residual)
     r_squared = 1.0 - ss_res / ss_tot
     return max(0.0, min(1.0, r_squared))

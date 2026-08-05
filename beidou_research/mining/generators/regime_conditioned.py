@@ -34,24 +34,31 @@ class RegimeType(str, Enum):
 @dataclass
 class RegimeConfig:
     """市场状态配置。"""
-    regimes: list[RegimeType] = field(default_factory=lambda: [
-        RegimeType.TRENDING, RegimeType.RANGING,
-        RegimeType.HIGH_VOL, RegimeType.NORMAL_VOL, RegimeType.LOW_VOL,
-    ])
+
+    regimes: list[RegimeType] = field(
+        default_factory=lambda: [
+            RegimeType.TRENDING,
+            RegimeType.RANGING,
+            RegimeType.HIGH_VOL,
+            RegimeType.NORMAL_VOL,
+            RegimeType.LOW_VOL,
+        ]
+    )
     min_samples_per_regime: int = 30
-    require_frozen_model: bool = True   # 禁止样本后验选择
+    require_frozen_model: bool = True  # 禁止样本后验选择
 
 
 @dataclass
 class RegimeSpec:
     """市场状态因子规格。"""
+
     regime_id: str
     base_factor: str
     regime: RegimeType
     expression_hash: str
     complexity_score: float
-    expected_behavior: str     # 在该 regime 下的预期行为
-    failure_regime: str        # 预期失效的 regime
+    expected_behavior: str  # 在该 regime 下的预期行为
+    failure_regime: str  # 预期失效的 regime
 
 
 class RegimeConditionedGenerator:
@@ -89,21 +96,23 @@ class RegimeConditionedGenerator:
             for regime in regimes:
                 regime_id = f"{fid}_regime_{regime}"
 
-                expr_hash = hashlib.sha256(
-                    f"regime:{fid}:{regime}".encode()
-                ).hexdigest()[:20]
+                expr_hash = hashlib.sha256(f"regime:{fid}:{regime}".encode()).hexdigest()[:20]
 
                 if expr_hash not in seen:
                     seen.add(expr_hash)
-                    specs.append(RegimeSpec(
-                        regime_id=regime_id,
-                        base_factor=fid,
-                        regime=RegimeType(regime) if regime in RegimeType._value2member_map_ else RegimeType(regime),
-                        expression_hash=expr_hash,
-                        complexity_score=candidate.get("complexity_score", 1.0) + 1.0,
-                        expected_behavior=self._expected_behavior(fid, regime),
-                        failure_regime=self._failure_regime(regime),
-                    ))
+                    specs.append(
+                        RegimeSpec(
+                            regime_id=regime_id,
+                            base_factor=fid,
+                            regime=RegimeType(regime)
+                            if regime in RegimeType._value2member_map_
+                            else RegimeType(regime),
+                            expression_hash=expr_hash,
+                            complexity_score=candidate.get("complexity_score", 1.0) + 1.0,
+                            expected_behavior=self._expected_behavior(fid, regime),
+                            failure_regime=self._failure_regime(regime),
+                        )
+                    )
 
         return specs
 
@@ -118,7 +127,7 @@ class RegimeConditionedGenerator:
         只返回 target_regime 状态下的因子值，其他时间点标记为 NaN。
         """
         result = []
-        for v, r in zip(factor_values, regime_timestamps):
+        for v, r in zip(factor_values, regime_timestamps, strict=False):
             if r == target_regime:
                 result.append(v)
             else:

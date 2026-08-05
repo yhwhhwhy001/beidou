@@ -1,11 +1,18 @@
-
 """双重记账、不可变经济事件与完整归因。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
 from beidou_shared.types import (
-    AccountId, CorrelationId, MonetaryValue, Quantity, VenueId, InstrumentId,
+    AccountId,
+    CorrelationId,
+    InstrumentId,
+    MonetaryValue,
+    VenueId,
 )
+
 
 @dataclass(frozen=True, slots=True)
 class JournalEntry:
@@ -23,9 +30,11 @@ class JournalEntry:
     def is_balanced(self) -> bool:
         return float(self.debit.amount) == float(self.credit.amount)
 
+
 class ImmutableLedger:
     """不可变账本。所有经济事件追加写入，不可修改。"""
-    def __init__(self):
+
+    def __init__(self) -> None:
         self._entries: list[JournalEntry] = []
         self._account_balances: dict[str, MonetaryValue] = {}
 

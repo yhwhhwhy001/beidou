@@ -110,10 +110,7 @@ class TestAlphaGraph:
         """验证复杂 DAG 的拓扑排序正确。"""
         graph = AlphaGraph(strategy_id=StrategyId("TEST_STRATEGY"))
 
-        components = {
-            name: FakeComponent(AlphaComponentType.ENTRY, name)
-            for name in ["a", "b", "c", "d", "e", "f"]
-        }
+        components = {name: FakeComponent(AlphaComponentType.ENTRY, name) for name in ["a", "b", "c", "d", "e", "f"]}
         for c in components.values():
             graph.add_component(c)
 

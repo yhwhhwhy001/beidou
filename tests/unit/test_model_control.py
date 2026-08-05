@@ -1,18 +1,41 @@
-
 """PKG-28~34: Model Registry、Control Plane、Chaos、Production Ladder 测试。"""
-from beidou_shared.types import ModelId, SchemaVersion, StrategyId, MonetaryValue, Quantity, AccountId, InstrumentId, VenueId
-from beidou_strategy.alpha.model_registry import ModelRegistry, ModelRecord, ModelStatus, DriftDetector
-from beidou_control.plane import ControlPlane, ControlAction, AccountFactOverview
-from beidou_chaos.engine import ChaosEngine, KillScenario
-from beidou_production.ladder import ProductionLadder, LadderLevel, GateResult
-from beidou_research.backtest.replay import ReplayValidator, ReplayResult, CheatDetection
+
 from datetime import datetime, timezone
+
+from beidou_chaos.engine import ChaosEngine, KillScenario
+from beidou_control.plane import AccountFactOverview, ControlAction, ControlPlane
+from beidou_production.ladder import GateResult, LadderLevel, ProductionLadder
+from beidou_research.backtest.replay import CheatDetection, ReplayResult, ReplayValidator
+from beidou_shared.types import (
+    AccountId,
+    ModelId,
+    MonetaryValue,
+    SchemaVersion,
+    StrategyId,
+    VenueId,
+)
+from beidou_strategy.alpha.model_registry import DriftDetector, ModelRecord, ModelRegistry, ModelStatus
+
 
 class TestModelRegistry:
     def test_champion_promotion(self):
         reg = ModelRegistry()
-        reg.register(ModelRecord(model_id=ModelId("m1"), strategy_id=StrategyId("s1"), status=ModelStatus.CHALLENGER, version=SchemaVersion("1.0.0")))
-        reg.register(ModelRecord(model_id=ModelId("m2"), strategy_id=StrategyId("s1"), status=ModelStatus.CHALLENGER, version=SchemaVersion("2.0.0")))
+        reg.register(
+            ModelRecord(
+                model_id=ModelId("m1"),
+                strategy_id=StrategyId("s1"),
+                status=ModelStatus.CHALLENGER,
+                version=SchemaVersion("1.0.0"),
+            )
+        )
+        reg.register(
+            ModelRecord(
+                model_id=ModelId("m2"),
+                strategy_id=StrategyId("s1"),
+                status=ModelStatus.CHALLENGER,
+                version=SchemaVersion("2.0.0"),
+            )
+        )
         assert reg.promote_to_champion(StrategyId("s1"), ModelId("m1"))
         champ = reg.get_champion(StrategyId("s1"))
         assert champ is not None
@@ -20,10 +43,18 @@ class TestModelRegistry:
 
     def test_retire_strategy(self):
         reg = ModelRegistry()
-        reg.register(ModelRecord(model_id=ModelId("m1"), strategy_id=StrategyId("s1"), status=ModelStatus.CHAMPION, version=SchemaVersion("1.0.0")))
+        reg.register(
+            ModelRecord(
+                model_id=ModelId("m1"),
+                strategy_id=StrategyId("s1"),
+                status=ModelStatus.CHAMPION,
+                version=SchemaVersion("1.0.0"),
+            )
+        )
         retired = reg.retire_strategy(StrategyId("s1"), "Performance degradation")
         assert len(retired) == 1
         assert retired[0].status == ModelStatus.RETIRED
+
 
 class TestDriftDetector:
     def test_no_drift(self):
@@ -45,6 +76,7 @@ class TestDriftDetector:
         drift = dd.detect({"a": 2.0, "b": 4.0, "c": 6.0, "d": 8.0})
         assert dd.should_retire(drift)
 
+
 class TestControlPlane:
     def test_emergency_lock(self):
         cp = ControlPlane()
@@ -54,15 +86,19 @@ class TestControlPlane:
     def test_account_overview(self):
         cp = ControlPlane()
         overview = AccountFactOverview(
-            account_id=AccountId("test"), venue_id=VenueId("BINANCE"),
-            total_equity=MonetaryValue(amount="100000"), available_balance=MonetaryValue(amount="50000"),
-            margin_used=MonetaryValue(amount="50000"), margin_ratio=0.5,
+            account_id=AccountId("test"),
+            venue_id=VenueId("BINANCE"),
+            total_equity=MonetaryValue(amount="100000"),
+            available_balance=MonetaryValue(amount="50000"),
+            margin_used=MonetaryValue(amount="50000"),
+            margin_ratio=0.5,
             unrealized_pnl=MonetaryValue(amount="1000"),
         )
         cp.update_account_overview(overview)
         # Verify the overview was stored
         issues = cp.get_unknown_or_differences()
         assert isinstance(issues, list)
+
 
 class TestChaosEngine:
     def test_all_experiments_passed(self):
@@ -75,6 +111,7 @@ class TestChaosEngine:
         engine = ChaosEngine()
         exps = engine.combination_fault_test([KillScenario.DATABASE_FAILURE, KillScenario.KAFKA_OUTAGE])
         assert len(exps) == 2
+
 
 class TestProductionLadder:
     def test_cannot_skip_levels(self):
@@ -95,11 +132,13 @@ class TestProductionLadder:
         ladder = ProductionLadder()
         assert not ladder.should_degrade(5.0, 1.5, 0)
 
+
 class TestReplayValidator:
     def test_future_function_detected(self):
         v = ReplayValidator()
         t0 = datetime.now(timezone.utc)
         from datetime import timedelta
+
         # signal before data available → future leak → FAIL
         assert not v.check_future_function(t0, t0 + timedelta(seconds=1))
         # signal after data available → no leak → PASS
@@ -111,7 +150,9 @@ class TestReplayValidator:
         assert "SOL" in missing
 
     def test_all_checks_pass(self):
-        result = ReplayResult(replay_id="r1", deterministic=True, cheat_checks={c: True for c in CheatDetection}, output_hash="abc")
+        result = ReplayResult(
+            replay_id="r1", deterministic=True, cheat_checks=dict.fromkeys(CheatDetection, True), output_hash="abc"
+        )
         v = ReplayValidator()
         v.set_baseline("abc")
         assert v.all_checks_pass(result)

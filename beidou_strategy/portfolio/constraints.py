@@ -14,6 +14,7 @@ from typing import Callable
 @dataclass
 class PortfolioConstraint:
     """组合约束。"""
+
     name: str
     description: str
     check: Callable[[dict[str, float]], bool]
@@ -23,8 +24,9 @@ class PortfolioConstraint:
 @dataclass
 class OptimizationResult:
     """优化结果。"""
+
     targets: dict[str, float]  # symbol → target_quantity
-    rejected: dict[str, str]   # symbol → rejection_reason
+    rejected: dict[str, str]  # symbol → rejection_reason
     total_risk_pct: float = 0.0
     gross_exposure: float = 0.0
     net_exposure: float = 0.0
@@ -44,24 +46,28 @@ class ConstraintOptimizer:
     输出: OptimizationResult (targets + rejected + violations)
     """
 
-    def __init__(self, max_gross_leverage: float = 3.0,
-                 max_net_leverage: float = 1.0,
-                 max_per_symbol_pct: float = 50.0):
+    def __init__(
+        self, max_gross_leverage: float = 3.0, max_net_leverage: float = 1.0, max_per_symbol_pct: float = 50.0
+    ):
         self.max_gross_leverage = max_gross_leverage
         self.max_net_leverage = max_net_leverage
         self.max_per_symbol_pct = max_per_symbol_pct
 
-    def optimize(self, signals: dict[str, dict],
-                 account_equity: float,
-                 min_notional: dict[str, float] | None = None,
-                 step_sizes: dict[str, float] | None = None) -> OptimizationResult:
+    def optimize(
+        self,
+        signals: dict[str, dict],
+        account_equity: float,
+        min_notional: dict[str, float] | None = None,
+        step_sizes: dict[str, float] | None = None,
+    ) -> OptimizationResult:
         """执行确定性优化。
 
         如果 account_equity 未知 (<=0)、成本无穷或规则缺失 → 返回空 targets。
         """
         if account_equity <= 0:
             return OptimizationResult(
-                targets={}, rejected={s: "UNKNOWN account equity" for s in signals},
+                targets={},
+                rejected=dict.fromkeys(signals, "UNKNOWN account equity"),
                 constraint_violations=["account_equity_unknown"],
             )
 

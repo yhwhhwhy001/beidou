@@ -1,16 +1,22 @@
 """版本化契约定义。所有模块间接口必须以版本化契约定义。"""
+
 from __future__ import annotations
+
 from datetime import datetime
 from enum import Enum
 from typing import Any
+
 from pydantic import BaseModel, Field
+
 from ..types import SchemaVersion
+
 
 class ContractCompatibility(str, Enum):
     BACKWARD = "BACKWARD"
     FORWARD = "FORWARD"
     FULL = "FULL"
     BREAKING = "BREAKING"
+
 
 class ContractRegistration(BaseModel):
     contract_name: str
@@ -21,6 +27,7 @@ class ContractRegistration(BaseModel):
     removal_date: datetime | None = None
     migration_script: str | None = None
     migration_description: str | None = None
+
 
 class ContractRegistry:
     def __init__(self) -> None:
@@ -50,7 +57,9 @@ class ContractRegistry:
     def list_contracts(self) -> dict[str, list[SchemaVersion]]:
         return {name: sorted([r.schema_version for r in regs]) for name, regs in self._contracts.items()}
 
+
 _global_registry: ContractRegistry | None = None
+
 
 def get_contract_registry() -> ContractRegistry:
     global _global_registry

@@ -1,10 +1,13 @@
-
 """Meta-labeling、模型可靠度、冲突检测与信号融合。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from beidou_shared.types import InstrumentId, ModelId, SchemaVersion, StrategyId, VenueId
+
+from beidou_shared.types import InstrumentId, VenueId
 from beidou_strategy.alpha import AlphaSignal, SignalDirection
+
 
 @dataclass(frozen=True, slots=True)
 class FusedSignal:
@@ -20,8 +23,10 @@ class FusedSignal:
     conflict_detail: str = ""
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+
 class SignalFuser:
     """信号融合器。Meta-labeling、冲突检测、可靠度加权。"""
+
     def __init__(self, min_agreement_ratio: float = 0.6) -> None:
         self.min_agreement_ratio = min_agreement_ratio
 
@@ -37,7 +42,13 @@ class SignalFuser:
 
     def fuse(self, signals: list[AlphaSignal]) -> FusedSignal:
         if not signals:
-            return FusedSignal(instrument_id=InstrumentId("UNKNOWN"), venue_id=VenueId("UNKNOWN"), direction=SignalDirection.NO_ACTION, strength=0.0, confidence=0.0)
+            return FusedSignal(
+                instrument_id=InstrumentId("UNKNOWN"),
+                venue_id=VenueId("UNKNOWN"),
+                direction=SignalDirection.NO_ACTION,
+                strength=0.0,
+                confidence=0.0,
+            )
         conflict, detail = self.detect_conflict(signals)
 
         # 应用方向符号: LONG → +1, SHORT → -1, NO_ACTION → 0
@@ -52,8 +63,32 @@ class SignalFuser:
         weights = [s.confidence * s.strength * _direction_sign(s) for s in signals]
         total_weight = sum(abs(w) for w in weights)
         if total_weight == 0:
-            return FusedSignal(instrument_id=signals[0].instrument_id, venue_id=signals[0].venue_id, direction=SignalDirection.NO_ACTION, strength=0.0, confidence=0.0, contributing_signals=signals, conflict_detected=conflict, conflict_detail=detail)
+            return FusedSignal(
+                instrument_id=signals[0].instrument_id,
+                venue_id=signals[0].venue_id,
+                direction=SignalDirection.NO_ACTION,
+                strength=0.0,
+                confidence=0.0,
+                contributing_signals=signals,
+                conflict_detected=conflict,
+                conflict_detail=detail,
+            )
         net_score = sum(w for w in weights) / total_weight
-        direction = SignalDirection.LONG if net_score > 0 else SignalDirection.SHORT if net_score < 0 else SignalDirection.NO_ACTION
+        direction = (
+            SignalDirection.LONG
+            if net_score > 0
+            else SignalDirection.SHORT
+            if net_score < 0
+            else SignalDirection.NO_ACTION
+        )
         confidence = sum(s.confidence for s in signals) / len(signals)
-        return FusedSignal(instrument_id=signals[0].instrument_id, venue_id=signals[0].venue_id, direction=direction, strength=abs(net_score), confidence=confidence, contributing_signals=signals, conflict_detected=conflict, conflict_detail=detail)
+        return FusedSignal(
+            instrument_id=signals[0].instrument_id,
+            venue_id=signals[0].venue_id,
+            direction=direction,
+            strength=abs(net_score),
+            confidence=confidence,
+            contributing_signals=signals,
+            conflict_detected=conflict,
+            conflict_detail=detail,
+        )

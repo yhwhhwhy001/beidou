@@ -6,22 +6,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass
 class ParetoCandidate:
     """Pareto 候选。"""
+
     candidate_id: str
-    metrics: dict[str, float]    # 所有评估指标
+    metrics: dict[str, float]  # 所有评估指标
     is_pareto_optimal: bool = False
-    pareto_rank: int = 999       # 0 = 前沿, 1 = 次前沿, ...
+    pareto_rank: int = 999  # 0 = 前沿, 1 = 次前沿, ...
 
 
 @dataclass
 class ParetoResult:
     """Pareto 分析结果。"""
+
     candidates: list[ParetoCandidate]
     front_size: int
     fronts: list[list[ParetoCandidate]]
@@ -68,10 +70,12 @@ class ParetoSelector:
             for k, v in c.items():
                 if isinstance(v, (int, float)):
                     metrics[k] = float(v)
-            pc_list.append(ParetoCandidate(
-                candidate_id=c.get("candidate_id", c.get("hash", "unknown")),
-                metrics=metrics,
-            ))
+            pc_list.append(
+                ParetoCandidate(
+                    candidate_id=c.get("candidate_id", c.get("hash", "unknown")),
+                    metrics=metrics,
+                )
+            )
 
         # 标准化目标向量
         # maximize 方向: value
@@ -105,7 +109,7 @@ class ParetoSelector:
 
         while current_front:
             for i in current_front:
-                pc_list[i].is_pareto_optimal = (rank == 0)
+                pc_list[i].is_pareto_optimal = rank == 0
                 pc_list[i].pareto_rank = rank
 
             fronts.append([pc_list[i] for i in current_front])
@@ -154,10 +158,7 @@ class ParetoSelector:
             best_idx = 0
             best_dist = -1.0
             for i, c in enumerate(remaining):
-                min_dist = min(
-                    self._metric_distance(c, s)
-                    for s in selected
-                )
+                min_dist = min(self._metric_distance(c, s) for s in selected)
                 if min_dist > best_dist:
                     best_dist = min_dist
                     best_idx = i
@@ -165,9 +166,7 @@ class ParetoSelector:
 
         return selected
 
-    def _metric_distance(
-        self, a: ParetoCandidate, b: ParetoCandidate
-    ) -> float:
+    def _metric_distance(self, a: ParetoCandidate, b: ParetoCandidate) -> float:
         """两个候选的欧几里得距离。"""
         all_keys = set(a.metrics.keys()) | set(b.metrics.keys())
         dist = 0.0
@@ -175,4 +174,4 @@ class ParetoSelector:
             va = a.metrics.get(k, 0.0)
             vb = b.metrics.get(k, 0.0)
             dist += (va - vb) ** 2
-        return dist ** 0.5
+        return dist**0.5

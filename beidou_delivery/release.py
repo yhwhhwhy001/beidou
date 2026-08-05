@@ -1,9 +1,13 @@
 """发布管理与回滚。失败发布不改变 Active 版本。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
 from beidou_shared.types import ResultStatus
+
 
 class ReleaseStatus(str, Enum):
     BUILDING = "BUILDING"
@@ -15,10 +19,12 @@ class ReleaseStatus(str, Enum):
     ROLLED_BACK = "ROLLED_BACK"
     FAILED = "FAILED"
 
+
 class MigrationCompatibility(str, Enum):
     FORWARD_BACKWARD = "FORWARD_BACKWARD"
     FORWARD_ONLY = "FORWARD_ONLY"
     INCOMPATIBLE = "INCOMPATIBLE"
+
 
 @dataclass(frozen=True, slots=True)
 class ArtifactIdentity:
@@ -31,6 +37,7 @@ class ArtifactIdentity:
     built_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     signature: str | None = None
     sbom_hash: str | None = None
+
 
 @dataclass
 class ReleaseRecord:
@@ -55,7 +62,7 @@ class ReleaseManager:
         if migration == MigrationCompatibility.INCOMPATIBLE:
             raise ValueError("Incompatible migration — cannot deploy")
         record = ReleaseRecord(
-            release_id=f"release-{len(self._release_order)+1}",
+            release_id=f"release-{len(self._release_order) + 1}",
             artifact=artifact,
             status=ReleaseStatus.BUILDING,
             migration_check=migration,

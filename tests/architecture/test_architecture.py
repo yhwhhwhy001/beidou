@@ -8,11 +8,7 @@
 from __future__ import annotations
 
 import ast
-import importlib
-import sys
 from pathlib import Path
-from typing import Set
-
 
 # --- 架构规则定义 ---
 
@@ -63,9 +59,8 @@ def _extract_imports_from_file(filepath: Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
     return imports
 
 
@@ -89,9 +84,7 @@ def test_no_strategy_directly_depends_exchange() -> None:
     for pyfile in strategy_src.rglob("*.py"):
         content = pyfile.read_text(encoding="utf-8").lower()
         for keyword in exchange_keywords:
-            assert keyword not in content.split(), (
-                f"策略层文件 {pyfile} 包含禁止的交易所相关引用: '{keyword}'"
-            )
+            assert keyword not in content.split(), f"策略层文件 {pyfile} 包含禁止的交易所相关引用: '{keyword}'"
 
 
 def test_no_research_directly_depends_production_db() -> None:
@@ -110,9 +103,7 @@ def test_no_research_directly_depends_production_db() -> None:
     for pyfile in research_src.rglob("*.py"):
         content = pyfile.read_text(encoding="utf-8").lower()
         for pattern in forbidden_patterns:
-            assert pattern not in content.replace("_", ""), (
-                f"研究层文件 {pyfile} 包含禁止的生产数据库直接引用"
-            )
+            assert pattern not in content.replace("_", ""), f"研究层文件 {pyfile} 包含禁止的生产数据库直接引用"
 
 
 def test_no_layer_crosses_clock_boundary() -> None:
@@ -136,9 +127,7 @@ def test_no_layer_crosses_clock_boundary() -> None:
         for imp in imports:
             if imp in forbidden:
                 raise ArchitectureViolation(
-                    source_pkg, imp,
-                    f"时钟层 {source_pkg} 不得导入 {imp} 的模块。"
-                    f"文件: {pyfile}"
+                    source_pkg, imp, f"时钟层 {source_pkg} 不得导入 {imp} 的模块。文件: {pyfile}"
                 )
 
 
@@ -156,9 +145,7 @@ def test_no_shared_kernel_depends_on_domain() -> None:
 
         imports = _extract_imports_from_file(pyfile)
         for imp in imports:
-            assert imp not in domain_packages, (
-                f"共享内核文件 {pyfile} 不得依赖领域包: {imp}"
-            )
+            assert imp not in domain_packages, f"共享内核文件 {pyfile} 不得依赖领域包: {imp}"
 
 
 def test_no_hardcoded_secrets_or_production_defaults() -> None:
@@ -196,7 +183,7 @@ def test_no_hardcoded_secrets_or_production_defaults() -> None:
 
     # TODO 本身在注释中是可以的，但在业务逻辑代码中不行
     # 此处检测的是代码级 TODO/FIXME/NotImplemented
-    assert len(violations) == 0, f"发现禁止模式:\n" + "\n".join(violations)
+    assert len(violations) == 0, "发现禁止模式:\n" + "\n".join(violations)
 
 
 def test_performance_budget_registry_exists() -> None:
@@ -205,6 +192,7 @@ def test_performance_budget_registry_exists() -> None:
     assert config_path.exists(), f"性能预算注册表不存在: {config_path}"
 
     import yaml
+
     with open(config_path) as f:
         budgets = yaml.safe_load(f)
 
@@ -268,9 +256,20 @@ def test_only_adapter_accesses_binance_api() -> None:
     for pyfile in root.rglob("*.py"):
         # Skip these directories
         path_str = str(pyfile)
-        if any(skip in path_str for skip in ["__pycache__", ".venv", ".git",
-                                               "tests/", "evidence/", "tools/",
-                                               "scripts/", "runbooks/", "docs/"]):
+        if any(
+            skip in path_str
+            for skip in [
+                "__pycache__",
+                ".venv",
+                ".git",
+                "tests/",
+                "evidence/",
+                "tools/",
+                "scripts/",
+                "runbooks/",
+                "docs/",
+            ]
+        ):
             continue
 
         # Determine which package this file belongs to
@@ -288,20 +287,17 @@ def test_only_adapter_accesses_binance_api() -> None:
 
         for pattern in BINANCE_API_PATTERNS:
             if pattern in content:
-                violations.append(
-                    f"{rel}: 非 Adapter 文件引用 Binance API 端点 '{pattern}'"
-                )
+                violations.append(f"{rel}: 非 Adapter 文件引用 Binance API 端点 '{pattern}'")
 
     # Filter known violations that are scheduled for fix in other BD tasks
-    new_violations = [v for v in violations
-                      if not any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02)]
+    new_violations = [v for v in violations if not any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02)]
 
     if new_violations:
         raise AssertionError(
             "非 Adapter 包禁止直接引用 Binance API 端点。"
             "请通过 beidou_exchange adapter 访问。"
-            f"\n新违规文件:\n" + "\n".join(new_violations) +
-            f"\n已知违规(待 BD-02 修复):\n" + "\n".join(
-                v for v in violations if any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02)
-            )
+            "\n新违规文件:\n"
+            + "\n".join(new_violations)
+            + "\n已知违规(待 BD-02 修复):\n"
+            + "\n".join(v for v in violations if any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02))
         )

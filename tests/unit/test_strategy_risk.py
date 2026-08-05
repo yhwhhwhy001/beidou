@@ -1,11 +1,13 @@
 """策略层风险管理测试。回撤监控、风险预算、熔断器、仓位计算。"""
+
 from __future__ import annotations
 
-import pytest
 from beidou_shared.types import StrategyId
 from beidou_strategy.risk.manager import (
-    StrategyRiskLevel, CircuitBreakerReason, RiskBudget, StrategyRiskState,
-    DrawdownMonitor, StrategyRiskManager,
+    DrawdownMonitor,
+    RiskBudget,
+    StrategyRiskLevel,
+    StrategyRiskManager,
 )
 
 
@@ -23,7 +25,7 @@ class TestDrawdownMonitor:
         assert peak == 100.0
 
     def test_drawdown_severe(self):
-        dd, peak = DrawdownMonitor.compute_drawdown(75.0, 100.0)
+        dd, _peak = DrawdownMonitor.compute_drawdown(75.0, 100.0)
         assert dd == 25.0
 
     def test_check_limit_normal(self):
@@ -57,19 +59,26 @@ class TestRiskBudget:
 
     def test_budget_creation(self):
         b = RiskBudget(
-            strategy_id=StrategyId("s1"), max_drawdown_pct=15.0,
-            max_daily_loss_pct=3.0, max_consecutive_losses=3,
-            max_position_notional=50000.0, risk_per_trade_pct=1.0,
+            strategy_id=StrategyId("s1"),
+            max_drawdown_pct=15.0,
+            max_daily_loss_pct=3.0,
+            max_consecutive_losses=3,
+            max_position_notional=50000.0,
+            risk_per_trade_pct=1.0,
         )
         assert b.max_drawdown_pct == 15.0
         assert b.risk_per_trade_pct == 1.0
 
     def test_position_size_calculation(self):
         mgr = StrategyRiskManager()
-        mgr.set_budget(RiskBudget(
-            strategy_id=StrategyId("s1"), max_drawdown_pct=20.0,
-            risk_per_trade_pct=1.0, max_position_notional=100000.0,
-        ))
+        mgr.set_budget(
+            RiskBudget(
+                strategy_id=StrategyId("s1"),
+                max_drawdown_pct=20.0,
+                risk_per_trade_pct=1.0,
+                max_position_notional=100000.0,
+            )
+        )
         # 10,000 equity * 1% risk = 100 risk per trade
         # Entry 50,000, SL 49,500 → risk per unit = 500
         # Size = 100 / 500 = 0.2 BTC
@@ -78,10 +87,14 @@ class TestRiskBudget:
 
     def test_position_size_capped_by_max_notional(self):
         mgr = StrategyRiskManager()
-        mgr.set_budget(RiskBudget(
-            strategy_id=StrategyId("s1"), max_drawdown_pct=20.0,
-            risk_per_trade_pct=10.0, max_position_notional=5000.0,
-        ))
+        mgr.set_budget(
+            RiskBudget(
+                strategy_id=StrategyId("s1"),
+                max_drawdown_pct=20.0,
+                risk_per_trade_pct=10.0,
+                max_position_notional=5000.0,
+            )
+        )
         size = mgr.compute_position_size(StrategyId("s1"), 100000.0, 50000.0, 49000.0)
         # risk amount = 100000 * 10% = 10000
         # risk per unit = 1000
@@ -101,12 +114,17 @@ class TestStrategyRiskManager:
     def _setup_manager(self) -> tuple[StrategyRiskManager, StrategyId]:
         mgr = StrategyRiskManager()
         sid = StrategyId("test-strategy")
-        mgr.set_budget(RiskBudget(
-            strategy_id=sid, max_drawdown_pct=20.0,
-            max_daily_loss_pct=5.0, max_consecutive_losses=5,
-            max_position_notional=100000.0, risk_per_trade_pct=1.0,
-            min_sharpe_rolling=0.0,
-        ))
+        mgr.set_budget(
+            RiskBudget(
+                strategy_id=sid,
+                max_drawdown_pct=20.0,
+                max_daily_loss_pct=5.0,
+                max_consecutive_losses=5,
+                max_position_notional=100000.0,
+                risk_per_trade_pct=1.0,
+                min_sharpe_rolling=0.0,
+            )
+        )
         return mgr, sid
 
     def test_initial_state_normal(self):
@@ -145,7 +163,7 @@ class TestStrategyRiskManager:
         state.peak_equity = 100.0
 
         # 5 consecutive losses should trigger
-        for i in range(5):
+        for _i in range(5):
             result = mgr.record_trade(sid, pnl=-10.0, is_win=False)
 
         assert state.consecutive_losses == 5
@@ -175,10 +193,13 @@ class TestStrategyRiskManager:
 
     def test_sharpe_degradation(self):
         mgr, sid = self._setup_manager()
-        mgr.set_budget(RiskBudget(
-            strategy_id=sid, max_drawdown_pct=20.0,
-            min_sharpe_rolling=0.3,
-        ))
+        mgr.set_budget(
+            RiskBudget(
+                strategy_id=sid,
+                max_drawdown_pct=20.0,
+                min_sharpe_rolling=0.3,
+            )
+        )
         result = mgr.update_sharpe(sid, 0.1)
         assert result["action"] == "DEGRADE"
 

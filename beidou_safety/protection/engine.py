@@ -15,6 +15,7 @@
 保护单生命周期:
   CREATED → ACTIVE → TRIGGERED → EXECUTED / EXPIRED / CANCELLED
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -23,8 +24,12 @@ from enum import Enum
 from typing import Any
 
 from beidou_shared.types import (
-    AccountId, CorrelationId, InstrumentId, OrderId, OrderSide,
-    Price, Quantity, VenueId, VenueInstrument,
+    CorrelationId,
+    InstrumentId,
+    OrderSide,
+    Price,
+    Quantity,
+    VenueId,
 )
 
 
@@ -55,6 +60,7 @@ class ProtectionStatus(str, Enum):
 @dataclass(slots=True)
 class ProtectionOrder:
     """保护单定义 — 状态随生命周期变更。"""
+
     protection_id: str
     position_id: str
     instrument_id: InstrumentId
@@ -87,6 +93,7 @@ class ProtectionOrder:
 @dataclass
 class PositionProtection:
     """单个仓位的完整保护方案 — 包含止损和止盈。"""
+
     position_id: str
     instrument_id: InstrumentId
     venue_id: VenueId
@@ -98,7 +105,7 @@ class PositionProtection:
     trailing_config: dict[str, float] = field(default_factory=dict)
     # 跟踪数据
     highest_price: float | None = None  # long仓用
-    lowest_price: float | None = None   # short仓用
+    lowest_price: float | None = None  # short仓用
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def is_long(self) -> bool:
@@ -252,16 +259,15 @@ class TakeProfitCalculator:
         for t in targets:
             rr = t.get("rr_ratio", 2.0)
             close_pct = t.get("close_pct", 50.0)
-            if side == OrderSide.BUY:
-                price = entry_price + risk * rr
-            else:
-                price = entry_price - risk * rr
-            result.append({
-                "price": round(price, 2),
-                "close_pct": close_pct,
-                "rr_ratio": rr,
-                "quantity_pct": close_pct / 100,
-            })
+            price = entry_price + risk * rr if side == OrderSide.BUY else entry_price - risk * rr
+            result.append(
+                {
+                    "price": round(price, 2),
+                    "close_pct": close_pct,
+                    "rr_ratio": rr,
+                    "quantity_pct": close_pct / 100,
+                }
+            )
         return result
 
     @staticmethod
@@ -275,10 +281,18 @@ class TakeProfitCalculator:
     ) -> list[dict[str, Any]]:
         """统一止盈计算入口，返回止盈目标列表。"""
         if take_profit_type == TakeProfitType.FIXED_RR:
-            return [{"price": TakeProfitCalculator.fixed_rr(entry_price, stop_loss_price, side, rr_ratio),
-                     "close_pct": 100.0, "rr_ratio": rr_ratio, "quantity_pct": 1.0}]
+            return [
+                {
+                    "price": TakeProfitCalculator.fixed_rr(entry_price, stop_loss_price, side, rr_ratio),
+                    "close_pct": 100.0,
+                    "rr_ratio": rr_ratio,
+                    "quantity_pct": 1.0,
+                }
+            ]
         elif take_profit_type == TakeProfitType.MULTI_TARGET:
-            return TakeProfitCalculator.multi_target(entry_price, stop_loss_price, side, targets or [{"rr_ratio": rr_ratio, "close_pct": 100.0}])
+            return TakeProfitCalculator.multi_target(
+                entry_price, stop_loss_price, side, targets or [{"rr_ratio": rr_ratio, "close_pct": 100.0}]
+            )
         return [{"price": entry_price, "close_pct": 0, "rr_ratio": 0, "quantity_pct": 0}]
 
 
@@ -325,7 +339,9 @@ class ProtectionManager:
         if stop_loss_config:
             sl_type = StopLossType(stop_loss_config.get("type", "FIXED_PERCENT"))
             stop_price = StopLossCalculator.calculate(
-                sl_type, entry_price, side,
+                sl_type,
+                entry_price,
+                side,
                 atr=stop_loss_config.get("atr"),
                 volatility_pct=stop_loss_config.get("volatility_pct"),
                 stop_pct=stop_loss_config.get("stop_pct", 2.0),
@@ -338,13 +354,17 @@ class ProtectionManager:
             pp.stop_loss = ProtectionOrder(
                 protection_id=f"sl-{position_id}",
                 position_id=position_id,
-                instrument_id=instrument_id, venue_id=venue_id,
-                side=sl_side, trigger_price=Price(amount=str(round(stop_price, 2))),
+                instrument_id=instrument_id,
+                venue_id=venue_id,
+                side=sl_side,
+                trigger_price=Price(amount=str(round(stop_price, 2))),
                 order_price=Price(amount=str(round(stop_price * 0.995, 2))) if order_type == "STOP_LIMIT" else None,
                 quantity=Quantity(amount=str(quantity)),
-                order_type=order_type, reduce_only=True,
+                order_type=order_type,
+                reduce_only=True,
                 status=ProtectionStatus.ACTIVE,
-                stop_type=sl_type, reason=f"Stop Loss: {sl_type.value}",
+                stop_type=sl_type,
+                reason=f"Stop Loss: {sl_type.value}",
             )
 
         # 止盈
@@ -352,7 +372,10 @@ class ProtectionManager:
             tp_type = TakeProfitType(take_profit_config.get("type", "FIXED_RR"))
             stop_price_for_rr = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else entry_price * 0.95
             tp_targets = TakeProfitCalculator.calculate(
-                tp_type, entry_price, stop_price_for_rr, side,
+                tp_type,
+                entry_price,
+                stop_price_for_rr,
+                side,
                 rr_ratio=take_profit_config.get("rr_ratio", 2.0),
                 targets=take_profit_config.get("targets"),
             )
@@ -364,15 +387,18 @@ class ProtectionManager:
                 tp_order = ProtectionOrder(
                     protection_id=f"tp-{position_id}-{i}",
                     position_id=position_id,
-                    instrument_id=instrument_id, venue_id=venue_id,
-                    side=tp_side, trigger_price=Price(amount=str(target["price"])),
+                    instrument_id=instrument_id,
+                    venue_id=venue_id,
+                    side=tp_side,
+                    trigger_price=Price(amount=str(target["price"])),
                     order_price=None,  # 市价止盈
                     quantity=Quantity(amount=str(round(qty, 4))),
-                    order_type="TAKE_PROFIT_MARKET", reduce_only=True,
+                    order_type="TAKE_PROFIT_MARKET",
+                    reduce_only=True,
                     status=ProtectionStatus.ACTIVE,
                     take_profit_type=tp_type,
-                    reason=f"Take Profit {i+1}/{len(tp_targets)}: RR={target['rr_ratio']} "
-                           f"close={target['close_pct']}%",
+                    reason=f"Take Profit {i + 1}/{len(tp_targets)}: RR={target['rr_ratio']} "
+                    f"close={target['close_pct']}%",
                     metadata={"rr_ratio": target["rr_ratio"], "close_pct": target["close_pct"]},
                 )
                 pp.take_profits.append(tp_order)
@@ -400,10 +426,7 @@ class ProtectionManager:
         # 检查止损
         if pp.stop_loss and pp.stop_loss.is_active():
             trigger = float(pp.stop_loss.trigger_price.amount)
-            hit_stop = (
-                (pp.is_long() and current_price <= trigger) or
-                (pp.is_short() and current_price >= trigger)
-            )
+            hit_stop = (pp.is_long() and current_price <= trigger) or (pp.is_short() and current_price >= trigger)
             if hit_stop:
                 pp.stop_loss.status = ProtectionStatus.TRIGGERED
                 pp.stop_loss.triggered_at = datetime.now(timezone.utc)
@@ -418,18 +441,15 @@ class ProtectionManager:
         for tp in pp.take_profits:
             if tp.is_active():
                 trigger = float(tp.trigger_price.amount)
-                hit_tp = (
-                    (pp.is_long() and current_price >= trigger) or
-                    (pp.is_short() and current_price <= trigger)
-                )
+                hit_tp = (pp.is_long() and current_price >= trigger) or (pp.is_short() and current_price <= trigger)
                 if hit_tp:
                     tp.status = ProtectionStatus.TRIGGERED
                     tp.triggered_at = datetime.now(timezone.utc)
                     result["triggered"] = True
                     result["take_profit"].append(tp)
                     result["details"].append(
-                        f"TAKE PROFIT triggered: RR={tp.metadata.get('rr_ratio','?')} "
-                        f"close={tp.metadata.get('close_pct','?')}% "
+                        f"TAKE PROFIT triggered: RR={tp.metadata.get('rr_ratio', '?')} "
+                        f"close={tp.metadata.get('close_pct', '?')}% "
                         f"price={current_price} >= trigger={trigger}"
                     )
 
@@ -448,8 +468,13 @@ class ProtectionManager:
 
         old_stop = float(pp.stop_loss.trigger_price.amount)
         new_stop = TrailingStopUpdater.update(
-            old_stop, pp.entry_price, pp.highest_price, pp.lowest_price,
-            pp.side, trail_pct, min_dist,
+            old_stop,
+            pp.entry_price,
+            pp.highest_price,
+            pp.lowest_price,
+            pp.side,
+            trail_pct,
+            min_dist,
         )
 
         if new_stop != old_stop:

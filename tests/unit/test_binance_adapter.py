@@ -1,11 +1,14 @@
-
 """PKG-06: Binance Adapter 测试。参考数据、健康监控、交易规则。"""
-from beidou_shared.types import VenueId, InstrumentId, HealthStatus, AccountId
+
 from beidou_exchange.binance_usdm import (
-    BinanceUsdmAdapter, BinanceReferenceData, BinanceHealthMonitor, TradingRuleChange,
+    BinanceHealthMonitor,
+    BinanceReferenceData,
+    BinanceUsdmAdapter,
 )
 from beidou_exchange.binance_usdm.adapter import InstrumentStatus
 from beidou_exchange.core.protocol import Capability
+from beidou_shared.types import HealthStatus, InstrumentId, VenueId
+
 
 class TestBinanceReferenceData:
     def test_no_guessing_tick_from_price_decimals(self):
@@ -34,6 +37,7 @@ class TestBinanceReferenceData:
         assert len(changes) == 1
         assert changes[0].instrument_id == InstrumentId("BTCUSDT")
         assert changes[0].field == "minQty"
+
 
 class TestBinanceHealthMonitor:
     def test_venue_health_starts_unknown(self):
@@ -66,6 +70,7 @@ class TestBinanceHealthMonitor:
         actions = monitor.instruments_requiring_action()
         assert actions[InstrumentId("ETHUSDT")] == InstrumentStatus.QUARANTINED
 
+
 class TestBinanceAdapter:
     def test_capabilities_include_futures(self):
         adapter = BinanceUsdmAdapter()
@@ -84,4 +89,5 @@ class TestBinanceAdapter:
         adapter = BinanceUsdmAdapter()
         error = adapter.normalize_error(-2015, "Invalid API-key")
         from beidou_shared.errors import ErrorCategory
+
         assert error.category == ErrorCategory.AUTH_FAILURE

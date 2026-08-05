@@ -19,13 +19,14 @@ from beidou_shared.types import (
     VenueId,
 )
 
-
 # ================================================================
 # 时间粒度类型
 # ================================================================
 
+
 class TimeframeGranularity(str, Enum):
     """时间粒度枚举。不同粒度数据不得交叉读取。"""
+
     M1 = "1m"
     M5 = "5m"
     M15 = "15m"
@@ -43,13 +44,15 @@ class TimeframeGranularity(str, Enum):
 
 class HorizonUnit(str, Enum):
     """标签持有期单位。"""
-    BAR = "bar"           # 按 K 线数量
-    HOUR = "hour"         # 按自然小时
-    DAY = "day"           # 按自然天
+
+    BAR = "bar"  # 按 K 线数量
+    HOUR = "hour"  # 按自然小时
+    DAY = "day"  # 按自然天
 
 
 class PriceType(str, Enum):
     """价格类型 — 用于标签计算的 entry/exit 价格。"""
+
     MID = "mid"
     MARK = "mark"
     CLOSE = "close"
@@ -58,6 +61,7 @@ class PriceType(str, Enum):
 
 class ReturnType(str, Enum):
     """收益类型。"""
+
     LOG = "log"
     SIMPLE = "simple"
     RESIDUAL = "residual"
@@ -65,10 +69,11 @@ class ReturnType(str, Enum):
 
 class LabelQuality(str, Enum):
     """标签质量状态。"""
+
     VALID = "VALID"
-    STALE = "STALE"               # 数据可用时间超过阈值
-    OVERLAPPING = "OVERLAPPING"    # 与另一个标签时间重叠
-    FUTURE_LEAK = "FUTURE_LEAK"   # 使用了未来数据
+    STALE = "STALE"  # 数据可用时间超过阈值
+    OVERLAPPING = "OVERLAPPING"  # 与另一个标签时间重叠
+    FUTURE_LEAK = "FUTURE_LEAK"  # 使用了未来数据
     MISSING_PRICE = "MISSING_PRICE"
     UNKNOWN = "UNKNOWN"
 
@@ -76,6 +81,7 @@ class LabelQuality(str, Enum):
 # ================================================================
 # 核心合同
 # ================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class PredictionKey:
@@ -95,6 +101,7 @@ class PredictionKey:
         factor_id: 因子标识
         factor_version: 因子代码版本
     """
+
     venue: VenueId
     symbol: InstrumentId
     timeframe: str
@@ -109,8 +116,7 @@ class PredictionKey:
         """确保 data_available_time ≤ prediction_time（点时约束）。"""
         if self.data_available_time > self.prediction_time:
             raise ValueError(
-                f"data_available_time ({self.data_available_time}) must be <= "
-                f"prediction_time ({self.prediction_time})"
+                f"data_available_time ({self.data_available_time}) must be <= prediction_time ({self.prediction_time})"
             )
 
     def timeframe_matches(self, other: PredictionKey) -> bool:
@@ -161,6 +167,7 @@ class LabelRecord:
         revision: 修订号（0 = 初始写入，>0 = 修订）
         metadata: 附加信息
     """
+
     label_id: str
     prediction_key: PredictionKey
     label_start_time: datetime
@@ -181,13 +188,11 @@ class LabelRecord:
         """验证标签时间顺序。"""
         if self.label_start_time >= self.label_end_time:
             raise ValueError(
-                f"label_start_time ({self.label_start_time}) must be < "
-                f"label_end_time ({self.label_end_time})"
+                f"label_start_time ({self.label_start_time}) must be < label_end_time ({self.label_end_time})"
             )
         if self.label_available_time < self.label_end_time:
             raise ValueError(
-                f"label_available_time ({self.label_available_time}) must be >= "
-                f"label_end_time ({self.label_end_time})"
+                f"label_available_time ({self.label_available_time}) must be >= label_end_time ({self.label_end_time})"
             )
 
     def overlaps_with(self, other: LabelRecord) -> bool:
@@ -198,10 +203,7 @@ class LabelRecord:
         """
         if not self.prediction_key.symbol_matches(other.prediction_key):
             return False
-        return (
-            self.label_start_time < other.label_end_time
-            and other.label_start_time < self.label_end_time
-        )
+        return self.label_start_time < other.label_end_time and other.label_start_time < self.label_end_time
 
     def is_valid_for_evaluation(self) -> bool:
         """检查标签是否可用于因子评估。"""
@@ -228,6 +230,7 @@ class PredictionRecord:
         dq_tier: 输入数据的数据质量
         revision: 修订号
     """
+
     prediction_key: PredictionKey
     prediction_value: float
     feature_manifest_hash: str = ""
@@ -240,9 +243,7 @@ class PredictionRecord:
 
     def can_be_evaluated(self) -> bool:
         """UNKNOWN 数据质量的预测不能用于评估。"""
-        return self.dq_tier not in (
-            getattr(DataQualityTier, "FAIL", "FAIL"),
-        )
+        return self.dq_tier not in (getattr(DataQualityTier, "FAIL", "FAIL"),)
 
     def to_lineage(self) -> dict:
         """输出完整的溯源信息。"""
@@ -285,6 +286,7 @@ class DatasetManifest:
         created_at: 清单创建时间
         is_frozen: 数据集是否已冻结（冻结后不可修改）
     """
+
     manifest_id: str
     manifest_hash: str
     venue: VenueId
@@ -323,6 +325,7 @@ class LabelSpec:
         embargo_bars: 禁运期（K 线数），防止标签重叠
         min_data_quality: 最低数据质量要求
     """
+
     label_id: str
     horizon_bars: int
     horizon_unit: HorizonUnit = HorizonUnit.BAR
@@ -337,14 +340,18 @@ class LabelSpec:
         """生成标签规格的确定性哈希。"""
         import hashlib
         import json
-        content = json.dumps({
-            "horizon_bars": self.horizon_bars,
-            "horizon_unit": self.horizon_unit.value,
-            "price_type": self.price_type.value,
-            "return_type": self.return_type.value,
-            "cost_adjusted": self.cost_adjusted,
-            "neutralization": list(self.neutralization),
-            "embargo_bars": self.embargo_bars,
-            "min_data_quality": str(self.min_data_quality),
-        }, sort_keys=True)
+
+        content = json.dumps(
+            {
+                "horizon_bars": self.horizon_bars,
+                "horizon_unit": self.horizon_unit.value,
+                "price_type": self.price_type.value,
+                "return_type": self.return_type.value,
+                "cost_adjusted": self.cost_adjusted,
+                "neutralization": list(self.neutralization),
+                "embargo_bars": self.embargo_bars,
+                "min_data_quality": str(self.min_data_quality),
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(content.encode()).hexdigest()[:16]

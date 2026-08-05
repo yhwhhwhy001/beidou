@@ -7,11 +7,9 @@ health=进程存活, ready=依赖可用, trading-eligibility=基于账户/DQ/对
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable
 
 
 class SystemStatus(str, Enum):
@@ -104,11 +102,14 @@ class ControlPlaneAPI:
 
     # === Trading Eligibility ===
 
-    def trading_eligibility(self, account_facts: dict | None = None,
-                            dq_tier: str = "UNKNOWN",
-                            reconciliation_clean: bool = False,
-                            protection_coverage: float = 0.0,
-                            gate_result: str = "NOT_VERIFIABLE") -> TradingEligibilityResponse:
+    def trading_eligibility(
+        self,
+        account_facts: dict | None = None,
+        dq_tier: str = "UNKNOWN",
+        reconciliation_clean: bool = False,
+        protection_coverage: float = 0.0,
+        gate_result: str = "NOT_VERIFIABLE",
+    ) -> TradingEligibilityResponse:
         checks = {
             "account_facts_fresh": account_facts is not None,
             "data_quality_pass": dq_tier in ("PASS",),
@@ -117,11 +118,12 @@ class ControlPlaneAPI:
             "gate_passed": gate_result == "PASS",
         }
         eligible = all(checks.values())
-        reason = "All checks passed" if eligible else \
-            f"Failed: {[k for k, v in checks.items() if not v]}"
+        reason = "All checks passed" if eligible else f"Failed: {[k for k, v in checks.items() if not v]}"
 
         return TradingEligibilityResponse(
-            eligible=eligible, reason=reason, checks=checks,
+            eligible=eligible,
+            reason=reason,
+            checks=checks,
             data_quality=dq_tier,
             reconciliation_clean=reconciliation_clean,
             protection_coverage_pct=protection_coverage,
@@ -130,15 +132,17 @@ class ControlPlaneAPI:
 
     # === Emergency Actions ===
 
-    def emergency(self, action: str, operator: str,
-                  correlation_id: str) -> EmergencyAction:
+    def emergency(self, action: str, operator: str, correlation_id: str) -> EmergencyAction:
         valid = {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN", "LOCK"}
         if action not in valid:
-            return EmergencyAction(action=action, operator=operator,
-                                   correlation_id=correlation_id,
-                                   success=False, reason=f"Invalid action: {action}")
-        ea = EmergencyAction(action=action, operator=operator,
-                            correlation_id=correlation_id, success=True)
+            return EmergencyAction(
+                action=action,
+                operator=operator,
+                correlation_id=correlation_id,
+                success=False,
+                reason=f"Invalid action: {action}",
+            )
+        ea = EmergencyAction(action=action, operator=operator, correlation_id=correlation_id, success=True)
         self._emergency_actions.append(ea)
         return ea
 
@@ -161,6 +165,7 @@ class ControlPlaneAPI:
 # ================================================================
 # FastAPI app factory (imported only when needed)
 # ================================================================
+
 
 def create_app(api: ControlPlaneAPI):
     """创建 FastAPI 应用。"""

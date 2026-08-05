@@ -25,6 +25,7 @@ class RecoveryPhase(str, Enum):
 @dataclass
 class ReconciliationDiff:
     """对账差异。"""
+
     field: str
     local_value: str
     exchange_value: str
@@ -36,6 +37,7 @@ class ReconciliationDiff:
 @dataclass
 class RecoveryState:
     """恢复状态。"""
+
     phase: RecoveryPhase = RecoveryPhase.CHECKPOINT
     checkpoint_id: str = ""
     events_replayed: int = 0
@@ -64,7 +66,7 @@ class RecoveryEngine:
 
     RECOVERY_TIMEOUT_SECONDS = 300  # 5分钟
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._state = RecoveryState()
 
     def start_recovery(self, checkpoint_id: str) -> RecoveryState:
@@ -91,18 +93,23 @@ class RecoveryEngine:
 
     def can_accept_new_risk(self) -> bool:
         """差异已闭合且 invariant 验证通过才能接受新风险。"""
-        return (self._state.phase == RecoveryPhase.ACTIVE and
-                not self._state.has_blocking_diffs and
-                self._state.invariants_valid)
+        return (
+            self._state.phase == RecoveryPhase.ACTIVE
+            and not self._state.has_blocking_diffs
+            and self._state.invariants_valid
+        )
 
     def is_timed_out(self) -> bool:
         elapsed = (datetime.now(timezone.utc) - self._state.started_at).total_seconds()
-        return (elapsed > self.RECOVERY_TIMEOUT_SECONDS and
-                self._state.phase != RecoveryPhase.ACTIVE)
+        return elapsed > self.RECOVERY_TIMEOUT_SECONDS and self._state.phase != RecoveryPhase.ACTIVE
 
     def fail(self, reason: str) -> None:
         self._state.phase = RecoveryPhase.FAILED
-        self._state.diffs.append(ReconciliationDiff(
-            field="recovery", local_value="FAILED",
-            exchange_value=reason, severity="P0",
-        ))
+        self._state.diffs.append(
+            ReconciliationDiff(
+                field="recovery",
+                local_value="FAILED",
+                exchange_value=reason,
+                severity="P0",
+            )
+        )

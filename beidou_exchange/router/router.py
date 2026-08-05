@@ -1,8 +1,10 @@
 """ExchangeRouter 与 CapabilityMatrix 实现。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 
-from beidou_shared.types import AccountId, InstrumentId, ResultStatus, VenueId
+from beidou_shared.types import InstrumentId, ResultStatus, VenueId
 
 from ..core.protocol import Capability, ExchangeAdapter, VenueInstrument
 
@@ -15,7 +17,9 @@ class CapabilityMatrix:
     _venue_instruments: dict[VenueId, frozenset[InstrumentId]] = field(default_factory=dict)
     _instrument_to_venues: dict[InstrumentId, set[VenueId]] = field(default_factory=dict)
 
-    def register_venue(self, venue_id: VenueId, capabilities: frozenset[Capability], instruments: frozenset[InstrumentId]) -> None:
+    def register_venue(
+        self, venue_id: VenueId, capabilities: frozenset[Capability], instruments: frozenset[InstrumentId]
+    ) -> None:
         self._venue_capabilities[venue_id] = capabilities
         self._venue_instruments[venue_id] = instruments
         for inst in instruments:

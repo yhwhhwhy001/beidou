@@ -26,6 +26,7 @@ class EvidenceBundle:
 
     所有字段参与哈希计算，确保不可篡改。
     """
+
     # 身份
     bundle_id: str
     candidate_id: str
@@ -60,7 +61,7 @@ class EvidenceBundle:
     cost_capacity_results: dict[str, Any] = field(default_factory=dict)
 
     # 结果
-    gate_decision: str = ""          # PASS / FAIL / CONDITIONAL_PASS
+    gate_decision: str = ""  # PASS / FAIL / CONDITIONAL_PASS
     failure_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -71,28 +72,32 @@ class EvidenceBundle:
 
     def compute_bundle_hash(self) -> str:
         """计算证据包的确定性哈希（排除 artifact_hash 自身）。"""
-        content = json.dumps({
-            "bundle_id": self.bundle_id,
-            "candidate_id": self.candidate_id,
-            "factor_id": self.factor_id,
-            "factor_version": self.factor_version,
-            "candidate_hash": self.candidate_hash,
-            "factor_code_hash": self.factor_code_hash,
-            "factor_expression_hash": self.factor_expression_hash,
-            "dataset_manifest_hash": self.dataset_manifest_hash,
-            "feature_manifest_hash": self.feature_manifest_hash,
-            "label_spec_hash": self.label_spec_hash,
-            "cost_model_version": self.cost_model_version,
-            "policy_version": self.policy_version,
-            "random_seed": self.random_seed,
-            "fold_definitions": self.fold_definitions,
-            "raw_metrics": self.raw_metrics,
-            "adjusted_metrics": self.adjusted_metrics,
-            "multiple_testing_results": self.multiple_testing_results,
-            "gate_decision": self.gate_decision,
-            "failure_reasons": self.failure_reasons,
-            "evaluator_version": self.evaluator_version,
-        }, sort_keys=True, default=str)
+        content = json.dumps(
+            {
+                "bundle_id": self.bundle_id,
+                "candidate_id": self.candidate_id,
+                "factor_id": self.factor_id,
+                "factor_version": self.factor_version,
+                "candidate_hash": self.candidate_hash,
+                "factor_code_hash": self.factor_code_hash,
+                "factor_expression_hash": self.factor_expression_hash,
+                "dataset_manifest_hash": self.dataset_manifest_hash,
+                "feature_manifest_hash": self.feature_manifest_hash,
+                "label_spec_hash": self.label_spec_hash,
+                "cost_model_version": self.cost_model_version,
+                "policy_version": self.policy_version,
+                "random_seed": self.random_seed,
+                "fold_definitions": self.fold_definitions,
+                "raw_metrics": self.raw_metrics,
+                "adjusted_metrics": self.adjusted_metrics,
+                "multiple_testing_results": self.multiple_testing_results,
+                "gate_decision": self.gate_decision,
+                "failure_reasons": self.failure_reasons,
+                "evaluator_version": self.evaluator_version,
+            },
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(content.encode()).hexdigest()
 
     def seal(self) -> str:

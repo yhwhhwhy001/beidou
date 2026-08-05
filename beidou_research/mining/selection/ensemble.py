@@ -10,14 +10,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class EnsembleWeights:
     """因子组合权重。"""
-    weights: dict[str, float]        # factor_id → weight
-    method: str                      # "equal_risk" / "shrinkage" / "elastic_net" / "regime_table"
+
+    weights: dict[str, float]  # factor_id → weight
+    method: str  # "equal_risk" / "shrinkage" / "elastic_net" / "regime_table"
     total_weight: float = 1.0
     non_negative: bool = True
     regime: str = "all"

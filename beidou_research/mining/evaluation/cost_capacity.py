@@ -9,19 +9,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass
 class CostModel:
     """交易成本模型。"""
-    taker_fee_bps: float = 4.0      # Taker 费率（VIP1: 2bps × 2 = 4bps round trip）
-    maker_fee_bps: float = 2.0      # Maker 费率
-    avg_spread_bps: float = 1.0     # 平均买卖价差
-    slippage_bps: float = 1.0       # 预期滑点
+
+    taker_fee_bps: float = 4.0  # Taker 费率（VIP1: 2bps × 2 = 4bps round trip）
+    maker_fee_bps: float = 2.0  # Maker 费率
+    avg_spread_bps: float = 1.0  # 平均买卖价差
+    slippage_bps: float = 1.0  # 预期滑点
     funding_rate_8h_pct: float = 0.01  # 资金费率（每 8 小时百分比）
-    impact_bps_per_10k: float = 0.1     # 每 10K 交易量的市场冲击（bps）
+    impact_bps_per_10k: float = 0.1  # 每 10K 交易量的市场冲击（bps）
     model_version: str = "bf06-v1"
 
     @property
@@ -61,12 +61,13 @@ class CostModel:
 @dataclass
 class CapacityResult:
     """容量评估结果。"""
-    aum_levels: list[float]           # AUM 级别（USD）
-    net_returns: list[float]          # 对应净收益
-    gross_returns: list[float]        # 对应毛收益
-    capacity_at_zero_return: float     # 零收益容量
-    capacity_at_half_return: float     # 收益减半容量
-    recommended_max_aum: float         # 推荐最大 AUM
+
+    aum_levels: list[float]  # AUM 级别（USD）
+    net_returns: list[float]  # 对应净收益
+    gross_returns: list[float]  # 对应毛收益
+    capacity_at_zero_return: float  # 零收益容量
+    capacity_at_half_return: float  # 收益减半容量
+    recommended_max_aum: float  # 推荐最大 AUM
 
 
 class CapacityEvaluator:
@@ -96,7 +97,7 @@ class CapacityEvaluator:
             aum_range = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 5_000_000]
 
         gross_return = _mean(returns) if returns else 0.0
-        gross_sharpe = _compute_sharpe_annualized(returns)
+        _compute_sharpe_annualized(returns)
 
         net_returns = []
         gross_returns_list = []
@@ -162,10 +163,10 @@ def _compute_sharpe_annualized(returns: list[float], periods_per_year: int = 365
         return 0.0
     mean_r = _mean(returns)
     var = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
-    std = var ** 0.5
+    std = var**0.5
     if std == 0:
         return 0.0
-    return (mean_r / std) * (periods_per_year ** 0.5)
+    return (mean_r / std) * (periods_per_year**0.5)
 
 
 def _find_zero_crossing(x: list[float], y: list[float]) -> float:

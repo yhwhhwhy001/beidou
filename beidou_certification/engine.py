@@ -5,21 +5,22 @@ PKG-35~40: Gate 独立发证。P0 立即停止并回退。
 G5: Testnet 协议认证。G6: Shadow 连续运行。G7-L2~L5: 实盘阶梯。
 G8: 30天无人值守 + Owner失联安全。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
 from beidou_shared.types import (
-    AccountId, CorrelationId, GateResult, InstrumentId,
-    MonetaryValue, ResultStatus, VenueId,
+    GateResult,
 )
 
 
 class CertificationGate(str, Enum):
     """认证 Gate 等级。"""
+
     G5_TESTNET = "G5_TESTNET"
     G6_SHADOW = "G6_SHADOW"
     G7_L2_CANARY = "G7_L2_CANARY"
@@ -39,6 +40,7 @@ class ScenarioStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class CertificationScenario:
     """认证场景定义 — 每个场景独立评估。"""
+
     scenario_id: str
     name: str
     description: str
@@ -52,6 +54,7 @@ class CertificationScenario:
 @dataclass
 class ScenarioResult:
     """单个场景的认证结果。"""
+
     scenario: CertificationScenario
     status: ScenarioStatus = ScenarioStatus.NOT_RUN
     started_at: datetime | None = None
@@ -70,6 +73,7 @@ class ScenarioResult:
 @dataclass
 class GateCertificate:
     """Gate 独立证书。P0 立即停止并回退至上一 Gate。"""
+
     certificate_id: str
     gate: CertificationGate
     result: GateResult
@@ -89,10 +93,7 @@ class GateCertificate:
         return self.result == GateResult.PASS
 
     def blocking_p0_count(self) -> int:
-        return len([
-            s for s in self.scenarios
-            if s.scenario.is_blocking and s.status == ScenarioStatus.FAIL
-        ])
+        return len([s for s in self.scenarios if s.scenario.is_blocking and s.status == ScenarioStatus.FAIL])
 
 
 class CertificationFramework:
@@ -148,9 +149,7 @@ class CertificationFramework:
         if not_verifiable and not blocking_p0:
             # 有 NOT_VERIFIABLE 但没有 P0，至少要求所有 blocking 场景通过
             all_blocking_pass = all(
-                r.status == ScenarioStatus.PASS
-                for r in scenarios_completed
-                if r.scenario.is_blocking
+                r.status == ScenarioStatus.PASS for r in scenarios_completed if r.scenario.is_blocking
             )
             gate_result = GateResult.PASS if all_blocking_pass else GateResult.FAIL
 
@@ -172,6 +171,7 @@ class CertificationFramework:
 # ============================================================
 # G5 Testnet 认证
 # ============================================================
+
 
 class G5TestnetCertification(CertificationFramework):
     """G5 Testnet 协议认证。使用 Testnet/Demo 认证协议层正确性。"""
@@ -248,7 +248,11 @@ class G5TestnetCertification(CertificationFramework):
         result = ScenarioResult(scenario=s, started_at=datetime.now(timezone.utc))
         if duplicate_orders == 0 and order_count > 0:
             result.status = ScenarioStatus.PASS
-            result.evidence = {"client_order_id": client_order_id, "order_count": order_count, "duplicate_orders": duplicate_orders}
+            result.evidence = {
+                "client_order_id": client_order_id,
+                "order_count": order_count,
+                "duplicate_orders": duplicate_orders,
+            }
         elif duplicate_orders > 0:
             result.status = ScenarioStatus.FAIL
             result.error_detail = f"Found {duplicate_orders} duplicate orders for {client_order_id}"
@@ -263,6 +267,7 @@ class G5TestnetCertification(CertificationFramework):
 # ============================================================
 # G6 Shadow 认证
 # ============================================================
+
 
 class G6ShadowCertification(CertificationFramework):
     """G6 实时 Shadow 认证。理论订单不调用交易 API，使用真实市场数据验证。"""
@@ -318,7 +323,9 @@ class G6ShadowCertification(CertificationFramework):
         for s in scenarios:
             self.register_scenario(s)
 
-    def record_runtime_check(self, actual_duration_seconds: float, policy_duration_seconds: float, time_compressed: bool) -> ScenarioResult:
+    def record_runtime_check(
+        self, actual_duration_seconds: float, policy_duration_seconds: float, time_compressed: bool
+    ) -> ScenarioResult:
         s = next(s for s in self._scenarios if s.scenario_id == "g6-continuous-runtime")
         result = ScenarioResult(scenario=s, started_at=datetime.now(timezone.utc))
         if time_compressed:
@@ -338,6 +345,7 @@ class G6ShadowCertification(CertificationFramework):
 # ============================================================
 # 实盘阶梯认证框架 (状态: PIVOT — 待算法收敛后重新激活)
 # ============================================================
+
 
 class G7LiveCertification(CertificationFramework):
     """G7 实盘阶梯认证。L2→L3→L4→L5 逐级晋级。"""
@@ -404,30 +412,36 @@ class G7LiveCertification(CertificationFramework):
 def create_l2_canary_certification() -> G7LiveCertification:
     """G7-L2 Canary: 极小资金、单品种、有限并发。"""
     cert = G7LiveCertification(CertificationGate.G7_L2_CANARY)
-    cert.register_scenario(CertificationScenario(
-        scenario_id="g7-l2-single-instrument",
-        name="Single Instrument Constraint",
-        description="Canary 仅使用批准的单个或少量 instrument",
-        gate=CertificationGate.G7_L2_CANARY,
-        category="constraints",
-        required_evidence=["instrument_list", "trade_log"],
-    ))
-    cert.register_scenario(CertificationScenario(
-        scenario_id="g7-l2-hard-stop",
-        name="Hard Stop Enforcement",
-        description="设置硬停止、最大交易次数，不可自动提高资金边界",
-        gate=CertificationGate.G7_L2_CANARY,
-        category="constraints",
-        required_evidence=["stop_config", "stop_trigger_log"],
-    ))
-    cert.register_scenario(CertificationScenario(
-        scenario_id="g7-l2-any-discrepancy-locks",
-        name="Account Discrepancy → Immediate LOCK",
-        description="任何未解释账户差异立即 LOCKED",
-        gate=CertificationGate.G7_L2_CANARY,
-        category="risk",
-        required_evidence=["discrepancy_event", "lock_action"],
-    ))
+    cert.register_scenario(
+        CertificationScenario(
+            scenario_id="g7-l2-single-instrument",
+            name="Single Instrument Constraint",
+            description="Canary 仅使用批准的单个或少量 instrument",
+            gate=CertificationGate.G7_L2_CANARY,
+            category="constraints",
+            required_evidence=["instrument_list", "trade_log"],
+        )
+    )
+    cert.register_scenario(
+        CertificationScenario(
+            scenario_id="g7-l2-hard-stop",
+            name="Hard Stop Enforcement",
+            description="设置硬停止、最大交易次数，不可自动提高资金边界",
+            gate=CertificationGate.G7_L2_CANARY,
+            category="constraints",
+            required_evidence=["stop_config", "stop_trigger_log"],
+        )
+    )
+    cert.register_scenario(
+        CertificationScenario(
+            scenario_id="g7-l2-any-discrepancy-locks",
+            name="Account Discrepancy → Immediate LOCK",
+            description="任何未解释账户差异立即 LOCKED",
+            gate=CertificationGate.G7_L2_CANARY,
+            category="risk",
+            required_evidence=["discrepancy_event", "lock_action"],
+        )
+    )
     return cert
 
 
@@ -449,6 +463,7 @@ def create_l5_champion_certification() -> G7LiveCertification:
 # ============================================================
 # G8 30天无人值守认证
 # ============================================================
+
 
 class G8UnattendedCertification(CertificationFramework):
     """G8 实际30天无人值守 + Owner失联安全认证。"""
@@ -558,6 +573,7 @@ class G8UnattendedCertification(CertificationFramework):
 # 认证管理器 — 统筹所有 Gate 认证
 # ============================================================
 
+
 class CertificationManager:
     """认证管理器 — 管理从 G5 到 G8 的完整认证流程。"""
 
@@ -573,7 +589,7 @@ class CertificationManager:
 
     def evaluate_all(self) -> list[GateCertificate]:
         certs: list[GateCertificate] = []
-        for gate, fw in self._frameworks.items():
+        for _gate, fw in self._frameworks.items():
             cert = fw.evaluate()
             certs.append(cert)
             self._all_certificates.append(cert)
@@ -620,10 +636,7 @@ class CertificationManager:
         return True
 
     def any_p0_failure(self) -> bool:
-        for cert in self._all_certificates:
-            if cert.blocking_p0_count() > 0:
-                return True
-        return False
+        return any(cert.blocking_p0_count() > 0 for cert in self._all_certificates)
 
     def should_degrade_to(self, gate: CertificationGate) -> bool:
         """P0 失败立即回退到指定 Gate。"""

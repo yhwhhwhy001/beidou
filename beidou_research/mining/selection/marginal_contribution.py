@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 @dataclass
 class IncrementalContribution:
     """增量贡献结果。"""
+
     candidate_id: str
     delta_sharpe: float
     delta_ic: float
@@ -44,7 +45,9 @@ def compute_incremental_contribution(
     if n < 10:
         return IncrementalContribution(
             candidate_id=candidate_id,
-            delta_sharpe=0.0, delta_ic=0.0, delta_ir=0.0,
+            delta_sharpe=0.0,
+            delta_ic=0.0,
+            delta_ir=0.0,
             delta_diversification=0.0,
             is_positive_contribution=False,
             sample_count=n,
@@ -63,7 +66,7 @@ def compute_incremental_contribution(
     delta_ic = _mean(delta_ret) / (_std(delta_ret) + 1e-10)
 
     # IR delta
-    delta_ir = delta_sharpe * (252 ** 0.5) if delta_sharpe != 0 else 0.0
+    delta_ir = delta_sharpe * (252**0.5) if delta_sharpe != 0 else 0.0
 
     # Diversification delta (收益波动率变化)
     vol_base = _std(base_ret)

@@ -10,10 +10,8 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Callable
+from dataclasses import dataclass
+from datetime import datetime
 
 from beidou_shared.types import (
     DataQualityTier,
@@ -33,14 +31,15 @@ from .contracts import (
     ReturnType,
 )
 
-
 # ================================================================
 # 价格提供者接口
 # ================================================================
 
+
 @dataclass
 class PricePoint:
     """单个价格点。"""
+
     venue: VenueId
     symbol: InstrumentId
     timeframe: str
@@ -70,14 +69,16 @@ class PricePoint:
 # 成本模型
 # ================================================================
 
+
 @dataclass(frozen=True)
 class CostEstimate:
     """往返交易成本估算（bps）。"""
-    fee_bps: float = 0.0         # 交易手续费
-    spread_bps: float = 0.0      # 买卖价差
-    slippage_bps: float = 0.0    # 滑点
-    funding_bps: float = 0.0     # 资金费率（按持有期估算）
-    total_bps: float = 0.0       # 总成本
+
+    fee_bps: float = 0.0  # 交易手续费
+    spread_bps: float = 0.0  # 买卖价差
+    slippage_bps: float = 0.0  # 滑点
+    funding_bps: float = 0.0  # 资金费率（按持有期估算）
+    total_bps: float = 0.0  # 总成本
 
     @classmethod
     def default_perpetual(cls, hold_hours: float = 4.0) -> CostEstimate:
@@ -104,6 +105,7 @@ class CostEstimate:
 # ================================================================
 # 标签构造器
 # ================================================================
+
 
 class LabelBuilder:
     """标签构造器 — 从价格序列构造评估标签。
@@ -179,7 +181,9 @@ class LabelBuilder:
             if entry_price is None or exit_price is None or entry_price <= 0 or exit_price <= 0:
                 # 创建质量标记为 MISSING_PRICE 的标签
                 pk = PredictionKey(
-                    venue=venue, symbol=symbol, timeframe=timeframe,
+                    venue=venue,
+                    symbol=symbol,
+                    timeframe=timeframe,
                     prediction_time=entry_point.timestamp,
                     data_available_time=entry_point.timestamp,
                     horizon=horizon,
@@ -187,26 +191,26 @@ class LabelBuilder:
                     factor_id=factor_id,
                     factor_version=factor_version,
                 )
-                labels.append(LabelRecord(
-                    label_id=_generate_label_id(pk, spec_hash),
-                    prediction_key=pk,
-                    label_start_time=entry_point.timestamp,
-                    label_end_time=exit_point.timestamp,
-                    label_available_time=exit_point.timestamp,
-                    entry_price_type=label_spec.price_type,
-                    exit_price_type=label_spec.price_type,
-                    cost_model_version="bf01-v1",
-                    label_value=0.0,
-                    gross_return=0.0,
-                    quality_status=LabelQuality.MISSING_PRICE,
-                    label_spec_hash=spec_hash,
-                ))
+                labels.append(
+                    LabelRecord(
+                        label_id=_generate_label_id(pk, spec_hash),
+                        prediction_key=pk,
+                        label_start_time=entry_point.timestamp,
+                        label_end_time=exit_point.timestamp,
+                        label_available_time=exit_point.timestamp,
+                        entry_price_type=label_spec.price_type,
+                        exit_price_type=label_spec.price_type,
+                        cost_model_version="bf01-v1",
+                        label_value=0.0,
+                        gross_return=0.0,
+                        quality_status=LabelQuality.MISSING_PRICE,
+                        label_spec_hash=spec_hash,
+                    )
+                )
                 continue
 
             # 计算原始收益
-            gross_return = _compute_return(
-                entry_price, exit_price, label_spec.return_type
-            )
+            gross_return = _compute_return(entry_price, exit_price, label_spec.return_type)
 
             # 估算持有期成本
             hold_hours = horizon * _timeframe_to_hours(timeframe)
@@ -214,10 +218,7 @@ class LabelBuilder:
             expected_cost = cost_est.total_bps / 10000.0  # bps → decimal
 
             # 标签值 = 原始收益 - 预期成本
-            if label_spec.cost_adjusted:
-                label_value = gross_return - expected_cost
-            else:
-                label_value = gross_return
+            label_value = gross_return - expected_cost if label_spec.cost_adjusted else gross_return
 
             # 确定标签质量
             quality = LabelQuality.VALID
@@ -278,8 +279,8 @@ class LabelBuilder:
         factor_id: FactorId,
         factor_version: SchemaVersion,
         *,
-        upper_barrier: float = 2.0,    # 止盈阈值（收益率 %）
-        lower_barrier: float = -1.0,   # 止损阈值（收益率 %）
+        upper_barrier: float = 2.0,  # 止盈阈值（收益率 %）
+        lower_barrier: float = -1.0,  # 止损阈值（收益率 %）
         max_hold_bars: int = 48,
     ) -> list[LabelRecord]:
         """构造 triple-barrier 标签。
@@ -345,16 +346,15 @@ class LabelBuilder:
             cost_est = CostEstimate.default_perpetual(hold_hours)
             expected_cost = cost_est.total_bps / 10000.0
 
-            if label_spec.cost_adjusted:
-                net_return = actual_return - expected_cost
-            else:
-                net_return = actual_return
+            net_return = actual_return - expected_cost if label_spec.cost_adjusted else actual_return
 
             # 成本调整后的 label_value：如果成本后无法盈利，标记为 0
             final_label = label_value if net_return * label_value >= 0 else 0.0
 
             pk = PredictionKey(
-                venue=venue, symbol=symbol, timeframe=timeframe,
+                venue=venue,
+                symbol=symbol,
+                timeframe=timeframe,
                 prediction_time=entry_point.timestamp,
                 data_available_time=entry_point.timestamp,
                 horizon=horizon,
@@ -363,29 +363,31 @@ class LabelBuilder:
                 factor_version=factor_version,
             )
 
-            labels.append(LabelRecord(
-                label_id=_generate_label_id(pk, spec_hash),
-                prediction_key=pk,
-                label_start_time=entry_point.timestamp,
-                label_end_time=exit_time,
-                label_available_time=exit_time,
-                entry_price_type=label_spec.price_type,
-                exit_price_type=label_spec.price_type,
-                cost_model_version="bf01-v1",
-                label_value=round(final_label, 10),
-                gross_return=round(actual_return, 10),
-                expected_cost_bps=cost_est.total_bps,
-                quality_status=LabelQuality.VALID,
-                label_spec_hash=spec_hash,
-                metadata={
-                    "entry_price": entry_price,
-                    "exit_idx": exit_idx,
-                    "upper_barrier": upper_barrier,
-                    "lower_barrier": lower_barrier,
-                    "label_value_raw": label_value,
-                    "hold_bars_actual": exit_idx - t,
-                },
-            ))
+            labels.append(
+                LabelRecord(
+                    label_id=_generate_label_id(pk, spec_hash),
+                    prediction_key=pk,
+                    label_start_time=entry_point.timestamp,
+                    label_end_time=exit_time,
+                    label_available_time=exit_time,
+                    entry_price_type=label_spec.price_type,
+                    exit_price_type=label_spec.price_type,
+                    cost_model_version="bf01-v1",
+                    label_value=round(final_label, 10),
+                    gross_return=round(actual_return, 10),
+                    expected_cost_bps=cost_est.total_bps,
+                    quality_status=LabelQuality.VALID,
+                    label_spec_hash=spec_hash,
+                    metadata={
+                        "entry_price": entry_price,
+                        "exit_idx": exit_idx,
+                        "upper_barrier": upper_barrier,
+                        "lower_barrier": lower_barrier,
+                        "label_value_raw": label_value,
+                        "hold_bars_actual": exit_idx - t,
+                    },
+                )
+            )
 
         return labels
 
@@ -393,6 +395,7 @@ class LabelBuilder:
 # ================================================================
 # 辅助函数
 # ================================================================
+
 
 def _compute_return(
     entry_price: float,
@@ -402,6 +405,7 @@ def _compute_return(
     """计算指定类型的收益。"""
     if return_type == ReturnType.LOG:
         import math
+
         return math.log(exit_price / entry_price)
     elif return_type == ReturnType.SIMPLE:
         return (exit_price - entry_price) / entry_price
@@ -415,9 +419,19 @@ def _compute_return(
 def _timeframe_to_hours(tf: str) -> float:
     """将 timeframe 字符串转换为小时数。"""
     mapping = {
-        "1m": 1 / 60, "5m": 5 / 60, "15m": 15 / 60, "30m": 30 / 60,
-        "1h": 1, "2h": 2, "4h": 4, "6h": 6, "8h": 8, "12h": 12,
-        "1d": 24, "3d": 72, "1w": 168,
+        "1m": 1 / 60,
+        "5m": 5 / 60,
+        "15m": 15 / 60,
+        "30m": 30 / 60,
+        "1h": 1,
+        "2h": 2,
+        "4h": 4,
+        "6h": 6,
+        "8h": 8,
+        "12h": 12,
+        "1d": 24,
+        "3d": 72,
+        "1w": 168,
     }
     return mapping.get(tf, 1.0)
 

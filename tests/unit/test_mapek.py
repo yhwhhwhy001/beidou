@@ -1,9 +1,11 @@
-
 """PKG-29: MAPE-K 自愈测试。指纹匹配、安全降级、检查点、恢复验证。"""
+
 from beidou_autonomy import (
-    MAPEKController, FaultFingerprint, Checkpoint,
-    RecoveryAction, FingerprintMatch, RecoveryResult,
+    FaultFingerprint,
+    MAPEKController,
+    RecoveryAction,
 )
+
 
 class TestFaultFingerprint:
     def test_exact_match_similarity(self):
@@ -26,7 +28,7 @@ class TestFaultFingerprint:
 class TestMAPEKController:
     def test_no_match_triggers_lock(self):
         ctrl = MAPEKController()
-        action, reason = ctrl.decide_action({"unknown_symptom": 1.0}, "test_module")
+        action, _reason = ctrl.decide_action({"unknown_symptom": 1.0}, "test_module")
         assert action == RecoveryAction.LOCK
 
     def test_low_similarity_triggers_lock(self):
@@ -37,7 +39,7 @@ class TestMAPEKController:
             approved_runbook="runbook-001",
         )
         ctrl.register_fingerprint(fp)
-        action, reason = ctrl.decide_action({"cpu": 0.20, "disk": 0.10}, "test_module")
+        action, _reason = ctrl.decide_action({"cpu": 0.20, "disk": 0.10}, "test_module")
         assert action == RecoveryAction.LOCK
 
     def test_approved_runbook_match(self):
@@ -48,7 +50,7 @@ class TestMAPEKController:
             approved_runbook="runbook-001",
         )
         ctrl.register_fingerprint(fp)
-        action, reason = ctrl.decide_action({"cpu": 0.95, "latency": 0.90}, "test_module")
+        action, _reason = ctrl.decide_action({"cpu": 0.95, "latency": 0.90}, "test_module")
         assert action == RecoveryAction.RESTART_MODULE
 
     def test_unapproved_runbook_degrades(self):
@@ -59,7 +61,7 @@ class TestMAPEKController:
             approved_runbook=None,
         )
         ctrl.register_fingerprint(fp)
-        action, reason = ctrl.decide_action({"cpu": 0.95, "latency": 0.90}, "test_module")
+        action, _reason = ctrl.decide_action({"cpu": 0.95, "latency": 0.90}, "test_module")
         assert action == RecoveryAction.DEGRADE_TO_NO_NEW_RISK
 
     def test_max_restarts_prevents_infinite_loop(self):

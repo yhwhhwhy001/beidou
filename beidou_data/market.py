@@ -1,13 +1,21 @@
-
 """实时行情数据与 Raw Layer。标准事件、ClickHouse 分析层。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
 from beidou_shared.types import (
-    CorrelationId, InstrumentId, MonetaryValue, Price, Quantity, SchemaVersion, VenueId, VenueInstrument,
+    CorrelationId,
+    Price,
+    Quantity,
+    SchemaVersion,
+    VenueId,
+    VenueInstrument,
 )
+
 
 class MarketEventType(str, Enum):
     TRADE = "TRADE"
@@ -18,6 +26,7 @@ class MarketEventType(str, Enum):
     FUNDING_RATE = "FUNDING_RATE"
     OPEN_INTEREST = "OPEN_INTEREST"
     LIQUIDATION = "LIQUIDATION"
+
 
 @dataclass(frozen=True, slots=True)
 class MarketEvent:
@@ -32,6 +41,7 @@ class MarketEvent:
     received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_replay: bool = False
 
+
 @dataclass(frozen=True, slots=True)
 class TradeTick:
     venue_instrument: VenueInstrument
@@ -43,11 +53,13 @@ class TradeTick:
     is_buyer_maker: bool = False
     correlation_id: CorrelationId | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class BookLevel:
     price: Price
     quantity: Quantity
     order_count: int | None = None
+
 
 @dataclass
 class OrderBookSnapshot:
@@ -114,8 +126,10 @@ class OrderBookSnapshot:
             else:
                 self.asks.sort(key=lambda l: float(l.price.amount))
 
+
 class RawLayer:
     """Raw Layer — 不可变原始行情存储。事件可追溯到原始字节。"""
+
     def __init__(self) -> None:
         self._events: list[MarketEvent] = []
 
@@ -123,7 +137,11 @@ class RawLayer:
         self._events.append(event)
 
     def replay_range(self, start: datetime, end: datetime, venue_id: VenueId | None = None) -> list[MarketEvent]:
-        return [e for e in self._events if start <= e.event_time <= end and (venue_id is None or e.venue_instrument.venue_id == venue_id)]
+        return [
+            e
+            for e in self._events
+            if start <= e.event_time <= end and (venue_id is None or e.venue_instrument.venue_id == venue_id)
+        ]
 
     def event_count(self) -> int:
         return len(self._events)

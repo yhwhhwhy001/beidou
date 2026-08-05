@@ -10,18 +10,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 
 @dataclass
 class BayesianConfig:
     """贝叶斯搜索配置。"""
+
     n_trials: int = 100
-    n_inner_folds: int = 3       # 内层 CV folds
-    n_outer_folds: int = 5       # 外层评估 folds
+    n_inner_folds: int = 3  # 内层 CV folds
+    n_outer_folds: int = 5  # 外层评估 folds
     random_seed: int = 42
     early_stopping_rounds: int = 20
     use_pruning: bool = True
@@ -30,8 +30,9 @@ class BayesianConfig:
 @dataclass
 class ParameterSpace:
     """参数空间定义。"""
+
     name: str
-    type: str                # "float", "int", "categorical"
+    type: str  # "float", "int", "categorical"
     low: float | None = None
     high: float | None = None
     choices: list[Any] | None = None
@@ -41,6 +42,7 @@ class ParameterSpace:
 @dataclass
 class TrialResult:
     """单次试验结果。"""
+
     trial_id: int
     parameters: dict[str, Any]
     objective_value: float
@@ -55,6 +57,7 @@ class TrialResult:
 @dataclass
 class BayesianResult:
     """贝叶斯搜索结果。"""
+
     best_params: dict[str, Any]
     best_objective: float
     n_trials_completed: int
@@ -92,6 +95,7 @@ class BayesianParameterSearch:
         使用简单的拉丁超立方采样（无 Optuna 依赖）。
         """
         import random
+
         rng = random.Random(self.config.random_seed + trial_id)
 
         params = {}
@@ -132,10 +136,15 @@ class BayesianParameterSearch:
 
             if not cv_metrics:
                 return TrialResult(
-                    trial_id=trial_id, parameters=params,
-                    objective_value=-999.0, inner_cv_mean=0.0, inner_cv_std=0.0,
-                    stability_penalty=0.0, turnover_penalty=0.0,
-                    complexity_penalty=0.0, status="no_results",
+                    trial_id=trial_id,
+                    parameters=params,
+                    objective_value=-999.0,
+                    inner_cv_mean=0.0,
+                    inner_cv_std=0.0,
+                    stability_penalty=0.0,
+                    turnover_penalty=0.0,
+                    complexity_penalty=0.0,
+                    status="no_results",
                 )
 
             sorted_metrics = sorted(cv_metrics)
@@ -161,10 +170,15 @@ class BayesianParameterSearch:
 
         except Exception:
             return TrialResult(
-                trial_id=trial_id, parameters=params,
-                objective_value=-999.0, inner_cv_mean=0.0, inner_cv_std=0.0,
-                stability_penalty=0.0, turnover_penalty=0.0,
-                complexity_penalty=0.0, status="error",
+                trial_id=trial_id,
+                parameters=params,
+                objective_value=-999.0,
+                inner_cv_mean=0.0,
+                inner_cv_std=0.0,
+                stability_penalty=0.0,
+                turnover_penalty=0.0,
+                complexity_penalty=0.0,
+                status="error",
             )
 
         return TrialResult(
@@ -199,14 +213,16 @@ class BayesianParameterSearch:
 
             # Early stopping
             if cfg.early_stopping_rounds > 0 and trial_id > cfg.early_stopping_rounds:
-                recent = [t.objective_value for t in self._trials[-cfg.early_stopping_rounds:]]
+                recent = [t.objective_value for t in self._trials[-cfg.early_stopping_rounds :]]
                 if max(recent) < best_objective:
                     break
 
         if best_trial is None:
             return BayesianResult(
-                best_params={}, best_objective=0.0,
-                n_trials_completed=0, trials=[],
+                best_params={},
+                best_objective=0.0,
+                n_trials_completed=0,
+                trials=[],
             )
 
         return BayesianResult(

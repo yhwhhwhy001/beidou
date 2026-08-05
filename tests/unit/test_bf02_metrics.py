@@ -11,8 +11,6 @@
 - 常数列、反向排序、缺失值等边界条件。
 """
 
-# ruff: noqa: S311  (测试中的固定种子伪随机为统计抽样用途，非安全随机)
-
 import math
 import random
 
@@ -37,6 +35,7 @@ from beidou_research.mining.evaluation.metrics import (
 # ---------------------------------------------------------------------------
 # 手工参考实现（与生产实现独立，避免测试依赖被测代码的推导）
 # ---------------------------------------------------------------------------
+
 
 def _pearson_manual(xs, ys):
     """手工 Pearson 相关系数（不含缺失值处理）。"""
@@ -77,6 +76,7 @@ def _sample_std_manual(vals):
 # ---------------------------------------------------------------------------
 # IC / RankIC
 # ---------------------------------------------------------------------------
+
 
 def test_compute_ic_matches_manual_single_period():
     preds = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
@@ -134,10 +134,7 @@ def test_rank_ic_multi_period_matches_manual():
     periods_p = [[1, 3, 2, 4], [5, 1, 4, 2, 3]]
     periods_r = [[0.1, 0.3, 0.2, 0.4], [0.5, 0.1, 0.4, 0.2, 0.3]]
     out = compute_rank_ic(periods_p, periods_r)
-    rank_ics = [
-        _pearson_manual(_ranks_manual(p), _ranks_manual(r))
-        for p, r in zip(periods_p, periods_r, strict=True)
-    ]
+    rank_ics = [_pearson_manual(_ranks_manual(p), _ranks_manual(r)) for p, r in zip(periods_p, periods_r, strict=True)]
     assert out["rank_ic_mean"] == pytest.approx(sum(rank_ics) / 2)
     assert out["rank_ic_std"] == pytest.approx(_sample_std_manual(rank_ics))
     assert out["sample_count"] == 9
@@ -146,6 +143,7 @@ def test_rank_ic_multi_period_matches_manual():
 # ---------------------------------------------------------------------------
 # 分期 IC 序列
 # ---------------------------------------------------------------------------
+
 
 def test_period_ic_series_non_overlapping():
     """分期序列必须非重叠、每期独立计算（不用扩展窗口）。"""
@@ -160,9 +158,7 @@ def test_period_ic_series_non_overlapping():
         assert item["period_end"] == e
         # 每期 IC 只依赖该期样本，等于对该期切片的手工计算
         assert item["ic"] == pytest.approx(_pearson_manual(preds[s:e], rets[s:e]))
-        assert item["rank_ic"] == pytest.approx(
-            _pearson_manual(_ranks_manual(preds[s:e]), _ranks_manual(rets[s:e]))
-        )
+        assert item["rank_ic"] == pytest.approx(_pearson_manual(_ranks_manual(preds[s:e]), _ranks_manual(rets[s:e])))
         assert item["sample_count"] == 5
 
 
@@ -187,6 +183,7 @@ def test_period_ic_series_rejects_nested_input():
 # ---------------------------------------------------------------------------
 # ICIR
 # ---------------------------------------------------------------------------
+
 
 def test_icir_small_sample_not_verifiable():
     """小样本（< 12 期）必须返回 NOT_VERIFIABLE，不得冒充有效值。"""
@@ -221,6 +218,7 @@ def test_icir_filters_missing_values():
 # Newey-West t 统计量
 # ---------------------------------------------------------------------------
 
+
 def test_newey_west_tstat_matches_manual_formula():
     ics = [0.05, 0.03, 0.07, 0.04, 0.06, 0.02, 0.08, 0.05, 0.01, 0.09]
     n = len(ics)
@@ -232,18 +230,12 @@ def test_newey_west_tstat_matches_manual_formula():
     # 手工 Newey-West 方差公式
     gamma = {}
     for k in range(max_lags + 1):
-        gamma[k] = sum(
-            (ics[t] - mu) * (ics[t - k] - mu) for t in range(k, n)
-        ) / n
-    var_nw = gamma[0] + 2.0 * sum(
-        (1.0 - k / (max_lags + 1.0)) * gamma[k] for k in range(1, max_lags + 1)
-    )
+        gamma[k] = sum((ics[t] - mu) * (ics[t - k] - mu) for t in range(k, n)) / n
+    var_nw = gamma[0] + 2.0 * sum((1.0 - k / (max_lags + 1.0)) * gamma[k] for k in range(1, max_lags + 1))
     se = math.sqrt(var_nw / n)
     assert out["se"] == pytest.approx(se)
     assert out["t_stat"] == pytest.approx(mu / se)
-    assert out["p_value"] == pytest.approx(
-        2.0 * (1.0 - 0.5 * (1.0 + math.erf(abs(mu / se) / math.sqrt(2.0))))
-    )
+    assert out["p_value"] == pytest.approx(2.0 * (1.0 - 0.5 * (1.0 + math.erf(abs(mu / se) / math.sqrt(2.0)))))
 
 
 def test_newey_west_tstat_auto_lags_reasonable():
@@ -262,6 +254,7 @@ def test_newey_west_tstat_auto_lags_reasonable():
 # ---------------------------------------------------------------------------
 # Block bootstrap
 # ---------------------------------------------------------------------------
+
 
 def test_block_bootstrap_ci_contains_mean():
     random.seed(17)
@@ -285,6 +278,7 @@ def test_block_bootstrap_ci_small_sample():
 # 分位数单调性
 # ---------------------------------------------------------------------------
 
+
 def test_quantile_monotonicity_increasing():
     preds = [float(i) for i in range(1, 101)]
     rets = [2.0 * v for v in preds]
@@ -295,9 +289,7 @@ def test_quantile_monotonicity_increasing():
     assert out["spread"] == pytest.approx(2.0 * (90.5 - 10.5))
     assert len(out["quantile_returns"]) == 5
     # 每组 20 个样本
-    assert out["quantile_returns"] == pytest.approx(
-        [2.0 * sum(range(20 * q + 1, 20 * q + 21)) / 20 for q in range(5)]
-    )
+    assert out["quantile_returns"] == pytest.approx([2.0 * sum(range(20 * q + 1, 20 * q + 21)) / 20 for q in range(5)])
 
 
 def test_quantile_constant_predictions_boundary():
@@ -315,6 +307,7 @@ def test_quantile_constant_predictions_boundary():
 # ---------------------------------------------------------------------------
 # VIF（真正多元回归）
 # ---------------------------------------------------------------------------
+
 
 def test_vif_detects_known_collinearity():
     """完全线性相关必须给出极大 VIF，独立因子 VIF 接近 1。"""
@@ -350,6 +343,7 @@ def test_vif_requires_equal_lengths():
 # ---------------------------------------------------------------------------
 # 增量贡献
 # ---------------------------------------------------------------------------
+
 
 def test_incremental_contribution_zero_when_no_increment():
     """候选因子与已有模型完全相同时，所有增量必须接近 0。"""
@@ -387,19 +381,25 @@ def test_incremental_contribution_length_mismatch():
     # 嵌套输入：期数不一致
     with pytest.raises(ValueError):
         compute_incremental_contribution(
-            [[1, 2], [3, 4]], [[1, 2], [3, 4]],
-            [[1, 2]], [[1, 2]],
+            [[1, 2], [3, 4]],
+            [[1, 2], [3, 4]],
+            [[1, 2]],
+            [[1, 2]],
         )
     # 同一期内样本数不一致
     with pytest.raises(ValueError):
         compute_incremental_contribution(
-            [[1, 2, 3]], [[1, 2, 3]], [[1, 2]], [[1, 2]],
+            [[1, 2, 3]],
+            [[1, 2, 3]],
+            [[1, 2]],
+            [[1, 2]],
         )
 
 
 # ---------------------------------------------------------------------------
 # 换手率 / 命中率 / 成本调整
 # ---------------------------------------------------------------------------
+
 
 def test_turnover_weight_change():
     pos_t = [0.5, 0.5, 0.0]
@@ -436,9 +436,7 @@ def test_cost_adjusted_metrics_scalar_cost():
     assert out["gross_mean"] == pytest.approx(sum(rets) / 4)
     assert out["cost_impact_bps"] == pytest.approx(5.0)
     assert out["total_costs_bps"] == pytest.approx(20.0)
-    assert out["net_sharpe"] == pytest.approx(
-        (sum(net) / 4) / _sample_std_manual(net)
-    )
+    assert out["net_sharpe"] == pytest.approx((sum(net) / 4) / _sample_std_manual(net))
     assert out["sample_count"] == 4
 
 
@@ -453,6 +451,7 @@ def test_cost_adjusted_metrics_sequence_cost():
 # ---------------------------------------------------------------------------
 # 边界条件
 # ---------------------------------------------------------------------------
+
 
 def test_constant_column_boundary():
     """常数列预测：相关性无定义，按约定返回 0。"""

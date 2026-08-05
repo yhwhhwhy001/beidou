@@ -9,10 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 from beidou_shared.types import (
-    InstrumentId, VenueId, StrategyId, SchemaVersion, Quantity, Price,
+    InstrumentId,
+    SchemaVersion,
+    StrategyId,
+    VenueId,
 )
 
 
@@ -46,6 +48,7 @@ class DataQualityTier(str, Enum):
 @dataclass(frozen=True, slots=True)
 class MarketEvent:
     """BD-04: 版本化行情事件合同。"""
+
     venue_id: VenueId
     instrument_id: InstrumentId
     event_time: datetime
@@ -60,6 +63,7 @@ class MarketEvent:
 @dataclass(frozen=True, slots=True)
 class KLineEvent(MarketEvent):
     """BD-04: K线事件 — 仅 is_closed=True 时发布给策略。"""
+
     open: float = 0.0
     high: float = 0.0
     low: float = 0.0
@@ -72,6 +76,7 @@ class KLineEvent(MarketEvent):
 @dataclass(frozen=True, slots=True)
 class FeatureSnapshot:
     """BD-04: 特征快照 — 绑定数据源、特征代码哈希和DQ。"""
+
     name: str
     values: dict[str, float]
     timestamp: datetime
@@ -87,6 +92,7 @@ class FeatureSnapshot:
 @dataclass(frozen=True, slots=True)
 class EntryProposal:
     """BD-05: 入场提案 — 由 Entry Alpha 节点生成。"""
+
     strategy_id: StrategyId
     instrument_id: InstrumentId
     venue_id: VenueId
@@ -103,6 +109,7 @@ class EntryProposal:
 @dataclass(frozen=True, slots=True)
 class FilterResult:
     """BD-05: 过滤器决策 — Filter 节点输出。"""
+
     decision: FilterDecision
     confidence_multiplier: float = 1.0
     size_multiplier: float = 1.0
@@ -114,6 +121,7 @@ class FilterResult:
 @dataclass(frozen=True, slots=True)
 class StrategyProposal:
     """BD-05: 策略最终提案 — DAG 执行结果。"""
+
     strategy_id: StrategyId
     instrument_id: InstrumentId
     venue_id: VenueId
@@ -131,9 +139,10 @@ class StrategyProposal:
 @dataclass(frozen=True, slots=True)
 class PortfolioDecision:
     """BD-06: 组合决策 — 优化器输出。"""
+
     strategy_id: StrategyId
     targets: dict[InstrumentId, float]  # symbol → target_position
-    rejected: dict[InstrumentId, str]   # symbol → rejection_reason
+    rejected: dict[InstrumentId, str]  # symbol → rejection_reason
     constraint_shadow_prices: dict[str, float]
     input_version: str
     total_risk_pct: float = 0.0
@@ -144,6 +153,7 @@ class PortfolioDecision:
 @dataclass(frozen=True, slots=True)
 class AccountFactSnapshot:
     """BD-07: 版本化账户事实快照。"""
+
     account_id: str
     venue_id: VenueId
     balance: float
@@ -163,6 +173,7 @@ class AccountFactSnapshot:
 @dataclass(frozen=True, slots=True)
 class RiskRuleResult:
     """BD-07: R0-R10 单条规则结果。"""
+
     rule_id: str
     decision: str  # PASS / REJECT / UNKNOWN
     reason: str

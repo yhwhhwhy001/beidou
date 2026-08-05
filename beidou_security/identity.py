@@ -1,5 +1,7 @@
 """服务身份与短期凭据管理。分离市场只读、账户只读和交易密钥。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -73,11 +75,20 @@ class Permission:
 class SecretSanitizer:
     """自动脱敏 — 日志、指标、异常中不得出现明文密钥。"""
 
-    SENSITIVE_KEYS = frozenset({
-        "api_key", "api_secret", "secret_key", "private_key",
-        "password", "token", "signature",
-        "access_key", "secret", "passphrase",
-    })
+    SENSITIVE_KEYS = frozenset(
+        {
+            "api_key",
+            "api_secret",
+            "secret_key",
+            "private_key",
+            "password",
+            "token",
+            "signature",
+            "access_key",
+            "secret",
+            "passphrase",
+        }
+    )
 
     @classmethod
     def sanitize(cls, data: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +109,7 @@ class SecretSanitizer:
         """扫描文本中是否包含疑似密钥。返回发现的模式列表。"""
         found: list[str] = []
         import re
+
         for pattern in cls.SENSITIVE_KEYS:
             if re.search(pattern, text, re.IGNORECASE):
                 found.append(pattern)

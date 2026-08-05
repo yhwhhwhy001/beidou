@@ -5,8 +5,6 @@ PKG-03: Security 测试。
 
 from __future__ import annotations
 
-import pytest
-
 from beidou_security.identity import (
     Credential,
     CredentialType,

@@ -4,6 +4,7 @@ PKG-14: 因子定义、IC/RankIC/ICIR、分层回测、衰减分析、换手率�
 成本后边际贡献、因子生命周期管理（IDEA→ACTIVE→DEGRADED→SUSPENDED→RETIRED）。
 退役证据永久保留；重新启用等同新 Challenger，必须重新经过完整 Gate。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from beidou_shared.types import InstrumentId, SchemaVersion, StrategyId, VenueId
+from beidou_shared.types import SchemaVersion, VenueId
 
 
 class FactorLifecycle(str, Enum):
@@ -22,12 +23,13 @@ class FactorLifecycle(str, Enum):
     → OOS_VERIFIED → COST_CAPACITY_VERIFIED → PAPER_TRADING
     → CHALLENGER → ACTIVE → DEGRADED → SUSPENDED → RETIRED
     """
+
     # 新状态 (BF-07)
     IDEA = "IDEA"
-    GENERATED = "GENERATED"                     # 候选已生成
-    SANITY_PASSED = "SANITY_PASSED"             # DQ/泄漏/复杂度通过
-    RESEARCH_VALIDATED = "RESEARCH_VALIDATED"   # 统计显著性+多重检验通过
-    OOS_VERIFIED = "OOS_VERIFIED"              # Purged WFO/CPCV 通过
+    GENERATED = "GENERATED"  # 候选已生成
+    SANITY_PASSED = "SANITY_PASSED"  # DQ/泄漏/复杂度通过
+    RESEARCH_VALIDATED = "RESEARCH_VALIDATED"  # 统计显著性+多重检验通过
+    OOS_VERIFIED = "OOS_VERIFIED"  # Purged WFO/CPCV 通过
     COST_CAPACITY_VERIFIED = "COST_CAPACITY_VERIFIED"  # 成本/容量通过
     PAPER_TRADING = "PAPER_TRADING"
     CHALLENGER = "CHALLENGER"
@@ -37,14 +39,19 @@ class FactorLifecycle(str, Enum):
     RETIRED = "RETIRED"
 
     # 兼容旧状态（标记为 LEGACY）
-    RESEARCH = "RESEARCH"           # DEPRECATED: 使用 RESEARCH_VALIDATED
-    BACKTEST = "BACKTEST"           # DEPRECATED: 使用 OOS_VERIFIED
+    RESEARCH = "RESEARCH"  # DEPRECATED: 使用 RESEARCH_VALIDATED
+    BACKTEST = "BACKTEST"  # DEPRECATED: 使用 OOS_VERIFIED
 
 
 # 合法生命周期转换 (BF-07 更新)
 FACTOR_LIFECYCLE_TRANSITIONS: dict[FactorLifecycle, set[FactorLifecycle]] = {
     # 新路径 (含旧状态兼容)
-    FactorLifecycle.IDEA: {FactorLifecycle.GENERATED, FactorLifecycle.RESEARCH, FactorLifecycle.RESEARCH_VALIDATED, FactorLifecycle.RETIRED},
+    FactorLifecycle.IDEA: {
+        FactorLifecycle.GENERATED,
+        FactorLifecycle.RESEARCH,
+        FactorLifecycle.RESEARCH_VALIDATED,
+        FactorLifecycle.RETIRED,
+    },
     FactorLifecycle.GENERATED: {FactorLifecycle.SANITY_PASSED, FactorLifecycle.RETIRED},
     FactorLifecycle.SANITY_PASSED: {FactorLifecycle.RESEARCH_VALIDATED, FactorLifecycle.RETIRED},
     FactorLifecycle.RESEARCH_VALIDATED: {FactorLifecycle.OOS_VERIFIED, FactorLifecycle.RETIRED},
@@ -65,6 +72,7 @@ FACTOR_LIFECYCLE_TRANSITIONS: dict[FactorLifecycle, set[FactorLifecycle]] = {
 @dataclass(frozen=True, slots=True)
 class FactorDefinition:
     """因子定义 — 不可变版本化记录。"""
+
     factor_id: str
     name: str
     version: SchemaVersion
@@ -84,6 +92,7 @@ class FactorDefinition:
 @dataclass(frozen=True, slots=True)
 class FactorPerformance:
     """因子性能指标。IC/RankIC/ICIR、分层回测、衰减分析。"""
+
     factor_id: str
     evaluation_period: str  # e.g., "2026-Q1"
     sample_count: int
@@ -108,6 +117,7 @@ class FactorPerformance:
 @dataclass(frozen=True, slots=True)
 class MarginalContribution:
     """边际贡献分析。评估因子加入现有组合后的增量收益和风险。"""
+
     factor_id: str
     existing_factor_ids: frozenset[str]
     marginal_sharpe: float  # 边际 Sharpe 增量
@@ -128,6 +138,7 @@ class MarginalContribution:
 @dataclass
 class FactorRecord:
     """因子运行时记录。绑定定义、性能、生命周期。"""
+
     definition: FactorDefinition
     lifecycle: FactorLifecycle = FactorLifecycle.IDEA
     performance: list[FactorPerformance] = field(default_factory=list)
@@ -223,7 +234,7 @@ class FactorEvaluator:
             return 0.0
         mean_ic = sum(ic_series) / len(ic_series)
         var = sum((ic - mean_ic) ** 2 for ic in ic_series) / (len(ic_series) - 1)
-        std_ic = var ** 0.5
+        std_ic = var**0.5
         if std_ic == 0:
             return float("inf") if mean_ic > 0 else float("-inf") if mean_ic < 0 else 0.0
         return mean_ic / std_ic
@@ -233,7 +244,7 @@ class FactorEvaluator:
         """计算分层回测的顶部分位数 vs 底部分位数收益差。"""
         if len(predictions) < 10:
             return 0.0
-        paired = sorted(zip(predictions, returns), key=lambda x: x[0])
+        paired = sorted(zip(predictions, returns, strict=False), key=lambda x: x[0])
         n = len(paired)
         decile_size = max(1, n // 10)
         top_decile = paired[-decile_size:]
@@ -275,10 +286,7 @@ class FactorEvaluator:
         existing_ids = frozenset(f.id for f in existing_factors)
         vif = FactorEvaluator.compute_vif(correlation_matrix, factor_id)
 
-        collinear_with = [
-            fid for fid, corr in correlation_matrix.get(factor_id, {}).items()
-            if abs(corr) > 0.7
-        ]
+        collinear_with = [fid for fid, corr in correlation_matrix.get(factor_id, {}).items() if abs(corr) > 0.7]
 
         marginal_sharpe = factor_performance.icir * 0.1  # 近似边际 Sharpe
         if collinear_with:
@@ -287,7 +295,9 @@ class FactorEvaluator:
 
         diversification = 0.0
         if not collinear_with:
-            avg_corr = sum(abs(v) for v in correlation_matrix.get(factor_id, {}).values()) / max(len(correlation_matrix.get(factor_id, {})), 1)
+            avg_corr = sum(abs(v) for v in correlation_matrix.get(factor_id, {}).values()) / max(
+                len(correlation_matrix.get(factor_id, {})), 1
+            )
             diversification = max(0.0, 0.3 - avg_corr)
 
         return MarginalContribution(
@@ -347,9 +357,7 @@ class FactorRegistry:
             return False
         if performance.cost_adjusted_ic is not None and performance.cost_adjusted_ic < 0.01:
             return False
-        if marginal_contributions and any(m.has_adverse_collinearity() for m in marginal_contributions):
-            return False
-        return True
+        return not (marginal_contributions and any(m.has_adverse_collinearity() for m in marginal_contributions))
 
     def promote_to_challenger(self, factor_id: str) -> bool:
         record = self._factors.get(factor_id)
@@ -398,8 +406,7 @@ class FactorRegistry:
             "retired_at": datetime.now(timezone.utc).isoformat(),
             "final_lifecycle": record.lifecycle.value,
             "performance_history": [
-                {"icir": p.icir, "ic_mean": p.ic_mean, "period": p.evaluation_period}
-                for p in record.performance
+                {"icir": p.icir, "ic_mean": p.ic_mean, "period": p.evaluation_period} for p in record.performance
             ],
         }
         record.retired_at = datetime.now(timezone.utc)

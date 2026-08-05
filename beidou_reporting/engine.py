@@ -3,17 +3,24 @@
 PKG-30B: 自动日报、周报、事故报告；数据不足时显示 NOT_VERIFIABLE；
 报告数值可追溯到权威查询和版本；报告任务失败不影响安全控制面。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from hashlib import sha256
 from typing import Any
 
 from beidou_shared.types import (
-    AccountId, CorrelationId, InstrumentId, MonetaryValue, ModelId,
-    ResultStatus, SchemaVersion, StrategyId, VenueId,
+    AccountId,
+    CorrelationId,
+    InstrumentId,
+    ModelId,
+    MonetaryValue,
+    SchemaVersion,
+    StrategyId,
+    VenueId,
 )
 
 
@@ -39,6 +46,7 @@ class ReportStatus(str, Enum):
 
 class EvidenceTier(str, Enum):
     """证据等级。NOT_VERIFIABLE = 数据不足不可验证。"""
+
     VERIFIED = "VERIFIED"
     PARTIALLY_VERIFIED = "PARTIALLY_VERIFIED"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
@@ -48,6 +56,7 @@ class EvidenceTier(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ReportReference:
     """报告数据溯源引用 — 指向权威查询和版本。"""
+
     source: str  # e.g., "ledger", "reconciliation", "model_registry"
     query_id: str
     schema_version: SchemaVersion
@@ -58,6 +67,7 @@ class ReportReference:
 @dataclass(frozen=True, slots=True)
 class EvidenceEntry:
     """证据条目。不可变数据点，可追溯到来源。"""
+
     key: str
     value: Any
     tier: EvidenceTier
@@ -68,6 +78,7 @@ class EvidenceEntry:
 @dataclass
 class ReportSection:
     """报告章节。每个章节有独立的证据级别。"""
+
     title: str
     entries: list[EvidenceEntry] = field(default_factory=list)
     summary: str = ""
@@ -83,6 +94,7 @@ class ReportSection:
 @dataclass
 class Report:
     """报告主体。不可变快照，支持冻结导出。"""
+
     report_id: str
     report_type: ReportType
     title: str
@@ -136,10 +148,7 @@ class Report:
                     "summary": s.summary,
                     "status": s.status.value,
                     "missing_keys": s.missing_keys(),
-                    "entries": [
-                        {"key": e.key, "value": str(e.value), "tier": e.tier.value}
-                        for e in s.entries
-                    ],
+                    "entries": [{"key": e.key, "value": str(e.value), "tier": e.tier.value} for e in s.entries],
                 }
                 for s in self.sections
             ],
@@ -191,16 +200,20 @@ class ReportGenerator:
 
         # PnL section
         pnl_section = ReportSection(title="PnL")
-        pnl_section.entries.append(EvidenceEntry(
-            key="daily_pnl",
-            value=str(pnl.amount) if pnl else "NOT_VERIFIABLE",
-            tier=EvidenceTier.VERIFIED if pnl else EvidenceTier.NOT_VERIFIABLE,
-            source_ref=ReportReference(
-                source="ledger", query_id="daily_pnl",
-                schema_version=data_version or SchemaVersion("unknown"),
-                timestamp=date, correlation_id=correlation_id,
-            ),
-        ))
+        pnl_section.entries.append(
+            EvidenceEntry(
+                key="daily_pnl",
+                value=str(pnl.amount) if pnl else "NOT_VERIFIABLE",
+                tier=EvidenceTier.VERIFIED if pnl else EvidenceTier.NOT_VERIFIABLE,
+                source_ref=ReportReference(
+                    source="ledger",
+                    query_id="daily_pnl",
+                    schema_version=data_version or SchemaVersion("unknown"),
+                    timestamp=date,
+                    correlation_id=correlation_id,
+                ),
+            )
+        )
         pnl_section.status = EvidenceTier.VERIFIED if pnl else EvidenceTier.NOT_VERIFIABLE
         pnl_section.summary = f"日 PnL: {pnl.amount if pnl else 'NOT_VERIFIABLE'}"
         report.add_section(pnl_section)
@@ -209,28 +222,36 @@ class ReportGenerator:
         pos_section = ReportSection(title="Positions")
         if positions:
             for inst_id, qty in positions.items():
-                pos_section.entries.append(EvidenceEntry(
-                    key=f"position_{inst_id}",
-                    value=str(qty),
-                    tier=EvidenceTier.VERIFIED,
-                ))
+                pos_section.entries.append(
+                    EvidenceEntry(
+                        key=f"position_{inst_id}",
+                        value=str(qty),
+                        tier=EvidenceTier.VERIFIED,
+                    )
+                )
             pos_section.status = EvidenceTier.VERIFIED
             pos_section.summary = f"持有 {len(positions)} 个仓位"
         else:
-            pos_section.entries.append(EvidenceEntry(
-                key="positions", value="NOT_VERIFIABLE",
-                tier=EvidenceTier.NOT_VERIFIABLE,
-            ))
+            pos_section.entries.append(
+                EvidenceEntry(
+                    key="positions",
+                    value="NOT_VERIFIABLE",
+                    tier=EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
             pos_section.status = EvidenceTier.NOT_VERIFIABLE
             pos_section.summary = "仓位数据: NOT_VERIFIABLE"
         report.add_section(pos_section)
 
         # Risk section
         risk_section = ReportSection(title="Risk Events (24h)")
-        risk_section.entries.append(EvidenceEntry(
-            key="risk_events_24h", value=str(risk_events_24h),
-            tier=EvidenceTier.VERIFIED,
-        ))
+        risk_section.entries.append(
+            EvidenceEntry(
+                key="risk_events_24h",
+                value=str(risk_events_24h),
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
         risk_section.status = EvidenceTier.VERIFIED
         risk_section.summary = f"过去24h风险事件: {risk_events_24h}"
         report.add_section(risk_section)
@@ -238,17 +259,23 @@ class ReportGenerator:
         # Reconciliation section
         recon_section = ReportSection(title="Account Reconciliation")
         if reconciliation_passed is not None:
-            recon_section.entries.append(EvidenceEntry(
-                key="reconciliation_passed", value=str(reconciliation_passed),
-                tier=EvidenceTier.VERIFIED,
-            ))
+            recon_section.entries.append(
+                EvidenceEntry(
+                    key="reconciliation_passed",
+                    value=str(reconciliation_passed),
+                    tier=EvidenceTier.VERIFIED,
+                )
+            )
             recon_section.status = EvidenceTier.VERIFIED
             recon_section.summary = "对账通过" if reconciliation_passed else "对账差异"
         else:
-            recon_section.entries.append(EvidenceEntry(
-                key="reconciliation_passed", value="NOT_VERIFIABLE",
-                tier=EvidenceTier.NOT_VERIFIABLE,
-            ))
+            recon_section.entries.append(
+                EvidenceEntry(
+                    key="reconciliation_passed",
+                    value="NOT_VERIFIABLE",
+                    tier=EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
             recon_section.status = EvidenceTier.NOT_VERIFIABLE
             recon_section.summary = "对账数据不足"
         report.add_section(recon_section)
@@ -257,28 +284,38 @@ class ReportGenerator:
         inc_section = ReportSection(title="Active Incidents")
         if active_incidents:
             for inc in active_incidents:
-                inc_section.entries.append(EvidenceEntry(
-                    key=f"incident_{inc}", value="ACTIVE",
-                    tier=EvidenceTier.VERIFIED,
-                ))
+                inc_section.entries.append(
+                    EvidenceEntry(
+                        key=f"incident_{inc}",
+                        value="ACTIVE",
+                        tier=EvidenceTier.VERIFIED,
+                    )
+                )
             inc_section.status = EvidenceTier.VERIFIED
             inc_section.summary = f"活跃事故: {len(active_incidents)}"
         else:
-            inc_section.entries.append(EvidenceEntry(
-                key="active_incidents", value="NONE",
-                tier=EvidenceTier.VERIFIED,
-            ))
+            inc_section.entries.append(
+                EvidenceEntry(
+                    key="active_incidents",
+                    value="NONE",
+                    tier=EvidenceTier.VERIFIED,
+                )
+            )
             inc_section.status = EvidenceTier.VERIFIED
             inc_section.summary = "无活跃事故"
         report.add_section(inc_section)
 
         # Data version reference
         if data_version:
-            report.references.append(ReportReference(
-                source="data_version", query_id="daily_report",
-                schema_version=data_version,
-                timestamp=date, correlation_id=correlation_id,
-            ))
+            report.references.append(
+                ReportReference(
+                    source="data_version",
+                    query_id="daily_report",
+                    schema_version=data_version,
+                    timestamp=date,
+                    correlation_id=correlation_id,
+                )
+            )
 
         report.freeze()
         self._daily_reports.append(report)
@@ -305,15 +342,14 @@ class ReportGenerator:
         days_with_data = len(daily_reports)
         for i in range(7):
             day = week_start + timedelta(days=i)
-            has_report = any(
-                r.period_start and r.period_start.date() == day.date()
-                for r in daily_reports
+            has_report = any(r.period_start and r.period_start.date() == day.date() for r in daily_reports)
+            coverage.entries.append(
+                EvidenceEntry(
+                    key=f"report_{day.strftime('%Y%m%d')}",
+                    value="PRESENT" if has_report else "MISSING",
+                    tier=EvidenceTier.VERIFIED if has_report else EvidenceTier.MISSING,
+                )
             )
-            coverage.entries.append(EvidenceEntry(
-                key=f"report_{day.strftime('%Y%m%d')}",
-                value="PRESENT" if has_report else "MISSING",
-                tier=EvidenceTier.VERIFIED if has_report else EvidenceTier.MISSING,
-            ))
         coverage.status = EvidenceTier.VERIFIED if days_with_data == 7 else EvidenceTier.PARTIALLY_VERIFIED
         coverage.summary = f"日报覆盖: {days_with_data}/7 天"
         report.add_section(coverage)
@@ -321,14 +357,20 @@ class ReportGenerator:
         # Weekly summary section
         summary = ReportSection(title="周度摘要")
         missing_days = 7 - days_with_data
-        summary.entries.append(EvidenceEntry(
-            key="days_covered", value=str(days_with_data),
-            tier=EvidenceTier.VERIFIED,
-        ))
-        summary.entries.append(EvidenceEntry(
-            key="days_missing", value=str(missing_days),
-            tier=EvidenceTier.VERIFIED if missing_days == 0 else EvidenceTier.NOT_VERIFIABLE,
-        ))
+        summary.entries.append(
+            EvidenceEntry(
+                key="days_covered",
+                value=str(days_with_data),
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
+        summary.entries.append(
+            EvidenceEntry(
+                key="days_missing",
+                value=str(missing_days),
+                tier=EvidenceTier.VERIFIED if missing_days == 0 else EvidenceTier.NOT_VERIFIABLE,
+            )
+        )
         summary.status = EvidenceTier.VERIFIED if missing_days == 0 else EvidenceTier.PARTIALLY_VERIFIED
         summary.summary = f"{days_with_data}/7 天完整数据"
         report.add_section(summary)
@@ -361,31 +403,53 @@ class ReportGenerator:
 
         # Incident details
         detail_section = ReportSection(title="事故详情")
-        detail_section.entries.append(EvidenceEntry(
-            key="incident_id", value=incident_id, tier=EvidenceTier.VERIFIED,
-        ))
-        detail_section.entries.append(EvidenceEntry(
-            key="severity", value=severity, tier=EvidenceTier.VERIFIED,
-        ))
-        detail_section.entries.append(EvidenceEntry(
-            key="detected_at", value=detected_at.isoformat(), tier=EvidenceTier.VERIFIED,
-        ))
-        detail_section.entries.append(EvidenceEntry(
-            key="auto_action", value=auto_action, tier=EvidenceTier.VERIFIED,
-        ))
-        detail_section.entries.append(EvidenceEntry(
-            key="description", value=description, tier=EvidenceTier.VERIFIED,
-        ))
+        detail_section.entries.append(
+            EvidenceEntry(
+                key="incident_id",
+                value=incident_id,
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
+        detail_section.entries.append(
+            EvidenceEntry(
+                key="severity",
+                value=severity,
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
+        detail_section.entries.append(
+            EvidenceEntry(
+                key="detected_at",
+                value=detected_at.isoformat(),
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
+        detail_section.entries.append(
+            EvidenceEntry(
+                key="auto_action",
+                value=auto_action,
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
+        detail_section.entries.append(
+            EvidenceEntry(
+                key="description",
+                value=description,
+                tier=EvidenceTier.VERIFIED,
+            )
+        )
         detail_section.status = EvidenceTier.VERIFIED
         report.add_section(detail_section)
 
         # Resolution section
         res_section = ReportSection(title="处理结果")
-        res_section.entries.append(EvidenceEntry(
-            key="resolution",
-            value=resolution if resolution else "NOT_VERIFIABLE",
-            tier=EvidenceTier.VERIFIED if resolution else EvidenceTier.NOT_VERIFIABLE,
-        ))
+        res_section.entries.append(
+            EvidenceEntry(
+                key="resolution",
+                value=resolution if resolution else "NOT_VERIFIABLE",
+                tier=EvidenceTier.VERIFIED if resolution else EvidenceTier.NOT_VERIFIABLE,
+            )
+        )
         res_section.status = EvidenceTier.VERIFIED if resolution else EvidenceTier.NOT_VERIFIABLE
         res_section.summary = resolution if resolution else "尚未解决"
         report.add_section(res_section)
@@ -394,26 +458,35 @@ class ReportGenerator:
         ev_section = ReportSection(title="证据快照")
         if evidence:
             for i, ev in enumerate(evidence):
-                ev_section.entries.append(EvidenceEntry(
-                    key=f"evidence_{i}",
-                    value=ev,
-                    tier=EvidenceTier.VERIFIED,
-                ))
+                ev_section.entries.append(
+                    EvidenceEntry(
+                        key=f"evidence_{i}",
+                        value=ev,
+                        tier=EvidenceTier.VERIFIED,
+                    )
+                )
             ev_section.status = EvidenceTier.VERIFIED
         else:
-            ev_section.entries.append(EvidenceEntry(
-                key="evidence", value="NOT_VERIFIABLE",
-                tier=EvidenceTier.NOT_VERIFIABLE,
-            ))
+            ev_section.entries.append(
+                EvidenceEntry(
+                    key="evidence",
+                    value="NOT_VERIFIABLE",
+                    tier=EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
             ev_section.status = EvidenceTier.NOT_VERIFIABLE
         report.add_section(ev_section)
 
         if data_version:
-            report.references.append(ReportReference(
-                source="data_version", query_id="incident_report",
-                schema_version=data_version, timestamp=detected_at,
-                correlation_id=correlation_id,
-            ))
+            report.references.append(
+                ReportReference(
+                    source="data_version",
+                    query_id="incident_report",
+                    schema_version=data_version,
+                    timestamp=detected_at,
+                    correlation_id=correlation_id,
+                )
+            )
 
         report.freeze()
         self._incident_reports.append(report)
@@ -442,40 +515,56 @@ class ReportGenerator:
 
         metrics = ReportSection(title="绩效指标")
         perf_fields = {
-            "sharpe": sharpe, "annualized_return_pct": annualized_return_pct,
-            "max_drawdown_pct": max_drawdown_pct, "win_rate": win_rate,
+            "sharpe": sharpe,
+            "annualized_return_pct": annualized_return_pct,
+            "max_drawdown_pct": max_drawdown_pct,
+            "win_rate": win_rate,
         }
         for key, val in perf_fields.items():
-            metrics.entries.append(EvidenceEntry(
-                key=key,
-                value=str(val) if val is not None else "NOT_VERIFIABLE",
-                tier=EvidenceTier.VERIFIED if val is not None else EvidenceTier.NOT_VERIFIABLE,
-            ))
-        metrics.status = EvidenceTier.VERIFIED if all(v is not None for v in perf_fields.values()) else EvidenceTier.NOT_VERIFIABLE
+            metrics.entries.append(
+                EvidenceEntry(
+                    key=key,
+                    value=str(val) if val is not None else "NOT_VERIFIABLE",
+                    tier=EvidenceTier.VERIFIED if val is not None else EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
+        metrics.status = (
+            EvidenceTier.VERIFIED if all(v is not None for v in perf_fields.values()) else EvidenceTier.NOT_VERIFIABLE
+        )
         report.add_section(metrics)
 
         # Factors section
         factor_section = ReportSection(title="活跃因子")
         if active_factors:
             for f in active_factors:
-                factor_section.entries.append(EvidenceEntry(
-                    key=f"factor_{f}", value="ACTIVE", tier=EvidenceTier.VERIFIED,
-                ))
+                factor_section.entries.append(
+                    EvidenceEntry(
+                        key=f"factor_{f}",
+                        value="ACTIVE",
+                        tier=EvidenceTier.VERIFIED,
+                    )
+                )
             factor_section.status = EvidenceTier.VERIFIED
         else:
-            factor_section.entries.append(EvidenceEntry(
-                key="factors", value="NOT_VERIFIABLE", tier=EvidenceTier.NOT_VERIFIABLE,
-            ))
+            factor_section.entries.append(
+                EvidenceEntry(
+                    key="factors",
+                    value="NOT_VERIFIABLE",
+                    tier=EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
             factor_section.status = EvidenceTier.NOT_VERIFIABLE
         report.add_section(factor_section)
 
         # Model section
         model_section = ReportSection(title="Champion Model")
-        model_section.entries.append(EvidenceEntry(
-            key="champion_model",
-            value=str(champion_model) if champion_model else "NOT_VERIFIABLE",
-            tier=EvidenceTier.VERIFIED if champion_model else EvidenceTier.NOT_VERIFIABLE,
-        ))
+        model_section.entries.append(
+            EvidenceEntry(
+                key="champion_model",
+                value=str(champion_model) if champion_model else "NOT_VERIFIABLE",
+                tier=EvidenceTier.VERIFIED if champion_model else EvidenceTier.NOT_VERIFIABLE,
+            )
+        )
         model_section.status = EvidenceTier.VERIFIED if champion_model else EvidenceTier.NOT_VERIFIABLE
         report.add_section(model_section)
 
@@ -509,21 +598,26 @@ class ReportGenerator:
             "funding_rate_pnl": str(funding_rate_pnl.amount) if funding_rate_pnl else None,
         }
         for key, val in cost_fields.items():
-            cost_section.entries.append(EvidenceEntry(
-                key=key,
-                value=val if val else "NOT_VERIFIABLE",
-                tier=EvidenceTier.VERIFIED if val else EvidenceTier.NOT_VERIFIABLE,
-            ))
+            cost_section.entries.append(
+                EvidenceEntry(
+                    key=key,
+                    value=val if val else "NOT_VERIFIABLE",
+                    tier=EvidenceTier.VERIFIED if val else EvidenceTier.NOT_VERIFIABLE,
+                )
+            )
         cost_section.status = EvidenceTier.VERIFIED if all(cost_fields.values()) else EvidenceTier.NOT_VERIFIABLE
         report.add_section(cost_section)
 
         if venue_breakdown:
             venue_section = ReportSection(title="按交易所分解")
             for venue, fee in venue_breakdown.items():
-                venue_section.entries.append(EvidenceEntry(
-                    key=f"venue_{venue}", value=str(fee.amount),
-                    tier=EvidenceTier.VERIFIED,
-                ))
+                venue_section.entries.append(
+                    EvidenceEntry(
+                        key=f"venue_{venue}",
+                        value=str(fee.amount),
+                        tier=EvidenceTier.VERIFIED,
+                    )
+                )
             venue_section.status = EvidenceTier.VERIFIED
             report.add_section(venue_section)
 
@@ -584,6 +678,4 @@ class ReportValidator:
     @staticmethod
     def safe_for_decision(report: Report) -> bool:
         """报告是否足够安全用于决策。"""
-        if report.overall_tier() in (EvidenceTier.MISSING, EvidenceTier.NOT_VERIFIABLE):
-            return False
-        return True
+        return report.overall_tier() not in (EvidenceTier.MISSING, EvidenceTier.NOT_VERIFIABLE)

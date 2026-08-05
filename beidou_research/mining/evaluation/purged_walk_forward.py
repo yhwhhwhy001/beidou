@@ -14,25 +14,26 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import datetime
+from typing import Callable
 
 from beidou_shared.types import GateResult
-
 
 # ================================================================
 # Fold 定义
 # ================================================================
 
+
 @dataclass(frozen=True)
 class Fold:
     """单个交叉验证折。"""
+
     fold_id: int
     train_start: datetime
     train_end: datetime
     test_start: datetime
     test_end: datetime
-    purge_end: datetime    # purge 结束时间（train_end + purge 区间）
+    purge_end: datetime  # purge 结束时间（train_end + purge 区间）
     embargo_end: datetime  # embargo 结束时间
     train_sample_count: int
     test_sample_count: int
@@ -50,16 +51,18 @@ class Fold:
 # Fold 构造器
 # ================================================================
 
+
 @dataclass
 class FoldConfig:
     """Purged Walk-Forward 配置。"""
+
     n_folds: int = 5
-    train_fraction: float = 0.6       # 训练集占比
-    purge_fraction: float = 0.05      # purge 区间占比
-    embargo_fraction: float = 0.02    # embargo 区间占比
-    min_train_samples: int = 100      # 最小训练样本数
-    min_test_samples: int = 20        # 最小测试样本数
-    random_seed: int = 42             # 固定 seed 保证可复现
+    train_fraction: float = 0.6  # 训练集占比
+    purge_fraction: float = 0.05  # purge 区间占比
+    embargo_fraction: float = 0.02  # embargo 区间占比
+    min_train_samples: int = 100  # 最小训练样本数
+    min_test_samples: int = 20  # 最小测试样本数
+    random_seed: int = 42  # 固定 seed 保证可复现
 
 
 class FoldBuilder:
@@ -105,11 +108,14 @@ class FoldBuilder:
 
             train_start = start_time
             train_end = start_time.__class__(
-                start_time.year, start_time.month, start_time.day,
+                start_time.year,
+                start_time.month,
+                start_time.day,
                 tzinfo=start_time.tzinfo,
             )
             # Convert offsets to timedelta
             from datetime import timedelta
+
             train_end = start_time + timedelta(seconds=test_start_offset)
             test_start = train_end
             test_end = start_time + timedelta(seconds=test_end_offset)
@@ -122,17 +128,19 @@ class FoldBuilder:
             embargo_duration = label_horizon_days * 1
             embargo_end = purge_end + timedelta(days=embargo_duration)
 
-            folds.append(Fold(
-                fold_id=i,
-                train_start=train_start,
-                train_end=train_end,
-                test_start=test_start,
-                test_end=test_end,
-                purge_end=purge_end,
-                embargo_end=embargo_end,
-                train_sample_count=0,  # 后续由调用者填充
-                test_sample_count=0,
-            ))
+            folds.append(
+                Fold(
+                    fold_id=i,
+                    train_start=train_start,
+                    train_end=train_end,
+                    test_start=test_start,
+                    test_end=test_end,
+                    purge_end=purge_end,
+                    embargo_end=embargo_end,
+                    train_sample_count=0,  # 后续由调用者填充
+                    test_sample_count=0,
+                )
+            )
 
         return folds
 
@@ -161,7 +169,7 @@ class FoldBuilder:
             train_count = 0
             test_count = 0
 
-            for pred_time, label_end in zip(sample_times, label_end_times):
+            for pred_time, label_end in zip(sample_times, label_end_times, strict=False):
                 # 分配样本
                 if fold.train_start <= pred_time < fold.train_end:
                     # 检查是否需要 purge
@@ -175,17 +183,19 @@ class FoldBuilder:
                         test_count += 1
                     # else: 在 embargo 区间，跳过
 
-            updated_folds.append(Fold(
-                fold_id=fold.fold_id,
-                train_start=fold.train_start,
-                train_end=fold.train_end,
-                test_start=fold.test_start,
-                test_end=fold.test_end,
-                purge_end=fold.purge_end,
-                embargo_end=fold.embargo_end,
-                train_sample_count=train_count,
-                test_sample_count=test_count,
-            ))
+            updated_folds.append(
+                Fold(
+                    fold_id=fold.fold_id,
+                    train_start=fold.train_start,
+                    train_end=fold.train_end,
+                    test_start=fold.test_start,
+                    test_end=fold.test_end,
+                    purge_end=fold.purge_end,
+                    embargo_end=fold.embargo_end,
+                    train_sample_count=train_count,
+                    test_sample_count=test_count,
+                )
+            )
 
         return updated_folds
 
@@ -194,9 +204,11 @@ class FoldBuilder:
 # Purged Walk-Forward 执行器
 # ================================================================
 
+
 @dataclass
 class FoldResult:
     """单折评估结果。"""
+
     fold_id: int
     train_samples: int
     test_samples: int
@@ -215,6 +227,7 @@ class FoldResult:
 @dataclass
 class PurgedWFOResult:
     """Purged Walk-Forward 总结果。"""
+
     folds: list[Fold]
     fold_results: list[FoldResult]
     n_folds_completed: int = 0
@@ -265,7 +278,8 @@ class PurgedWalkForward:
         """
         if len(sample_times) < self.config.min_train_samples + self.config.min_test_samples:
             return PurgedWFOResult(
-                folds=[], fold_results=[],
+                folds=[],
+                fold_results=[],
                 failure_reasons=["insufficient_samples"],
                 gate_result=GateResult.UNVERIFIABLE,
             )
@@ -275,25 +289,31 @@ class PurgedWalkForward:
 
         # 1. 构造 folds
         folds = self._fold_builder.build_folds(
-            start_time, end_time, total_duration_days,
+            start_time,
+            end_time,
+            total_duration_days,
             label_horizon_days=label_horizon_days,
         )
 
         # 2. 分配样本
         folds = self._fold_builder.assign_samples_to_folds(
-            folds, sample_times, label_end_times,
+            folds,
+            sample_times,
+            label_end_times,
         )
 
         # 验证 folds
         valid_folds = [
-            f for f in folds
+            f
+            for f in folds
             if f.train_sample_count >= self.config.min_train_samples
             and f.test_sample_count >= self.config.min_test_samples
         ]
 
         if len(valid_folds) < 2:
             return PurgedWFOResult(
-                folds=folds, fold_results=[],
+                folds=folds,
+                fold_results=[],
                 n_folds_completed=len(valid_folds),
                 failure_reasons=["insufficient_valid_folds"],
                 gate_result=GateResult.UNVERIFIABLE,
@@ -305,7 +325,7 @@ class PurgedWalkForward:
             # 构造训练/测试索引
             train_indices = []
             test_indices = []
-            for i, (t, le) in enumerate(zip(sample_times, label_end_times)):
+            for i, (t, le) in enumerate(zip(sample_times, label_end_times, strict=False)):
                 if fold.train_start <= t < fold.train_end and le <= fold.train_end:
                     train_indices.append(i)
                 elif fold.test_start <= t < fold.test_end and t >= fold.embargo_end:
@@ -316,18 +336,21 @@ class PurgedWalkForward:
                 fold_results.append(result)
             else:
                 # 无 evaluator 时返回空结果
-                fold_results.append(FoldResult(
-                    fold_id=fold.fold_id,
-                    train_samples=fold.train_sample_count,
-                    test_samples=fold.test_sample_count,
-                    failure_reason="no_evaluator",
-                ))
+                fold_results.append(
+                    FoldResult(
+                        fold_id=fold.fold_id,
+                        train_samples=fold.train_sample_count,
+                        test_samples=fold.test_sample_count,
+                        failure_reason="no_evaluator",
+                    )
+                )
 
         # 4. 汇总统计
         n_completed = len([r for r in fold_results if not r.failure_reason])
         if n_completed < 2:
             return PurgedWFOResult(
-                folds=valid_folds, fold_results=fold_results,
+                folds=valid_folds,
+                fold_results=fold_results,
                 n_folds_completed=n_completed,
                 failure_reasons=["too_few_completed_folds"],
                 gate_result=GateResult.UNVERIFIABLE,
@@ -338,7 +361,9 @@ class PurgedWalkForward:
         sharpes = [r.sharpe for r in completed]
 
         ic_mean_cv = sum(ic_means) / len(ic_means)
-        ic_std_cv = (sum((ic - ic_mean_cv) ** 2 for ic in ic_means) / (len(ic_means) - 1)) ** 0.5 if len(ic_means) > 1 else 0.0
+        ic_std_cv = (
+            (sum((ic - ic_mean_cv) ** 2 for ic in ic_means) / (len(ic_means) - 1)) ** 0.5 if len(ic_means) > 1 else 0.0
+        )
         icir_cv = ic_mean_cv / ic_std_cv if ic_std_cv > 0 else 0.0
         sharpe_cv = sum(sharpes) / len(sharpes)
 

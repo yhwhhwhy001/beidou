@@ -8,31 +8,47 @@
 
 from __future__ import annotations
 
-import itertools
 import hashlib
+import itertools
 from dataclasses import dataclass, field
-from typing import Any, Callable
 
 from beidou_research.mining.contracts import HorizonUnit
-
 
 # ================================================================
 # 模板配置
 # ================================================================
 
+
 @dataclass
 class TemplateConfig:
     """模板网格生成配置 — 参数空间由 policy 定义。"""
-    primitives: list[str] = field(default_factory=lambda: [
-        "close", "log_return", "volume", "rsi", "spread",
-    ])
+
+    primitives: list[str] = field(
+        default_factory=lambda: [
+            "close",
+            "log_return",
+            "volume",
+            "rsi",
+            "spread",
+        ]
+    )
     windows: list[int] = field(default_factory=lambda: [5, 10, 20, 50, 100])
-    transforms: list[str] = field(default_factory=lambda: [
-        "identity", "pct_change", "zscore", "diff",
-    ])
-    normalizations: list[str] = field(default_factory=lambda: [
-        "none", "zscore", "robust_zscore", "rank",
-    ])
+    transforms: list[str] = field(
+        default_factory=lambda: [
+            "identity",
+            "pct_change",
+            "zscore",
+            "diff",
+        ]
+    )
+    normalizations: list[str] = field(
+        default_factory=lambda: [
+            "none",
+            "zscore",
+            "robust_zscore",
+            "rank",
+        ]
+    )
     horizons: list[int] = field(default_factory=lambda: [1, 4, 12, 24])
     horizon_units: list[HorizonUnit] = field(default_factory=lambda: [HorizonUnit.BAR])
     regimes: list[str] = field(default_factory=lambda: ["all"])
@@ -43,6 +59,7 @@ class TemplateConfig:
 @dataclass
 class TemplateSpec:
     """单个模板的定义。"""
+
     template_id: str
     primitive: str
     window: int
@@ -122,9 +139,7 @@ class TemplateGridGenerator:
 
         return templates
 
-    def _is_valid_combination(
-        self, primitive: str, window: int, transform: str, normalization: str
-    ) -> bool:
+    def _is_valid_combination(self, primitive: str, window: int, transform: str, normalization: str) -> bool:
         """过滤无效组合。"""
         # zscore 后不再 zscore
         if transform == "zscore" and normalization == "zscore":
@@ -133,9 +148,7 @@ class TemplateGridGenerator:
         if transform == "identity" and normalization == "none":
             return False
         # window ≤ 0 无意义
-        if window <= 0:
-            return False
-        return True
+        return not window <= 0
 
     def _rationale_for(self, primitive: str, window: int, transform: str) -> str:
         """生成经济假设说明。"""

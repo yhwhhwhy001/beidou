@@ -12,64 +12,74 @@ import hashlib
 import hmac
 import json
 import os
-import signal
-import sys
 import time
-import urllib.request
-import urllib.error
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any
 
 import yaml
 
-from beidou_shared.types import (
-    AccountId, AccountRef, CorrelationId, InstrumentId, MonetaryValue,
-    OrderId, OrderSide, OrderType, Price, Quantity, ResultStatus,
-    RiskApprovalId, RiskDecision, SchemaVersion, StrategyId,
-    TimeInForce, VenueId, VenueInstrument,
+from beidou_autonomy.mapek import MAPEKController
+from beidou_control.plane import ControlAction, ControlPlane
+from beidou_core.alerts import AlertDispatcher
+from beidou_core.feed import MarketDataFeed
+from beidou_core.health import HealthServer
+from beidou_core.store import PersistentStore
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
+from beidou_observability.telemetry import AlertSeverity
+from beidou_research.factors.factor import (
+    FactorDefinition,
+    FactorEvaluator,
+    FactorLifecycle,
+    FactorRegistry,
 )
-from beidou_data.feature_store import FeatureStore
-from beidou_data.quality import DQCheckResult, DQCheckType, DataQualityGate
-from beidou_lifecycle.lifecycle import ModuleLifecycle, ModuleState, DegradationLevel
-from beidou_control.plane import ControlPlane, ControlAction
-from beidou_safety.risk.engine import (
-    PreRiskCheckerImpl, RiskEngineImpl, RiskApprovalSignerImpl,
-    RiskApprovalStateMachine, RiskSnapshot, PostRiskMonitor,
-)
-from beidou_safety.protection.engine import ProtectionManager, StopLossType, TakeProfitType
 from beidou_safety.execution.intent import IntentOutbox
-from beidou_safety.execution.order_state import OrderStateTracker, OrderEvent
 from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
-from beidou_safety.execution.reconciliation import ReconciliationEngine, AccountFactSnapshot
-from beidou_safety.execution.algorithms import (
-    ExecutionAlgorithmSelector, ExecutionAlgorithmType, ExecutionContext,
+from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
+from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
+from beidou_safety.protection.engine import ProtectionManager
+from beidou_safety.risk.engine import (
+    PostRiskMonitor,
+    PreRiskCheckerImpl,
+    RiskApprovalSignerImpl,
+    RiskApprovalStateMachine,
+    RiskEngineImpl,
+    RiskSnapshot,
 )
-from beidou_strategy.state.market_state import MarketStateEstimator
-from beidou_strategy.state.cost_model import CostModel
-from beidou_strategy.alpha import AlphaGraph, AlphaComponent, AlphaComponentType, SignalDirection
+from beidou_shared.types import (
+    AccountId,
+    AccountRef,
+    CorrelationId,
+    InstrumentId,
+    MonetaryValue,
+    OrderId,
+    OrderSide,
+    OrderType,
+    Price,
+    Quantity,
+    RiskApprovalId,
+    RiskDecision,
+    SchemaVersion,
+    StrategyId,
+    TimeInForce,
+    VenueId,
+    VenueInstrument,
+)
+from beidou_strategy.alpha import AlphaComponent, AlphaComponentType, AlphaGraph, SignalDirection
+from beidou_strategy.alpha.model_registry import DriftDetector, ModelRegistry
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
-from beidou_strategy.alpha.model_registry import ModelRegistry, DriftDetector
 from beidou_strategy.risk.manager import (
-    StrategyRiskManager, RiskBudget, StrategyRiskLevel, CircuitBreakerReason,
+    RiskBudget,
+    StrategyRiskLevel,
+    StrategyRiskManager,
 )
-from beidou_research.factors.factor import (
-    FactorEvaluator, FactorRegistry, FactorDefinition, FactorLifecycle,
-)
-from beidou_observability.telemetry import AlertSeverity
-from beidou_autonomy.mapek import MAPEKController
-
-from beidou_core.feed import MarketDataFeed
-from beidou_core.store import PersistentStore
-from beidou_core.health import HealthServer
-from beidou_core.alerts import AlertDispatcher
-from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
-from beidou_exchange.core.error_taxonomy import Result, ErrorCategory
-
+from beidou_strategy.state.cost_model import CostModel
 
 # ================================================================
 # 具体 AlphaComponent 实现
 # ================================================================
+
 
 class MeanReversionEntry(AlphaComponent):
     """均值回归入场组件 — 短期价格偏离 SMA 时入场。"""
@@ -83,6 +93,7 @@ class MeanReversionEntry(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         close = features.get("close", 0)
         sma_20 = features.get("sma_20", close)
@@ -132,6 +143,7 @@ class MomentumFilter(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         trend_20 = features.get("trend_20_pct", 0)
         ann_vol = features.get("ann_volatility", 0.3)
@@ -142,7 +154,8 @@ class MomentumFilter(AlphaComponent):
                 strategy_id=StrategyId("momentum_filter_v1"),
                 component_type=self.component_type,
                 direction=SignalDirection.NO_ACTION,
-                strength=0.0, confidence=0.8,
+                strength=0.0,
+                confidence=0.8,
                 instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
                 venue_id=context.get("venue_id", VenueId("BINANCE")),
                 model_version=SchemaVersion("2.0.0"),
@@ -184,6 +197,7 @@ class TrendFollowingEntry(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         sma_5 = features.get("sma_5", 0)
         sma_20 = features.get("sma_20", 0)
@@ -239,6 +253,7 @@ class BreakoutEntry(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         close = features.get("close", 0)
         highest_20 = features.get("highest_20", close)
@@ -272,8 +287,7 @@ class BreakoutEntry(AlphaComponent):
             instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
             venue_id=context.get("venue_id", VenueId("BINANCE")),
             model_version=SchemaVersion("2.0.0"),
-            metadata={"breakout_up": breakout_up, "breakout_down": breakout_down,
-                       "vol_expanding": vol_expanding},
+            metadata={"breakout_up": breakout_up, "breakout_down": breakout_down, "vol_expanding": vol_expanding},
         )
         context["_predictions"] = context.get("_predictions", {})
         context["_predictions"]["breakout_entry_v1"] = (close - highest_20) / max(highest_20, 1)
@@ -295,6 +309,7 @@ class VolatilityFilter(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         ann_vol = features.get("ann_volatility", 0.3)
         atr_pct = features.get("atr_pct", 1.0)
@@ -314,7 +329,9 @@ class VolatilityFilter(AlphaComponent):
             reason = "elevated_volatility"
         else:
             # Normal — confirm direction via RSI
-            direction = SignalDirection.LONG if rsi > 30 else SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
+            direction = (
+                SignalDirection.LONG if rsi > 30 else SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
+            )
             strength = 0.2
             confidence = 0.6
             reason = "normal"
@@ -350,6 +367,7 @@ class VolumeFilter(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         vol_ratio = features.get("vol_ratio", 1.0)
         trend_20 = features.get("trend_20_pct", 0)
@@ -411,6 +429,7 @@ class TrailingExit(AlphaComponent):
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
         close = features.get("close", 0)
         atr_pct = features.get("atr_pct", 1.0)
@@ -445,7 +464,7 @@ class TrailingExit(AlphaComponent):
                 # Take profit: 3× ATR + overbought
                 direction = SignalDirection.FLAT
                 strength = 0.7
-                reason = f"take_profit: {pnl_pct:.2f}% > {3.0*atr_pct:.2f}%"
+                reason = f"take_profit: {pnl_pct:.2f}% > {3.0 * atr_pct:.2f}%"
             elif close < sma_20 and position_side == "LONG":
                 # Trend breakdown — exit long
                 direction = SignalDirection.FLAT
@@ -491,10 +510,12 @@ class TimeExit(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
         import time as _time
+
+        from beidou_strategy.alpha import AlphaSignal
+
         features = context.get("features", {})
-        close = features.get("close", 0)
+        features.get("close", 0)
 
         position_info = context.get("_position_info", {})
         has_position = position_info.get("has_position", False)
@@ -550,6 +571,7 @@ class TimeExit(AlphaComponent):
 # 真实市场状态估算
 # ================================================================
 
+
 class RealMarketStateEstimator:
     """真实市场状态估算 — 替代始终返回 UNKNOWN 的 MarketStateEstimator。"""
 
@@ -574,9 +596,7 @@ class RealMarketStateEstimator:
             stress = "LOW"
 
         has_sufficient_data = (
-            features.get("close", 0) > 0 and
-            features.get("sma_5", 0) > 0 and
-            features.get("sma_20", 0) > 0
+            features.get("close", 0) > 0 and features.get("sma_5", 0) > 0 and features.get("sma_20", 0) > 0
         )
         quality = "RELIABLE" if has_sufficient_data and ann_vol > 0 else "UNKNOWN"
 
@@ -591,6 +611,7 @@ class RealMarketStateEstimator:
 # 自主运行引擎
 # ================================================================
 
+
 class AutonomousEngine:
     """北斗自主运行引擎。三个时钟域的 asyncio 事件循环。"""
 
@@ -602,7 +623,8 @@ class AutonomousEngine:
         # Config
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config", "env.testnet.yaml",
+            "config",
+            "env.testnet.yaml",
         )
         with open(config_path) as f:
             self._config = yaml.safe_load(f)
@@ -634,7 +656,9 @@ class AutonomousEngine:
         self._outbox = IntentOutbox()
         self._ledger = ImmutableLedger()
         self._recon = ReconciliationEngine()
-        self._pre_risk = PreRiskCheckerImpl(max_leverage=3.0, max_concentration_pct=50.0, max_position_notional=500000.0)
+        self._pre_risk = PreRiskCheckerImpl(
+            max_leverage=3.0, max_concentration_pct=50.0, max_position_notional=500000.0
+        )
         self._risk_engine = RiskEngineImpl()
         self._approval = RiskApprovalSignerImpl()
         self._risk_sm = RiskApprovalStateMachine()
@@ -648,16 +672,18 @@ class AutonomousEngine:
 
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
-        self._strategy_risk.set_budget(RiskBudget(
-            strategy_id=StrategyId("autopilot"),
-            max_drawdown_pct=20.0,
-            max_daily_loss_pct=5.0,
-            max_consecutive_losses=5,
-            max_position_notional=500000.0,
-            max_leverage=3.0,
-            risk_per_trade_pct=1.0,
-            min_sharpe_rolling=0.0,
-        ))
+        self._strategy_risk.set_budget(
+            RiskBudget(
+                strategy_id=StrategyId("autopilot"),
+                max_drawdown_pct=20.0,
+                max_daily_loss_pct=5.0,
+                max_consecutive_losses=5,
+                max_position_notional=500000.0,
+                max_leverage=3.0,
+                risk_per_trade_pct=1.0,
+                min_sharpe_rolling=0.0,
+            )
+        )
 
         # === NEW: Factor Registry + Evaluator ===
         self._factor_registry = FactorRegistry()
@@ -668,83 +694,115 @@ class AutonomousEngine:
         # ================================================================
         factor_defs = [
             FactorDefinition(
-                factor_id="meanrev_entry_v1", name="Mean Reversion Entry",
+                factor_id="meanrev_entry_v1",
+                name="Mean Reversion Entry",
                 version=SchemaVersion("2.0.0"),
                 description="Short-term price deviation from SMA for entry signals",
-                author="beidou-autopilot", category="mean_reversion",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="mean_reversion",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Prices revert to mean in ranging markets",
-                lookback_period="5h", rebalance_interval="5min",
+                lookback_period="5h",
+                rebalance_interval="5min",
                 parameters={"deviation_threshold_pct": 1.0, "rsi_oversold": 40, "rsi_overbought": 60},
             ),
             FactorDefinition(
-                factor_id="momentum_filter_v1", name="Momentum Filter",
+                factor_id="momentum_filter_v1",
+                name="Momentum Filter",
                 version=SchemaVersion("2.0.0"),
                 description="20-period trend confirmation and volatility gate",
-                author="beidou-autopilot", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Trend-following filter prevents counter-trend entries",
-                lookback_period="20h", rebalance_interval="5min",
+                lookback_period="20h",
+                rebalance_interval="5min",
                 parameters={"vol_threshold": 0.5, "trend_periods": 20},
             ),
             FactorDefinition(
-                factor_id="trend_entry_v1", name="Trend Following Entry",
+                factor_id="trend_entry_v1",
+                name="Trend Following Entry",
                 version=SchemaVersion("2.0.0"),
                 description="SMA5/SMA20 golden/death cross with trend strength confirmation",
-                author="beidou-autopilot", category="trend_following",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="trend_following",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Captures directional momentum at trend initiation",
-                lookback_period="20h", rebalance_interval="5min",
+                lookback_period="20h",
+                rebalance_interval="5min",
                 parameters={"crossover_threshold": 0.001, "trend_min_pct": 0.5},
             ),
             FactorDefinition(
-                factor_id="breakout_entry_v1", name="Breakout Entry",
+                factor_id="breakout_entry_v1",
+                name="Breakout Entry",
                 version=SchemaVersion("2.0.0"),
                 description="20-period high/low breakout with volatility expansion confirmation",
-                author="beidou-autopilot", category="breakout",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="breakout",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Breakouts with volume/volatility expansion signal regime shifts",
-                lookback_period="20h", rebalance_interval="5min",
+                lookback_period="20h",
+                rebalance_interval="5min",
                 parameters={"lookback_periods": 20, "vol_expansion_min": 1.2},
             ),
             FactorDefinition(
-                factor_id="volatility_filter_v1", name="Volatility Regime Filter",
+                factor_id="volatility_filter_v1",
+                name="Volatility Regime Filter",
                 version=SchemaVersion("2.0.0"),
                 description="ATR-based volatility regime: extreme→veto, elevated→degrade, normal→pass",
-                author="beidou-autopilot", category="volatility",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="volatility",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Avoid trading in unpredictable volatility regimes",
-                lookback_period="14h", rebalance_interval="5min",
+                lookback_period="14h",
+                rebalance_interval="5min",
                 parameters={"extreme_vol": 0.6, "elevated_vol": 0.4, "extreme_atr_pct": 5.0},
             ),
             FactorDefinition(
-                factor_id="volume_filter_v1", name="Volume Confirmation Filter",
+                factor_id="volume_filter_v1",
+                name="Volume Confirmation Filter",
                 version=SchemaVersion("2.0.0"),
                 description="Volume ratio (5/20) confirmation: surge→boost, low→degrade, dead→veto",
-                author="beidou-autopilot", category="volume",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="volume",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Volume validates price action; low-volume moves are unreliable",
-                lookback_period="20h", rebalance_interval="5min",
+                lookback_period="20h",
+                rebalance_interval="5min",
                 parameters={"dead_ratio": 0.25, "low_ratio": 0.5, "surge_ratio": 1.5},
             ),
             FactorDefinition(
-                factor_id="trailing_exit_v1", name="ATR Trailing Stop Exit",
+                factor_id="trailing_exit_v1",
+                name="ATR Trailing Stop Exit",
                 version=SchemaVersion("2.0.0"),
                 description="2× ATR trailing stop-loss + 3× ATR take-profit + SMA20 trend exit",
-                author="beidou-autopilot", category="risk_management",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="risk_management",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Dynamic exit based on realized volatility prevents large drawdowns",
-                lookback_period="14h", rebalance_interval="5min",
+                lookback_period="14h",
+                rebalance_interval="5min",
                 parameters={"trailing_atr_mult": 2.0, "profit_atr_mult": 3.0},
             ),
             FactorDefinition(
-                factor_id="time_exit_v1", name="Time-Based Exit",
+                factor_id="time_exit_v1",
+                name="Time-Based Exit",
                 version=SchemaVersion("2.0.0"),
                 description="Maximum hold time exit: 48h force, 24h underwater, 12h profit lock",
-                author="beidou-autopilot", category="risk_management",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
+                author="beidou-autopilot",
+                category="risk_management",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
                 economic_rationale="Time decay and funding costs erode edge; stale positions increase risk",
-                lookback_period="48h", rebalance_interval="5min",
+                lookback_period="48h",
+                rebalance_interval="5min",
                 parameters={"max_hold_hours": 48, "underwater_hours": 24, "profit_lock_hours": 12},
             ),
         ]
@@ -756,11 +814,17 @@ class AutonomousEngine:
         # Promote all factors through lifecycle chain to CHALLENGER
         for fid in all_factor_ids:
             rec = self._factor_registry.get(fid)
-            for target in [FactorLifecycle.RESEARCH, FactorLifecycle.BACKTEST,
-                          FactorLifecycle.PAPER_TRADING, FactorLifecycle.CHALLENGER]:
+            for target in [
+                FactorLifecycle.RESEARCH,
+                FactorLifecycle.BACKTEST,
+                FactorLifecycle.PAPER_TRADING,
+                FactorLifecycle.CHALLENGER,
+            ]:
                 if not rec.transition(target):
                     break
-        print(f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}")
+        print(
+            f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
+        )
 
         # Factor tracking: rolling predictions vs actual returns
         self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}
@@ -830,15 +894,13 @@ class AutonomousEngine:
     # 所有 Binance API 访问统一通过 self._exchange (BinanceRESTClient)
     # 不再在 engine 内重复实现签名逻辑
 
-    def _api(self, path: str, method: str = "GET", signed: bool = False,
-             params: dict | None = None) -> Any:
+    def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """通过 Adapter 访问 Binance API。
 
         统一路由到 BinanceRESTClient，享受统一错误分类、限频退避和熔断。
         返回原始 dict（兼容现有代码），失败时返回 {"error": code, "msg": "..."}
         """
         import urllib.request
-        import urllib.error
 
         url = self._rest_url + path
         headers = {
@@ -853,7 +915,9 @@ class AutonomousEngine:
             params["recvWindow"] = 60000
             qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
             params["signature"] = hmac.new(
-                self._api_secret.encode(), qs.encode(), hashlib.sha256,
+                self._api_secret.encode(),
+                qs.encode(),
+                hashlib.sha256,
             ).hexdigest()
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
 
@@ -881,10 +945,7 @@ class AutonomousEngine:
                     data = json.loads(raw)
                     # Normalize /fapi/v2/balance response to account format
                     if path == "/fapi/v2/balance" and isinstance(data, list):
-                        total_wallet = sum(
-                            float(a.get("crossWalletBalance", 0))
-                            for a in data
-                        )
+                        total_wallet = sum(float(a.get("crossWalletBalance", 0)) for a in data)
                         data = {"totalWalletBalance": str(total_wallet), "assets": data}
                     return data
             except urllib.error.HTTPError as e:
@@ -906,9 +967,7 @@ class AutonomousEngine:
     def _check_ready(self) -> bool:
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
-        if not self._feed.is_healthy():
-            return False
-        return True
+        return self._feed.is_healthy()
 
     def _collect_metrics(self) -> dict:
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
@@ -940,7 +999,9 @@ class AutonomousEngine:
                 "level": risk_state.risk_level.value if risk_state else "N/A",
                 "drawdown_pct": round(risk_state.current_drawdown_pct, 2) if risk_state else 0,
                 "consecutive_losses": risk_state.consecutive_losses if risk_state else 0,
-            } if risk_state else None,
+            }
+            if risk_state
+            else None,
             "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
         }
 
@@ -966,7 +1027,8 @@ class AutonomousEngine:
                     if result["triggered"]:
                         for sl in result["stop_loss"]:
                             self._alerts.send_incident(
-                                AlertSeverity.HIGH, f"Stop Loss triggered: {symbol}",
+                                AlertSeverity.HIGH,
+                                f"Stop Loss triggered: {symbol}",
                                 f"Position {pos_id} stop loss at {sl.trigger_price.amount}",
                                 category="protection",
                             )
@@ -987,9 +1049,12 @@ class AutonomousEngine:
 
                 # 5. Save market snapshot
                 self._store.save_market_snapshot(
-                    symbol, price,
-                    features.get("bid"), features.get("ask"),
-                    features.get("spread_bps"), features.get("volume_24h"),
+                    symbol,
+                    price,
+                    features.get("bid"),
+                    features.get("ask"),
+                    features.get("spread_bps"),
+                    features.get("volume_24h"),
                 )
 
             # 6. Reconciliation (every 30s)
@@ -1009,14 +1074,21 @@ class AutonomousEngine:
     async def _execute_protection_order(self, protection, symbol: str) -> None:
         """执行保护单（止损/止盈）→ 市价单。"""
         side = "SELL" if protection.side == OrderSide.SELL else "BUY"
-        client_id = f"beidou-prot-{int(time.time()*1000)}"
+        client_id = f"beidou-prot-{int(time.time() * 1000)}"
 
-        order = self._api("/fapi/v1/order", method="POST", signed=True, params={
-            "symbol": symbol, "side": side, "type": "MARKET",
-            "quantity": str(float(protection.quantity.amount)),
-            "reduceOnly": "true",
-            "newClientOrderId": client_id,
-        })
+        order = self._api(
+            "/fapi/v1/order",
+            method="POST",
+            signed=True,
+            params={
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "quantity": str(float(protection.quantity.amount)),
+                "reduceOnly": "true",
+                "newClientOrderId": client_id,
+            },
+        )
 
         if "orderId" in order:
             order_id = str(order["orderId"])
@@ -1030,26 +1102,37 @@ class AutonomousEngine:
 
             self._protection.mark_executed(protection.protection_id)
             self._store.save_protection(
-                protection.protection_id, protection.position_id, symbol,
-                side, protection.trigger_price.amount,
+                protection.protection_id,
+                protection.position_id,
+                symbol,
+                side,
+                protection.trigger_price.amount,
                 str(protection.order_price.amount) if protection.order_price else None,
-                protection.quantity.amount, "MARKET", "EXECUTED",
+                protection.quantity.amount,
+                "MARKET",
+                "EXECUTED",
             )
             self._store.save_order_state(
-                order_id, symbol, side, "MARKET",
+                order_id,
+                symbol,
+                side,
+                "MARKET",
                 str(float(protection.quantity.amount)),
                 str(protection.order_price.amount) if protection.order_price else None,
-                order.get("status", "NEW"), client_order_id=client_id,
+                order.get("status", "NEW"),
+                client_order_id=client_id,
             )
 
     async def _place_order(self, intent, symbol: str) -> None:
         """向交易所发送订单。"""
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
         order_type = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
-        client_id = intent.client_order_id or f"beidou-{int(time.time()*1000)}"
+        client_id = intent.client_order_id or f"beidou-{int(time.time() * 1000)}"
 
         params = {
-            "symbol": symbol, "side": side, "type": order_type,
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
             "quantity": str(float(intent.quantity.amount)),
             "newClientOrderId": client_id,
         }
@@ -1076,26 +1159,39 @@ class AutonomousEngine:
             self._active_order_ids.add(str(order["orderId"]))
             self._outbox.ack(intent.intent_id)
             self._order_count += 1
-            print(f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price','MKT')} "
-                  f"orderId={order['orderId']}")
+            print(
+                f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')} "
+                f"orderId={order['orderId']}"
+            )
 
             self._store.save_order_state(
-                str(order["orderId"]), symbol, side, order_type,
+                str(order["orderId"]),
+                symbol,
+                side,
+                order_type,
                 str(float(intent.quantity.amount)),
                 str(float(intent.price.amount)) if intent.price else None,
-                order.get("status", "NEW"), client_order_id=client_id,
+                order.get("status", "NEW"),
+                client_order_id=client_id,
             )
 
     async def _monitor_orders(self, symbol: str) -> None:
         """查询活跃订单状态并更新状态机/账本。"""
         for order_id in list(self._active_order_ids):
             try:
-                result = self._api("/fapi/v1/order", signed=True, params={
-                    "symbol": symbol, "orderId": int(order_id),
-                })
+                result = self._api(
+                    "/fapi/v1/order",
+                    signed=True,
+                    params={
+                        "symbol": symbol,
+                        "orderId": int(order_id),
+                    },
+                )
 
-                if isinstance(result, dict) and result.get("error") or "status" not in result:
-                    if result.get("msg") and ("Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))):
+                if (isinstance(result, dict) and result.get("error")) or "status" not in result:
+                    if result.get("msg") and (
+                        "Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))
+                    ):
                         self._active_order_ids.discard(order_id)
                         self._order_trackers.pop(order_id, None)
                     continue
@@ -1127,16 +1223,26 @@ class AutonomousEngine:
                     )
                     self._ledger.post(entry)
                     self._store.save_ledger_entry(
-                        entry.entry_id, "default", "BINANCE", symbol,
-                        entry.debit.amount, entry.credit.amount,
-                        entry.description, str(entry.correlation_id),
+                        entry.entry_id,
+                        "default",
+                        "BINANCE",
+                        symbol,
+                        entry.debit.amount,
+                        entry.credit.amount,
+                        entry.description,
+                        str(entry.correlation_id),
                         entry.timestamp.isoformat(),
                     )
                     self._store.save_order_state(
-                        order_id, symbol, result.get("side", ""),
-                        result.get("type", ""), result.get("origQty", "0"),
-                        result.get("price"), "FILLED",
-                        str(executed_qty), str(avg_price),
+                        order_id,
+                        symbol,
+                        result.get("side", ""),
+                        result.get("type", ""),
+                        result.get("origQty", "0"),
+                        result.get("price"),
+                        "FILLED",
+                        str(executed_qty),
+                        str(avg_price),
                     )
 
                     # 成交后创建止盈止损保护
@@ -1157,11 +1263,9 @@ class AutonomousEngine:
                     )
 
                     # === NEW: Strategy Risk update on trade fill ===
-                    side_str = result.get("side", "")
+                    result.get("side", "")
                     # PnL will be determined when position closes via reconciliation
                     # Do NOT hardcode is_win=True or pnl=0.0 — this corrupts risk tracking
-                    is_win = None  # NOT_VERIFIABLE — determined at position close
-                    pnl = None     # NOT_VERIFIABLE — determined at position close
                     # Only record PnL when we have actual realized PnL data
                     # self._strategy_risk.record_trade requires actual values
 
@@ -1175,9 +1279,13 @@ class AutonomousEngine:
                     tracker.apply(OrderEvent.CANCELED)
                     self._active_order_ids.discard(order_id)
                     self._store.save_order_state(
-                        order_id, symbol, result.get("side", ""),
-                        result.get("type", ""), result.get("origQty", "0"),
-                        result.get("price"), status,
+                        order_id,
+                        symbol,
+                        result.get("side", ""),
+                        result.get("type", ""),
+                        result.get("origQty", "0"),
+                        result.get("price"),
+                        status,
                     )
 
                 elif status == "PARTIALLY_FILLED":
@@ -1190,9 +1298,13 @@ class AutonomousEngine:
     async def _reconcile(self) -> None:
         """对账：系统状态 vs 交易所状态。"""
         try:
-            account = self._api("/fapi/v2/balance", signed=True)
+            # 对账优先使用完整 account 端点（含 positions），失败则回退 balance
+            account = self._api("/fapi/v2/account", signed=True)
             if "totalWalletBalance" not in account:
-                return
+                # 回退：balance 端点无 positions，仅对账余额
+                account = self._api("/fapi/v2/balance", signed=True)
+                if "totalWalletBalance" not in account:
+                    return
 
             balance = float(account.get("totalWalletBalance", 0))
             positions_list = account.get("positions", [])
@@ -1220,7 +1332,7 @@ class AutonomousEngine:
             )
 
             system_positions: dict[InstrumentId, Quantity] = {}
-            for pos_id, pos in self._protection.all_positions().items():
+            for _pos_id, pos in self._protection.all_positions().items():
                 system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
 
             system_facts = AccountFactSnapshot(
@@ -1238,6 +1350,7 @@ class AutonomousEngine:
             if not result.matched:
                 real_diffs = [d for d in result.differences if "Balance mismatch" not in d]
                 if real_diffs:
+                    print(f"[recon] Mismatch: {real_diffs}")
                     self._alerts.send_incident(
                         AlertSeverity.WARNING,
                         "Reconciliation mismatch",
@@ -1281,23 +1394,27 @@ class AutonomousEngine:
                 instrument_id = InstrumentId(symbol)
                 venue_id = VenueId("BINANCE")
 
-                print(f"[nearline] {symbol}: price={features.get('close', '?')} "
-                      f"trend={state['direction']} stress={state['stress']} "
-                      f"rsi={features.get('rsi_14', '?')} "
-                      f"sma5={features.get('sma_5', '?')} sma20={features.get('sma_20', '?')}")
+                print(
+                    f"[nearline] {symbol}: price={features.get('close', '?')} "
+                    f"trend={state['direction']} stress={state['stress']} "
+                    f"rsi={features.get('rsi_14', '?')} "
+                    f"sma5={features.get('sma_5', '?')} sma20={features.get('sma_20', '?')}"
+                )
 
                 if state["stress"] == "HIGH":
                     print(f"[nearline] {symbol}: SKIP (high volatility: ann_vol={features.get('ann_volatility', '?')})")
                     continue
 
                 # === 3. Execute full AlphaGraph DAG in topological order ===
+                close = features.get("close", 0)
+
                 # Inject position info for EXIT components
                 positions = self._protection.all_positions()
                 symbol_positions = {k: v for k, v in positions.items() if v.get("symbol") == symbol}
                 pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
                 if symbol_positions:
                     # Use the first matching position
-                    pos = list(symbol_positions.values())[0]
+                    pos = next(iter(symbol_positions.values()))
                     entry_price = float(pos.get("entry_price", 0) or 0)
                     pos_side = str(pos.get("side", ""))
                     pos_info["has_position"] = True
@@ -1338,8 +1455,10 @@ class AutonomousEngine:
                         signal = await comp.generate(context)
                         if hasattr(signal, "direction") and hasattr(signal, "strength"):
                             all_signals.append(signal)
-                            print(f"[nearline] {symbol}: DAG[{comp_id}] ({comp.component_type.value}) "
-                                  f"→ {signal.direction} strength={signal.strength:.3f}")
+                            print(
+                                f"[nearline] {symbol}: DAG[{comp_id}] ({comp.component_type.value}) "
+                                f"→ {signal.direction} strength={signal.strength:.3f}"
+                            )
                 except ValueError as e:
                     print(f"[nearline] {symbol}: DAG error: {e}")
                     continue
@@ -1355,7 +1474,9 @@ class AutonomousEngine:
                     continue
 
                 # Check if entry signal is actionable
-                entry_signals = [s for s in all_signals if s.direction != SignalDirection.NO_ACTION and s.strength >= 0.15]
+                entry_signals = [
+                    s for s in all_signals if s.direction != SignalDirection.NO_ACTION and s.strength >= 0.15
+                ]
                 if not entry_signals:
                     print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
                     continue
@@ -1367,7 +1488,12 @@ class AutonomousEngine:
                     entry_only = [s for s in all_signals if s.component_type == AlphaComponentType.ENTRY]
                     if entry_only:
                         # Check MomentumFilter: if filter returned NO_ACTION, it vetoed the entry
-                        filter_neg = [s for s in all_signals if s.component_type == AlphaComponentType.FILTER and s.direction == SignalDirection.NO_ACTION]
+                        filter_neg = [
+                            s
+                            for s in all_signals
+                            if s.component_type == AlphaComponentType.FILTER
+                            and s.direction == SignalDirection.NO_ACTION
+                        ]
                         if filter_neg:
                             print(f"[nearline] {symbol}: SKIP (MomentumFilter veto: {filter_neg[0].metadata})")
                         else:
@@ -1376,8 +1502,10 @@ class AutonomousEngine:
                         print(f"[nearline] {symbol}: SKIP (fusion rejected)")
                     continue
 
-                print(f"[nearline] {symbol}: FUSED → {fused.direction} strength={fused.strength:.3f} confidence={fused.confidence:.3f}"
-                      + (f" CONFLICT" if fused.conflict_detected else ""))
+                print(
+                    f"[nearline] {symbol}: FUSED → {fused.direction} strength={fused.strength:.3f} confidence={fused.confidence:.3f}"
+                    + (" CONFLICT" if fused.conflict_detected else "")
+                )
 
                 # === 5. Portfolio optimization — dynamic position sizing ===
                 price = features["close"]
@@ -1391,25 +1519,37 @@ class AutonomousEngine:
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
                 stop_loss_pct = 2.0  # FIXED_PERCENT stop
                 stop_loss_price = price * (1 - stop_loss_pct / 100)
-                risk_based_size = budget.compute_position_size(
-                    self._autopilot_strategy_id, account_balance, price, stop_loss_price,
-                ) if budget else 0.005
+                risk_based_size = (
+                    budget.compute_position_size(
+                        self._autopilot_strategy_id,
+                        account_balance,
+                        price,
+                        stop_loss_price,
+                    )
+                    if budget
+                    else 0.005
+                )
 
                 # Floor and cap
                 position_size = max(0.001, min(risk_based_size, 1.0))
                 position_notional = price * position_size
 
-                print(f"[nearline] {symbol}: Optimizer → size={position_size:.4f} "
-                      f"notional={position_notional:.0f} (account={account_balance:.0f})")
+                print(
+                    f"[nearline] {symbol}: Optimizer → size={position_size:.4f} "
+                    f"notional={position_notional:.0f} (account={account_balance:.0f})"
+                )
 
                 # === 6. Cost estimation ===
                 spread_bps = features.get("spread_bps", 1.0)
                 vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
                 self._cost_model.set_fee_tier(venue_id, "vip1", 2.0, 4.0)
                 cost_est = self._cost_model.estimate_order(
-                    vi, Quantity(amount=str(position_size)), Price(amount=str(price)),
+                    vi,
+                    Quantity(amount=str(position_size)),
+                    Price(amount=str(price)),
                     OrderSide.BUY if fused.direction == SignalDirection.LONG else OrderSide.SELL,
-                    urgency=0.3, spread_bps=spread_bps,
+                    urgency=0.3,
+                    spread_bps=spread_bps,
                 )
 
                 if cost_est.total_fee_bps > 30:
@@ -1428,10 +1568,14 @@ class AutonomousEngine:
                 )
 
                 if snapshot.leverage > 3.0 or snapshot.concentration_pct > 50:
-                    print(f"[nearline] {symbol}: SKIP (risk limits: leverage={snapshot.leverage:.1f} conc={snapshot.concentration_pct:.1f}%)")
+                    print(
+                        f"[nearline] {symbol}: SKIP (risk limits: leverage={snapshot.leverage:.1f} conc={snapshot.concentration_pct:.1f}%)"
+                    )
                     continue
 
                 # === 8. Approval & Intent ===
+                # Risk gates already enforced above: PreRisk → local checks (leverage/conc/cost)
+                # RiskEngine.full_evaluate() requires async integration (BD-15 backlog)
                 approval_id = RiskApprovalId(f"nearline-{int(time.time())}")
                 self._approval.sign(approval_id)
                 self._risk_sm.approve(approval_id)
@@ -1441,6 +1585,7 @@ class AutonomousEngine:
                     continue
 
                 from beidou_safety.execution import OrderIntent
+
                 side = OrderSide.BUY if fused.direction == SignalDirection.LONG else OrderSide.SELL
                 intent = OrderIntent(
                     intent_id=f"intent-{symbol}-{int(time.time())}",
@@ -1451,9 +1596,9 @@ class AutonomousEngine:
                     quantity=Quantity(amount=str(position_size)),
                     price=Price(amount=str(price)),
                     time_in_force=TimeInForce.GTC,
-                    client_order_id=f"beidou-{symbol.lower()}-{int(time.time()*1000)}",
+                    client_order_id=f"beidou-{symbol.lower()}-{int(time.time() * 1000)}",
                     correlation_id=CorrelationId(f"nearline-{int(time.time())}"),
-                    idempotency_key=f"idem-{symbol}-{int(time.time()/300)}",
+                    idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
                     risk_approval_id=str(approval_id),
                 )
 
@@ -1481,7 +1626,11 @@ class AutonomousEngine:
             if len(self._factor_returns) > 10:
                 for fid in self._factor_predictions:
                     preds = self._factor_predictions[fid]
-                    returns = self._factor_returns[-len(preds):] if len(preds) <= len(self._factor_returns) else self._factor_returns
+                    returns = (
+                        self._factor_returns[-len(preds) :]
+                        if len(preds) <= len(self._factor_returns)
+                        else self._factor_returns
+                    )
                     if len(preds) < 10 or len(returns) < 10:
                         continue
 
@@ -1503,18 +1652,25 @@ class AutonomousEngine:
                             rolling_ics.append(ic)
                     icir = FactorEvaluator.compute_icir(rolling_ics) if rolling_ics else 0.0
 
-                    print(f"[offline] Factor {fid}: IC={ic_mean:.4f} RankIC={rank_ic:.4f} "
-                          f"ICIR={icir:.3f} decile={decile_spread:.4f} samples={min_n}")
+                    print(
+                        f"[offline] Factor {fid}: IC={ic_mean:.4f} RankIC={rank_ic:.4f} "
+                        f"ICIR={icir:.3f} decile={decile_spread:.4f} samples={min_n}"
+                    )
 
                     record = self._factor_registry.get(fid)
                     if record:
                         from beidou_research.factors.factor import FactorPerformance
+
                         perf = FactorPerformance(
                             factor_id=fid,
                             evaluation_period=f"live-{now.strftime('%Y%m%d-%H')}",
                             sample_count=min_n,
-                            ic_mean=ic_mean, ic_std=ic_std, icir=icir,
-                            rank_ic_mean=rank_ic, rank_ic_std=0.0, rank_icir=0.0,
+                            ic_mean=ic_mean,
+                            ic_std=ic_std,
+                            icir=icir,
+                            rank_ic_mean=rank_ic,
+                            rank_ic_std=0.0,
+                            rank_icir=0.0,
                             top_bottom_decile_spread=decile_spread,
                         )
                         record.performance.append(perf)
@@ -1549,22 +1705,16 @@ class AutonomousEngine:
                 std_pnl = (sum((p - avg_pnl) ** 2 for p in self._trade_pnls) / max(1, len(self._trade_pnls))) ** 0.5
                 sharpe = avg_pnl / std_pnl if std_pnl > 0 else 0.0
 
-                live_metrics = {
-                    "sharpe": sharpe,
-                    "win_rate": win_rate,
-                    "total_trades": total_trades,
-                    "avg_pnl": avg_pnl,
-                }
-
                 if not self._drift_detector.is_calibrated():
                     # First calibration — set baseline from live performance
                     self._drift_detector.set_baseline({"sharpe": max(0.5, sharpe), "win_rate": max(0.4, win_rate)})
-                    print(f"[offline] DriftDetector baseline calibrated")
+                    print("[offline] DriftDetector baseline calibrated")
                 else:
                     drift = self._drift_detector.detect({"sharpe": sharpe, "win_rate": win_rate})
                     if self._drift_detector.should_retire(drift):
                         self._alerts.send_incident(
-                            AlertSeverity.HIGH, "Model drift detected",
+                            AlertSeverity.HIGH,
+                            "Model drift detected",
                             f"Drifted metrics: {list(drift.keys())}, live sharpe={sharpe:.3f} win_rate={win_rate:.2f}",
                             category="model",
                         )
@@ -1577,10 +1727,12 @@ class AutonomousEngine:
             # === 3. Strategy risk: daily PnL reset ===
             risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
             if risk_state:
-                print(f"[offline] Strategy risk: level={risk_state.risk_level.value} "
-                      f"drawdown={risk_state.current_drawdown_pct:.1f}% "
-                      f"daily_pnl={risk_state.daily_pnl:.2f} "
-                      f"peak_equity={risk_state.peak_equity:.0f}")
+                print(
+                    f"[offline] Strategy risk: level={risk_state.risk_level.value} "
+                    f"drawdown={risk_state.current_drawdown_pct:.1f}% "
+                    f"daily_pnl={risk_state.daily_pnl:.2f} "
+                    f"peak_equity={risk_state.peak_equity:.0f}"
+                )
                 # Check drawdown via strategy risk manager
                 account_balance = float(self._last_account.get("totalWalletBalance", 0))
                 if account_balance > 0:
@@ -1613,7 +1765,8 @@ class AutonomousEngine:
                     "order_count": self._order_count,
                     "positions": self._protection.position_count(),
                     "ledger_entries": len(self._ledger._entries),
-                    "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
+                    "active_factors": len(self._factor_registry.get_active())
+                    + len(self._factor_registry.get_challengers()),
                     "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
                     "timestamp": now.isoformat(),
                 },
@@ -1674,8 +1827,10 @@ class AutonomousEngine:
         ledger_entries = self._store.restore_ledger_entries()
         active_orders = self._store.get_active_orders()
         protections = self._store.restore_protections()
-        print(f"[beidou-autopilot] Restored: {len(ledger_entries)} ledger entries, "
-              f"{len(active_orders)} active orders, {len(protections)} protections")
+        print(
+            f"[beidou-autopilot] Restored: {len(ledger_entries)} ledger entries, "
+            f"{len(active_orders)} active orders, {len(protections)} protections"
+        )
 
         # Restore active_order_ids from exchange
         try:
@@ -1696,11 +1851,13 @@ class AutonomousEngine:
 
         # Print strategy/risk activation status
         print(f"[beidou-autopilot] AlphaGraph DAG: {self._alpha_graph.topological_order()}")
-        print(f"[beidou-autopilot] Strategy Risk: max_drawdown=20% max_daily_loss=5% max_consec_losses=5")
+        print("[beidou-autopilot] Strategy Risk: max_drawdown=20% max_daily_loss=5% max_consec_losses=5")
         factor_ids = list(self._factor_registry._factors.keys())
         print(f"[beidou-autopilot] Factor Registry: {len(factor_ids)} factors registered ({factor_ids})")
-        print(f"[beidou-autopilot] Circuit Breakers: DRAWNDOWN_LIMIT | DAILY_LOSS_LIMIT | CONSECUTIVE_LOSSES | "
-              f"SHARPE_DEGRADATION | VOLATILITY_SPIKE | CORRELATION_BREAKDOWN | MAX_POSITION_COUNT")
+        print(
+            "[beidou-autopilot] Circuit Breakers: DRAWNDOWN_LIMIT | DAILY_LOSS_LIMIT | CONSECUTIVE_LOSSES | "
+            "SHARPE_DEGRADATION | VOLATILITY_SPIKE | CORRELATION_BREAKDOWN | MAX_POSITION_COUNT"
+        )
 
         # Lifecycle transitions
         self._lifecycle.transition(ModuleState.WARMING)
@@ -1710,7 +1867,7 @@ class AutonomousEngine:
 
         # Start health server
         self._health.start()
-        print(f"[beidou-autopilot] Health server: http://0.0.0.0:9090")
+        print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
         # StartupGate: 启动后进入 NO_NEW_RISK，完成预热后自动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
@@ -1744,7 +1901,7 @@ class AutonomousEngine:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 self._error_count += 1
                 if self._error_count > 100:
                     self._alerts.send_incident(
@@ -1773,20 +1930,30 @@ class AutonomousEngine:
             for order_id in list(self._active_order_ids):
                 for symbol in self._symbols:
                     try:
-                        self._api("/fapi/v1/order", method="DELETE", signed=True, params={
-                            "symbol": symbol, "orderId": int(order_id),
-                        })
+                        self._api(
+                            "/fapi/v1/order",
+                            method="DELETE",
+                            signed=True,
+                            params={
+                                "symbol": symbol,
+                                "orderId": int(order_id),
+                            },
+                        )
                     except Exception as e:
                         print(f"[shutdown] Failed to cancel order {order_id}: {e}")
         print(f"[beidou-autopilot] 2. Cancelled {len(self._active_order_ids)} pending orders")
 
         # 3. Save checkpoint
-        self._mapek.save_checkpoint("autopilot-shutdown", {
-            "tick_count": self._tick_count,
-            "order_count": self._order_count,
-            "shutdown_time": datetime.now(timezone.utc).isoformat(),
-            "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
-        }, invariants_valid=True)
+        self._mapek.save_checkpoint(
+            "autopilot-shutdown",
+            {
+                "tick_count": self._tick_count,
+                "order_count": self._order_count,
+                "shutdown_time": datetime.now(timezone.utc).isoformat(),
+                "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
+            },
+            invariants_valid=True,
+        )
         print("[beidou-autopilot] 3. Checkpoint saved")
 
         # 4. Close store

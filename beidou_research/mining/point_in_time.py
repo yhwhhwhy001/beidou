@@ -12,29 +12,27 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
-from beidou_shared.types import DataQualityTier, InstrumentId, VenueId
+from beidou_shared.types import InstrumentId, VenueId
 
 from .contracts import (
-    DatasetManifest,
     LabelQuality,
     LabelRecord,
-    LabelSpec,
     PredictionKey,
     PredictionRecord,
-    TimeframeGranularity,
 )
-
 
 # ================================================================
 # Point-in-Time Join 引擎
 # ================================================================
 
+
 @dataclass
 class PointInTimeJoinResult:
     """点时连接结果 — 一对 (prediction, label)。"""
+
     prediction: PredictionRecord
     label: LabelRecord
     is_valid: bool = True
@@ -44,6 +42,7 @@ class PointInTimeJoinResult:
 @dataclass
 class JoinReport:
     """连接操作报告。"""
+
     total_predictions: int = 0
     matched: int = 0
     unmatched: int = 0
@@ -157,9 +156,7 @@ class PointInTimeJoin:
 
         return overlaps
 
-    def has_overlapping_labels(
-        self, venue: VenueId, symbol: InstrumentId, timeframe: str
-    ) -> bool:
+    def has_overlapping_labels(self, venue: VenueId, symbol: InstrumentId, timeframe: str) -> bool:
         """检查是否存在重叠标签。"""
         return len(self.detect_overlaps(venue, symbol, timeframe)) > 0
 
@@ -188,15 +185,13 @@ class PointInTimeJoin:
             scope = (pk.venue, pk.symbol, pk.timeframe)
             candidates = labels_by_scope.get(scope, {})
         else:
-            candidates = self._labels.get(
-                (pk.venue, pk.symbol, pk.timeframe), {}
-            )
+            candidates = self._labels.get((pk.venue, pk.symbol, pk.timeframe), {})
 
         # 检查 2: 找到匹配的标签
         # 标签的 prediction_key 应与预测的 prediction_key 在
         # venue/symbol/timeframe/horizon 上匹配
         matched_label = None
-        for label_id, label in candidates.items():
+        for _label_id, label in candidates.items():
             lp = label.prediction_key
             if (
                 lp.venue == pk.venue
@@ -281,8 +276,7 @@ class PointInTimeJoin:
                 if "label_quality" in result.failure_reason:
                     report.quality_filtered += 1
                 report.failures.append(
-                    f"{pred.prediction_key.factor_id}@{pred.prediction_key.prediction_time}: "
-                    f"{result.failure_reason}"
+                    f"{pred.prediction_key.factor_id}@{pred.prediction_key.prediction_time}: {result.failure_reason}"
                 )
 
         # 检测重叠标签
@@ -302,9 +296,11 @@ class PointInTimeJoin:
 # Closed-Bar 强制器
 # ================================================================
 
+
 @dataclass
 class BarInfo:
     """K 线信息 — 用于 closed-bar enforcement。"""
+
     venue: VenueId
     symbol: InstrumentId
     timeframe: str
@@ -345,9 +341,7 @@ class ClosedBarEnforcer:
             if bar.open_time == open_time:
                 if not bar.is_closed:
                     return False
-                if query_time < bar.close_time:
-                    return False
-                return True
+                return not query_time < bar.close_time
 
         # 未找到该 K 线
         return False
@@ -390,6 +384,7 @@ class ClosedBarEnforcer:
 # 多品种/多周期隔离验证器
 # ================================================================
 
+
 class IsolationValidator:
     """验证预测和标签的多品种、多周期隔离。"""
 
@@ -408,15 +403,11 @@ class IsolationValidator:
 
             if not pk.symbol_matches(ref):
                 violations.append(
-                    f"Prediction {i}: symbol mismatch "
-                    f"({pk.venue}:{pk.symbol} vs {ref.venue}:{ref.symbol})"
+                    f"Prediction {i}: symbol mismatch ({pk.venue}:{pk.symbol} vs {ref.venue}:{ref.symbol})"
                 )
 
             if not pk.timeframe_matches(ref):
-                violations.append(
-                    f"Prediction {i}: timeframe mismatch "
-                    f"({pk.timeframe} vs {ref.timeframe})"
-                )
+                violations.append(f"Prediction {i}: timeframe mismatch ({pk.timeframe} vs {ref.timeframe})")
 
         return violations
 
@@ -447,8 +438,8 @@ class IsolationValidator:
         """
         # 检查是否有相同的 prediction_time 同时出现
         # 如果同一时刻在两个 timeframe 都有预测，它们的标签必须独立
-        pred_times_1h = {p.prediction_key.prediction_time for p in group_1h}
-        pred_times_5m = {p.prediction_key.prediction_time for p in group_5m}
+        {p.prediction_key.prediction_time for p in group_1h}
+        {p.prediction_key.prediction_time for p in group_5m}
 
         # 允许同一时刻有不同 timeframe 的预测
         # 但它们必须使用各自 timeframe 的数据生成
@@ -460,9 +451,11 @@ class IsolationValidator:
 # 辅助函数
 # ================================================================
 
+
 def _make_placeholder_label(pk: PredictionKey) -> LabelRecord:
     """创建占位标签用于错误报告。"""
     from datetime import timedelta
+
     return LabelRecord(
         label_id=f"placeholder-{pk.factor_id}",
         prediction_key=pk,
@@ -480,6 +473,7 @@ def _make_placeholder_label(pk: PredictionKey) -> LabelRecord:
 # ================================================================
 # 未来数据注入检测
 # ================================================================
+
 
 class FutureDataGuard:
     """未来数据注入检测器。
@@ -499,9 +493,7 @@ class FutureDataGuard:
             True 如果 data_timestamp ≤ query_time（数据已可用）
             False 如果 data_timestamp > query_time（未来数据）
         """
-        if data_timestamp > query_time:
-            return False
-        return True
+        return not data_timestamp > query_time
 
     @staticmethod
     def assert_no_future_data(

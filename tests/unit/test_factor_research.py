@@ -1,20 +1,18 @@
 """PKG-14 因子研究模块测试。IC/RankIC/ICIR、分层、边际贡献、生命周期、退役/重启。"""
+
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone
-
-from beidou_shared.types import SchemaVersion, VenueId
 from beidou_research.factors.factor import (
-    FactorLifecycle,
     FACTOR_LIFECYCLE_TRANSITIONS,
     FactorDefinition,
-    FactorPerformance,
-    MarginalContribution,
-    FactorRecord,
     FactorEvaluator,
+    FactorLifecycle,
+    FactorPerformance,
+    FactorRecord,
     FactorRegistry,
+    MarginalContribution,
 )
+from beidou_shared.types import SchemaVersion, VenueId
 
 
 class TestFactorLifecycle:
@@ -23,10 +21,17 @@ class TestFactorLifecycle:
     def test_idea_to_research(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-001", name="momentum_24h", version=SchemaVersion("1.0.0"),
-                description="24h momentum", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="trend persists", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-001",
+                name="momentum_24h",
+                version=SchemaVersion("1.0.0"),
+                description="24h momentum",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="trend persists",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.IDEA,
         )
@@ -36,10 +41,17 @@ class TestFactorLifecycle:
     def test_full_lifecycle_path(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-002", name="mean_rev_1h", version=SchemaVersion("1.0.0"),
-                description="mean reversion", author="test", category="mean_reversion",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="price reverts", lookback_period="1h", rebalance_interval="15m",
+                factor_id="f-002",
+                name="mean_rev_1h",
+                version=SchemaVersion("1.0.0"),
+                description="mean reversion",
+                author="test",
+                category="mean_reversion",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="price reverts",
+                lookback_period="1h",
+                rebalance_interval="15m",
             ),
             lifecycle=FactorLifecycle.IDEA,
         )
@@ -57,10 +69,17 @@ class TestFactorLifecycle:
     def test_invalid_transition_rejected(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-003", name="test", version=SchemaVersion("1.0.0"),
-                description="test", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-003",
+                name="test",
+                version=SchemaVersion("1.0.0"),
+                description="test",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="test",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.IDEA,
         )
@@ -70,10 +89,17 @@ class TestFactorLifecycle:
     def test_retired_cannot_transition(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-004", name="retired_test", version=SchemaVersion("1.0.0"),
-                description="test", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-004",
+                name="retired_test",
+                version=SchemaVersion("1.0.0"),
+                description="test",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="test",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.RETIRED,
         )
@@ -84,10 +110,17 @@ class TestFactorLifecycle:
     def test_suspended_restarts_as_challenger(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-005", name="suspended_test", version=SchemaVersion("1.0.0"),
-                description="test", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-005",
+                name="suspended_test",
+                version=SchemaVersion("1.0.0"),
+                description="test",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="test",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.SUSPENDED,
         )
@@ -98,10 +131,17 @@ class TestFactorLifecycle:
     def test_degraded_to_suspended(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-006", name="degraded_test", version=SchemaVersion("1.0.0"),
-                description="test", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-006",
+                name="degraded_test",
+                version=SchemaVersion("1.0.0"),
+                description="test",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="test",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.DEGRADED,
         )
@@ -111,10 +151,17 @@ class TestFactorLifecycle:
     def test_degraded_can_recover(self):
         f = FactorRecord(
             definition=FactorDefinition(
-                factor_id="f-007", name="recover_test", version=SchemaVersion("1.0.0"),
-                description="test", author="test", category="momentum",
-                universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-                economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+                factor_id="f-007",
+                name="recover_test",
+                version=SchemaVersion("1.0.0"),
+                description="test",
+                author="test",
+                category="momentum",
+                universe=frozenset({VenueId("BINANCE")}),
+                instrument_types=frozenset({"perpetual"}),
+                economic_rationale="test",
+                lookback_period="24h",
+                rebalance_interval="1h",
             ),
             lifecycle=FactorLifecycle.DEGRADED,
         )
@@ -135,11 +182,11 @@ class TestFactorEvaluator:
     def test_ic_computation(self):
         preds = [1.0, 2.0, 3.0, 4.0, 5.0]
         rets = [0.01, 0.02, 0.03, 0.04, 0.05]
-        ic, ic_std = FactorEvaluator.compute_ic(preds, rets)
+        ic, _ic_std = FactorEvaluator.compute_ic(preds, rets)
         assert ic > 0.9  # 接近完美正相关
 
     def test_ic_zero_for_short_series(self):
-        ic, ic_std = FactorEvaluator.compute_ic([1.0], [0.01])
+        ic, _ic_std = FactorEvaluator.compute_ic([1.0], [0.01])
         assert ic == 0.0
 
     def test_rank_ic(self):
@@ -190,8 +237,15 @@ class TestFactorEvaluator:
 
     def test_marginal_contribution(self):
         perf = FactorPerformance(
-            factor_id="f-a", evaluation_period="2026-Q1", sample_count=1000,
-            ic_mean=0.05, ic_std=0.02, icir=2.5, rank_ic_mean=0.06, rank_ic_std=0.02, rank_icir=3.0,
+            factor_id="f-a",
+            evaluation_period="2026-Q1",
+            sample_count=1000,
+            ic_mean=0.05,
+            ic_std=0.02,
+            icir=2.5,
+            rank_ic_mean=0.06,
+            rank_ic_std=0.02,
+            rank_icir=3.0,
         )
         corr = {"f-a": {"f-b": 0.2, "f-c": 0.3}}
         mc = FactorEvaluator.compute_marginal_contribution(perf, [], corr)
@@ -201,8 +255,15 @@ class TestFactorEvaluator:
 
     def test_marginal_contribution_high_collinearity(self):
         perf = FactorPerformance(
-            factor_id="f-x", evaluation_period="2026-Q1", sample_count=1000,
-            ic_mean=0.002, ic_std=0.02, icir=0.1, rank_ic_mean=0.002, rank_ic_std=0.02, rank_icir=0.1,
+            factor_id="f-x",
+            evaluation_period="2026-Q1",
+            sample_count=1000,
+            ic_mean=0.002,
+            ic_std=0.02,
+            icir=0.1,
+            rank_ic_mean=0.002,
+            rank_ic_std=0.02,
+            rank_icir=0.1,
         )
         corr = {"f-x": {"f-y": 0.95}}
         mc = FactorEvaluator.compute_marginal_contribution(perf, [], corr)
@@ -215,10 +276,17 @@ class TestFactorRegistry:
 
     def _make_def(self, fid: str, name: str = "test_factor") -> FactorDefinition:
         return FactorDefinition(
-            factor_id=fid, name=name, version=SchemaVersion("1.0.0"),
-            description="test factor", author="test", category="momentum",
-            universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-            economic_rationale="test", lookback_period="24h", rebalance_interval="1h",
+            factor_id=fid,
+            name=name,
+            version=SchemaVersion("1.0.0"),
+            description="test factor",
+            author="test",
+            category="momentum",
+            universe=frozenset({VenueId("BINANCE")}),
+            instrument_types=frozenset({"perpetual"}),
+            economic_rationale="test",
+            lookback_period="24h",
+            rebalance_interval="1h",
         )
 
     def test_register_factor(self):
@@ -265,7 +333,7 @@ class TestFactorRegistry:
 
     def test_promote_to_active_requires_performance(self):
         reg = FactorRegistry()
-        record = reg.register(self._make_def("f-reg-007"))
+        reg.register(self._make_def("f-reg-007"))
         # 直接晋升 ACTIVE 应失败（没有经过完整评估）
         assert not reg.promote_to_active("f-reg-007")
 
@@ -276,12 +344,22 @@ class TestFactorRegistry:
             record.transition(state)
         record.transition(FactorLifecycle.CHALLENGER)
         perf = FactorPerformance(
-            factor_id="f-reg-008", evaluation_period="2026-Q1", sample_count=100,
-            ic_mean=0.01, ic_std=0.05, icir=0.2, rank_ic_mean=0.01, rank_ic_std=0.05, rank_icir=0.2,
+            factor_id="f-reg-008",
+            evaluation_period="2026-Q1",
+            sample_count=100,
+            ic_mean=0.01,
+            ic_std=0.05,
+            icir=0.2,
+            rank_ic_mean=0.01,
+            rank_ic_std=0.05,
+            rank_icir=0.2,
         )
         mc = MarginalContribution(
-            factor_id="f-reg-008", existing_factor_ids=frozenset(),
-            marginal_sharpe=0.02, marginal_ic=0.005, diversification_benefit=0.0,
+            factor_id="f-reg-008",
+            existing_factor_ids=frozenset(),
+            marginal_sharpe=0.02,
+            marginal_ic=0.005,
+            diversification_benefit=0.0,
             collinearity_vif=1.2,
         )
         reg.evaluate("f-reg-008", perf, [mc])
@@ -301,7 +379,7 @@ class TestFactorRegistry:
     def test_cross_venue_instability(self):
         reg = FactorRegistry()
         reg.register(self._make_def("f-reg-010"))
-        ok, msg = reg.cross_venue_stability(
+        ok, _msg = reg.cross_venue_stability(
             "f-reg-010",
             {VenueId("BINANCE"): 0.05, VenueId("OKX"): -0.04},  # 方向不一致
         )
@@ -310,7 +388,7 @@ class TestFactorRegistry:
     def test_cross_venue_below_threshold(self):
         reg = FactorRegistry()
         reg.register(self._make_def("f-reg-011"))
-        ok, msg = reg.cross_venue_stability(
+        ok, _msg = reg.cross_venue_stability(
             "f-reg-011",
             {VenueId("BINANCE"): 0.01},  # 低于阈值
             min_stability_threshold=0.03,
@@ -320,7 +398,12 @@ class TestFactorRegistry:
     def test_degrade_active_factor(self):
         reg = FactorRegistry()
         record = reg.register(self._make_def("f-reg-012"))
-        for state in [FactorLifecycle.RESEARCH, FactorLifecycle.BACKTEST, FactorLifecycle.PAPER_TRADING, FactorLifecycle.CHALLENGER]:
+        for state in [
+            FactorLifecycle.RESEARCH,
+            FactorLifecycle.BACKTEST,
+            FactorLifecycle.PAPER_TRADING,
+            FactorLifecycle.CHALLENGER,
+        ]:
             record.transition(state)
         record.transition(FactorLifecycle.ACTIVE)
         assert reg.degrade("f-reg-012", "performance decline")
@@ -337,10 +420,19 @@ class TestFactorRegistry:
         reg = FactorRegistry()
         record = reg.register(self._make_def("f-reg-014"))
         record.transition(FactorLifecycle.RESEARCH)
-        record.performance.append(FactorPerformance(
-            factor_id="f-reg-014", evaluation_period="2026-Q1", sample_count=500,
-            ic_mean=0.04, ic_std=0.02, icir=2.0, rank_ic_mean=0.04, rank_ic_std=0.02, rank_icir=2.0,
-        ))
+        record.performance.append(
+            FactorPerformance(
+                factor_id="f-reg-014",
+                evaluation_period="2026-Q1",
+                sample_count=500,
+                ic_mean=0.04,
+                ic_std=0.02,
+                icir=2.0,
+                rank_ic_mean=0.04,
+                rank_ic_std=0.02,
+                rank_icir=2.0,
+            )
+        )
         assert reg.retire("f-reg-014", "strategy decommissioned")
         retired = reg.get_retired()
         assert len(retired) == 1
@@ -355,10 +447,17 @@ class TestFactorPerformance:
 
     def test_performance_creation(self):
         perf = FactorPerformance(
-            factor_id="f-001", evaluation_period="2026-Q2", sample_count=5000,
-            ic_mean=0.05, ic_std=0.02, icir=2.5,
-            rank_ic_mean=0.06, rank_ic_std=0.02, rank_icir=3.0,
-            cost_adjusted_ic=0.04, sharpe_contribution=0.3,
+            factor_id="f-001",
+            evaluation_period="2026-Q2",
+            sample_count=5000,
+            ic_mean=0.05,
+            ic_std=0.02,
+            icir=2.5,
+            rank_ic_mean=0.06,
+            rank_ic_std=0.02,
+            rank_icir=3.0,
+            cost_adjusted_ic=0.04,
+            sharpe_contribution=0.3,
         )
         assert perf.icir > 2.0
         assert perf.rank_icir > 2.0
@@ -366,9 +465,15 @@ class TestFactorPerformance:
 
     def test_performance_with_venue_breakdown(self):
         perf = FactorPerformance(
-            factor_id="f-002", evaluation_period="2026-Q2", sample_count=5000,
-            ic_mean=0.05, ic_std=0.02, icir=2.5,
-            rank_ic_mean=0.06, rank_ic_std=0.02, rank_icir=3.0,
+            factor_id="f-002",
+            evaluation_period="2026-Q2",
+            sample_count=5000,
+            ic_mean=0.05,
+            ic_std=0.02,
+            icir=2.5,
+            rank_ic_mean=0.06,
+            rank_ic_std=0.02,
+            rank_icir=3.0,
             venue_breakdown={VenueId("BINANCE"): 0.06, VenueId("OKX"): 0.04},
         )
         assert VenueId("BINANCE") in perf.venue_breakdown

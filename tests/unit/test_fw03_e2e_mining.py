@@ -9,20 +9,19 @@ from __future__ import annotations
 
 import math
 import random
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from beidou_research.mining.runner import MiningRunner, PipelineConfig
 from beidou_research.mining.evaluation.multiple_testing import (
-    benjamini_hochberg, deflated_sharpe_ratio,
+    benjamini_hochberg,
+    deflated_sharpe_ratio,
 )
-from beidou_research.mining.evidence import EvidenceBundle
 from beidou_research.mining.persistence import JSONFileFactorStore
-
+from beidou_research.mining.runner import MiningRunner, PipelineConfig
 
 # ================================================================
 # 合成数据生成
 # ================================================================
+
 
 def generate_synthetic_ohlcv(
     n: int = 500,
@@ -67,6 +66,7 @@ def generate_synthetic_ohlcv(
 # 端到端测试
 # ================================================================
 
+
 class TestEndToEndMining:
     """端到端挖掘流水线验收测试。"""
 
@@ -95,13 +95,6 @@ class TestEndToEndMining:
         assert result.candidates_evaluated > 0, "应有评估结果"
         assert result.runtime_seconds > 0, "应有运行时间"
         assert result.status == "COMPLETED"
-
-        print(f"\n[E2E] 候选生成: {result.candidates_generated}")
-        print(f"[E2E] 预筛通过: {result.candidates_screened}")
-        print(f"[E2E] 评估完成: {result.candidates_evaluated}")
-        print(f"[E2E] 晋级通过: {result.candidates_passed}")
-        print(f"[E2E] 失败分类: {result.failure_taxonomy}")
-        print(f"[E2E] 运行时间: {result.runtime_seconds:.2f}s")
 
     def test_evidence_bundle_sealed(self):
         """EvidenceBundle 封存后哈希一致。"""
@@ -144,7 +137,8 @@ class TestEndToEndMining:
 
     def test_persistence_roundtrip(self):
         """因子版本持久化往返。"""
-        import tempfile, os
+        import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             store = JSONFileFactorStore(tmpdir)
             data = {"ic_mean": 0.05, "sharpe": 0.5, "samples": 100}
@@ -172,7 +166,7 @@ class TestEndToEndMining:
         sma = []
         for i in range(len(closes)):
             start = max(0, i - window + 1)
-            sma.append(sum(closes[start:i+1]) / (i - start + 1))
+            sma.append(sum(closes[start : i + 1]) / (i - start + 1))
 
         # 因子值 = 偏离SMA的程度
         factor_vals = []
@@ -198,6 +192,5 @@ class TestEndToEndMining:
         sr = (sum((x - mr) ** 2 for x in forward_returns) / (n - 1)) ** 0.5
         ic = cov / (sp * sr) if sp > 0 and sr > 0 else 0.0
 
-        print(f"\n[E2E] 均值回归因子 IC: {ic:.4f}")
         # 均值回归因子应对 forward return 有正 IC
         assert ic > 0, f"Mean reversion factor should have positive IC vs forward returns, got {ic:.4f}"

@@ -14,20 +14,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
-
 
 # ================================================================
 # Benjamini-Hochberg FDR
 # ================================================================
 
+
 @dataclass
 class BHResult:
     """Benjamini-Hochberg FDR 结果。"""
+
     original_pvalues: list[float]
     adjusted_pvalues: list[float]
-    significant_at_05: list[bool]        # α = 0.05
-    significant_at_01: list[bool]        # α = 0.01
+    significant_at_05: list[bool]  # α = 0.05
+    significant_at_01: list[bool]  # α = 0.01
     n_tests: int
     n_significant_05: int
     n_significant_01: int
@@ -63,7 +63,7 @@ def benjamini_hochberg(
     # 按 p-value 排序并记录原始索引
     indexed = sorted(enumerate(pvalues), key=lambda x: x[1])
     sorted_indices = [i for i, _ in indexed]
-    sorted_pvalues = [p for _, p in indexed]
+    [p for _, p in indexed]
 
     # BH 校正：adjusted_pvalue = min(1, p * n / rank)
     adjusted = [0.0] * n
@@ -95,9 +95,11 @@ def benjamini_hochberg(
 # Holm 校正
 # ================================================================
 
+
 @dataclass
 class HolmResult:
     """Holm-Bonferroni 校正结果。"""
+
     original_pvalues: list[float]
     adjusted_pvalues: list[float]
     rejected: list[bool]
@@ -137,6 +139,7 @@ def holm_correction(pvalues: list[float], alpha: float = 0.05) -> HolmResult:
 # Deflated Sharpe Ratio (DSR)
 # ================================================================
 
+
 def deflated_sharpe_ratio(
     observed_sharpe: float,
     n_trials: int,
@@ -166,10 +169,10 @@ def deflated_sharpe_ratio(
     # 期望最大 Sharpe（在 n_trials 次独立试验后）
     # E[max(SR)] ≈ SR_std * sqrt(2 * log(n_trials))
     import math as _math
+
     euler_gamma = 0.5772156649
     expected_max = sharpe_std * (
-        (1 - euler_gamma) * _math.sqrt(2 * _math.log(n_trials))
-        + euler_gamma * _math.sqrt(2 * _math.log(n_trials))
+        (1 - euler_gamma) * _math.sqrt(2 * _math.log(n_trials)) + euler_gamma * _math.sqrt(2 * _math.log(n_trials))
     )
 
     # 简化：使用极值理论近似
@@ -206,9 +209,11 @@ def deflated_sharpe_ratio(
 # Probability of Backtest Overfitting (PBO)
 # ================================================================
 
+
 @dataclass
 class PBOResult:
     """Probability of Backtest Overfitting 结果。"""
+
     pbo: float
     performance_degradation: float
     rank_correlation: float
@@ -302,6 +307,7 @@ def compute_pbo(
 # 辅助函数
 # ================================================================
 
+
 def _normal_cdf(x: float) -> float:
     """标准正态分布累积分布函数（Abramowitz and Stegun 近似）。"""
     if x < -8:
@@ -350,16 +356,18 @@ def _spearman_rank_corr(x: list[float], y: list[float]) -> float:
 # 综合多重检验报告
 # ================================================================
 
+
 @dataclass
 class MultipleTestingReport:
     """多重检验综合报告。"""
-    n_total_trials: int            # 所有被尝试的候选数量
-    n_evaluated: int               # 被评估的候选数量
+
+    n_total_trials: int  # 所有被尝试的候选数量
+    n_evaluated: int  # 被评估的候选数量
     bh_result: BHResult | None = None
     holm_result: HolmResult | None = None
     dsr: dict[str, float] = field(default_factory=dict)
     pbo: PBOResult | None = None
-    verdict: str = ""              # "PASS" / "FAIL" / "NOT_VERIFIABLE"
+    verdict: str = ""  # "PASS" / "FAIL" / "NOT_VERIFIABLE"
 
 
 def evaluate_multiple_testing(

@@ -1,24 +1,26 @@
 """PKG-35~40 认证框架测试。G5-G8 Gate 独立发证、场景评估、P0回退。"""
+
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from beidou_shared.types import GateResult
+import pytest
+
 from beidou_certification.engine import (
-    CertificationGate,
-    ScenarioStatus,
-    CertificationScenario,
-    ScenarioResult,
-    GateCertificate,
     CertificationFramework,
+    CertificationGate,
+    CertificationManager,
+    CertificationScenario,
     G5TestnetCertification,
     G6ShadowCertification,
     G7LiveCertification,
     G8UnattendedCertification,
-    CertificationManager,
+    GateCertificate,
+    ScenarioResult,
+    ScenarioStatus,
     create_l2_canary_certification,
 )
+from beidou_shared.types import GateResult
 
 
 class TestCertificationScenario:
@@ -39,11 +41,15 @@ class TestCertificationScenario:
 
     def test_scenario_result_pass(self):
         s = CertificationScenario(
-            scenario_id="test-002", name="Pass Test", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="test-002",
+            name="Pass Test",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         r = ScenarioResult(
-            scenario=s, status=ScenarioStatus.PASS,
+            scenario=s,
+            status=ScenarioStatus.PASS,
             started_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
         )
@@ -52,11 +58,15 @@ class TestCertificationScenario:
 
     def test_scenario_result_fail(self):
         s = CertificationScenario(
-            scenario_id="test-003", name="Fail Test", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="test-003",
+            name="Fail Test",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         r = ScenarioResult(
-            scenario=s, status=ScenarioStatus.FAIL,
+            scenario=s,
+            status=ScenarioStatus.FAIL,
             error_detail="Something broke",
         )
         assert not r.is_pass()
@@ -64,8 +74,11 @@ class TestCertificationScenario:
 
     def test_not_verifiable(self):
         s = CertificationScenario(
-            scenario_id="test-004", name="NV Test", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="test-004",
+            name="NV Test",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         r = ScenarioResult(scenario=s, status=ScenarioStatus.NOT_VERIFIABLE)
         assert not r.is_pass()
@@ -85,13 +98,19 @@ class TestGateCertificate:
 
     def test_fail_certificate_with_blocking(self):
         s = CertificationScenario(
-            scenario_id="block-1", name="Blocking", description="",
-            gate=CertificationGate.G5_TESTNET, category="test", is_blocking=True,
+            scenario_id="block-1",
+            name="Blocking",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
+            is_blocking=True,
         )
         r = ScenarioResult(scenario=s, status=ScenarioStatus.FAIL)
         cert = GateCertificate(
-            certificate_id="cert-fail", gate=CertificationGate.G5_TESTNET,
-            result=GateResult.FAIL, scenarios=[r],
+            certificate_id="cert-fail",
+            gate=CertificationGate.G5_TESTNET,
+            result=GateResult.FAIL,
+            scenarios=[r],
         )
         assert not cert.is_pass()
         assert cert.blocking_p0_count() == 1
@@ -103,8 +122,11 @@ class TestCertificationFramework:
     def test_register_scenario(self):
         fw = CertificationFramework(CertificationGate.G5_TESTNET)
         s = CertificationScenario(
-            scenario_id="fw-001", name="FW Test", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="fw-001",
+            name="FW Test",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         fw.register_scenario(s)
         assert len(fw.get_scenarios()) == 1
@@ -112,8 +134,11 @@ class TestCertificationFramework:
     def test_register_wrong_gate_raises(self):
         fw = CertificationFramework(CertificationGate.G5_TESTNET)
         s = CertificationScenario(
-            scenario_id="wrong-gate", name="Wrong", description="",
-            gate=CertificationGate.G6_SHADOW, category="test",
+            scenario_id="wrong-gate",
+            name="Wrong",
+            description="",
+            gate=CertificationGate.G6_SHADOW,
+            category="test",
         )
         with pytest.raises(ValueError):
             fw.register_scenario(s)
@@ -121,12 +146,18 @@ class TestCertificationFramework:
     def test_not_complete_until_all_run(self):
         fw = CertificationFramework(CertificationGate.G5_TESTNET)
         s1 = CertificationScenario(
-            scenario_id="s1", name="S1", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="s1",
+            name="S1",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         s2 = CertificationScenario(
-            scenario_id="s2", name="S2", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="s2",
+            name="S2",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         fw.register_scenario(s1)
         fw.register_scenario(s2)
@@ -138,8 +169,11 @@ class TestCertificationFramework:
     def test_evaluate_all_pass(self):
         fw = CertificationFramework(CertificationGate.G5_TESTNET)
         s = CertificationScenario(
-            scenario_id="pass-1", name="Pass", description="",
-            gate=CertificationGate.G5_TESTNET, category="test",
+            scenario_id="pass-1",
+            name="Pass",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
         )
         fw.register_scenario(s)
         fw.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.PASS))
@@ -150,8 +184,12 @@ class TestCertificationFramework:
     def test_evaluate_blocking_fail(self):
         fw = CertificationFramework(CertificationGate.G5_TESTNET)
         s = CertificationScenario(
-            scenario_id="block-2", name="Block", description="",
-            gate=CertificationGate.G5_TESTNET, category="test", is_blocking=True,
+            scenario_id="block-2",
+            name="Block",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
+            is_blocking=True,
         )
         fw.register_scenario(s)
         fw.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.FAIL))
@@ -338,8 +376,12 @@ class TestCertificationManager:
         mgr.register_framework(g5)
         # Blocking failure
         blocking_s = CertificationScenario(
-            scenario_id="p0-block", name="P0 Block", description="",
-            gate=CertificationGate.G5_TESTNET, category="test", is_blocking=True,
+            scenario_id="p0-block",
+            name="P0 Block",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
+            is_blocking=True,
         )
         g5.register_scenario(blocking_s)
         g5.record_result(ScenarioResult(scenario=blocking_s, status=ScenarioStatus.FAIL))

@@ -19,6 +19,7 @@ class OrderBookLevel:
 @dataclass
 class OrderBookSnapshot:
     """订单簿快照 — 某时刻的完整深度。"""
+
     instrument_id: str
     venue_id: str
     bids: list[OrderBookLevel]
@@ -47,6 +48,7 @@ class OrderBookSnapshot:
 @dataclass
 class OrderBookDiff:
     """订单簿增量更新。"""
+
     instrument_id: str
     sequence: int
     prev_sequence: int
@@ -102,7 +104,7 @@ class OrderBookManager:
                 bids = [b for b in bids if b.price != level.price]
                 bids.append(level)
         bids.sort(key=lambda x: x.price, reverse=True)
-        bids = bids[:self._max_depth]
+        bids = bids[: self._max_depth]
 
         # Apply ask updates
         asks = list(self._snapshot.asks)
@@ -113,12 +115,13 @@ class OrderBookManager:
                 asks = [a for a in asks if a.price != level.price]
                 asks.append(level)
         asks.sort(key=lambda x: x.price)
-        asks = asks[:self._max_depth]
+        asks = asks[: self._max_depth]
 
         self._snapshot = OrderBookSnapshot(
             instrument_id=self._snapshot.instrument_id,
             venue_id=self._snapshot.venue_id,
-            bids=bids, asks=asks,
+            bids=bids,
+            asks=asks,
             sequence=diff.sequence,
         )
         self._last_sequence = diff.sequence

@@ -1,9 +1,13 @@
-
 """PKG-31: Release Management 测试。失败发布不改变 Active 版本。"""
+
 from beidou_delivery.release import (
-    ReleaseManager, ArtifactIdentity, MigrationCompatibility, ReleaseStatus,
+    ArtifactIdentity,
+    MigrationCompatibility,
+    ReleaseManager,
+    ReleaseStatus,
 )
 from beidou_shared.types import ResultStatus
+
 
 class TestReleaseManager:
     def make_artifact(self, signed=True):
@@ -41,7 +45,7 @@ class TestReleaseManager:
     def test_incompatible_migration_blocked(self):
         rm = ReleaseManager()
         art = self.make_artifact()
-        with __import__('pytest').raises(ValueError, match="Incompatible"):
+        with __import__("pytest").raises(ValueError, match="Incompatible"):
             rm.register_build(art, MigrationCompatibility.INCOMPATIBLE)
 
     def test_rollback_changes_active(self):

@@ -1,15 +1,18 @@
-
 """Order Intent、Outbox/Inbox、幂等与事务边界。"""
+
 from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+
 from hashlib import sha256
-from beidou_shared.types import CorrelationId, OrderId
-from beidou_shared.types import AccountRef, CorrelationId, InstrumentId, OrderSide, OrderType, Quantity, Price, TimeInForce, VenueId, AccountId, OrderId, ExecutionId, MonetaryValue, OrderStatus
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from beidou_safety.execution import OrderIntent
+
 
 class IntentOutbox:
     """事务性 Outbox — Intent 先提交到 Outbox，再异步发送。"""
-    def __init__(self):
+
+    def __init__(self) -> None:
         self._outbox: list[OrderIntent] = []
         self._inbox: dict[str, OrderIntent] = {}
         self._processed: set[str] = set()

@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from beidou_exchange.core.error_taxonomy import (
-    AdapterError,
     ErrorCategory,
     Result,
     classify_http_error,
@@ -25,6 +24,7 @@ from beidou_exchange.core.error_taxonomy import (
 @dataclass
 class RateLimitState:
     """端点级限频状态。"""
+
     weight_used: int = 0
     weight_limit: int = 1200
     order_count: int = 0
@@ -47,8 +47,9 @@ class BinanceRESTClient:
     - 密钥自动脱敏
     """
 
-    def __init__(self, rest_url: str, api_key: str = "", api_secret: str = "",
-                 recv_window: int = 60000, max_retries: int = 3):
+    def __init__(
+        self, rest_url: str, api_key: str = "", api_secret: str = "", recv_window: int = 60000, max_retries: int = 3
+    ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
         self._api_secret = api_secret
@@ -78,9 +79,15 @@ class BinanceRESTClient:
 
     async def get_klines(self, symbol: str, interval: str, limit: int = 500) -> Result[list]:
         """获取K线数据。"""
-        return await self._request("GET", "/fapi/v1/klines", params={
-            "symbol": symbol, "interval": interval, "limit": limit,
-        })
+        return await self._request(
+            "GET",
+            "/fapi/v1/klines",
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit,
+            },
+        )
 
     # === 签名请求 ===
 
@@ -95,18 +102,32 @@ class BinanceRESTClient:
 
     async def get_order(self, symbol: str, order_id: int) -> Result[dict]:
         """查询单个订单状态。"""
-        return await self._request("GET", "/fapi/v1/order", signed=True, params={
-            "symbol": symbol, "orderId": order_id,
-        })
+        return await self._request(
+            "GET",
+            "/fapi/v1/order",
+            signed=True,
+            params={
+                "symbol": symbol,
+                "orderId": order_id,
+            },
+        )
 
-    async def create_order(self, symbol: str, side: str, order_type: str,
-                           quantity: str, price: str | None = None,
-                           time_in_force: str | None = None,
-                           reduce_only: str | None = None,
-                           client_order_id: str | None = None) -> Result[dict]:
+    async def create_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: str,
+        price: str | None = None,
+        time_in_force: str | None = None,
+        reduce_only: str | None = None,
+        client_order_id: str | None = None,
+    ) -> Result[dict]:
         """创建订单。"""
         params: dict[str, Any] = {
-            "symbol": symbol, "side": side, "type": order_type,
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
             "quantity": quantity,
         }
         if price:
@@ -120,9 +141,15 @@ class BinanceRESTClient:
 
     async def cancel_order(self, symbol: str, order_id: int) -> Result[dict]:
         """取消订单。"""
-        return await self._request("DELETE", "/fapi/v1/order", signed=True, params={
-            "symbol": symbol, "orderId": order_id,
-        })
+        return await self._request(
+            "DELETE",
+            "/fapi/v1/order",
+            signed=True,
+            params={
+                "symbol": symbol,
+                "orderId": order_id,
+            },
+        )
 
     # === 用户数据流 ===
 
@@ -174,24 +201,29 @@ class BinanceRESTClient:
         if exchange_info.is_success():
             capabilities["can_trade"] = True
 
-        all_ok = all([
-            capabilities["can_read_balance"],
-            capabilities["can_read_positions"],
-            capabilities["can_read_orders"],
-            capabilities["can_trade"],
-            not capabilities["can_withdraw"],
-            abs(capabilities["clock_skew_ms"]) < 5000,
-        ])
+        all_ok = all(
+            [
+                capabilities["can_read_balance"],
+                capabilities["can_read_positions"],
+                capabilities["can_read_orders"],
+                capabilities["can_trade"],
+                not capabilities["can_withdraw"],
+                abs(capabilities["clock_skew_ms"]) < 5000,
+            ]
+        )
 
-        return Result.ok(capabilities) if all_ok else Result.fail(
-            ErrorCategory.UNKNOWN,
-            f"Account capability check failed: {capabilities}",
+        return (
+            Result.ok(capabilities)
+            if all_ok
+            else Result.fail(
+                ErrorCategory.UNKNOWN,
+                f"Account capability check failed: {capabilities}",
+            )
         )
 
     # === 内部实现 ===
 
-    async def _request(self, method: str, path: str, signed: bool = False,
-                       params: dict | None = None) -> Result:
+    async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
         """发送 HTTP 请求并返回 Result[T]。"""
         if params is None:
             params = {}
@@ -209,7 +241,9 @@ class BinanceRESTClient:
             params["recvWindow"] = self._recv_window
             qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
             params["signature"] = hmac.new(
-                self._api_secret.encode(), qs.encode(), hashlib.sha256,
+                self._api_secret.encode(),
+                qs.encode(),
+                hashlib.sha256,
             ).hexdigest()
 
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -217,8 +251,8 @@ class BinanceRESTClient:
         for attempt in range(self._max_retries):
             try:
                 # 使用同步 urllib（后续升级为 httpx async）
-                import urllib.request
                 import urllib.error
+                import urllib.request
 
                 if method == "POST":
                     req = urllib.request.Request(url, data=qs.encode())
@@ -254,7 +288,7 @@ class BinanceRESTClient:
                     err_data = json.loads(error_body)
                     binance_code = err_data.get("code", 0)
                 except Exception:
-                    pass
+                    binance_code = 0  # JSON parse failure: classification falls back to HTTP status
 
                 category = classify_http_error(http_status, binance_code)
 
@@ -264,7 +298,7 @@ class BinanceRESTClient:
                     continue
 
                 if category == ErrorCategory.RETRYABLE and attempt < self._max_retries - 1:
-                    wait = 0.5 * (2 ** attempt)
+                    wait = 0.5 * (2**attempt)
                     await asyncio.sleep(wait)
                     continue
 
@@ -277,7 +311,7 @@ class BinanceRESTClient:
 
             except Exception as e:
                 if attempt < self._max_retries - 1:
-                    await asyncio.sleep(0.5 * (2 ** attempt))
+                    await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 self._rate_state.consecutive_failures += 1
                 return Result.fail(ErrorCategory.RETRYABLE, str(e)[:200])

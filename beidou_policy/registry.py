@@ -1,11 +1,12 @@
 """Policy Registry 核心实现 — 版本化策略存储、签名验证与原子激活。"""
+
 from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from uuid import uuid4
 
 from beidou_shared.types import CorrelationId, PolicyId, ResultStatus, SchemaVersion
 
@@ -76,9 +77,7 @@ class PolicyPackage:
     def validate(self, policy_schema_version: SchemaVersion) -> bool:
         if self.metadata.schema_version != policy_schema_version:
             return False
-        if self.metadata.expires_at and self.metadata.expires_at < datetime.now(timezone.utc):
-            return False
-        return True
+        return not (self.metadata.expires_at and self.metadata.expires_at < datetime.now(timezone.utc))
 
     def sign(self, signature: str, signing_key_id: str) -> None:
         self._assert_transition(PolicyLifecycle.SIGNED)
@@ -105,9 +104,7 @@ class PolicyPackage:
     def is_effectively_active(self) -> bool:
         if self.lifecycle != PolicyLifecycle.ACTIVE:
             return False
-        if self.metadata.expires_at and self.metadata.expires_at < datetime.now(timezone.utc):
-            return False
-        return True
+        return not (self.metadata.expires_at and self.metadata.expires_at < datetime.now(timezone.utc))
 
 
 class PolicyRegistry:
@@ -188,7 +185,7 @@ class PolicyRegistry:
 
     def list_active_policies(self) -> list[PolicyPackage]:
         result: list[PolicyPackage] = []
-        for name, pid in self._active_index.items():
+        for _name, pid in self._active_index.items():
             pkg = self._policies.get(pid)
             if pkg and pkg.is_effectively_active():
                 result.append(deepcopy(pkg))
@@ -198,22 +195,26 @@ class PolicyRegistry:
         pkg = self._policies.get(policy_id)
         if pkg is None or pkg.metadata.signature is None:
             return False
+        import json
+
+        from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding, rsa
-        from cryptography.exceptions import InvalidSignature
-        import json
 
         try:
             key = serialization.load_pem_public_key(public_key_pem.encode())
             if not isinstance(key, rsa.RSAPublicKey):
                 return False
-            payload = json.dumps({
-                "policy_id": pkg.metadata.policy_id,
-                "name": pkg.metadata.name,
-                "category": pkg.metadata.category.value,
-                "schema_version": pkg.metadata.schema_version,
-                "data": pkg.data,
-            }, sort_keys=True).encode()
+            payload = json.dumps(
+                {
+                    "policy_id": pkg.metadata.policy_id,
+                    "name": pkg.metadata.name,
+                    "category": pkg.metadata.category.value,
+                    "schema_version": pkg.metadata.schema_version,
+                    "data": pkg.data,
+                },
+                sort_keys=True,
+            ).encode()
             sig_bytes = bytes.fromhex(pkg.metadata.signature)
             key.verify(sig_bytes, payload, padding.PKCS1v15(), hashes.SHA256())
             return True

@@ -1,26 +1,33 @@
 """PKG-23 自适应执行算法测试。TWAP/POV/Adaptive Slice/IOC/PostOnly/Passive/Emergency。"""
+
 from __future__ import annotations
 
-import pytest
-from beidou_shared.types import (
-    InstrumentId, OrderId, OrderSide, OrderType,
-    Price, Quantity, TimeInForce, VenueId, VenueInstrument,
-)
 from beidou_safety.execution.algorithms import (
-    ExecutionAlgorithmType,
-    ExecutionContext,
-    OrderSlice,
-    ExecutionPlan,
-    PostOnlyAlgorithm,
-    PassiveAlgorithm,
-    MarketableLimitAlgorithm,
-    IOCAlgorithm,
-    TWAPAlgorithm,
-    POVAlgorithm,
     AdaptiveSliceAlgorithm,
     EmergencyReduceOnlyAlgorithm,
     ExecutionAlgorithmSelector,
+    ExecutionAlgorithmType,
+    ExecutionContext,
+    ExecutionPlan,
+    IOCAlgorithm,
+    MarketableLimitAlgorithm,
+    OrderSlice,
+    PassiveAlgorithm,
+    PostOnlyAlgorithm,
+    POVAlgorithm,
     SliceInvariantChecker,
+    TWAPAlgorithm,
+)
+from beidou_shared.types import (
+    InstrumentId,
+    OrderId,
+    OrderSide,
+    OrderType,
+    Price,
+    Quantity,
+    TimeInForce,
+    VenueId,
+    VenueInstrument,
 )
 
 
@@ -161,7 +168,14 @@ class TestPOVAlgorithm:
         assert algo.can_handle(ctx)
 
     def test_plan_respects_participation_rate(self):
-        ctx = _make_ctx(urgency=0.3, bid_depth=100000.0, ask_depth=100000.0, total_quantity=0.5, net_alpha_bps=10.0, predicted_cost_bps=3.0)
+        ctx = _make_ctx(
+            urgency=0.3,
+            bid_depth=100000.0,
+            ask_depth=100000.0,
+            total_quantity=0.5,
+            net_alpha_bps=10.0,
+            predicted_cost_bps=3.0,
+        )
         algo = POVAlgorithm(participation_rate=0.1)
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert not plan.is_canceled
@@ -182,7 +196,9 @@ class TestAdaptiveSliceAlgorithm:
         assert algo.can_handle(ctx)
 
     def test_plan_adapts_to_market(self):
-        ctx = _make_ctx(urgency=0.4, alpha_decay_seconds=3600.0, net_alpha_bps=15.0, predicted_cost_bps=3.0, spread_bps=3.0)
+        ctx = _make_ctx(
+            urgency=0.4, alpha_decay_seconds=3600.0, net_alpha_bps=15.0, predicted_cost_bps=3.0, spread_bps=3.0
+        )
         algo = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25)
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert not plan.is_canceled
@@ -306,7 +322,7 @@ class TestSliceInvariantChecker:
             algorithm=ExecutionAlgorithmType.TWAP,
             sequence_number=0,
         )
-        ok, msg = SliceInvariantChecker.check_slice(slice_, ctx)
+        ok, _msg = SliceInvariantChecker.check_slice(slice_, ctx)
         assert not ok
 
     def test_exceeds_approved_quantity_fails(self):
@@ -321,7 +337,7 @@ class TestSliceInvariantChecker:
             algorithm=ExecutionAlgorithmType.TWAP,
             sequence_number=0,
         )
-        ok, msg = SliceInvariantChecker.check_slice(slice_, ctx)
+        ok, _msg = SliceInvariantChecker.check_slice(slice_, ctx)
         assert not ok
 
     def test_exceeds_slippage_limit_fails(self):
@@ -336,7 +352,7 @@ class TestSliceInvariantChecker:
             algorithm=ExecutionAlgorithmType.TWAP,
             sequence_number=0,
         )
-        ok, msg = SliceInvariantChecker.check_slice(slice_, ctx)
+        ok, _msg = SliceInvariantChecker.check_slice(slice_, ctx)
         assert not ok
 
     def test_alpha_depleted_fails(self):
@@ -352,13 +368,20 @@ class TestSliceInvariantChecker:
             sequence_number=0,
             remaining_alpha_bps=0.0,
         )
-        ok, msg = SliceInvariantChecker.check_slice(slice_, ctx)
+        ok, _msg = SliceInvariantChecker.check_slice(slice_, ctx)
         assert not ok
 
     def test_validate_plan_safety(self):
         ctx = _make_ctx(spread_bps=5.0, hard_slippage_limit_bps=50.0)
         algo = TWAPAlgorithm(slice_count=5, interval_seconds=60.0)
-        ctx_valid = _make_ctx(urgency=0.3, alpha_decay_seconds=3600.0, net_alpha_bps=10.0, predicted_cost_bps=3.0, spread_bps=5.0, hard_slippage_limit_bps=50.0)
+        ctx_valid = _make_ctx(
+            urgency=0.3,
+            alpha_decay_seconds=3600.0,
+            net_alpha_bps=10.0,
+            predicted_cost_bps=3.0,
+            spread_bps=5.0,
+            hard_slippage_limit_bps=50.0,
+        )
         plan = algo.plan(ctx_valid, FIXED_ORDER_ID)
         ok, msg = SliceInvariantChecker.validate_plan(plan, ctx)
         assert ok, msg
@@ -366,7 +389,7 @@ class TestSliceInvariantChecker:
     def test_canceled_plan_is_always_valid(self):
         ctx = _make_ctx()
         plan = ExecutionPlan(algorithm=ExecutionAlgorithmType.TWAP, is_canceled=True, cancel_reason="test")
-        ok, msg = SliceInvariantChecker.validate_plan(plan, ctx)
+        ok, _msg = SliceInvariantChecker.validate_plan(plan, ctx)
         assert ok
 
 

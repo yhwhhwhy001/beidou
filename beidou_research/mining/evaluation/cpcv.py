@@ -14,10 +14,8 @@
 from __future__ import annotations
 
 import hashlib
-import math
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Callable
 
 from beidou_shared.types import GateResult
 
@@ -25,17 +23,19 @@ from beidou_shared.types import GateResult
 @dataclass
 class CPCVConfig:
     """CPCV 配置。"""
-    n_groups: int = 6           # 将数据分为 N 组
-    n_test_groups: int = 2      # 每组测试集大小（组数）
-    purge_bars: int = 5         # purge K线数
-    embargo_bars: int = 0       # embargo K线数
-    min_train_groups: int = 3   # 最小训练组数
+
+    n_groups: int = 6  # 将数据分为 N 组
+    n_test_groups: int = 2  # 每组测试集大小（组数）
+    purge_bars: int = 5  # purge K线数
+    embargo_bars: int = 0  # embargo K线数
+    min_train_groups: int = 3  # 最小训练组数
     random_seed: int = 42
 
 
 @dataclass
 class CPCVPath:
     """单条 CPCV 路径。"""
+
     path_id: int
     train_indices: list[int]
     test_indices: list[int]
@@ -46,6 +46,7 @@ class CPCVPath:
 @dataclass
 class CPCVResult:
     """CPCV 评估结果。"""
+
     n_paths: int
     n_completed: int
     oos_metrics: list[dict[str, float]]
@@ -102,6 +103,7 @@ class CPCVEvaluator:
 
         # 生成所有路径组合
         import itertools
+
         all_group_ids = list(groups.keys())
         k = min(cfg.n_test_groups, len(all_group_ids) - cfg.min_train_groups)
 
@@ -126,21 +128,23 @@ class CPCVEvaluator:
                 train_min = min(test_indices) if test_indices else 0
                 train_max = max(test_indices) if test_indices else 0
                 train_indices = [
-                    i for i in train_indices
-                    if abs(i - train_min) > cfg.purge_bars
-                    and abs(i - train_max) > cfg.purge_bars
+                    i
+                    for i in train_indices
+                    if abs(i - train_min) > cfg.purge_bars and abs(i - train_max) > cfg.purge_bars
                 ]
 
             if len(train_indices) < cfg.min_train_groups * 20:
                 continue
 
-            paths.append(CPCVPath(
-                path_id=path_id,
-                train_indices=sorted(train_indices),
-                test_indices=sorted(test_indices),
-                train_sample_count=len(train_indices),
-                test_sample_count=len(test_indices),
-            ))
+            paths.append(
+                CPCVPath(
+                    path_id=path_id,
+                    train_indices=sorted(train_indices),
+                    test_indices=sorted(test_indices),
+                    train_sample_count=len(train_indices),
+                    test_sample_count=len(test_indices),
+                )
+            )
             path_id += 1
 
         return paths
@@ -175,9 +179,14 @@ class CPCVEvaluator:
 
         if len(paths) < 2:
             return CPCVResult(
-                n_paths=len(paths), n_completed=0,
-                oos_metrics=[], metric_mean=0.0, metric_std=0.0,
-                metric_median=0.0, metric_q05=0.0, metric_q95=0.0,
+                n_paths=len(paths),
+                n_completed=0,
+                oos_metrics=[],
+                metric_mean=0.0,
+                metric_std=0.0,
+                metric_median=0.0,
+                metric_q05=0.0,
+                metric_q95=0.0,
                 path_consistency=0.0,
             )
 
@@ -187,17 +196,24 @@ class CPCVEvaluator:
             test_rets = [returns[i] for i in path.test_indices if i < n]
             if len(test_preds) >= 10:
                 metric = metric_fn(test_preds, test_rets)
-                oos_metrics.append({
-                    "path_id": path.path_id,
-                    "metric": round(metric, 6),
-                    "test_samples": len(test_preds),
-                })
+                oos_metrics.append(
+                    {
+                        "path_id": path.path_id,
+                        "metric": round(metric, 6),
+                        "test_samples": len(test_preds),
+                    }
+                )
 
         if not oos_metrics:
             return CPCVResult(
-                n_paths=len(paths), n_completed=0,
-                oos_metrics=[], metric_mean=0.0, metric_std=0.0,
-                metric_median=0.0, metric_q05=0.0, metric_q95=0.0,
+                n_paths=len(paths),
+                n_completed=0,
+                oos_metrics=[],
+                metric_mean=0.0,
+                metric_std=0.0,
+                metric_median=0.0,
+                metric_q05=0.0,
+                metric_q95=0.0,
                 path_consistency=0.0,
             )
 
@@ -217,9 +233,7 @@ class CPCVEvaluator:
         consistency = max(positive, negative) / n_p if n_p > 0 else 0.0
 
         gate = GateResult.PASS
-        if consistency < 0.6:
-            gate = GateResult.FAIL
-        elif mean_m <= 0:
+        if consistency < 0.6 or mean_m <= 0:
             gate = GateResult.FAIL
 
         content = f"cpcv:{n_p}:{mean_m:.6f}:{std_m:.6f}:{consistency:.3f}"

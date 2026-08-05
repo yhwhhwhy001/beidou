@@ -1,8 +1,12 @@
 """Gate 认证模块。每个 Gate 独立发证。"""
+
 from __future__ import annotations
-from datetime import datetime, timezone
+
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
 from beidou_shared.types import GateResult
+
 
 @dataclass
 class GateCertificate:

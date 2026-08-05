@@ -20,18 +20,24 @@ from typing import Any
 @dataclass
 class ResidualConfig:
     """残差生成配置。"""
-    control_factors: list[str] = field(default_factory=lambda: [
-        "market_beta", "volatility", "liquidity",
-    ])
+
+    control_factors: list[str] = field(
+        default_factory=lambda: [
+            "market_beta",
+            "volatility",
+            "liquidity",
+        ]
+    )
     max_controls: int = 5
     min_effective_samples: int = 30
-    max_vif: float = 10.0        # 控制变量之间的最大 VIF
+    max_vif: float = 10.0  # 控制变量之间的最大 VIF
     residual_threshold: float = 0.01  # 最小残差方差比
 
 
 @dataclass
 class ResidualSpec:
     """残差因子规格。"""
+
     residual_id: str
     base_factor: str
     controls: tuple[str, ...]
@@ -72,24 +78,24 @@ class ResidualGenerator:
 
         for candidate in candidates:
             fid = candidate.get("factor_id", "unknown")
-            for control in control_names[:cfg.max_controls]:
+            for control in control_names[: cfg.max_controls]:
                 controls = (control,)
                 res_id = f"{fid}_residual_{control}"
 
-                expr_hash = hashlib.sha256(
-                    f"residual:{fid}:{control}".encode()
-                ).hexdigest()[:20]
+                expr_hash = hashlib.sha256(f"residual:{fid}:{control}".encode()).hexdigest()[:20]
 
                 if expr_hash not in seen:
                     seen.add(expr_hash)
-                    residuals.append(ResidualSpec(
-                        residual_id=res_id,
-                        base_factor=fid,
-                        controls=controls,
-                        expression_hash=expr_hash,
-                        complexity_score=candidate.get("complexity_score", 1.0) + 2.0,
-                        parent_factor_ids=(fid,),
-                    ))
+                    residuals.append(
+                        ResidualSpec(
+                            residual_id=res_id,
+                            base_factor=fid,
+                            controls=controls,
+                            expression_hash=expr_hash,
+                            complexity_score=candidate.get("complexity_score", 1.0) + 2.0,
+                            parent_factor_ids=(fid,),
+                        )
+                    )
 
         return residuals
 

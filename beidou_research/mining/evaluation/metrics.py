@@ -81,6 +81,7 @@ SignalInput = Union[Sequence[Value], Sequence[Sequence[Value]]]
 # 内部工具函数
 # ---------------------------------------------------------------------------
 
+
 def _mean(vals: Sequence[float]) -> float:
     """算术均值；空序列返回 0.0。"""
     return sum(vals) / len(vals) if vals else 0.0
@@ -115,9 +116,7 @@ def _clean_series(vals: Sequence[Value]) -> List[float]:
     return out
 
 
-def _clean_pairs(
-    xs: Sequence[Value], ys: Sequence[Value]
-) -> List[Tuple[float, float]]:
+def _clean_pairs(xs: Sequence[Value], ys: Sequence[Value]) -> List[Tuple[float, float]]:
     """成对过滤缺失值：任一序列在该位置无效则整对剔除。"""
     if len(xs) != len(ys):
         raise ValueError(f"两个序列长度不一致: {len(xs)} vs {len(ys)}")
@@ -145,9 +144,7 @@ def _check_lengths(a: Sequence[Any], b: Sequence[Any]) -> None:
         raise ValueError(f"两个序列长度不一致: {len(a)} vs {len(b)}")
 
 
-def _as_periods(
-    predictions: SignalInput, returns: SignalInput
-) -> List[Tuple[Sequence[Value], Sequence[Value]]]:
+def _as_periods(predictions: SignalInput, returns: SignalInput) -> List[Tuple[Sequence[Value], Sequence[Value]]]:
     """归一化为「每期一个 (预测, 收益) 对」的列表。
 
     扁平输入视为单期；嵌套输入视为多期。
@@ -287,9 +284,7 @@ def _long_short_spread(preds: Sequence[Value], rets: Sequence[Value]) -> float:
     return _mean(top) - _mean(bottom)
 
 
-def _solve_linear_system(
-    mat: List[List[float]], rhs: List[float]
-) -> Optional[List[float]]:
+def _solve_linear_system(mat: List[List[float]], rhs: List[float]) -> Optional[List[float]]:
     """高斯消元（部分主元）解 mat·x = rhs；奇异矩阵返回 None。"""
     n = len(mat)
     aug = [[*row, rhs[i]] for i, row in enumerate(mat)]
@@ -347,6 +342,7 @@ def _ols_r2(design: List[List[float]], y: List[float]) -> float:
 # ---------------------------------------------------------------------------
 # 公开 API
 # ---------------------------------------------------------------------------
+
 
 def compute_ic(predictions: SignalInput, returns: SignalInput) -> Dict[str, float]:
     """Pearson IC。
@@ -419,8 +415,7 @@ def compute_period_ic_series(
     """
     if _is_nested(predictions) or _is_nested(returns):
         raise ValueError(
-            "compute_period_ic_series 接受扁平列表；"
-            "多期数据请使用 compute_ic / compute_rank_ic 的嵌套形式"
+            "compute_period_ic_series 接受扁平列表；多期数据请使用 compute_ic / compute_rank_ic 的嵌套形式"
         )
     _check_lengths(predictions, returns)
     n = len(predictions)
@@ -479,9 +474,7 @@ def compute_icir(ic_series: Sequence[Value]) -> Dict[str, Any]:
     }
 
 
-def compute_newey_west_tstat(
-    ic_series: Sequence[Value], max_lags: Optional[int] = None
-) -> Dict[str, Any]:
+def compute_newey_west_tstat(ic_series: Sequence[Value], max_lags: Optional[int] = None) -> Dict[str, Any]:
     """Newey-West 调整的 t 统计量（对 IC 序列的时序自相关稳健）。
 
     自动选择滞后阶数 ``max_lags = floor(4 * (n/100)^(2/9))``
@@ -511,9 +504,7 @@ def compute_newey_west_tstat(
     var_nw = 0.0
     for k in range(max_lags + 1):
         # 滞后 k 自协方差（1/n 归一，与 Newey-West 标准形式一致）
-        acov = sum(
-            (ics[t] - mu) * (ics[t - k] - mu) for t in range(k, n)
-        ) / n
+        acov = sum((ics[t] - mu) * (ics[t - k] - mu) for t in range(k, n)) / n
         if k == 0:
             var_nw += acov
         else:
@@ -562,7 +553,7 @@ def compute_block_bootstrap_ci(
         block_size = max(1, math.floor(math.sqrt(n)))
     block_size = min(block_size, n)
     # S311 例外：分块重抽样为统计抽样用途，非安全随机
-    rng = random.Random(seed)  # noqa: S311
+    rng = random.Random(seed)
     n_blocks = math.ceil(n / block_size)
     means: List[float] = []
     for _ in range(n_bootstraps):
@@ -724,19 +715,16 @@ def compute_incremental_contribution(
     sample_count = 0
     for (cp, cr), (ep, er) in zip(cand_periods, exist_periods, strict=True):
         if not (len(cp) == len(cr) == len(ep) == len(er)):
-            raise ValueError(
-                "同一期内候选与已有模型的样本数不一致"
-                f"({len(cp)}, {len(cr)}, {len(ep)}, {len(er)})"
-            )
+            raise ValueError(f"同一期内候选与已有模型的样本数不一致({len(cp)}, {len(cr)}, {len(ep)}, {len(er)})")
         # 四序列同位置全部有效才保留（相同样本比较）
         triples = [
             (float(cp_), float(cr_), float(ep_), float(er_))
             for cp_, cr_, ep_, er_ in zip(cp, cr, ep, er, strict=True)
-            if cp_ is not None and cr_ is not None
-            and ep_ is not None and er_ is not None
+            if cp_ is not None and cr_ is not None and ep_ is not None and er_ is not None
         ]
-        valid = [(a, b, c, d) for a, b, c, d in triples
-                 if all(not (math.isnan(v) or math.isinf(v)) for v in (a, b, c, d))]
+        valid = [
+            (a, b, c, d) for a, b, c, d in triples if all(not (math.isnan(v) or math.isinf(v)) for v in (a, b, c, d))
+        ]
         sample_count += len(valid)
         if not valid:
             continue
@@ -778,9 +766,7 @@ def compute_incremental_contribution(
     }
 
 
-def compute_turnover(
-    positions_t: Sequence[Value], positions_t_plus_1: Sequence[Value]
-) -> float:
+def compute_turnover(positions_t: Sequence[Value], positions_t_plus_1: Sequence[Value]) -> float:
     """换手率（单边）= 0.5 * Σ|w_{t+1} - w_t|。
 
     若输入为权重向量（各期权重和为 1），结果落在 [0, 1]，
@@ -791,9 +777,7 @@ def compute_turnover(
         ValueError: 两期长度不一致。
     """
     if len(positions_t) != len(positions_t_plus_1):
-        raise ValueError(
-            f"两期持仓长度不一致: {len(positions_t)} vs {len(positions_t_plus_1)}"
-        )
+        raise ValueError(f"两期持仓长度不一致: {len(positions_t)} vs {len(positions_t_plus_1)}")
     total = 0.0
     for a, b in zip(positions_t, positions_t_plus_1, strict=True):
         if a is None or b is None:
@@ -819,9 +803,7 @@ def compute_hit_rate(predictions: Sequence[Value], returns: Sequence[Value]) -> 
     return hits / valid if valid else 0.0
 
 
-def compute_cost_adjusted_metrics(
-    returns: Sequence[Value], costs_bps: Union[Value, Sequence[Value]]
-) -> Dict[str, Any]:
+def compute_cost_adjusted_metrics(returns: Sequence[Value], costs_bps: Union[Value, Sequence[Value]]) -> Dict[str, Any]:
     """成本调整后指标。
 
     costs_bps 为每期交易成本，单位是基点（1bp = 1e-4），
@@ -838,13 +820,9 @@ def compute_cost_adjusted_metrics(
         cost_series = [float(costs_bps) / 10000.0] * len(raw_returns)
     else:
         if len(costs_bps) != len(raw_returns):
-            raise ValueError(
-                f"成本序列长度不一致: {len(costs_bps)} vs {len(raw_returns)}"
-            )
+            raise ValueError(f"成本序列长度不一致: {len(costs_bps)} vs {len(raw_returns)}")
         # 缺失成本按 0 处理，与收益成对清洗
-        cost_series = [
-            0.0 if c is None else float(c) / 10000.0 for c in costs_bps
-        ]
+        cost_series = [0.0 if c is None else float(c) / 10000.0 for c in costs_bps]
     pairs = _clean_pairs(raw_returns, cost_series)
     clean_rets = [r for r, _ in pairs]
     costs = [c for _, c in pairs]

@@ -6,21 +6,27 @@ Contextual Bandit 仅在已批准算法集合内选择，不得改变方向/数�
 订单切片持续检查在途不变量和剩余 Alpha；
 执行成本预测 > 净 Alpha 时取消非风险退出交易。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
 
 from beidou_shared.types import (
-    InstrumentId, OrderId, OrderSide, OrderStatus, OrderType,
-    Price, Quantity, ResultStatus, TimeInForce, VenueId, VenueInstrument,
+    OrderId,
+    OrderSide,
+    OrderType,
+    Price,
+    Quantity,
+    TimeInForce,
+    VenueInstrument,
 )
 
 
 class ExecutionAlgorithmType(str, Enum):
     """执行算法类型。"""
+
     POST_ONLY = "POST_ONLY"
     PASSIVE = "PASSIVE"
     MARKETABLE_LIMIT = "MARKETABLE_LIMIT"
@@ -34,6 +40,7 @@ class ExecutionAlgorithmType(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ExecutionContext:
     """执行上下文 — 订单执行的完整市场环境。"""
+
     venue_instrument: VenueInstrument
     side: OrderSide
     total_quantity: Quantity
@@ -56,6 +63,7 @@ class ExecutionContext:
 @dataclass(frozen=True, slots=True)
 class OrderSlice:
     """订单切片。"""
+
     slice_id: str
     parent_order_id: OrderId
     quantity: Quantity
@@ -73,6 +81,7 @@ class OrderSlice:
 @dataclass
 class ExecutionPlan:
     """执行计划 — 算法输出的一系列切片。"""
+
     algorithm: ExecutionAlgorithmType
     slices: list[OrderSlice] = field(default_factory=list)
     total_estimated_cost_bps: float = 0.0
@@ -115,27 +124,25 @@ class PostOnlyAlgorithm(BaseExecutionAlgorithm):
     algorithm_type = ExecutionAlgorithmType.POST_ONLY
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
-        return (
-            ctx.urgency < 0.5
-            and ctx.limit_price is not None
-            and ctx.spread_bps > 1.0
-        )
+        return ctx.urgency < 0.5 and ctx.limit_price is not None and ctx.spread_bps > 1.0
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
         return ExecutionPlan(
             algorithm=self.algorithm_type,
-            slices=[OrderSlice(
-                slice_id=f"{order_id}-postonly-0",
-                parent_order_id=order_id,
-                quantity=ctx.total_quantity,
-                price=ctx.limit_price,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.GTC,
-                algorithm=self.algorithm_type,
-                sequence_number=0,
-                invariants_check_passed=invariant_ok,
-            )],
+            slices=[
+                OrderSlice(
+                    slice_id=f"{order_id}-postonly-0",
+                    parent_order_id=order_id,
+                    quantity=ctx.total_quantity,
+                    price=ctx.limit_price,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.GTC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=0,
+                    invariants_check_passed=invariant_ok,
+                )
+            ],
             estimated_completion_seconds=30.0,
         )
 
@@ -146,29 +153,26 @@ class PassiveAlgorithm(BaseExecutionAlgorithm):
     algorithm_type = ExecutionAlgorithmType.PASSIVE
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
-        return (
-            ctx.urgency < 0.3
-            and ctx.spread_bps < 10.0
-            and ctx.best_bid is not None
-            and ctx.best_ask is not None
-        )
+        return ctx.urgency < 0.3 and ctx.spread_bps < 10.0 and ctx.best_bid is not None and ctx.best_ask is not None
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
         price = ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask
         return ExecutionPlan(
             algorithm=self.algorithm_type,
-            slices=[OrderSlice(
-                slice_id=f"{order_id}-passive-0",
-                parent_order_id=order_id,
-                quantity=ctx.total_quantity,
-                price=price,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.GTC,
-                algorithm=self.algorithm_type,
-                sequence_number=0,
-                invariants_check_passed=invariant_ok,
-            )],
+            slices=[
+                OrderSlice(
+                    slice_id=f"{order_id}-passive-0",
+                    parent_order_id=order_id,
+                    quantity=ctx.total_quantity,
+                    price=price,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.GTC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=0,
+                    invariants_check_passed=invariant_ok,
+                )
+            ],
             estimated_completion_seconds=60.0,
         )
 
@@ -180,36 +184,30 @@ class MarketableLimitAlgorithm(BaseExecutionAlgorithm):
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
         return (
-            ctx.urgency < 0.7
-            and ctx.limit_price is not None
-            and ctx.best_ask is not None
-            and ctx.best_bid is not None
+            ctx.urgency < 0.7 and ctx.limit_price is not None and ctx.best_ask is not None and ctx.best_bid is not None
         )
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
         fill_price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
         # 限价必须穿越价差
-        if ctx.side == OrderSide.BUY and fill_price:
-            effective_price = fill_price
-        elif fill_price:
-            effective_price = fill_price
-        else:
-            effective_price = ctx.limit_price
+        effective_price = fill_price if (ctx.side == OrderSide.BUY and fill_price) or fill_price else ctx.limit_price
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
-            slices=[OrderSlice(
-                slice_id=f"{order_id}-mktlimit-0",
-                parent_order_id=order_id,
-                quantity=ctx.total_quantity,
-                price=effective_price,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=0,
-                invariants_check_passed=invariant_ok,
-            )],
+            slices=[
+                OrderSlice(
+                    slice_id=f"{order_id}-mktlimit-0",
+                    parent_order_id=order_id,
+                    quantity=ctx.total_quantity,
+                    price=effective_price,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=0,
+                    invariants_check_passed=invariant_ok,
+                )
+            ],
             estimated_completion_seconds=5.0,
         )
 
@@ -223,21 +221,23 @@ class IOCAlgorithm(BaseExecutionAlgorithm):
         return ctx.urgency >= 0.5 and ctx.best_bid is not None and ctx.best_ask is not None
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
         price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
         return ExecutionPlan(
             algorithm=self.algorithm_type,
-            slices=[OrderSlice(
-                slice_id=f"{order_id}-ioc-0",
-                parent_order_id=order_id,
-                quantity=ctx.total_quantity,
-                price=price,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=0,
-                invariants_check_passed=invariant_ok,
-            )],
+            slices=[
+                OrderSlice(
+                    slice_id=f"{order_id}-ioc-0",
+                    parent_order_id=order_id,
+                    quantity=ctx.total_quantity,
+                    price=price,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=0,
+                    invariants_check_passed=invariant_ok,
+                )
+            ],
             estimated_completion_seconds=1.0,
         )
 
@@ -259,7 +259,7 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
         )
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
         total_qty = float(ctx.total_quantity.amount)
         slice_qty = total_qty / self.slice_count
 
@@ -282,19 +282,21 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
 
             slice_invariant = invariant_ok and alpha_remaining > 0
 
-            slices.append(OrderSlice(
-                slice_id=f"{order_id}-twap-{i}",
-                parent_order_id=order_id,
-                quantity=Quantity(amount=str(slice_qty)),
-                price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=i,
-                estimated_cost_bps=ctx.predicted_cost_bps / self.slice_count,
-                invariants_check_passed=slice_invariant,
-                remaining_alpha_bps=alpha_remaining,
-            ))
+            slices.append(
+                OrderSlice(
+                    slice_id=f"{order_id}-twap-{i}",
+                    parent_order_id=order_id,
+                    quantity=Quantity(amount=str(slice_qty)),
+                    price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=i,
+                    estimated_cost_bps=ctx.predicted_cost_bps / self.slice_count,
+                    invariants_check_passed=slice_invariant,
+                    remaining_alpha_bps=alpha_remaining,
+                )
+            )
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -315,14 +317,11 @@ class POVAlgorithm(BaseExecutionAlgorithm):
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
         return (
-            ctx.urgency < 0.5
-            and ctx.bid_depth > 0
-            and ctx.ask_depth > 0
-            and ctx.predicted_cost_bps < ctx.net_alpha_bps
+            ctx.urgency < 0.5 and ctx.bid_depth > 0 and ctx.ask_depth > 0 and ctx.predicted_cost_bps < ctx.net_alpha_bps
         )
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
 
         if ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
@@ -341,18 +340,20 @@ class POVAlgorithm(BaseExecutionAlgorithm):
 
         while remaining > 0:
             slice_qty = min(remaining, max_slice)
-            slices.append(OrderSlice(
-                slice_id=f"{order_id}-pov-{seq}",
-                parent_order_id=order_id,
-                quantity=Quantity(amount=str(slice_qty)),
-                price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=seq,
-                estimated_cost_bps=ctx.predicted_cost_bps * (slice_qty / total_qty),
-                invariants_check_passed=invariant_ok and slice_qty <= max_slice,
-            ))
+            slices.append(
+                OrderSlice(
+                    slice_id=f"{order_id}-pov-{seq}",
+                    parent_order_id=order_id,
+                    quantity=Quantity(amount=str(slice_qty)),
+                    price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=seq,
+                    estimated_cost_bps=ctx.predicted_cost_bps * (slice_qty / total_qty),
+                    invariants_check_passed=invariant_ok and slice_qty <= max_slice,
+                )
+            )
             remaining -= slice_qty
             seq += 1
             if seq > 50:  # 防止无限循环
@@ -388,7 +389,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
         return base
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
 
         if ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
@@ -414,19 +415,21 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
 
             # 切片大小随市场动态调整
             qty = slice_qty * (0.8 + 0.4 * alpha_remaining / max(ctx.net_alpha_bps, 1))
-            slices.append(OrderSlice(
-                slice_id=f"{order_id}-adaptive-{i}",
-                parent_order_id=order_id,
-                quantity=Quantity(amount=str(qty)),
-                price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=i,
-                estimated_cost_bps=ctx.predicted_cost_bps / slice_count,
-                invariants_check_passed=slice_invariant,
-                remaining_alpha_bps=alpha_remaining,
-            ))
+            slices.append(
+                OrderSlice(
+                    slice_id=f"{order_id}-adaptive-{i}",
+                    parent_order_id=order_id,
+                    quantity=Quantity(amount=str(qty)),
+                    price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=i,
+                    estimated_cost_bps=ctx.predicted_cost_bps / slice_count,
+                    invariants_check_passed=slice_invariant,
+                    remaining_alpha_bps=alpha_remaining,
+                )
+            )
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -445,22 +448,24 @@ class EmergencyReduceOnlyAlgorithm(BaseExecutionAlgorithm):
         return ctx.urgency >= 0.8 and ctx.side == OrderSide.SELL  # 减仓只能卖出
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        invariant_ok, msg = self.check_invariants(ctx)
+        invariant_ok, _msg = self.check_invariants(ctx)
 
         # 应急减仓不因成本取消
         return ExecutionPlan(
             algorithm=self.algorithm_type,
-            slices=[OrderSlice(
-                slice_id=f"{order_id}-emergency-0",
-                parent_order_id=order_id,
-                quantity=ctx.total_quantity,
-                price=None,  # 市价成交
-                order_type=OrderType.MARKET,
-                time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=0,
-                invariants_check_passed=invariant_ok,
-            )],
+            slices=[
+                OrderSlice(
+                    slice_id=f"{order_id}-emergency-0",
+                    parent_order_id=order_id,
+                    quantity=ctx.total_quantity,
+                    price=None,  # 市价成交
+                    order_type=OrderType.MARKET,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=0,
+                    invariants_check_passed=invariant_ok,
+                )
+            ],
             total_estimated_cost_bps=ctx.predicted_cost_bps,
             estimated_completion_seconds=1.0,
         )
@@ -482,9 +487,7 @@ class ExecutionAlgorithmSelector:
 
     def __init__(self, approved_algorithm_types: set[ExecutionAlgorithmType] | None = None) -> None:
         self._approved = approved_algorithm_types or set(ExecutionAlgorithmType)
-        self._quality_scores: dict[ExecutionAlgorithmType, float] = {
-            t: 0.5 for t in ExecutionAlgorithmType
-        }
+        self._quality_scores: dict[ExecutionAlgorithmType, float] = dict.fromkeys(ExecutionAlgorithmType, 0.5)
 
     @property
     def approved_algorithms(self) -> list[BaseExecutionAlgorithm]:
@@ -499,9 +502,9 @@ class ExecutionAlgorithmSelector:
 
         if not applicable:
             # 无适用算法时回退到已批准确定性策略
-            safe_fallbacks = [a for a in candidates if a.algorithm_type in (
-                ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY,
-            )]
+            safe_fallbacks = [
+                a for a in candidates if a.algorithm_type in (ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY,)
+            ]
             if safe_fallbacks:
                 return safe_fallbacks[0]
             # 最后回退到 IOC（快速退出）
@@ -516,13 +519,20 @@ class ExecutionAlgorithmSelector:
 
         # 按历史执行质量和紧急性加权排序
         scored = [
-            (a, self._quality_scores.get(a.algorithm_type, 0.5) * (1.0 + ctx.urgency) * (1.0 - ctx.predicted_cost_bps / 100.0))
+            (
+                a,
+                self._quality_scores.get(a.algorithm_type, 0.5)
+                * (1.0 + ctx.urgency)
+                * (1.0 - ctx.predicted_cost_bps / 100.0),
+            )
             for a in applicable
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[0][0]
 
-    def update_quality(self, algorithm_type: ExecutionAlgorithmType, realized_cost_bps: float, slippage_bps: float) -> None:
+    def update_quality(
+        self, algorithm_type: ExecutionAlgorithmType, realized_cost_bps: float, slippage_bps: float
+    ) -> None:
         """根据实际执行表现更新质量分数。"""
         current = self._quality_scores.get(algorithm_type, 0.5)
         # 成本越低分数越高
@@ -545,7 +555,10 @@ class SliceInvariantChecker:
 
         # 硬滑点检查
         if current_ctx.spread_bps > current_ctx.hard_slippage_limit_bps:
-            return False, f"Spread {current_ctx.spread_bps}bps exceeds hard limit {current_ctx.hard_slippage_limit_bps}bps"
+            return (
+                False,
+                f"Spread {current_ctx.spread_bps}bps exceeds hard limit {current_ctx.hard_slippage_limit_bps}bps",
+            )
 
         # Alpha 剩余检查
         if slice_.remaining_alpha_bps is not None and slice_.remaining_alpha_bps <= 0:

@@ -1,23 +1,29 @@
 """PKG-30B 报告引擎测试。日报/周报/事故报告、NOT_VERIFIABLE 语义、证据导出。"""
+
 from __future__ import annotations
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from beidou_shared.types import (
-    AccountId, CorrelationId, InstrumentId, ModelId, MonetaryValue,
-    SchemaVersion, StrategyId, VenueId,
-)
 from beidou_reporting.engine import (
-    ReportType,
-    ReportStatus,
-    EvidenceTier,
-    ReportReference,
     EvidenceEntry,
-    ReportSection,
+    EvidenceTier,
     Report,
     ReportGenerator,
+    ReportReference,
+    ReportSection,
+    ReportStatus,
+    ReportType,
     ReportValidator,
+)
+from beidou_shared.types import (
+    AccountId,
+    CorrelationId,
+    InstrumentId,
+    ModelId,
+    MonetaryValue,
+    SchemaVersion,
+    StrategyId,
+    VenueId,
 )
 
 
@@ -42,9 +48,12 @@ class TestEvidenceEntry:
 
     def test_verified_entry(self):
         entry = EvidenceEntry(
-            key="test_key", value="test_value", tier=EvidenceTier.VERIFIED,
+            key="test_key",
+            value="test_value",
+            tier=EvidenceTier.VERIFIED,
             source_ref=ReportReference(
-                source="ledger", query_id="q1",
+                source="ledger",
+                query_id="q1",
                 schema_version=SchemaVersion("1.0.0"),
                 timestamp=datetime.now(timezone.utc),
             ),
@@ -54,7 +63,8 @@ class TestEvidenceEntry:
 
     def test_not_verifiable_entry(self):
         entry = EvidenceEntry(
-            key="missing_data", value="NOT_VERIFIABLE",
+            key="missing_data",
+            value="NOT_VERIFIABLE",
             tier=EvidenceTier.NOT_VERIFIABLE,
         )
         assert entry.tier == EvidenceTier.NOT_VERIFIABLE
@@ -116,7 +126,9 @@ class TestReport:
 
     def test_export_dict_structure(self):
         report = Report(
-            report_id="r4", report_type=ReportType.DAILY, title="Export Test",
+            report_id="r4",
+            report_type=ReportType.DAILY,
+            title="Export Test",
             period_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
             period_end=datetime(2026, 1, 1, 23, 59, 59, tzinfo=timezone.utc),
         )
@@ -266,10 +278,14 @@ class TestReportGenerator:
         gen = ReportGenerator()
         date = datetime(2026, 1, 15, tzinfo=timezone.utc)
         report = gen.generate_daily_report(
-            date=date, strategies=[StrategyId("s1")],
-            account_id=AccountId("acc1"), venue_id=VenueId("BINANCE"),
-            pnl=MonetaryValue(amount="100"), risk_events_24h=0,
-            reconciliation_passed=True, positions={},
+            date=date,
+            strategies=[StrategyId("s1")],
+            account_id=AccountId("acc1"),
+            venue_id=VenueId("BINANCE"),
+            pnl=MonetaryValue(amount="100"),
+            risk_events_24h=0,
+            reconciliation_passed=True,
+            positions={},
             data_version=SchemaVersion("2.0.0"),
         )
         package = gen.export_evidence_package(report)
@@ -281,10 +297,14 @@ class TestReportGenerator:
         gen = ReportGenerator()
         date = datetime(2026, 1, 15, tzinfo=timezone.utc)
         gen.generate_daily_report(
-            date=date, strategies=[StrategyId("s1")],
-            account_id=AccountId("acc1"), venue_id=VenueId("BINANCE"),
-            pnl=MonetaryValue(amount="100"), risk_events_24h=0,
-            reconciliation_passed=True, positions={},
+            date=date,
+            strategies=[StrategyId("s1")],
+            account_id=AccountId("acc1"),
+            venue_id=VenueId("BINANCE"),
+            pnl=MonetaryValue(amount="100"),
+            risk_events_24h=0,
+            reconciliation_passed=True,
+            positions={},
         )
         assert len(gen.get_daily_reports()) == 1
 
@@ -292,10 +312,14 @@ class TestReportGenerator:
         gen = ReportGenerator()
         date = datetime(2026, 1, 15, tzinfo=timezone.utc)
         gen.generate_daily_report(
-            date=date, strategies=[StrategyId("s1")],
-            account_id=AccountId("acc1"), venue_id=VenueId("BINANCE"),
-            pnl=MonetaryValue(amount="100"), risk_events_24h=0,
-            reconciliation_passed=True, positions={},
+            date=date,
+            strategies=[StrategyId("s1")],
+            account_id=AccountId("acc1"),
+            venue_id=VenueId("BINANCE"),
+            pnl=MonetaryValue(amount="100"),
+            risk_events_24h=0,
+            reconciliation_passed=True,
+            positions={},
         )
         dailies = gen.get_reports_by_type(ReportType.DAILY)
         assert len(dailies) == 1
@@ -307,18 +331,22 @@ class TestReportValidator:
 
     def test_validate_with_references(self):
         report = Report(report_id="rv1", report_type=ReportType.DAILY, title="VTest")
-        report.references.append(ReportReference(
-            source="ledger", query_id="q1", schema_version=SchemaVersion("2.0.0"),
-            timestamp=datetime.now(timezone.utc),
-            correlation_id=CorrelationId("corr-1"),
-        ))
+        report.references.append(
+            ReportReference(
+                source="ledger",
+                query_id="q1",
+                schema_version=SchemaVersion("2.0.0"),
+                timestamp=datetime.now(timezone.utc),
+                correlation_id=CorrelationId("corr-1"),
+            )
+        )
         ok, issues = ReportValidator.validate_references(report)
         assert ok
         assert len(issues) == 0
 
     def test_validate_missing_references(self):
         report = Report(report_id="rv2", report_type=ReportType.DAILY, title="VTest")
-        ok, issues = ReportValidator.validate_references(report)
+        ok, _issues = ReportValidator.validate_references(report)
         assert not ok
 
     def test_not_verifiable_coverage(self):

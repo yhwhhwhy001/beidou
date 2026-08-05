@@ -4,16 +4,17 @@
   - beidou_safety: 交易安全（PreRisk/杠杆/仓位不变量），阻止非法订单
   - beidou_strategy.risk: 策略质量（回撤/Alpha衰减/风险预算），决定是否继续交易
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
-from beidou_shared.types import MonetaryValue, StrategyId, ResultStatus
-
+from beidou_shared.types import StrategyId
 
 _RISK_LEVEL_SEVERITY = {"NORMAL": 0, "CAUTION": 1, "REDUCED": 2, "EXIT_ONLY": 3, "LOCKED": 4}
+
 
 class StrategyRiskLevel(str, Enum):
     NORMAL = "NORMAL"
@@ -40,6 +41,7 @@ class CircuitBreakerReason(str, Enum):
 @dataclass
 class RiskBudget:
     """策略风险预算 — 限制单策略可承担的风险量。"""
+
     strategy_id: StrategyId
     max_drawdown_pct: float = 20.0
     max_daily_loss_pct: float = 5.0
@@ -51,8 +53,9 @@ class RiskBudget:
     allocation_pct: float = 100.0
     parent_budget_id: str | None = None
 
-    def compute_position_size(self, strategy_id: StrategyId, account_equity: float,
-                              entry_price: float, stop_loss_price: float) -> float:
+    def compute_position_size(
+        self, strategy_id: StrategyId, account_equity: float, entry_price: float, stop_loss_price: float
+    ) -> float:
         """基于风险预算计算仓位大小。
 
         risk_amount = account_equity × risk_per_trade_pct%
@@ -73,6 +76,7 @@ class RiskBudget:
 @dataclass
 class StrategyRiskState:
     """策略风险实时状态 — 动态更新的风险指标。"""
+
     strategy_id: StrategyId
     current_drawdown_pct: float = 0.0
     peak_equity: float = 0.0
@@ -134,7 +138,7 @@ class StrategyRiskManager:
         self._states: dict[StrategyId, StrategyRiskState] = {}
         self._circuit_breaker_log: list[dict] = []
 
-       # ---- 风险预算 ----
+    # ---- 风险预算 ----
 
     def set_budget(self, budget: RiskBudget) -> None:
         self._budgets[budget.strategy_id] = budget
@@ -146,7 +150,9 @@ class StrategyRiskManager:
     def get_budget(self, strategy_id: StrategyId) -> RiskBudget | None:
         return self._budgets.get(strategy_id)
 
-    def compute_position_size(self, strategy_id: StrategyId, account_equity: float, entry_price: float, stop_loss_price: float) -> float:
+    def compute_position_size(
+        self, strategy_id: StrategyId, account_equity: float, entry_price: float, stop_loss_price: float
+    ) -> float:
         """基于风险预算计算仓位大小。风险金额 = 账户权益 × risk_per_trade_pct%。"""
         budget = self._budgets.get(strategy_id)
         if budget is None or entry_price == 0:
@@ -179,21 +185,23 @@ class StrategyRiskManager:
         state.last_updated = datetime.now(timezone.utc)
 
         # 检查回撤限制
-        trading_ok, new_level = DrawdownMonitor.check_limit(dd_pct, budget.max_drawdown_pct)
+        _trading_ok, new_level = DrawdownMonitor.check_limit(dd_pct, budget.max_drawdown_pct)
         old_level = state.risk_level
 
         if new_level != old_level and new_level.severity > old_level.severity:
             state.risk_level = new_level
             reason = CircuitBreakerReason.DRAWDOWN_LIMIT
             state.active_circuit_breakers.append(reason)
-            self._circuit_breaker_log.append({
-                "strategy_id": str(strategy_id),
-                "reason": reason.value,
-                "old_level": old_level.value,
-                "new_level": new_level.value,
-                "drawdown_pct": dd_pct,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            self._circuit_breaker_log.append(
+                {
+                    "strategy_id": str(strategy_id),
+                    "reason": reason.value,
+                    "old_level": old_level.value,
+                    "new_level": new_level.value,
+                    "drawdown_pct": dd_pct,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             return {
                 "action": "DEGRADE",
                 "old_level": old_level.value,
@@ -230,13 +238,17 @@ class StrategyRiskManager:
             if reason not in state.active_circuit_breakers:
                 state.active_circuit_breakers.append(reason)
                 state.risk_level = StrategyRiskLevel.LOCKED
-                self._circuit_breaker_log.append({
-                    "strategy_id": str(strategy_id),
-                    "reason": reason.value,
-                    "daily_loss_pct": state.daily_loss_pct,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
-                actions.append(f"DAILY_LOSS_LIMIT: {state.daily_loss_pct:.1f}% >= {budget.max_daily_loss_pct:.1f}% → LOCKED")
+                self._circuit_breaker_log.append(
+                    {
+                        "strategy_id": str(strategy_id),
+                        "reason": reason.value,
+                        "daily_loss_pct": state.daily_loss_pct,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                actions.append(
+                    f"DAILY_LOSS_LIMIT: {state.daily_loss_pct:.1f}% >= {budget.max_daily_loss_pct:.1f}% → LOCKED"
+                )
 
         # 检查连续亏损限制
         if state.consecutive_losses >= budget.max_consecutive_losses:
@@ -244,13 +256,17 @@ class StrategyRiskManager:
             if reason not in state.active_circuit_breakers:
                 state.active_circuit_breakers.append(reason)
                 state.risk_level = StrategyRiskLevel.EXIT_ONLY
-                self._circuit_breaker_log.append({
-                    "strategy_id": str(strategy_id),
-                    "reason": reason.value,
-                    "consecutive_losses": state.consecutive_losses,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
-                actions.append(f"CONSECUTIVE_LOSSES: {state.consecutive_losses} >= {budget.max_consecutive_losses} → EXIT_ONLY")
+                self._circuit_breaker_log.append(
+                    {
+                        "strategy_id": str(strategy_id),
+                        "reason": reason.value,
+                        "consecutive_losses": state.consecutive_losses,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                actions.append(
+                    f"CONSECUTIVE_LOSSES: {state.consecutive_losses} >= {budget.max_consecutive_losses} → EXIT_ONLY"
+                )
 
         return {
             "action": "DEGRADE" if actions else "NOOP",
@@ -273,15 +289,20 @@ class StrategyRiskManager:
             if reason not in state.active_circuit_breakers:
                 state.active_circuit_breakers.append(reason)
                 state.risk_level = StrategyRiskLevel.EXIT_ONLY
-                self._circuit_breaker_log.append({
-                    "strategy_id": str(strategy_id),
-                    "reason": reason.value,
-                    "sharpe": rolling_sharpe,
-                    "threshold": budget.min_sharpe_rolling,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
-                return {"action": "DEGRADE", "new_level": "EXIT_ONLY",
-                        "reason": f"Sharpe {rolling_sharpe:.2f} < {budget.min_sharpe_rolling}"}
+                self._circuit_breaker_log.append(
+                    {
+                        "strategy_id": str(strategy_id),
+                        "reason": reason.value,
+                        "sharpe": rolling_sharpe,
+                        "threshold": budget.min_sharpe_rolling,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                return {
+                    "action": "DEGRADE",
+                    "new_level": "EXIT_ONLY",
+                    "reason": f"Sharpe {rolling_sharpe:.2f} < {budget.min_sharpe_rolling}",
+                }
 
         return {"action": "NOOP"}
 
@@ -297,12 +318,14 @@ class StrategyRiskManager:
         state.consecutive_losses = 0
         state.daily_pnl = 0.0
         state.daily_loss_pct = 0.0
-        self._circuit_breaker_log.append({
-            "strategy_id": str(strategy_id),
-            "reason": "MANUAL_RESET",
-            "reset_reason": reason,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self._circuit_breaker_log.append(
+            {
+                "strategy_id": str(strategy_id),
+                "reason": "MANUAL_RESET",
+                "reset_reason": reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return True
 
     def reset_daily_pnl(self) -> None:

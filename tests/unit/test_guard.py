@@ -6,14 +6,10 @@ import json
 import os
 import tempfile
 
-import pytest
-
 from beidou_core.guard import (
     EnvironmentGuard,
     EnvironmentMode,
     StartupGateStatus,
-    AuditEvent,
-    StartupGateResult,
 )
 
 
@@ -122,7 +118,7 @@ class TestFullModeRequirements:
             api_key="a" * 64,
             api_secret="b" * 64,
         )
-        assert not guard.check_full_mode_requirements()
+        assert not guard.check_full_mode_requirements(cli_mode="full")
 
     def test_full_mode_requires_g5_certificate(self):
         """full 模式需要 G5 证书文件。"""
@@ -133,7 +129,7 @@ class TestFullModeRequirements:
             api_secret="b" * 64,
         )
         # G5 cert path doesn't exist yet
-        assert not guard.check_full_mode_requirements()
+        assert not guard.check_full_mode_requirements(cli_mode="full")
 
     def test_full_mode_with_g5_certificate(self):
         """创建 G5 证书后 full mode 应通过。"""
@@ -144,26 +140,15 @@ class TestFullModeRequirements:
             with open(cert_path, "w") as f:
                 json.dump({"commit": "test_commit", "status": "PASS"}, f)
 
-            # Override cwd for test
-            import beidou_core.guard as guard_mod
-            original_exists = os.path.exists
-
-            def mock_exists(path):
-                if "G5.json" in str(path):
-                    return True
-                return original_exists(path)
-
-            # 用测试中的证书路径模拟完整性
             guard = EnvironmentGuard(
                 mode="testnet",
                 rest_url="https://testnet.binancefuture.com",
                 api_key="a" * 64,
                 api_secret="b" * 64,
                 commit="test_commit",
-                evidence_dir=os.path.join(tmpdir, "evidence", "BD-00"),
+                g5_cert_path=cert_path,
             )
-            assert guard.check_mainnet_url()
-            assert guard.check_trading_credentials()
+            assert guard.check_full_mode_requirements(cli_mode="full")
 
 
 class TestControlPlaneNoAutoResume:
@@ -171,13 +156,15 @@ class TestControlPlaneNoAutoResume:
 
     def test_control_plane_defaults_to_no_new_risk(self):
         """控制面默认状态应为 NO_NEW_RISK。"""
-        from beidou_control.plane import ControlPlane, ControlAction
+        from beidou_control.plane import ControlAction, ControlPlane
+
         cp = ControlPlane()
         assert cp.get_status() == ControlAction.NO_NEW_RISK
 
     def test_resume_is_explicit_only(self):
         """RESUME 必须显式调用。"""
-        from beidou_control.plane import ControlPlane, ControlAction
+        from beidou_control.plane import ControlAction, ControlPlane
+
         cp = ControlPlane()
         # 初始状态 NO_NEW_RISK
         assert cp.get_status() == ControlAction.NO_NEW_RISK
@@ -211,7 +198,7 @@ class TestAuditEvents:
                 mode="paper",
                 evidence_dir=evidence_dir,
             )
-            result = guard.run_all_checks()
+            guard.run_all_checks()
             audit_path = os.path.join(evidence_dir, "startup_audit.json")
             assert os.path.exists(audit_path)
 

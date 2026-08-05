@@ -10,11 +10,9 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 
 class EnvironmentMode(str, Enum):
@@ -32,6 +30,7 @@ class StartupGateStatus(str, Enum):
 @dataclass
 class AuditEvent:
     """安全启动审计事件 — 不可变记录。"""
+
     timestamp: str
     event_type: str
     environment: str
@@ -91,17 +90,25 @@ class EnvironmentGuard:
         "G7 ALL PASS",
     ]
 
-    def __init__(self, mode: str, rest_url: str = "", api_key: str = "",
-                 api_secret: str = "", commit: str = "",
-                 config_path: str = "", evidence_dir: str = "evidence/BD-00"):
-        self._mode = EnvironmentMode(mode.lower() if mode.lower() in
-                      [m.value for m in EnvironmentMode] else "paper")
+    def __init__(
+        self,
+        mode: str,
+        rest_url: str = "",
+        api_key: str = "",
+        api_secret: str = "",
+        commit: str = "",
+        config_path: str = "",
+        evidence_dir: str = "evidence/BD-00",
+        g5_cert_path: str = "",
+    ):
+        self._mode = EnvironmentMode(mode.lower() if mode.lower() in [m.value for m in EnvironmentMode] else "paper")
         self._rest_url = rest_url
         self._api_key = api_key
         self._api_secret = api_secret
         self._commit = commit
         self._config_path = config_path
         self._evidence_dir = evidence_dir
+        self._g5_cert_path = g5_cert_path
         self._audit_events: list[AuditEvent] = []
 
     def _audit(self, event_type: str, details: dict | None = None) -> AuditEvent:
@@ -134,7 +141,9 @@ class EnvironmentGuard:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return result.stdout.strip() if result.returncode == 0 else "UNKNOWN"
         except Exception:
@@ -158,30 +167,33 @@ class EnvironmentGuard:
         # 如果 URL 包含 binance.com 且无测试网标记
         if "binance.com" in url_lower:
             return True
-        for pattern in self.MAINNET_URL_PATTERNS:
-            if pattern in url_lower:
-                return True
-        return False
+        return any(pattern in url_lower for pattern in self.MAINNET_URL_PATTERNS)
 
     def check_production_block(self) -> bool:
         """检查 production 模式是否被永久阻断。"""
         if self._mode == EnvironmentMode.PRODUCTION:
-            self._audit("PRODUCTION_BLOCKED", {
-                "reason": "PIVOT — production is permanently prohibited until package completion",
-                "decision": "PIVOT",
-                "mainnet_allowed": False,
-            })
+            self._audit(
+                "PRODUCTION_BLOCKED",
+                {
+                    "reason": "PIVOT — production is permanently prohibited until package completion",
+                    "decision": "PIVOT",
+                    "mainnet_allowed": False,
+                },
+            )
             return False
         return True
 
     def check_mainnet_url(self) -> bool:
         """检查 REST URL 是否指向 Mainnet。"""
         if self._is_mainnet_url(self._rest_url):
-            self._audit("MAINNET_URL_BLOCKED", {
-                "url": self._rest_url,
-                "reason": "Mainnet URL detected — blocked by EnvironmentGuard",
-                "severity": "P0",
-            })
+            self._audit(
+                "MAINNET_URL_BLOCKED",
+                {
+                    "url": self._rest_url,
+                    "reason": "Mainnet URL detected — blocked by EnvironmentGuard",
+                    "severity": "P0",
+                },
+            )
             return False
         return True
 
@@ -191,15 +203,21 @@ class EnvironmentGuard:
             return True  # Paper mode 不需要凭据
 
         if not self._api_key or len(self._api_key) < 10:
-            self._audit("CREDENTIAL_MISSING", {
-                "reason": "API key missing or too short for non-paper mode",
-            })
+            self._audit(
+                "CREDENTIAL_MISSING",
+                {
+                    "reason": "API key missing or too short for non-paper mode",
+                },
+            )
             return False
 
         if not self._api_secret or len(self._api_secret) < 10:
-            self._audit("CREDENTIAL_MISSING", {
-                "reason": "API secret missing or too short for non-paper mode",
-            })
+            self._audit(
+                "CREDENTIAL_MISSING",
+                {
+                    "reason": "API secret missing or too short for non-paper mode",
+                },
+            )
             return False
 
         return True
@@ -225,27 +243,36 @@ class EnvironmentGuard:
         # 1. Mainnet URL 检查
         if self._is_mainnet_url(self._rest_url):
             failures.append("Mainnet URL not allowed")
-            self._audit("FULL_MODE_BLOCKED", {
-                "blocker": "mainnet_url",
-                "url": self._rest_url,
-            })
+            self._audit(
+                "FULL_MODE_BLOCKED",
+                {
+                    "blocker": "mainnet_url",
+                    "url": self._rest_url,
+                },
+            )
 
         # 2. 交易凭据
         if not self._api_key or not self._api_secret:
             failures.append("Trading credentials required for full/testnet mode")
-            self._audit("FULL_MODE_BLOCKED", {
-                "blocker": "missing_credentials",
-            })
+            self._audit(
+                "FULL_MODE_BLOCKED",
+                {
+                    "blocker": "missing_credentials",
+                },
+            )
 
         # 3. G5 证书链 — 仅 full CLI 模式强制要求（testnet 模式跳过）
         if cli_mode == "full":
-            g5_cert_path = os.path.join("evidence", "certificates", "G5.json")
+            g5_cert_path = self._g5_cert_path or os.path.join("evidence", "certificates", "G5.json")
             if not os.path.exists(g5_cert_path):
                 failures.append("G5 certificate not found")
-                self._audit("FULL_MODE_BLOCKED", {
-                    "blocker": "no_g5_certificate",
-                    "path": g5_cert_path,
-                })
+                self._audit(
+                    "FULL_MODE_BLOCKED",
+                    {
+                        "blocker": "no_g5_certificate",
+                        "path": g5_cert_path,
+                    },
+                )
             elif self._commit:
                 # 证书-commit 绑定
                 try:
@@ -254,14 +281,20 @@ class EnvironmentGuard:
                     cert_commit = cert.get("commit", "")
                     if cert_commit != self._commit:
                         failures.append(f"Certificate commit {cert_commit[:8]} != current {self._commit[:8]}")
-                        self._audit("FULL_MODE_BLOCKED", {
-                            "blocker": "commit_mismatch",
-                        })
+                        self._audit(
+                            "FULL_MODE_BLOCKED",
+                            {
+                                "blocker": "commit_mismatch",
+                            },
+                        )
                 except Exception:
                     failures.append("Certificate unreadable")
-                    self._audit("FULL_MODE_BLOCKED", {
-                        "blocker": "certificate_unreadable",
-                    })
+                    self._audit(
+                        "FULL_MODE_BLOCKED",
+                        {
+                            "blocker": "certificate_unreadable",
+                        },
+                    )
 
         return len(failures) == 0
 
@@ -312,11 +345,14 @@ class EnvironmentGuard:
             checks["full_mode_requirements"] = True
 
         # Startup audit event
-        self._audit("STARTUP_GATE", {
-            "all_checks_passed": len(failures) == 0,
-            "checks": checks,
-            "failures": failures,
-        })
+        self._audit(
+            "STARTUP_GATE",
+            {
+                "all_checks_passed": len(failures) == 0,
+                "checks": checks,
+                "failures": failures,
+            },
+        )
 
         # Write audit events to disk
         self._write_audit_trail()
@@ -340,11 +376,19 @@ class EnvironmentGuard:
     def scan_for_forbidden_claims(root_dir: str = ".") -> list[str]:
         """扫描仓库文本中的禁止声明。"""
         import glob
+
         found: list[str] = []
-        patterns = ["**/*.md", "**/*.py", "**/*.yaml", "**/*.yml", "**/*.json",
-                     "**/*.toml", "**/*.cfg", "**/*.txt"]
-        exclude_dirs = {".git", ".venv", "__pycache__", ".pytest_cache",
-                        "node_modules", ".mypy_cache", "evidence", "dist"}
+        patterns = ["**/*.md", "**/*.py", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.cfg", "**/*.txt"]
+        exclude_dirs = {
+            ".git",
+            ".venv",
+            "__pycache__",
+            ".pytest_cache",
+            "node_modules",
+            ".mypy_cache",
+            "evidence",
+            "dist",
+        }
 
         for pattern in patterns:
             for filepath in glob.glob(os.path.join(root_dir, pattern), recursive=True):
@@ -353,8 +397,7 @@ class EnvironmentGuard:
                 if parts & exclude_dirs:
                     continue
                 # Skip binary files
-                if any(filepath.endswith(ext) for ext in [".db", ".db-shm", ".db-wal",
-                                                           ".pyc", ".png", ".jpg"]):
+                if any(filepath.endswith(ext) for ext in [".db", ".db-shm", ".db-wal", ".pyc", ".png", ".jpg"]):
                     continue
                 try:
                     with open(filepath, "r") as f:

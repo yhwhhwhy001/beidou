@@ -24,6 +24,7 @@ from beidou_shared.types import DataQualityTier
 @dataclass
 class FastScreenResult:
     """快速预筛结果。"""
+
     passed: bool
     failure_reasons: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -32,17 +33,18 @@ class FastScreenResult:
 @dataclass
 class FastScreenConfig:
     """快速预筛配置 — 所有阈值来自 policy。"""
+
     min_sample_count: int = 30
-    max_missing_rate: float = 0.10       # 最大缺失率 10%
-    min_variance: float = 1e-12           # 最小方差（防零方差）
-    max_extreme_ratio: float = 0.05       # 最大极端值比例 5%
-    extreme_sigma: float = 5.0            # 极端值判定（σ 倍数）
-    max_complexity_score: float = 20.0    # 最大表达式复杂度
-    max_lookback_bars: int = 500          # 最大回看期
-    max_compute_time_ms: float = 100.0    # 最大单次计算时间（ms）
-    min_effective_samples: int = 20       # 最小有效样本（非缺失）
-    max_turnover_pct: float = 50.0        # 最大换手率（%）
-    require_deterministic: bool = True    # 必须确定性复现
+    max_missing_rate: float = 0.10  # 最大缺失率 10%
+    min_variance: float = 1e-12  # 最小方差（防零方差）
+    max_extreme_ratio: float = 0.05  # 最大极端值比例 5%
+    extreme_sigma: float = 5.0  # 极端值判定（σ 倍数）
+    max_complexity_score: float = 20.0  # 最大表达式复杂度
+    max_lookback_bars: int = 500  # 最大回看期
+    max_compute_time_ms: float = 100.0  # 最大单次计算时间（ms）
+    min_effective_samples: int = 20  # 最小有效样本（非缺失）
+    max_turnover_pct: float = 50.0  # 最大换手率（%）
+    require_deterministic: bool = True  # 必须确定性复现
 
 
 class FastScreen:
@@ -130,12 +132,9 @@ class FastScreen:
                 abs_deviations = sorted([abs(v - median_val) for v in valid_vals])
                 mad = abs_deviations[n_v // 2]
                 # 比例常数：正态分布下 MAD ≈ 0.6745 * σ
-                robust_sigma = mad / 0.6745 if mad > 0 else (variance ** 0.5)
+                robust_sigma = mad / 0.6745 if mad > 0 else (variance**0.5)
 
-                extreme_count = sum(
-                    1 for v in valid_vals
-                    if abs(v - median_val) > cfg.extreme_sigma * robust_sigma
-                )
+                extreme_count = sum(1 for v in valid_vals if abs(v - median_val) > cfg.extreme_sigma * robust_sigma)
                 extreme_ratio = extreme_count / len(valid_vals)
                 metrics["extreme_ratio"] = extreme_ratio
                 metrics["robust_sigma"] = robust_sigma
@@ -143,9 +142,8 @@ class FastScreen:
                     reasons.append(f"extreme_ratio: {extreme_ratio:.3f} > {cfg.max_extreme_ratio}")
 
         # 7. 表达式哈希重复检查
-        if existing_hashes and expression_hash:
-            if expression_hash in existing_hashes:
-                reasons.append(f"duplicate: expression_hash already exists")
+        if existing_hashes and expression_hash and expression_hash in existing_hashes:
+            reasons.append("duplicate: expression_hash already exists")
 
         # 8. 复杂度检查
         metrics["complexity_score"] = complexity_score
@@ -202,5 +200,6 @@ def _is_missing(v: float) -> bool:
         return True
     if isinstance(v, float):
         import math
+
         return math.isnan(v) or math.isinf(v)
     return False

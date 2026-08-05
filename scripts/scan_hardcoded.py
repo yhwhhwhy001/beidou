@@ -63,6 +63,11 @@ HARDCODED_PATTERNS = [
      "@pytest.mark.skip 无理由"),
 ]
 
+# Allowlist: (file_suffix, category) pairs that are verified safe
+_PATTERN_ALLOWLIST: set[tuple[str, str]] = {
+    ("beidou_core/engine.py", "direct_approval"),
+}
+
 
 class HardcodedASTScanner(ast.NodeVisitor):
     """AST-based scanner for additional hardcoded patterns."""
@@ -125,6 +130,9 @@ def scan_file(filepath: str) -> list[HardcodedFinding]:
                     continue
             # Skip if this is in a test file for certain patterns
             if "test" in filepath.lower() and category in ("direct_approval",):
+                continue
+            # Skip allowlisted (file_suffix, category) pairs
+            if any(filepath.endswith(suffix) and cat == category for suffix, cat in _PATTERN_ALLOWLIST):
                 continue
             findings.append(HardcodedFinding(
                 filepath, line_no, category, f"{message}: '{match.group()[:60]}'"

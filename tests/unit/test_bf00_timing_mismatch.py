@@ -9,14 +9,12 @@
 
 from __future__ import annotations
 
-import math
 import random
-from dataclasses import dataclass
-
 
 # ================================================================
 # 模拟场景：生成带自相关的模拟价格序列
 # ================================================================
+
 
 def generate_price_series(n: int = 1000, seed: int = 42) -> list[float]:
     """生成GARCH-like价格序列，模拟真实市场数据。"""
@@ -44,9 +42,8 @@ def compute_sma(prices: list[float], window: int = 20) -> list[float]:
 # 当前引擎的错误实现（复现 engine.py 的行为）
 # ================================================================
 
-def current_engine_pairing(
-    prices: list[float], sma20: list[float]
-) -> tuple[list[float], list[float], list[float]]:
+
+def current_engine_pairing(prices: list[float], sma20: list[float]) -> tuple[list[float], list[float], list[float]]:
     """复现当前 engine.py _nearline_tick + _offline_tick 的逻辑。
 
     当前实现：
@@ -98,6 +95,7 @@ def current_engine_pairing(
 # 正确的实现
 # ================================================================
 
+
 def correct_engine_pairing(
     prices: list[float], sma20: list[float], horizon: int = 1
 ) -> tuple[list[float], list[float]]:
@@ -136,6 +134,7 @@ def correct_engine_pairing(
 # 统计函数
 # ================================================================
 
+
 def pearson_corr(x: list[float], y: list[float]) -> tuple[float, float]:
     """计算 Pearson 相关系数（IC）和标准差。"""
     n = min(len(x), len(y))
@@ -157,6 +156,7 @@ def pearson_corr(x: list[float], y: list[float]) -> tuple[float, float]:
 # 测试用例
 # ================================================================
 
+
 class TestTimingMismatch:
     """BF-00: 时间错配最小可复现实例。"""
 
@@ -174,22 +174,16 @@ class TestTimingMismatch:
         correct_fwd = correct_fwd[:n]
 
         # 计算当前实现的 IC
-        ic_current, ic_std_current = pearson_corr(predictions, paired_returns)
+        ic_current, _ic_std_current = pearson_corr(predictions, paired_returns)
         # 计算正确配对的 IC
-        ic_correct, ic_std_correct = pearson_corr(predictions, correct_fwd)
-
-        print(f"\n[BF-00] 当前引擎 IC: {ic_current:.6f} (配对 past return)")
-        print(f"[BF-00] 正确引擎 IC: {ic_correct:.6f} (配对 forward return)")
-        print(f"[BF-00] IC 差异: {abs(ic_current - ic_correct):.6f}")
-        print(f"[BF-00] 结论: 当前 prediction(t) 与 return(t-1, t) 配对，存在时间错配")
+        ic_correct, _ic_std_correct = pearson_corr(predictions, correct_fwd)
 
         # 关键断言：当前引擎确实使用了 past return
         # paired_returns[i] = (prices[i+1] - prices[i]) / prices[i] 这是时刻i的past return
         # 而 predictions[i] 是时刻 i+1 的预测（基于当前close的偏差）
         # 所以 prediction(t) ↔ return(t-1, t)
         assert ic_current != ic_correct, (
-            f"IC values should differ due to timing mismatch: "
-            f"current={ic_current:.6f} vs correct={ic_correct:.6f}"
+            f"IC values should differ due to timing mismatch: current={ic_current:.6f} vs correct={ic_correct:.6f}"
         )
 
     def test_current_engine_returns_are_past_not_forward(self):
@@ -209,30 +203,20 @@ class TestTimingMismatch:
         prices = [100.0, 101.0, 99.0, 102.0]
         sma20 = [100.0] * 4
 
-        predictions, paired_returns, correct_fwd = current_engine_pairing(prices, sma20)
+        _predictions, paired_returns, correct_fwd = current_engine_pairing(prices, sma20)
 
         # t=1 时刻（数组索引0对应i=1）
         # paired_returns[0] = (101-100)/100 = 0.01 ← 这是 past return
         # correct_fwd[0] = (99-101)/101 ≈ -0.0198 ← 这才是正确的 forward return
 
-        print(f"\n[BF-00] 确定性复现:")
-        print(f"  prices: {prices}")
-        print(f"  predictions: {[f'{p:.4f}' for p in predictions]}")
-        print(f"  paired_returns (past): {[f'{r:.4f}' for r in paired_returns]}")
-        print(f"  correct_fwd: {[f'{r:.4f}' for r in correct_fwd]}")
-        print(f"  t=1: pred={predictions[0]:.4f} ↔ paired_return={paired_returns[0]:.4f} (PAST)")
-        print(f"  t=1: pred={predictions[0]:.4f} ↔ correct_fwd={correct_fwd[0]:.4f} (FORWARD)")
-
         # 验证 past return 不是 forward return
-        assert abs(paired_returns[0] - 0.01) < 1e-9, (
-            f"Expected past return 0.01, got {paired_returns[0]}"
-        )
+        assert abs(paired_returns[0] - 0.01) < 1e-9, f"Expected past return 0.01, got {paired_returns[0]}"
         assert abs(correct_fwd[0] - (-0.019801980198019802)) < 1e-9, (
             f"Expected forward return -0.0198, got {correct_fwd[0]}"
         )
         # 两者明显不同
         assert paired_returns[0] * correct_fwd[0] < 0, (
-            f"Past and forward returns should have opposite signs in this case"
+            "Past and forward returns should have opposite signs in this case"
         )
 
     def test_correct_pairing_yields_different_ic(self):
@@ -251,15 +235,8 @@ class TestTimingMismatch:
         ic_current, _ = pearson_corr(pred_current[:n], paired_current[:n])
         ic_correct, _ = pearson_corr(pred_correct[:n], fwd_correct[:n])
 
-        print(f"\n[BF-00] 1000点序列比较:")
-        print(f"  IC (prediction vs past return):     {ic_current:+.6f}")
-        print(f"  IC (prediction vs forward return):  {ic_correct:+.6f}")
-        print(f"  绝对差值: {abs(ic_current - ic_correct):.6f}")
-
         # 符号或幅度应不同
-        assert abs(ic_current - ic_correct) > 1e-6, (
-            f"Timing mismatch should produce materially different IC values"
-        )
+        assert abs(ic_current - ic_correct) > 1e-6, "Timing mismatch should produce materially different IC values"
 
     def test_shared_close_price_creates_spurious_correlation(self):
         """证明共享 close price 制造了虚假相关。
@@ -289,7 +266,7 @@ class TestTimingMismatch:
             else:
                 prices.append(150.0 + rng.gauss(0, 1))
 
-        sma = [100.0] * n  # 简化SMA
+        [100.0] * n  # 简化SMA
 
         # 纯随机预测（零预测力）
         random_predictions = [rng.gauss(0, 1) for _ in range(n - 1)]
@@ -309,12 +286,8 @@ class TestTimingMismatch:
         past_returns = past_returns[:n_align]
         forward_returns = forward_returns[:n_align]
 
-        ic_vs_past, _ = pearson_corr(random_predictions, past_returns)
+        _ic_vs_past, _ = pearson_corr(random_predictions, past_returns)
         ic_vs_forward, _ = pearson_corr(random_predictions, forward_returns)
-
-        print(f"\n[BF-00] 纯噪声因子 — 共享 close price 的虚假相关:")
-        print(f"  噪声预测 vs past return:    {ic_vs_past:+.6f}")
-        print(f"  噪声预测 vs forward return: {ic_vs_forward:+.6f}")
 
         # 噪声因子与 forward return 的 IC 应很小（无预测力）
         # 但由于价格振荡结构，past return 可能与噪声有任何相关性
@@ -330,22 +303,15 @@ class TestTimingMismatch:
         predictions = [0.1, -0.2, 0.3, -0.1, 0.05, 0.15, -0.12, 0.08, -0.05, 0.02] * 10
         returns = [0.01, -0.02, 0.03, -0.01, 0.005, 0.015, -0.012, 0.008, -0.005, 0.002] * 10
 
-        ic, second_value = pearson_corr(predictions, returns)
+        _ic, second_value = pearson_corr(predictions, returns)
 
         # 正确的 IC 标准差：对 IC 序列本身求 std
         # 当前代码返回的是 returns 的标准差
         returns_std = (sum((r - sum(returns) / len(returns)) ** 2 for r in returns) / (len(returns) - 1)) ** 0.5
 
-        print(f"\n[BF-00] compute_ic 返回值分析:")
-        print(f"  IC: {ic:.6f}")
-        print(f"  compute_ic 第二个返回值: {second_value:.6f}")
-        print(f"  returns 标准差:        {returns_std:.6f}")
-        print(f"  两者一致: {abs(second_value - returns_std) < 1e-9}")
-
         # 验证第二个返回值确实是收益标准差
         assert abs(second_value - returns_std) < 1e-9, (
-            f"compute_ic second return value IS returns std, not IC std. "
-            f"Got {second_value}, returns std={returns_std}"
+            f"compute_ic second return value IS returns std, not IC std. Got {second_value}, returns std={returns_std}"
         )
 
     def test_extended_window_icir_is_biased(self):
@@ -361,6 +327,7 @@ class TestTimingMismatch:
         这导致 IC 序列高度相关，ICIR 有偏。
         """
         import random as rng_mod
+
         rng = rng_mod.Random(42)
 
         # 生成独立同分布 IC 序列
@@ -385,12 +352,7 @@ class TestTimingMismatch:
 
         # 或者直接看扩展窗口 IC mean 的 std
         # 扩展窗口均值比单期均值稳定得多 → std 偏低 → ICIR 偏高
-        icir_inflation = ext_icir / true_icir if true_icir != 0 else float("inf")
-
-        print(f"\n[BF-00] 扩展窗口 ICIR 偏差:")
-        print(f"  真实 IC 序列: mean={true_mean:.4f}, std={true_std:.4f}, ICIR={true_icir:.4f}")
-        print(f"  扩展窗口 IC 序列: mean={ext_mean:.4f}, std={ext_std:.4f}, ICIR={ext_icir:.4f}")
-        print(f"  ICIR 膨胀倍数: {icir_inflation:.2f}x")
+        ext_icir / true_icir if true_icir != 0 else float("inf")
 
         # 扩展窗口的 std 应该更小（因为平均效应）
         assert ext_std < true_std, (
@@ -428,14 +390,7 @@ class TestTimingMismatch:
         ic_b, _ = pearson_corr(pred_b, ret_b)
         ic_mixed, _ = pearson_corr(mixed_preds, mixed_rets)
 
-        print(f"\n[BF-00] 多品种不隔离影响:")
-        print(f"  IC(symbol A): {ic_a:.4f}")
-        print(f"  IC(symbol B): {ic_b:.4f}")
-        print(f"  IC(mixed):    {ic_mixed:.4f}")
-
-        assert abs(ic_a) > 0.5, f"Symbol A should have strong positive IC"
-        assert abs(ic_b) > 0.5, f"Symbol B should have strong negative IC"
+        assert abs(ic_a) > 0.5, "Symbol A should have strong positive IC"
+        assert abs(ic_b) > 0.5, "Symbol B should have strong negative IC"
         # 混合后 IC 应接近 0（两品种抵消）
-        assert abs(ic_mixed) < 0.1, (
-            f"Mixed IC should be near 0 due to cancellation, got {ic_mixed:.4f}"
-        )
+        assert abs(ic_mixed) < 0.1, f"Mixed IC should be near 0 due to cancellation, got {ic_mixed:.4f}"

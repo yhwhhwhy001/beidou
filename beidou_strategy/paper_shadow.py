@@ -15,9 +15,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
-from beidou_shared.types import StrategyId, GateResult
+from beidou_shared.types import GateResult, StrategyId
 
 
 class ShadowMode(str, Enum):
@@ -35,9 +34,10 @@ class ShadowStatus(str, Enum):
 @dataclass
 class ShadowConfig:
     """Paper Shadow 配置。"""
+
     strategy_id: StrategyId
     mode: ShadowMode = ShadowMode.PAPER
-    min_runtime_hours: float = 168.0       # 7 days for Paper
+    min_runtime_hours: float = 168.0  # 7 days for Paper
     min_effective_events: int = 50
     max_prediction_deviation_pct: float = 30.0
     max_cost_deviation_pct: float = 20.0
@@ -47,13 +47,14 @@ class ShadowConfig:
 @dataclass
 class ShadowMetrics:
     """Paper Shadow 运行指标。"""
+
     runtime_hours: float = 0.0
     total_ticks: int = 0
     total_signals: int = 0
     total_executed: int = 0
     total_rejected: int = 0
-    prediction_vs_simulation_mae: float = 0.0   # 预测vs模拟平均绝对误差
-    cost_estimated_vs_actual_mae: float = 0.0   # 预测成本vs实际成本误差
+    prediction_vs_simulation_mae: float = 0.0  # 预测vs模拟平均绝对误差
+    cost_estimated_vs_actual_mae: float = 0.0  # 预测成本vs实际成本误差
     drift_events: int = 0
     p0_incidents: int = 0
 
@@ -61,6 +62,7 @@ class ShadowMetrics:
 @dataclass
 class ShadowReport:
     """Paper Shadow 完成报告。"""
+
     config: ShadowConfig
     metrics: ShadowMetrics = field(default_factory=ShadowMetrics)
     status: ShadowStatus = ShadowStatus.INITIALIZING
@@ -77,13 +79,9 @@ class ShadowReport:
 
         failures = []
         if m.runtime_hours < cfg.min_runtime_hours:
-            failures.append(
-                f"runtime: {m.runtime_hours:.1f}h < {cfg.min_runtime_hours}h"
-            )
+            failures.append(f"runtime: {m.runtime_hours:.1f}h < {cfg.min_runtime_hours}h")
         if m.total_executed < cfg.min_effective_events:
-            failures.append(
-                f"events: {m.total_executed} < {cfg.min_effective_events}"
-            )
+            failures.append(f"events: {m.total_executed} < {cfg.min_effective_events}")
         if m.prediction_vs_simulation_mae > cfg.max_prediction_deviation_pct:
             failures.append(
                 f"prediction_deviation: {m.prediction_vs_simulation_mae:.1f}% > {cfg.max_prediction_deviation_pct}%"
@@ -129,22 +127,26 @@ class PaperShadowRunner:
             self.metrics.total_signals += 1
 
             # 记录预测
-            self._predictions.append({
-                "direction": predicted_direction,
-                "strength": predicted_strength,
-                "cost_bps": estimated_cost_bps,
-                "tick": self.metrics.total_ticks,
-            })
+            self._predictions.append(
+                {
+                    "direction": predicted_direction,
+                    "strength": predicted_strength,
+                    "cost_bps": estimated_cost_bps,
+                    "tick": self.metrics.total_ticks,
+                }
+            )
 
             # 与实际比较
             if actual_direction != "NO_ACTION":
                 self.metrics.total_executed += 1
-                self._actuals.append({
-                    "direction": actual_direction,
-                    "strength": actual_strength,
-                    "cost_bps": actual_cost_bps,
-                    "tick": self.metrics.total_ticks,
-                })
+                self._actuals.append(
+                    {
+                        "direction": actual_direction,
+                        "strength": actual_strength,
+                        "cost_bps": actual_cost_bps,
+                        "tick": self.metrics.total_ticks,
+                    }
+                )
             else:
                 self.metrics.total_rejected += 1
 
@@ -157,17 +159,15 @@ class PaperShadowRunner:
             # 更新 MAE (指数移动平均)
             n = self.metrics.total_signals
             self.metrics.prediction_vs_simulation_mae = (
-                (self.metrics.prediction_vs_simulation_mae * (n - 1) + strength_err * 100)
-                / n
-            )
+                self.metrics.prediction_vs_simulation_mae * (n - 1) + strength_err * 100
+            ) / n
 
             # 成本偏差
             if estimated_cost_bps > 0 and actual_cost_bps > 0:
                 cost_err = abs(estimated_cost_bps - actual_cost_bps) / estimated_cost_bps * 100
                 self.metrics.cost_estimated_vs_actual_mae = (
-                    (self.metrics.cost_estimated_vs_actual_mae * (n - 1) + cost_err)
-                    / n
-                )
+                    self.metrics.cost_estimated_vs_actual_mae * (n - 1) + cost_err
+                ) / n
 
     def record_incident(self, level: str) -> None:
         """记录事件。"""
@@ -203,13 +203,16 @@ class PaperShadowRunner:
                 report.status = ShadowStatus.INITIALIZING
 
         # 证据哈希
-        content = json.dumps({
-            "strategy_id": str(self.config.strategy_id),
-            "runtime_hours": self.metrics.runtime_hours,
-            "total_executed": self.metrics.total_executed,
-            "deviation_pct": self.metrics.prediction_vs_simulation_mae,
-            "p0_incidents": self.metrics.p0_incidents,
-        }, sort_keys=True)
+        content = json.dumps(
+            {
+                "strategy_id": str(self.config.strategy_id),
+                "runtime_hours": self.metrics.runtime_hours,
+                "total_executed": self.metrics.total_executed,
+                "deviation_pct": self.metrics.prediction_vs_simulation_mae,
+                "p0_incidents": self.metrics.p0_incidents,
+            },
+            sort_keys=True,
+        )
         report.evidence_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
 
         if not ready:

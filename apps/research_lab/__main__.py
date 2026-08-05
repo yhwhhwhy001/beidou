@@ -35,7 +35,8 @@ def main() -> None:
     # 可选: 如果提供了 --run 参数，直接启动因子挖掘
     if "--run" in sys.argv:
         print("[research_lab] 启动离线因子挖掘...")
-        from beidou_research.mining.runner import MiningRunner, PipelineConfig
+        from beidou_research.mining.runner import PipelineConfig
+
         config = PipelineConfig(run_id=f"research-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}")
         print(f"[research_lab] Run ID: {config.run_id}")
         print("[research_lab] 请提供 price_data 参数调用 runner.run()")

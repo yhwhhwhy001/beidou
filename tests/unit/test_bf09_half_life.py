@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-import pytest
+
 from beidou_strategy.components.mean_reversion_fixed import (
-    estimate_half_life, robust_zscore, HalfLifeResult,
+    estimate_half_life,
+    robust_zscore,
 )
 
 
@@ -16,6 +17,7 @@ class TestHalfLifeFix:
         """AR(1) 均值回归序列产生正半衰期。"""
         # 构造 OU 过程：x_{t+1} = 0.8 x_t + ε (均值回归)
         import random
+
         rng = random.Random(42)
         n = 200
         log_prices = [0.0]
@@ -34,6 +36,7 @@ class TestHalfLifeFix:
     def test_random_walk_has_large_half_life(self):
         """随机游走的半衰期应很大或无均值回归证据。"""
         import random
+
         rng = random.Random(99)
         n = 500
         prices = [100.0]
@@ -54,6 +57,7 @@ class TestHalfLifeFix:
     def test_half_life_formula_agreement(self):
         """β 方法和 φ 方法的半衰期近似一致。"""
         import random
+
         rng = random.Random(123)
         n = 500
         log_prices = [0.0]
@@ -69,8 +73,7 @@ class TestHalfLifeFix:
         if result.valid:
             # 估计值应在理论值的 ±50% 内
             assert 0.5 * theoretical < result.half_life_bars < 1.5 * theoretical, (
-                f"Half-life estimate {result.half_life_bars:.1f} should be near "
-                f"theoretical {theoretical:.1f}"
+                f"Half-life estimate {result.half_life_bars:.1f} should be near theoretical {theoretical:.1f}"
             )
 
 
@@ -80,6 +83,7 @@ class TestRobustZscore:
     def test_normal_data(self):
         """正态分布数据产生合理的 z-score。"""
         import random
+
         rng = random.Random(42)
         values = [rng.gauss(0, 1) for _ in range(100)]
         zs = robust_zscore(values, window=20)
@@ -89,9 +93,7 @@ class TestRobustZscore:
         if valid_zs:
             extreme = [z for z in valid_zs if abs(z) > 5]
             # 允许少量，但不超过 20%
-            assert len(extreme) < len(valid_zs) * 0.2, (
-                f"Too many extreme values: {len(extreme)}/{len(valid_zs)}"
-            )
+            assert len(extreme) < len(valid_zs) * 0.2, f"Too many extreme values: {len(extreme)}/{len(valid_zs)}"
 
     def test_outlier_detection(self):
         """异常值产生高 z-score。"""
@@ -104,9 +106,7 @@ class TestRobustZscore:
         # 最后一个值应检测为异常
         # 在 window 20-40 内都是 1.0 → median=1.0, MAD≈0
         # 最后一个 100.0 相对 20-window 的 median 应很大
-        assert abs(zs[-1]) > 3 or zs[-1] == 0, (
-            f"Last z-score should be high (>3) or 0, got {zs[-1]}"
-        )
+        assert abs(zs[-1]) > 3 or zs[-1] == 0, f"Last z-score should be high (>3) or 0, got {zs[-1]}"
 
     def test_constant_data_zero_scores(self):
         """常数数据不应产生异常高的 z-score。"""

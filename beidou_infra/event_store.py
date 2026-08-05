@@ -9,12 +9,12 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class DomainEvent:
     """不可变领域事件。"""
+
     stream_id: str
     aggregate_type: str
     sequence: int
@@ -34,17 +34,21 @@ class DomainEvent:
 
     def _compute_checksum(self) -> str:
         """计算事件内容的 SHA256。"""
-        content = json.dumps({
-            "stream_id": self.stream_id,
-            "aggregate_type": self.aggregate_type,
-            "sequence": self.sequence,
-            "event_type": self.event_type,
-            "payload": self.payload,
-            "event_time": self.event_time.isoformat(),
-            "schema_version": self.schema_version,
-            "correlation_id": self.correlation_id,
-            "causation_id": self.causation_id,
-        }, sort_keys=True, default=str)
+        content = json.dumps(
+            {
+                "stream_id": self.stream_id,
+                "aggregate_type": self.aggregate_type,
+                "sequence": self.sequence,
+                "event_type": self.event_type,
+                "payload": self.payload,
+                "event_time": self.event_time.isoformat(),
+                "schema_version": self.schema_version,
+                "correlation_id": self.correlation_id,
+                "causation_id": self.causation_id,
+            },
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(content.encode()).hexdigest()
 
 
@@ -66,18 +70,13 @@ class EventStore:
         """追加事件。失败时抛异常（乐观并发冲突）。"""
         # 检查 sequence 冲突
         for existing in self._events:
-            if (existing.stream_id == event.stream_id and
-                existing.sequence == event.sequence):
-                raise ConcurrencyConflictError(
-                    f"Sequence {event.sequence} already exists for stream {event.stream_id}"
-                )
+            if existing.stream_id == event.stream_id and existing.sequence == event.sequence:
+                raise ConcurrencyConflictError(f"Sequence {event.sequence} already exists for stream {event.stream_id}")
 
         # 验证 checksum
         expected = event._compute_checksum()
         if event.checksum and event.checksum != expected:
-            raise ChecksumMismatchError(
-                f"Checksum mismatch for event in stream {event.stream_id}"
-            )
+            raise ChecksumMismatchError(f"Checksum mismatch for event in stream {event.stream_id}")
 
         self._events.append(event)
         return True
@@ -96,8 +95,7 @@ class EventStore:
     def replay(self, aggregate_type: str, stream_id: str) -> list[DomainEvent]:
         """事件溯源重放 — 返回该 aggregate 的所有历史事件。"""
         return sorted(
-            [e for e in self._events
-             if e.aggregate_type == aggregate_type and e.stream_id == stream_id],
+            [e for e in self._events if e.aggregate_type == aggregate_type and e.stream_id == stream_id],
             key=lambda e: e.sequence,
         )
 
@@ -107,17 +105,17 @@ class EventStore:
         for event in self._events:
             expected = event._compute_checksum()
             if event.checksum != expected:
-                errors.append(
-                    f"Checksum mismatch: {event.stream_id}#{event.sequence}"
-                )
+                errors.append(f"Checksum mismatch: {event.stream_id}#{event.sequence}")
         return errors
 
 
 class ConcurrencyConflictError(Exception):
     """乐观并发冲突 — 同一 stream 的 sequence 已被占用。"""
+
     pass
 
 
 class ChecksumMismatchError(Exception):
     """事件 checksum 不匹配 — 数据可能被篡改。"""
+
     pass

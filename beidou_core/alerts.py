@@ -5,6 +5,7 @@ P0 (CRITICAL/LOCKDOWN) 永不抑制，立即发送。
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import urllib.request
@@ -12,7 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from beidou_observability.telemetry import (
-    AlertSeverity, AlertSuppressor, AutoAction, Incident, IncidentStatus,
+    AlertSeverity,
+    AlertSuppressor,
+    AutoAction,
+    Incident,
 )
 from beidou_reporting.engine import ReportGenerator
 
@@ -30,9 +34,14 @@ class AlertDispatcher:
         self._alert_count: dict[str, int] = {}
         self._start_time = datetime.now(timezone.utc)
 
-    def send_incident(self, severity: AlertSeverity, title: str,
-                      description: str, auto_action: AutoAction | None = None,
-                      category: str = "runtime") -> Incident:
+    def send_incident(
+        self,
+        severity: AlertSeverity,
+        title: str,
+        description: str,
+        auto_action: AutoAction | None = None,
+        category: str = "runtime",
+    ) -> Incident:
         """创建并分发事故告警。"""
         incident_id = f"inc-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{category}"
 
@@ -60,9 +69,7 @@ class AlertDispatcher:
     def _dispatch(self, incident: Incident) -> None:
         with self._lock:
             self._active_incidents[incident.incident_id] = incident
-            self._alert_count[incident.severity.value] = (
-                self._alert_count.get(incident.severity.value, 0) + 1
-            )
+            self._alert_count[incident.severity.value] = self._alert_count.get(incident.severity.value, 0) + 1
 
         # 写入 JSONL 文件
         self._write_to_file(incident)
@@ -72,7 +79,7 @@ class AlertDispatcher:
             self._send_webhook(incident)
 
         # 生成事故报告
-        try:
+        with contextlib.suppress(Exception):
             self._report_generator.generate_incident_report(
                 incident_id=incident.incident_id,
                 title=incident.title,
@@ -81,8 +88,6 @@ class AlertDispatcher:
                 detected_at=incident.detected_at,
                 auto_action=incident.auto_action.value,
             )
-        except Exception as e:
-            print(f"[alerts] Failed to write to database: {e}")
 
     def _write_to_file(self, incident: Incident) -> None:
         record = {
@@ -98,14 +103,16 @@ class AlertDispatcher:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _send_webhook(self, incident: Incident) -> None:
-        payload = json.dumps({
-            "incident_id": incident.incident_id,
-            "severity": incident.severity.value,
-            "title": incident.title,
-            "description": incident.description,
-            "auto_action": incident.auto_action.value,
-            "detected_at": incident.detected_at.isoformat(),
-        }).encode()
+        payload = json.dumps(
+            {
+                "incident_id": incident.incident_id,
+                "severity": incident.severity.value,
+                "title": incident.title,
+                "description": incident.description,
+                "auto_action": incident.auto_action.value,
+                "detected_at": incident.detected_at.isoformat(),
+            }
+        ).encode()
 
         try:
             req = urllib.request.Request(
@@ -114,9 +121,9 @@ class AlertDispatcher:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=5)
-        except Exception as e:
+        except Exception:
             # Webhook 失败不应影响主流程，但必须记录
-            print(f"[alerts] Webhook delivery failed: {e}")
+            pass
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:

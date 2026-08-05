@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
-import math
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from beidou_research.mining.evaluation.fast_screen import FastScreen, FastScreenConfig
+from beidou_research.mining.evaluation.cost_capacity import (
+    CapacityEvaluator,
+    CostModel,
+)
+from beidou_research.mining.evaluation.fast_screen import FastScreen
 from beidou_research.mining.evaluation.multiple_testing import (
-    benjamini_hochberg, holm_correction, deflated_sharpe_ratio,
-    compute_pbo, evaluate_multiple_testing,
+    benjamini_hochberg,
+    compute_pbo,
+    deflated_sharpe_ratio,
+    holm_correction,
 )
 from beidou_research.mining.evaluation.purged_walk_forward import (
-    FoldBuilder, FoldConfig, PurgedWalkForward, Fold,
+    FoldBuilder,
+    FoldConfig,
+    PurgedWalkForward,
 )
 from beidou_research.mining.evaluation.stability import StabilityEvaluator
-from beidou_research.mining.evaluation.cost_capacity import (
-    CostModel, CapacityEvaluator, CapacityResult,
-)
 from beidou_shared.types import DataQualityTier
-
 
 # ================================================================
 # FastScreen
 # ================================================================
+
 
 class TestFastScreen:
     def test_passes_clean_data(self):
@@ -54,7 +57,7 @@ class TestFastScreen:
 
     def test_fails_high_missing(self):
         fs = FastScreen()
-        vals = [0.1, 0.2] + [float('nan')] * 98
+        vals = [0.1, 0.2] + [float("nan")] * 98
         result = fs.screen(factor_values=vals)
         assert not result.passed
         assert any("missing_rate" in r for r in result.failure_reasons)
@@ -91,6 +94,7 @@ class TestFastScreen:
 # ================================================================
 # Multiple Testing
 # ================================================================
+
 
 class TestBenjaminiHochberg:
     def test_single_pvalue(self):
@@ -172,6 +176,7 @@ class TestPBO:
 # Purged Walk-Forward
 # ================================================================
 
+
 class TestFoldBuilder:
     def test_build_folds_basic(self):
         builder = FoldBuilder(FoldConfig(n_folds=5, train_fraction=0.6))
@@ -228,6 +233,7 @@ class TestPurgedWalkForward:
 # Stability
 # ================================================================
 
+
 class TestStability:
     def test_time_split_stable(self):
         evaluator = StabilityEvaluator(degradation_threshold=0.5)
@@ -263,6 +269,7 @@ class TestStability:
 # Cost/Capacity
 # ================================================================
 
+
 class TestCostModel:
     def test_default_model(self):
         model = CostModel()
@@ -295,7 +302,8 @@ class TestCapacityEvaluator:
         returns = [0.0005] * 100
 
         result = evaluator.evaluate_capacity_curve(
-            predictions, returns,
+            predictions,
+            returns,
             aum_range=[10_000, 100_000, 500_000, 1_000_000],
             avg_holding_hours=4.0,
         )
@@ -312,5 +320,5 @@ class TestCapacityEvaluator:
 
     def test_cost_viable_positive(self):
         evaluator = CapacityEvaluator()
-        viable, reason = evaluator.is_cost_viable(0.01, 0.015)
+        viable, _reason = evaluator.is_cost_viable(0.01, 0.015)
         assert viable

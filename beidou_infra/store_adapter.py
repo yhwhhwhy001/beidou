@@ -18,30 +18,31 @@ class StorageBackend(ABC):
     """
 
     @abstractmethod
-    def connect(self, connection_string: str) -> bool:
-        ...
+    def connect(self, connection_string: str) -> bool: ...
 
     @abstractmethod
-    def execute(self, sql: str, params: tuple | None = None) -> Any:
-        ...
+    def execute(self, sql: str, params: tuple | None = None) -> Any: ...
 
     @abstractmethod
-    def append_event(self, stream_id: str, aggregate_type: str, sequence: int,
-                     event_type: str, payload: dict, metadata: dict | None = None,
-                     correlation_id: str | None = None) -> bool:
-        ...
+    def append_event(
+        self,
+        stream_id: str,
+        aggregate_type: str,
+        sequence: int,
+        event_type: str,
+        payload: dict,
+        metadata: dict | None = None,
+        correlation_id: str | None = None,
+    ) -> bool: ...
 
     @abstractmethod
-    def get_events(self, stream_id: str) -> list[dict]:
-        ...
+    def get_events(self, stream_id: str) -> list[dict]: ...
 
     @abstractmethod
-    def health_check(self) -> bool:
-        ...
+    def health_check(self) -> bool: ...
 
     @abstractmethod
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 class SQLiteBackend(StorageBackend):
@@ -58,6 +59,7 @@ class SQLiteBackend(StorageBackend):
     def connect(self, connection_string: str = "") -> bool:
         try:
             import sqlite3
+
             path = connection_string or self._db_path
             self._conn = sqlite3.connect(path)
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -70,10 +72,19 @@ class SQLiteBackend(StorageBackend):
             raise RuntimeError("SQLiteBackend not connected")
         return self._conn.execute(sql, params or ())
 
-    def append_event(self, stream_id: str, aggregate_type: str, sequence: int,
-                     event_type: str, payload: dict, metadata: dict | None = None,
-                     correlation_id: str | None = None) -> bool:
-        import json, hashlib
+    def append_event(
+        self,
+        stream_id: str,
+        aggregate_type: str,
+        sequence: int,
+        event_type: str,
+        payload: dict,
+        metadata: dict | None = None,
+        correlation_id: str | None = None,
+    ) -> bool:
+        import hashlib
+        import json
+
         content = json.dumps(payload, sort_keys=True, default=str)
         checksum = hashlib.sha256(content.encode()).hexdigest()
         meta = json.dumps(metadata or {})
@@ -82,8 +93,7 @@ class SQLiteBackend(StorageBackend):
                 "INSERT INTO event_store (stream_id, aggregate_type, sequence, "
                 "event_type, payload, metadata, correlation_id, checksum) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (stream_id, aggregate_type, sequence, event_type,
-                 content, meta, correlation_id, checksum),
+                (stream_id, aggregate_type, sequence, event_type, content, meta, correlation_id, checksum),
             )
             self._conn.commit()
             return True
@@ -92,13 +102,13 @@ class SQLiteBackend(StorageBackend):
 
     def get_events(self, stream_id: str) -> list[dict]:
         import json
+
         cur = self._conn.execute(
             "SELECT * FROM event_store WHERE stream_id=? ORDER BY sequence",
             (stream_id,),
         )
         return [
-            {"stream_id": r[1], "sequence": r[3], "event_type": r[4],
-             "payload": json.loads(r[5])}
+            {"stream_id": r[1], "sequence": r[3], "event_type": r[4], "payload": json.loads(r[5])}
             for r in cur.fetchall()
         ]
 
@@ -128,9 +138,12 @@ class PostgresBackend(StorageBackend):
     def connect(self, connection_string: str = "") -> bool:
         try:
             import psycopg
+
             self._dsn = connection_string or self._dsn
             self._pool = psycopg.ConnectionPool(
-                self._dsn, min_size=2, max_size=10,
+                self._dsn,
+                min_size=2,
+                max_size=10,
             )
             return True
         except Exception:
@@ -142,10 +155,19 @@ class PostgresBackend(StorageBackend):
         with self._pool.connection() as conn:
             return conn.execute(sql, params or ())
 
-    def append_event(self, stream_id: str, aggregate_type: str, sequence: int,
-                     event_type: str, payload: dict, metadata: dict | None = None,
-                     correlation_id: str | None = None) -> bool:
-        import json, hashlib
+    def append_event(
+        self,
+        stream_id: str,
+        aggregate_type: str,
+        sequence: int,
+        event_type: str,
+        payload: dict,
+        metadata: dict | None = None,
+        correlation_id: str | None = None,
+    ) -> bool:
+        import hashlib
+        import json
+
         content = json.dumps(payload, sort_keys=True, default=str)
         checksum = hashlib.sha256(content.encode()).hexdigest()
         meta = json.dumps(metadata or {})
@@ -155,8 +177,7 @@ class PostgresBackend(StorageBackend):
                     "INSERT INTO event_store (stream_id, aggregate_type, sequence, "
                     "event_type, payload, metadata, correlation_id, checksum) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                    (stream_id, aggregate_type, sequence, event_type,
-                     content, meta, correlation_id, checksum),
+                    (stream_id, aggregate_type, sequence, event_type, content, meta, correlation_id, checksum),
                 )
                 conn.commit()
             return True
@@ -165,17 +186,13 @@ class PostgresBackend(StorageBackend):
 
     def get_events(self, stream_id: str) -> list[dict]:
         import json
+
         with self._pool.connection() as conn:
             rows = conn.execute(
-                "SELECT stream_id, sequence, event_type, payload "
-                "FROM event_store WHERE stream_id=%s ORDER BY sequence",
+                "SELECT stream_id, sequence, event_type, payload FROM event_store WHERE stream_id=%s ORDER BY sequence",
                 (stream_id,),
             ).fetchall()
-        return [
-            {"stream_id": r[0], "sequence": r[1], "event_type": r[2],
-             "payload": json.loads(r[3])}
-            for r in rows
-        ]
+        return [{"stream_id": r[0], "sequence": r[1], "event_type": r[2], "payload": json.loads(r[3])} for r in rows]
 
     def health_check(self) -> bool:
         try:
@@ -199,6 +216,7 @@ def create_backend(mode: str = "paper") -> StorageBackend:
     """
     if mode in ("testnet", "production"):
         import os
+
         dsn = os.environ.get("DATABASE_URL", "")
         if not dsn:
             raise ValueError("DATABASE_URL required for testnet/production mode")

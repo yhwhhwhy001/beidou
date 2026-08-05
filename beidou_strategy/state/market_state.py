@@ -1,9 +1,12 @@
-
 """三维市场状态评估。方向、压力、数据质量三个正交维度。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
 from beidou_shared.types import InstrumentId, VenueId
+
 
 @dataclass(frozen=True, slots=True)
 class DirectionState:
@@ -11,6 +14,7 @@ class DirectionState:
     probability: float
     uncertainty: float
     model_fallback: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class StressState:
@@ -20,12 +24,14 @@ class StressState:
     vol_regime: str | None = None
     correlation_regime: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class QualityState:
     tier: str  # GOOD, DEGRADED, UNRELIABLE, UNKNOWN
     data_gap_seconds: float | None = None
     stale_instruments: list[InstrumentId] = field(default_factory=list)
     rejection_rate_pct: float = 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class MarketStateVector:
@@ -46,12 +52,12 @@ class MarketStateVector:
             return False
         if self.stress.level == "UNKNOWN" or self.quality.tier == "UNKNOWN":
             return False
-        if self.rollback_rate_pct > 50.0:
-            return False
-        return True
+        return not self.rollback_rate_pct > 50.0
+
 
 class MarketStateEstimator:
     """市场状态评估器。正交维度输出，监控回退率。"""
+
     def __init__(self) -> None:
         self._rollback_count: int = 0
         self._total_predictions: int = 0
@@ -61,7 +67,14 @@ class MarketStateEstimator:
         stress = StressState(level="UNKNOWN", probability=0.5)
         quality = QualityState(tier="UNKNOWN")
         self._total_predictions += 1
-        return MarketStateVector(direction=direction, stress=stress, quality=quality, venue_id=venue_id, instrument_id=instrument_id, rollback_rate_pct=self.rollback_rate())
+        return MarketStateVector(
+            direction=direction,
+            stress=stress,
+            quality=quality,
+            venue_id=venue_id,
+            instrument_id=instrument_id,
+            rollback_rate_pct=self.rollback_rate(),
+        )
 
     def record_rollback(self) -> None:
         self._rollback_count += 1

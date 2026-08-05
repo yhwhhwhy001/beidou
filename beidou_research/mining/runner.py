@@ -16,46 +16,46 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-import math
-import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from beidou_shared.types import (
-    DataQualityTier, FactorId, GateResult,
-    InstrumentId, SchemaVersion, VenueId,
+    FactorId,
+    InstrumentId,
+    SchemaVersion,
+    VenueId,
 )
 
 from .contracts import (
-    DatasetManifest, HorizonUnit, LabelQuality, LabelRecord,
-    LabelSpec, PredictionKey, PredictionRecord, PriceType, ReturnType,
+    LabelSpec,
+    PriceType,
+    ReturnType,
 )
-from .label_builder import LabelBuilder, PricePoint
+from .evaluation.cost_capacity import CapacityEvaluator, CostModel
 from .evaluation.fast_screen import FastScreen, FastScreenConfig
 from .evaluation.purged_walk_forward import (
-    PurgedWalkForward, FoldConfig, FoldResult,
-)
-from .evaluation.multiple_testing import (
-    benjamini_hochberg, deflated_sharpe_ratio, compute_pbo,
-    MultipleTestingReport, evaluate_multiple_testing,
+    FoldConfig,
+    PurgedWalkForward,
 )
 from .evaluation.stability import StabilityEvaluator
-from .evaluation.cost_capacity import CostModel, CapacityEvaluator
 from .evidence import EvidenceBundle
+from .label_builder import LabelBuilder, PricePoint
 from .persistence import JSONFileFactorStore
-
 
 # ================================================================
 # 流水线配置
 # ================================================================
 
+
 @dataclass
 class PipelineConfig:
     """端到端流水线配置。"""
+
     run_id: str = ""
     random_seed: int = 42
     label_spec: LabelSpec | None = None
@@ -68,6 +68,7 @@ class PipelineConfig:
     def from_yaml(cls, path: str) -> PipelineConfig:
         """从 YAML policy 文件加载配置。"""
         import yaml
+
         with open(path) as f:
             cfg = yaml.safe_load(f)
 
@@ -99,9 +100,11 @@ class PipelineConfig:
 # 端到端执行器
 # ================================================================
 
+
 @dataclass
 class MiningResult:
     """单次挖掘运行的结果。"""
+
     run_id: str
     candidates_generated: int
     candidates_screened: int
@@ -169,21 +172,29 @@ class MiningRunner:
         self._notify(progress_callback, "labels", 0, 5)
         price_points = [
             PricePoint(
-                venue=ven, symbol=sym, timeframe=timeframe,
-                timestamp=d["timestamp"], close=d["close"],
-                mark=d.get("mark"), mid=d.get("mid"),
-                vwap=d.get("vwap"), is_closed=True,
+                venue=ven,
+                symbol=sym,
+                timeframe=timeframe,
+                timestamp=d["timestamp"],
+                close=d["close"],
+                mark=d.get("mark"),
+                mid=d.get("mid"),
+                vwap=d.get("vwap"),
+                is_closed=True,
             )
             for d in price_data
         ]
 
         label_spec = self.config.label_spec or LabelSpec(
-            label_id="default", horizon_bars=4,
+            label_id="default",
+            horizon_bars=4,
         )
         labels = self._label_builder.build_labels(
             price_series=price_points,
             label_spec=label_spec,
-            venue=ven, symbol=sym, timeframe=timeframe,
+            venue=ven,
+            symbol=sym,
+            timeframe=timeframe,
             factor_id=FactorId("pipeline"),
             factor_version=SchemaVersion("2.0.0"),
         )
@@ -206,9 +217,9 @@ class MiningRunner:
 
         for c in candidates:
             factor_values = self._evaluate_candidate(c, price_points)
-            ch = c.get("expression_hash", hashlib.sha256(
-                json.dumps(c, sort_keys=True, default=str).encode()
-            ).hexdigest()[:16])
+            ch = c.get(
+                "expression_hash", hashlib.sha256(json.dumps(c, sort_keys=True, default=str).encode()).hexdigest()[:16]
+            )
 
             result = self._fast_screen.screen(
                 factor_values=factor_values,
@@ -232,12 +243,12 @@ class MiningRunner:
 
         evidence_bundles = []
         label_returns = [l.label_value for l in labels if l.is_valid_for_evaluation()]
-        sample_times = [l.prediction_key.prediction_time for l in labels if l.is_valid_for_evaluation()]
-        label_end_times = [l.label_end_time for l in labels if l.is_valid_for_evaluation()]
+        [l.prediction_key.prediction_time for l in labels if l.is_valid_for_evaluation()]
+        [l.label_end_time for l in labels if l.is_valid_for_evaluation()]
 
         for candidate in screened[:50]:  # 限制评估数量
             factor_vals = candidate["factor_values"]
-            returns_aligned = label_returns[:len(factor_vals)]
+            returns_aligned = label_returns[: len(factor_vals)]
 
             if len(returns_aligned) < 50:
                 continue
@@ -247,15 +258,12 @@ class MiningRunner:
             sharpe = _compute_sharpe(returns_aligned)
 
             # 稳定性评估
-            stability_results = [
-                self._stability.evaluate_time_split(
-                    factor_vals, returns_aligned, ic_full=ic
-                )
-            ]
+            stability_results = [self._stability.evaluate_time_split(factor_vals, returns_aligned, ic_full=ic)]
 
             # 成本容量评估
             capacity_result = self._capacity.evaluate_capacity_curve(
-                factor_vals, returns_aligned,
+                factor_vals,
+                returns_aligned,
             )
 
             # 构造证据包
@@ -296,7 +304,8 @@ class MiningRunner:
 
             # 持久化
             self._store.save_factor_version(
-                candidate["hash"], "2.0.0",
+                candidate["hash"],
+                "2.0.0",
                 bundle.to_dict(),
             )
 
@@ -348,19 +357,19 @@ class MiningRunner:
             if len(values) < 30:
                 continue
 
-            expr_hash = hashlib.sha256(
-                f"mean_reversion:w{window}".encode()
-            ).hexdigest()[:20]
-            candidates.append({
-                "factor_id": f"meanrev_w{window}",
-                "expression_hash": expr_hash,
-                "complexity_score": 2.0,
-                "generator": "template_grid",
-                "primitive": "close",
-                "window": window,
-                "transform": "zscore",
-                "rationale": f"价格偏离{window}期SMA的均值回归信号",
-            })
+            expr_hash = hashlib.sha256(f"mean_reversion:w{window}".encode()).hexdigest()[:20]
+            candidates.append(
+                {
+                    "factor_id": f"meanrev_w{window}",
+                    "expression_hash": expr_hash,
+                    "complexity_score": 2.0,
+                    "generator": "template_grid",
+                    "primitive": "close",
+                    "window": window,
+                    "transform": "zscore",
+                    "rationale": f"价格偏离{window}期SMA的均值回归信号",
+                }
+            )
 
         # 动量信号: (close - close_lag) / close_lag
         for lag in [5, 10, 20]:
@@ -376,19 +385,19 @@ class MiningRunner:
             if len(values) < 30:
                 continue
 
-            expr_hash = hashlib.sha256(
-                f"momentum:lag{lag}".encode()
-            ).hexdigest()[:20]
-            candidates.append({
-                "factor_id": f"momentum_lag{lag}",
-                "expression_hash": expr_hash,
-                "complexity_score": 1.0,
-                "generator": "template_grid",
-                "primitive": "close",
-                "window": lag,
-                "transform": "pct_change",
-                "rationale": f"{lag}期价格动量效应",
-            })
+            expr_hash = hashlib.sha256(f"momentum:lag{lag}".encode()).hexdigest()[:20]
+            candidates.append(
+                {
+                    "factor_id": f"momentum_lag{lag}",
+                    "expression_hash": expr_hash,
+                    "complexity_score": 1.0,
+                    "generator": "template_grid",
+                    "primitive": "close",
+                    "window": lag,
+                    "transform": "pct_change",
+                    "rationale": f"{lag}期价格动量效应",
+                }
+            )
 
         return candidates
 
@@ -405,14 +414,10 @@ class MiningRunner:
 
         if primitive == "close" and transform in ("zscore", "identity"):
             sma = _sma(closes, window)
-            return [
-                (closes[i] - sma[i]) / sma[i] if sma[i] > 0 else 0.0
-                for i in range(window, len(closes))
-            ]
+            return [(closes[i] - sma[i]) / sma[i] if sma[i] > 0 else 0.0 for i in range(window, len(closes))]
         elif primitive == "close" and transform == "pct_change":
             return [
-                (closes[i] - closes[i - window]) / closes[i - window]
-                if closes[i - window] > 0 else 0.0
+                (closes[i] - closes[i - window]) / closes[i - window] if closes[i - window] > 0 else 0.0
                 for i in range(window, len(closes))
             ]
         return []
@@ -425,15 +430,14 @@ class MiningRunner:
         total: int,
     ) -> None:
         if callback:
-            try:
+            with contextlib.suppress(Exception):
                 callback(stage, current, total)
-            except Exception:
-                pass
 
 
 # ================================================================
 # 辅助统计函数
 # ================================================================
+
 
 def _sma(values: list[float], window: int) -> list[float]:
     result = [0.0] * len(values)
@@ -464,7 +468,7 @@ def _compute_sharpe(returns: list[float]) -> float:
         return 0.0
     mean = sum(returns) / n
     var = sum((r - mean) ** 2 for r in returns) / (n - 1)
-    std = var ** 0.5
+    std = var**0.5
     if std == 0:
         return 0.0
     return mean / std

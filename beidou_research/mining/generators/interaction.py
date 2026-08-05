@@ -19,32 +19,41 @@ from __future__ import annotations
 import hashlib
 import itertools
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
 class InteractionConfig:
     """交互生成配置。"""
-    max_order: int = 2                           # 最大交互阶数（1=一阶, 2=二阶）
-    base_factors: list[str] = field(default_factory=lambda: [
-        "momentum", "mean_reversion", "volatility",
-        "liquidity", "funding", "basis",
-        "orderbook_imbalance", "spread",
-        "oi_change", "volume_surprise",
-    ])
-    complexity_penalty_per_order: float = 2.0    # 每增加一阶的复杂度惩罚
-    min_correlation_with_parent: float = 0.3     # 最小父因子相关性（太低=无关联）
+
+    max_order: int = 2  # 最大交互阶数（1=一阶, 2=二阶）
+    base_factors: list[str] = field(
+        default_factory=lambda: [
+            "momentum",
+            "mean_reversion",
+            "volatility",
+            "liquidity",
+            "funding",
+            "basis",
+            "orderbook_imbalance",
+            "spread",
+            "oi_change",
+            "volume_surprise",
+        ]
+    )
+    complexity_penalty_per_order: float = 2.0  # 每增加一阶的复杂度惩罚
+    min_correlation_with_parent: float = 0.3  # 最小父因子相关性（太低=无关联）
     require_incremental_contribution: bool = True
 
 
 @dataclass
 class InteractionSpec:
     """交互因子规格。"""
+
     interaction_id: str
-    factors: tuple[str, ...]            # 参与交互的因子
-    order: int                           # 交互阶数
-    interaction_type: str                # "multiplicative" / "ratio" / "difference"
-    parent_factor_ids: tuple[str, ...]   # 父因子 lineage
+    factors: tuple[str, ...]  # 参与交互的因子
+    order: int  # 交互阶数
+    interaction_type: str  # "multiplicative" / "ratio" / "difference"
+    parent_factor_ids: tuple[str, ...]  # 父因子 lineage
     complexity_score: float
     economic_rationale: str = ""
 
@@ -118,7 +127,7 @@ class InteractionGenerator:
         interaction_type: str,
     ) -> InteractionSpec:
         """构造交互规格。"""
-        factor_str = " × ".join(factors)
+        " × ".join(factors)
         complexity = self.config.complexity_penalty_per_order * order
 
         # 生成经济逻辑

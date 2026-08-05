@@ -21,12 +21,12 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from .expression_ast import (
+    EMA,
     Add,
     Clip,
     Constant,
     CsRank,
     Diff,
-    EMA,
     Eq,
     Expression,
     ExpressionParseError,
@@ -59,7 +59,6 @@ from .expression_ast import (
     ZScore,
 )
 
-
 # ================================================================
 # 算子白名单
 # ================================================================
@@ -67,13 +66,39 @@ from .expression_ast import (
 # 只允许 expression_ast 中定义的算子 — 白名单由 AST 节点注册表
 # 自动推导，任何新增算子必须先在 expression_ast 中定义。
 ALLOWED_OPERATORS: frozenset[str] = frozenset(
-    cls.OP_NAME for cls in (
-        Constant, Feature, Lag, Diff, PctChange,
-        RollingMean, RollingStd, RollingMedian, RollingMAD, RollingQuantile,
-        EMA, TsRank, CsRank, ZScore, RobustZScore,
-        SafeDiv, SignedLog1p, SignedSqrt, Clip, Residualize, Where,
-        Add, Sub, Mul, Neg,
-        Lt, Le, Gt, Ge, Eq, Ne,
+    cls.OP_NAME
+    for cls in (
+        Constant,
+        Feature,
+        Lag,
+        Diff,
+        PctChange,
+        RollingMean,
+        RollingStd,
+        RollingMedian,
+        RollingMAD,
+        RollingQuantile,
+        EMA,
+        TsRank,
+        CsRank,
+        ZScore,
+        RobustZScore,
+        SafeDiv,
+        SignedLog1p,
+        SignedSqrt,
+        Clip,
+        Residualize,
+        Where,
+        Add,
+        Sub,
+        Mul,
+        Neg,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        Eq,
+        Ne,
     )
 )
 
@@ -81,6 +106,7 @@ ALLOWED_OPERATORS: frozenset[str] = frozenset(
 # ================================================================
 # 特征注册
 # ================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureDef:
@@ -93,6 +119,7 @@ class FeatureDef:
         min_window: 特征本身需要的最小历史窗口（K 线数）
         max_window: 特征最大可用窗口；None 表示无上限
     """
+
     name: str
     type: ExprType
     description: str = ""
@@ -112,9 +139,7 @@ class FeatureDef:
             if isinstance(self.max_window, bool) or not isinstance(self.max_window, int):
                 raise ExpressionParseError("max_window 必须为整数或 None")
             if self.max_window < self.min_window:
-                raise ExpressionParseError(
-                    f"max_window ({self.max_window}) 不能小于 min_window ({self.min_window})"
-                )
+                raise ExpressionParseError(f"max_window ({self.max_window}) 不能小于 min_window ({self.min_window})")
 
 
 class PrimitiveRegistry:
@@ -144,13 +169,15 @@ class PrimitiveRegistry:
         max_window: int | None = None,
     ) -> None:
         """便捷注册：直接用参数注册特征。"""
-        self.register(FeatureDef(
-            name=name,
-            type=type,
-            description=description,
-            min_window=min_window,
-            max_window=max_window,
-        ))
+        self.register(
+            FeatureDef(
+                name=name,
+                type=type,
+                description=description,
+                min_window=min_window,
+                max_window=max_window,
+            )
+        )
 
     def get(self, name: str) -> FeatureDef | None:
         """按名查找特征定义；不存在返回 None。"""
@@ -183,13 +210,32 @@ class PrimitiveRegistry:
 # 防止把危险内建函数名伪装成特征。
 # 注意：open/type/id 等同时也是合法特征名（开盘价等），不在
 # 黑名单内；它们的函数调用形式仍会被函数白名单拦截。
-_FORBIDDEN_NAMES: frozenset[str] = frozenset({
-    "eval", "exec", "compile", "__import__", "import",
-    "globals", "locals", "vars",
-    "input", "getattr", "setattr", "delattr", "hasattr",
-    "object", "lambda", "print",
-    "breakpoint", "help", "exit", "quit", "copyright", "credits",
-})
+_FORBIDDEN_NAMES: frozenset[str] = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "import",
+        "globals",
+        "locals",
+        "vars",
+        "input",
+        "getattr",
+        "setattr",
+        "delattr",
+        "hasattr",
+        "object",
+        "lambda",
+        "print",
+        "breakpoint",
+        "help",
+        "exit",
+        "quit",
+        "copyright",
+        "credits",
+    }
+)
 
 
 def _const_number(expr: Expression, what: str) -> float:
@@ -215,9 +261,7 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
             return Constant(node.value, ExprType.BOOLEAN)
         if isinstance(node.value, (int, float)) and not isinstance(node.value, complex):
             return Constant(float(node.value), ExprType.SCALAR)
-        raise UnsupportedExpressionError(
-            f"不支持的字面量: {node.value!r}（只允许数字与布尔常量）"
-        )
+        raise UnsupportedExpressionError(f"不支持的字面量: {node.value!r}（只允许数字与布尔常量）")
 
     if isinstance(node, py_ast.Name):
         name = node.id
@@ -239,9 +283,7 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
         if isinstance(node.op, py_ast.Div):
             # 除号映射为安全除法 — 除以零不传播 NaN
             return SafeDiv(left, right, 1e-10)
-        raise UnsupportedExpressionError(
-            f"不支持的二元运算符: {type(node.op).__name__}（只允许 + - * /）"
-        )
+        raise UnsupportedExpressionError(f"不支持的二元运算符: {type(node.op).__name__}（只允许 + - * /）")
 
     if isinstance(node, py_ast.UnaryOp):
         operand = _parse_node(node.operand, features)
@@ -249,9 +291,7 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
             return Neg(operand)
         if isinstance(node.op, py_ast.UAdd):
             return operand
-        raise UnsupportedExpressionError(
-            f"不支持的一元运算符: {type(node.op).__name__}（只允许负号）"
-        )
+        raise UnsupportedExpressionError(f"不支持的一元运算符: {type(node.op).__name__}（只允许负号）")
 
     if isinstance(node, py_ast.Compare):
         if len(node.ops) != 1 or len(node.comparators) != 1:
@@ -271,9 +311,7 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
             return Eq(left, right)
         if isinstance(op, py_ast.NotEq):
             return Ne(left, right)
-        raise UnsupportedExpressionError(
-            f"不支持的比较运算符: {type(op).__name__}（只允许 == != < <= > >=）"
-        )
+        raise UnsupportedExpressionError(f"不支持的比较运算符: {type(op).__name__}（只允许 == != < <= > >=）")
 
     if isinstance(node, py_ast.Call):
         if not isinstance(node.func, py_ast.Name):
@@ -282,27 +320,19 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
         if name in _FORBIDDEN_NAMES:
             raise UnsupportedExpressionError(f"禁止的调用: {name!r}")
         if name not in _FUNCTION_TABLE:
-            raise UnsupportedExpressionError(
-                f"未授权的函数调用: {name!r}（白名单: {sorted(_FUNCTION_TABLE)}）"
-            )
+            raise UnsupportedExpressionError(f"未授权的函数调用: {name!r}（白名单: {sorted(_FUNCTION_TABLE)}）")
         min_args, max_args, builder = _FUNCTION_TABLE[name]
         if not min_args <= len(node.args) <= max_args:
             if min_args == max_args:
-                raise ExpressionParseError(
-                    f"函数 {name}() 需要 {min_args} 个参数, 收到 {len(node.args)}"
-                )
-            raise ExpressionParseError(
-                f"函数 {name}() 需要 {min_args}-{max_args} 个参数, 收到 {len(node.args)}"
-            )
+                raise ExpressionParseError(f"函数 {name}() 需要 {min_args} 个参数, 收到 {len(node.args)}")
+            raise ExpressionParseError(f"函数 {name}() 需要 {min_args}-{max_args} 个参数, 收到 {len(node.args)}")
         if node.keywords:
             raise UnsupportedExpressionError("不支持关键字参数调用")
         parsed = [_parse_node(arg, features) for arg in node.args]
         return builder(parsed)
 
     # 其余节点一律拒绝
-    raise UnsupportedExpressionError(
-        f"不支持的表达式构造: {type(node).__name__}"
-    )
+    raise UnsupportedExpressionError(f"不支持的表达式构造: {type(node).__name__}")
 
 
 def _build_lag(args: Sequence[Expression]) -> Expression:
@@ -360,10 +390,7 @@ def _build_robust_zscore(args: Sequence[Expression]) -> Expression:
 
 
 def _build_safe_div(args: Sequence[Expression]) -> Expression:
-    if len(args) == 3:
-        epsilon = _const_number(args[2], "safe_div 的 epsilon")
-    else:
-        epsilon = 1e-10
+    epsilon = _const_number(args[2], "safe_div 的 epsilon") if len(args) == 3 else 1e-10
     return SafeDiv(args[0], args[1], epsilon)
 
 
@@ -376,8 +403,7 @@ def _build_signed_sqrt(args: Sequence[Expression]) -> Expression:
 
 
 def _build_clip(args: Sequence[Expression]) -> Expression:
-    return Clip(args[0], _const_number(args[1], "clip 的下界 lower"),
-                _const_number(args[2], "clip 的上界 upper"))
+    return Clip(args[0], _const_number(args[1], "clip 的下界 lower"), _const_number(args[2], "clip 的上界 upper"))
 
 
 def _build_where(args: Sequence[Expression]) -> Expression:
@@ -439,16 +465,14 @@ def parse_expression(
     try:
         tree = py_ast.parse(source, mode="eval")
     except SyntaxError as e:
-        raise ExpressionParseError(
-            f"表达式语法错误: {e.msg}（第 {e.lineno} 行）"
-        ) from e
+        raise ExpressionParseError(f"表达式语法错误: {e.msg}（第 {e.lineno} 行）") from e
     features = dict(feature_types or {})
     return _parse_node(tree.body, features)
 
 
 __all__ = [
-    "ALLOWED_OPERATORS",
     "ALLOWED_FUNCTIONS",
+    "ALLOWED_OPERATORS",
     "FeatureDef",
     "PrimitiveRegistry",
     "parse_expression",

@@ -9,12 +9,7 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-
-from beidou_shared.types import (
-    AccountId, CorrelationId, InstrumentId, MonetaryValue, Quantity, VenueId,
-)
 
 
 class PersistentStore:
@@ -131,10 +126,18 @@ class PersistentStore:
 
     # --- Ledger ---
 
-    def save_ledger_entry(self, entry_id: str, account_id: str, venue_id: str,
-                          instrument_id: str | None, debit: str, credit: str,
-                          description: str, correlation_id: str | None,
-                          timestamp: str) -> None:
+    def save_ledger_entry(
+        self,
+        entry_id: str,
+        account_id: str,
+        venue_id: str,
+        instrument_id: str | None,
+        debit: str,
+        credit: str,
+        description: str,
+        correlation_id: str | None,
+        timestamp: str,
+    ) -> None:
         conn = self._get_conn()
         conn.execute(
             "INSERT OR IGNORE INTO ledger_entries (entry_id, account_id, venue_id, instrument_id, debit_amount, credit_amount, description, correlation_id, timestamp) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -157,15 +160,38 @@ class PersistentStore:
 
     # --- Order States ---
 
-    def save_order_state(self, order_id: str, symbol: str, side: str, order_type: str,
-                         quantity: str, price: str | None, status: str,
-                         filled_qty: str = "0", avg_price: str | None = None,
-                         client_order_id: str | None = None) -> None:
+    def save_order_state(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: str,
+        price: str | None,
+        status: str,
+        filled_qty: str = "0",
+        avg_price: str | None = None,
+        client_order_id: str | None = None,
+    ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",
-            (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, order_id, now, now),
+            (
+                order_id,
+                symbol,
+                side,
+                order_type,
+                quantity,
+                price,
+                status,
+                filled_qty,
+                avg_price,
+                client_order_id,
+                order_id,
+                now,
+                now,
+            ),
         )
         conn.commit()
 
@@ -183,15 +209,42 @@ class PersistentStore:
 
     # --- Protection Orders ---
 
-    def save_protection(self, protection_id: str, position_id: str, symbol: str,
-                        side: str, trigger_price: str, order_price: str | None,
-                        quantity: str, order_type: str, status: str,
-                        stop_type: str | None = None, take_profit_type: str | None = None) -> None:
+    def save_protection(
+        self,
+        protection_id: str,
+        position_id: str,
+        symbol: str,
+        side: str,
+        trigger_price: str,
+        order_price: str | None,
+        quantity: str,
+        order_type: str,
+        status: str,
+        stop_type: str | None = None,
+        take_profit_type: str | None = None,
+    ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT OR REPLACE INTO protection_orders (protection_id, position_id, symbol, side, trigger_price, order_price, quantity, order_type, status, stop_type, take_profit_type, created_at, triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM protection_orders WHERE protection_id=?),?),CASE WHEN ? IN ('TRIGGERED','EXECUTED') THEN ? ELSE (SELECT triggered_at FROM protection_orders WHERE protection_id=?) END)",
-            (protection_id, position_id, symbol, side, trigger_price, order_price, quantity, order_type, status, stop_type, take_profit_type, protection_id, now, status, now, protection_id),
+            (
+                protection_id,
+                position_id,
+                symbol,
+                side,
+                trigger_price,
+                order_price,
+                quantity,
+                order_type,
+                status,
+                stop_type,
+                take_profit_type,
+                protection_id,
+                now,
+                status,
+                now,
+                protection_id,
+            ),
         )
         conn.commit()
 
@@ -202,9 +255,9 @@ class PersistentStore:
 
     # --- Checkpoints ---
 
-    def save_checkpoint(self, checkpoint_id: str, module_name: str,
-                        state: dict[str, Any], sequence: int,
-                        invariants_valid: bool = True) -> None:
+    def save_checkpoint(
+        self, checkpoint_id: str, module_name: str, state: dict[str, Any], sequence: int, invariants_valid: bool = True
+    ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -228,8 +281,9 @@ class PersistentStore:
 
     # --- Reports ---
 
-    def save_report(self, report_id: str, report_type: str, title: str,
-                    checksum: str, status: str, export_data: str) -> None:
+    def save_report(
+        self, report_id: str, report_type: str, title: str, checksum: str, status: str, export_data: str
+    ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -254,9 +308,15 @@ class PersistentStore:
 
     # --- Market Snapshots ---
 
-    def save_market_snapshot(self, symbol: str, price: float, bid: float | None,
-                             ask: float | None, spread_bps: float | None,
-                             volume_24h: float | None) -> None:
+    def save_market_snapshot(
+        self,
+        symbol: str,
+        price: float,
+        bid: float | None,
+        ask: float | None,
+        spread_bps: float | None,
+        volume_24h: float | None,
+    ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
@@ -277,11 +337,13 @@ class PersistentStore:
 
     def cleanup_old_data(self, retention_days: int = 90) -> int:
         conn = self._get_conn()
-        cutoff = (datetime.now(timezone.utc).timestamp() - retention_days * 86400)
+        cutoff = datetime.now(timezone.utc).timestamp() - retention_days * 86400
         cutoff_str = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         deleted = 0
         deleted += conn.execute("DELETE FROM market_snapshots WHERE timestamp < ?", (cutoff_str,)).rowcount
-        deleted += conn.execute("DELETE FROM reports WHERE generated_at < ? AND report_type='DAILY'", (cutoff_str,)).rowcount
+        deleted += conn.execute(
+            "DELETE FROM reports WHERE generated_at < ? AND report_type='DAILY'", (cutoff_str,)
+        ).rowcount
         conn.commit()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return deleted

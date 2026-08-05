@@ -13,10 +13,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 
 class MigrationStatus(str, Enum):
@@ -30,6 +29,7 @@ class MigrationStatus(str, Enum):
 @dataclass
 class MigrationRecord:
     """单条迁移记录。"""
+
     old_factor_id: str
     new_factor_id: str
     old_status: str
@@ -77,9 +77,7 @@ class FactorMigration:
                 new_factor_id=f"{fid}_legacy",
                 old_status="ACTIVE",
                 new_status=LEGACY_UNVERIFIED,
-                evidence_hash=hashlib.sha256(
-                    f"{fid}:legacy_unverified:{reason}".encode()
-                ).hexdigest()[:16],
+                evidence_hash=hashlib.sha256(f"{fid}:legacy_unverified:{reason}".encode()).hexdigest()[:16],
                 migrated_at=datetime.now(timezone.utc),
                 reason=reason,
             )

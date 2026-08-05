@@ -90,19 +90,15 @@ class TestExchangeRouter:
             AccountInfo,
             AccountRef,
             ExchangeAdapter,
-            ExchangeInfo,
             HealthStatus,
             OrderRequest,
             OrderResponse,
-            OrderSide,
-            OrderType,
             OrderStatus,
-            Price,
-            Quantity,
         )
 
         class FakeBinanceAdapter(ExchangeAdapter):
             """TEST_SYNTHETIC — 仅用于协议契约测试。"""
+
             @property
             def venue_id(self) -> VenueId:
                 return VenueId("BINANCE")
@@ -160,38 +156,72 @@ class TestExchangeRouter:
 
     def test_duplicate_adapter_raises(self) -> None:
         # Use the same FakeBinanceAdapter pattern but simpler
-        from beidou_exchange.core.protocol import (
-            AccountInfo, AccountRef, HealthStatus, OrderRequest, OrderResponse,
-            OrderSide, OrderType, OrderStatus, Price, Quantity,
-        )
 
         class AdapterA2(ExchangeAdapter):
             @property
-            def venue_id(self) -> VenueId: return VenueId("BINANCE_DUP")
+            def venue_id(self) -> VenueId:
+                return VenueId("BINANCE_DUP")
+
             @property
-            def capabilities(self) -> frozenset[Capability]: return frozenset({Capability.FUTURES_USD_M})
-            async def get_exchange_info(self): raise NotImplementedError
-            async def check_health(self, venue_id): raise NotImplementedError
-            async def get_account_info(self, account_ref): raise NotImplementedError
-            async def get_balances(self, account_ref): raise NotImplementedError
-            async def get_positions(self, account_ref): raise NotImplementedError
-            async def create_order(self, request): raise NotImplementedError
-            async def cancel_order(self, order_id, venue_instrument): raise NotImplementedError
-            async def get_order_status(self, order_id, venue_instrument): raise NotImplementedError
+            def capabilities(self) -> frozenset[Capability]:
+                return frozenset({Capability.FUTURES_USD_M})
+
+            async def get_exchange_info(self):
+                raise NotImplementedError
+
+            async def check_health(self, venue_id):
+                raise NotImplementedError
+
+            async def get_account_info(self, account_ref):
+                raise NotImplementedError
+
+            async def get_balances(self, account_ref):
+                raise NotImplementedError
+
+            async def get_positions(self, account_ref):
+                raise NotImplementedError
+
+            async def create_order(self, request):
+                raise NotImplementedError
+
+            async def cancel_order(self, order_id, venue_instrument):
+                raise NotImplementedError
+
+            async def get_order_status(self, order_id, venue_instrument):
+                raise NotImplementedError
 
         class AdapterB2(ExchangeAdapter):
             @property
-            def venue_id(self) -> VenueId: return VenueId("BINANCE_DUP")
+            def venue_id(self) -> VenueId:
+                return VenueId("BINANCE_DUP")
+
             @property
-            def capabilities(self) -> frozenset[Capability]: return frozenset({Capability.FUTURES_USD_M})
-            async def get_exchange_info(self): raise NotImplementedError
-            async def check_health(self, venue_id): raise NotImplementedError
-            async def get_account_info(self, account_ref): raise NotImplementedError
-            async def get_balances(self, account_ref): raise NotImplementedError
-            async def get_positions(self, account_ref): raise NotImplementedError
-            async def create_order(self, request): raise NotImplementedError
-            async def cancel_order(self, order_id, venue_instrument): raise NotImplementedError
-            async def get_order_status(self, order_id, venue_instrument): raise NotImplementedError
+            def capabilities(self) -> frozenset[Capability]:
+                return frozenset({Capability.FUTURES_USD_M})
+
+            async def get_exchange_info(self):
+                raise NotImplementedError
+
+            async def check_health(self, venue_id):
+                raise NotImplementedError
+
+            async def get_account_info(self, account_ref):
+                raise NotImplementedError
+
+            async def get_balances(self, account_ref):
+                raise NotImplementedError
+
+            async def get_positions(self, account_ref):
+                raise NotImplementedError
+
+            async def create_order(self, request):
+                raise NotImplementedError
+
+            async def cancel_order(self, order_id, venue_instrument):
+                raise NotImplementedError
+
+            async def get_order_status(self, order_id, venue_instrument):
+                raise NotImplementedError
 
         matrix = CapabilityMatrix()
         router = ExchangeRouter(matrix)
@@ -223,8 +253,11 @@ class TestErrorNormalizer:
         assert error.recommended_action == RecoveryAction.RETRY
 
     def test_custom_venue_mapping(self) -> None:
-        ErrorNormalizer.register_venue_errors("BYBIT", {
-            10001: (ErrorCategory.AUTH_FAILURE, FaultSeverity.P0_CRITICAL, RecoveryAction.LOCK),
-        })
+        ErrorNormalizer.register_venue_errors(
+            "BYBIT",
+            {
+                10001: (ErrorCategory.AUTH_FAILURE, FaultSeverity.P0_CRITICAL, RecoveryAction.LOCK),
+            },
+        )
         error = ErrorNormalizer.normalize("BYBIT", 10001, "Auth failed")
         assert error.category == ErrorCategory.AUTH_FAILURE

@@ -1,13 +1,15 @@
-
 """MAPE-K 控制器实现。Monitor→Analyze→Plan→Execute→Knowledge。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
-from beidou_shared.types import CorrelationId, ResultStatus
-from beidou_lifecycle import ModuleState, DegradationLevel
+
+from beidou_shared.types import CorrelationId
+
 
 class RecoveryAction(str, Enum):
     NOOP = "NOOP"
@@ -19,11 +21,13 @@ class RecoveryAction(str, Enum):
     EMERGENCY_FLATTEN = "EMERGENCY_FLATTEN"
     LOCK = "LOCK"
 
+
 class RecoveryResult(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     PARTIAL = "PARTIAL"
     DEGRADED = "DEGRADED"
+
 
 @dataclass(frozen=True, slots=True)
 class Checkpoint:
@@ -34,6 +38,7 @@ class Checkpoint:
     invariants_valid: bool
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: CorrelationId | None = None
+
 
 @dataclass
 class FaultFingerprint:
@@ -58,12 +63,14 @@ class FaultFingerprint:
         matches = sum(1 for k in common if abs(self.symptom_vector[k] - other.symptom_vector[k]) < 0.1)
         return matches / len(all_keys)
 
+
 @dataclass
 class FingerprintMatch:
     fingerprint: FaultFingerprint
     similarity_score: float
     recommended_action: RecoveryAction
     is_approved: bool
+
 
 class MAPEKController:
     """MAPE-K 自主运维控制器。自愈≠无限重启。"""
@@ -78,7 +85,9 @@ class MAPEKController:
     def register_fingerprint(self, fp: FaultFingerprint) -> None:
         self._fingerprints[fp.fingerprint_id] = fp
 
-    def find_similar(self, symptom_vector: dict[str, float], min_similarity: float | None = None) -> list[FingerprintMatch]:
+    def find_similar(
+        self, symptom_vector: dict[str, float], min_similarity: float | None = None
+    ) -> list[FingerprintMatch]:
         threshold = min_similarity if min_similarity is not None else self._similarity_threshold
         query = FaultFingerprint(symptom_vector=symptom_vector)
         matches: list[FingerprintMatch] = []
@@ -86,7 +95,14 @@ class MAPEKController:
             sim = fp.similarity(query)
             if sim >= threshold:
                 rec_action = fp.effective_actions[0] if fp.effective_actions else RecoveryAction.NOOP
-                matches.append(FingerprintMatch(fingerprint=fp, similarity_score=sim, recommended_action=rec_action, is_approved=fp.approved_runbook is not None))
+                matches.append(
+                    FingerprintMatch(
+                        fingerprint=fp,
+                        similarity_score=sim,
+                        recommended_action=rec_action,
+                        is_approved=fp.approved_runbook is not None,
+                    )
+                )
         return sorted(matches, key=lambda m: m.similarity_score, reverse=True)
 
     def decide_action(self, symptom_vector: dict[str, float], module_name: str) -> tuple[RecoveryAction, str]:
@@ -95,20 +111,30 @@ class MAPEKController:
             return RecoveryAction.LOCK, "No similar fingerprint found; safe default is LOCK"
         best = matches[0]
         if best.similarity_score < self._similarity_threshold:
-            return RecoveryAction.LOCK, f"Best match similarity {best.similarity_score:.2f} below threshold {self._similarity_threshold}"
+            return (
+                RecoveryAction.LOCK,
+                f"Best match similarity {best.similarity_score:.2f} below threshold {self._similarity_threshold}",
+            )
         if not best.is_approved:
             return RecoveryAction.DEGRADE_TO_NO_NEW_RISK, "Best match has no approved runbook; degrading"
         if best.recommended_action == RecoveryAction.RESTART_MODULE:
             count = self._recovery_counter.get(module_name, 0)
             if count >= self._max_restart_attempts:
-                return RecoveryAction.LOCK, f"Module {module_name} restarted {count} times; refusing further auto-restart"
+                return (
+                    RecoveryAction.LOCK,
+                    f"Module {module_name} restarted {count} times; refusing further auto-restart",
+                )
             self._recovery_counter[module_name] = count + 1
-        return best.recommended_action, f"Matched fingerprint {best.fingerprint.fingerprint_id} with similarity {best.similarity_score:.2f}"
+        return (
+            best.recommended_action,
+            f"Matched fingerprint {best.fingerprint.fingerprint_id} with similarity {best.similarity_score:.2f}",
+        )
 
     def save_checkpoint(self, module_name: str, state: dict[str, Any], invariants_valid: bool) -> Checkpoint:
         cp = Checkpoint(
             checkpoint_id=str(uuid4()),
-            module_name=module_name, state_snapshot=state,
+            module_name=module_name,
+            state_snapshot=state,
             sequence_number=len(self._checkpoints.get(module_name, [])),
             invariants_valid=invariants_valid,
         )
@@ -124,7 +150,9 @@ class MAPEKController:
                 return cp
         return None
 
-    def execute_recovery(self, action: RecoveryAction, module_name: str, checkpoint: Checkpoint | None = None) -> RecoveryResult:
+    def execute_recovery(
+        self, action: RecoveryAction, module_name: str, checkpoint: Checkpoint | None = None
+    ) -> RecoveryResult:
         if action == RecoveryAction.NOOP:
             return RecoveryResult.SUCCESS
         if action == RecoveryAction.LOCK:

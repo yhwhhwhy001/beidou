@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-import math
-import pytest
 from datetime import datetime, timezone
 
-from beidou_shared.types import (
-    FactorId,
-    InstrumentId,
-    SchemaVersion,
-    VenueId,
-)
+import pytest
+
 from beidou_research.mining.contracts import (
     LabelQuality,
     LabelSpec,
@@ -23,11 +17,17 @@ from beidou_research.mining.label_builder import (
     LabelBuilder,
     PricePoint,
 )
-
+from beidou_shared.types import (
+    FactorId,
+    InstrumentId,
+    SchemaVersion,
+    VenueId,
+)
 
 # ================================================================
 # Fixtures
 # ================================================================
+
 
 def _make_price_series(
     n: int = 100,
@@ -38,6 +38,7 @@ def _make_price_series(
 ) -> list[PricePoint]:
     """生成合成价格序列。"""
     import random
+
     rng = random.Random(seed)
     prices = [start_price]
     for _ in range(n - 1):
@@ -48,17 +49,20 @@ def _make_price_series(
     base_time = datetime(2026, 1, 15, 0, 0, tzinfo=timezone.utc)
     for i, p in enumerate(prices):
         import datetime as dt
-        points.append(PricePoint(
-            venue=VenueId("BINANCE"),
-            symbol=InstrumentId("BTCUSDT"),
-            timeframe="1h",
-            timestamp=base_time + dt.timedelta(hours=i),
-            close=p,
-            mark=p,
-            mid=p,
-            vwap=p,
-            is_closed=True,
-        ))
+
+        points.append(
+            PricePoint(
+                venue=VenueId("BINANCE"),
+                symbol=InstrumentId("BTCUSDT"),
+                timeframe="1h",
+                timestamp=base_time + dt.timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
+        )
     return points
 
 
@@ -75,6 +79,7 @@ def label_builder():
 # ================================================================
 # CostEstimate tests
 # ================================================================
+
 
 class TestCostEstimate:
     """成本估算测试。"""
@@ -99,6 +104,7 @@ class TestCostEstimate:
 # ================================================================
 # LabelBuilder tests
 # ================================================================
+
 
 class TestLabelBuilder:
     """LabelBuilder 验收测试。"""
@@ -169,10 +175,20 @@ class TestLabelBuilder:
         """对数收益计算正确。"""
         # 确定性价格序列：100 → 110 → 100
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         prices = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=p, mark=p, mid=p, vwap=p, is_closed=True)
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
             for i, p in enumerate([100.0, 110.0, 100.0, 110.0, 100.0])
         ]
 
@@ -203,10 +219,20 @@ class TestLabelBuilder:
     def test_simple_return_calculation(self, label_builder):
         """简单收益计算正确。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         prices = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=p, mark=p, mid=p, vwap=p, is_closed=True)
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
             for i, p in enumerate([100.0, 101.0, 102.0])
         ]
 
@@ -284,27 +310,43 @@ class TestLabelBuilder:
     def test_label_id_deterministic(self, label_builder):
         """相同参数的标签 ID 确定性。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
         def make_prices():
             return [
-                PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                           base + timedelta(hours=i), close=100.0 + i, mark=100.0 + i,
-                           mid=100.0 + i, vwap=100.0 + i, is_closed=True)
+                PricePoint(
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    "1h",
+                    base + timedelta(hours=i),
+                    close=100.0 + i,
+                    mark=100.0 + i,
+                    mid=100.0 + i,
+                    vwap=100.0 + i,
+                    is_closed=True,
+                )
                 for i in range(10)
             ]
 
         label_spec = LabelSpec(label_id="test", horizon_bars=2)
 
         labels1 = label_builder.build_labels(
-            price_series=make_prices(), label_spec=label_spec,
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
-            timeframe="1h", factor_id=FactorId("test"),
+            price_series=make_prices(),
+            label_spec=label_spec,
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
+            timeframe="1h",
+            factor_id=FactorId("test"),
             factor_version=SchemaVersion("1.0.0"),
         )
         labels2 = label_builder.build_labels(
-            price_series=make_prices(), label_spec=label_spec,
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
-            timeframe="1h", factor_id=FactorId("test"),
+            price_series=make_prices(),
+            label_spec=label_spec,
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
+            timeframe="1h",
+            factor_id=FactorId("test"),
             factor_version=SchemaVersion("1.0.0"),
         )
         # 相同参数应产生相同 label_id
@@ -313,20 +355,31 @@ class TestLabelBuilder:
     def test_open_bar_skipped(self, label_builder):
         """未闭合 K 线被跳过。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         prices = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=100.0 + i, mark=100.0 + i,
-                       mid=100.0 + i, vwap=100.0 + i,
-                       is_closed=(i < 9))  # 最后一个是未闭合 K 线
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=100.0 + i,
+                mark=100.0 + i,
+                mid=100.0 + i,
+                vwap=100.0 + i,
+                is_closed=(i < 9),
+            )  # 最后一个是未闭合 K 线
             for i in range(10)
         ]
 
         label_spec = LabelSpec(label_id="test", horizon_bars=2)
         labels = label_builder.build_labels(
-            price_series=prices, label_spec=label_spec,
-            venue=VenueId("BINANCE"), symbol=InstrumentId("BTCUSDT"),
-            timeframe="1h", factor_id=FactorId("test"),
+            price_series=prices,
+            label_spec=label_spec,
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
+            timeframe="1h",
+            factor_id=FactorId("test"),
             factor_version=SchemaVersion("1.0.0"),
         )
         # 未闭合的 entry 和 exit 应被跳过
@@ -336,6 +389,7 @@ class TestLabelBuilder:
     def test_triple_barrier_basic(self, label_builder):
         """Triple-barrier 标签基本功能。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         # 构造足够长的价格序列
         n = 60  # > max_hold_bars (48)
@@ -347,8 +401,17 @@ class TestLabelBuilder:
                 prices_list.append(prices_list[-1] * (1 + 0.001))
 
         price_series = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=p, mark=p, mid=p, vwap=p, is_closed=True)
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
             for i, p in enumerate(prices_list)
         ]
 
@@ -372,6 +435,7 @@ class TestLabelBuilder:
     def test_triple_barrier_lower_hit(self, label_builder):
         """Triple-barrier 突破下限。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         n = 60
         prices_list = [100.0]
@@ -382,8 +446,17 @@ class TestLabelBuilder:
                 prices_list.append(prices_list[-1] * (1 + 0.001))
 
         price_series = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=p, mark=p, mid=p, vwap=p, is_closed=True)
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
             for i, p in enumerate(prices_list)
         ]
 
@@ -406,6 +479,7 @@ class TestLabelBuilder:
     def test_triple_barrier_horizontal(self, label_builder):
         """Triple-barrier 水平触及（无突破）。"""
         from datetime import timedelta
+
         base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
         # 价格固定在 100±0.2%，不会触及 ±5% barriers
         n = 60
@@ -414,8 +488,17 @@ class TestLabelBuilder:
             prices_list.append(100.0 + 0.2 * (i % 5 - 2))
 
         price_series = [
-            PricePoint(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h",
-                       base + timedelta(hours=i), close=p, mark=p, mid=p, vwap=p, is_closed=True)
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=p,
+                mark=p,
+                mid=p,
+                vwap=p,
+                is_closed=True,
+            )
             for i, p in enumerate(prices_list)
         ]
 

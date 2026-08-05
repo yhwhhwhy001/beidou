@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 @dataclass
 class CostEstimate:
     """成本估计 — 完整分解。"""
+
     symbol: str
     side: str  # BUY / SELL
     quantity: float
@@ -46,6 +47,7 @@ class CostEstimate:
 @dataclass
 class CostCalibration:
     """成本模型 OOS 校准。"""
+
     model_version: str
     sample_count: int
     mean_predicted_bps: float = 0.0
@@ -78,11 +80,19 @@ class RealCostModel:
     def get_fee_tier(self, venue: str) -> tuple[float, float]:
         return self._fee_tiers.get(venue, (2.0, 4.0))
 
-    def estimate(self, symbol: str, side: str, quantity: float, price: float,
-                 spread_bps: float = 1.0, bid_depth: float = 0.0,
-                 ask_depth: float = 0.0, participation_pct: float = 1.0,
-                 funding_rate_bps: float = 0.0, venue: str = "BINANCE",
-                 ) -> CostEstimate:
+    def estimate(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        spread_bps: float = 1.0,
+        bid_depth: float = 0.0,
+        ask_depth: float = 0.0,
+        participation_pct: float = 1.0,
+        funding_rate_bps: float = 0.0,
+        venue: str = "BINANCE",
+    ) -> CostEstimate:
         """估计交易成本（全面分解）。"""
         notional = quantity * price
         maker_bps, taker_bps = self.get_fee_tier(venue)
@@ -102,16 +112,23 @@ class RealCostModel:
         # Funding cost (for perpetuals, holding cost)
         funding_cost = funding_rate_bps * (1.0 / 3)  # assume ~8h holding period
 
-        total = half_spread + taker_fee_bps + impact + funding_cost
+        total = half_spread + taker_bps + impact + funding_cost
 
         return CostEstimate(
-            symbol=symbol, side=side, quantity=quantity, price=price,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
             notional=notional,
-            maker_fee_bps=maker_bps, taker_fee_bps=taker_bps,
-            effective_fee_bps=taker_fee_bps,
-            spread_bps=spread_bps, half_spread_cost_bps=half_spread,
-            participation_pct=participation_pct, impact_bps=impact,
-            funding_rate_bps=funding_rate_bps, funding_cost_bps=funding_cost,
+            maker_fee_bps=maker_bps,
+            taker_fee_bps=taker_bps,
+            effective_fee_bps=taker_bps,
+            spread_bps=spread_bps,
+            half_spread_cost_bps=half_spread,
+            participation_pct=participation_pct,
+            impact_bps=impact,
+            funding_rate_bps=funding_rate_bps,
+            funding_cost_bps=funding_cost,
             total_cost_bps=total,
         )
 
@@ -129,14 +146,17 @@ class RealCostModel:
         mean_pred = sum(p.total_cost_bps for p, _ in self._predictions) / n
         mean_actual = sum(a for _, a in self._predictions) / n
         mean_residual = sum(residuals) / n
-        rmse = math.sqrt(sum(r ** 2 for r in residuals) / n)
+        rmse = math.sqrt(sum(r**2 for r in residuals) / n)
 
         is_valid = abs(mean_residual) < 5.0 and rmse < 10.0  # within 5bps bias, 10bps RMSE
 
         self._calibration = CostCalibration(
-            model_version=model_version, sample_count=n,
-            mean_predicted_bps=mean_pred, mean_actual_bps=mean_actual,
-            mean_residual_bps=mean_residual, rmse_bps=rmse,
+            model_version=model_version,
+            sample_count=n,
+            mean_predicted_bps=mean_pred,
+            mean_actual_bps=mean_actual,
+            mean_residual_bps=mean_residual,
+            rmse_bps=rmse,
             is_valid=is_valid,
         )
         return self._calibration
@@ -148,10 +168,11 @@ class RealCostModel:
 @dataclass
 class SignalConsistency:
     """BD-06 item 3: 信号一致性评估。"""
-    agreement_ratio: float     # 同向信号占比
+
+    agreement_ratio: float  # 同向信号占比
     correlation_discount: float  # 相关性折扣 (0-1)
     conflict_detected: bool
-    filter_multiplier: float   # Filter 施加的乘数
+    filter_multiplier: float  # Filter 施加的乘数
     contribution_breakdown: dict[str, float]  # component_id → contribution
     final_direction: str
     final_strength: float

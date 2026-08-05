@@ -1,5 +1,7 @@
 """ExchangeAdapter Protocol — 所有交易所适配器必须实现的统一接口。"""
+
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -7,9 +9,20 @@ from enum import Enum
 from typing import Any
 
 from beidou_shared.types import (
-    AccountId, AccountRef, CorrelationId, HealthStatus, InstrumentId,
-    MonetaryValue, OrderSide, OrderStatus, OrderType, Price, Quantity,
-    ResultStatus, TimeInForce, VenueId, VenueInstrument,
+    AccountRef,
+    CorrelationId,
+    HealthStatus,
+    InstrumentId,
+    MonetaryValue,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Price,
+    Quantity,
+    ResultStatus,
+    TimeInForce,
+    VenueId,
+    VenueInstrument,
 )
 
 

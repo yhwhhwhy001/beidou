@@ -1,10 +1,14 @@
 """账户能力发现与权限预检实现。查询失败≠空仓。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, ResultStatus, VenueId
+
+from beidou_shared.types import AccountId, CorrelationId, ResultStatus, VenueId
+
 
 class AccountQueryStatus(str, Enum):
     SUCCESS = "SUCCESS"
@@ -14,6 +18,7 @@ class AccountQueryStatus(str, Enum):
     ERROR = "ERROR"
     UNAUTHORIZED = "UNAUTHORIZED"
     RATE_LIMITED = "RATE_LIMITED"
+
 
 @dataclass(frozen=True, slots=True)
 class AccountQueryResult:
@@ -29,6 +34,7 @@ class AccountQueryResult:
 
     def should_fail_closed(self) -> bool:
         return self.status in (AccountQueryStatus.UNKNOWN, AccountQueryStatus.ERROR, AccountQueryStatus.UNAUTHORIZED)
+
 
 @dataclass(frozen=True, slots=True)
 class AccountCapabilityReport:

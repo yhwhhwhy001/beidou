@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +18,7 @@ from typing import Any
 @dataclass(frozen=True, slots=True)
 class PolicyEnvelope:
     """已签名 Policy Envelope — 不可变参数集。"""
+
     policy_id: str
     version: str
     parameters: dict[str, Any]
@@ -37,13 +38,16 @@ class PolicyEnvelope:
     def verify(self, signing_key: str) -> bool:
         if not self.signature or not signing_key:
             return False
-        payload = json.dumps({
-            "policy_id": self.policy_id,
-            "version": self.version,
-            "parameters": self.parameters,
-            "issued_at": self.issued_at,
-            "expires_at": self.expires_at,
-        }, sort_keys=True)
+        payload = json.dumps(
+            {
+                "policy_id": self.policy_id,
+                "version": self.version,
+                "parameters": self.parameters,
+                "issued_at": self.issued_at,
+                "expires_at": self.expires_at,
+            },
+            sort_keys=True,
+        )
         expected = hmac.new(signing_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(self.signature, expected)
 
@@ -55,8 +59,7 @@ class PolicyLoader:
     Policy 不可用或签名无效 → NO_ACTION（不允许使用默认值）。
     """
 
-    def __init__(self, policy_dir: str = "config/policies",
-                 signing_key: str | None = None):
+    def __init__(self, policy_dir: str = "config/policies", signing_key: str | None = None):
         self._policy_dir = policy_dir
         self._signing_key = signing_key or os.environ.get("BEIDOU_SIGNING_KEY", "")
         self._cache: dict[str, PolicyEnvelope] = {}

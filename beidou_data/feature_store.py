@@ -1,9 +1,12 @@
-
 """在线/离线统一特征图、时间语义与特征仓。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
+
 from beidou_shared.types import InstrumentId, SchemaVersion, VenueId
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureVector:
@@ -15,8 +18,10 @@ class FeatureVector:
     version: SchemaVersion
     feature_metadata: dict[str, str] = field(default_factory=dict)
 
+
 class FeatureStore:
     """统一特征仓。在线/离线一致的时间语义。"""
+
     def __init__(self) -> None:
         self._features: dict[str, list[FeatureVector]] = {}
 

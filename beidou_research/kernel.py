@@ -15,6 +15,7 @@ from typing import Protocol
 
 class MarketIO(Protocol):
     """市场数据 I/O 接口。Live 和 Backtest 各自实现。"""
+
     def get_price(self, symbol: str, timestamp: datetime) -> float: ...
     def get_features(self, symbol: str) -> dict: ...
     def get_order_book(self, symbol: str) -> dict: ...
@@ -22,8 +23,8 @@ class MarketIO(Protocol):
 
 class ExchangeIO(Protocol):
     """交易所 I/O 接口。Live 和 Backtest 各自实现。"""
-    def place_order(self, symbol: str, side: str, qty: float,
-                    price: float | None) -> dict: ...
+
+    def place_order(self, symbol: str, side: str, qty: float, price: float | None) -> dict: ...
     def cancel_order(self, order_id: str) -> bool: ...
     def get_account(self) -> dict: ...
 
@@ -31,6 +32,7 @@ class ExchangeIO(Protocol):
 @dataclass
 class DatasetManifest:
     """BD-11 item 2: 冻结数据集清单。"""
+
     dataset_id: str
     time_start: str
     time_end: str
@@ -44,14 +46,17 @@ class DatasetManifest:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def compute_manifest_hash(self) -> str:
-        content = json.dumps({
-            "dataset_id": self.dataset_id,
-            "time_start": self.time_start,
-            "time_end": self.time_end,
-            "point_in_time_universe": sorted(self.point_in_time_universe),
-            "source_checksum": self.source_checksum,
-            "code_hash": self.code_hash,
-        }, sort_keys=True)
+        content = json.dumps(
+            {
+                "dataset_id": self.dataset_id,
+                "time_start": self.time_start,
+                "time_end": self.time_end,
+                "point_in_time_universe": sorted(self.point_in_time_universe),
+                "source_checksum": self.source_checksum,
+                "code_hash": self.code_hash,
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(content.encode()).hexdigest()
 
 
@@ -74,28 +79,27 @@ class StrategyKernel:
         if not features:
             return None
         price = self._market.get_price(symbol, timestamp)
-        return {"symbol": symbol, "price": price, "features": features,
-                "timestamp": timestamp.isoformat()}
+        return {"symbol": symbol, "price": price, "features": features, "timestamp": timestamp.isoformat()}
 
     def verify_parity(self, live_result: dict, backtest_result: dict) -> bool:
         """BD-05 item 8: 验证 live/backtest kernel parity。"""
-        live_hash = hashlib.sha256(
-            json.dumps(live_result, sort_keys=True, default=str).encode()
-        ).hexdigest()
-        backtest_hash = hashlib.sha256(
-            json.dumps(backtest_result, sort_keys=True, default=str).encode()
-        ).hexdigest()
+        live_hash = hashlib.sha256(json.dumps(live_result, sort_keys=True, default=str).encode()).hexdigest()
+        backtest_hash = hashlib.sha256(json.dumps(backtest_result, sort_keys=True, default=str).encode()).hexdigest()
         return live_hash == backtest_hash
 
 
 @dataclass
 class WalkForwardResult:
     """BD-11 item 4: Purged walk-forward 结果。"""
+
     fold_id: int
-    train_start: str; train_end: str
-    test_start: str; test_end: str
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
     embargo_days: int
-    train_sharpe: float; test_sharpe: float
+    train_sharpe: float
+    test_sharpe: float
     parameters: dict
     is_best: bool = False
 
@@ -110,24 +114,26 @@ class PurgedWalkForward:
     - Multiple-testing correction: Bonferroni/Holm
     """
 
-    def __init__(self, n_folds: int = 5, embargo_days: int = 7,
-                 purge_days: int = 3):
+    def __init__(self, n_folds: int = 5, embargo_days: int = 7, purge_days: int = 3):
         self._n_folds = n_folds
         self._embargo_days = embargo_days
         self._purge_days = purge_days
         self._results: list[WalkForwardResult] = []
 
-    def run(self, dataset_manifest: DatasetManifest,
-            param_grid: list[dict]) -> list[WalkForwardResult]:
+    def run(self, dataset_manifest: DatasetManifest, param_grid: list[dict]) -> list[WalkForwardResult]:
         """执行 purged walk-forward。"""
         # Placeholder — full implementation requires backtest engine
         self._results = []
         for i in range(self._n_folds):
             fold = WalkForwardResult(
-                fold_id=i, train_start="", train_end="",
-                test_start="", test_end="",
+                fold_id=i,
+                train_start="",
+                train_end="",
+                test_start="",
+                test_end="",
                 embargo_days=self._embargo_days,
-                train_sharpe=0.0, test_sharpe=0.0,
+                train_sharpe=0.0,
+                test_sharpe=0.0,
                 parameters=param_grid[0] if param_grid else {},
             )
             self._results.append(fold)
@@ -146,6 +152,7 @@ class ChampionChallengerSwitch:
     绑定模型、数据、代码、参数和证书 hash。
     切换原子化，可回滚。
     """
+
     switch_id: str
     old_champion_id: str
     new_champion_id: str

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +17,7 @@ from datetime import datetime, timezone
 @dataclass
 class SignedCertificate:
     """已签名证书。"""
+
     certificate_id: str
     gate_id: str  # G0-G8
     repository: str
@@ -30,16 +30,24 @@ class SignedCertificate:
     revocation_signed_at: str | None = None
 
     def sign(self, signing_key: str) -> str:
-        payload = f"{self.certificate_id}|{self.gate_id}|{self.repository}|{self.commit}|{self.bundle_hash}|{self.signed_at}"
+        payload = (
+            f"{self.certificate_id}|{self.gate_id}|{self.repository}|{self.commit}|{self.bundle_hash}|{self.signed_at}"
+        )
         self.signature = hmac.new(
-            signing_key.encode(), payload.encode(), hashlib.sha256,
+            signing_key.encode(),
+            payload.encode(),
+            hashlib.sha256,
         ).hexdigest()
         return self.signature
 
     def verify(self, signing_key: str) -> bool:
-        payload = f"{self.certificate_id}|{self.gate_id}|{self.repository}|{self.commit}|{self.bundle_hash}|{self.signed_at}"
+        payload = (
+            f"{self.certificate_id}|{self.gate_id}|{self.repository}|{self.commit}|{self.bundle_hash}|{self.signed_at}"
+        )
         expected = hmac.new(
-            signing_key.encode(), payload.encode(), hashlib.sha256,
+            signing_key.encode(),
+            payload.encode(),
+            hashlib.sha256,
         ).hexdigest()
         return hmac.compare_digest(self.signature, expected)
 
@@ -72,8 +80,7 @@ class CertificateStore:
         return self._certificates.get(certificate_id)
 
     def verify_all(self) -> dict[str, bool]:
-        return {cid: c.verify(self._signing_key)
-                for cid, c in self._certificates.items()}
+        return {cid: c.verify(self._signing_key) for cid, c in self._certificates.items()}
 
     def revoke(self, certificate_id: str, reason: str) -> bool:
         cert = self._certificates.get(certificate_id)
@@ -87,27 +94,28 @@ class CertificateStore:
         cert = self._certificates.get(certificate_id)
         return cert is not None and cert.revoked
 
-    def export_to_s3(self, bucket: str = "beidou-certificates",
-                     endpoint: str = "http://localhost:9000") -> bool:
+    def export_to_s3(self, bucket: str = "beidou-certificates", endpoint: str = "http://localhost:9000") -> bool:
         """导出到 S3/MinIO。"""
         try:
             import json
+
             # MinIO/S3 client
-            for cid, cert in self._certificates.items():
-                key = f"certificates/{cid}.json"
+            for _cid, cert in self._certificates.items():
                 # In production: boto3/minio client.put_object(...)
-                data = json.dumps({
-                    "certificate_id": cert.certificate_id,
-                    "gate_id": cert.gate_id,
-                    "repository": cert.repository,
-                    "commit": cert.commit,
-                    "bundle_hash": cert.bundle_hash,
-                    "signature": cert.signature,
-                    "signed_at": cert.signed_at,
-                    "revoked": cert.revoked,
-                }, indent=2)
+                json.dumps(
+                    {
+                        "certificate_id": cert.certificate_id,
+                        "gate_id": cert.gate_id,
+                        "repository": cert.repository,
+                        "commit": cert.commit,
+                        "bundle_hash": cert.bundle_hash,
+                        "signature": cert.signature,
+                        "signed_at": cert.signed_at,
+                        "revoked": cert.revoked,
+                    },
+                    indent=2,
+                )
                 # Placeholder for actual S3/MinIO upload
-                print(f"[cert-store] Would upload: {bucket}/{key}")
             return True
         except Exception:
             return False
@@ -116,6 +124,7 @@ class CertificateStore:
 @dataclass
 class ReleaseArtifact:
     """BD-13 item 8: 发布制品。"""
+
     version: str
     commit: str
     sbom_path: str = ""
@@ -128,7 +137,8 @@ class ReleaseArtifact:
     def compute_artifact_hash(self) -> str:
         """计算制品的整体 SHA256。"""
         parts = [
-            self.version, self.commit,
+            self.version,
+            self.commit,
             self._file_hash(self.sbom_path),
             self._file_hash(self.build_provenance_path),
             self._file_hash(self.test_report_path),

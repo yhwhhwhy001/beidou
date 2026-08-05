@@ -15,19 +15,19 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass
 class HalfLifeResult:
     """半衰期估计结果。"""
-    half_life_bars: float         # 半衰期（以 K 线数计）
-    ar1_coefficient: float         # AR(1) 系数 φ
-    beta: float                    # 回归系数 β
-    is_mean_reverting: bool        # 是否均值回归（β < 0 且 φ < 1）
-    r_squared: float               # 回归 R²
+
+    half_life_bars: float  # 半衰期（以 K 线数计）
+    ar1_coefficient: float  # AR(1) 系数 φ
+    beta: float  # 回归系数 β
+    is_mean_reverting: bool  # 是否均值回归（β < 0 且 φ < 1）
+    r_squared: float  # 回归 R²
     sample_count: int
-    valid: bool                    # 估计是否有效
+    valid: bool  # 估计是否有效
 
 
 def estimate_half_life(prices: list[float]) -> HalfLifeResult:
@@ -66,15 +66,18 @@ def estimate_half_life(prices: list[float]) -> HalfLifeResult:
     if len(log_prices) < 30:
         return HalfLifeResult(
             half_life_bars=float("inf"),
-            ar1_coefficient=1.0, beta=0.0,
-            is_mean_reverting=False, r_squared=0.0,
-            sample_count=len(log_prices), valid=False,
+            ar1_coefficient=1.0,
+            beta=0.0,
+            is_mean_reverting=False,
+            r_squared=0.0,
+            sample_count=len(log_prices),
+            valid=False,
         )
 
     # 构造 Δlog(P_t) 和 log(P_{t-1})
     m = len(log_prices) - 1
     y = [log_prices[t + 1] - log_prices[t] for t in range(m)]  # Δlog(P_t)
-    x = [log_prices[t] for t in range(m)]                       # log(P_{t-1})
+    x = [log_prices[t] for t in range(m)]  # log(P_{t-1})
 
     # OLS 回归: y = α + β x + ε
     mean_x = sum(x) / m
@@ -86,9 +89,12 @@ def estimate_half_life(prices: list[float]) -> HalfLifeResult:
     if abs(var_x) < 1e-15:
         return HalfLifeResult(
             half_life_bars=float("inf"),
-            ar1_coefficient=1.0, beta=0.0,
-            is_mean_reverting=False, r_squared=0.0,
-            sample_count=m, valid=False,
+            ar1_coefficient=1.0,
+            beta=0.0,
+            is_mean_reverting=False,
+            r_squared=0.0,
+            sample_count=m,
+            valid=False,
         )
 
     beta = cov_xy / var_x

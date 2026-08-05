@@ -15,25 +15,28 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timezone
 
 from beidou_shared.types import (
-    InstrumentId, StrategyId, SchemaVersion, VenueId,
+    InstrumentId,
+    StrategyId,
+    VenueId,
 )
 from beidou_strategy.alpha.contracts import (
-    EntryProposal, FilterDecision, FilterResult, StrategyProposal,
-    DataQualityTier,
+    EntryProposal,
+    FilterDecision,
+    FilterResult,
 )
 from beidou_strategy.alpha.typed_graph import (
-    TypedAlphaGraph, TypedGraphNode, TypedNodeOutput,
-    NodeType, NodeFailurePolicy,
-    EntryNode, FilterNode, FusionNode,
+    EntryNode,
+    FilterNode,
+    FusionNode,
+    TypedAlphaGraph,
 )
-
 
 # ================================================================
 # 辅助函数
 # ================================================================
+
 
 async def _make_entry(context: dict) -> EntryProposal:
     return EntryProposal(
@@ -92,6 +95,7 @@ def sample_context():
 # FilterResult 语义验证（最关键的修复）
 # ================================================================
 
+
 class TestFilterResultSemantics:
     """BF-08 核心语义：Filter 不能产生方向信号。"""
 
@@ -129,6 +133,7 @@ class TestFilterResultSemantics:
 # TypedAlphaGraph 核心测试
 # ================================================================
 
+
 class TestTypedAlphaGraph:
     """TypedAlphaGraph 验收测试。"""
 
@@ -143,9 +148,9 @@ class TestTypedAlphaGraph:
         graph.add_node(entry)
         graph.add_node(flt)
         graph.add_node(fusion)
-        graph.connect("entry", "filter")   # Entry → Filter
-        graph.connect("filter", "fusion")   # Filter → Fusion
-        graph.connect("entry", "fusion")    # Entry → Fusion (for EntryProposal data)
+        graph.connect("entry", "filter")  # Entry → Filter
+        graph.connect("filter", "fusion")  # Filter → Fusion
+        graph.connect("entry", "fusion")  # Entry → Fusion (for EntryProposal data)
 
         result = await graph.execute(sample_context)
 
@@ -169,15 +174,13 @@ class TestTypedAlphaGraph:
         graph.add_node(entry)
         graph.add_node(flt)
         graph.add_node(fusion)
-        graph.connect("entry", "filter")   # Entry → Filter
-        graph.connect("filter", "fusion")   # Filter → Fusion
-        graph.connect("entry", "fusion")    # Entry → Fusion (for EntryProposal data)
+        graph.connect("entry", "filter")  # Entry → Filter
+        graph.connect("filter", "fusion")  # Filter → Fusion
+        graph.connect("entry", "fusion")  # Entry → Fusion (for EntryProposal data)
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "LONG", (
-            f"Entry LONG + Filter ACCEPT must be LONG, got {result.direction}"
-        )
+        assert result.direction == "LONG", f"Entry LONG + Filter ACCEPT must be LONG, got {result.direction}"
 
     @pytest.mark.asyncio
     async def test_entry_long_bearish_filter_not_become_short(self, sample_context):
@@ -193,18 +196,16 @@ class TestTypedAlphaGraph:
         graph.add_node(entry)
         graph.add_node(flt)
         graph.add_node(fusion)
-        graph.connect("entry", "filter")   # Entry → Filter
-        graph.connect("filter", "fusion")   # Filter → Fusion
-        graph.connect("entry", "fusion")    # Entry → Fusion (for EntryProposal data)
+        graph.connect("entry", "filter")  # Entry → Filter
+        graph.connect("filter", "fusion")  # Filter → Fusion
+        graph.connect("entry", "fusion")  # Entry → Fusion (for EntryProposal data)
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "LONG", (
-            f"Entry LONG + DEGRADE filter must still be LONG, got {result.direction}"
-        )
+        assert result.direction == "LONG", f"Entry LONG + DEGRADE filter must still be LONG, got {result.direction}"
         # DEGRADE 降低了信心和强度
         assert result.confidence < 0.6  # original confidence reduced
-        assert result.strength < 0.7    # original strength reduced
+        assert result.strength < 0.7  # original strength reduced
 
     @pytest.mark.asyncio
     async def test_degrade_multipliers_reduce_confidence_and_strength(self, sample_context):
@@ -217,9 +218,9 @@ class TestTypedAlphaGraph:
         graph.add_node(entry)
         graph.add_node(flt)
         graph.add_node(fusion)
-        graph.connect("entry", "filter")   # Entry → Filter
-        graph.connect("filter", "fusion")   # Filter → Fusion
-        graph.connect("entry", "fusion")    # Entry → Fusion (for EntryProposal data)
+        graph.connect("entry", "filter")  # Entry → Filter
+        graph.connect("filter", "fusion")  # Filter → Fusion
+        graph.connect("entry", "fusion")  # Entry → Fusion (for EntryProposal data)
 
         result = await graph.execute(sample_context)
         # confidence: 0.6 * 0.5 = 0.3
@@ -271,6 +272,7 @@ class TestTypedAlphaGraph:
     @pytest.mark.asyncio
     async def test_filter_fails_closed_default(self, sample_context):
         """Filter 节点默认 FAIL_CLOSED → 失败即 VETO。"""
+
         async def broken_filter(context, entry=None):
             raise RuntimeError("simulated failure")
 

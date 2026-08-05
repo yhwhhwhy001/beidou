@@ -12,15 +12,16 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class LiquidationRisk:
     """清算风险评估。"""
+
     symbol: str
     current_price: float
     liquidation_price: float
-    distance_pct: float          # 距离清算的百分比
+    distance_pct: float  # 距离清算的百分比
     leverage: float
     initial_margin: float
     maintenance_margin: float
-    margin_ratio: float          # maintenance / initial
-    is_critical: bool            # 距离 < 5%
+    margin_ratio: float  # maintenance / initial
+    is_critical: bool  # 距离 < 5%
     position_size: float
     notional: float
 
@@ -30,11 +31,13 @@ class LiquidationCalculator:
 
     # Binance USDⓈ-M 默认维持保证金率
     DEFAULT_MAINTENANCE_MARGIN_RATE = 0.004  # 0.4%
-    DEFAULT_INITIAL_MARGIN_RATE = 0.01       # 1% (100x max leverage)
+    DEFAULT_INITIAL_MARGIN_RATE = 0.01  # 1% (100x max leverage)
 
     @staticmethod
     def calculate_long_liquidation(
-        entry_price: float, quantity: float, leverage: float,
+        entry_price: float,
+        quantity: float,
+        leverage: float,
         maintenance_rate: float | None = None,
     ) -> float:
         """计算多头清算价格。"""
@@ -48,7 +51,9 @@ class LiquidationCalculator:
 
     @staticmethod
     def calculate_short_liquidation(
-        entry_price: float, quantity: float, leverage: float,
+        entry_price: float,
+        quantity: float,
+        leverage: float,
         maintenance_rate: float | None = None,
     ) -> float:
         """计算空头清算价格。"""
@@ -60,25 +65,21 @@ class LiquidationCalculator:
         return round(liquidation_price, 8)
 
     @staticmethod
-    def assess_risk(symbol: str, current_price: float, entry_price: float,
-                    quantity: float, leverage: float, side: str = "LONG") -> LiquidationRisk:
+    def assess_risk(
+        symbol: str, current_price: float, entry_price: float, quantity: float, leverage: float, side: str = "LONG"
+    ) -> LiquidationRisk:
         """评估清算风险。"""
         if side.upper() == "SHORT":
-            liq_price = LiquidationCalculator.calculate_short_liquidation(
-                entry_price, quantity, leverage)
+            liq_price = LiquidationCalculator.calculate_short_liquidation(entry_price, quantity, leverage)
         else:
-            liq_price = LiquidationCalculator.calculate_long_liquidation(
-                entry_price, quantity, leverage)
+            liq_price = LiquidationCalculator.calculate_long_liquidation(entry_price, quantity, leverage)
 
         notional = quantity * current_price
         initial_margin = notional / leverage
         maintenance_margin = notional * LiquidationCalculator.DEFAULT_MAINTENANCE_MARGIN_RATE
         margin_ratio = maintenance_margin / initial_margin if initial_margin > 0 else 1.0
 
-        if current_price > 0:
-            distance_pct = abs(current_price - liq_price) / current_price * 100
-        else:
-            distance_pct = 0.0
+        distance_pct = abs(current_price - liq_price) / current_price * 100 if current_price > 0 else 0.0
 
         return LiquidationRisk(
             symbol=symbol,

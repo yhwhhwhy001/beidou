@@ -1,13 +1,20 @@
-
 """订单状态机、用户数据流、UNKNOWN 恢复与交易所语义归一。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
 from beidou_shared.types import (
-    OrderId, OrderStatus, OrderSide, OrderType, InstrumentId, VenueId,
-    Price, Quantity, MonetaryValue, CorrelationId, ExecutionId,
+    CorrelationId,
+    MonetaryValue,
+    OrderId,
+    OrderStatus,
+    Price,
+    Quantity,
 )
+
 
 class OrderEvent(str, Enum):
     CREATED = "CREATED"
@@ -22,9 +29,11 @@ class OrderEvent(str, Enum):
     UNKNOWN = "UNKNOWN"
     RECOVERED = "RECOVERED"
 
+
 ORDER_STATE_TRANSITIONS: dict[OrderStatus, dict[OrderEvent, OrderStatus]] = {
     OrderStatus.NEW: {
-        OrderEvent.SENT: OrderStatus.NEW, OrderEvent.ACKED: OrderStatus.NEW,
+        OrderEvent.SENT: OrderStatus.NEW,
+        OrderEvent.ACKED: OrderStatus.NEW,
         OrderEvent.REJECTED: OrderStatus.REJECTED,
         OrderEvent.PARTIALLY_FILLED: OrderStatus.PARTIALLY_FILLED,
         OrderEvent.FILLED: OrderStatus.FILLED,
@@ -44,6 +53,7 @@ ORDER_STATE_TRANSITIONS: dict[OrderStatus, dict[OrderEvent, OrderStatus]] = {
     },
     OrderStatus.UNKNOWN: {OrderEvent.RECOVERED: OrderStatus.NEW},
 }
+
 
 @dataclass
 class OrderStateTracker:
@@ -65,22 +75,25 @@ class OrderStateTracker:
             self.status = OrderStatus.UNKNOWN
             self.events.append((event, datetime.now(timezone.utc)))
             return True
-        if event == OrderEvent.RECOVERED:
-            if self.status == OrderStatus.UNKNOWN:
-                self.status = OrderStatus.NEW
-                self.events.append((event, datetime.now(timezone.utc)))
-                return True
+        if event == OrderEvent.RECOVERED and self.status == OrderStatus.UNKNOWN:
+            self.status = OrderStatus.NEW
+            self.events.append((event, datetime.now(timezone.utc)))
+            return True
         return False
 
     def is_terminal(self) -> bool:
         return self.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
 
+
 class UnknownRecoveryHandler:
     """UNKNOWN 状态恢复。查询交易所实际状态，不猜测。"""
+
     @staticmethod
     def recover_from_exchange(exchange_status: OrderStatus) -> OrderEvent:
-        if exchange_status == OrderStatus.FILLED: return OrderEvent.FILLED
-        if exchange_status == OrderStatus.CANCELED: return OrderEvent.CANCELED
+        if exchange_status == OrderStatus.FILLED:
+            return OrderEvent.FILLED
+        if exchange_status == OrderStatus.CANCELED:
+            return OrderEvent.CANCELED
         if exchange_status == OrderStatus.NEW or exchange_status == OrderStatus.PARTIALLY_FILLED:
             return OrderEvent.RECOVERED
         return OrderEvent.UNKNOWN

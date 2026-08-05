@@ -1,10 +1,13 @@
-
 """版本化数据集、Lineage、退市样本与真实 Replay 基线。"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
-from beidou_shared.types import InstrumentId, SchemaVersion, VenueId
+
+from beidou_shared.types import InstrumentId, SchemaVersion
+
 
 @dataclass(frozen=True, slots=True)
 class DatasetVersion:
@@ -18,14 +21,21 @@ class DatasetVersion:
     is_delisted_aware: bool = True
     parent_version: str | None = None
 
+
 @dataclass
 class DatasetManager:
     """数据集版本管理器。Lineage 追踪，退市样本保留。"""
+
     def __init__(self) -> None:
         self._datasets: dict[str, list[DatasetVersion]] = {}
 
     def create_version(self, dataset_id: str, prev_version: SchemaVersion | None, **kwargs) -> DatasetVersion:
-        v = DatasetVersion(dataset_id=dataset_id, version=SchemaVersion(f"{dataset_id}-{len(self._datasets.get(dataset_id, []))+1}"), parent_version=str(prev_version) if prev_version else None, **kwargs)
+        v = DatasetVersion(
+            dataset_id=dataset_id,
+            version=SchemaVersion(f"{dataset_id}-{len(self._datasets.get(dataset_id, [])) + 1}"),
+            parent_version=str(prev_version) if prev_version else None,
+            **kwargs,
+        )
         if dataset_id not in self._datasets:
             self._datasets[dataset_id] = []
         self._datasets[dataset_id].append(v)

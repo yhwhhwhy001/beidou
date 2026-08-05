@@ -1,17 +1,29 @@
 """复合 Alpha SDK 与策略组件图。Entry/Filter/Exit/PositionManager 可组合 DAG。"""
+
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
 from beidou_shared.types import InstrumentId, ModelId, SchemaVersion, StrategyId, VenueId
 
+
 class AlphaComponentType(str, Enum):
-    ENTRY = "ENTRY"; FILTER = "FILTER"; EXIT = "EXIT"; POSITION_MANAGER = "POSITION_MANAGER"
+    ENTRY = "ENTRY"
+    FILTER = "FILTER"
+    EXIT = "EXIT"
+    POSITION_MANAGER = "POSITION_MANAGER"
+
 
 class SignalDirection(str, Enum):
-    LONG = "LONG"; SHORT = "SHORT"; FLAT = "FLAT"; NO_ACTION = "NO_ACTION"
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+    NO_ACTION = "NO_ACTION"
+
 
 @dataclass(frozen=True, slots=True)
 class AlphaSignal:
@@ -26,6 +38,7 @@ class AlphaSignal:
     model_id: ModelId | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
 
 class AlphaComponent(ABC):
     def __init__(self, component_type: AlphaComponentType, component_id: str, version: SchemaVersion) -> None:
@@ -42,6 +55,7 @@ class AlphaComponent(ABC):
     async def generate(self, context: dict[str, Any]) -> AlphaSignal: ...
     @abstractmethod
     def validate(self) -> bool: ...
+
 
 class AlphaGraph:
     def __init__(self, strategy_id: StrategyId) -> None:
@@ -65,30 +79,37 @@ class AlphaGraph:
     def has_cycle(self) -> bool:
         visited: set[str] = set()
         stack: set[str] = set()
+
         def dfs(n: str) -> bool:
-            visited.add(n); stack.add(n)
+            visited.add(n)
+            stack.add(n)
             for nb in self._edges.get(n, []):
                 if nb not in visited:
-                    if dfs(nb): return True
-                elif nb in stack: return True
-            stack.discard(n); return False
-        for node in self._components:
-            if node not in visited and dfs(node): return True
-        return False
+                    if dfs(nb):
+                        return True
+                elif nb in stack:
+                    return True
+            stack.discard(n)
+            return False
+
+        return any(node not in visited and dfs(node) for node in self._components)
 
     def topological_order(self) -> list[str]:
         if self.has_cycle():
             raise ValueError("AlphaGraph contains a cycle")
-        in_deg = {n: 0 for n in self._components}
-        for src, tgts in self._edges.items():
-            for t in tgts: in_deg[t] = in_deg.get(t, 0) + 1
+        in_deg = dict.fromkeys(self._components, 0)
+        for _src, tgts in self._edges.items():
+            for t in tgts:
+                in_deg[t] = in_deg.get(t, 0) + 1
         queue = [n for n, d in in_deg.items() if d == 0]
         order: list[str] = []
         while queue:
-            n = queue.pop(0); order.append(n)
+            n = queue.pop(0)
+            order.append(n)
             for nb in self._edges.get(n, []):
                 in_deg[nb] -= 1
-                if in_deg[nb] == 0: queue.append(nb)
+                if in_deg[nb] == 0:
+                    queue.append(nb)
         if len(order) != len(self._components):
             raise ValueError("AlphaGraph has unresolved dependencies")
         return order

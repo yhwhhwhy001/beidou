@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -31,6 +29,7 @@ class GateResult(str, Enum):
 @dataclass
 class EvidenceItem:
     """单条证据。"""
+
     name: str
     source_uri: str
     checksum: str
@@ -42,6 +41,7 @@ class EvidenceItem:
 @dataclass
 class EvidenceBundle:
     """证据包。"""
+
     bundle_id: str
     manifest: dict = field(default_factory=dict)
     evidence_items: list[EvidenceItem] = field(default_factory=list)
@@ -51,16 +51,18 @@ class EvidenceBundle:
     def add_evidence(self, item: EvidenceItem) -> None:
         self.evidence_items.append(item)
 
-    def record_scenario(self, scenario_id: str, status: ScenarioStatus,
-                        evidence_refs: list[str] | None = None) -> None:
+    def record_scenario(self, scenario_id: str, status: ScenarioStatus, evidence_refs: list[str] | None = None) -> None:
         self.scenario_results[scenario_id] = status
 
     def compute_bundle_hash(self) -> str:
-        content = json.dumps({
-            "bundle_id": self.bundle_id,
-            "evidence_checksums": [e.checksum for e in self.evidence_items],
-            "scenario_results": {k: v.value for k, v in self.scenario_results.items()},
-        }, sort_keys=True)
+        content = json.dumps(
+            {
+                "bundle_id": self.bundle_id,
+                "evidence_checksums": [e.checksum for e in self.evidence_items],
+                "scenario_results": {k: v.value for k, v in self.scenario_results.items()},
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(content.encode()).hexdigest()
 
     def is_complete(self) -> bool:
@@ -70,6 +72,7 @@ class EvidenceBundle:
 @dataclass
 class GateCertificate:
     """Gate 证书 — 绑定完整上下文。"""
+
     gate_id: str  # G0, G1, ..., G8
     result: GateResult
     bundle_hash: str
@@ -150,14 +153,15 @@ class GateRunner:
 
     def has_p0_blocker(self) -> bool:
         """任一 P0 失败立即阻断后续 Gate。"""
-        for gate_id, results in self._results.items():
-            for scenario, status in results.items():
+        for _gate_id, results in self._results.items():
+            for _scenario, status in results.items():
                 if status == ScenarioStatus.FAIL:
                     return True
         return False
 
-    def generate_certificate(self, gate_id: str, bundle: EvidenceBundle,
-                             commit: str, repo: str = "yhwhhwhy001/beidou") -> GateCertificate:
+    def generate_certificate(
+        self, gate_id: str, bundle: EvidenceBundle, commit: str, repo: str = "yhwhhwhy001/beidou"
+    ) -> GateCertificate:
         result = self.run_gate(gate_id, bundle.scenario_results)
         return GateCertificate(
             gate_id=gate_id,
