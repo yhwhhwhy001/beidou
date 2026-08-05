@@ -1,0 +1,141 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "beidou_shared",
+    "beidou_safety",
+    "beidou_strategy",
+    "beidou_research",
+    "beidou_policy",
+    "beidou_security",
+    "beidou_observability",
+    "beidou_exchange",
+    "beidou_lifecycle",
+    "beidou_delivery",
+    "beidou_autonomy",
+    "beidou_infra",
+    "beidou_data",
+    "beidou_control",
+    "beidou_chaos",
+    "beidou_production",
+    "beidou_reporting",
+    "beidou_certification",
+]
+
+
+[project]
+name = "beidou"
+version = "2.0.0"
+description = "北斗 - 生产级自主加密合约量化交易系统"
+readme = "README.md"
+license = {text = "Proprietary"}
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "pydantic>=2.0",
+    "msgpack>=1.0",
+    "psycopg[binary]>=3.1",
+    "structlog>=24.0",
+    "prometheus-client>=0.19",
+    "cryptography>=41.0",
+    "pyjwt>=2.8",
+    "httpx>=0.25",
+    "tenacity>=8.2",
+    "pyyaml>=6.0",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "hypothesis>=6.92",
+    "ruff>=0.3",
+    "mypy>=1.8",
+    "black>=24.0",
+    "pre-commit>=3.6",
+    "coverage>=7.4",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "B", "S", "C4", "T20",
+    "SIM", "RUF", "DTZ", "PGH",
+]
+ignore = ["S101", "S104"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_any_generics = false
+no_implicit_optional = true
+check_untyped_defs = true
+warn_return_any = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+    "--cov=packages",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "e2e: End-to-end tests",
+    "architecture: Architecture enforcement tests",
+    "performance: Performance benchmark tests",
+    "security: Security tests",
+    "chaos: Chaos engineering tests",
+    "slow: Slow running tests",
+]
+
+[tool.coverage.run]
+source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research", "beidou_policy", "beidou_security", "beidou_observability", "beidou_exchange", "beidou_lifecycle", "beidou_delivery", "beidou_autonomy", "beidou_infra", "beidou_data", "beidou_control", "beidou_chaos", "beidou_production", "beidou_reporting", "beidou_certification"]
+omit = ["*/tests/*", "*/test_*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B101"]
