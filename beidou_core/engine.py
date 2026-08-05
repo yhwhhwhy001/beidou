@@ -303,9 +303,16 @@ class AutonomousEngine:
             rebalance_interval="5min",
             parameters={"vol_threshold": 0.5, "trend_periods": 20},
         ))
-        # Promote to CHALLENGER immediately (skip paper trading for known factors)
+        # Promote through valid lifecycle chain: IDEA → RESEARCH → BACKTEST → PAPER_TRADING → CHALLENGER
         for fid in ["meanrev_entry_v1", "momentum_filter_v1"]:
-            self._factor_registry.get(fid).transition(FactorLifecycle.CHALLENGER)
+            rec = self._factor_registry.get(fid)
+            for target in [FactorLifecycle.RESEARCH, FactorLifecycle.BACKTEST,
+                          FactorLifecycle.PAPER_TRADING, FactorLifecycle.CHALLENGER]:
+                if not rec.transition(target):
+                    break
+        active_challengers = [fid for fid, r in self._factor_registry._factors.items()
+                             if r.lifecycle == FactorLifecycle.CHALLENGER]
+        print(f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}")
 
         # Factor tracking: rolling predictions vs actual returns
         self._factor_predictions: dict[str, list[float]] = {"meanrev_entry_v1": [], "momentum_filter_v1": []}
