@@ -1,0 +1,271 @@
+"""行情数据源 — Binance REST 轮询 ticker/orderbook/klines。
+
+绕过存根 BinanceUsdmAdapter，直接使用 urllib+hmac 调用 REST API。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import time
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+from typing import Any
+
+import yaml
+
+from beidou_shared.types import (
+    DataQualityTier, InstrumentId, Quantity, SchemaVersion, VenueId, VenueInstrument,
+)
+from beidou_data.feature_store import FeatureStore, FeatureVector
+from beidou_data.klines import KLineGenerator
+from beidou_data.quality import DQCheckResult, DQCheckType, DataQualityGate
+
+
+class MarketDataFeed:
+    """Binance REST 行情数据源。自动重试、DQ 检查、特征存储。"""
+
+    def __init__(self) -> None:
+        # Load config
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "env.testnet.yaml",
+        )
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+
+        binance_cfg = cfg["exchange"]["binance_usdm"]
+        self._rest_url = binance_cfg["rest_base_url"]
+        self._api_key = str(binance_cfg.get("api_key", "")).strip()
+        self._api_secret = str(binance_cfg.get("api_secret", "")).strip()
+        self._recv_window = binance_cfg.get("recv_window_ms", 60000)
+
+        self._feature_store = FeatureStore()
+        self._kline_generators: dict[str, KLineGenerator] = {}
+        self._last_ticker: dict[str, dict] = {}
+        self._last_orderbook: dict[str, dict] = {}
+        self._error_count: dict[str, int] = {}
+        self._start_time = time.time()
+
+    # --- Public API ---
+
+    def uptime_seconds(self) -> float:
+        return time.time() - self._start_time
+
+    def is_healthy(self) -> bool:
+        total_errors = sum(self._error_count.values())
+        return total_errors < 10
+
+    def api(self, path: str, method: str = "GET", signed: bool = False,
+            params: dict | None = None) -> Any:
+        """直接调用 Binance REST API。与 tools/strategy_live_trade.py 相同模式。"""
+        url = self._rest_url + path
+        headers = {"X-MBX-APIKEY": self._api_key}
+        if params is None:
+            params = {}
+        if signed:
+            params["timestamp"] = int(time.time() * 1000)
+            params["recvWindow"] = self._recv_window
+            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+            params["signature"] = hmac.new(
+                self._api_secret.encode(), qs.encode(), hashlib.sha256,
+            ).hexdigest()
+
+        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        if method == "POST":
+            req = urllib.request.Request(url, data=qs.encode(), headers=headers)
+        elif method == "DELETE":
+            req = urllib.request.Request(url + "?" + qs, headers=headers)
+            req.method = method
+        else:
+            req = urllib.request.Request(url + "?" + qs, headers=headers)
+            req.method = method
+
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read())
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode()
+                if e.code == 429:
+                    time.sleep(1 * (attempt + 1))
+                    continue
+                self._error_count["http"] = self._error_count.get("http", 0) + 1
+                return {"error": e.code, "msg": err_body}
+            except Exception as e:
+                self._error_count["network"] = self._error_count.get("network", 0) + 1
+                time.sleep(0.5 * (attempt + 1))
+        return {"error": -1, "msg": "retry exhausted"}
+
+    # --- Data fetching ---
+
+    def fetch_ticker(self, symbol: str) -> dict:
+        data = self.api("/fapi/v1/ticker/24hr", params={"symbol": symbol})
+        if "lastPrice" not in data:
+            return {}
+        self._last_ticker[symbol] = data
+        return data
+
+    def fetch_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        data = self.api("/fapi/v1/depth", params={"symbol": symbol, "limit": depth})
+        if "bids" not in data:
+            return {}
+        self._last_orderbook[symbol] = data
+        return data
+
+    def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[dict]:
+        raw = self.api("/fapi/v1/klines", params={
+            "symbol": symbol, "interval": interval, "limit": limit,
+        })
+        if not isinstance(raw, list):
+            return []
+        klines = []
+        for k in raw:
+            klines.append({
+                "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                "open": float(k[1]), "high": float(k[2]),
+                "low": float(k[3]), "close": float(k[4]),
+                "volume": float(k[5]),
+                "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
+                "quote_volume": float(k[7]), "trades": k[8],
+            })
+        return klines
+
+    def fetch_account(self) -> dict:
+        return self.api("/fapi/v2/account", signed=True)
+
+    # --- Feature computation ---
+
+    def update_features(self, symbol: str) -> dict[str, float]:
+        """拉取最新数据并更新特征仓。返回特征字典。"""
+        ticker = self.fetch_ticker(symbol)
+        orderbook = self.fetch_orderbook(symbol, 5)
+
+        if not ticker or not orderbook:
+            return {}
+
+        last_price = float(ticker["lastPrice"])
+        best_bid = float(orderbook["bids"][0][0])
+        best_ask = float(orderbook["asks"][0][0])
+        spread_bps = (best_ask - best_bid) / best_ask * 10000
+        change_pct = float(ticker.get("priceChangePercent", 0))
+
+        features = {
+            "price": last_price,
+            "bid": best_bid,
+            "ask": best_ask,
+            "spread_bps": spread_bps,
+            "change_24h_pct": change_pct,
+            "volume_24h": float(ticker.get("volume", 0)),
+            "high_24h": float(ticker.get("highPrice", 0)),
+            "low_24h": float(ticker.get("lowPrice", 0)),
+        }
+
+        instrument_id = InstrumentId(symbol)
+        venue_id = VenueId("BINANCE")
+        vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
+
+        # Data quality check
+        gate = DataQualityGate(venue_instrument=vi)
+        freshness_tier = DataQualityTier.PASS  # live data
+        gate.checks.append(DQCheckResult(
+            check_type=DQCheckType.FRESHNESS, tier=freshness_tier,
+            detail=f"live_ticker",
+        ))
+        if spread_bps < 100:  # reasonable spread
+            gate.checks.append(DQCheckResult(
+                check_type=DQCheckType.COMPLETENESS, tier=DataQualityTier.PASS,
+                detail=f"spread={spread_bps:.1f}bps",
+            ))
+
+        # Store features
+        self._feature_store.store(FeatureVector(
+            name=f"{symbol.lower()}_live",
+            values=features,
+            timestamp=datetime.now(timezone.utc),
+            instrument_id=instrument_id,
+            venue_id=venue_id,
+            version=SchemaVersion("2.0.0"),
+        ))
+
+        return features
+
+    def get_kline_features(self, symbol: str, interval: str = "1h",
+                           lookback: int = 100) -> dict[str, float]:
+        """从 K 线计算技术特征。"""
+        klines = self.fetch_klines(symbol, interval, lookback)
+        if len(klines) < 20:
+            return {}
+
+        closes = [k["close"] for k in klines]
+        highs = [k["high"] for k in klines]
+        lows = [k["low"] for k in klines]
+        volumes = [k["volume"] for k in klines]
+        n = len(closes)
+
+        # Returns
+        returns = [(closes[i] / closes[i-1] - 1) for i in range(1, n)]
+
+        # SMA
+        sma_5 = sum(closes[-5:]) / 5
+        sma_20 = sum(closes[-20:]) / 20
+        sma_50 = sum(closes[-50:]) / min(50, n) if n >= 50 else sma_20
+
+        # Volatility (20-period annualized)
+        recent_ret = returns[-20:] if len(returns) >= 20 else returns
+        vol_20 = (sum(r**2 for r in recent_ret) / len(recent_ret)) ** 0.5
+        ann_vol = vol_20 * (365 * 24) ** 0.5 if interval == "1h" else vol_20 * (365) ** 0.5
+
+        # ATR (14-period)
+        tr_list = []
+        for i in range(1, min(15, len(highs))):
+            tr = max(
+                highs[-i] - lows[-i],
+                abs(highs[-i] - closes[-i-1]),
+                abs(lows[-i] - closes[-i-1]),
+            )
+            tr_list.append(tr)
+        atr = sum(tr_list) / len(tr_list) if tr_list else 0
+        atr_pct = atr / closes[-1] * 100 if closes[-1] > 0 else 0
+
+        # Volume trend
+        vol_short = sum(volumes[-5:]) / 5
+        vol_long = sum(volumes[-20:]) / 20
+        vol_ratio = vol_short / vol_long if vol_long > 0 else 1.0
+
+        # Trend (SMA crossover)
+        trend_5 = closes[-1] / closes[-5] - 1 if n >= 5 else 0
+        trend_20 = closes[-1] / closes[-20] - 1 if n >= 20 else 0
+
+        # RSI (14-period)
+        gains = [max(r, 0) for r in returns[-15:]]
+        losses = [abs(min(r, 0)) for r in returns[-15:]]
+        avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else sum(gains) / max(len(gains), 1)
+        avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else sum(losses) / max(len(losses), 1)
+        rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+
+        return {
+            "close": closes[-1],
+            "sma_5": sma_5,
+            "sma_20": sma_20,
+            "sma_50": sma_50,
+            "ann_volatility": ann_vol,
+            "atr_pct": atr_pct,
+            "vol_ratio": vol_ratio,
+            "trend_5_pct": trend_5 * 100,
+            "trend_20_pct": trend_20 * 100,
+            "rsi_14": rsi,
+            "n_candles": n,
+        }
+
+    def get_feature_store(self) -> FeatureStore:
+        return self._feature_store
+
+    def get_last_ticker(self, symbol: str) -> dict:
+        return self._last_ticker.get(symbol, {})
+
+    def get_last_orderbook(self, symbol: str) -> dict:
+        return self._last_orderbook.get(symbol, {})

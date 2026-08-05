@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.beidou.autopilot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/maguannan/beidou/.venv/bin/python</string>
+        <string>-u</string>
+        <string>-m</string>
+        <string>apps.autopilot</string>
+        <string>--symbols</string>
+        <string>BTCUSDT,ETHUSDT</string>
+        <string>--mode</string>
+        <string>full</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/maguannan/beidou</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BEIDOU_ENV</key>
+        <string>testnet</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/beidou_autopilot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/beidou_autopilot_err.log</string>
+</dict>
+</plist>

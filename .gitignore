@@ -40,3 +40,8 @@ config/env.*.yaml
 htmlcov/
 .coverage
 coverage.xml
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
