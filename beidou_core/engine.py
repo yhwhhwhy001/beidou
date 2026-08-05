@@ -335,7 +335,7 @@ class AutonomousEngine:
             "control_action": self._control.get_status().value,
             "symbols": self._symbols,
             "mode": self._mode,
-            "uptime_seconds": round(time.time() - self._health.uptime_seconds() + self._health.uptime_seconds(), 1),
+            "uptime_seconds": round(self._health.uptime_seconds(), 1),
             "last_realtime_tick": self._last_realtime,
             "last_nearline_tick": self._last_nearline,
             "active_incidents": self._alerts.get_active_incidents(),
@@ -416,13 +416,28 @@ class AutonomousEngine:
         })
 
         if "orderId" in order:
+            order_id = str(order["orderId"])
             self._order_count += 1
+
+            # Track protection order in active set for reconciliation
+            tracker = OrderStateTracker(order_id=OrderId(order_id))
+            tracker.apply(OrderEvent.ACKED)
+            tracker.apply(OrderEvent.SENT)
+            self._order_trackers[order_id] = tracker
+            self._active_order_ids.add(order_id)
+
             self._protection.mark_executed(protection.protection_id)
             self._store.save_protection(
                 protection.protection_id, protection.position_id, symbol,
                 side, protection.trigger_price.amount,
                 str(protection.order_price.amount) if protection.order_price else None,
                 protection.quantity.amount, "MARKET", "EXECUTED",
+            )
+            self._store.save_order_state(
+                order_id, symbol, side, "MARKET",
+                str(float(protection.quantity.amount)),
+                str(protection.order_price.amount) if protection.order_price else None,
+                order.get("status", "NEW"), client_order_id=client_id,
             )
 
     async def _place_order(self, intent, symbol: str) -> None:
@@ -476,6 +491,14 @@ class AutonomousEngine:
                 result = self._api("/fapi/v1/order", signed=True, params={
                     "symbol": symbol, "orderId": int(order_id),
                 })
+
+                # 订单不存在于交易所（已过期/被取消/已成交后删除）→ 从跟踪移除
+                if isinstance(result, dict) and result.get("error") or "status" not in result:
+                    if result.get("msg") and ("Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))):
+                        self._active_order_ids.discard(order_id)
+                        self._order_trackers.pop(order_id, None)
+                    continue
+
                 if "status" not in result:
                     continue
 
@@ -533,23 +556,30 @@ class AutonomousEngine:
                         take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
                     )
 
-                elif status == "CANCELED":
+                elif status == "CANCELED" or status == "EXPIRED":
                     tracker.apply(OrderEvent.CANCELED)
                     self._active_order_ids.discard(order_id)
                     self._store.save_order_state(
                         order_id, symbol, result.get("side", ""),
                         result.get("type", ""), result.get("origQty", "0"),
-                        result.get("price"), "CANCELED",
+                        result.get("price"), status,
                     )
 
                 elif status == "PARTIALLY_FILLED":
                     tracker.apply(OrderEvent.PARTIALLY_FILLED)
 
             except Exception:
+                # 网络/临时错误：保留在 active_order_ids 中等待下次轮询
                 pass
 
     async def _reconcile(self) -> None:
-        """对账：系统账本 vs 交易所余额。"""
+        """对账：系统状态 vs 交易所状态。
+
+        比较内容：
+        - 活跃订单：系统跟踪 vs 交易所实际挂单
+        - 持仓数量：系统保护管理器 vs 交易所持仓
+        - 余额：直接从交易所获取（系统不独立跟踪钱包余额）
+        """
         try:
             account = self._api("/fapi/v2/account", signed=True)
             if "totalWalletBalance" not in account:
@@ -558,29 +588,43 @@ class AutonomousEngine:
             balance = float(account.get("totalWalletBalance", 0))
             positions_list = account.get("positions", [])
 
-            # Build exchange facts
-            positions = {}
+            # --- Exchange facts ---
+            exchange_positions: dict[InstrumentId, Quantity] = {}
             for p in positions_list:
                 amt = float(p.get("positionAmt", 0))
                 if amt != 0:
-                    positions[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
+                    exchange_positions[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
+
+            # Fetch exchange open orders
+            exchange_open_order_ids: list[str] = []
+            try:
+                open_orders = self._api("/fapi/v1/openOrders", signed=True)
+                if isinstance(open_orders, list):
+                    exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
+            except Exception:
+                pass
 
             exchange_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),
                 balance=MonetaryValue(amount=str(balance)),
-                positions=positions,
-                open_orders=[],
+                positions=exchange_positions,
+                open_orders=exchange_open_order_ids,
             )
 
-            # System facts from ledger
-            sys_balance = self._store.get_account_balance("default", "BINANCE")
+            # --- System facts ---
+            # 余额使用交易所来源（系统当前不独立跟踪钱包余额/PnL/资金费率）
+            # 活跃订单来自系统跟踪的订单 ID 集合
+            # 持仓来自保护管理器
+            system_positions: dict[InstrumentId, Quantity] = {}
+            for pos_id, pos in self._protection.all_positions().items():
+                system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
 
             system_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount=str(sys_balance)),
-                positions={},
+                balance=MonetaryValue(amount=str(balance)),  # 与交易所同源
+                positions=system_positions,
                 open_orders=list(self._active_order_ids),
             )
 
@@ -589,12 +633,15 @@ class AutonomousEngine:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
 
             if not result.matched:
-                self._alerts.send_incident(
-                    AlertSeverity.WARNING,
-                    "Reconciliation mismatch",
-                    "; ".join(result.differences),
-                    category="reconciliation",
-                )
+                # 余额同源必然一致，过滤掉余额差异（永远不应该出现）
+                real_diffs = [d for d in result.differences if "Balance mismatch" not in d]
+                if real_diffs:
+                    self._alerts.send_incident(
+                        AlertSeverity.WARNING,
+                        "Reconciliation mismatch",
+                        "; ".join(real_diffs),
+                        category="reconciliation",
+                    )
 
             self._last_account = account
         except Exception:
@@ -813,6 +860,23 @@ class AutonomousEngine:
         protections = self._store.restore_protections()
         print(f"[beidou-autopilot] Restored: {len(ledger_entries)} ledger entries, "
               f"{len(active_orders)} active orders, {len(protections)} protections")
+
+        # Restore active_order_ids from exchange (authoritative source for open orders)
+        try:
+            exchange_open = self._api("/fapi/v1/openOrders", signed=True)
+            if isinstance(exchange_open, list):
+                for o in exchange_open:
+                    oid = str(o["orderId"])
+                    tracker = OrderStateTracker(order_id=OrderId(oid))
+                    tracker.apply(OrderEvent.ACKED)
+                    tracker.apply(OrderEvent.SENT)
+                    if o.get("status") == "PARTIALLY_FILLED":
+                        tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                    self._order_trackers[oid] = tracker
+                    self._active_order_ids.add(oid)
+                print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # Lifecycle transitions
         self._lifecycle.transition(ModuleState.WARMING)

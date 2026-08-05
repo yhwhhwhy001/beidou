@@ -41,10 +41,31 @@ class ReconciliationEngine:
         if sys_facts is None or ex_facts is None:
             return ReconciliationResult(matched=False, differences=["One side missing"], system_facts=sys_facts, exchange_facts=ex_facts)
         diffs: list[str] = []
+
+        # 余额比较
         if float(sys_facts.balance.amount) != float(ex_facts.balance.amount):
             diffs.append(f"Balance mismatch: system={sys_facts.balance.amount} exchange={ex_facts.balance.amount}")
-        if sys_facts.open_orders != ex_facts.open_orders:
-            diffs.append(f"Open orders mismatch: system={sys_facts.open_orders} exchange={ex_facts.open_orders}")
+
+        # 活跃订单比较（集合比较，忽略顺序和时序差异）
+        sys_orders = set(sys_facts.open_orders)
+        ex_orders = set(ex_facts.open_orders)
+        if sys_orders != ex_orders:
+            missing_on_exchange = sys_orders - ex_orders
+            extra_on_exchange = ex_orders - sys_orders
+            parts = []
+            if missing_on_exchange:
+                parts.append(f"Orders in system but not on exchange: {sorted(missing_on_exchange)}")
+            if extra_on_exchange:
+                parts.append(f"Orders on exchange but not in system: {sorted(extra_on_exchange)}")
+            if parts:
+                diffs.append("Open orders mismatch: " + "; ".join(parts))
+
+        # 持仓比较
+        sys_pos = {str(k): str(v.amount) for k, v in sys_facts.positions.items()}
+        ex_pos = {str(k): str(v.amount) for k, v in ex_facts.positions.items()}
+        if sys_pos != ex_pos:
+            diffs.append(f"Position mismatch: system={sys_pos} exchange={ex_pos}")
+
         return ReconciliationResult(matched=len(diffs) == 0, differences=diffs, system_facts=sys_facts, exchange_facts=ex_facts)
 
     def repair_strategy(self, result: ReconciliationResult) -> str:
