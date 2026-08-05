@@ -60,6 +60,9 @@ class TestControlPlane:
             unrealized_pnl=MonetaryValue(amount="1000"),
         )
         cp.update_account_overview(overview)
+        # Verify the overview was stored
+        issues = cp.get_unknown_or_differences()
+        assert isinstance(issues, list)
 
 class TestChaosEngine:
     def test_all_experiments_passed(self):
@@ -97,8 +100,10 @@ class TestReplayValidator:
         v = ReplayValidator()
         t0 = datetime.now(timezone.utc)
         from datetime import timedelta
-        assert v.check_future_function(t0, t0 + timedelta(seconds=1))
-        assert not v.check_future_function(t0 + timedelta(seconds=1), t0)
+        # signal before data available → future leak → FAIL
+        assert not v.check_future_function(t0, t0 + timedelta(seconds=1))
+        # signal after data available → no leak → PASS
+        assert v.check_future_function(t0 + timedelta(seconds=1), t0)
 
     def test_survivorship_check(self):
         v = ReplayValidator()

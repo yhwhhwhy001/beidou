@@ -95,4 +95,4 @@ class TestAutoRepair:
         t0 = datetime.now(timezone.utc)
         series = [{"ts": t0}, {"ts": t0 + timedelta(seconds=5)}]
         _, gaps = AutoRepair.repair_gap(series, "ts", 1000)
-        assert len(gaps) >= 0  # gap detection works
+        assert isinstance(gaps, list), f"Expected list, got {type(gaps)}"  # gap detection works

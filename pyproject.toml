@@ -29,10 +29,10 @@ packages = [
 [project]
 name = "beidou"
 version = "2.0.0"
-description = "北斗 - 生产级自主加密合约量化交易系统"
+description = "北斗 - 加密合约量化交易系统 (PIVOT 重构阶段)"
 readme = "README.md"
 license = {text = "Proprietary"}
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     "pydantic>=2.0",
     "msgpack>=1.0",
@@ -61,7 +61,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "build", "dist"]
 
@@ -79,7 +79,7 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unused_configs = true
 warn_redundant_casts = true
@@ -100,9 +100,6 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "--cov=packages",
-    "--cov-report=term-missing",
-    "--cov-report=html",
 ]
 markers = [
     "unit: Unit tests",
@@ -120,6 +117,9 @@ source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research"
 omit = ["*/tests/*", "*/test_*"]
 
 [tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -129,8 +129,20 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 
+# 关键包需要 >=95% 行覆盖
+[tool.coverage.critical_packages]
+paths = [
+    "beidou_safety/execution",
+    "beidou_safety/risk",
+    "beidou_safety/execution/ledger",
+    "beidou_safety/execution/reconciliation",
+    "beidou_exchange",
+]
+line_coverage = 95
+branch_coverage = 90
+
 [tool.black]
-target-version = ["py311"]
+target-version = ["py312"]
 line-length = 120
 
 [tool.isort]

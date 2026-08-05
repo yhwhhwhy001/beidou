@@ -30,7 +30,11 @@ class ReplayValidator:
         self._baseline_hash = result_hash
 
     def check_future_function(self, signal_time: datetime, data_available_time: datetime) -> bool:
-        return signal_time <= data_available_time
+        """检查未来函数：信号时间必须 >= 数据可用时间。
+
+        如果 signal_time < data_available_time，说明信号使用了未来才能获得的数据。
+        """
+        return signal_time >= data_available_time
 
     def check_event_time_inversion(self, events: list[tuple[datetime, datetime]]) -> list[int]:
         """检查事件时间是否单调递增。"""

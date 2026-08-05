@@ -61,18 +61,28 @@ class ModelRegistry:
 class DriftDetector:
     """漂移检测器。监控特征分布、预测分布、性能指标漂移。"""
     def __init__(self, threshold: float = 0.1):
-        self.threshold = threshold; self._baseline: dict[str, float] = {}
+        self.threshold = threshold
+        self._baseline: dict[str, float] | None = None  # None = 未校准
 
-    def set_baseline(self, metrics: dict[str, float]) -> None: self._baseline = metrics
+    def set_baseline(self, metrics: dict[str, float]) -> None:
+        self._baseline = dict(metrics)
+
+    def is_calibrated(self) -> bool:
+        """基线是否已校准。"""
+        return self._baseline is not None and len(self._baseline) > 0
 
     def detect(self, current_metrics: dict[str, float]) -> dict[str, float]:
         drift: dict[str, float] = {}
+        if self._baseline is None:
+            return drift
         for k, v in current_metrics.items():
             baseline = self._baseline.get(k)
             if baseline and baseline != 0:
                 change = abs(v - baseline) / abs(baseline)
-                if change > self.threshold: drift[k] = change
+                if change > self.threshold:
+                    drift[k] = change
         return drift
 
     def should_retire(self, drift: dict[str, float]) -> bool:
-        return len(drift) > 3
+        """至少一个指标显著漂移就触发退役警告。"""
+        return len(drift) >= 1

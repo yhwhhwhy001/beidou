@@ -234,3 +234,74 @@ def test_build_reproducibility() -> None:
     # 验证 pyproject.toml 包含依赖
     content = pyproject.read_text(encoding="utf-8")
     assert "dependencies" in content, "pyproject.toml 缺少 dependencies 段"
+
+
+# ================================================================
+# BD-01 新增：Adapter 边界测试
+# ================================================================
+
+BINANCE_API_PATTERNS = [
+    "/fapi/v1/order",
+    "/fapi/v1/order/test",
+    "/fapi/v2/order",
+    "/dapi/v1/order",
+]
+
+ADAPTER_PACKAGES = {"beidou_exchange"}
+
+# BD-02 will refactor engine.py to go through the adapter.
+# Until then, document the known violation so the test can verify
+# that no NEW violations are introduced.
+KNOWN_VIOLATIONS_UNTIL_BD02 = {
+    "beidou_core/engine.py",  # Direct _api() calls — to be fixed in BD-02
+}
+
+
+def test_only_adapter_accesses_binance_api() -> None:
+    """AC-01-02: 只有 Adapter 包可以引用 Binance API 端点。
+
+    故意在非 Adapter 文件加入 `/fapi/v1/order` 时架构测试必须失败。
+    """
+    root = Path(__file__).resolve().parent.parent.parent
+    violations: list[str] = []
+
+    for pyfile in root.rglob("*.py"):
+        # Skip these directories
+        path_str = str(pyfile)
+        if any(skip in path_str for skip in ["__pycache__", ".venv", ".git",
+                                               "tests/", "evidence/", "tools/",
+                                               "scripts/", "runbooks/", "docs/"]):
+            continue
+
+        # Determine which package this file belongs to
+        rel = pyfile.relative_to(root)
+        pkg = str(rel.parts[0]) if rel.parts else ""
+
+        # Skip adapter package files — they ARE allowed
+        if pkg in ADAPTER_PACKAGES:
+            continue
+
+        try:
+            content = pyfile.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        for pattern in BINANCE_API_PATTERNS:
+            if pattern in content:
+                violations.append(
+                    f"{rel}: 非 Adapter 文件引用 Binance API 端点 '{pattern}'"
+                )
+
+    # Filter known violations that are scheduled for fix in other BD tasks
+    new_violations = [v for v in violations
+                      if not any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02)]
+
+    if new_violations:
+        raise AssertionError(
+            "非 Adapter 包禁止直接引用 Binance API 端点。"
+            "请通过 beidou_exchange adapter 访问。"
+            f"\n新违规文件:\n" + "\n".join(new_violations) +
+            f"\n已知违规(待 BD-02 修复):\n" + "\n".join(
+                v for v in violations if any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02)
+            )
+        )

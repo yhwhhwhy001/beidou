@@ -39,7 +39,17 @@ class SignalFuser:
         if not signals:
             return FusedSignal(instrument_id=InstrumentId("UNKNOWN"), venue_id=VenueId("UNKNOWN"), direction=SignalDirection.NO_ACTION, strength=0.0, confidence=0.0)
         conflict, detail = self.detect_conflict(signals)
-        weights = [s.confidence * s.strength for s in signals]
+
+        # 应用方向符号: LONG → +1, SHORT → -1, NO_ACTION → 0
+        def _direction_sign(s: AlphaSignal) -> float:
+            if s.direction == SignalDirection.LONG:
+                return 1.0
+            elif s.direction == SignalDirection.SHORT:
+                return -1.0
+            return 0.0
+
+        # 权重 = confidence × strength × direction_sign
+        weights = [s.confidence * s.strength * _direction_sign(s) for s in signals]
         total_weight = sum(abs(w) for w in weights)
         if total_weight == 0:
             return FusedSignal(instrument_id=signals[0].instrument_id, venue_id=signals[0].venue_id, direction=SignalDirection.NO_ACTION, strength=0.0, confidence=0.0, contributing_signals=signals, conflict_detected=conflict, conflict_detail=detail)

@@ -1,11 +1,12 @@
 # 北斗 (Beidou) V2.0
 
-**生产级自主加密合约量化交易系统**
+**加密合约量化交易系统 — PIVOT 重构阶段**
 
-三层决策时钟架构，46 个任务包的完整实现。支持 Binance USDⓈ-M 合约交易，全链路风控，策略驱动自动化交易，止盈止损保护，实盘认证阶梯。
+三层决策时钟架构。支持 Binance USDⓈ-M 合约交易，全链路风控，策略驱动自动化交易，止盈止损保护。
+
+**当前状态: PIVOT — Paper HOLD / Testnet HOLD / Mainnet PROHIBITED**
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue)](https://python.org)
-[![Tests](https://img.shields.io/badge/tests-446%20passed-green)]()
 [![License](https://img.shields.io/badge/license-Proprietary-red)]()
 
 ---
@@ -100,7 +101,7 @@ python tools/strategy_live_trade.py
 ## 测试
 
 ```bash
-pytest tests/ -q          # 446 项单元+架构测试
+pytest tests/ -q          # 单元+架构测试
 python tools/e2e_real_demo.py   # 全流程端到端 (真实API)
 python tools/strategy_live_trade.py  # 策略驱动 + 止盈止损 + 真实成交
 ```

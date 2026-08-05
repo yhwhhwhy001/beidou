@@ -1,0 +1,145 @@
+"""Fencing Lease — BD-03 双主防护。
+
+PostgreSQL advisory lock 和 Redis fencing lease。
+旧 generation 不得执行，防止裂脑。
+"""
+
+from __future__ import annotations
+
+import os
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class LeaseState(str, Enum):
+    ACQUIRED = "ACQUIRED"
+    EXPIRED = "EXPIRED"
+    REVOKED = "REVOKED"
+    FENCED = "FENCED"  # 旧 generation 被隔离
+
+
+@dataclass
+class FencingLease:
+    """分布式租约。
+
+    使用 generation 递增门控：新实例启动时 generation+1，
+    旧实例检测到 generation 落后时自动 FENCED。
+    """
+    instance_id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
+    generation: int = 1
+    ttl_seconds: int = 30
+    state: LeaseState = LeaseState.ACQUIRED
+    acquired_at: float = field(default_factory=time.monotonic)
+
+    def is_valid(self) -> bool:
+        """租约是否仍然有效。"""
+        if self.state != LeaseState.ACQUIRED:
+            return False
+        if time.monotonic() - self.acquired_at > self.ttl_seconds:
+            self.state = LeaseState.EXPIRED
+            return False
+        return True
+
+    def fence(self) -> None:
+        """隔离当前实例（旧 generation）。"""
+        self.state = LeaseState.FENCED
+
+    def revoke(self) -> None:
+        """主动撤销租约。"""
+        self.state = LeaseState.REVOKED
+
+
+class LeaseManager:
+    """租约管理器。
+
+    PostgreSQL 模式: 使用 pg_try_advisory_lock(lease_id)
+    Redis 模式: 使用 SET NX EX + generation fencing
+    Paper 模式: 单实例，始终有效
+    """
+
+    LEASE_KEY = 0x42454944  # "BEID" in hex
+
+    def __init__(self, mode: str = "paper"):
+        self._mode = mode
+        self._lease: FencingLease | None = None
+
+    def acquire(self, generation: int = 1, ttl: int = 30) -> FencingLease:
+        """获取租约。"""
+        lease = FencingLease(generation=generation, ttl_seconds=ttl)
+        if self._mode == "paper":
+            # Paper 模式：单实例，始终成功
+            lease.state = LeaseState.ACQUIRED
+        elif self._mode == "redis":
+            # Redis: 尝试 SET NX EX
+            self._try_redis_acquire(lease)
+        elif self._mode == "postgresql":
+            # PostgreSQL: 尝试 advisory lock
+            self._try_pg_acquire(lease)
+
+        self._lease = lease
+        return lease
+
+    def renew(self) -> bool:
+        """续期租约。"""
+        if not self._lease:
+            return False
+        if self._lease.state != LeaseState.ACQUIRED:
+            return False
+        self._lease.acquired_at = time.monotonic()
+        return True
+
+    def release(self) -> None:
+        """释放租约。"""
+        if self._lease:
+            self._lease.revoke()
+            self._lease = None
+
+    def is_current_generation(self, generation: int) -> bool:
+        """检查是否为当前 generation。
+
+        如果传入的 generation < 当前 generation，说明该实例已被取代。
+        """
+        if not self._lease:
+            return False
+        return generation >= self._lease.generation
+
+    @staticmethod
+    def _try_redis_acquire(lease: FencingLease) -> None:
+        """通过 Redis 获取租约（需要 redis 库）。"""
+        try:
+            import redis
+            r = redis.Redis(host="localhost", port=6379, socket_timeout=2)
+            key = f"beidou:lease:{LeaseManager.LEASE_KEY}"
+            acquired = r.set(key, lease.instance_id, nx=True, ex=lease.ttl_seconds)
+            if acquired:
+                lease.state = LeaseState.ACQUIRED
+            else:
+                # 检查是否是旧 generation
+                current = r.get(key)
+                if current and current.decode() != lease.instance_id:
+                    lease.state = LeaseState.FENCED
+                else:
+                    lease.state = LeaseState.ACQUIRED  # 续约
+        except Exception:
+            # Redis 不可用→回退到单实例模式
+            lease.state = LeaseState.ACQUIRED
+
+    @staticmethod
+    def _try_pg_acquire(lease: FencingLease) -> None:
+        """通过 PostgreSQL advisory lock 获取租约。"""
+        try:
+            import psycopg
+            conn = psycopg.connect(os.environ.get("DATABASE_URL", ""))
+            cur = conn.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (LeaseManager.LEASE_KEY,),
+            )
+            acquired = cur.fetchone()[0]
+            if acquired:
+                lease.state = LeaseState.ACQUIRED
+            else:
+                lease.state = LeaseState.FENCED
+        except Exception:
+            lease.state = LeaseState.ACQUIRED

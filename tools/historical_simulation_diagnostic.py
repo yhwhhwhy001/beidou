@@ -1,6 +1,8 @@
-"""北斗 V2.0 历史数据加速认证 — G6 Shadow → G7 Live → 因子研究 → 反作弊回测。
+"""北斗 V2.0 历史数据模拟诊断 — NON_CERTIFYING。
 
-使用 Binance Testnet 历史 K线数据，加速完成通常需要数天/数周的认证流程。
+使用 Binance Testnet 历史 K线数据进行数据质量检查、因子研究和反作弊诊断。
+本脚本输出固定语义 NON_CERTIFYING，禁止调用任何生产晋级 API。
+不产生 G5-G8 Certificate 或 ladder 晋级记录。
 """
 from __future__ import annotations
 
@@ -553,88 +555,19 @@ check("5.5 确定性验证", validator.verify_determinism(replay),
       f"baseline={replay.output_hash[:16]}...")
 
 # ================================================================
-# Phase 6: G6 Shadow 认证 — 历史数据加速
+# Phase 6: 策略风险与降级条件验证 (NON_CERTIFYING)
 # ================================================================
-section("Phase 6: G6 Shadow 认证 — 历史数据加速验证")
+section("Phase 6: 策略风险 — 回撤/熔断/降级条件 (NON_CERTIFYING)")
 
-from beidou_certification.engine import (
-    G6ShadowCertification, G7LiveCertification,
-    create_l2_canary_certification, create_l3_ramp_certification,
-    create_l4_normal_certification, create_l5_champion_certification,
-    CertificationGate, ScenarioStatus, ScenarioResult,
-    CertificationManager,
-)
-from beidou_production.ladder import ProductionLadder, LadderLevel
-
-g6 = G6ShadowCertification()
-
-g6_scenarios = {
-    "g6-signal-freshness": (ScenarioStatus.PASS,
-        f"历史回放信号延迟: p50=0ms (数据时间戳精确对齐)"),
-    "g6-cost-estimation": (ScenarioStatus.PASS,
-        f"成本偏差: {cost_results[0]['deviation_bps']:.1f}bps (样本={cost_results[0]['samples']})" if cost_results else "验证通过"),
-    "g6-strategy-conflict": (ScenarioStatus.PASS,
-        "3个因子 VIF 均<3，无共线性冲突"),
-    "g6-recovery": (ScenarioStatus.PASS,
-        f"数据集可重复生成，deterministic=True"),
-    "g6-continuous-runtime": (ScenarioStatus.PASS,
-        f"历史数据跨度: {(klines_1h[-1]['open_time'] - klines_1h[0]['open_time']).total_seconds()/3600:.1f}h ≥ 24h 要求" if klines_1h else "N/A"),
-}
-
-for sid, (status, detail) in g6_scenarios.items():
-    s = next((x for x in g6.get_scenarios() if x.scenario_id == sid), None)
-    if s:
-        r = ScenarioResult(scenario=s, status=status,
-                           started_at=now, completed_at=now,
-                           error_detail="" if status == ScenarioStatus.PASS else detail,
-                           evidence={"source": "historical_data"})
-        g6.record_result(r)
-        icon = "✅" if status == ScenarioStatus.PASS else "❌"
-        print(f"  {icon} {s.name}: {status.value}  |  {detail}")
-
-g6_cert = g6.evaluate()
-check("6.1 G6 Shadow 评估", g6_cert.is_pass(),
-      f"result={g6_cert.result.value}  p0_failures={g6_cert.blocking_p0_count()}")
-
-# ================================================================
-# Phase 7: G7 实盘阶梯认证 — 历史数据模拟
-# ================================================================
-section("Phase 7: G7 实盘阶梯 — 历史数据模拟各等级约束")
-
-ladder = ProductionLadder()
-manager = CertificationManager()
-
-for level_name, create_fn, capital, desc in [
-    ("L2_CANARY", create_l2_canary_certification, 100.0, "单品种BTCUSDT"),
-    ("L3_RAMP", create_l3_ramp_certification, 1000.0, "BTC+ETH双品种"),
-    ("L4_NORMAL", create_l4_normal_certification, 10000.0, "完整品种池"),
-    ("L5_CHAMPION", create_l5_champion_certification, 50000.0, "全预算+全品种"),
-]:
-    fw = create_fn()
-    for s in fw.get_scenarios():
-        r = ScenarioResult(scenario=s, status=ScenarioStatus.PASS,
-                           started_at=now - timedelta(days=30),
-                           completed_at=now,
-                           evidence={"source": "historical_simulation"})
-        fw.record_result(r)
-    cert = fw.evaluate()
-
-    if cert.is_pass():
-        ladder_level = getattr(LadderLevel, level_name)
-        ladder.certify(ladder_level, GateResult.PASS, [f"historical_{level_name.lower()}"])
-        check(f"7.{LadderLevel[ladder_level.value].value}",
-              True,
-              f"{desc}  capital=\${capital:,.0f}  level={ladder._current_level.value}")
-
-# ================================================================
-# Phase 8: 策略风险与降级条件验证
-# ================================================================
-section("Phase 8: 策略风险 — 回撤/熔断/降级条件")
+# NON_CERTIFYING: 本脚本不生成任何 G5-G8 Certificate 或 ladder 晋级记录。
+# 所有历史诊断结果仅供研究参考，不可用于生产晋级决策。
+print("  ⚠️  NON_CERTIFYING — 本脚本不产生认证证书或晋级记录")
+print("  ⚠️  PIVOT decision in effect — Mainnet PROHIBITED")
 
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 optimizer = PortfolioOptimizerImpl()
 
-# 模拟回撤场景
+# 模拟回撤场景（仅诊断，非认证）
 test_scenarios = [
     ("normal", 5.0, 1.5, 0),
     ("moderate_drawdown", 12.0, 0.8, 1),
@@ -643,23 +576,25 @@ test_scenarios = [
 ]
 
 for name, drawdown, sharpe, incidents in test_scenarios:
-    should_degrade = ladder.should_degrade(drawdown, sharpe, incidents)
+    # Diagnostic only — no production ladder API calls
+    should_degrade = drawdown > 20.0 or incidents > 3
     if name == "normal":
-        check(f"8.1 {name}", not should_degrade,
+        check(f"6.1 {name}", not should_degrade,
               f"dd={drawdown}% sharpe={sharpe} incidents={incidents} → NO_DEGRADE")
     elif name == "severe_drawdown":
-        check(f"8.1 {name}", should_degrade,
-              f"dd={drawdown}% > 20% → DEGRADE ✅")
+        check(f"6.1 {name}", should_degrade,
+              f"dd={drawdown}% > 20% → WOULD DEGRADE (diagnostic only)")
     elif name == "incident_spike":
-        check(f"8.1 {name}", should_degrade,
-              f"incidents={incidents} > 3 → DEGRADE ✅")
+        check(f"6.1 {name}", should_degrade,
+              f"incidents={incidents} > 3 → WOULD DEGRADE (diagnostic only)")
 
 # ================================================================
-# SUMMARY
+# SUMMARY (NON_CERTIFYING)
 # ================================================================
-section("认证总结")
+section("诊断总结")
 
 print(f"")
+print(f"  状态: NON_CERTIFYING")
 print(f"  数据源: Binance Testnet 历史K线 ({len(SYMBOLS)}品种 x {len(INTERVALS)}周期)")
 if klines_1h:
     duration_h = (klines_1h[-1]["open_time"] - klines_1h[0]["open_time"]).total_seconds() / 3600
@@ -667,10 +602,15 @@ if klines_1h:
 if klines_1h:
     print(f"  样本数量: {len(klines_1h)}根1h K线")
 print(f"")
-print(f"  G6 Shadow:  {g6_cert.is_pass() and '✅ PASS' or '❌ FAIL'}")
-print(f"  G7 L2-L5:   ✅ ALL PASS (历史模拟)")
-print(f"  Factor Research: 3因子 IC/ICIR/边际贡献 全部验证")
-print(f"  Anti-Cheat: 7/7 反作弊检查通过")
+print(f"  数据质量检查: 完成")
+print(f"  市场状态分析: 完成")
+print(f"  成本模型校准: 完成")
+print(f"  Factor Research: 3因子 IC/ICIR 全部计算")
+print(f"  Anti-Cheat: 反作弊检查执行")
+print(f"")
+print(f"  ⚠️  不产生 G5-G8 Certificate")
+print(f"  ⚠️  不产生 production ladder 晋级记录")
+print(f"  ⚠️  不可用于 full mode 启动认证")
 print(f"")
 print(f"  结果: {passed}/{step_no} passed, {failed} failed")
 print(f"{'='*70}")

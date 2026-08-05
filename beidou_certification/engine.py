@@ -336,7 +336,7 @@ class G6ShadowCertification(CertificationFramework):
 
 
 # ============================================================
-# G7 L2-L5 实盘阶梯认证
+# 实盘阶梯认证框架 (状态: PIVOT — 待算法收敛后重新激活)
 # ============================================================
 
 class G7LiveCertification(CertificationFramework):

@@ -14,6 +14,11 @@ class DQCheckType(str, Enum):
     ACCURACY = "ACCURACY"
     UNIQUENESS = "UNIQUENESS"
     TIMELINESS = "TIMELINESS"
+    SEQUENCE = "SEQUENCE"           # BD-04: 序列连续性
+    CROSS_SOURCE = "CROSS_SOURCE"   # BD-04: 跨源偏差
+    OUTLIER = "OUTLIER"             # BD-04: 异常值检测
+    CLOCK_SKEW = "CLOCK_SKEW"       # BD-04: 时钟偏差
+    SCHEMA_VALIDITY = "SCHEMA_VALIDITY"  # BD-04: Schema 版本校验
 
 @dataclass(frozen=True, slots=True)
 class DQCheckResult:
@@ -34,8 +39,14 @@ class DataQualityGate:
     def overall_tier(self) -> DataQualityTier:
         if not self.checks:
             return DataQualityTier.FAIL
+        # BLOCK: 任一检查为 FAIL → 阻止交易
         if any(c.tier == DataQualityTier.FAIL for c in self.checks):
             return DataQualityTier.FAIL
+        # UNKNOWN: 无 PASS 但有 CONDITIONAL → 不可交易
+        has_pass = any(c.tier == DataQualityTier.PASS for c in self.checks)
+        if not has_pass and any(c.tier == DataQualityTier.CONDITIONAL for c in self.checks):
+            return DataQualityTier.CONDITIONAL
+        # DEGRADED: 部分 CONDITIONAL 但仍可研究
         if any(c.tier == DataQualityTier.CONDITIONAL for c in self.checks):
             return DataQualityTier.CONDITIONAL
         return DataQualityTier.PASS
@@ -44,7 +55,34 @@ class DataQualityGate:
         return self.overall_tier() == DataQualityTier.PASS
 
     def is_safe_for_research(self) -> bool:
-        return self.overall_tier() != DataQualityTier.FAIL
+        return self.overall_tier() not in (DataQualityTier.FAIL,)
+
+    def add_freshness_check(self, age_seconds: float, max_age: float) -> None:
+        tier = DataQualityTier.PASS if age_seconds < max_age else DataQualityTier.FAIL
+        self.checks.append(DQCheckResult(DQCheckType.FRESHNESS, tier,
+            f"age={age_seconds:.0f}s max={max_age:.0f}s",
+            metric_value=age_seconds, threshold=max_age))
+
+    def add_sequence_check(self, expected_seq: int, actual_seq: int) -> None:
+        tier = DataQualityTier.PASS if actual_seq == expected_seq else DataQualityTier.FAIL
+        self.checks.append(DQCheckResult(DQCheckType.SEQUENCE, tier,
+            f"expected_seq={expected_seq} actual={actual_seq}",
+            metric_value=actual_seq, threshold=expected_seq))
+
+    def add_outlier_check(self, value: float, mean: float, std: float, max_sigma: float = 5.0) -> None:
+        if std == 0:
+            return
+        sigma = abs(value - mean) / std
+        tier = DataQualityTier.PASS if sigma < max_sigma else DataQualityTier.CONDITIONAL
+        self.checks.append(DQCheckResult(DQCheckType.OUTLIER, tier,
+            f"sigma={sigma:.1f} max={max_sigma}",
+            metric_value=sigma, threshold=max_sigma))
+
+    def add_clock_skew_check(self, skew_ms: int, max_skew_ms: int = 5000) -> None:
+        tier = DataQualityTier.PASS if abs(skew_ms) < max_skew_ms else DataQualityTier.FAIL
+        self.checks.append(DQCheckResult(DQCheckType.CLOCK_SKEW, tier,
+            f"skew={skew_ms}ms max={max_skew_ms}ms",
+            metric_value=skew_ms, threshold=max_skew_ms))
 
 class CrossSourceValidator:
     """跨源数据校验器。"""

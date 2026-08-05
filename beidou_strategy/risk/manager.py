@@ -41,15 +41,33 @@ class CircuitBreakerReason(str, Enum):
 class RiskBudget:
     """策略风险预算 — 限制单策略可承担的风险量。"""
     strategy_id: StrategyId
-    max_drawdown_pct: float = 20.0  # 最大回撤百分比
-    max_daily_loss_pct: float = 5.0  # 单日最大亏损
-    max_consecutive_losses: int = 5  # 最大连续亏损笔数
-    max_position_notional: float = 100000.0  # 最大仓位名义价值
-    max_leverage: float = 3.0  # 最大杠杆
-    risk_per_trade_pct: float = 1.0  # 单笔风险占资金百分比
-    min_sharpe_rolling: float = 0.0  # 滚动Sharpe下限
-    allocation_pct: float = 100.0  # 资金分配比例
-    parent_budget_id: str | None = None  # 从属的上级预算
+    max_drawdown_pct: float = 20.0
+    max_daily_loss_pct: float = 5.0
+    max_consecutive_losses: int = 5
+    max_position_notional: float = 100000.0
+    max_leverage: float = 3.0
+    risk_per_trade_pct: float = 1.0
+    min_sharpe_rolling: float = 0.0
+    allocation_pct: float = 100.0
+    parent_budget_id: str | None = None
+
+    def compute_position_size(self, strategy_id: StrategyId, account_equity: float,
+                              entry_price: float, stop_loss_price: float) -> float:
+        """基于风险预算计算仓位大小。
+
+        risk_amount = account_equity × risk_per_trade_pct%
+        position_size = risk_amount / |entry_price - stop_loss_price|
+        上限为 max_position_notional / entry_price
+        """
+        if entry_price == 0:
+            return 0.0
+        risk_amount = account_equity * self.risk_per_trade_pct / 100
+        risk_per_unit = abs(entry_price - stop_loss_price)
+        if risk_per_unit == 0:
+            return 0.0
+        size = risk_amount / risk_per_unit
+        max_size = self.max_position_notional / entry_price
+        return min(size, max_size)
 
 
 @dataclass

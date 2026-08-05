@@ -81,8 +81,8 @@ class AlertDispatcher:
                 detected_at=incident.detected_at,
                 auto_action=incident.auto_action.value,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[alerts] Failed to write to database: {e}")
 
     def _write_to_file(self, incident: Incident) -> None:
         record = {
@@ -114,8 +114,9 @@ class AlertDispatcher:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=5)
-        except Exception:
-            pass  # Webhook 失败不影响主流程
+        except Exception as e:
+            # Webhook 失败不应影响主流程，但必须记录
+            print(f"[alerts] Webhook delivery failed: {e}")
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:

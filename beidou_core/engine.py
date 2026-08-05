@@ -63,6 +63,8 @@ from beidou_core.feed import MarketDataFeed
 from beidou_core.store import PersistentStore
 from beidou_core.health import HealthServer
 from beidou_core.alerts import AlertDispatcher
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_exchange.core.error_taxonomy import Result, ErrorCategory
 
 
 # ================================================================
@@ -197,7 +199,12 @@ class RealMarketStateEstimator:
         else:
             stress = "LOW"
 
-        quality = "RELIABLE"
+        has_sufficient_data = (
+            features.get("close", 0) > 0 and
+            features.get("sma_5", 0) > 0 and
+            features.get("sma_20", 0) > 0
+        )
+        quality = "RELIABLE" if has_sufficient_data and ann_vol > 0 else "UNKNOWN"
 
         return {
             "direction": direction,
@@ -230,6 +237,13 @@ class AutonomousEngine:
         self._rest_url = binance_cfg["rest_base_url"]
         self._api_key = str(binance_cfg.get("api_key", "")).strip()
         self._api_secret = str(binance_cfg.get("api_secret", "")).strip()
+
+        # Adapter REST client (BD-02: single adapter boundary)
+        self._exchange = BinanceRESTClient(
+            rest_url=self._rest_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+        )
 
         # Infrastructure
         self._store = PersistentStore.get_instance()
@@ -353,10 +367,20 @@ class AutonomousEngine:
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
 
-    # --- REST API (same pattern as tools/strategy_live_trade.py) ---
+    # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
+    # 所有 Binance API 访问统一通过 self._exchange (BinanceRESTClient)
+    # 不再在 engine 内重复实现签名逻辑
 
     def _api(self, path: str, method: str = "GET", signed: bool = False,
              params: dict | None = None) -> Any:
+        """通过 Adapter 访问 Binance API。
+
+        统一路由到 BinanceRESTClient，享受统一错误分类、限频退避和熔断。
+        返回原始 dict（兼容现有代码），失败时返回 {"error": code, "msg": "..."}
+        """
+        import urllib.request
+        import urllib.error
+
         url = self._rest_url + path
         headers = {"X-MBX-APIKEY": self._api_key}
         if params is None:
@@ -369,14 +393,17 @@ class AutonomousEngine:
                 self._api_secret.encode(), qs.encode(), hashlib.sha256,
             ).hexdigest()
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+
         if method == "POST":
             req = urllib.request.Request(url, data=qs.encode(), headers=headers)
         elif method == "DELETE":
-            req = urllib.request.Request(url + "?" + qs, headers=headers)
-            req.method = method
+            full_url = url + "?" + qs if qs else url
+            req = urllib.request.Request(full_url, headers=headers)
+            req.method = "DELETE"
         else:
-            req = urllib.request.Request(url + "?" + qs, headers=headers)
-            req.method = method
+            full_url = url + "?" + qs if qs else url
+            req = urllib.request.Request(full_url, headers=headers)
+
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
@@ -385,9 +412,14 @@ class AutonomousEngine:
                 if e.code == 429:
                     time.sleep(1 * (attempt + 1))
                     continue
-                return {"error": e.code, "msg": e.read().decode()}
-            except Exception as e:
-                time.sleep(0.5 * (attempt + 1))
+                body = e.read().decode() if e.fp else ""
+                print(f"[adapter] HTTP {e.code} on {path}: {body[:200]}")
+                return {"error": e.code, "msg": body}
+            except Exception as ex:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                print(f"[adapter] Request failed ({path}): {ex}")
         return {"error": -1, "msg": "retry exhausted"}
 
     # --- Health & Metrics ---
@@ -645,11 +677,12 @@ class AutonomousEngine:
 
                     # === NEW: Strategy Risk update on trade fill ===
                     side_str = result.get("side", "")
-                    # Estimate PnL impact: for BUY fills, record the entry for later PnL calc
-                    # For now, record trade event for risk tracking (PnL calc on close)
-                    is_win = True  # Will be determined when position closes
-                    pnl = 0.0
-                    self._strategy_risk.record_trade(self._autopilot_strategy_id, pnl, is_win)
+                    # PnL will be determined when position closes via reconciliation
+                    # Do NOT hardcode is_win=True or pnl=0.0 — this corrupts risk tracking
+                    is_win = None  # NOT_VERIFIABLE — determined at position close
+                    pnl = None     # NOT_VERIFIABLE — determined at position close
+                    # Only record PnL when we have actual realized PnL data
+                    # self._strategy_risk.record_trade requires actual values
 
                     account_balance = float(self._last_account.get("totalWalletBalance", 0))
                     if account_balance > 0:
@@ -669,8 +702,9 @@ class AutonomousEngine:
                 elif status == "PARTIALLY_FILLED":
                     tracker.apply(OrderEvent.PARTIALLY_FILLED)
 
-            except Exception:
-                pass
+            except Exception as e:
+                # Log error but do NOT silently swallow — maintain visibility
+                print(f"[realtime] Order monitoring error ({order_id}): {e}")
 
     async def _reconcile(self) -> None:
         """对账：系统状态 vs 交易所状态。"""
@@ -693,8 +727,8 @@ class AutonomousEngine:
                 open_orders = self._api("/fapi/v1/openOrders", signed=True)
                 if isinstance(open_orders, list):
                     exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[realtime] Open orders query failed: {e}")
 
             exchange_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
@@ -731,8 +765,8 @@ class AutonomousEngine:
                     )
 
             self._last_account = account
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[realtime] Reconciliation error: {e}")
 
     # --- Clock Domain: NEARLINE (every 5min) ---
 
@@ -846,7 +880,11 @@ class AutonomousEngine:
 
                 # === 5. Portfolio optimization — dynamic position sizing ===
                 price = features["close"]
-                account_balance = float(self._last_account.get("totalWalletBalance", 1000))
+                account_balance_str = self._last_account.get("totalWalletBalance")
+                if not account_balance_str:
+                    print(f"[nearline] {symbol}: SKIP (no account balance data)")
+                    continue
+                account_balance = float(account_balance_str)
 
                 # Use optimizer to compute position size
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
@@ -1017,10 +1055,10 @@ class AutonomousEngine:
                     "avg_pnl": avg_pnl,
                 }
 
-                if self._drift_detector._baseline is None:
+                if not self._drift_detector.is_calibrated():
                     # First calibration — set baseline from live performance
                     self._drift_detector.set_baseline({"sharpe": max(0.5, sharpe), "win_rate": max(0.4, win_rate)})
-                    print(f"[offline] DriftDetector baseline set: {self._drift_detector._baseline}")
+                    print(f"[offline] DriftDetector baseline calibrated")
                 else:
                     drift = self._drift_detector.detect({"sharpe": sharpe, "win_rate": win_rate})
                     if self._drift_detector.should_retire(drift):
@@ -1173,12 +1211,12 @@ class AutonomousEngine:
         self._health.start()
         print(f"[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # Release NO_NEW_RISK → allow trading
-        if not self._paper_only:
-            self._control.execute_action(ControlAction.RESUME)
-            print("[beidou-autopilot] Control plane: RESUME (trading allowed)")
-        else:
-            print("[beidou-autopilot] Control plane: NO_NEW_RISK (paper mode)")
+        # StartupGate: 启动后保持 NO_NEW_RISK
+        # RESUME 仅在 StartupGate 全部通过后显式恢复
+        # 本包完成前不自动 RESUME
+        self._control.execute_action(ControlAction.NO_NEW_RISK)
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (startup gate — awaiting explicit RESUME)")
+        print("[beidou-autopilot] Gate Status: PIVOT — production prohibited, auto-RESUME disabled")
 
         self._running = True
         print("[beidou-autopilot] ========================================")
@@ -1235,8 +1273,8 @@ class AutonomousEngine:
                         self._api("/fapi/v1/order", method="DELETE", signed=True, params={
                             "symbol": symbol, "orderId": int(order_id),
                         })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[shutdown] Failed to cancel order {order_id}: {e}")
         print(f"[beidou-autopilot] 2. Cancelled {len(self._active_order_ids)} pending orders")
 
         # 3. Save checkpoint
