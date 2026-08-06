@@ -23,7 +23,6 @@ packages = [
     "beidou_reporting",
     "beidou_certification",
     "beidou_core",
-    "beidou_bootstrap",
     "beidou_launcher",
 ]
 
@@ -49,9 +48,6 @@ dependencies = [
 ]
 
 [project.scripts]
-beidou = "beidou_bootstrap.cli:main"
-"北斗" = "beidou_bootstrap.cli:main"
-bd = "beidou_bootstrap.cli:main"
 beidou = "beidou_launcher.cli:main"
 "北斗" = "beidou_launcher.cli:main"
 bd = "beidou_launcher.cli:main"
@@ -100,7 +96,9 @@ ignore = ["S101", "S104", "RUF001", "RUF002", "RUF003"]
 "beidou_core/guard.py" = ["RUF012", "S607", "S105"]
 "apps/autopilot/__main__.py" = ["S607"]
 "beidou_launcher/**/*.py" = ["T201"]
-"beidou_launcher/supervisor.py" = ["S603", "S607", "S310"]
+"beidou_launcher/preflight.py" = ["S603", "S607"]
+"beidou_launcher/state.py" = ["S603", "S607"]
+"beidou_launcher/supervisor.py" = ["S310"]
 "beidou_safety/risk/rules.py" = ["RUF012", "S105"]
 "beidou_exchange/binance_usdm/rest_client.py" = ["S310"]
 "beidou_safety/risk/__init__.py" = ["E402", "F401"]
@@ -144,9 +142,6 @@ ignore = ["S101", "S104", "RUF001", "RUF002", "RUF003"]
 "tests/architecture/test_architecture.py" = ["S112"]
 "tests/unit/test_execution.py" = ["F811"]
 "tests/unit/test_bf00_timing_mismatch.py" = ["S311", "SIM108"]
-"beidou_bootstrap/preflight.py" = ["S607"]
-"beidou_bootstrap/state.py" = ["S607"]
-"beidou_bootstrap/supervisor.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -189,7 +184,6 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research", "beidou_policy", "beidou_security", "beidou_observability", "beidou_exchange", "beidou_lifecycle", "beidou_delivery", "beidou_autonomy", "beidou_infra", "beidou_data", "beidou_control", "beidou_chaos", "beidou_production", "beidou_reporting", "beidou_certification", "beidou_core", "beidou_bootstrap"]
 source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research", "beidou_policy", "beidou_security", "beidou_observability", "beidou_exchange", "beidou_lifecycle", "beidou_delivery", "beidou_autonomy", "beidou_infra", "beidou_data", "beidou_control", "beidou_chaos", "beidou_production", "beidou_reporting", "beidou_certification", "beidou_core", "beidou_launcher"]
 omit = ["*/tests/*", "*/test_*"]
 
@@ -206,7 +200,6 @@ exclude_lines = [
     "if TYPE_CHECKING:",
 ]
 
-# 关键包需要 >=95% 行覆盖
 [tool.coverage.critical_packages]
 paths = [
     "beidou_safety/execution",
@@ -229,8 +222,3 @@ line_length = 120
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"]
-
-# BD-T15: 核心交易链 mypy ignore_errors 已全部移除。
-# 全量 mypy strict 类型检查通过 (0 errors)。
-# 如需新增豁免，必须附带 issue/owner/expiry；P0 包禁止豁免。
-# [[tool.mypy.overrides]] 块已删除 — 不再需要。
