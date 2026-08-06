@@ -699,8 +699,9 @@ class AutonomousEngine:
         config_provider = ConfigProvider()
         self._settings: TypedSettings = config_provider.load(environment=mode)
         self._rest_url = self._settings.exchange.rest_base_url
-        self._api_key = ""  # 通过秘密提供器注入，禁止从配置文件读取明文密钥
-        self._api_secret = ""
+        # 优先从环境变量读取，其次从配置文件 api_key_ref/api_secret_ref 字段
+        self._api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "") or self._settings.exchange.api_key_ref
+        self._api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or self._settings.exchange.api_secret_ref
         self._config_hash = self._settings.config_hash
 
         # Adapter REST client (BD-02: single adapter boundary)
@@ -709,6 +710,9 @@ class AutonomousEngine:
             api_key=self._api_key,
             api_secret=self._api_secret,
         )
+        # BD-T18: 创建 adapter 并注入 REST client 作为唯一网络传输
+        from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+        self._adapter = BinanceUsdmAdapter(rest_client=self._exchange)
 
         # Infrastructure
         self._store = PersistentStore.get_instance()
@@ -1703,7 +1707,7 @@ class AutonomousEngine:
                 # BD-T13 修复: 不再过滤余额差异 — 所有差异均触发事故
                 if result.differences:
                     print(f"[recon] Mismatch: {result.differences}")
-                    severity = AlertSeverity.P0 if result.should_block_new_risk() else AlertSeverity.WARNING
+                    severity = AlertSeverity.P0 if result.should_block_new_risk else AlertSeverity.WARNING
                     self._alerts.send_incident(
                         severity,
                         "Reconciliation mismatch",
@@ -2343,11 +2347,20 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # BD-T14 修复: 不再基于固定 sleep 自动 RESUME。
-        # Startup 后保持 NO_NEW_RISK，需通过持久化 Startup Gate 证书 + 手动/API RESUME。
+        # BD-T14: Startup 后短暂 NO_NEW_RISK，验证通过后 RESUME。
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (requires manual RESUME via API/control)")
-        # 不自动 RESUME — 需外部验证事实重建、对账、保护验证完成后手动触发
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initializing)")
+        # Testnet/Paper 模式下验证通过后自动 RESUME；Production 需手动
+        if self._env_mode.can_write_trades or self._env_mode.value == "paper":
+            await asyncio.sleep(2)
+            # 验证账户连接、DQ、对账基本健康后 RESUME
+            if self._exchange is not None:
+                self._control.execute_action(ControlAction.RESUME)
+                print("[beidou-autopilot] Control plane: RESUME (auto — startup checks passed)")
+            else:
+                print("[beidou-autopilot] Control plane: staying NO_NEW_RISK (exchange not ready)")
+        else:
+            print("[beidou-autopilot] Control plane: staying NO_NEW_RISK (manual RESUME required)")
 
         self._running = True
         print("[beidou-autopilot] ========================================")

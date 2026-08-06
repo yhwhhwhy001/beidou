@@ -69,6 +69,7 @@ class ControlPlaneAPI:
         self._start_time = datetime.now(timezone.utc)
         self._emergency_actions: list[EmergencyAction] = []
         self._metrics: dict[str, float] = {}
+        self._control_plane = None  # BD-T14: wired at engine startup
 
     @property
     def bind_address(self) -> str:
@@ -160,6 +161,20 @@ class ControlPlaneAPI:
             "uptime_seconds": (datetime.now(timezone.utc) - self._start_time).total_seconds(),
             "emergency_actions_count": len(self._emergency_actions),
         }
+
+    # === Control Actions (BD-T14) ===
+
+    def resume_trading(self) -> dict:
+        """BD-T14: 手动 RESUME — 验证通过后恢复交易能力。"""
+        if self._control_plane is not None:
+            from beidou_control.plane import ControlAction
+            result = self._control_plane.execute_action(ControlAction.RESUME)
+            return {"action": "RESUME", "success": result, "new_status": str(self._control_plane.get_status())}
+        return {"action": "RESUME", "success": False, "error": "control_plane not wired"}
+
+    def wire_control_plane(self, control_plane) -> None:
+        """BD-T14: 注入控制平面引用。"""
+        self._control_plane = control_plane
 
 
 # ================================================================

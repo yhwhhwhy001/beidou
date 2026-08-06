@@ -176,8 +176,12 @@ class ConfigProvider:
 
         errors: list[str] = []
 
-        # Parse environment
-        env_name = str(raw.get("environment", "safety_only"))
+        # Parse environment — 兼容字符串和 dict 两种格式
+        env_raw = raw.get("environment", "safety_only")
+        if isinstance(env_raw, dict):
+            env_name = str(env_raw.get("name", "safety_only"))
+        else:
+            env_name = str(env_raw)
         try:
             environment = Environment(env_name)
         except ValueError:

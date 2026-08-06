@@ -142,9 +142,15 @@ class BinanceHealthMonitor:
 class BinanceUsdmAdapter(ExchangeAdapter):
     """Binance USDⓈ-M 认证适配器。通过 ExchangeAdapter 全量契约测试。"""
 
-    def __init__(self, venue_id: VenueId = VenueId("BINANCE"), account_id: AccountId = AccountId("default")) -> None:
+    def __init__(
+        self,
+        venue_id: VenueId = VenueId("BINANCE"),
+        account_id: AccountId = AccountId("default"),
+        rest_client=None,  # BD-T18: BinanceRESTClient 注入
+    ) -> None:
         self._venue_id = venue_id
         self._account_id = account_id
+        self._rest_client = rest_client  # BD-T18: 真实传输层
         self._health_monitor = BinanceHealthMonitor(venue_id)
         self._reference_data = BinanceReferenceData(venue_id=venue_id)
         self._capabilities = frozenset(
@@ -229,7 +235,40 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 correlation_id=request.correlation_id,
                 raw_response={"reason": "venue_health_unsafe"},
             )
-        # BD-T03: 真实 Transport 接入前返回 UNKNOWN，不构造 NEW
+        # BD-T18: 有真实传输层时走 API，否则返回 UNKNOWN
+        if self._rest_client is not None:
+            try:
+                import asyncio
+                result = asyncio.get_event_loop().run_until_complete(
+                    self._rest_client.create_order(
+                        symbol=str(request.venue_instrument.instrument_id),
+                        side=request.side.value if hasattr(request.side, 'value') else str(request.side),
+                        order_type=request.order_type.value if hasattr(request.order_type, 'value') else str(request.order_type),
+                        quantity=float(request.quantity.amount),
+                        price=float(request.price.amount) if request.price else None,
+                        time_in_force=request.time_in_force or "GTC",
+                        client_order_id=request.client_order_id or "",
+                    )
+                )
+                if result.is_ok and result.data:
+                    data = result.data
+                    return OrderResponse(
+                        venue_instrument=request.venue_instrument,
+                        account_ref=request.account_ref,
+                        order_id=str(data.get("orderId", "")),
+                        client_order_id=request.client_order_id,
+                        status=OrderStatus.NEW,
+                        side=request.side,
+                        order_type=request.order_type,
+                        original_quantity=request.quantity,
+                        executed_quantity=Quantity(amount=str(data.get("executedQty", "0"))),
+                        average_price=Price(amount=str(data.get("avgPrice", "0"))) if data.get("avgPrice") else None,
+                        commission=None,
+                        correlation_id=request.correlation_id,
+                        raw_response=data,
+                    )
+            except Exception as e:
+                print(f"[adapter] create_order API failed: {e}")
         return OrderResponse(
             venue_instrument=request.venue_instrument,
             account_ref=request.account_ref,
@@ -243,7 +282,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             average_price=None,
             commission=None,
             correlation_id=request.correlation_id,
-            raw_response={"reason": "real_transport_pending_BD-T18"},
+            raw_response={"reason": "real_transport_pending_BD-T18" if self._rest_client is None else "api_call_failed"},
         )
 
     async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:

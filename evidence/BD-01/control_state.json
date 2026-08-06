@@ -1,19 +1,19 @@
 {
-  "control_action": "LOCK",
-  "version": 1,
-  "updated_at": "2026-08-06T15:21:32.758078+00:00",
+  "control_action": "RESUME",
+  "version": 2,
+  "updated_at": "2026-08-06T15:46:54.772481+00:00",
   "change_log": [
     {
-      "timestamp": "2026-08-06T15:21:32.758062+00:00",
+      "timestamp": "2026-08-06T15:46:52.770429+00:00",
       "old_state": "NO_NEW_RISK",
-      "new_state": "LOCK",
-      "version": 0
+      "new_state": "NO_NEW_RISK",
+      "version": 1
     },
     {
-      "timestamp": "2026-08-06T15:21:32.758068+00:00",
+      "timestamp": "2026-08-06T15:46:54.772366+00:00",
       "old_state": "NO_NEW_RISK",
-      "new_state": "LOCK",
-      "version": 1
+      "new_state": "RESUME",
+      "version": 2
     }
   ]
 }

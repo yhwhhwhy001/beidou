@@ -99,8 +99,9 @@ def main() -> None:
     os.environ["BEIDOU_ENV"] = env_mode.value
     settings = ConfigProvider().load(environment=env_mode.value)
     rest_url = settings.exchange.rest_base_url
-    api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
-    api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
+    # 优先环境变量，其次配置文件 api_key_ref/api_secret_ref 字段
+    api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "") or settings.exchange.api_key_ref
+    api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or settings.exchange.api_secret_ref
     config_path = ""
     if settings.source.startswith("env-file:"):
         config_path = os.path.join(proj_root, "config", f"env.{settings.source.split(':', 1)[1]}.yaml")
