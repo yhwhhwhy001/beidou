@@ -56,6 +56,12 @@ def main() -> None:
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
 
+    # 特殊关键字：ALL/DEFAULT 展开为完整交易池
+    if symbols == ["ALL"] or symbols == ["DEFAULT"]:
+        from beidou_core.engine import DEFAULT_UNIVERSE
+        symbols = list(DEFAULT_UNIVERSE)
+        print(f"[autopilot] 展开 DEFAULT_UNIVERSE → {len(symbols)} 个标的")
+
     # 确保项目根目录在 path 上
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sys.path.insert(0, proj_root)

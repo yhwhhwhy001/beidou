@@ -75,6 +75,41 @@ from beidou_strategy.risk.manager import (
     StrategyRiskManager,
 )
 from beidou_strategy.state.cost_model import CostModel
+from beidou_data.trading_pool_lifecycle import TradingPool, PoolStatus, InstrumentScore
+
+# Binance USDⓈ-M 永续合约交易池 — 主流 + 活跃altcoin
+DEFAULT_UNIVERSE = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+    "MATICUSDT", "UNIUSDT", "ATOMUSDT", "LTCUSDT", "ETCUSDT",
+    "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "NEARUSDT",
+    "INJUSDT", "SUIUSDT", "RUNEUSDT", "SEIUSDT", "TIAUSDT",
+]
+
+# ================================================================
+# 自适应杠杆 — 基于波动率分级
+# ================================================================
+
+
+def adaptive_leverage(ann_volatility: float) -> float:
+    """波动率越高杠杆越低，控制风险暴露。"""
+    if ann_volatility <= 0.0:
+        return 2.0  # 数据缺失时保守
+    if ann_volatility < 0.2:
+        return 3.0  # 低波动：可以放大
+    if ann_volatility < 0.4:
+        return 2.0  # 正常波动
+    if ann_volatility < 0.6:
+        return 1.0  # 偏高波动：减半
+    return 0.5  # 极端波动：最小化
+
+
+def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: float) -> float:
+    """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。"""
+    vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
+    spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
+    base = strength * 0.02  # 基础: 2% of signal strength
+    return base * vol_penalty * spread_penalty
 
 # ================================================================
 # 具体 AlphaComponent 实现
@@ -670,6 +705,28 @@ class AutonomousEngine:
         self._drift_detector = DriftDetector(threshold=0.1)
         self._mapek = MAPEKController()
 
+        # === 交易池 — 动态标的管理 ===
+        self._trading_pool = TradingPool(max_instruments=50)
+        # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE 需经过评分）
+        for sym in (symbols if len(symbols) > 2 else DEFAULT_UNIVERSE):
+            entry = self._trading_pool.add(sym)
+            # 种子评分：给初始信任，让标的进入 PROMOTED
+            seed_score = InstrumentScore(
+                instrument_id=sym,
+                spread_score=0.7,
+                depth_score=0.7,
+                volume_score=0.8,
+                stability_score=0.8,
+                capacity_score=0.7,
+            )
+            seed_score.compute_overall()
+            entry.scores.append(seed_score)
+            # 跳过观察期直接进入 PROMOTED（种子标的已预筛选）
+            entry.min_observation_hours = 0.0
+            self._trading_pool.try_promote(sym)
+            self._trading_pool.activate(sym)
+        print(f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments")
+
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
         self._strategy_risk.set_budget(
@@ -873,6 +930,7 @@ class AutonomousEngine:
         # Order tracking
         self._order_trackers: dict[str, OrderStateTracker] = {}
         self._active_order_ids: set[str] = set()
+        self._order_symbols: dict[str, str] = {}  # orderId → symbol mapping
 
         # State
         self._running = False
@@ -962,6 +1020,66 @@ class AutonomousEngine:
                 print(f"[adapter] Request failed ({path}): {ex}")
         return {"error": -1, "msg": "retry exhausted"}
 
+    # --- Leverage Management ---
+
+    def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
+        """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
+
+        返回实际生效的杠杆值（如遇 -2028 则查询当前杠杆）。
+        """
+        if not hasattr(self, "_leverage_cache"):
+            self._leverage_cache: dict[str, int] = {}
+        current = self._leverage_cache.get(symbol)
+        if current == target_leverage:
+            return current
+
+        resp = self._api(
+            "/fapi/v1/leverage",
+            method="POST",
+            signed=True,
+            params={"symbol": symbol, "leverage": target_leverage},
+        )
+        if "leverage" in resp:
+            actual = int(resp["leverage"])
+            self._leverage_cache[symbol] = actual
+            print(f"[leverage] {symbol}: set to {actual}x (was {current or 'unknown'}x)")
+            return actual
+
+        # 解析 Binance 错误码（可能嵌套在 msg JSON 中）
+        binance_code = resp.get("code")
+        if binance_code is None and isinstance(resp.get("msg"), str):
+            try:
+                import json
+                inner = json.loads(resp["msg"])
+                binance_code = inner.get("code")
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        if binance_code == -2028:
+            # 降低杠杆时保证金不足 → 查询当前杠杆并沿用
+            actual = target_leverage  # fallback
+            try:
+                pos_resp = self._api(
+                    "/fapi/v2/positionRisk",
+                    signed=True,
+                    params={"symbol": symbol},
+                )
+                if isinstance(pos_resp, list) and len(pos_resp) > 0:
+                    lev_from_api = int(float(pos_resp[0].get("leverage", 0)))
+                    if lev_from_api > 0:
+                        actual = lev_from_api
+            except Exception:
+                pass
+            # 如果查询返回 0（testnet 常见），保持目标杠杆
+            if actual <= 0:
+                actual = target_leverage
+            self._leverage_cache[symbol] = actual
+            print(f"[leverage] {symbol}: cannot lower to {target_leverage}x, keeping {actual}x (existing positions)")
+            return actual
+        else:
+            print(f"[leverage] FAILED {symbol}: {resp.get('msg', resp)}")
+            return target_leverage  # 返回目标值让流程继续
+
     # --- Health & Metrics ---
 
     def _check_ready(self) -> bool:
@@ -1012,8 +1130,20 @@ class AutonomousEngine:
         self._tick_count += 1
         self._last_realtime = time.time()
 
+        if self._tick_count % 3 == 0:
+            print(f"[realtime] TICK #{self._tick_count} — outbox id={id(self._outbox)} items={len(self._outbox._outbox)}")
+
         try:
-            for symbol in self._symbols:
+            active_symbols = self._trading_pool.active_instruments()
+            if not active_symbols:
+                active_symbols = list(self._symbols)
+
+            # 批次轮询: 25个标的每tick处理5个，5 tick完成一轮，避免阻塞
+            batch_size = max(5, len(active_symbols) // 5)
+            offset = (self._tick_count % max(1, (len(active_symbols) + batch_size - 1) // batch_size)) * batch_size
+            batch = active_symbols[offset : offset + batch_size]
+
+            for symbol in batch:
                 # 1. Fetch latest market data
                 features = self._feed.update_features(symbol)
                 if not features:
@@ -1021,33 +1151,33 @@ class AutonomousEngine:
 
                 price = features["price"]
 
-                # 2. Check protection triggers
-                for pos_id in list(self._protection.all_positions().keys()):
+                # 2. Check protection triggers（仅检查属于当前 symbol 的持仓）
+                for pos_id, pp in list(self._protection.all_positions().items()):
+                    pos_sym = str(pp.instrument_id)
+                    if pos_sym != symbol:
+                        continue  # 跳过不属于当前批次 symbol 的持仓
                     result = self._protection.check_price(pos_id, price)
                     if result["triggered"]:
                         for sl in result["stop_loss"]:
+                            sl_symbol = str(sl.instrument_id) if hasattr(sl, 'instrument_id') else symbol
                             self._alerts.send_incident(
                                 AlertSeverity.HIGH,
-                                f"Stop Loss triggered: {symbol}",
+                                f"Stop Loss triggered: {sl_symbol}",
                                 f"Position {pos_id} stop loss at {sl.trigger_price.amount}",
                                 category="protection",
                             )
                             if not self._paper_only:
-                                await self._execute_protection_order(sl, symbol)
+                                await self._execute_protection_order(sl, sl_symbol)
                         for tp in result["take_profit"]:
+                            tp_symbol = str(tp.instrument_id) if hasattr(tp, 'instrument_id') else symbol
                             if not self._paper_only:
-                                await self._execute_protection_order(tp, symbol)
+                                await self._execute_protection_order(tp, tp_symbol)
 
-                # 3. Process unacked intents → place orders
-                if not self._paper_only:
-                    for intent in self._outbox.unacked():
-                        await self._place_order(intent, symbol)
-
-                # 4. Monitor active orders
+                # 3. Monitor active orders
                 if not self._paper_only:
                     await self._monitor_orders(symbol)
 
-                # 5. Save market snapshot
+                # 4. Save market snapshot
                 self._store.save_market_snapshot(
                     symbol,
                     price,
@@ -1056,6 +1186,19 @@ class AutonomousEngine:
                     features.get("spread_bps"),
                     features.get("volume_24h"),
                 )
+
+            # 5. Process unacked intents → place orders (once per tick, all symbols)
+            unacked = self._outbox.unacked()
+            pending = self._outbox.pending_count()
+            if self._tick_count % 5 == 0:
+                ob = self._outbox
+                raw_outbox = len(ob._outbox)
+                raw_processed = len(ob._processed)
+                raw_inbox = len(ob._inbox)
+                print(f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} paper_only={self._paper_only}")
+            if not self._paper_only:
+                for intent in unacked:
+                    await self._place_order(intent)
 
             # 6. Reconciliation (every 30s)
             if time.time() - self._last_recon > 30:
@@ -1076,6 +1219,12 @@ class AutonomousEngine:
         side = "SELL" if protection.side == OrderSide.SELL else "BUY"
         client_id = f"beidou-prot-{int(time.time() * 1000)}"
 
+        # 精度修正（复用 _place_order 同样的缓存）
+        prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+        qty_raw = float(protection.quantity.amount)
+        qty_str = f"{qty_raw:.{prec_map['quantity']}f}"
+
+        print(f"[protection] Executing: {symbol} {side} qty={qty_str} reduceOnly=true")
         order = self._api(
             "/fapi/v1/order",
             method="POST",
@@ -1084,7 +1233,7 @@ class AutonomousEngine:
                 "symbol": symbol,
                 "side": side,
                 "type": "MARKET",
-                "quantity": str(float(protection.quantity.amount)),
+                "quantity": qty_str,
                 "reduceOnly": "true",
                 "newClientOrderId": client_id,
             },
@@ -1099,6 +1248,7 @@ class AutonomousEngine:
             tracker.apply(OrderEvent.SENT)
             self._order_trackers[order_id] = tracker
             self._active_order_ids.add(order_id)
+            self._order_symbols[order_id] = symbol
 
             self._protection.mark_executed(protection.protection_id)
             self._store.save_protection(
@@ -1122,21 +1272,31 @@ class AutonomousEngine:
                 order.get("status", "NEW"),
                 client_order_id=client_id,
             )
+        else:
+            err_code = order.get("code", order.get("error", "unknown"))
+            err_msg = order.get("msg", str(order)[:150])
+            print(f"[protection] EXECUTION FAILED {symbol} {side}: code={err_code} msg={err_msg}")
+            # -2022 (ReduceOnly rejected) → 符号错配或无持仓，不标记完成，等待下次正确触发
+            # -2010 (insufficient margin) → 账户问题，稍后重试
+            # 不再自动 mark_executed，避免误标记
 
-    async def _place_order(self, intent, symbol: str) -> None:
+    async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
         order_type = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
         client_id = intent.client_order_id or f"beidou-{int(time.time() * 1000)}"
 
+        # 使用 intent 自身的 instrument_id，而非循环变量
+        order_symbol = str(intent.instrument_id) if hasattr(intent, 'instrument_id') else symbol
+
         params = {
-            "symbol": symbol,
+            "symbol": order_symbol,
             "side": side,
             "type": order_type,
             "quantity": str(float(intent.quantity.amount)),
             "newClientOrderId": client_id,
         }
-        if intent.price:
+        if order_type == "LIMIT" and intent.price:
             params["price"] = str(float(intent.price.amount))
             params["timeInForce"] = "GTC"
 
@@ -1149,14 +1309,51 @@ class AutonomousEngine:
             self._order_count += 1
             return
 
+        # 量化精度修正：查询交易所规则获取 stepSize 和 tickSize
+        if not hasattr(self, "_symbol_precision"):
+            self._symbol_precision: dict[str, dict[str, int]] = {}
+        if order_symbol not in self._symbol_precision:
+            try:
+                exchange_info = self._api("/fapi/v1/exchangeInfo")
+                found = False
+                for s in exchange_info.get("symbols", []):
+                    sym = s.get("symbol", "")
+                    prec = {"quantity": 3, "price": 2}  # defaults
+                    for f_item in s.get("filters", []):
+                        if f_item.get("filterType") == "LOT_SIZE":
+                            step = f_item.get("stepSize", "0.001")
+                            prec["quantity"] = max(0, len(step.split(".")[1].rstrip("0")) if "." in step else 0)
+                        if f_item.get("filterType") == "PRICE_FILTER":
+                            tick = f_item.get("tickSize", "0.01")
+                            prec["price"] = max(0, len(tick.split(".")[1].rstrip("0")) if "." in tick else 0)
+                    self._symbol_precision[sym] = prec
+                    if sym == order_symbol:
+                        found = True
+                # 未找到时缓存默认精度，避免重复 exchangeInfo 查询
+                if not found:
+                    self._symbol_precision[order_symbol] = {"quantity": 3, "price": 2}
+            except Exception:
+                self._symbol_precision[order_symbol] = {"quantity": 3, "price": 2}
+
+        prec = self._symbol_precision.get(order_symbol, {"quantity": 3, "price": 2})
+        qty = float(params["quantity"])
+        params["quantity"] = f"{qty:.{prec['quantity']}f}"
+        price_raw = params.get("price")
+        if price_raw:
+            params["price"] = f"{float(price_raw):.{prec['price']}f}"
+
+        print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
         order = self._api("/fapi/v1/order", method="POST", signed=True, params=params)
+        print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
             tracker = OrderStateTracker(order_id=OrderId(str(order["orderId"])))
             tracker.apply(OrderEvent.ACKED)
             tracker.apply(OrderEvent.SENT)
             self._order_trackers[str(order["orderId"])] = tracker
-            self._active_order_ids.add(str(order["orderId"]))
+            oid_str = str(order["orderId"])
+            self._active_order_ids.add(oid_str)
+            self._order_symbols[oid_str] = order_symbol  # 记录订单所属 symbol
             self._outbox.ack(intent.intent_id)
             self._order_count += 1
             print(
@@ -1174,16 +1371,20 @@ class AutonomousEngine:
                 order.get("status", "NEW"),
                 client_order_id=client_id,
             )
+        else:
+            print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
 
     async def _monitor_orders(self, symbol: str) -> None:
         """查询活跃订单状态并更新状态机/账本。"""
         for order_id in list(self._active_order_ids):
+            # 使用订单自身的 symbol 而非批量循环的 symbol
+            order_sym = self._order_symbols.get(order_id, symbol)
             try:
                 result = self._api(
                     "/fapi/v1/order",
                     signed=True,
                     params={
-                        "symbol": symbol,
+                        "symbol": order_sym,
                         "orderId": int(order_id),
                     },
                 )
@@ -1251,7 +1452,7 @@ class AutonomousEngine:
                     pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
                     pos_id = f"pos-{order_id}"
 
-                    self._protection.create_protection(
+                    pp = self._protection.create_protection(
                         position_id=pos_id,
                         instrument_id=InstrumentId(symbol),
                         venue_id=VenueId("BINANCE"),
@@ -1261,6 +1462,49 @@ class AutonomousEngine:
                         stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 2.0},
                         take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
                     )
+
+                    # 将 SL/TP 保护单实际下单到交易所（使用价格精度）
+                    # Testnet 不支持 STOP_MARKET → 回退到本地价格监控
+                    reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
+                    protect_orders = [pp.stop_loss] if pp.stop_loss else []
+                    protect_orders.extend(pp.take_profits)
+                    for p_order in protect_orders:
+                        if p_order is None:
+                            continue
+                        # 已尝试过的保护单不再重复提交（避免 -4120 日志洪流）
+                        if not hasattr(self, "_protection_exchange_attempted"):
+                            self._protection_exchange_attempted: set[str] = set()
+                        if p_order.protection_id in self._protection_exchange_attempted:
+                            continue
+                        self._protection_exchange_attempted.add(p_order.protection_id)
+
+                        prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                        qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
+                        price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
+                        sl_params = {
+                            "symbol": symbol,
+                            "side": reduce_side,
+                            "type": "STOP_MARKET",
+                            "quantity": qty_str,
+                            "stopPrice": price_str,
+                            "closePosition": "true",
+                            "workingType": "CONTRACT_PRICE",
+                            "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
+                        }
+                        sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                        if "code" in sl_resp and sl_resp.get("code") == -4120:
+                            # 回退: 使用不带 closePosition 的 reduceOnly 版本
+                            sl_params["reduceOnly"] = "true"
+                            sl_params.pop("closePosition", None)
+                            sl_params.pop("workingType", None)
+                            sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                        if "orderId" in sl_resp:
+                            print(f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}")
+                        elif "code" in sl_resp and sl_resp.get("code") == -4120:
+                            # Testnet: STOP_MARKET 不可用，依赖本地 check_price() + MARKET 单
+                            print(f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)")
+                        else:
+                            print(f"[protection] FAILED {symbol} {p_order.reason}: {sl_resp.get('msg', sl_resp)}")
 
                     # === NEW: Strategy Risk update on trade fill ===
                     result.get("side", "")
@@ -1382,7 +1626,10 @@ class AutonomousEngine:
             return
 
         try:
-            for symbol in self._symbols:
+            active_symbols = self._trading_pool.active_instruments()
+            if not active_symbols:
+                active_symbols = list(self._symbols)
+            for symbol in active_symbols:
                 # 1. K-line features
                 features = self._feed.get_kline_features(symbol, "1h", 100)
                 if not features:
@@ -1410,17 +1657,17 @@ class AutonomousEngine:
 
                 # Inject position info for EXIT components
                 positions = self._protection.all_positions()
-                symbol_positions = {k: v for k, v in positions.items() if v.get("symbol") == symbol}
+                symbol_positions = {k: v for k, v in positions.items() if str(v.instrument_id) == symbol}
                 pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
                 if symbol_positions:
                     # Use the first matching position
                     pos = next(iter(symbol_positions.values()))
-                    entry_price = float(pos.get("entry_price", 0) or 0)
-                    pos_side = str(pos.get("side", ""))
+                    entry_price = pos.entry_price
+                    pos_side = "LONG" if pos.side == OrderSide.BUY else "SHORT"
                     pos_info["has_position"] = True
                     pos_info["entry_price"] = entry_price
                     pos_info["side"] = pos_side
-                    pos_info["entry_time"] = float(pos.get("entry_time", 0) or 0)
+                    pos_info["entry_time"] = 0  # PositionProtection doesn't track entry_time
                     if entry_price > 0 and close > 0:
                         if pos_side == "LONG":
                             pos_info["pnl_pct"] = (close - entry_price) / entry_price * 100
@@ -1507,7 +1754,7 @@ class AutonomousEngine:
                     + (" CONFLICT" if fused.conflict_detected else "")
                 )
 
-                # === 5. Portfolio optimization — dynamic position sizing ===
+                # === 5. Adaptive position sizing & leverage ===
                 price = features["close"]
                 account_balance_str = self._last_account.get("totalWalletBalance")
                 if not account_balance_str:
@@ -1515,10 +1762,22 @@ class AutonomousEngine:
                     continue
                 account_balance = float(account_balance_str)
 
-                # Use optimizer to compute position size
+                ann_vol = features.get("ann_volatility", 0.3)
+                spread_bps_val = features.get("spread_bps", 1.0)
+                signal_strength = fused.strength
+
+                # 自适应杠杆 — 波动率越高杠杆越低
+                dyn_leverage = adaptive_leverage(ann_vol)
+
+                # 自适应仓位 — 信号强度 × 波动率惩罚 × 点差惩罚 × 风险预算
+                adaptive_pct = adaptive_position_pct(signal_strength, ann_vol, spread_bps_val)
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
-                stop_loss_pct = 2.0  # FIXED_PERCENT stop
+
+                # ATR-based stop loss (volatility-adaptive, default 2% if ATR unavailable)
+                atr_pct = features.get("atr_pct", 2.0)
+                stop_loss_pct = max(1.0, min(atr_pct * 1.5, 5.0))  # 1.5× ATR, capped 1%-5%
                 stop_loss_price = price * (1 - stop_loss_pct / 100)
+
                 risk_based_size = (
                     budget.compute_position_size(
                         self._autopilot_strategy_id,
@@ -1527,17 +1786,39 @@ class AutonomousEngine:
                         stop_loss_price,
                     )
                     if budget
-                    else 0.005
+                    else account_balance * 0.01 / (price * stop_loss_pct / 100)
                 )
 
-                # Floor and cap
-                position_size = max(0.001, min(risk_based_size, 1.0))
+                # Pool capacity check
+                pool_capacity = self._trading_pool.is_tradable(symbol)
+
+                # 自适应仓位: risk_based_size × adaptive_pct, 受 leverage 约束
+                max_by_leverage = (account_balance * dyn_leverage) / price
+                position_size = min(risk_based_size * adaptive_pct * 50, max_by_leverage)
+                position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
                 position_notional = price * position_size
 
                 print(
-                    f"[nearline] {symbol}: Optimizer → size={position_size:.4f} "
-                    f"notional={position_notional:.0f} (account={account_balance:.0f})"
+                    f"[nearline] {symbol}: Adaptive → size={position_size:.4f} "
+                    f"notional={position_notional:.0f} lev={dyn_leverage:.1f}x "
+                    f"vol={ann_vol:.1%} atr_stop={stop_loss_pct:.1f}% "
+                    f"pool={'OK' if pool_capacity else 'SKIP'}"
                 )
+
+                if not pool_capacity:
+                    print(f"[nearline] {symbol}: SKIP (pool not tradable)")
+                    continue
+
+                # === 5.5 下发自适应杠杆到交易所，获取实际生效值 ===
+                exchange_leverage = max(1, int(dyn_leverage))  # Binance 最低 1x
+                if not self._paper_only:
+                    actual_lev = self._ensure_leverage(symbol, exchange_leverage)
+                    if actual_lev != dyn_leverage:
+                        dyn_leverage = float(actual_lev)  # 使用实际杠杆重新计算仓位
+                        max_by_leverage = (account_balance * dyn_leverage) / price
+                        position_size = min(risk_based_size * adaptive_pct * 50, max_by_leverage)
+                        position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
+                        position_notional = price * position_size
 
                 # === 6. Cost estimation ===
                 spread_bps = features.get("spread_bps", 1.0)
@@ -1559,11 +1840,11 @@ class AutonomousEngine:
                 # === 7. Safety risk check ===
                 snapshot = RiskSnapshot(
                     total_exposure=position_notional,
-                    margin_used=position_notional / 2,
+                    margin_used=position_notional / dyn_leverage if dyn_leverage > 0 else position_notional / 2,
                     margin_total=account_balance,
                     position_count=self._protection.position_count(),
                     pending_orders=len(self._active_order_ids),
-                    leverage=2.0,
+                    leverage=dyn_leverage,
                     concentration_pct=position_notional / max(account_balance, 1) * 100,
                 )
 
@@ -1592,7 +1873,7 @@ class AutonomousEngine:
                     account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
                     instrument_id=instrument_id,
                     side=side,
-                    order_type=OrderType.LIMIT,
+                    order_type=OrderType.MARKET,
                     quantity=Quantity(amount=str(position_size)),
                     price=Price(amount=str(price)),
                     time_in_force=TimeInForce.GTC,
@@ -1604,7 +1885,7 @@ class AutonomousEngine:
 
                 try:
                     self._outbox.commit(intent)
-                    print(f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price}")
+                    print(f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} (outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})")
                 except ValueError:
                     print(f"[nearline] {symbol}: SKIP (duplicate intent in window)")
 
