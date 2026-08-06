@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
@@ -9,19 +10,39 @@ if TYPE_CHECKING:
     from beidou_safety.execution import OrderIntent
 
 
+class OutboxState(str, Enum):
+    """BD-P0-06: Outbox 消息状态。"""
+
+    PENDING = "PENDING"
+    SENDING = "SENDING"
+    SENT = "SENT"
+    ACKED = "ACKED"
+    UNKNOWN = "UNKNOWN"
+    FAILED = "FAILED"
+    DEAD_LETTER = "DEAD_LETTER"
+
+
 class IntentOutbox:
-    """事务性 Outbox — Intent 先提交到 Outbox，再异步发送。"""
+    """事务性 Outbox — Intent 先提交到 Outbox，再异步发送。
+
+    BD-P0-06 约束:
+    - 幂等键唯一性：相同 idempotency_key 不得重复提交
+    - 无覆盖写入：已处理的消息不可修改
+    - 状态机: PENDING → SENDING → SENT → ACKED
+    """
 
     def __init__(self) -> None:
         self._outbox: list[OrderIntent] = []
         self._inbox: dict[str, OrderIntent] = {}
         self._processed: set[str] = set()
+        self._states: dict[str, OutboxState] = {}
 
     def commit(self, intent: OrderIntent) -> str:
         key = intent.idempotency_key or self._hash(intent)
         if key in self._processed or any(i.idempotency_key == key or self._hash(i) == key for i in self._outbox):
             raise ValueError(f"Duplicate intent: {key}")
         self._outbox.append(intent)
+        self._states[key] = OutboxState.PENDING
         return key
 
     def _hash(self, intent: OrderIntent) -> str:
