@@ -135,6 +135,22 @@ class StrategyProposal:
     policy_version: str = ""
     feature_snapshot_ref: str = ""
 
+    def hash(self) -> str:
+        """BD-P0-04: 稳定哈希 — 相同输入产生相同输出。"""
+        import hashlib
+
+        parts = [
+            str(self.strategy_id),
+            str(self.instrument_id),
+            str(self.venue_id),
+            self.direction,
+            str(self.strength),
+            str(self.confidence),
+            str(self.conflict_detected),
+            str(self.policy_version),
+        ]
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()[:16]
+
 
 @dataclass(frozen=True, slots=True)
 class PortfolioDecision:

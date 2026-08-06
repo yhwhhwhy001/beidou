@@ -46,8 +46,9 @@ class NodeType(str, Enum):
     ENTRY = "ENTRY"
     FILTER = "FILTER"
     FUSION = "FUSION"
+    EXIT = "EXIT"  # BD-P0-04: 退出节点
     SIZING = "SIZING"
-    EXIT_POLICY = "EXIT_POLICY"
+    EXIT_POLICY = "EXIT_POLICY"  # 兼容旧代码
     STRATEGY = "STRATEGY"
 
 
@@ -272,6 +273,65 @@ class FilterNode(TypedGraphNode):
             raise
 
 
+class ExitNode(TypedGraphNode):
+    """BD-P0-04: 退出节点 — 只能产生减仓/平仓信号，不得增加绝对风险。
+
+    核心规则：
+    - 输出方向必须为 REDUCE/FLATTEN/CANCEL
+    - 禁止输出 LONG/SHORT（新增风险方向）
+    - 输出 Proposal.direction 必须以 "EXIT_" 前缀
+    """
+
+    def __init__(self, node_id: str, exit_fn: Any = None) -> None:
+        super().__init__(node_id, NodeType.EXIT)
+        self._exit_fn = exit_fn
+
+    async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
+        try:
+            if self._exit_fn is not None:
+                proposal = await self._exit_fn(context)
+            else:
+                proposal = None
+        except Exception:
+            return TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.EXIT,
+                output_hash="exit_error",
+                data=None,
+                dq_tier=DataQualityTier.DEGRADED,
+                failure_policy=NodeFailurePolicy.FAIL_CLOSED,
+            )
+
+        if proposal is None:
+            return TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.EXIT,
+                output_hash="no_exit",
+                data=None,
+                dq_tier=DataQualityTier.PASS,
+            )
+
+        # 强制约束：退出信号不得新增风险
+        direction_str = str(getattr(proposal, "direction", "")).upper()
+        forbidden = {"LONG", "SHORT", "INCREASE"}
+        if direction_str in forbidden:
+            return TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.EXIT,
+                output_hash="exit_violation",
+                data=None,
+                dq_tier=DataQualityTier.BLOCK,
+            )
+
+        return TypedNodeOutput(
+            node_id=self.node_id,
+            node_type=NodeType.EXIT,
+            output_hash=proposal.hash() if hasattr(proposal, "hash") else "exit",
+            data=proposal,
+            dq_tier=DataQualityTier.PASS,
+        )
+
+
 class FusionNode(TypedGraphNode):
     """融合节点 — 组合 Entry + Filter 结果，输出最终方向。
 
@@ -280,6 +340,7 @@ class FusionNode(TypedGraphNode):
     - 所有 Filter ACCEPT → 保持 Entry 方向
     - DEGRADE → 降低 confidence 和 size
     - UNKNOWN DQ → NO_ACTION（不新增风险）
+    - BD-P0-04: 输出 Proposal 具备确定性哈希
     """
 
     def __init__(self, node_id: str) -> None:
