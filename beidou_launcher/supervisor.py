@@ -1,531 +1,493 @@
-"""Foreground supervisor for the Beidou Autopilot process."""
+"""北斗引擎启动监督、自动降级、恢复和锁定。"""
 
 from __future__ import annotations
 
-import json
+import asyncio
 import os
 import signal
-import subprocess
-import sys
 import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from .checks import PreflightChecker, find_project_root
-from .manifest import EXPECTED_FACTOR_COUNT, HEALTH_PORT
-from .models import CheckReport, CheckResult, CheckStatus
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeSnapshot:
-    """Evidence captured from the child process at one point in time."""
-
-    captured_at: float
-    ready: dict[str, Any]
-    status: dict[str, Any]
-    metrics: dict[str, float]
-
-    @property
-    def tick_count(self) -> float:
-        return self.metrics.get("beidou_tick_count", -1.0)
-
-    @property
-    def error_count(self) -> float:
-        return self.metrics.get("beidou_error_count", -1.0)
-
-    @property
-    def active_factors(self) -> float:
-        return self.metrics.get("beidou_active_factors", -1.0)
-
-
-def _critical_incidents(incidents: Any) -> list[dict[str, Any]]:
-    if not isinstance(incidents, list):
-        return []
-    critical: list[dict[str, Any]] = []
-    for incident in incidents:
-        if not isinstance(incident, dict):
-            continue
-        severity = str(incident.get("severity", incident.get("level", ""))).upper()
-        if severity in {"CRITICAL", "LOCKDOWN", "P0"}:
-            critical.append(incident)
-    return critical
-
-
-def evaluate_runtime_snapshots(
-    first: RuntimeSnapshot,
-    second: RuntimeSnapshot,
-    expected_mode: str,
-) -> CheckReport:
-    """Evaluate runtime truth using two time-separated snapshots."""
-
-    report = CheckReport(phase="runtime-verification", mode=expected_mode)
-    lifecycle = str(second.status.get("lifecycle_state", "UNKNOWN"))
-    actual_mode = str(second.status.get("mode", "UNKNOWN"))
-    control_action = str(second.status.get("control_action", "UNKNOWN"))
-    ready = bool(second.ready.get("ready", False))
-    critical = _critical_incidents(second.status.get("active_incidents", []))
-
-    report.results.extend(
-        [
-            CheckResult(
-                code="RT-PROCESS-READY",
-                subject="运行就绪",
-                status=CheckStatus.PASS if ready else CheckStatus.FAIL,
-                message="/ready 返回 ready=true" if ready else "/ready 未通过",
-                evidence={"ready": second.ready},
-            ),
-            CheckResult(
-                code="RT-LIFECYCLE",
-                subject="生命周期",
-                status=CheckStatus.PASS if lifecycle == "ACTIVE" else CheckStatus.FAIL,
-                message=f"生命周期状态 {lifecycle}",
-                evidence={"lifecycle_state": lifecycle},
-            ),
-            CheckResult(
-                code="RT-MODE",
-                subject="运行模式一致性",
-                status=CheckStatus.PASS if actual_mode == expected_mode else CheckStatus.FAIL,
-                message=f"请求 {expected_mode}, 实际 {actual_mode}",
-                evidence={"expected": expected_mode, "actual": actual_mode},
-            ),
-            CheckResult(
-                code="RT-TICK-PROGRESS",
-                subject="实时时钟心跳",
-                status=(
-                    CheckStatus.PASS
-                    if first.tick_count >= 0 and second.tick_count > first.tick_count
-                    else CheckStatus.FAIL
-                ),
-                message=f"tick_count {first.tick_count:g} → {second.tick_count:g}",
-                evidence={"first": first.tick_count, "second": second.tick_count},
-            ),
-            CheckResult(
-                code="RT-ERROR-DELTA",
-                subject="异常计数",
-                status=(
-                    CheckStatus.PASS
-                    if first.error_count >= 0 and second.error_count <= first.error_count
-                    else CheckStatus.FAIL
-                ),
-                message=f"error_count {first.error_count:g} → {second.error_count:g}",
-                evidence={"first": first.error_count, "second": second.error_count},
-            ),
-            CheckResult(
-                code="RT-FACTORS",
-                subject="运行中因子",
-                status=(
-                    CheckStatus.PASS if second.active_factors >= EXPECTED_FACTOR_COUNT else CheckStatus.FAIL
-                ),
-                message=f"active_factors={second.active_factors:g}",
-                evidence={"expected_minimum": EXPECTED_FACTOR_COUNT},
-            ),
-            CheckResult(
-                code="RT-INCIDENTS",
-                subject="活动事故",
-                status=CheckStatus.PASS if not critical else CheckStatus.FAIL,
-                message="无 P0/CRITICAL 活动事故" if not critical else f"发现 {len(critical)} 个关键事故",
-                evidence={"critical_incidents": critical},
-            ),
-        ]
-    )
-
-    expected_control = "RESUME" if expected_mode in {"paper", "testnet"} else "NO_NEW_RISK"
-    report.results.append(
-        CheckResult(
-            code="RT-CONTROL",
-            subject="控制面",
-            status=CheckStatus.PASS if control_action == expected_control else CheckStatus.FAIL,
-            message=f"控制状态 {control_action}, 期望 {expected_control}",
-            evidence={"expected": expected_control, "actual": control_action},
-        )
-    )
-    return report.finish()
-
-
-def parse_prometheus_metrics(text: str) -> dict[str, float]:
-    """Parse the numeric subset emitted by the built-in metrics endpoint."""
-
-    metrics: dict[str, float] = {}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "{" in line:
-            continue
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        try:
-            metrics[parts[0]] = float(parts[1])
-        except ValueError:
-            continue
-    return metrics
-
-
-class SingleInstanceLock:
-    """Atomic supervisor ownership record with stale-process detection."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-
-    @staticmethod
-    def _pid_alive(pid: int) -> bool:
-        if pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        return True
-
-    def read(self) -> dict[str, Any]:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
-
-    def acquire(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        existing = self.read()
-        existing_pid = int(existing.get("supervisor_pid", 0) or 0)
-        if existing and self._pid_alive(existing_pid):
-            raise RuntimeError(f"Beidou supervisor is already running (pid={existing_pid})")
-        if self.path.exists():
-            self.path.unlink()
-        fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, ensure_ascii=False, indent=2)
-        except Exception:
-            self.path.unlink(missing_ok=True)
-            raise
-
-    def update(self, data: dict[str, Any]) -> None:
-        temp_path = self.path.with_suffix(".tmp")
-        temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp_path, self.path)
-
-    def release(self) -> None:
-        self.path.unlink(missing_ok=True)
+from .models import CheckResult, StartupReport
+from .preflight import current_commit, run_preflight
+from .registry import inspect_engine_wiring
+from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
+from .state import EvidenceWriter, InstanceLock
 
 
 class BeidouSupervisor:
-    """Start, verify and continuously supervise the existing Autopilot entrypoint."""
-
     def __init__(
         self,
+        *,
+        project_root: Path,
         mode: str,
         symbols: list[str],
-        startup_timeout: int = 180,
-        poll_interval: int = 10,
+        port: int,
+        startup_timeout: float = 300.0,
+        monitor_interval: float = 5.0,
         self_heal: bool = True,
         max_restarts: int = 2,
     ) -> None:
+        self.project_root = project_root
         self.mode = mode
         self.symbols = symbols
+        self.port = port
         self.startup_timeout = startup_timeout
-        self.poll_interval = poll_interval
+        self.monitor_interval = monitor_interval
         self.self_heal = self_heal
         self.max_restarts = max_restarts
-        self.root = find_project_root()
-        self.runtime_dir = self.root / ".beidou"
-        self.evidence_dir = self.root / "evidence" / "BD-STARTUP"
-        self.log_path = self.root / "logs" / "beidou-autopilot.log"
-        self.lock = SingleInstanceLock(self.runtime_dir / "supervisor.json")
-        self.child: subprocess.Popen[bytes] | None = None
-        self._stop_requested = False
-        self._restart_count = 0
-        self._last_snapshot: RuntimeSnapshot | None = None
-        self._consecutive_runtime_failures = 0
-
-    @property
-    def endpoint(self) -> str:
-        return f"http://127.0.0.1:{HEALTH_PORT}"
-
-    def run(self) -> int:
-        preflight = PreflightChecker(self.mode, self.symbols).run()
-        self._persist_report(preflight)
-        self._print_report(preflight)
-        if not preflight.passed:
-            print("[beidou] 启动已阻断：启动前自检存在关键失败。")
-            return 2
-
-        identity = {
-            "supervisor_pid": os.getpid(),
-            "child_pid": 0,
-            "mode": self.mode,
-            "symbols": self.symbols,
-            "endpoint": self.endpoint,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "log_path": str(self.log_path),
-        }
-        try:
-            self.lock.acquire(identity)
-        except RuntimeError as exc:
-            print(f"[beidou] {exc}")
-            return 3
-
-        self._install_signal_handlers()
-        try:
-            if not self._start_and_verify(identity):
-                return 4
-            return self._monitor(identity)
-        finally:
-            self._stop_child()
-            self.lock.release()
-
-    def _start_and_verify(self, identity: dict[str, Any]) -> bool:
-        self._spawn_child()
-        assert self.child is not None
-        identity["child_pid"] = self.child.pid
-        identity["restart_count"] = self._restart_count
-        self.lock.update(identity)
-
-        first = self._wait_for_snapshot()
-        if first is None:
-            report = CheckReport(phase="runtime-verification", mode=self.mode)
-            report.results.append(
-                CheckResult(
-                    code="RT-STARTUP-TIMEOUT",
-                    subject="Autopilot 启动",
-                    status=CheckStatus.FAIL,
-                    message=f"{self.startup_timeout}s 内未获得可解析健康端点",
-                    evidence={"log_path": str(self.log_path)},
-                )
-            )
-            report.finish()
-            self._persist_report(report)
-            self._print_report(report)
-            self._stop_child()
-            return False
-
-        time.sleep(6)
-        second = self._collect_snapshot()
-        if second is None:
-            report = CheckReport(phase="runtime-verification", mode=self.mode)
-            report.results.append(
-                CheckResult(
-                    code="RT-ENDPOINT-LOST",
-                    subject="Autopilot 健康端点",
-                    status=CheckStatus.FAIL,
-                    message="首次响应后健康端点丢失",
-                )
-            )
-            report.finish()
-        else:
-            report = evaluate_runtime_snapshots(first, second, self.mode)
-            self._last_snapshot = second
-
-        self._persist_report(report)
-        self._print_report(report)
-        if not report.passed:
-            self._stop_child()
-            return False
-
-        print(
-            f"[beidou] ✅ 北斗已通过双阶段自检并进入持续巡检。"
-            f" mode={self.mode} pid={self.child.pid} endpoint={self.endpoint}"
-        )
-        print(f"[beidou] 日志: {self.log_path}")
-        return True
-
-    def _spawn_child(self) -> None:
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable,
-            "-m",
-            "apps.autopilot",
-            "--mode",
-            self.mode,
-            "--symbols",
-            ",".join(self.symbols),
-            "--port",
-            str(HEALTH_PORT),
-        ]
-        with self.log_path.open("ab", buffering=0) as log_handle:
-            self.child = subprocess.Popen(
-                command,
-                cwd=self.root,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-
-    def _wait_for_snapshot(self) -> RuntimeSnapshot | None:
-        deadline = time.monotonic() + self.startup_timeout
-        while time.monotonic() < deadline and not self._stop_requested:
-            if self.child is None or self.child.poll() is not None:
-                return None
-            snapshot = self._collect_snapshot()
-            if snapshot is not None:
-                return snapshot
-            time.sleep(1)
-        return None
-
-    def _monitor(self, identity: dict[str, Any]) -> int:
-        while not self._stop_requested:
-            time.sleep(self.poll_interval)
-            if self.child is None or self.child.poll() is not None:
-                if self._maybe_restart(identity, reason="child process exited"):
-                    continue
-                print("[beidou] ❌ Autopilot 进程退出，Supervisor 停止。")
-                return 5
-
-            current = self._collect_snapshot()
-            if current is None or self._last_snapshot is None:
-                self._consecutive_runtime_failures += 1
-                reason = "health endpoint unavailable"
-            else:
-                report = evaluate_runtime_snapshots(self._last_snapshot, current, self.mode)
-                self._persist_report(report, suffix="runtime")
-                failures = [
-                    result
-                    for result in report.results
-                    if result.critical and result.status == CheckStatus.FAIL
-                ]
-                if failures:
-                    self._consecutive_runtime_failures += 1
-                    reason = "; ".join(f"{item.code}:{item.message}" for item in failures)
-                else:
-                    self._consecutive_runtime_failures = 0
-                    reason = ""
-                self._last_snapshot = current
-
-            if self._consecutive_runtime_failures >= 3:
-                print(f"[beidou] ❌ 连续运行异常: {reason}")
-                if self._maybe_restart(identity, reason=reason):
-                    continue
-                return 6
-
-        print("[beidou] 收到停止信号，执行安全关闭。")
-        return 0
-
-    def _maybe_restart(self, identity: dict[str, Any], reason: str) -> bool:
-        if self.mode == "testnet":
-            print("[beidou] Testnet 异常采用 fail-closed：停止进程，不自动恢复风险增加路径。")
-            self._stop_child()
-            return False
-        if not self.self_heal or self._restart_count >= self.max_restarts:
-            self._stop_child()
-            return False
-
-        self._restart_count += 1
-        print(f"[beidou] 尝试自愈重启 {self._restart_count}/{self.max_restarts}: {reason}")
-        self._stop_child()
-        self._consecutive_runtime_failures = 0
-        self._last_snapshot = None
-        time.sleep(min(5 * self._restart_count, 15))
-        return self._start_and_verify(identity)
-
-    def _collect_snapshot(self) -> RuntimeSnapshot | None:
-        try:
-            ready = self._get_json("/ready")
-            status = self._get_json("/status")
-            metrics_text = self._get_text("/metrics")
-        except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-            return None
-        return RuntimeSnapshot(
-            captured_at=time.time(),
-            ready=ready,
-            status=status,
-            metrics=parse_prometheus_metrics(metrics_text),
-        )
-
-    def _get_json(self, path: str) -> dict[str, Any]:
-        request = urllib.request.Request(f"{self.endpoint}{path}", method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=3) as response:  # noqa: S310 - localhost only
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8")
-            return json.loads(body)
-
-    def _get_text(self, path: str) -> str:
-        request = urllib.request.Request(f"{self.endpoint}{path}", method="GET")
-        with urllib.request.urlopen(request, timeout=3) as response:  # noqa: S310 - localhost only
-            return response.read().decode("utf-8")
-
-    def _stop_child(self) -> None:
-        child = self.child
-        if child is None or child.poll() is not None:
-            self.child = None
-            return
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            self.child = None
-            return
-        try:
-            child.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            child.wait(timeout=5)
-        self.child = None
-
-    def _install_signal_handlers(self) -> None:
-        def _request_stop(signum: int, _frame: Any) -> None:
-            del signum
-            self._stop_requested = True
-
-        signal.signal(signal.SIGINT, _request_stop)
-        signal.signal(signal.SIGTERM, _request_stop)
-
-    def _persist_report(self, report: CheckReport, suffix: str = "") -> None:
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        filename = f"{timestamp}-{report.phase}{('-' + suffix) if suffix else ''}.json"
-        path = self.evidence_dir / filename
-        path.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        self.writer = EvidenceWriter(project_root)
+        self.lock = InstanceLock(project_root / ".beidou" / "beidou.pid")
+        self.report = StartupReport(mode=mode, symbols=symbols, port=port, commit=current_commit(project_root))
+        self.engine: Any | None = None
+        self._engine_task: asyncio.Task[Any] | None = None
+        self._resume_authorized = False
+        self._critical_streak = 0
+        self._last_error_count = 0
+        self._algorithm_probe: dict[str, Any] = {}
+        self._last_algorithm_probe_attempt = 0.0
+        self._exchange_algo_snapshot: dict[str, Any] = {"ok": mode != "testnet", "by_symbol": {}}
+        self._last_exchange_algo_probe = 0.0
+        self._exchange_account_snapshot: dict[str, Any] = {"ok": False}
+        self._last_exchange_account_probe = 0.0
+        self._shutdown_requested = False
+        self._control_paused_by_supervisor = False
+        self._engine_failure = ""
+        self._recovery_count = 0
 
     @staticmethod
-    def _print_report(report: CheckReport) -> None:
-        print(f"[beidou] === {report.phase} ===")
-        for result in report.results:
-            symbol = {CheckStatus.PASS: "✅", CheckStatus.WARN: "⚠️", CheckStatus.FAIL: "❌"}[result.status]
-            print(f"[beidou] {symbol} {result.code} {result.subject}: {result.message}")
-        print(
-            f"[beidou] result={'PASS' if report.passed else 'FAIL'} "
-            f"failures={report.failure_count} warnings={report.warning_count}"
+    def _print_checks(checks: list[CheckResult]) -> None:
+        for item in checks:
+            marker = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "UNKNOWN": "❔"}[item.status.value]
+            print(f"{marker} [{item.severity.value}] {item.name}: {item.message}")
+
+    def _install_exchange_write_interlock(self) -> None:
+        """在非写模式从引擎 API 边界拦截所有交易所写请求。"""
+        assert self.engine is not None
+        original_async = self.engine._api_async
+        original_sync = self.engine._api
+        self.engine._supervisor_blocked_writes = []
+
+        def record(path: str, method: str) -> dict[str, Any]:
+            event = {"path": path, "method": method.upper(), "mode": self.mode, "timestamp": time.time()}
+            self.engine._supervisor_blocked_writes.append(event)
+            return {
+                "code": -3,
+                "error": -3,
+                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {self.mode}",
+            }
+
+        async def guarded_async(
+            path: str,
+            method: str = "GET",
+            signed: bool = False,
+            params: dict[str, Any] | None = None,
+        ) -> Any:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+                return record(path, method)
+            return await original_async(path, method=method, signed=signed, params=params)
+
+        def guarded_sync(
+            path: str,
+            method: str = "GET",
+            signed: bool = False,
+            params: dict[str, Any] | None = None,
+        ) -> Any:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+                return record(path, method)
+            return original_sync(path, method=method, signed=signed, params=params)
+
+        self.engine._api_async = guarded_async
+        self.engine._api = guarded_sync
+
+    def _install_resume_interlock(self) -> None:
+        """在深度启动门禁通过前阻止引擎内部自动 RESUME。"""
+        from beidou_control.plane import ControlAction
+
+        assert self.engine is not None
+        control = self.engine._control
+        original = control.execute_action
+
+        def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
+            if action == ControlAction.RESUME and not self._resume_authorized:
+                return original(ControlAction.NO_NEW_RISK)
+            return original(action, *args, **kwargs)
+
+        control.execute_action = guarded_execute
+        control.execute_action(ControlAction.NO_NEW_RISK)
+        self._control_paused_by_supervisor = True
+
+    def _control_state(self) -> str:
+        if self.engine is None:
+            return "UNKNOWN"
+        try:
+            status = self.engine._control.get_status()
+            return str(getattr(status, "value", status))
+        except Exception:
+            return "UNKNOWN"
+
+    def _is_trading_ready(self) -> bool:
+        return (
+            self._resume_authorized
+            and not self.report.blockers
+            and self._control_state() == "RESUME"
+            and self.report.supervisor_state not in {"FAILED", "LOCKED", "STOPPED"}
         )
 
-    @classmethod
-    def status(cls) -> int:
-        root = find_project_root()
-        lock = SingleInstanceLock(root / ".beidou" / "supervisor.json")
-        data = lock.read()
-        if not data:
-            print("[beidou] 未发现运行中的 Supervisor。")
-            return 1
-        supervisor_pid = int(data.get("supervisor_pid", 0) or 0)
-        child_pid = int(data.get("child_pid", 0) or 0)
-        status = {
-            **data,
-            "supervisor_alive": lock._pid_alive(supervisor_pid),
-            "child_alive": lock._pid_alive(child_pid),
-        }
-        print(json.dumps(status, ensure_ascii=False, indent=2))
+    def _install_health_callbacks(self) -> None:
+        """让 HTTP readiness 与监督器证据保持一致。"""
+        assert self.engine is not None
+
+        def readiness() -> bool:
+            return bool(self.engine._check_ready()) and self.report.supervisor_state == "RUNNING"
+
+        def trading_readiness() -> tuple[bool, str]:
+            ready = self._is_trading_ready()
+            if ready:
+                return True, "SUPERVISOR_VALIDATED"
+            if self.report.blockers:
+                return False, self.report.blockers[0].check_id
+            return False, f"CONTROL_{self._control_state()}"
+
+        def status_info() -> dict[str, Any]:
+            base = dict(self.engine._get_status_info())
+            base["supervisor"] = {
+                "state": self.report.supervisor_state,
+                "phase": self.report.phase,
+                "trading_ready": self._is_trading_ready(),
+                "control_state": self._control_state(),
+                "commit": self.report.commit,
+                "blockers": [item.check_id for item in self.report.blockers],
+                "checks": {item.check_id: item.status.value for item in self.report.checks},
+            }
+            return base
+
+        self.engine._health.set_readiness_check(readiness)
+        self.engine._health.set_trading_readiness(trading_readiness)
+        self.engine._health.set_status_info(status_info)
+
+    async def _refresh_exchange_account_snapshot(self) -> None:
+        """独立读取当前账户事实，拒绝使用陈旧的引擎缓存作为就绪证据。"""
+        if self.engine is None:
+            return
+        now = time.monotonic()
+        if now - self._last_exchange_account_probe < 15.0:
+            return
+        self._last_exchange_account_probe = now
+        try:
+            response = await self.engine._api_async("/fapi/v2/account", signed=True)
+            valid = (
+                isinstance(response, dict)
+                and "totalWalletBalance" in response
+                and isinstance(response.get("positions"), list)
+            )
+            if not valid:
+                raise RuntimeError(str(response)[:300])
+            self._exchange_account_snapshot = {"ok": True, "account": response, "observed_at": time.time()}
+        except Exception as exc:
+            self._exchange_account_snapshot = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "observed_at": time.time(),
+            }
+
+    async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
+        """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
+        if self.mode != "testnet" or self.engine is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_exchange_algo_probe < 15.0:
+            return
+        self._last_exchange_algo_probe = now
+        try:
+            response = await self.engine._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            if not isinstance(response, list):
+                raise RuntimeError(str(response)[:300])
+            by_symbol: dict[str, list[str]] = {}
+            for item in response:
+                symbol = str(item.get("symbol", ""))
+                algo_id = str(item.get("algoId", ""))
+                if symbol and algo_id:
+                    by_symbol.setdefault(symbol, []).append(algo_id)
+            self._exchange_algo_snapshot = {
+                "ok": True,
+                "by_symbol": by_symbol,
+                "total": sum(len(ids) for ids in by_symbol.values()),
+                "observed_at": time.time(),
+            }
+        except Exception as exc:
+            self._exchange_algo_snapshot = {
+                "ok": False,
+                "by_symbol": {},
+                "error": f"{type(exc).__name__}: {exc}",
+                "observed_at": time.time(),
+            }
+
+    def _runtime_checks(self) -> list[CheckResult]:
+        assert self.engine is not None
+        checks, error_count = collect_runtime_checks(
+            engine=self.engine,
+            mode=self.mode,
+            port=self.port,
+            resume_authorized=self._resume_authorized,
+            algorithm_probe=self._algorithm_probe,
+            last_error_count=self._last_error_count,
+            exchange_algo_snapshot=self._exchange_algo_snapshot,
+            exchange_account_snapshot=self._exchange_account_snapshot,
+        )
+        self._last_error_count = error_count
+        return checks
+
+    async def _wait_for_startup(self) -> bool:
+        assert self.engine is not None
+        assert self._engine_task is not None
+        deadline = time.monotonic() + self.startup_timeout
+        while time.monotonic() < deadline:
+            if self._engine_task.done():
+                try:
+                    await self._engine_task
+                except asyncio.CancelledError:
+                    self._engine_failure = "engine task cancelled"
+                except Exception as exc:
+                    self._engine_failure = f"{type(exc).__name__}: {exc}"
+                return False
+            lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
+            lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
+            health_thread = getattr(getattr(self.engine, "_health", None), "_thread", None)
+            if lifecycle_value == "ACTIVE" and self._shutdown_requested:
+                self.engine._running = False
+                return False
+            if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
+                if (
+                    not self._algorithm_probe.get("ok")
+                    and time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
+                ):
+                    self._last_algorithm_probe_attempt = time.monotonic()
+                    self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                await self._refresh_exchange_account_snapshot()
+                await self._refresh_exchange_algo_snapshot()
+                checks = self._runtime_checks()
+                self.report.phase = "STARTUP_VALIDATION"
+                self.report.replace_phase_checks("runtime.", checks)
+                self.writer.write(self.report)
+                if not self.report.blockers:
+                    return True
+            else:
+                self.report.phase = "ENGINE_STARTING"
+                self.report.supervisor_state = "STARTING"
+                self.writer.write(self.report)
+            await asyncio.sleep(1)
+        return False
+
+    async def _fail_closed(self, reason: str, fatal: bool = False) -> None:
+        if self.engine is None:
+            return
+        from beidou_control.plane import ControlAction
+        from beidou_lifecycle.lifecycle import ModuleState
+
+        previous_control = self._control_state()
+        with suppress(Exception):
+            self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
+        if previous_control == "RESUME":
+            self._control_paused_by_supervisor = True
+        lifecycle = self.engine._lifecycle
+        if fatal:
+            with suppress(Exception):
+                lifecycle.transition(ModuleState.LOCKED)
+            self.engine._running = False
+        elif str(getattr(lifecycle.state, "value", lifecycle.state)) == "ACTIVE":
+            with suppress(Exception):
+                lifecycle.transition(ModuleState.DEGRADED)
+        print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
+
+    async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
+        """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。"""
+        if self.engine is None:
+            return False
+        lifecycle = self.engine._lifecycle
+        state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
+        non_lifecycle_blockers = [
+            item for item in checks if item.is_blocking and item.check_id != "runtime.health.lifecycle"
+        ]
+        if state_value != "DEGRADED" or non_lifecycle_blockers:
+            return False
+        if not self.self_heal or self._recovery_count >= self.max_restarts:
+            return False
+
+        from beidou_control.plane import ControlAction
+        from beidou_lifecycle.lifecycle import ModuleState
+
+        for target in (ModuleState.RECOVERING, ModuleState.VALIDATING, ModuleState.ACTIVE):
+            result = lifecycle.transition(target)
+            if str(getattr(result, "value", result)) != "SUCCESS":
+                return False
+        if self._control_paused_by_supervisor:
+            self.engine._control.execute_action(ControlAction.RESUME)
+            self._control_paused_by_supervisor = False
+        self._critical_streak = 0
+        self._recovery_count += 1
+        print(
+            f"[supervisor] RECOVERED: RECOVERING → VALIDATING → ACTIVE "
+            f"({self._recovery_count}/{self.max_restarts})"
+        )
+        return True
+
+    async def _monitor(self) -> int:
+        assert self._engine_task is not None
+        fatal_triggered = False
+        while not self._engine_task.done():
+            await asyncio.sleep(self.monitor_interval)
+            await self._refresh_exchange_account_snapshot()
+            await self._refresh_exchange_algo_snapshot()
+            checks = self._runtime_checks()
+            if await self._recover_if_validated(checks):
+                checks = self._runtime_checks()
+            self.report.phase = "RUNTIME_MONITORING"
+            self.report.replace_phase_checks("runtime.", checks)
+            blockers = self.report.blockers
+            if blockers:
+                self._critical_streak += 1
+                fatal_triggered = self._critical_streak >= 3
+                await self._fail_closed(
+                    "; ".join(f"{item.check_id}:{item.message}" for item in blockers),
+                    fatal=fatal_triggered,
+                )
+            else:
+                self._critical_streak = 0
+            if fatal_triggered:
+                self.report.supervisor_state = "LOCKED"
+            elif blockers:
+                self.report.supervisor_state = "DEGRADED"
+            elif self._control_state() != "RESUME":
+                self.report.supervisor_state = "PAUSED"
+            else:
+                self.report.supervisor_state = "RUNNING"
+            self.report.trading_ready = self._is_trading_ready()
+            self.writer.write(self.report)
+        try:
+            await self._engine_task
+        except asyncio.CancelledError:
+            self._engine_failure = "engine task cancelled"
+        except Exception as exc:
+            self._engine_failure = f"{type(exc).__name__}: {exc}"
+
+        self.report.trading_ready = False
+        self.report.phase = "STOPPED"
+        lifecycle = None
+        if self.engine is not None:
+            lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
+        lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
+        if fatal_triggered or lifecycle_value in {"LOCKED", "FAILED"}:
+            self.report.supervisor_state = "LOCKED" if lifecycle_value == "LOCKED" else "FAILED"
+            self.writer.write(self.report)
+            return 5
+        if self._engine_failure:
+            self.report.supervisor_state = "FAILED"
+            self.writer.write(self.report)
+            return 6
+        self.report.supervisor_state = "STOPPED"
+        self.writer.write(self.report)
         return 0
 
-    @classmethod
-    def stop(cls) -> int:
-        root = find_project_root()
-        lock = SingleInstanceLock(root / ".beidou" / "supervisor.json")
-        data = lock.read()
-        if not data:
-            print("[beidou] 未发现运行中的 Supervisor。")
-            return 1
-        supervisor_pid = int(data.get("supervisor_pid", 0) or 0)
-        if not lock._pid_alive(supervisor_pid):
-            lock.release()
-            print("[beidou] 清理了失效运行锁。")
-            return 0
-        os.kill(supervisor_pid, signal.SIGTERM)
-        print(f"[beidou] 已向 Supervisor pid={supervisor_pid} 发送安全停止信号。")
-        return 0
+    async def run(self) -> int:
+        os.chdir(self.project_root)
+        os.environ["BEIDOU_ENV"] = self.mode
+        locked, lock_message = self.lock.acquire()
+        if not locked:
+            print(f"❌ {lock_message}")
+            return 3
+
+        try:
+            print("=" * 72)
+            print("北斗一键启动监督器 / Beidou One-Click Supervisor")
+            print(f"mode={self.mode} symbols={','.join(self.symbols)} port={self.port}")
+            print("=" * 72)
+
+            preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
+            self.report.phase = "PREFLIGHT"
+            self.report.replace_phase_checks("preflight.", preflight)
+            self._print_checks(preflight)
+            self.writer.write(self.report)
+            if self.report.blockers:
+                self.report.supervisor_state = "BLOCKED"
+                self.writer.write(self.report)
+                print("❌ 启动前置检查未通过，系统未启动。")
+                return 2
+
+            from beidou_core.engine import AutonomousEngine
+
+            self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
+            self.engine._health._port = self.port
+            self.engine._last_realtime = 0.0
+            self.engine._last_recon = 0.0
+            self._install_exchange_write_interlock()
+            self._install_resume_interlock()
+            self._install_health_callbacks()
+
+            wiring = inspect_engine_wiring(self.engine, self.mode)
+            self.report.phase = "CONSTRUCTION_VALIDATION"
+            self.report.replace_phase_checks("runtime.", wiring)
+            self._print_checks(wiring)
+            self.writer.write(self.report)
+            if self.report.blockers:
+                self.report.supervisor_state = "BLOCKED"
+                self.writer.write(self.report)
+                print("❌ 模块或算法接线不完整，系统未进入运行循环。")
+                return 2
+
+            loop = asyncio.get_running_loop()
+
+            def request_shutdown() -> None:
+                self._shutdown_requested = True
+                if self.engine is not None:
+                    lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
+                    if str(getattr(lifecycle, "value", lifecycle)) == "ACTIVE":
+                        self.engine._running = False
+
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                with suppress(NotImplementedError, RuntimeError):
+                    loop.add_signal_handler(sig, request_shutdown)
+
+            self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
+            ready = await self._wait_for_startup()
+            if not ready:
+                if self._shutdown_requested:
+                    self.report.supervisor_state = "STOPPED"
+                    self.report.trading_ready = False
+                    self.writer.write(self.report)
+                    print("[supervisor] 启动阶段收到停止请求，安全退出。")
+                    return 0
+                failure_reason = self._engine_failure or "启动超时或引擎提前退出"
+                await self._fail_closed(failure_reason, fatal=True)
+                self.report.supervisor_state = "FAILED"
+                self.report.trading_ready = False
+                self.writer.write(self.report)
+                print("❌ 深度启动自检未通过。")
+                return 4
+
+            self._resume_authorized = True
+            from beidou_control.plane import ControlAction
+
+            self.engine._control.execute_action(ControlAction.RESUME)
+            self._control_paused_by_supervisor = False
+            self.report.supervisor_state = "RUNNING"
+            self.report.trading_ready = self._is_trading_ready()
+            self.report.phase = "RUNTIME_MONITORING"
+            self.writer.write(self.report)
+            print("✅ 深度启动自检通过：环境、模块、算法、数据、账户与安全门禁均已验证。")
+            print(f"✅ 状态: http://127.0.0.1:{self.port}/status")
+            print(f"✅ 证据: {self.writer.state_path}")
+            return await self._monitor()
+        finally:
+            if self.engine is not None:
+                self.engine._running = False
+            if self._engine_task is not None and not self._engine_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._engine_task), timeout=30.0)
+                except TimeoutError:
+                    self._engine_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await self._engine_task
+            self.lock.release()
