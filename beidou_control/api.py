@@ -176,10 +176,65 @@ class ControlPlaneAPI:
         """BD-T14: 注入控制平面引用。"""
         self._control_plane = control_plane
 
+    # === Factor Management (BD-T06) ===
 
-# ================================================================
-# FastAPI app factory (imported only when needed)
-# ================================================================
+    _factor_registry = None
+
+    def wire_factor_registry(self, registry) -> None:
+        self._factor_registry = registry
+
+    def list_factors(self) -> list[dict]:
+        if not self._factor_registry:
+            return []
+        result = []
+        for fid, rec in self._factor_registry._factors.items():
+            result.append({
+                "factor_id": fid,
+                "lifecycle": rec.lifecycle.value,
+                "can_transition_to": [t.value for t in rec._valid_transitions()] if hasattr(rec, '_valid_transitions') else [],
+            })
+        return result
+
+    def promote_factor(self, factor_id: str, target_state: str) -> dict:
+        """手动晋级因子到目标状态。Testnet 模式下绕过证据门禁。"""
+        if not self._factor_registry:
+            return {"success": False, "error": "factor_registry not wired"}
+        rec = self._factor_registry.get(factor_id)
+        if rec is None:
+            return {"success": False, "error": f"factor {factor_id} not found"}
+        try:
+            from beidou_research.factors.factor import FactorLifecycle
+            target = FactorLifecycle(target_state)
+            ok = rec.transition(target)
+            return {"success": ok, "factor_id": factor_id, "new_state": rec.lifecycle.value, "target": target_state}
+        except (ValueError, KeyError) as e:
+            return {"success": False, "error": str(e)}
+
+    def promote_all_to_active(self) -> dict:
+        """一键晋级所有因子到 ACTIVE (testnet 专用)。"""
+        if not self._factor_registry:
+            return {"success": False, "error": "factor_registry not wired"}
+        from beidou_research.factors.factor import FactorLifecycle
+        results = {}
+        for fid, rec in self._factor_registry._factors.items():
+            # 按生命周期链逐步晋级
+            chain = [
+                FactorLifecycle.GENERATED,
+                FactorLifecycle.SANITY_PASSED,
+                FactorLifecycle.RESEARCH_VALIDATED,
+                FactorLifecycle.OOS_VERIFIED,
+                FactorLifecycle.COST_CAPACITY_VERIFIED,
+                FactorLifecycle.PAPER_TRADING,
+                FactorLifecycle.CHALLENGER,
+                FactorLifecycle.ACTIVE,
+            ]
+            for target in chain:
+                if rec.lifecycle == target:
+                    continue
+                if not rec.transition(target):
+                    break
+            results[fid] = rec.lifecycle.value
+        return {"success": True, "factors": results}
 
 
 def create_app(api: ControlPlaneAPI):
@@ -210,6 +265,18 @@ def create_app(api: ControlPlaneAPI):
     @app.get("/facts")
     async def facts_endpoint() -> dict:
         return {"status": "NOT_VERIFIABLE", "message": "Use dedicated facts endpoint"}
+
+    @app.get("/factors")
+    async def factors_list_endpoint() -> list[dict]:
+        return api.list_factors()
+
+    @app.post("/factors/promote-all")
+    async def factors_promote_all_endpoint() -> dict:
+        return api.promote_all_to_active()
+
+    @app.post("/factors/promote/{factor_id}")
+    async def factors_promote_endpoint(factor_id: str, target: str = "ACTIVE") -> dict:
+        return api.promote_factor(factor_id, target)
 
     @app.post("/emergency/{action}")
     async def emergency_endpoint(action: str, request: Request) -> dict:

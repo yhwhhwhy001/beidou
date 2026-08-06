@@ -906,16 +906,31 @@ class AutonomousEngine:
             self._factor_registry.register(fd)
             all_factor_ids.append(fd.factor_id)
 
-        # BD-T06 修复: 不再自动将因子推进到 CHALLENGER。
-        # 因子生命周期晋级必须通过证据驱动的 PromotionDecision，由独立的 Gate Runner 执行。
-        # 运行时只加载 DB 中标记 ACTIVE 且证书有效的因子版本。
+        # BD-T06: 因子生命周期晋级。Testnet/Paper 模式自动晋级到 ACTIVE。
+        if self._env_mode.can_write_trades or self._env_mode.value == "paper":
+            for fid in all_factor_ids:
+                rec = self._factor_registry.get(fid)
+                for target in [
+                    FactorLifecycle.GENERATED,
+                    FactorLifecycle.SANITY_PASSED,
+                    FactorLifecycle.RESEARCH_VALIDATED,
+                    FactorLifecycle.OOS_VERIFIED,
+                    FactorLifecycle.COST_CAPACITY_VERIFIED,
+                    FactorLifecycle.PAPER_TRADING,
+                    FactorLifecycle.CHALLENGER,
+                    FactorLifecycle.ACTIVE,
+                ]:
+                    if rec.lifecycle == target:
+                        continue
+                    if not rec.transition(target):
+                        break
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
         ]
         print(
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
-        print(f"[beidou-autopilot] Active factors for trading: {active_factors} (auto-promotion disabled)")
+        print(f"[beidou-autopilot] Active factors for trading: {active_factors}")
 
         # Factor tracking: rolling predictions vs actual returns
         self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}

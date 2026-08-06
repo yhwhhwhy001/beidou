@@ -1,16 +1,16 @@
 {
   "control_action": "RESUME",
   "version": 2,
-  "updated_at": "2026-08-06T15:47:59.426723+00:00",
+  "updated_at": "2026-08-06T15:52:01.514631+00:00",
   "change_log": [
     {
-      "timestamp": "2026-08-06T15:47:57.425003+00:00",
+      "timestamp": "2026-08-06T15:51:59.512630+00:00",
       "old_state": "NO_NEW_RISK",
       "new_state": "NO_NEW_RISK",
       "version": 1
     },
     {
-      "timestamp": "2026-08-06T15:47:59.426520+00:00",
+      "timestamp": "2026-08-06T15:52:01.514513+00:00",
       "old_state": "NO_NEW_RISK",
       "new_state": "RESUME",
       "version": 2
