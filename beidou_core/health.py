@@ -92,11 +92,14 @@ class HealthServer:
                     # BD-P1-15: Liveness — 进程存活
                     liveness = server._liveness_check()
                     code = 200 if liveness in (HealthState.HEALTHY, HealthState.DEGRADED) else 503
-                    self._send_json(code, {
-                        "status": liveness.value,
-                        "uptime_seconds": round(server.uptime_seconds(), 1),
-                        "version": "2.0.0",
-                    })
+                    self._send_json(
+                        code,
+                        {
+                            "status": liveness.value,
+                            "uptime_seconds": round(server.uptime_seconds(), 1),
+                            "version": "2.0.0",
+                        },
+                    )
                 elif self.path == "/ready":
                     ready = server._readiness_check()
                     status_info = server._status_info()
@@ -133,15 +136,18 @@ class HealthServer:
                     liveness = server._liveness_check()
                     trading_ready, tr_reason = server._trading_readiness_check()
                     exit_ready, ex_reason = server._exit_readiness_check()
-                    self._send_json(200, {
-                        "uptime_seconds": round(server.uptime_seconds(), 1),
-                        "liveness": liveness.value,
-                        **status_info,
-                        "trading_ready": trading_ready,
-                        "trading_ready_reason": tr_reason,
-                        "exit_ready": exit_ready,
-                        "exit_ready_reason": ex_reason,
-                    })
+                    self._send_json(
+                        200,
+                        {
+                            "uptime_seconds": round(server.uptime_seconds(), 1),
+                            "liveness": liveness.value,
+                            **status_info,
+                            "trading_ready": trading_ready,
+                            "trading_ready_reason": tr_reason,
+                            "exit_ready": exit_ready,
+                            "exit_ready_reason": ex_reason,
+                        },
+                    )
                 else:
                     self._send_json(404, {"error": "not found"})
 

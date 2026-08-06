@@ -79,11 +79,31 @@ from beidou_data.trading_pool_lifecycle import TradingPool, PoolStatus, Instrume
 
 # Binance USDⓈ-M 永续合约交易池 — 主流 + 活跃altcoin
 DEFAULT_UNIVERSE = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
-    "MATICUSDT", "UNIUSDT", "ATOMUSDT", "LTCUSDT", "ETCUSDT",
-    "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "NEARUSDT",
-    "INJUSDT", "SUIUSDT", "RUNEUSDT", "SEIUSDT", "TIAUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "DOTUSDT",
+    "LINKUSDT",
+    "MATICUSDT",
+    "UNIUSDT",
+    "ATOMUSDT",
+    "LTCUSDT",
+    "ETCUSDT",
+    "FILUSDT",
+    "APTUSDT",
+    "ARBUSDT",
+    "OPUSDT",
+    "NEARUSDT",
+    "INJUSDT",
+    "SUIUSDT",
+    "RUNEUSDT",
+    "SEIUSDT",
+    "TIAUSDT",
 ]
 
 # ================================================================
@@ -110,6 +130,7 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
     base = strength * 0.02  # 基础: 2% of signal strength
     return base * vol_penalty * spread_penalty
+
 
 # ================================================================
 # 具体 AlphaComponent 实现
@@ -720,7 +741,7 @@ class AutonomousEngine:
         # === 交易池 — 动态标的管理 ===
         self._trading_pool = TradingPool(max_instruments=50)
         # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE 需经过评分）
-        for sym in (symbols if len(symbols) > 2 else DEFAULT_UNIVERSE):
+        for sym in symbols if len(symbols) > 2 else DEFAULT_UNIVERSE:
             entry = self._trading_pool.add(sym)
             # 种子评分：给初始信任，让标的进入 PROMOTED
             seed_score = InstrumentScore(
@@ -1005,6 +1026,7 @@ class AutonomousEngine:
             return result.data
         err = result.error
         return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+
     async def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
         """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
 
@@ -1033,6 +1055,7 @@ class AutonomousEngine:
         if binance_code is None and isinstance(resp.get("msg"), str):
             try:
                 import json
+
                 inner = json.loads(resp["msg"])
                 binance_code = inner.get("code")
             except (json.JSONDecodeError, KeyError):
@@ -1114,7 +1137,9 @@ class AutonomousEngine:
         self._last_realtime = time.time()
 
         if self._tick_count % 3 == 0:
-            print(f"[realtime] TICK #{self._tick_count} — outbox id={id(self._outbox)} items={len(self._outbox._outbox)}")
+            print(
+                f"[realtime] TICK #{self._tick_count} — outbox id={id(self._outbox)} items={len(self._outbox._outbox)}"
+            )
 
         try:
             active_symbols = self._trading_pool.active_instruments()
@@ -1145,7 +1170,7 @@ class AutonomousEngine:
                     result = self._protection.check_price(pos_id, price)
                     if result["triggered"]:
                         for sl in result["stop_loss"]:
-                            sl_symbol = str(sl.instrument_id) if hasattr(sl, 'instrument_id') else symbol
+                            sl_symbol = str(sl.instrument_id) if hasattr(sl, "instrument_id") else symbol
                             self._alerts.send_incident(
                                 AlertSeverity.HIGH,
                                 f"Stop Loss triggered: {sl_symbol}",
@@ -1155,7 +1180,7 @@ class AutonomousEngine:
                             if self._can_write:
                                 await self._execute_protection_order(sl, sl_symbol)
                         for tp in result["take_profit"]:
-                            tp_symbol = str(tp.instrument_id) if hasattr(tp, 'instrument_id') else symbol
+                            tp_symbol = str(tp.instrument_id) if hasattr(tp, "instrument_id") else symbol
                             if self._can_write:
                                 await self._execute_protection_order(tp, tp_symbol)
 
@@ -1181,7 +1206,9 @@ class AutonomousEngine:
                 raw_outbox = len(ob._outbox)
                 raw_processed = len(ob._processed)
                 raw_inbox = len(ob._inbox)
-                print(f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} can_write={self._can_write}")
+                print(
+                    f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} can_write={self._can_write}"
+                )
             if self._can_write:
                 for intent in unacked:
                     await self._place_order(intent)
@@ -1256,7 +1283,9 @@ class AutonomousEngine:
                 else:
                     self._loss_count += 1
                 self._trade_pnls.append(trade_pnl)
-                print(f"[protection] Trade recorded: PnL={trade_pnl:.2f} win={is_win} total_trades={len(self._trade_pnls)}")
+                print(
+                    f"[protection] Trade recorded: PnL={trade_pnl:.2f} win={is_win} total_trades={len(self._trade_pnls)}"
+                )
             self._store.save_protection(
                 protection.protection_id,
                 protection.position_id,
@@ -1292,7 +1321,9 @@ class AutonomousEngine:
         # P0 Gate 2: Executor 发送前再次校验控制状态
         # 防止 Outbox 提交后到发送前控制状态变更的竞态窗口
         if not self._control.should_accept(intent):
-            print(f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})")
+            print(
+                f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})"
+            )
             self._outbox.ack(intent.intent_id)
             return
 
@@ -1302,7 +1333,7 @@ class AutonomousEngine:
         client_id = intent.client_order_id or f"beidou-{intent.intent_id}"
 
         # 使用 intent 自身的 instrument_id，而非循环变量
-        order_symbol = str(intent.instrument_id) if hasattr(intent, 'instrument_id') else symbol
+        order_symbol = str(intent.instrument_id) if hasattr(intent, "instrument_id") else symbol
 
         params = {
             "symbol": order_symbol,
@@ -1555,18 +1586,26 @@ class AutonomousEngine:
                                 "workingType": "CONTRACT_PRICE",
                                 "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
                             }
-                            sl_resp = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                            sl_resp = await self._api_async(
+                                "/fapi/v1/order", method="POST", signed=True, params=sl_params
+                            )
                             if "code" in sl_resp and sl_resp.get("code") == -4120:
                                 # 回退: 使用不带 closePosition 的 reduceOnly 版本
                                 sl_params["reduceOnly"] = "true"
                                 sl_params.pop("closePosition", None)
                                 sl_params.pop("workingType", None)
-                                sl_resp = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                                sl_resp = await self._api_async(
+                                    "/fapi/v1/order", method="POST", signed=True, params=sl_params
+                                )
                             if "orderId" in sl_resp:
-                                print(f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}")
+                                print(
+                                    f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}"
+                                )
                             elif "code" in sl_resp and sl_resp.get("code") == -4120:
                                 # Testnet: STOP_MARKET 不可用，依赖本地 check_price() + MARKET 单
-                                print(f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)")
+                                print(
+                                    f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)"
+                                )
                             else:
                                 print(f"[protection] FAILED {symbol} {p_order.reason}: {sl_resp.get('msg', sl_resp)}")
 
@@ -1783,7 +1822,8 @@ class AutonomousEngine:
 
                 # === 3.5 检测 EXIT 组件平仓信号（优先于入场） ===
                 exit_flat_signals = [
-                    s for s in all_signals
+                    s
+                    for s in all_signals
                     if s.component_type == AlphaComponentType.EXIT
                     and s.direction == SignalDirection.FLAT
                     and s.strength >= 0.3
@@ -1791,8 +1831,13 @@ class AutonomousEngine:
                 if exit_flat_signals and pos_info["has_position"]:
                     # 生成平仓订单
                     close_side = OrderSide.SELL if pos_info["side"] == "LONG" else OrderSide.BUY
-                    close_qty = abs(float(symbol_positions[next(iter(symbol_positions))].quantity)) if symbol_positions else 0.001
+                    close_qty = (
+                        abs(float(symbol_positions[next(iter(symbol_positions))].quantity))
+                        if symbol_positions
+                        else 0.001
+                    )
                     from beidou_safety.execution import OrderIntent
+
                     close_intent = OrderIntent(
                         intent_id=f"intent-{symbol}-close-{int(time.time())}",
                         account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
@@ -1810,19 +1855,24 @@ class AutonomousEngine:
                     )
                     # P0 Gate 1: 控制面校验
                     if not self._control.should_accept(close_intent):
-                        print(f"[nearline] {symbol}: CLOSE REJECTED by control plane ({self._control.get_status().value})")
+                        print(
+                            f"[nearline] {symbol}: CLOSE REJECTED by control plane ({self._control.get_status().value})"
+                        )
                         continue
                     try:
                         self._outbox.commit(close_intent)
                         reasons = [s.metadata.get("reason", "unknown") for s in exit_flat_signals]
-                        print(f"[nearline] {symbol}: CLOSE ORDER → {close_side.value} {close_qty:.4f} reasons={reasons}")
+                        print(
+                            f"[nearline] {symbol}: CLOSE ORDER → {close_side.value} {close_qty:.4f} reasons={reasons}"
+                        )
                     except ValueError:
                         print(f"[nearline] {symbol}: CLOSE SKIP (duplicate close in window)")
                     continue  # 平仓后跳过入场逻辑
 
                 # Check if entry signal is actionable (exclude EXIT components)
                 entry_signals = [
-                    s for s in all_signals
+                    s
+                    for s in all_signals
                     if s.component_type != AlphaComponentType.EXIT
                     and s.direction != SignalDirection.NO_ACTION
                     and s.direction != SignalDirection.FLAT
@@ -1990,12 +2040,16 @@ class AutonomousEngine:
 
                 # P0 Gate 1: 控制面校验（Outbox 提交前）
                 if not self._control.should_accept(intent):
-                    print(f"[nearline] {symbol}: ❌ Intent REJECTED by control plane ({self._control.get_status().value}) — risk increase blocked")
+                    print(
+                        f"[nearline] {symbol}: ❌ Intent REJECTED by control plane ({self._control.get_status().value}) — risk increase blocked"
+                    )
                     continue
 
                 try:
                     self._outbox.commit(intent)
-                    print(f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} (outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})")
+                    print(
+                        f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} (outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})"
+                    )
                 except ValueError:
                     print(f"[nearline] {symbol}: SKIP (duplicate intent in window)")
 

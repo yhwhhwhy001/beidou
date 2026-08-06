@@ -45,20 +45,31 @@ class ControlAction(str, Enum):
 # 控制状态 → 允许的风险方向矩阵
 CONTROL_ALLOW_MATRIX: dict[ControlAction, set[RiskDirection]] = {
     ControlAction.NO_NEW_RISK: {
-        RiskDirection.REDUCE, RiskDirection.FLATTEN, RiskDirection.CANCEL, RiskDirection.QUERY,
+        RiskDirection.REDUCE,
+        RiskDirection.FLATTEN,
+        RiskDirection.CANCEL,
+        RiskDirection.QUERY,
     },
     ControlAction.EXIT_ONLY: {
-        RiskDirection.REDUCE, RiskDirection.FLATTEN, RiskDirection.CANCEL, RiskDirection.QUERY,
+        RiskDirection.REDUCE,
+        RiskDirection.FLATTEN,
+        RiskDirection.CANCEL,
+        RiskDirection.QUERY,
     },
     ControlAction.EMERGENCY_FLATTEN: {
-        RiskDirection.FLATTEN, RiskDirection.CANCEL, RiskDirection.QUERY,
+        RiskDirection.FLATTEN,
+        RiskDirection.CANCEL,
+        RiskDirection.QUERY,
     },
     ControlAction.LOCK: {
         RiskDirection.QUERY,
     },
     ControlAction.RESUME: {
-        RiskDirection.INCREASE, RiskDirection.REDUCE, RiskDirection.FLATTEN,
-        RiskDirection.CANCEL, RiskDirection.QUERY,
+        RiskDirection.INCREASE,
+        RiskDirection.REDUCE,
+        RiskDirection.FLATTEN,
+        RiskDirection.CANCEL,
+        RiskDirection.QUERY,
     },
 }
 
@@ -115,8 +126,12 @@ class ControlPlane:
         self._state_change_log: list[dict] = []
         self._account_overview: dict[str, AccountFactOverview] = {}
         self._risk_dashboard = RiskDashboard(
-            total_exposure=0, leverage=0, concentration_pct=0,
-            active_strategies=0, pending_approvals=0, risk_events_24h=0,
+            total_exposure=0,
+            leverage=0,
+            concentration_pct=0,
+            active_strategies=0,
+            pending_approvals=0,
+            risk_events_24h=0,
         )
 
     # --- State management ---
@@ -216,9 +231,7 @@ class ControlPlane:
         - allowed=False: 被拒绝，含 reason_code
         """
         direction = self.classify_intent(intent)
-        allowed_directions = CONTROL_ALLOW_MATRIX.get(
-            self._action, {RiskDirection.QUERY}
-        )
+        allowed_directions = CONTROL_ALLOW_MATRIX.get(self._action, {RiskDirection.QUERY})
 
         # LOCK 状态特殊处理：FLATTEN/CANCEL 需要 Emergency Policy 签名
         if self._action == ControlAction.LOCK and direction in (
@@ -316,12 +329,14 @@ class ControlPlane:
             f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
 
     def _log_state_change(self, old_state: str, new_state: str) -> None:
-        self._state_change_log.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "old_state": old_state,
-            "new_state": new_state,
-            "version": self._version,
-        })
+        self._state_change_log.append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "old_state": old_state,
+                "new_state": new_state,
+                "version": self._version,
+            }
+        )
 
     def restore_state(self) -> bool:
         """从磁盘恢复控制状态。如果磁盘版本 > 内存版本，更新内存状态。"""

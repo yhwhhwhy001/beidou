@@ -86,14 +86,10 @@ class TestRiskDirectionClassification:
 
     def test_cancel_order_is_cancel(self):
         """CANCEL 类型订单应分类为 CANCEL 方向。"""
-        assert ControlPlane.classify_risk_direction(
-            side="BUY", order_type="CANCEL"
-        ) == RiskDirection.CANCEL
+        assert ControlPlane.classify_risk_direction(side="BUY", order_type="CANCEL") == RiskDirection.CANCEL
 
     def test_query_is_query(self):
-        assert ControlPlane.classify_risk_direction(
-            side="UNKNOWN", order_type="QUERY"
-        ) == RiskDirection.QUERY
+        assert ControlPlane.classify_risk_direction(side="UNKNOWN", order_type="QUERY") == RiskDirection.QUERY
 
 
 # ================================================================
@@ -192,9 +188,7 @@ class TestIntentValidation:
         """LOCK 状态下，有 Emergency Policy 签名的 FLATTEN 应被允许。"""
         cp = ControlPlane()
         cp.execute_action(ControlAction.LOCK)
-        intent = _make_intent(
-            side=OrderSide.SELL, close_position=True, emergency_signed=True
-        )
+        intent = _make_intent(side=OrderSide.SELL, close_position=True, emergency_signed=True)
         result = cp.validate_intent(intent)
         assert result.allowed, f"Emergency-signed FLATTEN should be allowed in LOCK, got {result.reason_code}"
         assert result.reason_code == "LOCK_EMERGENCY_OVERRIDE"
@@ -313,6 +307,7 @@ class TestStatePersistence:
     def test_state_persisted_to_disk(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             import beidou_control.plane as plane_mod
+
             old_file = plane_mod._STATE_FILE
             old_log = plane_mod._REJECTION_LOG
             try:
@@ -336,6 +331,7 @@ class TestStatePersistence:
     def test_restore_respects_higher_disk_version(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             import beidou_control.plane as plane_mod
+
             old_file = plane_mod._STATE_FILE
             old_log = plane_mod._REJECTION_LOG
             try:
@@ -361,6 +357,7 @@ class TestStatePersistence:
     def test_memory_version_higher_ignores_disk(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             import beidou_control.plane as plane_mod
+
             old_file = plane_mod._STATE_FILE
             old_log = plane_mod._REJECTION_LOG
             try:
@@ -392,9 +389,7 @@ class TestUnknownFailClosed:
 
     def test_unknown_direction_treated_as_increase(self):
         """未识别的订单方向 → INCREASE（最保守分类）。"""
-        assert ControlPlane.classify_risk_direction(
-            side="UNKNOWN_DIRECTION"
-        ) == RiskDirection.INCREASE
+        assert ControlPlane.classify_risk_direction(side="UNKNOWN_DIRECTION") == RiskDirection.INCREASE
 
     def test_default_matrix_does_not_allow_unknown(self):
         """默认矩阵不应包含未定义的状态。"""

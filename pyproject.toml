@@ -73,7 +73,7 @@ research = [
 [tool.ruff]
 target-version = "py312"
 line-length = 120
-exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "build", "dist"]
+exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "build", "dist", "beidou_state.db*", "beidou_monitor_state.json", "beidou_repair_log.jsonl"]
 
 [tool.ruff.lint]
 select = [

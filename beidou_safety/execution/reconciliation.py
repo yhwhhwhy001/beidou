@@ -91,8 +91,11 @@ class ReconciliationEngine:
             )
         if sys_facts is None or ex_facts is None:
             return ReconciliationResult(
-                matched=False, status=ReconciliationStatus.ONE_SIDE_MISSING,
-                differences=["One side missing"], system_facts=sys_facts, exchange_facts=ex_facts,
+                matched=False,
+                status=ReconciliationStatus.ONE_SIDE_MISSING,
+                differences=["One side missing"],
+                system_facts=sys_facts,
+                exchange_facts=ex_facts,
             )
         diffs: list[str] = []
 

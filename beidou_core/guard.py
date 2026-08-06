@@ -221,10 +221,7 @@ class EnvironmentGuard:
             self._audit(
                 "PRODUCTION_BLOCKED",
                 {
-                    "reason": (
-                        f"PIVOT — {self._mode.value} is permanently prohibited "
-                        "until package completion"
-                    ),
+                    "reason": (f"PIVOT — {self._mode.value} is permanently prohibited until package completion"),
                     "decision": "PIVOT",
                     "mainnet_allowed": False,
                     "blocked_mode": self._mode.value,
@@ -314,11 +311,11 @@ class EnvironmentGuard:
                 },
             )
 
-        # 3. G5 证书链 — BD-P2-18: 证书由独立 Gate Runner 签发
-        # G5 证书要求由 ProductionLadder (BD-P2-18) 强制执行；
-        # CLI 层不再通过 mode 参数触发 G5 检查。
-        # check_write_mode_requirements() 专注于环境安全检查，
-        # 证书验证由 CertificationManager 独立完成。
+            # 3. G5 证书链 — BD-P2-18: 证书由独立 Gate Runner 签发
+            # G5 证书要求由 ProductionLadder (BD-P2-18) 强制执行；
+            # CLI 层不再通过 mode 参数触发 G5 检查。
+            # check_write_mode_requirements() 专注于环境安全检查，
+            # 证书验证由 CertificationManager 独立完成。
             g5_cert_path = self._g5_cert_path or os.path.join("evidence", "certificates", "G5.json")
             if not os.path.exists(g5_cert_path):
                 failures.append("G5 certificate not found")

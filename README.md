@@ -6,7 +6,7 @@
 
 **当前状态: PIVOT — Paper HOLD / Testnet HOLD / Mainnet PROHIBITED**
 
-[![Python](https://img.shields.io/badge/python-3.11+-blue)](https://python.org)
+[![Python](https://img.shields.io/badge/python-3.12+-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-Proprietary-red)]()
 
 ---

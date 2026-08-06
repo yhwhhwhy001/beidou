@@ -366,10 +366,7 @@ class TestNoAutoResume:
         import ast
         from pathlib import Path
 
-        engine_path = (
-            Path(__file__).resolve().parent.parent.parent
-            / "beidou_core" / "engine.py"
-        )
+        engine_path = Path(__file__).resolve().parent.parent.parent / "beidou_core" / "engine.py"
         content = engine_path.read_text(encoding="utf-8")
 
         # 检查不存在 "sleep" + "RESUME" 组合（在 15 行窗口内）
