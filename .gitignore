@@ -19,6 +19,9 @@ beidou_state.db-shm
 beidou_state.db-wal
 beidou_monitor_state.json
 beidou_repair_log.jsonl
+.beidou/
+evidence/bootstrap/*.json
+evidence/bootstrap/*.jsonl
 
 # IDE
 .idea/
