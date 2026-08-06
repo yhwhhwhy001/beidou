@@ -127,6 +127,33 @@ class OrderBookSnapshot:
                 self.asks.sort(key=lambda l: float(l.price.amount))
 
 
+@dataclass(frozen=True, slots=True)
+class ClosedBar:
+    """BD-P0-03: 已闭合 K 线合约 — Point-in-Time 事实。
+
+    仅在 bar 确认闭合后才可用作策略输入。
+    open_time 为 bar 起始时间；close_time 为确认闭合时间。
+    """
+
+    venue_instrument: VenueInstrument
+    open_time: datetime
+    close_time: datetime
+    open: Price
+    high: Price
+    low: Price
+    close: Price
+    volume: Quantity
+    quote_volume: Quantity | None = None
+    trade_count: int = 0
+    taker_buy_volume: Quantity | None = None
+    is_closed: bool = True  # 必须为 True 才能进入策略内核
+    schema_version: SchemaVersion = field(default_factory=lambda: SchemaVersion("2.0.0"))
+    data_quality_tier: str = "UNKNOWN"  # PASS/DEGRADED/BLOCK/UNKNOWN
+    revision: int = 0
+    payload_hash: str = ""
+    correlation_id: CorrelationId | None = None
+
+
 class RawLayer:
     """Raw Layer — 不可变原始行情存储。事件可追溯到原始字节。"""
 

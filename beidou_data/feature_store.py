@@ -17,6 +17,16 @@ class FeatureVector:
     venue_id: VenueId
     version: SchemaVersion
     feature_metadata: dict[str, str] = field(default_factory=dict)
+    available_at: datetime | None = None  # BD-P0-03: Point-in-Time 可用时间
+    lookback_start: datetime | None = None  # BD-P0-03: 回溯起始时间
+    input_hash: str = ""  # BD-P0-03: 输入数据哈希（可复现性）
+    feature_version: str = ""  # BD-P0-03: 特征计算版本
+    data_quality_tier: str = "UNKNOWN"  # BD-P0-03: 数据质量层级 (PASS/DEGRADED/BLOCK/UNKNOWN)
+
+    @property
+    def is_safe_for_trading(self) -> bool:
+        """BD-P0-03: DQ=BLOCK 或 UNKNOWN 时禁止生成风险增加 Proposal。"""
+        return self.data_quality_tier not in ("BLOCK", "UNKNOWN")
 
 
 class FeatureStore:
