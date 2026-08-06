@@ -981,73 +981,30 @@ class AutonomousEngine:
     def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """同步兼容包装 — 委托给 BinanceRESTClient（BD-02 Adapter 边界）。
 
+        运行时通过 asyncio.run() 调用异步 BinanceRESTClient.request()，
+        享受统一错误分类、限频退避、熔断和时钟偏差校准。
         遗留同步代码使用此方法；新异步代码必须使用 _api_async。
         返回原始 dict（兼容现有代码），失败时返回 {"error": code, "msg": "..."}
         """
-        import urllib.request
+        import asyncio as _asyncio
 
-        url = self._rest_url + path
-        headers = {
-            "X-MBX-APIKEY": self._api_key,
-            "Connection": "close",
-            "User-Agent": "beidou-autopilot/2.0",
-        }
-        if params is None:
-            params = {}
-        if signed:
-            params["timestamp"] = int(time.time() * 1000)
-            params["recvWindow"] = 60000
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-            params["signature"] = hmac.new(
-                self._api_secret.encode(),
-                qs.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        # 检查是否在异步上下文中被调用
+        try:
+            loop = _asyncio.get_running_loop()
+            if loop.is_running():
+                return {"error": -2, "msg": "_api called from async context — use _api_async instead"}
+        except RuntimeError:
+            pass  # 不在异步上下文中，正常
 
-        if method == "POST":
-            req = urllib.request.Request(url, data=qs.encode(), headers=headers)
-        elif method == "DELETE":
-            full_url = url + "?" + qs if qs else url
-            req = urllib.request.Request(full_url, headers=headers)
-            req.method = "DELETE"
-        else:
-            full_url = url + "?" + qs if qs else url
-            req = urllib.request.Request(full_url, headers=headers)
+        try:
+            result = _asyncio.run(self._exchange.request(method, path, signed, params))
+        except Exception as ex:
+            return {"error": -1, "msg": f"Adapter error: {ex}"}
 
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    # Read in chunks to handle large responses (>256KB)
-                    chunks = []
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                    raw = b"".join(chunks)
-                    data = json.loads(raw)
-                    # Normalize /fapi/v2/balance response to account format
-                    if path == "/fapi/v2/balance" and isinstance(data, list):
-                        total_wallet = sum(float(a.get("crossWalletBalance", 0)) for a in data)
-                        data = {"totalWalletBalance": str(total_wallet), "assets": data}
-                    return data
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    time.sleep(1 * (attempt + 1))
-                    continue
-                body = e.read().decode() if e.fp else ""
-                print(f"[adapter] HTTP {e.code} on {path}: {body[:200]}")
-                return {"error": e.code, "msg": body}
-            except Exception as ex:
-                if attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                print(f"[adapter] Request failed ({path}): {ex}")
-        return {"error": -1, "msg": "retry exhausted"}
-
-    # --- Leverage Management ---
-
+        if result.is_success():
+            return result.data
+        err = result.error
+        return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
     async def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
         """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
 
@@ -2309,13 +2266,11 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后进入 NO_NEW_RISK，预热完成后自动 RESUME
+        # StartupGate: 启动后进入并保持 NO_NEW_RISK
+        # 不存在固定时间自动 RESUME — 需持久化 Startup Gate 证书通过后方可手动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
-
-        await asyncio.sleep(10)
-        self._control.execute_action(ControlAction.RESUME)
-        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (persistent — no auto RESUME)")
+        print("[beidou-autopilot] RESUME requires: valid Startup Gate certificate + explicit trigger")
 
         self._running = True
         print("[beidou-autopilot] ========================================")
