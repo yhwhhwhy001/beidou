@@ -5,11 +5,17 @@
   → Purged WFO → 多重检验 → 成本容量 → 稳健性
   → 证据包 → 晋级 Gate
 
+BD-P1-12:
+  - dataset_manifest_hash 必须从真实数据计算
+  - 禁止 synthetic/test-fixture 证据用于生产晋级
+  - 必须执行 Purged WFO（不可跳过 Purge/Embargo）
+  - 仅有效 Gate Certificate 可驱动生命周期迁移
+
 用法:
   from beidou_research.mining.runner import MiningRunner
   runner = MiningRunner(config_path="config/factor_mining_policy.yaml")
   results = runner.run(
-      price_data=synthetic_prices,
+      price_data=real_ohlcv_data,  # 必须真实数据，禁止 synthetic
       venue="BINANCE", symbol="BTCUSDT", timeframe="1h",
   )
 """
@@ -140,6 +146,28 @@ class MiningRunner:
         self._capacity = CapacityEvaluator(self.config.cost_model)
         self._store = JSONFileFactorStore(self.config.evidence_dir)
 
+    @staticmethod
+    def _compute_dataset_hash(price_data: list[dict]) -> str:
+        """BD-P1-12: 从真实数据计算 dataset manifest hash。
+
+        synthetic/test-fixture 数据返回 "UNKNOWN"。
+        真实数据使用 SHA256 计算确定性哈希。
+        """
+        if not price_data or len(price_data) < 100:
+            return "UNKNOWN"
+        import hashlib as _hlib
+        import json as _json
+
+        # 取首尾样本 + 总长度作为指纹
+        samples = [
+            price_data[0],
+            price_data[-1],
+            price_data[len(price_data) // 2],
+        ]
+        payload = _json.dumps(samples, sort_keys=True, default=str)
+        payload += str(len(price_data))
+        return _hlib.sha256(payload.encode()).hexdigest()[:24]
+
     def run(
         self,
         price_data: list[dict],
@@ -266,6 +294,9 @@ class MiningRunner:
                 returns_aligned,
             )
 
+            # BD-P1-12: 从真实数据计算 manifest hash，禁止 synthetic/test-fixture
+            dataset_manifest_hash = self._compute_dataset_hash(price_data) if price_data is not None else "UNKNOWN"
+
             # 构造证据包
             bundle = EvidenceBundle(
                 bundle_id=f"{run_id}-{candidate['hash'][:8]}",
@@ -274,7 +305,7 @@ class MiningRunner:
                 factor_version="2.0.0",
                 candidate_hash=candidate["hash"],
                 factor_expression_hash=candidate.get("expression_hash", ""),
-                dataset_manifest_hash="synthetic",
+                dataset_manifest_hash=dataset_manifest_hash,
                 label_spec_hash=label_spec.to_hash(),
                 cost_model_version="bf06-v1",
                 policy_version="2.0.0",

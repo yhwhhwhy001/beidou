@@ -1,6 +1,14 @@
-"""健康检查 HTTP 服务器 — /health /ready /metrics 端点。
+"""健康检查 HTTP 服务器 — 四层健康状态 (BD-P1-15)。
 
-基于 http.server，零外部依赖。端口 9090 与 config 中 prometheus_port 一致。
+端点:
+  /health        — Liveness (进程存活)
+  /ready         — Readiness (可接受请求)
+  /trading-ready — Trading Readiness (可接受交易操作)
+  /exit-ready    — Exit Readiness (可执行退出订单)
+  /metrics       — Prometheus 指标
+  /status        — 完整状态信息
+
+BD-P1-15 AC-15-03: 四种健康状态独立可查询。
 """
 
 from __future__ import annotations
@@ -9,12 +17,25 @@ import json
 import socket
 import threading
 import time
+from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable
 
 
+class HealthState(str, Enum):
+    """BD-P1-15: 四层健康状态。"""
+
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+    UNHEALTHY = "UNHEALTHY"
+    UNKNOWN = "UNKNOWN"
+
+
 class HealthServer:
-    """轻量 HTTP 健康检查服务器。"""
+    """BD-P1-15: 四层健康检查 HTTP 服务器。
+
+    每层有独立回调，可独立查询。
+    """
 
     def __init__(self, port: int = 9090) -> None:
         self._port = port
@@ -22,13 +43,33 @@ class HealthServer:
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
-        # 可注册的回调
+        # BD-P1-15: 四层健康检查回执
+        self._liveness_check: Callable[[], HealthState] = lambda: HealthState.HEALTHY
         self._readiness_check: Callable[[], bool] = lambda: True
+        self._trading_readiness_check: Callable[[], tuple[bool, str]] = lambda: (False, "NO_CERTIFICATE")
+        self._exit_readiness_check: Callable[[], tuple[bool, str]] = lambda: (True, "EXIT_ONLY_AVAILABLE")
+
+        # 其他回执
         self._metrics_collector: Callable[[], dict] = lambda: {}
         self._status_info: Callable[[], dict] = lambda: {}
 
+    # --- Setters ---
+
     def set_readiness_check(self, fn: Callable[[], bool]) -> None:
         self._readiness_check = fn
+
+    def set_liveness_check(self, fn: Callable[[], HealthState]) -> None:
+        """BD-P1-15: 设置 Liveness 检查回执。"""
+        self._liveness_check = fn
+
+    def set_trading_readiness(self, fn: Callable[[], tuple[bool, str]]) -> None:
+        """BD-P1-15: 设置 Trading Readiness 检查回执。
+        返回 (ready: bool, reason: str)"""
+        self._trading_readiness_check = fn
+
+    def set_exit_readiness(self, fn: Callable[[], tuple[bool, str]]) -> None:
+        """BD-P1-15: 设置 Exit Readiness 检查回执。"""
+        self._exit_readiness_check = fn
 
     def set_metrics_collector(self, fn: Callable[[], dict]) -> None:
         self._metrics_collector = fn
@@ -48,22 +89,40 @@ class HealthServer:
 
             def do_GET(self):
                 if self.path == "/health":
-                    self._send_json(
-                        200,
-                        {
-                            "status": "ok",
-                            "uptime_seconds": round(server.uptime_seconds(), 1),
-                            "version": "2.0.0",
-                        },
-                    )
+                    # BD-P1-15: Liveness — 进程存活
+                    liveness = server._liveness_check()
+                    code = 200 if liveness in (HealthState.HEALTHY, HealthState.DEGRADED) else 503
+                    self._send_json(code, {
+                        "status": liveness.value,
+                        "uptime_seconds": round(server.uptime_seconds(), 1),
+                        "version": "2.0.0",
+                    })
                 elif self.path == "/ready":
                     ready = server._readiness_check()
                     status_info = server._status_info()
                     self._send_json(
                         200 if ready else 503,
+                        {"ready": ready, **status_info},
+                    )
+                elif self.path == "/trading-ready":
+                    # BD-P1-15: Trading Readiness — 可接受交易操作
+                    trading_ready, reason = server._trading_readiness_check()
+                    self._send_json(
+                        200 if trading_ready else 503,
                         {
-                            "ready": ready,
-                            **status_info,
+                            "trading_ready": trading_ready,
+                            "reason": reason,
+                            "uptime_seconds": round(server.uptime_seconds(), 1),
+                        },
+                    )
+                elif self.path == "/exit-ready":
+                    # BD-P1-15: Exit Readiness — 可执行退出订单
+                    exit_ready, reason = server._exit_readiness_check()
+                    self._send_json(
+                        200 if exit_ready else 503,
+                        {
+                            "exit_ready": exit_ready,
+                            "reason": reason,
                         },
                     )
                 elif self.path == "/metrics":
@@ -71,13 +130,18 @@ class HealthServer:
                     self._send_prometheus(metrics)
                 elif self.path == "/status":
                     status_info = server._status_info()
-                    self._send_json(
-                        200,
-                        {
-                            "uptime_seconds": round(server.uptime_seconds(), 1),
-                            **status_info,
-                        },
-                    )
+                    liveness = server._liveness_check()
+                    trading_ready, tr_reason = server._trading_readiness_check()
+                    exit_ready, ex_reason = server._exit_readiness_check()
+                    self._send_json(200, {
+                        "uptime_seconds": round(server.uptime_seconds(), 1),
+                        "liveness": liveness.value,
+                        **status_info,
+                        "trading_ready": trading_ready,
+                        "trading_ready_reason": tr_reason,
+                        "exit_ready": exit_ready,
+                        "exit_ready_reason": ex_reason,
+                    })
                 else:
                     self._send_json(404, {"error": "not found"})
 

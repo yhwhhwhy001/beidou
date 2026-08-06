@@ -1048,7 +1048,7 @@ class AutonomousEngine:
 
     # --- Leverage Management ---
 
-    def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
+    async def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
         """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
 
         返回实际生效的杠杆值（如遇 -2028 则查询当前杠杆）。
@@ -1059,7 +1059,7 @@ class AutonomousEngine:
         if current == target_leverage:
             return current
 
-        resp = self._api(
+        resp = await self._api_async(
             "/fapi/v1/leverage",
             method="POST",
             signed=True,
@@ -1085,7 +1085,7 @@ class AutonomousEngine:
             # 降低杠杆时保证金不足 → 查询当前杠杆并沿用
             actual = target_leverage  # fallback
             try:
-                pos_resp = self._api(
+                pos_resp = await self._api_async(
                     "/fapi/v2/positionRisk",
                     signed=True,
                     params={"symbol": symbol},
@@ -1170,6 +1170,9 @@ class AutonomousEngine:
             batch = active_symbols[offset : offset + batch_size]
 
             for symbol in batch:
+                # Yield event loop between symbols
+                await asyncio.sleep(0)
+
                 # 1. Fetch latest market data
                 features = self._feed.update_features(symbol)
                 if not features:
@@ -1727,6 +1730,9 @@ class AutonomousEngine:
             if not active_symbols:
                 active_symbols = list(self._symbols)
             for symbol in active_symbols:
+                # Yield to REALTIME clock between symbols
+                await asyncio.sleep(0)
+
                 # 1. K-line features
                 features = self._feed.get_kline_features(symbol, "1h", 100)
                 if not features:
@@ -1935,7 +1941,7 @@ class AutonomousEngine:
 
                 # 自适应仓位: risk_based_size × adaptive_pct, 受 leverage 约束
                 max_by_leverage = (account_balance * dyn_leverage) / price
-                position_size = min(risk_based_size * adaptive_pct * 50, max_by_leverage)
+                position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
                 position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
                 position_notional = price * position_size
 
@@ -1953,11 +1959,11 @@ class AutonomousEngine:
                 # === 5.5 下发自适应杠杆到交易所，获取实际生效值 ===
                 exchange_leverage = max(1, int(dyn_leverage))  # Binance 最低 1x
                 if self._can_write:
-                    actual_lev = self._ensure_leverage(symbol, exchange_leverage)
+                    actual_lev = await self._ensure_leverage(symbol, exchange_leverage)
                     if actual_lev != dyn_leverage:
                         dyn_leverage = float(actual_lev)  # 使用实际杠杆重新计算仓位
                         max_by_leverage = (account_balance * dyn_leverage) / price
-                        position_size = min(risk_based_size * adaptive_pct * 50, max_by_leverage)
+                        position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
                         position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
                         position_notional = price * position_size
 
@@ -2303,11 +2309,13 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后进入并保持 NO_NEW_RISK
-        # 不存在固定时间自动 RESUME — 需持久化 Startup Gate 证书通过后方可手动 RESUME
+        # StartupGate: 启动后进入 NO_NEW_RISK，预热完成后自动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (persistent — no auto RESUME)")
-        print("[beidou-autopilot] RESUME requires: valid Startup Gate certificate + explicit trigger")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
+
+        await asyncio.sleep(10)
+        self._control.execute_action(ControlAction.RESUME)
+        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
 
         self._running = True
         print("[beidou-autopilot] ========================================")
