@@ -99,7 +99,7 @@
 
 - 任一 P0/P1 阻断：立即执行 `NO_NEW_RISK` 并将 ACTIVE 降级为 DEGRADED。
 - 连续 3 个监测周期仍存在阻断：进入 LOCKED，停止引擎。
-- 不自动重启到 ACTIVE。
+- 不得绕过 RECOVERING/VALIDATING 直接回到 ACTIVE；只有全部阻断重新验证通过后才允许恢复。
 
 ### BD-BOOT-008 证据与状态（P1）
 
