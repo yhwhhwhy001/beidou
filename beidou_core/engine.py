@@ -1773,6 +1773,23 @@ class AutonomousEngine:
             print(f"[nearline] Skipped: degraded state ({self._lifecycle.get_degradation_level()})")
             return
 
+        # === 幽灵仓位清理：交易所已无持仓但系统仍追踪的保护单 ===
+        exchange_positions_raw = self._last_account.get("positions", [])
+        exchange_symbols: set[str] = set()
+        for ep in exchange_positions_raw:
+            amt = float(ep.get("positionAmt", 0) or 0)
+            sym = str(ep.get("symbol", ""))
+            if abs(amt) > 0 and sym:
+                exchange_symbols.add(sym)
+
+        for old_pid, old_pp in list(self._protection.all_positions().items()):
+            if str(old_pp.instrument_id) not in exchange_symbols:
+                self._protection.cancel_protection(old_pid)
+                self._protection.remove_position(old_pid)
+                self._position_entry_times.pop(old_pid, None)
+                await self._cancel_algo_orders(old_pid, str(old_pp.instrument_id))
+                print(f"[nearline] 🧹 Cleaned up ghost position: {old_pp.instrument_id} (pos={old_pid})")
+
         try:
             active_symbols = self._trading_pool.active_instruments()
             if not active_symbols:
