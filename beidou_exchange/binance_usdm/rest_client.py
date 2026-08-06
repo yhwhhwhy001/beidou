@@ -161,6 +161,15 @@ class BinanceRESTClient:
         """续期 listenKey。"""
         return await self._request("PUT", "/fapi/v1/listenKey", signed=True)
 
+    # === 通用请求（兼容遗留 _api 调用） ===
+
+    async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
+        """通用异步请求 — 替代 engine._api() 的直连 urllib。
+
+        所有 Binance API 端点统一通过此方法访问，确保错误分类、限频和时钟偏差一致。
+        """
+        return await self._request(method, path, signed, params)
+
     # === 账户能力检查 ===
 
     async def check_account_capability(self) -> Result[dict]:

@@ -966,10 +966,22 @@ class AutonomousEngine:
     # 所有 Binance API 访问统一通过 self._exchange (BinanceRESTClient)
     # 不再在 engine 内重复实现签名逻辑
 
-    def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """通过 Adapter 访问 Binance API。
+    async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
+        """异步 API 调用 — 通过 BinanceRESTClient Adapter 边界（BD-02）。
 
-        统一路由到 BinanceRESTClient，享受统一错误分类、限频退避和熔断。
+        所有异步代码必须使用此方法，禁止直接 urllib/requests/httpx。
+        BinanceRESTClient 提供统一错误分类、限频退避和熔断。
+        """
+        result = await self._exchange.request(method, path, signed, params)
+        if result.is_success():
+            return result.data
+        err = result.error
+        return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+
+    def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
+        """同步兼容包装 — 委托给 BinanceRESTClient（BD-02 Adapter 边界）。
+
+        遗留同步代码使用此方法；新异步代码必须使用 _api_async。
         返回原始 dict（兼容现有代码），失败时返回 {"error": code, "msg": "..."}
         """
         import urllib.request

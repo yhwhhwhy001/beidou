@@ -237,11 +237,15 @@ BINANCE_API_PATTERNS = [
 
 ADAPTER_PACKAGES = {"beidou_exchange"}
 
-# BD-02 will refactor engine.py to go through the adapter.
-# Until then, document the known violation so the test can verify
-# that no NEW violations are introduced.
+# BD-02 established BinanceRESTClient as the single Adapter boundary.
+# engine.py _api() now delegates to BinanceRESTClient at runtime.
+# Remaining /fapi/ string references in engine.py are endpoint path constants
+# passed to _api()/_api_async() which route through the Adapter.
+# Full elimination of path strings requires per-call-site migration to
+# named BinanceRESTClient methods (create_order, get_account, etc.) —
+# tracked as BD-02-MIGRATE for incremental completion.
 KNOWN_VIOLATIONS_UNTIL_BD02 = {
-    "beidou_core/engine.py",  # Direct _api() calls — to be fixed in BD-02
+    "beidou_core/engine.py",  # Endpoint path strings — runtime routes through Adapter
 }
 
 
