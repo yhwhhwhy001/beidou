@@ -136,6 +136,8 @@ ignore = ["S101", "S104", "RUF001", "RUF002", "RUF003"]
 "tests/architecture/test_architecture.py" = ["S112"]
 "tests/unit/test_execution.py" = ["F811"]
 "tests/unit/test_bf00_timing_mismatch.py" = ["S311", "SIM108"]
+"beidou_bootstrap/preflight.py" = ["S607"]
+"beidou_bootstrap/supervisor.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"
