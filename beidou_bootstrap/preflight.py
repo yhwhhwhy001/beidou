@@ -18,7 +18,7 @@ from .registry import check_package_imports
 WRITE_MODE = "testnet"
 
 
-def current_commit() -> str:
+def current_commit(project_root: Path | None = None) -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -26,10 +26,29 @@ def current_commit() -> str:
             capture_output=True,
             text=True,
             timeout=5,
+            cwd=project_root,
         )
         return result.stdout.strip() if result.returncode == 0 else "UNKNOWN"
     except Exception:
         return "UNKNOWN"
+
+
+def _git_worktree_state(project_root: Path) -> tuple[bool, list[str], str]:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=project_root,
+        )
+    except Exception as exc:
+        return False, [], f"{type(exc).__name__}: {exc}"
+    if result.returncode != 0:
+        return False, [], result.stderr.strip() or "git status failed"
+    dirty = [line for line in result.stdout.splitlines() if line.strip()]
+    return True, dirty, ""
 
 
 def _result(
@@ -65,7 +84,7 @@ def _port_available(port: int) -> tuple[bool, str]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("127.0.0.1", port))
+        sock.bind(("0.0.0.0", port))
         return True, "available"
     except OSError as exc:
         return False, str(exc)
@@ -76,18 +95,72 @@ def _port_available(port: int) -> tuple[bool, str]:
 def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
     checks: list[CheckResult] = []
 
-    version_ok = sys.version_info >= (3, 12)
+    version_ok = (3, 12) <= sys.version_info[:2] < (4, 0)
     checks.append(
         _result(
             "preflight.python",
             "Python 版本",
             version_ok,
             CheckSeverity.P1,
-            f"Python {platform.python_version()} 满足 >=3.12",
-            f"Python {platform.python_version()} 不满足 >=3.12",
+            f"Python {platform.python_version()} 满足 >=3.12,<4.0",
+            f"Python {platform.python_version()} 不满足 >=3.12,<4.0",
             evidence={"executable": sys.executable, "version": platform.python_version()},
         )
     )
+
+    commit = current_commit(project_root)
+    commit_ok = len(commit) == 40 and all(char in "0123456789abcdef" for char in commit.lower())
+    checks.append(
+        _result(
+            "preflight.git_commit",
+            "Git 提交身份",
+            commit_ok,
+            CheckSeverity.P1,
+            f"当前提交: {commit}",
+            "无法解析当前 Git commit，证据不可绑定",
+            evidence={"commit": commit},
+        )
+    )
+
+    git_ok, dirty_files, git_error = _git_worktree_state(project_root)
+    if not git_ok:
+        checks.append(
+            CheckResult(
+                check_id="preflight.git_worktree",
+                name="Git 工作区状态",
+                status=CheckStatus.FAIL,
+                severity=CheckSeverity.P1,
+                message=f"无法读取工作区状态: {git_error}",
+                evidence={"error": git_error},
+            )
+        )
+    elif dirty_files:
+        strict = mode == WRITE_MODE
+        checks.append(
+            CheckResult(
+                check_id="preflight.git_worktree",
+                name="Git 工作区状态",
+                status=CheckStatus.FAIL if strict else CheckStatus.WARN,
+                severity=CheckSeverity.P0 if strict else CheckSeverity.P2,
+                message=(
+                    "Testnet 禁止从未提交工作区启动"
+                    if strict
+                    else f"非写模式允许脏工作区，但证据降级: {len(dirty_files)} 项变更"
+                ),
+                evidence={"dirty": dirty_files[:100], "count": len(dirty_files)},
+            )
+        )
+    else:
+        checks.append(
+            CheckResult(
+                check_id="preflight.git_worktree",
+                name="Git 工作区状态",
+                status=CheckStatus.PASS,
+                severity=CheckSeverity.P1,
+                message="工作区干净",
+                evidence={"dirty": []},
+            )
+        )
 
     required_paths = ["pyproject.toml", "config", "beidou_core", "apps/autopilot"]
     missing_paths = [item for item in required_paths if not (project_root / item).exists()]
@@ -223,7 +296,7 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             rest_url=settings.exchange.rest_base_url,
             api_key=api_key_env or settings.exchange.api_key_ref,
             api_secret=api_secret_env or settings.exchange.api_secret_ref,
-            commit=current_commit(),
+            commit=commit,
             config_path="",
             evidence_dir=str(evidence_dir),
         )
