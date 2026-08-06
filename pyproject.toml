@@ -23,8 +23,8 @@ packages = [
     "beidou_reporting",
     "beidou_certification",
     "beidou_core",
+    "beidou_bootstrap",
 ]
-
 
 [project]
 name = "beidou"
@@ -46,6 +46,11 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1",
 ]
+
+[project.scripts]
+beidou = "beidou_bootstrap.cli:main"
+"北斗" = "beidou_bootstrap.cli:main"
+bd = "beidou_bootstrap.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -91,8 +96,6 @@ ignore = ["S101", "S104", "RUF001", "RUF002", "RUF003"]
 "beidou_core/guard.py" = ["RUF012", "S607", "S105"]
 "apps/autopilot/__main__.py" = ["S607"]
 "beidou_safety/risk/rules.py" = ["RUF012", "S105"]
-"beidou_exchange/binance_usdm/rest_client.py" = ["S310"]
-"beidou_safety/risk/__init__.py" = ["E402", "F401"]
 "beidou_strategy/portfolio/__init__.py" = ["E402", "F401"]
 "beidou_safety/execution/__init__.py" = ["F401"]
 "beidou_data/klines.py" = ["RUF012"]
@@ -175,7 +178,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research", "beidou_policy", "beidou_security", "beidou_observability", "beidou_exchange", "beidou_lifecycle", "beidou_delivery", "beidou_autonomy", "beidou_infra", "beidou_data", "beidou_control", "beidou_chaos", "beidou_production", "beidou_reporting", "beidou_certification", "beidou_core"]
+source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research", "beidou_policy", "beidou_security", "beidou_observability", "beidou_exchange", "beidou_lifecycle", "beidou_delivery", "beidou_autonomy", "beidou_infra", "beidou_data", "beidou_control", "beidou_chaos", "beidou_production", "beidou_reporting", "beidou_certification", "beidou_core", "beidou_bootstrap"]
 omit = ["*/tests/*", "*/test_*"]
 
 [tool.coverage.report]
