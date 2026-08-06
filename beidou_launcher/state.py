@@ -186,7 +186,7 @@ def stop_running_instance(project_root: Path) -> tuple[bool, str]:
     except ValueError:
         tokens = command.split()
     basenames = {Path(token).name.lower() for token in tokens}
-    module_identity = any("beidou_bootstrap" in token.lower() for token in tokens)
+    module_identity = any("beidou_launcher" in token.lower() for token in tokens)
     script_identity = bool({"beidou", "bd", "北斗"} & basenames)
     if not module_identity and not script_identity:
         return False, f"拒绝停止：PID={pid} 不是北斗进程"

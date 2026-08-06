@@ -14,7 +14,6 @@ from typing import Any
 from .models import CheckResult, CheckSeverity, CheckStatus
 from .registry import check_package_imports
 
-
 WRITE_MODE = "testnet"
 
 
@@ -94,7 +93,6 @@ def _port_available(port: int) -> tuple[bool, str]:
 
 def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
     checks: list[CheckResult] = []
-
     version_ok = (3, 12) <= sys.version_info[:2] < (4, 0)
     checks.append(
         _result(
@@ -217,7 +215,6 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
     api_key_env = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
     api_secret_env = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
     signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
-
     checks.extend(check_package_imports())
 
     settings = None
@@ -237,10 +234,6 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 evidence={"source": settings.source, "config_hash": settings.config_hash, "rest_url": rest_url},
             )
         )
-
-        # 当前 AutonomousEngine 在所有运行模式启动时都会读取签名账户快照，
-        # 因此不能沿用“非写模式无需凭据”的抽象假设。这里按实际代码行为
-        # 提前阻断，避免启动后才以 Cannot access account 失败。
         effective_api_key = api_key_env or settings.exchange.api_key_ref
         effective_api_secret = api_secret_env or settings.exchange.api_secret_ref
         account_credentials_ok = len(effective_api_key) >= 10 and len(effective_api_secret) >= 10
@@ -324,5 +317,4 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 f"EnvironmentGuard 执行异常: {type(exc).__name__}: {exc}",
             )
         )
-
     return checks, settings

@@ -8,7 +8,6 @@ from typing import Any
 
 from .models import CheckResult, CheckSeverity, CheckStatus
 
-
 REQUIRED_PACKAGES: tuple[str, ...] = (
     "beidou_shared",
     "beidou_safety",
@@ -43,7 +42,6 @@ EXPECTED_ALPHA_COMPONENTS: frozenset[str] = frozenset(
         "time_exit_v1",
     }
 )
-
 EXPECTED_FACTORS: frozenset[str] = EXPECTED_ALPHA_COMPONENTS
 
 REQUIRED_ENGINE_ATTRIBUTES: tuple[str, ...] = (
@@ -132,9 +130,7 @@ def check_package_imports() -> list[CheckResult]:
 
 
 def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
-    """验证引擎对象、算法图、因子生命周期和风险接线。"""
     checks: list[CheckResult] = []
-
     missing = [name for name in REQUIRED_ENGINE_ATTRIBUTES if getattr(engine, name, None) is None]
     checks.append(
         _result(
@@ -167,7 +163,6 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             topological_order = list(graph.topological_order())
         except Exception as exc:
             graph_error = f"{type(exc).__name__}: {exc}"
-
     topology_mismatch = set(topological_order) != component_ids or len(topological_order) != len(component_ids)
     graph_failed = bool(
         missing_components or extra_components or invalid_components or graph_error or topology_mismatch
@@ -202,7 +197,6 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         raw_state = getattr(record, "lifecycle", "UNKNOWN")
         lifecycle[factor_id] = str(getattr(raw_state, "value", raw_state))
     active = {factor_id for factor_id, state in lifecycle.items() if state in {"ACTIVE", "CHALLENGER"}}
-    strict_mode = mode in {"production", "canary", "live"}
     inactive_expected = sorted(EXPECTED_FACTORS - active)
     factor_failed = bool(missing_factors or extra_factors or inactive_expected)
     checks.append(
@@ -219,7 +213,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
                 "extra": extra_factors,
                 "inactive_expected": inactive_expected,
                 "lifecycle": lifecycle,
-                "strict_mode": strict_mode,
+                "mode": mode,
             },
         )
     )
@@ -266,7 +260,6 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         budget_valid = budget_valid and budget_fields["max_drawdown_pct"] <= 100
         budget_valid = budget_valid and budget_fields["max_daily_loss_pct"] <= 100
         budget_valid = budget_valid and budget_fields["risk_per_trade_pct"] <= 100
-
     checks.append(
         _result(
             "runtime.algorithms.risk_budget",
@@ -281,5 +274,4 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             },
         )
     )
-
     return checks

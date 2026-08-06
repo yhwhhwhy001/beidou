@@ -276,8 +276,6 @@ def collect_runtime_checks(
     recon_differences: list[str] = []
     recon_snapshot_age = float("inf")
     try:
-        # ReconciliationEngine 以字符串化 key 定位事实；使用协议值可减少
-        # 启动监督器对领域类型导入顺序的耦合。
         reconciliation = engine._recon.reconcile("default", "BINANCE")
         raw_status = getattr(reconciliation, "status", "UNKNOWN")
         recon_status = str(getattr(raw_status, "value", raw_status))
@@ -294,7 +292,6 @@ def collect_runtime_checks(
             recon_snapshot_age = now - min(valid_timestamps)
     except Exception as exc:
         recon_differences = [f"RECONCILIATION_CHECK_ERROR: {type(exc).__name__}: {exc}"]
-
     recon_ok = recon_status == "MATCHED" and recon_age <= 120.0 and recon_snapshot_age <= 120.0
     checks.append(
         CheckResult(
@@ -345,10 +342,7 @@ def collect_runtime_checks(
                 )
                 expected_by_symbol[symbol] = expected_by_symbol.get(symbol, 0) + expected_orders
                 protection_evidence.setdefault(symbol, []).append(
-                    {
-                        "position_id": str(position_id),
-                        "expected_orders": expected_orders,
-                    }
+                    {"position_id": str(position_id), "expected_orders": expected_orders}
                 )
         except Exception as exc:
             protection_evidence = {"_error": [{"message": f"{type(exc).__name__}: {exc}"}]}
@@ -376,9 +370,6 @@ def collect_runtime_checks(
             )
             if fully_placed:
                 exchange_protected_symbols.add(symbol)
-
-        # 保护事实必须来自当前交易所 openAlgoOrders 快照；内存中的历史 algoId
-        # 只能说明曾经提交成功，不能证明保护单现在仍然有效。
         missing_protection = sorted(open_symbols - exchange_protected_symbols)
         coverage_ok = snapshot_ok and not missing_protection
         checks.append(
