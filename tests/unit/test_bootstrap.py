@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from beidou_bootstrap.models import CheckResult, CheckSeverity, CheckStatus, StartupReport
@@ -48,3 +49,13 @@ def test_instance_lock_removes_stale_pid(tmp_path: Path) -> None:
     finally:
         lock.release()
     assert not path.exists()
+
+
+def test_console_script_aliases() -> None:
+    data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    scripts = data["project"]["scripts"]
+    assert scripts == {
+        "beidou": "beidou_bootstrap.cli:main",
+        "北斗": "beidou_bootstrap.cli:main",
+        "bd": "beidou_bootstrap.cli:main",
+    }
