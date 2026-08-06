@@ -2463,7 +2463,7 @@ class AutonomousEngine:
                         },
                     })
 
-            # Phase 2: 并行提交所有条件单到交易所
+            # Phase 2: 分批提交条件单到交易所（每批 5 个，间隔 2s，避免限流熔断）
             if pending_submissions:
                 async def _submit_algo(sub: dict):
                     sub["result"] = await self._api_async(
@@ -2471,7 +2471,16 @@ class AutonomousEngine:
                     )
                     return sub
 
-                results = await asyncio.gather(*[_submit_algo(s) for s in pending_submissions], return_exceptions=True)
+                results: list = []
+                batch_size = 5
+                for i in range(0, len(pending_submissions), batch_size):
+                    batch = pending_submissions[i : i + batch_size]
+                    batch_results = await asyncio.gather(
+                        *[_submit_algo(s) for s in batch], return_exceptions=True
+                    )
+                    results.extend(batch_results)
+                    if i + batch_size < len(pending_submissions):
+                        await asyncio.sleep(2)
                 recovered_by_pos: dict[str, dict] = {}
                 for sub, res in zip(pending_submissions, results):
                     if isinstance(res, Exception):
