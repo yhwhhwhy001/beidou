@@ -164,6 +164,7 @@ class ClosedBar:
 
 class BarIntegrity(str, Enum):
     """Bar 完整性状态。"""
+
     OK = "OK"
     DUPLICATE = "DUPLICATE"
     OUT_OF_ORDER = "OUT_OF_ORDER"
@@ -176,6 +177,7 @@ class BarIntegrity(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ClosedBarResult:
     """ClosedBar 处理结果 — 类型化。"""
+
     bar: ClosedBar | None
     status: BarIntegrity
     detail: str = ""
@@ -239,7 +241,9 @@ class ClosedBarNormalizer:
                 volume=Quantity(amount=str(raw.get("volume", 0))),
                 quote_volume=Quantity(amount=str(raw.get("quote_volume", 0))) if raw.get("quote_volume") else None,
                 trade_count=int(raw.get("trade_count", raw.get("n", 0))),
-                taker_buy_volume=Quantity(amount=str(raw.get("taker_buy_volume", 0))) if raw.get("taker_buy_volume") else None,
+                taker_buy_volume=Quantity(amount=str(raw.get("taker_buy_volume", 0)))
+                if raw.get("taker_buy_volume")
+                else None,
                 is_closed=bool(is_closed),
                 revision=0,
                 sequence=self._seq_counter,
