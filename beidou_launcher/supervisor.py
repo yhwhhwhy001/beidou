@@ -278,10 +278,20 @@ class BeidouSupervisor:
                     and time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
                 ):
                     self._last_algorithm_probe_attempt = time.monotonic()
-                    self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                    try:
+                        self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                    except Exception as exc:
+                        self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        print(f"[supervisor] Algorithm probe failed: {exc}")
                 await self._refresh_exchange_account_snapshot()
                 await self._refresh_exchange_algo_snapshot()
-                checks = self._runtime_checks()
+                try:
+                    checks = self._runtime_checks()
+                except Exception as exc:
+                    print(f"[supervisor] Runtime checks failed: {type(exc).__name__}: {exc}")
+                    import traceback
+                    traceback.print_exc()
+                    checks = []
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
