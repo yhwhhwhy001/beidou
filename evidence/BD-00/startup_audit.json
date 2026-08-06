@@ -1,9 +1,9 @@
 [
   {
-    "timestamp": "2026-08-06T10:24:20.204843+00:00",
+    "timestamp": "2026-08-06T10:25:28.428028+00:00",
     "event_type": "PRODUCTION_BLOCKED",
     "environment": "production",
-    "commit": "f20e44e3504d95bdba6dae85d3f9b826a006769f",
+    "commit": "408904f462ea66af6500998fe1bb83961a51494f",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -16,10 +16,10 @@
     }
   },
   {
-    "timestamp": "2026-08-06T10:24:20.204875+00:00",
+    "timestamp": "2026-08-06T10:25:28.428069+00:00",
     "event_type": "STARTUP_GATE",
     "environment": "production",
-    "commit": "f20e44e3504d95bdba6dae85d3f9b826a006769f",
+    "commit": "408904f462ea66af6500998fe1bb83961a51494f",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
