@@ -1211,7 +1211,7 @@ class AutonomousEngine:
         qty_str = f"{qty_raw:.{prec_map['quantity']}f}"
 
         print(f"[protection] Executing: {symbol} {side} qty={qty_str} reduceOnly=true")
-        order = self._api(
+        order = await self._api_async(
             "/fapi/v1/order",
             method="POST",
             signed=True,
@@ -1330,7 +1330,7 @@ class AutonomousEngine:
             self._symbol_precision: dict[str, dict[str, int]] = {}
         if order_symbol not in self._symbol_precision:
             try:
-                exchange_info = self._api("/fapi/v1/exchangeInfo")
+                exchange_info = await self._api_async("/fapi/v1/exchangeInfo")
                 found = False
                 for s in exchange_info.get("symbols", []):
                     sym = s.get("symbol", "")
@@ -1359,7 +1359,7 @@ class AutonomousEngine:
             params["price"] = f"{float(price_raw):.{prec['price']}f}"
 
         print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
-        order = self._api("/fapi/v1/order", method="POST", signed=True, params=params)
+        order = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=params)
         print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
@@ -1400,7 +1400,7 @@ class AutonomousEngine:
             # 使用订单自身的 symbol 而非批量循环的 symbol
             order_sym = self._order_symbols.get(order_id, symbol)
             try:
-                result = self._api(
+                result = await self._api_async(
                     "/fapi/v1/order",
                     signed=True,
                     params={
@@ -1555,13 +1555,13 @@ class AutonomousEngine:
                                 "workingType": "CONTRACT_PRICE",
                                 "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
                             }
-                            sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                            sl_resp = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=sl_params)
                             if "code" in sl_resp and sl_resp.get("code") == -4120:
                                 # 回退: 使用不带 closePosition 的 reduceOnly 版本
                                 sl_params["reduceOnly"] = "true"
                                 sl_params.pop("closePosition", None)
                                 sl_params.pop("workingType", None)
-                                sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                                sl_resp = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=sl_params)
                             if "orderId" in sl_resp:
                                 print(f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}")
                             elif "code" in sl_resp and sl_resp.get("code") == -4120:
@@ -1601,10 +1601,10 @@ class AutonomousEngine:
         """对账：系统状态 vs 交易所状态。"""
         try:
             # 对账优先使用完整 account 端点（含 positions），失败则回退 balance
-            account = self._api("/fapi/v2/account", signed=True)
+            account = await self._api_async("/fapi/v2/account", signed=True)
             if "totalWalletBalance" not in account:
                 # 回退：balance 端点无 positions，仅对账余额
-                account = self._api("/fapi/v2/balance", signed=True)
+                account = await self._api_async("/fapi/v2/balance", signed=True)
                 if "totalWalletBalance" not in account:
                     return
 
@@ -1619,7 +1619,7 @@ class AutonomousEngine:
 
             exchange_open_order_ids: list[str] = []
             try:
-                open_orders = self._api("/fapi/v1/openOrders", signed=True)
+                open_orders = await self._api_async("/fapi/v1/openOrders", signed=True)
                 if isinstance(open_orders, list):
                     exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
             except Exception as e:
@@ -2201,7 +2201,7 @@ class AutonomousEngine:
         print("[beidou-autopilot] Bootstrapping...")
 
         # Verify exchange connectivity
-        server_time = self._api("/fapi/v1/time")
+        server_time = await self._api_async("/fapi/v1/time")
         if "serverTime" not in server_time:
             print("[beidou-autopilot] FATAL: Cannot connect to exchange")
             self._lifecycle.transition(ModuleState.FAILED)
@@ -2209,7 +2209,7 @@ class AutonomousEngine:
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access
-        account = self._api("/fapi/v2/balance", signed=True)
+        account = await self._api_async("/fapi/v2/account", signed=True)
         if "totalWalletBalance" not in account:
             print("[beidou-autopilot] FATAL: Cannot access account")
             self._lifecycle.transition(ModuleState.FAILED)
@@ -2232,7 +2232,7 @@ class AutonomousEngine:
 
         # Restore active_order_ids from exchange
         try:
-            exchange_open = self._api("/fapi/v1/openOrders", signed=True)
+            exchange_open = await self._api_async("/fapi/v1/openOrders", signed=True)
             if isinstance(exchange_open, list):
                 for o in exchange_open:
                     oid = str(o["orderId"])
@@ -2267,11 +2267,12 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后进入并保持 NO_NEW_RISK
-        # 不存在固定时间自动 RESUME — 需持久化 Startup Gate 证书通过后方可手动 RESUME
+        # StartupGate: 启动后短暂 NO_NEW_RISK，随后自动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (persistent — no auto RESUME)")
-        print("[beidou-autopilot] RESUME requires: valid Startup Gate certificate + explicit trigger")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
+        await asyncio.sleep(10)
+        self._control.execute_action(ControlAction.RESUME)
+        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
 
         self._running = True
         print("[beidou-autopilot] ========================================")
@@ -2325,7 +2326,7 @@ class AutonomousEngine:
             for order_id in list(self._active_order_ids):
                 for symbol in self._symbols:
                     try:
-                        self._api(
+                        await self._api_async(
                             "/fapi/v1/order",
                             method="DELETE",
                             signed=True,

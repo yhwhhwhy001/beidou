@@ -43,6 +43,39 @@ OK_TO_ESCALATE = 3
 MAX_REPAIR_ATTEMPTS = 3
 STABILIZE_WAIT = 12  # 重启后等待稳定的秒数
 
+FULL_UNIVERSE = {
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "UNIUSDT",
+    "ATOMUSDT", "LTCUSDT", "ETCUSDT", "FILUSDT", "APTUSDT", "ARBUSDT",
+    "OPUSDT", "NEARUSDT", "INJUSDT", "SUIUSDT", "RUNEUSDT", "SEIUSDT", "TIAUSDT",
+}
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT"
+DEFAULT_MODE = "testnet"
+DEFAULT_PORT = 9090
+
+
+def _build_autopilot_cmd() -> list[str]:
+    """从运行中系统检测参数，构建正确的重启命令。"""
+    try:
+        status = http_get("/status")
+        if "error" not in status:
+            mode = status.get("mode", DEFAULT_MODE)
+            symbols = status.get("symbols", [])
+            if set(symbols) >= FULL_UNIVERSE:
+                symbols_arg = "ALL"
+            elif symbols:
+                symbols_arg = ",".join(symbols[:25])
+            else:
+                symbols_arg = DEFAULT_SYMBOLS
+            return ["python", "-m", "apps.autopilot",
+                    "--symbols", symbols_arg, "--mode", mode,
+                    "--port", str(DEFAULT_PORT)]
+    except Exception:
+        pass
+    return ["python", "-m", "apps.autopilot",
+            "--symbols", DEFAULT_SYMBOLS, "--mode", DEFAULT_MODE,
+            "--port", str(DEFAULT_PORT)]
+
 
 # ================================================================
 # 状态管理
@@ -206,7 +239,7 @@ def check_order_flow() -> CheckResult:
 
     # ---- 1. 系统存活 ----
     health = http_get("/health")
-    if health.get("status") != "ok":
+    if health.get("status") not in ("ok", "HEALTHY"):
         failures.append(f"Health check failed: {health}")
         suggested = RepairAction.RESTART
         return CheckResult(
@@ -440,7 +473,7 @@ def restart_autopilot() -> tuple[bool, str]:
     # 4. 启动新进程
     try:
         proc = subprocess.Popen(
-            AUTOPILOT_CMD,
+            _build_autopilot_cmd(),
             cwd=PROJECT_ROOT,
             stdout=open("/tmp/beidou-24h.log", "a"),
             stderr=subprocess.STDOUT,
