@@ -213,15 +213,35 @@ def collect_runtime_checks(
             if abs(float(position.get("positionAmt", 0) or 0)) > 0
         }
         protection = getattr(engine, "_protection", None)
+        active_algo_ids = getattr(engine, "_active_algo_ids", {})
+        protection_evidence: dict[str, list[dict[str, Any]]] = {}
+        exchange_protected_symbols: set[str] = set()
         try:
-            protected_symbols = (
-                {str(item.instrument_id) for item in protection.all_positions().values()}
-                if protection is not None
-                else set()
-            )
-        except Exception:
-            protected_symbols = set()
-        missing_protection = sorted(open_symbols - protected_symbols)
+            local_positions = protection.all_positions() if protection is not None else {}
+            for position_id, protected_position in local_positions.items():
+                symbol = str(protected_position.instrument_id)
+                expected_orders = int(protected_position.stop_loss is not None) + len(protected_position.take_profits)
+                server_algo_ids = set(active_algo_ids.get(position_id, set()))
+                server_order_count = len(server_algo_ids)
+                fully_placed = expected_orders > 0 and server_order_count >= expected_orders
+                protection_evidence.setdefault(symbol, []).append(
+                    {
+                        "position_id": str(position_id),
+                        "expected_orders": expected_orders,
+                        "server_order_count": server_order_count,
+                        "server_algo_ids": sorted(str(item) for item in server_algo_ids),
+                        "fully_placed": fully_placed,
+                    }
+                )
+                if fully_placed:
+                    exchange_protected_symbols.add(symbol)
+        except Exception as exc:
+            protection_evidence = {"_error": [{"message": f"{type(exc).__name__}: {exc}"}]}
+            exchange_protected_symbols = set()
+
+        # 本地 ProtectionManager 对象不是交易所事实。只有成功返回的 algoId
+        # 数量覆盖本地预期止损/止盈订单时，才将该持仓视为已保护。
+        missing_protection = sorted(open_symbols - exchange_protected_symbols)
         coverage_ok = not missing_protection
         checks.append(
             CheckResult(
@@ -230,14 +250,15 @@ def collect_runtime_checks(
                 status=CheckStatus.PASS if coverage_ok else CheckStatus.FAIL,
                 severity=CheckSeverity.P0,
                 message=(
-                    f"全部 {len(open_symbols)} 个持仓标的均有保护"
+                    f"全部 {len(open_symbols)} 个持仓标的均有交易所保护单"
                     if coverage_ok
-                    else f"存在未保护持仓标的: {missing_protection}"
+                    else f"存在交易所保护单未完整落地的持仓标的: {missing_protection}"
                 ),
                 evidence={
                     "open_symbols": sorted(open_symbols),
-                    "protected_symbols": sorted(protected_symbols),
+                    "exchange_protected_symbols": sorted(exchange_protected_symbols),
                     "missing": missing_protection,
+                    "positions": protection_evidence,
                 },
             )
         )
