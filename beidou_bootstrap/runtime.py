@@ -84,6 +84,8 @@ def collect_runtime_checks(
     resume_authorized: bool,
     algorithm_probe: dict[str, Any],
     last_error_count: int,
+    exchange_algo_snapshot: dict[str, Any] | None = None,
+    exchange_account_snapshot: dict[str, Any] | None = None,
 ) -> tuple[list[CheckResult], int]:
     checks = inspect_engine_wiring(engine, mode)
     now = time.time()
@@ -99,6 +101,51 @@ def collect_runtime_checks(
             severity=CheckSeverity.P0,
             message=f"生命周期={lifecycle_value}",
             evidence={"state": lifecycle_value},
+        )
+    )
+
+    control = getattr(engine, "_control", None)
+    try:
+        raw_control_state = control.get_status()
+        control_state = str(getattr(raw_control_state, "value", raw_control_state))
+    except Exception:
+        control_state = "UNKNOWN"
+    if control_state == "RESUME":
+        control_status = CheckStatus.PASS
+        control_severity = CheckSeverity.P1
+        control_message = "控制面允许正常运行"
+    elif control_state in {"NO_NEW_RISK", "EXIT_ONLY"}:
+        control_status = CheckStatus.WARN
+        control_severity = CheckSeverity.P1
+        control_message = f"控制面处于安全暂停状态: {control_state}"
+    else:
+        control_status = CheckStatus.FAIL
+        control_severity = CheckSeverity.P0
+        control_message = f"控制面异常或锁定: {control_state}"
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.control_plane",
+            name="控制面状态",
+            status=control_status,
+            severity=control_severity,
+            message=control_message,
+            evidence={"state": control_state, "resume_authorized": resume_authorized},
+        )
+    )
+
+    blocked_writes = list(getattr(engine, "_supervisor_blocked_writes", []))
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.write_interlock",
+            name="零写模式互锁",
+            status=CheckStatus.WARN if blocked_writes else CheckStatus.PASS,
+            severity=CheckSeverity.P1,
+            message=(
+                f"已拦截 {len(blocked_writes)} 次非授权交易所写请求"
+                if blocked_writes
+                else "未发现非授权交易所写请求"
+            ),
+            evidence={"blocked_count": len(blocked_writes), "recent": blocked_writes[-20:]},
         )
     )
 
@@ -193,56 +240,147 @@ def collect_runtime_checks(
         )
     )
 
-    account = getattr(engine, "_last_account", {})
-    account_ok = isinstance(account, dict) and bool(account.get("totalWalletBalance"))
+    account_snapshot = exchange_account_snapshot or {"ok": False, "error": "NO_SNAPSHOT"}
+    account_observed_at = float(account_snapshot.get("observed_at", 0.0) or 0.0)
+    account_age = now - account_observed_at if account_observed_at > 0 else float("inf")
+    account = account_snapshot.get("account", {})
+    account_ok = (
+        bool(account_snapshot.get("ok"))
+        and account_age <= 45.0
+        and isinstance(account, dict)
+        and "totalWalletBalance" in account
+        and isinstance(account.get("positions"), list)
+    )
     checks.append(
         CheckResult(
             check_id="runtime.health.account_snapshot",
             name="账户事实快照",
             status=CheckStatus.PASS if account_ok else CheckStatus.FAIL,
             severity=CheckSeverity.P0,
-            message="账户快照可用" if account_ok else "账户状态 UNKNOWN，禁止增加风险",
-            evidence={"has_wallet_balance": account_ok},
+            message=(
+                f"独立账户快照可用，年龄={account_age:.1f}s"
+                if account_ok
+                else f"账户状态 UNKNOWN/STALE: {account_snapshot.get('error', 'INVALID_SCHEMA')}"
+            ),
+            evidence={
+                "ok": account_ok,
+                "age_seconds": round(account_age, 3) if account_age != float("inf") else None,
+                "observed_at": account_observed_at or None,
+                "error": account_snapshot.get("error"),
+            },
         )
     )
 
-    if mode == "testnet" and isinstance(account, dict):
+    recon_age = now - float(getattr(engine, "_last_recon", 0.0))
+    recon_status = "UNKNOWN"
+    recon_differences: list[str] = []
+    recon_snapshot_age = float("inf")
+    try:
+        # ReconciliationEngine 以字符串化 key 定位事实；使用协议值可减少
+        # 启动监督器对领域类型导入顺序的耦合。
+        reconciliation = engine._recon.reconcile("default", "BINANCE")
+        raw_status = getattr(reconciliation, "status", "UNKNOWN")
+        recon_status = str(getattr(raw_status, "value", raw_status))
+        recon_differences = list(getattr(reconciliation, "differences", []))
+        exchange_facts = getattr(reconciliation, "exchange_facts", None)
+        system_facts = getattr(reconciliation, "system_facts", None)
+        timestamps = [
+            getattr(facts, "timestamp", None)
+            for facts in (exchange_facts, system_facts)
+            if facts is not None
+        ]
+        valid_timestamps = [item.timestamp() for item in timestamps if item is not None]
+        if valid_timestamps:
+            recon_snapshot_age = now - min(valid_timestamps)
+    except Exception as exc:
+        recon_differences = [f"RECONCILIATION_CHECK_ERROR: {type(exc).__name__}: {exc}"]
+
+    recon_ok = recon_status == "MATCHED" and recon_age <= 120.0 and recon_snapshot_age <= 120.0
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.reconciliation",
+            name="账户与订单对账",
+            status=CheckStatus.PASS if recon_ok else CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
+            message=(
+                f"对账状态=MATCHED，事实年龄={recon_snapshot_age:.1f}s"
+                if recon_ok
+                else f"对账未通过: status={recon_status}, differences={recon_differences[:3]}"
+            ),
+            evidence={
+                "status": recon_status,
+                "differences": recon_differences,
+                "engine_heartbeat_age_seconds": round(recon_age, 3),
+                "fact_snapshot_age_seconds": (
+                    round(recon_snapshot_age, 3) if recon_snapshot_age != float("inf") else None
+                ),
+                "threshold_seconds": 120.0,
+            },
+        )
+    )
+
+    if mode == "testnet" and account_ok:
+        positions = account.get("positions", [])
         open_symbols = {
             str(position.get("symbol", ""))
-            for position in account.get("positions", [])
+            for position in positions
             if abs(float(position.get("positionAmt", 0) or 0)) > 0
         }
         protection = getattr(engine, "_protection", None)
-        active_algo_ids = getattr(engine, "_active_algo_ids", {})
         protection_evidence: dict[str, list[dict[str, Any]]] = {}
-        exchange_protected_symbols: set[str] = set()
+        expected_by_symbol: dict[str, int] = {}
         try:
             local_positions = protection.all_positions() if protection is not None else {}
             for position_id, protected_position in local_positions.items():
                 symbol = str(protected_position.instrument_id)
-                expected_orders = int(protected_position.stop_loss is not None) + len(protected_position.take_profits)
-                server_algo_ids = set(active_algo_ids.get(position_id, set()))
-                server_order_count = len(server_algo_ids)
-                fully_placed = expected_orders > 0 and server_order_count >= expected_orders
+
+                def is_active(order: Any) -> bool:
+                    if order is None:
+                        return False
+                    check = getattr(order, "is_active", None)
+                    return bool(check()) if callable(check) else True
+
+                expected_orders = int(is_active(protected_position.stop_loss)) + sum(
+                    1 for order in protected_position.take_profits if is_active(order)
+                )
+                expected_by_symbol[symbol] = expected_by_symbol.get(symbol, 0) + expected_orders
                 protection_evidence.setdefault(symbol, []).append(
                     {
                         "position_id": str(position_id),
                         "expected_orders": expected_orders,
-                        "server_order_count": server_order_count,
-                        "server_algo_ids": sorted(str(item) for item in server_algo_ids),
-                        "fully_placed": fully_placed,
                     }
                 )
-                if fully_placed:
-                    exchange_protected_symbols.add(symbol)
         except Exception as exc:
             protection_evidence = {"_error": [{"message": f"{type(exc).__name__}: {exc}"}]}
-            exchange_protected_symbols = set()
+            expected_by_symbol = {}
 
-        # 本地 ProtectionManager 对象不是交易所事实。只有成功返回的 algoId
-        # 数量覆盖本地预期止损/止盈订单时，才将该持仓视为已保护。
+        snapshot = exchange_algo_snapshot or {"ok": False, "by_symbol": {}, "error": "NO_SNAPSHOT"}
+        snapshot_observed_at = float(snapshot.get("observed_at", 0.0) or 0.0)
+        snapshot_age = now - snapshot_observed_at if snapshot_observed_at > 0 else float("inf")
+        snapshot_ok = bool(snapshot.get("ok")) and snapshot_age <= 45.0
+        server_by_symbol = snapshot.get("by_symbol", {}) if isinstance(snapshot.get("by_symbol", {}), dict) else {}
+        exchange_protected_symbols: set[str] = set()
+        for symbol in open_symbols:
+            expected_orders = expected_by_symbol.get(symbol, 0)
+            server_algo_ids = {str(item) for item in server_by_symbol.get(symbol, [])}
+            server_order_count = len(server_algo_ids)
+            fully_placed = snapshot_ok and expected_orders > 0 and server_order_count == expected_orders
+            protection_evidence.setdefault(symbol, []).append(
+                {
+                    "source": "exchange_openAlgoOrders",
+                    "expected_orders": expected_orders,
+                    "server_order_count": server_order_count,
+                    "server_algo_ids": sorted(server_algo_ids),
+                    "fully_placed": fully_placed,
+                }
+            )
+            if fully_placed:
+                exchange_protected_symbols.add(symbol)
+
+        # 保护事实必须来自当前交易所 openAlgoOrders 快照；内存中的历史 algoId
+        # 只能说明曾经提交成功，不能证明保护单现在仍然有效。
         missing_protection = sorted(open_symbols - exchange_protected_symbols)
-        coverage_ok = not missing_protection
+        coverage_ok = snapshot_ok and not missing_protection
         checks.append(
             CheckResult(
                 check_id="runtime.safety.protection_coverage",
@@ -250,14 +388,22 @@ def collect_runtime_checks(
                 status=CheckStatus.PASS if coverage_ok else CheckStatus.FAIL,
                 severity=CheckSeverity.P0,
                 message=(
-                    f"全部 {len(open_symbols)} 个持仓标的均有交易所保护单"
+                    f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
                     if coverage_ok
-                    else f"存在交易所保护单未完整落地的持仓标的: {missing_protection}"
+                    else (
+                        f"交易所保护事实查询失败: {snapshot.get('error', 'UNKNOWN')}"
+                        if not snapshot_ok
+                        else f"存在交易所保护单未完整落地的持仓标的: {missing_protection}"
+                    )
                 ),
                 evidence={
                     "open_symbols": sorted(open_symbols),
                     "exchange_protected_symbols": sorted(exchange_protected_symbols),
                     "missing": missing_protection,
+                    "exchange_snapshot": snapshot,
+                    "exchange_snapshot_age_seconds": (
+                        round(snapshot_age, 3) if snapshot_age != float("inf") else None
+                    ),
                     "positions": protection_evidence,
                 },
             )
