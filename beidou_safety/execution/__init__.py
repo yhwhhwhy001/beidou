@@ -46,6 +46,9 @@ class OrderIntent:
     idempotency_key: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     risk_approval_id: str | None = None
+    reduce_only: bool = False
+    close_position: bool = False
+    emergency_policy_signed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

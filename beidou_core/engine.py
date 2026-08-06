@@ -1316,6 +1316,14 @@ class AutonomousEngine:
 
     async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
+
+        # P0 Gate 2: Executor 发送前再次校验控制状态
+        # 防止 Outbox 提交后到发送前控制状态变更的竞态窗口
+        if not self._control.should_accept(intent):
+            print(f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})")
+            self._outbox.ack(intent.intent_id)
+            return
+
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
         order_type = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
         client_id = intent.client_order_id or f"beidou-{int(time.time() * 1000)}"
@@ -1822,7 +1830,12 @@ class AutonomousEngine:
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
                         idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
                         risk_approval_id=str(RiskApprovalId(f"nearline-close-{int(time.time())}")),
+                        reduce_only=True,
                     )
+                    # P0 Gate 1: 控制面校验
+                    if not self._control.should_accept(close_intent):
+                        print(f"[nearline] {symbol}: CLOSE REJECTED by control plane ({self._control.get_status().value})")
+                        continue
                     try:
                         self._outbox.commit(close_intent)
                         reasons = [s.metadata.get("reason", "unknown") for s in exit_flat_signals]
@@ -1998,6 +2011,11 @@ class AutonomousEngine:
                     idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
                     risk_approval_id=str(approval_id),
                 )
+
+                # P0 Gate 1: 控制面校验（Outbox 提交前）
+                if not self._control.should_accept(intent):
+                    print(f"[nearline] {symbol}: ❌ Intent REJECTED by control plane ({self._control.get_status().value}) — risk increase blocked")
+                    continue
 
                 try:
                     self._outbox.commit(intent)
