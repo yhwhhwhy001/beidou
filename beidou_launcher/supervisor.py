@@ -240,6 +240,19 @@ class BeidouSupervisor:
         self._last_error_count = error_count
         return checks
 
+    # 启动阶段只要求关键检查通过；行情、对账、心跳等运行时检查
+    # 在引擎运行一段时间后自然会就绪，不应阻断启动。
+    _STARTUP_CRITICAL_CHECKS = frozenset({
+        "runtime.wiring.core",
+        "runtime.algorithms.alpha_graph",
+        "runtime.algorithms.factor_lifecycle",
+        "runtime.algorithms.trading_pool",
+        "runtime.algorithms.risk_budget",
+        "runtime.health.lifecycle",
+        "runtime.health.http_server",
+        "runtime.health.account_snapshot",
+    })
+
     async def _wait_for_startup(self) -> bool:
         assert self.engine is not None
         assert self._engine_task is not None
@@ -272,7 +285,12 @@ class BeidouSupervisor:
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
-                if not self.report.blockers:
+                # 启动阶段仅阻断关键接线/生命周期/账户检查
+                startup_blockers = [
+                    c for c in checks
+                    if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS
+                ]
+                if not startup_blockers:
                     return True
             else:
                 self.report.phase = "ENGINE_STARTING"
