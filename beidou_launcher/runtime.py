@@ -93,12 +93,23 @@ def collect_runtime_checks(
     lifecycle = getattr(getattr(engine, "_lifecycle", None), "state", None)
     lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
     lifecycle_ok = lifecycle_value == "ACTIVE"
+    # DEGRADED 是监督器主动设置的受控安全状态，不应自锁；
+    # 仅 LOCKED/FAILED 视为阻断。
+    if lifecycle_value in ("LOCKED", "FAILED"):
+        lc_status = CheckStatus.FAIL
+        lc_severity = CheckSeverity.P0
+    elif lifecycle_value == "DEGRADED":
+        lc_status = CheckStatus.WARN
+        lc_severity = CheckSeverity.P1
+    else:
+        lc_status = CheckStatus.PASS if lifecycle_ok else CheckStatus.FAIL
+        lc_severity = CheckSeverity.P0
     checks.append(
         CheckResult(
             check_id="runtime.health.lifecycle",
             name="引擎生命周期",
-            status=CheckStatus.PASS if lifecycle_ok else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=lc_status,
+            severity=lc_severity,
             message=f"生命周期={lifecycle_value}",
             evidence={"state": lifecycle_value},
         )
