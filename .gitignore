@@ -22,6 +22,8 @@ beidou_repair_log.jsonl
 .beidou/
 evidence/bootstrap/*.json
 evidence/bootstrap/*.jsonl
+evidence/BD-00/startup_audit.json
+evidence/BD-01/control_state.json
 
 # IDE
 .idea/
