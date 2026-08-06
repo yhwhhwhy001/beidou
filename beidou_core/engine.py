@@ -1298,7 +1298,8 @@ class AutonomousEngine:
 
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
         order_type = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
-        client_id = intent.client_order_id or f"beidou-{int(time.time() * 1000)}"
+        # BD-P0-07: Client Order ID 从 Intent ID 确定性派生，重试时可恢复
+        client_id = intent.client_order_id or f"beidou-{intent.intent_id}"
 
         # 使用 intent 自身的 instrument_id，而非循环变量
         order_symbol = str(intent.instrument_id) if hasattr(intent, 'instrument_id') else symbol
@@ -1801,7 +1802,7 @@ class AutonomousEngine:
                         quantity=Quantity(amount=str(close_qty)),
                         price=Price(amount=str(close)),
                         time_in_force=TimeInForce.GTC,
-                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time() * 1000)}",
+                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time())}",
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
                         idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
                         risk_approval_id=str(RiskApprovalId(f"nearline-close-{int(time.time())}")),
@@ -1981,7 +1982,7 @@ class AutonomousEngine:
                     quantity=Quantity(amount=str(position_size)),
                     price=Price(amount=str(price)),
                     time_in_force=TimeInForce.GTC,
-                    client_order_id=f"beidou-{symbol.lower()}-{int(time.time() * 1000)}",
+                    client_order_id=f"beidou-{symbol.lower()}-entry-{int(time.time())}",
                     correlation_id=CorrelationId(f"nearline-{int(time.time())}"),
                     idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
                     risk_approval_id=str(approval_id),

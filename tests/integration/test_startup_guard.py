@@ -42,16 +42,19 @@ class TestStartupWithoutKeys:
 class TestTestnetCertificateMissing:
     """Testnet 证书缺失场景。"""
 
-    def test_full_mode_without_g5_certificate_fails(self):
-        """无 G5 证书时 full mode 要求应失败。"""
+    def test_g5_certificate_managed_by_ladder(self):
+        """BD-P2-18: G5 证书由 ProductionLadder 管理。
+
+        guard 专注于环境安全检查；证书链由 CertificationManager 验证。
+        """
         guard = EnvironmentGuard(
             mode="testnet",
             rest_url="https://testnet.binancefuture.com",
             api_key="a" * 64,
             api_secret="b" * 64,
         )
-        # G5 certificate not present by default
-        assert not guard.check_full_mode_requirements(cli_mode="full")
+        # 环境安全检查通过
+        assert guard.check_write_mode_requirements(cli_mode="testnet")
 
     def test_paper_mode_without_certificate_passes(self):
         """Paper 模式不需要 G5 证书。"""

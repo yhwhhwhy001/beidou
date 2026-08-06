@@ -5,7 +5,47 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from enum import Enum
+
 from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, VenueId
+
+
+class ReconciliationStatus(str, Enum):
+    """BD-P0-10: 对账结果状态。"""
+
+    MATCHED = "MATCHED"
+    MISMATCHED = "MISMATCHED"
+    ONE_SIDE_MISSING = "ONE_SIDE_MISSING"
+    BOTH_SIDES_MISSING = "BOTH_SIDES_MISSING"  # → UNKNOWN, blocks new risk
+    ERROR = "ERROR"
+
+    @property
+    def is_safe(self) -> bool:
+        """是否可以安全继续交易。BOTH_SIDES_MISSING/ERROR → unsafe。"""
+        return self in (ReconciliationStatus.MATCHED,)
+
+
+@dataclass
+class ReconciliationResult:
+    """BD-P0-10: 对账结果。包含类型化状态和差异列表。"""
+
+    matched: bool
+    status: ReconciliationStatus = ReconciliationStatus.MATCHED
+    differences: list[str] = field(default_factory=list)
+    system_facts: AccountFactSnapshot | None = None
+    exchange_facts: AccountFactSnapshot | None = None
+
+    @property
+    def is_unknown(self) -> bool:
+        return self.status == ReconciliationStatus.BOTH_SIDES_MISSING
+
+    @property
+    def should_block_new_risk(self) -> bool:
+        """BD-P0-10 AC-10-01: BOTH_SIDES_MISSING → UNKNOWN, blocks new risk。"""
+        return self.status in (
+            ReconciliationStatus.BOTH_SIDES_MISSING,
+            ReconciliationStatus.ERROR,
+        )
 
 
 @dataclass
@@ -18,14 +58,6 @@ class AccountFactSnapshot:
     margin_used: MonetaryValue | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: CorrelationId | None = None
-
-
-@dataclass
-class ReconciliationResult:
-    matched: bool
-    differences: list[str] = field(default_factory=list)
-    system_facts: AccountFactSnapshot | None = None
-    exchange_facts: AccountFactSnapshot | None = None
 
 
 class ReconciliationEngine:
@@ -51,14 +83,16 @@ class ReconciliationEngine:
         sys_facts = self._system_facts.get(key)
         ex_facts = self._exchange_facts.get(key)
         if sys_facts is None and ex_facts is None:
-            # BD-P0-10: 双方缺失 → UNKNOWN (fail-closed)
+            # BD-P0-10: 双方缺失 → BOTH_SIDES_MISSING, blocks new risk
             return ReconciliationResult(
                 matched=False,
+                status=ReconciliationStatus.BOTH_SIDES_MISSING,
                 differences=["BOTH_SIDES_MISSING: system and exchange facts unavailable — UNKNOWN"],
             )
         if sys_facts is None or ex_facts is None:
             return ReconciliationResult(
-                matched=False, differences=["One side missing"], system_facts=sys_facts, exchange_facts=ex_facts
+                matched=False, status=ReconciliationStatus.ONE_SIDE_MISSING,
+                differences=["One side missing"], system_facts=sys_facts, exchange_facts=ex_facts,
             )
         diffs: list[str] = []
 
@@ -86,8 +120,13 @@ class ReconciliationEngine:
         if sys_pos != ex_pos:
             diffs.append(f"Position mismatch: system={sys_pos} exchange={ex_pos}")
 
+        status = ReconciliationStatus.MATCHED if len(diffs) == 0 else ReconciliationStatus.MISMATCHED
         return ReconciliationResult(
-            matched=len(diffs) == 0, differences=diffs, system_facts=sys_facts, exchange_facts=ex_facts
+            matched=len(diffs) == 0,
+            status=status,
+            differences=diffs,
+            system_facts=sys_facts,
+            exchange_facts=ex_facts,
         )
 
     def repair_strategy(self, result: ReconciliationResult) -> str:

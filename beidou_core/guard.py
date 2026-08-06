@@ -276,14 +276,14 @@ class EnvironmentGuard:
 
         return True
 
-    def check_full_mode_requirements(self, cli_mode: str = "paper") -> bool:
+    def check_write_mode_requirements(self, cli_mode: str = "paper") -> bool:
         """检查可写模式的前置条件。
 
         TESTNET 模式要求：
         1. Testnet URL（非 Mainnet）
         2. 有效交易凭据
 
-        full CLI 模式额外要求：
+        G5 证书模式额外要求：
         3. G5 证书 + commit 绑定
 
         零写模式无需此检查。
@@ -297,7 +297,7 @@ class EnvironmentGuard:
         if self._is_mainnet_url(self._rest_url):
             failures.append("Mainnet URL not allowed")
             self._audit(
-                "FULL_MODE_BLOCKED",
+                "WRITE_MODE_BLOCKED",
                 {
                     "blocker": "mainnet_url",
                     "url": self._rest_url,
@@ -306,21 +306,24 @@ class EnvironmentGuard:
 
         # 2. 交易凭据
         if not self._api_key or not self._api_secret:
-            failures.append("Trading credentials required for full/testnet mode")
+            failures.append("Trading credentials required for write-capable mode")
             self._audit(
-                "FULL_MODE_BLOCKED",
+                "WRITE_MODE_BLOCKED",
                 {
                     "blocker": "missing_credentials",
                 },
             )
 
-        # 3. G5 证书链 — 仅 full CLI 模式强制要求（testnet 模式跳过）
-        if cli_mode == "full":
+        # 3. G5 证书链 — BD-P2-18: 证书由独立 Gate Runner 签发
+        # G5 证书要求由 ProductionLadder (BD-P2-18) 强制执行；
+        # CLI 层不再通过 mode 参数触发 G5 检查。
+        # check_write_mode_requirements() 专注于环境安全检查，
+        # 证书验证由 CertificationManager 独立完成。
             g5_cert_path = self._g5_cert_path or os.path.join("evidence", "certificates", "G5.json")
             if not os.path.exists(g5_cert_path):
                 failures.append("G5 certificate not found")
                 self._audit(
-                    "FULL_MODE_BLOCKED",
+                    "WRITE_MODE_BLOCKED",
                     {
                         "blocker": "no_g5_certificate",
                         "path": g5_cert_path,
@@ -335,7 +338,7 @@ class EnvironmentGuard:
                     if cert_commit != self._commit:
                         failures.append(f"Certificate commit {cert_commit[:8]} != current {self._commit[:8]}")
                         self._audit(
-                            "FULL_MODE_BLOCKED",
+                            "WRITE_MODE_BLOCKED",
                             {
                                 "blocker": "commit_mismatch",
                             },
@@ -343,7 +346,7 @@ class EnvironmentGuard:
                 except Exception:
                     failures.append("Certificate unreadable")
                     self._audit(
-                        "FULL_MODE_BLOCKED",
+                        "WRITE_MODE_BLOCKED",
                         {
                             "blocker": "certificate_unreadable",
                         },
@@ -391,12 +394,12 @@ class EnvironmentGuard:
 
         # Check 5: Write-mode requirements (G5 cert for full CLI)
         if not self._mode.is_write_blocked:
-            full_ok = self.check_full_mode_requirements(cli_mode=cli_mode)
-            checks["full_mode_requirements"] = full_ok
+            full_ok = self.check_write_mode_requirements(cli_mode=cli_mode)
+            checks["write_mode_requirements"] = full_ok
             if not full_ok:
                 failures.append("Write-mode requirements not met")
         else:
-            checks["full_mode_requirements"] = True
+            checks["write_mode_requirements"] = True
 
         # Startup audit event
         self._audit(
