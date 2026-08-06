@@ -734,8 +734,11 @@ class AutonomousEngine:
             max_leverage=3.0, max_concentration_pct=50.0, max_position_notional=500000.0
         )
         self._risk_engine = RiskEngineImpl()
+        # 仅在正式生产环境 (CANARY/LIVE) 要求真实签名密钥；
+        # 其他环境 (RESEARCH/PAPER/SHADOW/TESTNET/SAFETY_ONLY) 使用 mock 密钥。
+        _needs_real_signing = self._env_mode.value in ("canary", "live")
         self._approval = RiskApprovalSignerImpl(
-            signing_key="beidou-paper-mock-key" if not self._can_write else ""
+            signing_key="" if _needs_real_signing else "beidou-testnet-mock-key"
         )
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
@@ -1539,6 +1542,15 @@ class AutonomousEngine:
                         # 跳过后续保护创建
                     else:
                         # 成交后创建止盈止损保护（仅入场订单）
+                        # 先清理同 symbol 的旧保护单，防止仓位翻转时堆积
+                        for old_pid, old_pp in list(self._protection.all_positions().items()):
+                            if str(old_pp.instrument_id) == symbol:
+                                self._protection.cancel_protection(old_pid)
+                                self._protection.remove_position(old_pid)
+                                self._position_entry_times.pop(old_pid, None)
+                                await self._cancel_algo_orders(old_pid, symbol)
+                                print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
+
                         entry_price = float(avg_price)
                         qty = executed_qty
                         pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL

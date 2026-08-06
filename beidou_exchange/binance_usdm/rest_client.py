@@ -242,6 +242,7 @@ class BinanceRESTClient:
             if time.monotonic() < self._rate_state.circuit_open_until:
                 return Result.fail(ErrorCategory.RATE_LIMIT, "Circuit breaker open")
             self._rate_state.circuit_open = False
+            self._rate_state.consecutive_failures = 0  # 重置计数器，避免立即重新触发熔断
 
         url = self._rest_url + path
 
