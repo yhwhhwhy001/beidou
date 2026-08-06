@@ -104,3 +104,51 @@ class ApprovalSigner:
         if not self._key:
             return False
         return approval.verify(self._key)
+
+
+@dataclass(frozen=True, slots=True)
+class PaperDecision:
+    """纸面决策 — 仅用于研究和回测，绝不可被 Exchange Executor 接受。
+
+    不变量：
+    - mode 永远为 PAPER。
+    - non_tradable 永远为 True。
+    - Exchange Executor 必须在入口校验 non_tradable，拒绝所有 Paper 决策。
+    """
+
+    decision_id: str
+    intent_hash: str
+    portfolio_hash: str
+    policy_version: str
+    issued_at: float
+    mode: str = "PAPER"
+    non_tradable: bool = True
+    reason: str = ""
+
+
+class PaperApprovalPort:
+    """纸面审批端口 — 生成明确标记为 PAPER、non_tradable=true 的纸面决策。
+
+    Paper 决策与真实签名审批 (ApprovalSigner) 使用完全不同的类型和路径，
+    防止纸面决策被误路由到执行层。
+    """
+
+    def decide(self, snapshot_hash: str, intent_hash: str = "", portfolio_hash: str = "", policy_version: str = "") -> PaperDecision:
+        """生成纸面交易决策。
+
+        返回的 PaperDecision 携带 mode=PAPER, non_tradable=true，
+        Exchange Executor 必须拒绝此类决策。
+        """
+        import time
+        import uuid
+
+        return PaperDecision(
+            decision_id=f"paper-{uuid.uuid4().hex[:12]}",
+            intent_hash=intent_hash,
+            portfolio_hash=portfolio_hash,
+            policy_version=policy_version,
+            issued_at=time.time(),
+            mode="PAPER",
+            non_tradable=True,
+            reason=f"Paper decision for snapshot {snapshot_hash[:16]}",
+        )

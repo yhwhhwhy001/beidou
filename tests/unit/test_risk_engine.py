@@ -63,26 +63,91 @@ class TestPreRisk:
 
 
 class TestRiskApproval:
-    def test_approve_and_verify(self):
-        signer = RiskApprovalSignerImpl()
+    def _make_signer(self) -> RiskApprovalSignerImpl:
+        """创建带测试密钥的签名器。"""
+        return RiskApprovalSignerImpl(signing_key="test-signing-key-for-unit-tests")
+
+    def test_sign_requires_key(self, monkeypatch):
+        """无密钥时 sign() 必须抛出 SIGNING_UNAVAILABLE。"""
+        monkeypatch.delenv("BEIDOU_SIGNING_KEY", raising=False)
+        signer = RiskApprovalSignerImpl()  # no key
+        aid = RiskApprovalId("approval-000")
+        import pytest as _pytest
+
+        with _pytest.raises(RuntimeError, match="SIGNING_UNAVAILABLE"):
+            signer.sign(aid)
+
+    def test_verify_denied_without_signature(self):
+        """无签名时 verify() 必须返回 False（不再支持无签名旁路）。"""
+        signer = self._make_signer()
         aid = RiskApprovalId("approval-001")
-        signer.sign(aid)
+        signer.sign(aid, nonce="nonce-001")
         import asyncio
 
-        assert asyncio.run(signer.verify(aid))
+        assert not asyncio.run(signer.verify(aid))  # no signature provided
+
+    def test_approve_and_verify(self):
+        """正常签名→验证流程。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-002")
+        sig = signer.sign(aid, nonce="nonce-002")
+        import asyncio
+
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-002"))
+
+    def test_verify_wrong_signature(self):
+        """错误签名必须被拒绝。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-003")
+        signer.sign(aid, nonce="nonce-003")
+        import asyncio
+
+        assert not asyncio.run(signer.verify(aid, signature="bad-signature", nonce="nonce-003"))
+
+    def test_verify_replay_rejected(self):
+        """nonce 重放必须被拒绝。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-004")
+        sig = signer.sign(aid, nonce="nonce-004")
+        import asyncio
+
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004"))
+        # 重放相同 nonce
+        assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004"))
+
+    def test_verify_tampered_payload_rejected(self):
+        """篡改 payload 字段导致签名不匹配。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-005")
+        sig = signer.sign(aid, proposal_hash="hash-A", nonce="nonce-005")
+        import asyncio
+
+        # 验证时使用不同的 proposal_hash
+        assert not asyncio.run(signer.verify(aid, signature=sig, proposal_hash="hash-B", nonce="nonce-005"))
 
     def test_revoke(self):
-        signer = RiskApprovalSignerImpl()
-        aid = RiskApprovalId("approval-002")
-        signer.sign(aid)
+        """撤销后验证应失败。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-006")
+        sig = signer.sign(aid, nonce="nonce-006")
         signer.revoke(aid)
         import asyncio
 
-        assert not asyncio.run(signer.verify(aid))
+        assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-006"))
+
+    def test_signing_unavailable_verify_denied(self, monkeypatch):
+        """密钥不可用时 verify() 一律返回 False。"""
+        monkeypatch.delenv("BEIDOU_SIGNING_KEY", raising=False)
+        signer = RiskApprovalSignerImpl()  # no key
+        aid = RiskApprovalId("approval-007")
+        import asyncio
+
+        assert not signer.signing_available
+        assert not asyncio.run(signer.verify(aid, signature="any-sig"))
 
     def test_state_machine(self):
         sm = RiskApprovalStateMachine()
-        aid = RiskApprovalId("approval-003")
+        aid = RiskApprovalId("approval-008")
         assert sm.get(aid) == RiskDecision.PENDING
         sm.approve(aid)
         assert sm.get(aid) == RiskDecision.APPROVED

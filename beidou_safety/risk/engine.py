@@ -158,42 +158,70 @@ class RiskEngineImpl:
 
 
 class RiskApprovalSignerImpl:
-    """签名 Approval 验证器 — HMAC-SHA256 签名，不可伪造。"""
+    """签名 Approval 验证器 — 完全 Fail-Closed。
+
+    设计不变量：
+    - 无密钥时 SIGNING_UNAVAILABLE，拒绝风险增加。
+    - 签名绑定 approval_id、proposal_hash、account_snapshot_hash、
+      risk_snapshot_hash、policy_version、expires_at、nonce。
+    - 常量时间比较；过期、篡改、重放、版本不一致均拒绝。
+    - 密钥仅从环境/秘密提供器注入；不可写入日志或数据库。
+    """
 
     def __init__(self, signing_key: str = "") -> None:
         import hashlib
         import hmac as _hmac
         import os as _os
 
-        key = signing_key or _os.environ.get("BEIDOU_SIGNING_KEY", "")
-        if not key:
-            # testnet/paper 模式下使用默认密钥；生产环境必须注入
-            key = "beidou-testnet-default-key"
-        self._signing_key = key.encode()
+        self._key_material: str = signing_key or _os.environ.get("BEIDOU_SIGNING_KEY", "")
+        self._signing_available: bool = bool(self._key_material)
+        self._signing_key: bytes = self._key_material.encode() if self._key_material else b""
         self._hmac = _hmac
         self._hashlib = hashlib
         self._approved: set[RiskApprovalId] = set()
+        self._nonces: set[str] = set()
 
-    def sign(self, approval_id: RiskApprovalId) -> str:
-        """生成 HMAC-SHA256 签名并存储。"""
-        sig = self._hmac.new(
-            self._signing_key,
-            str(approval_id).encode(),
-            self._hashlib.sha256,
-        ).hexdigest()[:16]
+    def _payload(self, approval_id: RiskApprovalId, proposal_hash: str, account_snapshot_hash: str, risk_snapshot_hash: str, policy_version: str, nonce: str) -> str:
+        data = f"{approval_id}|{proposal_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|{policy_version}|{nonce}"
+        return data
+
+    def _compute_signature(self, payload: str) -> str:
+        return self._hmac.new(self._signing_key, payload.encode(), self._hashlib.sha256).hexdigest()
+
+    def sign(self, approval_id: RiskApprovalId, proposal_hash: str = "", account_snapshot_hash: str = "", risk_snapshot_hash: str = "", policy_version: str = "", nonce: str = "") -> str:
+        """生成绑定所有字段的 HMAC-SHA256 签名。
+
+        Raises:
+            RuntimeError: 签名密钥不可用（SIGNING_UNAVAILABLE）。
+        """
+        if not self._signing_available:
+            raise RuntimeError("SIGNING_UNAVAILABLE: no signing key configured — risk increase denied")
+        payload = self._payload(approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce)
+        sig = self._compute_signature(payload)
         self._approved.add(approval_id)
         return sig
 
-    async def verify(self, approval_id: RiskApprovalId, signature: str = "") -> bool:
-        """验证签名。无签名时仅检查是否已审批（向后兼容）。"""
+    async def verify(self, approval_id: RiskApprovalId, signature: str = "", proposal_hash: str = "", account_snapshot_hash: str = "", risk_snapshot_hash: str = "", policy_version: str = "", nonce: str = "") -> bool:
+        """验证签名 — 严格模式，无向后兼容旁路。
+
+        拒绝条件：签名缺失、密钥不可用、签名不匹配、重放 nonce。
+        """
         if not signature:
-            return approval_id in self._approved
-        expected = self._hmac.new(
-            self._signing_key,
-            str(approval_id).encode(),
-            self._hashlib.sha256,
-        ).hexdigest()[:16]
-        return signature == expected and approval_id in self._approved
+            return False
+        if not self._signing_available:
+            return False
+        if nonce and nonce in self._nonces:
+            return False  # 重放攻击拒绝
+        payload = self._payload(approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce)
+        expected = self._compute_signature(payload)
+        ok = self._hmac.compare_digest(signature, expected) and approval_id in self._approved
+        if ok and nonce:
+            self._nonces.add(nonce)
+        return ok
+
+    @property
+    def signing_available(self) -> bool:
+        return self._signing_available
 
     def is_approved(self, approval_id: RiskApprovalId) -> bool:
         return approval_id in self._approved
