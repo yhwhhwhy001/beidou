@@ -38,6 +38,7 @@ from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
 from beidou_safety.protection.engine import ProtectionManager
+from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_safety.risk.engine import (
     PostRiskMonitor,
     PreRiskCheckerImpl,
@@ -1541,6 +1542,11 @@ class AutonomousEngine:
                         pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
                         pos_id = f"pos-{order_id}"
 
+                        # 自适应止盈止损：基于 ATR、波动率、点差、价格档位动态计算
+                        kline_features = self._feed.get_kline_features(symbol)
+                        adaptive_cfg = AdaptiveProtectionCalculator.calculate(
+                            symbol, entry_price, kline_features
+                        )
                         pp = self._protection.create_protection(
                             position_id=pos_id,
                             instrument_id=InstrumentId(symbol),
@@ -1548,8 +1554,8 @@ class AutonomousEngine:
                             entry_price=entry_price,
                             quantity=qty,
                             side=pos_side,
-                            stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 2.0},
-                            take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
+                            stop_loss_config=adaptive_cfg.stop_loss_config,
+                            take_profit_config=adaptive_cfg.take_profit_config,
                         )
                         # 记录入场时间，供 TimeExit 超时检测使用
                         self._position_entry_times[pos_id] = time.time()
@@ -1568,11 +1574,17 @@ class AutonomousEngine:
                             else:
                                 tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
 
+                        adaptive_info = (
+                            f"ATR={adaptive_cfg.atr_pct:.2f}% vol={adaptive_cfg.volatility_regime.value} "
+                            f"tier={adaptive_cfg.price_tier.value} regime={adaptive_cfg.market_regime.value} "
+                            f"RR={adaptive_cfg.rr_ratio:.1f}"
+                        )
                         print(
                             f"[protection] ┌ {'='*60}\n"
                             f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
                             f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
                             f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts))}\n"
+                            f"[protection] ├─ 📊 {adaptive_info}\n"
                             f"[protection] └ {'='*60}"
                         )
 
@@ -2333,6 +2345,129 @@ class AutonomousEngine:
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
         except Exception as e:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
+
+        # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
+        # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
+        try:
+            exchange_info = await self._api_async("/fapi/v1/exchangeInfo")
+            if not hasattr(self, "_symbol_precision"):
+                self._symbol_precision = {}
+            for s in exchange_info.get("symbols", []):
+                sym = s.get("symbol", "")
+                prec = {"quantity": 3, "price": 2}
+                for f_item in s.get("filters", []):
+                    if f_item.get("filterType") == "LOT_SIZE":
+                        step = f_item.get("stepSize", "0.001")
+                        prec["quantity"] = max(0, len(step.split(".")[1].rstrip("0")) if "." in step else 0)
+                    if f_item.get("filterType") == "PRICE_FILTER":
+                        tick = f_item.get("tickSize", "0.01")
+                        prec["price"] = max(0, len(tick.split(".")[1].rstrip("0")) if "." in tick else 0)
+                self._symbol_precision[sym] = prec
+            print(f"[beidou-autopilot] Loaded precision for {len(self._symbol_precision)} symbols")
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: exchangeInfo load failed: {e}")
+
+        try:
+            account = await self._api_async("/fapi/v2/account", signed=True)
+            positions_list = account.get("positions", [])
+            # Phase 1: 本地创建所有保护单
+            pending_submissions: list[dict] = []
+            for p in positions_list:
+                amt = float(p.get("positionAmt", 0))
+                if amt == 0:
+                    continue
+                symbol = p["symbol"]
+                entry_price = float(p.get("entryPrice", 0))
+                if entry_price <= 0:
+                    features = self._feed.update_features(symbol)
+                    entry_price = features.get("price", 0) if features else 0
+                    if entry_price <= 0:
+                        continue
+                pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
+                qty = abs(amt)
+                pos_id = f"pos-recovered-{symbol}"
+
+                already_protected = any(
+                    str(pp.instrument_id) == symbol and abs(float(pp.quantity) - qty) < 1e-8
+                    for pp in self._protection.all_positions().values()
+                )
+                if already_protected:
+                    continue
+
+                kline_features = self._feed.get_kline_features(symbol)
+                adaptive_cfg = AdaptiveProtectionCalculator.calculate(
+                    symbol, entry_price, kline_features
+                )
+                pp = self._protection.create_protection(
+                    position_id=pos_id, instrument_id=InstrumentId(symbol),
+                    venue_id=VenueId("BINANCE"), entry_price=entry_price,
+                    quantity=qty, side=pos_side,
+                    stop_loss_config=adaptive_cfg.stop_loss_config,
+                    take_profit_config=adaptive_cfg.take_profit_config,
+                )
+                self._position_entry_times[pos_id] = time.time()
+
+                reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
+                protect_orders = [pp.stop_loss] if pp.stop_loss else []
+                protect_orders.extend(pp.take_profits)
+
+                for p_order in protect_orders:
+                    if p_order is None:
+                        continue
+                    prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                    qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
+                    price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
+                    pending_submissions.append({
+                        "symbol": symbol, "pos_id": pos_id, "reason": p_order.reason,
+                        "algo_params": {
+                            "symbol": symbol, "side": reduce_side,
+                            "algoType": "CONDITIONAL", "type": p_order.order_type,
+                            "quantity": qty_str, "triggerPrice": price_str,
+                            "reduceOnly": "true", "workingType": "CONTRACT_PRICE",
+                        },
+                    })
+
+            # Phase 2: 并行提交所有条件单到交易所
+            if pending_submissions:
+                async def _submit_algo(sub: dict):
+                    sub["result"] = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True, params=sub["algo_params"]
+                    )
+                    return sub
+
+                results = await asyncio.gather(*[_submit_algo(s) for s in pending_submissions], return_exceptions=True)
+                recovered_by_pos: dict[str, dict] = {}
+                for sub, res in zip(pending_submissions, results):
+                    if isinstance(res, Exception):
+                        print(f"[startup] Recovery ERROR {sub['symbol']} {sub['reason']}: {res}")
+                        continue
+                    algo_resp = res["result"]
+                    symbol = sub["symbol"]
+                    pos_id = sub["pos_id"]
+                    if "algoId" in algo_resp:
+                        algo_id = str(algo_resp["algoId"])
+                        if not hasattr(self, "_active_algo_ids"):
+                            self._active_algo_ids = {}
+                        self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                        rec = recovered_by_pos.setdefault(pos_id, {"symbol": symbol, "placed": 0, "total": 0})
+                        rec["placed"] += 1
+                        rec["total"] += 1
+                        print(f"[startup] Recovered protection: {symbol} {sub['reason']} → algoId={algo_id}")
+                    else:
+                        rec = recovered_by_pos.setdefault(pos_id, {"symbol": symbol, "placed": 0, "total": 0})
+                        rec["total"] += 1
+                        print(f"[startup] Recovery FAILED {symbol} {sub['reason']}: "
+                              f"{algo_resp.get('msg', str(algo_resp)[:100])}")
+
+                for pos_id, rec in recovered_by_pos.items():
+                    print(f"[startup] Recovered position {rec['symbol']}: "
+                          f"{rec['placed']}/{rec['total']} placed")
+                total_placed = sum(r["placed"] for r in recovered_by_pos.values())
+                print(f"[beidou-autopilot] Restored protections for {len(recovered_by_pos)} positions ({total_placed} orders)")
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: Position protection recovery failed: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Print strategy/risk activation status
         print(
