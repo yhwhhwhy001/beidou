@@ -1,64 +1,105 @@
-"""Command-line entrypoint for `beidou`, `北斗`, and `bd`."""
+"""北斗统一命令行入口：beidou / 北斗 / bd。"""
 
 from __future__ import annotations
 
-import sys
+import asyncio
+import json
+import os
+from pathlib import Path
 
 import click
 
-from .checks import PreflightChecker
-from .manifest import DEFAULT_MODE, DEFAULT_SYMBOLS, SUPPORTED_MODES
+from .checks import find_project_root
+from .manifest import DEFAULT_MODE, DEFAULT_SYMBOLS, HEALTH_PORT, SUPPORTED_MODES
+from .preflight import run_preflight
+from .state import inspect_runtime_status, stop_running_instance
 from .supervisor import BeidouSupervisor
 
 
+def _parse_symbols(value: str) -> list[str]:
+    values = [item.strip().upper() for item in value.split(",") if item.strip()]
+    if values in (["ALL"], ["DEFAULT"]):
+        from beidou_core.engine import DEFAULT_UNIVERSE
+
+        return list(DEFAULT_UNIVERSE)
+    return values or ["BTCUSDT", "ETHUSDT"]
+
+
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument(
-    "action",
-    required=False,
-    default="start",
-    type=click.Choice(["start", "doctor", "status", "stop"], case_sensitive=False),
-)
+@click.argument("action", required=False, default="start", type=click.Choice(["start", "doctor", "status", "stop"]))
 @click.option("--mode", type=click.Choice(SUPPORTED_MODES), default=DEFAULT_MODE, show_default=True)
-@click.option("--symbols", default=",".join(DEFAULT_SYMBOLS), show_default=True, help="逗号分隔的交易对，或 ALL")
-@click.option("--startup-timeout", type=click.IntRange(min=30, max=900), default=180, show_default=True)
-@click.option("--poll-interval", type=click.IntRange(min=5, max=300), default=10, show_default=True)
+@click.option("--symbols", default=",".join(DEFAULT_SYMBOLS), show_default=True)
+@click.option("--port", type=click.IntRange(1024, 65535), default=HEALTH_PORT, show_default=True)
+@click.option("--startup-timeout", type=click.FloatRange(30.0, 900.0), default=300.0, show_default=True)
+@click.option(
+    "--monitor-interval",
+    "--poll-interval",
+    type=click.FloatRange(1.0, 60.0),
+    default=5.0,
+    show_default=True,
+)
 @click.option("--self-heal/--no-self-heal", default=True, show_default=True)
-@click.option("--max-restarts", type=click.IntRange(min=0, max=10), default=2, show_default=True)
+@click.option(
+    "--max-restarts",
+    type=click.IntRange(0, 10),
+    default=2,
+    show_default=True,
+    help="兼容参数：允许的证据驱动恢复次数；不执行未验证的 Testnet 进程硬重启。",
+)
 def main(
     action: str,
     mode: str,
     symbols: str,
-    startup_timeout: int,
-    poll_interval: int,
+    port: int,
+    startup_timeout: float,
+    monitor_interval: float,
     self_heal: bool,
     max_restarts: int,
 ) -> None:
-    """一键启动、诊断、查看或停止北斗 Autopilot。"""
+    """北斗一键启动、深度自检、状态查询和安全停止。
 
-    normalized_symbols = [item.strip().upper() for item in symbols.split(",") if item.strip()]
-    if not normalized_symbols:
-        raise click.UsageError("--symbols 不能为空")
+    直接执行 `beidou`、`北斗` 或 `bd` 等价于 `start`。
+    """
+    root: Path = find_project_root()
+    os.chdir(root)
+    os.environ["BEIDOU_ENV"] = mode
 
-    action = action.lower()
     if action == "doctor":
-        report = PreflightChecker(mode, normalized_symbols).run()
-        BeidouSupervisor._print_report(report)
-        raise SystemExit(0 if report.passed else 2)
-    if action == "status":
-        raise SystemExit(BeidouSupervisor.status())
-    if action == "stop":
-        raise SystemExit(BeidouSupervisor.stop())
+        checks, _ = run_preflight(root, mode, port)
+        for item in checks:
+            click.echo(json.dumps(item.to_dict(), ensure_ascii=False))
+        raise SystemExit(2 if any(item.is_blocking for item in checks) else 0)
 
+    if action == "status":
+        status = inspect_runtime_status(root)
+        if status is None:
+            click.echo("未发现监督器状态证据。")
+            raise SystemExit(1)
+        click.echo(json.dumps(status, ensure_ascii=False, indent=2))
+        return
+
+    if action == "stop":
+        ok, message = stop_running_instance(root)
+        click.echo(message)
+        raise SystemExit(0 if ok else 1)
+
+    parsed_symbols = _parse_symbols(symbols)
     supervisor = BeidouSupervisor(
+        project_root=root,
         mode=mode,
-        symbols=normalized_symbols,
+        symbols=parsed_symbols,
+        port=port,
         startup_timeout=startup_timeout,
-        poll_interval=poll_interval,
+        monitor_interval=monitor_interval,
         self_heal=self_heal,
         max_restarts=max_restarts,
     )
-    raise SystemExit(supervisor.run())
+    try:
+        exit_code = asyncio.run(supervisor.run())
+    except KeyboardInterrupt:
+        exit_code = 130
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

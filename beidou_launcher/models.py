@@ -1,77 +1,87 @@
-"""Data models for the Beidou one-click launcher."""
+"""启动检查与监督证据模型。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 
 class CheckStatus(str, Enum):
-    """Normalized result of a startup or runtime check."""
-
     PASS = "PASS"
     WARN = "WARN"
     FAIL = "FAIL"
+    UNKNOWN = "UNKNOWN"
+
+
+class CheckSeverity(str, Enum):
+    INFO = "INFO"
+    P2 = "P2"
+    P1 = "P1"
+    P0 = "P0"
 
 
 @dataclass(frozen=True, slots=True)
 class CheckResult:
-    """One evidence-backed check result."""
-
-    code: str
-    subject: str
+    check_id: str
+    name: str
     status: CheckStatus
+    severity: CheckSeverity
     message: str
-    critical: bool = True
     evidence: dict[str, Any] = field(default_factory=dict)
+    duration_ms: float = 0.0
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def is_blocking(self) -> bool:
+        return self.status == CheckStatus.FAIL and self.severity in {CheckSeverity.P0, CheckSeverity.P1}
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "code": self.code,
-            "subject": self.subject,
-            "status": self.status.value,
-            "message": self.message,
-            "critical": self.critical,
-            "evidence": self.evidence,
-        }
+        data = asdict(self)
+        data["status"] = self.status.value
+        data["severity"] = self.severity.value
+        data["is_blocking"] = self.is_blocking
+        return data
 
 
 @dataclass(slots=True)
-class CheckReport:
-    """Collection of checks for one launcher phase."""
-
-    phase: str
+class StartupReport:
     mode: str
-    results: list[CheckResult] = field(default_factory=list)
+    symbols: list[str]
+    port: int
+    commit: str
+    checks: list[CheckResult] = field(default_factory=list)
+    phase: str = "PREFLIGHT"
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    finished_at: str = ""
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    trading_ready: bool = False
+    supervisor_state: str = "STARTING"
+
+    @property
+    def blockers(self) -> list[CheckResult]:
+        return [item for item in self.checks if item.is_blocking]
 
     @property
     def passed(self) -> bool:
-        return not any(result.critical and result.status == CheckStatus.FAIL for result in self.results)
+        return not self.blockers
 
-    @property
-    def failure_count(self) -> int:
-        return sum(1 for result in self.results if result.status == CheckStatus.FAIL)
-
-    @property
-    def warning_count(self) -> int:
-        return sum(1 for result in self.results if result.status == CheckStatus.WARN)
-
-    def finish(self) -> CheckReport:
-        self.finished_at = datetime.now(timezone.utc).isoformat()
-        return self
+    def replace_phase_checks(self, phase_prefix: str, checks: list[CheckResult]) -> None:
+        self.checks = [item for item in self.checks if not item.check_id.startswith(phase_prefix)] + checks
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "phase": self.phase,
             "mode": self.mode,
-            "passed": self.passed,
-            "failure_count": self.failure_count,
-            "warning_count": self.warning_count,
+            "symbols": self.symbols,
+            "port": self.port,
+            "commit": self.commit,
+            "phase": self.phase,
             "started_at": self.started_at,
-            "finished_at": self.finished_at,
-            "results": [result.to_dict() for result in self.results],
+            "updated_at": self.updated_at,
+            "trading_ready": self.trading_ready,
+            "supervisor_state": self.supervisor_state,
+            "passed": self.passed,
+            "blockers": [item.to_dict() for item in self.blockers],
+            "checks": [item.to_dict() for item in self.checks],
         }
