@@ -1,5 +1,9 @@
 """PKG-20A/B/C: Risk Engine 测试。"""
 
+import os
+
+import pytest
+
 from beidou_safety.risk import PreRiskContext
 from beidou_safety.risk.engine import (
     PostRiskMonitor,
@@ -18,6 +22,12 @@ from beidou_shared.types import (
     RiskDecision,
     VenueId,
 )
+
+
+@pytest.fixture(autouse=True)
+def _set_signing_key(monkeypatch):
+    """BD-P0-05: 测试用签名密钥。"""
+    monkeypatch.setenv("BEIDOU_SIGNING_KEY", "test-signing-key-for-unit-tests")
 
 
 class TestPreRisk:
