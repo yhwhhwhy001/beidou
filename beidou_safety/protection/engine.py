@@ -33,6 +33,20 @@ from beidou_shared.types import (
 )
 
 
+# ================================================================
+# BD-T11: 保护参数默认值 — 来自版本化策略配置 (v1)。
+# 禁止在调用点硬编码策略数值（stop_pct / rr_ratio / multiplier /
+# trail_pct / min_trail_distance 等）；修改必须走 BD-T11 策略版本
+# 变更流程，并同步更新版本化策略配置。
+# ================================================================
+DEFAULT_STOP_PCT = 2.0  # BD-T11 v1: 固定百分比/移动止损默认百分比
+DEFAULT_RR_RATIO = 2.0  # BD-T11 v1: 默认风险回报比
+DEFAULT_MULTIPLIER = 2.0  # BD-T11 v1: ATR/历史波动率止损默认倍数
+DEFAULT_TRAIL_PCT = 2.0  # BD-T11 v1: 移动止损默认百分比
+DEFAULT_MIN_TRAIL_DISTANCE = 0.5  # BD-T11 v1: 移动止损最小距离
+DEFAULT_FALLBACK_STOP_PCT = 5.0  # BD-T11 v1: swing 结构缺数据回退止损百分比
+
+
 class StopLossType(str, Enum):
     FIXED_PERCENT = "FIXED_PERCENT"
     ATR_BASED = "ATR_BASED"
@@ -146,7 +160,7 @@ class StopLossCalculator:
             return entry_price * (1 + stop_pct / 100)
 
     @staticmethod
-    def atr_based(entry_price: float, side: OrderSide, atr: float, multiplier: float = 2.0) -> float:
+    def atr_based(entry_price: float, side: OrderSide, atr: float, multiplier: float = DEFAULT_MULTIPLIER) -> float:
         """ATR 波动率止损。止损距离 = ATR × 倍数。"""
         if side == OrderSide.BUY:
             return entry_price - atr * multiplier
@@ -154,7 +168,9 @@ class StopLossCalculator:
             return entry_price + atr * multiplier
 
     @staticmethod
-    def volatility_based(entry_price: float, side: OrderSide, volatility_pct: float, multiplier: float = 2.0) -> float:
+    def volatility_based(
+        entry_price: float, side: OrderSide, volatility_pct: float, multiplier: float = DEFAULT_MULTIPLIER
+    ) -> float:
         """历史波动率止损。"""
         if side == OrderSide.BUY:
             return entry_price * (1 - volatility_pct * multiplier / 100)
@@ -170,11 +186,11 @@ class StopLossCalculator:
             return swing_low * 0.999  # 略低于前低
         elif side == OrderSide.SELL and swing_high is not None:
             return swing_high * 1.001  # 略高于前高
-        # 缺数据时回退：固定 5% 止损，避免 0.0 导致的误触发
+        # 缺数据时回退：BD-T11 默认止损百分比，避免 0.0 导致的误触发
         if side == OrderSide.BUY:
-            return entry_price * 0.95 if entry_price > 0 else 0.0
+            return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100) if entry_price > 0 else 0.0
         else:
-            return entry_price * 1.05 if entry_price > 0 else float("inf")
+            return entry_price * (1 + DEFAULT_FALLBACK_STOP_PCT / 100) if entry_price > 0 else float("inf")
 
     @staticmethod
     def calculate(
@@ -183,8 +199,8 @@ class StopLossCalculator:
         side: OrderSide,
         atr: float | None = None,
         volatility_pct: float | None = None,
-        stop_pct: float = 2.0,
-        multiplier: float = 2.0,
+        stop_pct: float = DEFAULT_STOP_PCT,
+        multiplier: float = DEFAULT_MULTIPLIER,
         swing_low: float | None = None,
         swing_high: float | None = None,
     ) -> float:
@@ -200,7 +216,7 @@ class StopLossCalculator:
         elif stop_type == StopLossType.TRAILING:
             # 移动止损初始值 = 固定百分比
             return StopLossCalculator.fixed_percent(entry_price, side, stop_pct)
-        return entry_price * 0.95  # default 5% stop
+        return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)  # BD-T11 默认回退止损
 
 
 class TrailingStopUpdater:
@@ -213,8 +229,8 @@ class TrailingStopUpdater:
         highest_price: float | None,
         lowest_price: float | None,
         side: OrderSide,
-        trail_pct: float = 2.0,
-        min_trail_distance: float = 0.5,
+        trail_pct: float = DEFAULT_TRAIL_PCT,
+        min_trail_distance: float = DEFAULT_MIN_TRAIL_DISTANCE,
     ) -> float:
         """根据价格极值更新移动止损位。
 
@@ -240,7 +256,9 @@ class TakeProfitCalculator:
     """止盈计算器 — 基于风险回报比或多目标。"""
 
     @staticmethod
-    def fixed_rr(entry_price: float, stop_loss_price: float, side: OrderSide, rr_ratio: float = 2.0) -> float:
+    def fixed_rr(
+        entry_price: float, stop_loss_price: float, side: OrderSide, rr_ratio: float = DEFAULT_RR_RATIO
+    ) -> float:
         """基于风险回报比的止盈。风险 = |入场-止损| × RR。"""
         risk = abs(entry_price - stop_loss_price)
         if side == OrderSide.BUY:
@@ -263,7 +281,7 @@ class TakeProfitCalculator:
         risk = abs(entry_price - stop_loss_price)
         result = []
         for t in targets:
-            rr = t.get("rr_ratio", 2.0)
+            rr = t.get("rr_ratio", DEFAULT_RR_RATIO)
             close_pct = t.get("close_pct", 50.0)
             price = entry_price + risk * rr if side == OrderSide.BUY else entry_price - risk * rr
             result.append(
@@ -282,7 +300,7 @@ class TakeProfitCalculator:
         entry_price: float,
         stop_loss_price: float,
         side: OrderSide,
-        rr_ratio: float = 2.0,
+        rr_ratio: float = DEFAULT_RR_RATIO,
         targets: list[dict[str, float]] | None = None,
     ) -> list[dict[str, Any]]:
         """统一止盈计算入口，返回止盈目标列表。"""
@@ -360,8 +378,8 @@ class ProtectionManager:
                 side,
                 atr=stop_loss_config.get("atr"),
                 volatility_pct=stop_loss_config.get("volatility_pct"),
-                stop_pct=stop_loss_config.get("stop_pct", 2.0),
-                multiplier=stop_loss_config.get("multiplier", 2.0),
+                stop_pct=stop_loss_config.get("stop_pct", DEFAULT_STOP_PCT),
+                multiplier=stop_loss_config.get("multiplier", DEFAULT_MULTIPLIER),
                 swing_low=stop_loss_config.get("swing_low"),
                 swing_high=stop_loss_config.get("swing_high"),
             )
@@ -394,13 +412,17 @@ class ProtectionManager:
         # 止盈
         if take_profit_config:
             tp_type = TakeProfitType(take_profit_config.get("type", "FIXED_RR"))
-            stop_price_for_rr = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else entry_price * 0.95
+            stop_price_for_rr = (
+                float(pp.stop_loss.trigger_price.amount)
+                if pp.stop_loss
+                else entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)
+            )
             tp_targets = TakeProfitCalculator.calculate(
                 tp_type,
                 entry_price,
                 stop_price_for_rr,
                 side,
-                rr_ratio=take_profit_config.get("rr_ratio", 2.0),
+                rr_ratio=take_profit_config.get("rr_ratio", DEFAULT_RR_RATIO),
                 targets=take_profit_config.get("targets"),
             )
             tp_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
@@ -487,8 +509,8 @@ class ProtectionManager:
         if pp.stop_loss.stop_type != StopLossType.TRAILING:
             return None
 
-        trail_pct = trail_pct or pp.trailing_config.get("trail_pct", 2.0)
-        min_dist = pp.trailing_config.get("min_trail_distance", 0.5)
+        trail_pct = trail_pct or pp.trailing_config.get("trail_pct", DEFAULT_TRAIL_PCT)
+        min_dist = pp.trailing_config.get("min_trail_distance", DEFAULT_MIN_TRAIL_DISTANCE)
 
         old_stop = float(pp.stop_loss.trigger_price.amount)
         new_stop = TrailingStopUpdater.update(
