@@ -214,21 +214,37 @@ class PreflightChecker:
 
         rest_url = settings.exchange.rest_base_url
         env_matches = settings.environment.value == self.mode or self.mode == "safety_only"
+        safe_fallback_allowed = (
+            self.mode in {"research", "paper", "shadow"}
+            and settings.environment.value == "safety_only"
+            and not settings.can_write_trades
+        )
+        config_status = (
+            CheckStatus.PASS
+            if env_matches
+            else (CheckStatus.WARN if safe_fallback_allowed else CheckStatus.FAIL)
+        )
+        if env_matches:
+            config_message = f"配置来源 {settings.source}, 环境 {settings.environment.value}"
+        elif safe_fallback_allowed:
+            config_message = (
+                f"未找到 {self.mode} 专用配置，使用 SAFETY_ONLY 配置快照；"
+                "运行模式仍由封闭 CLI 枚举控制且交易写入保持禁用"
+            )
+        else:
+            config_message = f"请求模式 {self.mode} 被解析为 {settings.environment.value}"
         results.append(
             CheckResult(
                 code="PF-CONFIG",
                 subject="统一配置",
-                status=CheckStatus.PASS if env_matches else CheckStatus.FAIL,
-                message=(
-                    f"配置来源 {settings.source}, 环境 {settings.environment.value}"
-                    if env_matches
-                    else f"请求模式 {self.mode} 被解析为 {settings.environment.value}"
-                ),
+                status=config_status,
+                message=config_message,
                 evidence={
                     "source": settings.source,
                     "environment": settings.environment.value,
                     "config_hash": settings.config_hash,
                     "rest_base_url": rest_url,
+                    "safe_fallback_allowed": safe_fallback_allowed,
                 },
             )
         )
