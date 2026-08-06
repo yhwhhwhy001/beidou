@@ -1,0 +1,21 @@
+coverage:
+  global_line: 85
+  critical_line: 95
+  critical_branch: 90
+  critical_mutation: 75
+critical_paths:
+- beidou_safety/risk
+- beidou_safety/execution
+- beidou_safety/protection
+- beidou_safety/ledger
+- beidou_safety/reconciliation
+- beidou_exchange
+- beidou_lifecycle
+- beidou_control
+forbidden:
+- mainnet writes
+- default secrets
+- swallowed exceptions
+- mock production path
+- parallel truth sources
+- test weakening

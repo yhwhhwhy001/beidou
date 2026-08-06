@@ -1,0 +1,38 @@
+task_id: BD-T00
+status_enum:
+- PASS
+- CONDITIONAL_PASS
+- FAIL
+- NOT_VERIFIABLE
+blocking_priority: P0
+dependencies: []
+criteria:
+- id: AC-BD-T00-01
+  statement: 所有生产 Python 文件可编译，compileall 退出码为 0。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T00-02
+  statement: pytest 收集成功，收集数量写入证据；不得有 collection error。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T00-03
+  statement: 基线失败被逐项分类为 SOURCE / TEST / ENVIRONMENT / EXTERNAL / NOT_VERIFIABLE。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T00-04
+  statement: 工作树无未记录改动；基线文件包含 commit、命令和原始证据哈希。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T00-05
+  statement: G0 仅在 compile、collect、lint、format、typecheck、unit/integration/architecture 基础门全部可复现后标记 PASS。
+  mandatory: true
+  evidence_required: true
+commands:
+- python -m py_compile beidou_core/guard.py
+- python -m compileall -q beidou_* apps
+- ruff check beidou_* apps tests scripts
+- ruff format --check beidou_* apps tests scripts
+- mypy beidou_* apps --no-error-summary
+- pytest --collect-only -q
+- pytest tests -q --maxfail=1
+failure_rule: 任一 mandatory criterion FAIL 或缺少关键证据时任务不得 PASS；存在 P0 时必须 FAIL。

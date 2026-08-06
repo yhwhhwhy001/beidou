@@ -1,0 +1,30 @@
+task_id: BD-T12
+status_enum:
+- PASS
+- CONDITIONAL_PASS
+- FAIL
+- NOT_VERIFIABLE
+blocking_priority: P0
+dependencies:
+- BD-T10
+criteria:
+- id: AC-BD-T12-01
+  statement: 每个 transaction 的 postings 按币种和方向求和为 0。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T12-02
+  statement: 重复 fill/source_event 不重复记账。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T12-03
+  statement: 任意重放得到相同余额、PnL、fee、funding。
+  mandatory: true
+  evidence_required: true
+- id: AC-BD-T12-04
+  statement: 无 UPDATE/DELETE 已过账交易的生产 API。
+  mandatory: true
+  evidence_required: true
+commands:
+- pytest tests/ledger -q
+- pytest -q -k 'ledger and (balanced or reversal or duplicate_fill or funding or replay)'
+failure_rule: 任一 mandatory criterion FAIL 或缺少关键证据时任务不得 PASS；存在 P0 时必须 FAIL。

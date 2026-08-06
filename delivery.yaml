@@ -1,0 +1,277 @@
+package:
+  name: Beidou Engineering Execution Package
+  version: V1.0
+  generated_at: '2026-08-06'
+  baseline: 6b0d95dfa67465be421d9a4f5eaa5a406e7c3341
+repository: yhwhhwhy001/beidou
+decision: PIVOT
+mainnet: PROHIBITED
+allowed_statuses:
+- PASS
+- CONDITIONAL_PASS
+- FAIL
+- NOT_VERIFIABLE
+first_batch:
+- BD-T00
+- BD-T01
+- BD-T02
+- BD-T03
+- BD-T15
+phases:
+  Phase 0:
+  - BD-T00
+  - BD-T01
+  - BD-T02
+  - BD-T15
+  Phase 1:
+  - BD-T03
+  - BD-T04
+  - BD-T05
+  - BD-T06
+  - BD-T07
+  - BD-T08
+  - BD-T09
+  - BD-T10
+  - BD-T11
+  - BD-T12
+  - BD-T13
+  - BD-T14
+  Phase 2:
+  - BD-T16
+  - BD-T17
+  Phase 4:
+  - BD-T18
+  Phase 5:
+  - BD-T19
+gates:
+- id: G0
+  name: Baseline Integrity
+  required_tasks:
+  - BD-T00
+  - BD-T01
+  - BD-T02
+  - BD-T15
+  initial: FAIL/NOT_VERIFIABLE
+- id: G1
+  name: Single Truth Chain
+  required_tasks:
+  - BD-T03
+  - BD-T08
+  - BD-T09
+  - BD-T10
+  - BD-T12
+  - BD-T13
+  initial: FAIL
+- id: G2
+  name: Data Integrity
+  required_tasks:
+  - BD-T04
+  initial: FAIL
+- id: G3
+  name: Strategy/Research Integrity
+  required_tasks:
+  - BD-T05
+  - BD-T06
+  - BD-T07
+  - BD-T17
+  initial: FAIL
+- id: G4
+  name: Paper Ready
+  required_tasks:
+  - BD-T11
+  - BD-T14
+  - BD-T16
+  initial: HOLD
+- id: G5
+  name: Testnet Ready
+  required_tasks:
+  - BD-T18
+  initial: HOLD
+- id: G6
+  name: Shadow Stability
+  required_tasks:
+  - BD-T19
+  initial: NOT_RUN
+- id: G7
+  name: Unattended
+  required_tasks:
+  - BD-T19
+  initial: NOT_RUN
+- id: G8
+  name: Mainnet Candidate
+  required_tasks: []
+  initial: PROHIBITED
+  manual_approval_required: true
+tasks:
+- id: BD-T00
+  name: 冻结基线并修复构建门
+  priority: P0
+  phase: Phase 0
+  dependencies: []
+  path: delivery/task-packages/BD-T00
+- id: BD-T01
+  name: 密钥与审批 Fail-Closed
+  priority: P0
+  phase: Phase 0
+  dependencies:
+  - BD-T00
+  path: delivery/task-packages/BD-T01
+- id: BD-T02
+  name: 统一配置提供器
+  priority: P0
+  phase: Phase 0
+  dependencies:
+  - BD-T00
+  path: delivery/task-packages/BD-T02
+- id: BD-T03
+  name: 单一 Exchange Gateway
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T01
+  - BD-T02
+  path: delivery/task-packages/BD-T03
+- id: BD-T04
+  name: ClosedBar 与点时特征链
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T03
+  path: delivery/task-packages/BD-T04
+- id: BD-T05
+  name: Typed Strategy Kernel 切换
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T04
+  path: delivery/task-packages/BD-T05
+- id: BD-T06
+  name: 证据驱动因子生命周期
+  priority: P0/P1
+  phase: Phase 1
+  dependencies:
+  - BD-T04
+  - BD-T05
+  path: delivery/task-packages/BD-T06
+- id: BD-T07
+  name: 持久化 Risk Snapshot 与 Approval
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T01
+  - BD-T05
+  path: delivery/task-packages/BD-T07
+- id: BD-T08
+  name: 持久化 Intent 与 PostgreSQL Transactional Outbox
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T07
+  path: delivery/task-packages/BD-T08
+- id: BD-T09
+  name: 统一订单聚合与 UNKNOWN 恢复
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T03
+  - BD-T08
+  path: delivery/task-packages/BD-T09
+- id: BD-T10
+  name: Fill 与 Position 权威链
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T09
+  path: delivery/task-packages/BD-T10
+- id: BD-T11
+  name: 交易所原生保护与安全监督
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T03
+  - BD-T10
+  path: delivery/task-packages/BD-T11
+- id: BD-T12
+  name: 真正的复式账本
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T10
+  path: delivery/task-packages/BD-T12
+- id: BD-T13
+  name: 独立对账与差异门禁
+  priority: P0
+  phase: Phase 1
+  dependencies:
+  - BD-T03
+  - BD-T10
+  - BD-T12
+  path: delivery/task-packages/BD-T13
+- id: BD-T14
+  name: 生命周期、恢复和控制面
+  priority: P0/P1
+  phase: Phase 1
+  dependencies:
+  - BD-T08
+  - BD-T09
+  - BD-T10
+  - BD-T11
+  - BD-T12
+  - BD-T13
+  path: delivery/task-packages/BD-T14
+- id: BD-T15
+  name: CI 与证据系统加固
+  priority: P0
+  phase: Cross-cutting
+  dependencies:
+  - BD-T00
+  path: delivery/task-packages/BD-T15
+- id: BD-T16
+  name: 真实 Paper 撮合与成本模型
+  priority: P1
+  phase: Phase 2
+  dependencies:
+  - BD-T05
+  - BD-T09
+  - BD-T10
+  path: delivery/task-packages/BD-T16
+- id: BD-T17
+  name: 因子统计与组合优化
+  priority: P1
+  phase: Phase 2
+  dependencies:
+  - BD-T04
+  - BD-T06
+  - BD-T16
+  path: delivery/task-packages/BD-T17
+- id: BD-T18
+  name: Binance Testnet 认证
+  priority: P1
+  phase: Phase 4
+  dependencies:
+  - BD-T00
+  - BD-T01
+  - BD-T02
+  - BD-T03
+  - BD-T04
+  - BD-T05
+  - BD-T06
+  - BD-T07
+  - BD-T08
+  - BD-T09
+  - BD-T10
+  - BD-T11
+  - BD-T12
+  - BD-T13
+  - BD-T14
+  - BD-T15
+  - BD-T16
+  - BD-T17
+  path: delivery/task-packages/BD-T18
+- id: BD-T19
+  name: 30 天无人值守认证
+  priority: P2
+  phase: Phase 5
+  dependencies:
+  - BD-T18
+  path: delivery/task-packages/BD-T19

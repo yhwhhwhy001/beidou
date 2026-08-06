@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "acceptance",
+    "evidence_manifests",
+    "remaining_risks",
+    "rollback"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "CONDITIONAL_PASS",
+        "FAIL",
+        "NOT_VERIFIABLE"
+      ]
+    },
+    "acceptance": {
+      "type": "array"
+    },
+    "evidence_manifests": {
+      "type": "array"
+    },
+    "remaining_risks": {
+      "type": "array"
+    },
+    "rollback": {
+      "type": "string"
+    }
+  }
+}

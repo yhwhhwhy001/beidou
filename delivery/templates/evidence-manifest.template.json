@@ -1,0 +1,18 @@
+{
+  "task_id": "BD-T00",
+  "commit": "",
+  "branch": "",
+  "config_hash": "",
+  "policy_versions": {},
+  "command": [],
+  "exit_code": 0,
+  "started_at": "",
+  "finished_at": "",
+  "stdout_path": "",
+  "stderr_path": "",
+  "stdout_sha256": "",
+  "stderr_sha256": "",
+  "artifact_hashes": {},
+  "agent_id": "",
+  "status": "NOT_VERIFIABLE"
+}

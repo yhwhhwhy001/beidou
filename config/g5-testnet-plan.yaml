@@ -1,0 +1,26 @@
+environment: BINANCE_USDM_TESTNET_ONLY
+mainnet_prohibited: true
+max_test_notional_usdt: 20
+scenarios:
+- create_query_cancel
+- stable_client_order_id
+- ack_loss
+- timeout_unknown_recovery
+- duplicate_request
+- partial_fill
+- cancel_fill_race
+- user_stream_reconnect
+- native_protection
+- process_restart
+- database_restart
+- double_worker_fencing
+- clock_skew
+- rate_limit
+- credential_failure
+- reconciliation_mismatch
+fail_fast_on:
+- P0
+- mainnet_url
+- withdraw_permission
+- duplicate_order
+- unprotected_position
