@@ -147,6 +147,7 @@ class FactorRecord:
     retirement_reason: str = ""
     retired_at: datetime | None = None
     restarted_from: str | None = None  # 重新启用的原始 factor_id
+    promotion_history: list[PromotionDecision] = field(default_factory=list)  # BD-T06: 晋级证据链
 
     def transition(self, target: FactorLifecycle) -> bool:
         allowed = FACTOR_LIFECYCLE_TRANSITIONS.get(self.lifecycle, set())
@@ -166,6 +167,247 @@ class FactorRecord:
         self.lifecycle = FactorLifecycle.CHALLENGER
         self.retirement_evidence["restarted_at"] = datetime.now(timezone.utc).isoformat()
         return True
+
+
+# ================================================================
+# BD-T06: 证据驱动的因子晋级系统 (Production 模式)
+# ================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionDecision:
+    """BD-T06: 不可变晋级决策。每次生命周期转换的唯一证据记录。
+
+    绑定: factor_version, commit, dataset_hash, evidence_ids, policy_version, falsifier。
+    """
+
+    decision_id: str
+    factor_id: str
+    from_state: FactorLifecycle
+    to_state: FactorLifecycle
+    approved: bool
+    reason: str
+    # 证据绑定
+    factor_version: str = ""
+    commit: str = ""
+    dataset_hash: str = ""
+    evidence_ids: list[str] = field(default_factory=list)
+    policy_version: str = ""
+    falsifier: str = ""  # 谁执行了此决策
+    # 性能指标
+    ic: float = 0.0
+    rank_ic: float = 0.0
+    icir: float = 0.0
+    cost_adjusted_ic: float = 0.0
+    sample_count: int = 0
+    # 元数据
+    decided_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    correlation_id: str = ""
+
+
+# BD-T06: 每个生命周期阶段的证据要求
+PROMOTION_EVIDENCE_REQUIREMENTS: dict[FactorLifecycle, dict] = {
+    FactorLifecycle.IDEA: {
+        "required_evidence": ["code_compiles", "basic_test_pass", "economic_rationale"],
+        "min_icir": None,
+        "min_sample_count": 0,
+        "description": "因子代码编译通过，基础测试通过，有明确经济假设",
+    },
+    FactorLifecycle.GENERATED: {
+        "required_evidence": ["non_zero_output", "non_constant_output", "no_lookahead_bias"],
+        "min_icir": None,
+        "min_sample_count": 20,
+        "description": "因子产生非零、非常量输出，无前视偏差",
+    },
+    FactorLifecycle.SANITY_PASSED: {
+        "required_evidence": ["ic_significant", "rank_ic_significant", "decile_spread_positive"],
+        "min_icir": 0.3,
+        "min_sample_count": 100,
+        "description": "IC 统计显著，Rank IC 显著，分层回测有效",
+    },
+    FactorLifecycle.RESEARCH_VALIDATED: {
+        "required_evidence": ["multiple_testing_corrected", "no_p_hacking", "purged_wfo_complete"],
+        "min_icir": 0.3,
+        "min_sample_count": 200,
+        "description": "多重检验校正通过，无 p-hacking，Purged WFO 完成",
+    },
+    FactorLifecycle.OOS_VERIFIED: {
+        "required_evidence": ["oos_icir_stable", "cpcv_passed", "no_regime_overfit"],
+        "min_icir": 0.2,
+        "min_sample_count": 300,
+        "description": "样本外 ICIR 稳定，CPCV 通过，无 regime 过拟合",
+    },
+    FactorLifecycle.COST_CAPACITY_VERIFIED: {
+        "required_evidence": ["cost_adjusted_ic_positive", "capacity_decay_acceptable", "turnover_acceptable"],
+        "min_icir": 0.2,
+        "min_sample_count": 300,
+        "description": "扣除成本后 IC 为正，容量衰减可接受，换手率合理",
+    },
+    FactorLifecycle.PAPER_TRADING: {
+        "required_evidence": ["paper_sharpe_positive", "paper_drawdown_acceptable", "signal_consistency_good"],
+        "min_icir": 0.15,
+        "min_sample_count": 500,
+        "description": "Paper 交易 Sharpe 为正，回撤可接受，信号一致性良好",
+    },
+    FactorLifecycle.CHALLENGER: {
+        "required_evidence": ["challenger_period_complete", "live_signal_quality", "latency_within_slo"],
+        "min_icir": 0.1,
+        "min_sample_count": 500,
+        "description": "Challenger 阶段完成，实盘信号质量好，延迟在 SLO 内",
+    },
+    FactorLifecycle.ACTIVE: {
+        "required_evidence": [],  # ACTIVE 不需要晋级，但需要持续监控
+        "min_icir": 0.0,
+        "min_sample_count": 0,
+        "description": "活跃交易中，需持续监控 IC 衰减和共线性",
+    },
+}
+
+
+class FactorPromotionGate:
+    """BD-T06: 因子晋级门禁 — 验证每个阶段所需证据。
+
+    Production 模式强制证据门禁；Testnet/Paper 模式可选绕过。
+    """
+
+    def __init__(self, strict: bool = True):
+        self._strict = strict  # Production=True, Testnet=False
+
+    def validate_evidence(
+        self,
+        factor_id: str,
+        current_state: FactorLifecycle,
+        target_state: FactorLifecycle,
+        performance: FactorPerformance | None = None,
+        evidence_ids: list[str] | None = None,
+        factor_version: str = "",
+        commit: str = "",
+        dataset_hash: str = "",
+        policy_version: str = "",
+        falsifier: str = "system",
+    ) -> PromotionDecision:
+        """验证晋级证据是否满足目标阶段要求。
+
+        Returns:
+            PromotionDecision: 包含审批结果和原因
+        """
+        import uuid
+
+        decision_id = f"promo-{factor_id}-{target_state.value}-{uuid.uuid4().hex[:8]}"
+
+        # 非严格模式直接通过
+        if not self._strict:
+            return PromotionDecision(
+                decision_id=decision_id,
+                factor_id=factor_id,
+                from_state=current_state,
+                to_state=target_state,
+                approved=True,
+                reason=f"Non-strict mode: auto-promoted to {target_state.value}",
+                factor_version=factor_version,
+                commit=commit,
+                dataset_hash=dataset_hash,
+                evidence_ids=evidence_ids or [],
+                policy_version=policy_version,
+                falsifier=falsifier,
+            )
+
+        # 严格模式: 验证证据要求
+        requirements = PROMOTION_EVIDENCE_REQUIREMENTS.get(target_state)
+        if requirements is None:
+            return PromotionDecision(
+                decision_id=decision_id,
+                factor_id=factor_id,
+                from_state=current_state,
+                to_state=target_state,
+                approved=False,
+                reason=f"No evidence requirements defined for {target_state.value}",
+            )
+
+        failures: list[str] = []
+
+        # 检查必需证据
+        required = requirements.get("required_evidence", [])
+        provided = set(evidence_ids or [])
+        missing = [e for e in required if e not in provided]
+        if missing:
+            failures.append(f"Missing required evidence: {missing}")
+
+        # 检查 ICIR 阈值
+        if performance is not None:
+            min_icir = requirements.get("min_icir")
+            if min_icir is not None and performance.icir < min_icir:
+                failures.append(f"ICIR {performance.icir:.3f} < threshold {min_icir}")
+
+            min_samples = requirements.get("min_sample_count", 0)
+            if performance.sample_count < min_samples:
+                failures.append(f"Sample count {performance.sample_count} < required {min_samples}")
+
+        if failures:
+            return PromotionDecision(
+                decision_id=decision_id,
+                factor_id=factor_id,
+                from_state=current_state,
+                to_state=target_state,
+                approved=False,
+                reason="; ".join(failures),
+                factor_version=factor_version,
+                commit=commit,
+                dataset_hash=dataset_hash,
+                evidence_ids=evidence_ids or [],
+                policy_version=policy_version,
+                falsifier=falsifier,
+                ic=performance.ic_mean if performance else 0.0,
+                icir=performance.icir if performance else 0.0,
+                sample_count=performance.sample_count if performance else 0,
+            )
+
+        # 通过
+        return PromotionDecision(
+            decision_id=decision_id,
+            factor_id=factor_id,
+            from_state=current_state,
+            to_state=target_state,
+            approved=True,
+            reason=f"All evidence requirements met for {target_state.value}",
+            factor_version=factor_version,
+            commit=commit,
+            dataset_hash=dataset_hash,
+            evidence_ids=evidence_ids or [],
+            policy_version=policy_version,
+            falsifier=falsifier,
+            ic=performance.ic_mean if performance else 0.0,
+            icir=performance.icir if performance else 0.0,
+            sample_count=performance.sample_count if performance else 0,
+        )
+
+    def promote(
+        self,
+        record: FactorRecord,
+        target_state: FactorLifecycle,
+        performance: FactorPerformance | None = None,
+        evidence_ids: list[str] | None = None,
+        **kwargs,
+    ) -> PromotionDecision:
+        """执行因子晋级：验证证据 → 创建 PromotionDecision → 推进生命周期。
+
+        Returns:
+            PromotionDecision: 包含审批结果的不可变记录
+        """
+        decision = self.validate_evidence(
+            factor_id=record.definition.factor_id,
+            current_state=record.lifecycle,
+            target_state=target_state,
+            performance=performance,
+            evidence_ids=evidence_ids,
+            **kwargs,
+        )
+
+        if decision.approved:
+            record.transition(target_state)
+            record.promotion_history.append(decision)
+
+        return decision
 
 
 class FactorEvaluator:

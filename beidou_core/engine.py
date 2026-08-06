@@ -906,8 +906,14 @@ class AutonomousEngine:
             self._factor_registry.register(fd)
             all_factor_ids.append(fd.factor_id)
 
-        # BD-T06: 因子生命周期晋级。Testnet/Paper 模式自动晋级到 ACTIVE。
-        if self._env_mode.can_write_trades or self._env_mode.value == "paper":
+        # BD-T06: 因子生命周期晋级 (Production 模式使用证据驱动门禁)
+        from beidou_research.factors.factor import FactorPromotionGate
+
+        is_production = self._env_mode.value in ("production", "canary", "live")
+        self._factor_gate = FactorPromotionGate(strict=is_production)
+
+        if not is_production:
+            # Testnet/Paper: 非严格模式，自动晋级到 ACTIVE
             for fid in all_factor_ids:
                 rec = self._factor_registry.get(fid)
                 for target in [
@@ -922,8 +928,13 @@ class AutonomousEngine:
                 ]:
                     if rec.lifecycle == target:
                         continue
-                    if not rec.transition(target):
+                    decision = self._factor_gate.promote(rec, target, falsifier="autopilot-testnet")
+                    if not decision.approved:
                         break
+        else:
+            # Production: 严格门禁，只加载 DB 中标记 ACTIVE 的因子
+            print("[beidou-autopilot] Production mode: factor promotion requires evidence-gated decisions")
+
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
         ]
@@ -931,6 +942,8 @@ class AutonomousEngine:
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
         print(f"[beidou-autopilot] Active factors for trading: {active_factors}")
+        if is_production and not active_factors:
+            print("[beidou-autopilot] WARNING: No ACTIVE factors — system will not generate trading signals")
 
         # Factor tracking: rolling predictions vs actual returns
         self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}
