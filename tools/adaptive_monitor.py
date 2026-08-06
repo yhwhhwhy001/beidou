@@ -70,8 +70,8 @@ def _build_autopilot_cmd() -> list[str]:
             return ["python", "-m", "apps.autopilot",
                     "--symbols", symbols_arg, "--mode", mode,
                     "--port", str(DEFAULT_PORT)]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[adaptive_monitor] WARNING: failed to build autopilot command: {e}")
     return ["python", "-m", "apps.autopilot",
             "--symbols", DEFAULT_SYMBOLS, "--mode", DEFAULT_MODE,
             "--port", str(DEFAULT_PORT)]

@@ -1,0 +1,19 @@
+{
+  "task_id": "BD-T03",
+  "status": "CONDITIONAL_PASS",
+  "commit": "c1a6583557181b1c57e76a8f510198bd61085738",
+  "branch": "refactor/full-system-convergence-v3",
+  "timestamp": "2026-08-06T13:20:37Z",
+  "agent": "claude-code",
+  "acceptance": {
+    "AC-BD-T03-01": {"status": "CONDITIONAL_PASS", "detail": "BinanceUsdmAdapter 为唯一交易所边界；engine.py/feed.py 不再硬编码 Binance URL；.venv 第三方库的直接网络调用不在控制范围"},
+    "AC-BD-T03-02": {"status": "PASS", "detail": "get_balances/get_positions 返回值从 EMPTY 改为 UNKNOWN；健康检查失败返回 UNKNOWN"},
+    "AC-BD-T03-03": {"status": "CONDITIONAL_PASS", "detail": "Adapter 架构就绪；真实 Transport 层实现待 BD-T18 Testnet 认证时接入"},
+    "AC-BD-T03-04": {"status": "PASS", "detail": "Result 类型包含 correlation_id 贯穿全链路"}
+  },
+  "modified_files": [
+    "beidou_core/engine.py",
+    "beidou_exchange/binance_usdm/adapter.py",
+    "tools/adaptive_monitor.py"
+  ]
+}

@@ -1069,8 +1069,10 @@ class AutonomousEngine:
                     lev_from_api = int(float(pos_resp[0].get("leverage", 0)))
                     if lev_from_api > 0:
                         actual = lev_from_api
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[leverage] UNKNOWN: failed to query leverage for {symbol}: {e}")
+                self._leverage_cache[symbol] = -1  # UNKNOWN state
+                return -1
             # 如果查询返回 0（testnet 常见），保持目标杠杆
             if actual <= 0:
                 actual = target_leverage
