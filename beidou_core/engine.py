@@ -1707,7 +1707,7 @@ class AutonomousEngine:
                 # BD-T13 修复: 不再过滤余额差异 — 所有差异均触发事故
                 if result.differences:
                     print(f"[recon] Mismatch: {result.differences}")
-                    severity = AlertSeverity.P0 if result.should_block_new_risk else AlertSeverity.WARNING
+                    severity = AlertSeverity.CRITICAL if result.should_block_new_risk else AlertSeverity.WARNING
                     self._alerts.send_incident(
                         severity,
                         "Reconciliation mismatch",
