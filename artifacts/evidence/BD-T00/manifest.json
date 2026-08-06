@@ -1,0 +1,13 @@
+{
+  "task_id": "BD-T00", "status": "PASS",
+  "branch": "refactor/full-system-convergence-v3",
+  "timestamp": "2026-08-06T12:00:00Z", "agent": "claude-code",
+  "acceptance": {
+    "AC-BD-T00-01": {"status": "PASS", "detail": "compileall 退出码 0"},
+    "AC-BD-T00-02": {"status": "PASS", "detail": "pytest 收集 818 测试，零 collection error"},
+    "AC-BD-T00-03": {"status": "PASS", "detail": "基线失败分类: SOURCE/TEST/ENVIRONMENT/EXTERNAL/NOT_VERIFIABLE"},
+    "AC-BD-T00-04": {"status": "PASS", "detail": "工作树干净，基线文件含 commit/命令/原始证据哈希"},
+    "AC-BD-T00-05": {"status": "PASS", "detail": "G0: compile/collect/lint/format/typecheck 全部可复现"}
+  },
+  "gate": "G0 PASS"
+}

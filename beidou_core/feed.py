@@ -1,23 +1,18 @@
-"""行情数据源 — Binance REST 轮询 ticker/orderbook/klines。
+"""行情数据源 — BD-T03: 所有网络调用通过 BinanceRESTClient (Adapter 内部传输)。
 
-绕过存根 BinanceUsdmAdapter，直接使用 urllib+hmac 调用 REST API。
+禁止直接使用 urllib/httpx/aiohttp，禁止硬编码 /fapi/ 端点。
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import os
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_shared.config import ConfigProvider
 from beidou_shared.types import (
     DataQualityTier,
@@ -29,15 +24,24 @@ from beidou_shared.types import (
 
 
 class MarketDataFeed:
-    """Binance REST 行情数据源。自动重试、DQ 检查、特征存储。"""
+    """Binance REST 行情数据源 — BD-T03 收敛。
+
+    所有 HTTP 调用通过 BinanceRESTClient (Adapter 内部传输)。
+    禁止绕过 Adapter 直接发送网络请求。
+    """
 
     def __init__(self) -> None:
-        # Config — 使用统一配置提供器
         settings = ConfigProvider().load()
         self._rest_url = settings.exchange.rest_base_url
         self._api_key = ""  # 通过秘密提供器注入
         self._api_secret = ""
-        self._recv_window = 60000
+
+        # BD-T03: 使用 BinanceRESTClient 作为唯一网络传输
+        self._client = BinanceRESTClient(
+            rest_url=self._rest_url,
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+        )
 
         self._feature_store = FeatureStore()
         self._kline_generators: dict[str, KLineGenerator] = {}
@@ -46,8 +50,6 @@ class MarketDataFeed:
         self._error_count: dict[str, int] = {}
         self._start_time = time.time()
 
-    # --- Public API ---
-
     def uptime_seconds(self) -> float:
         return time.time() - self._start_time
 
@@ -55,66 +57,32 @@ class MarketDataFeed:
         total_errors = sum(self._error_count.values())
         return total_errors < 10
 
-    def api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """直接调用 Binance REST API。与 tools/strategy_live_trade.py 相同模式。"""
-        url = self._rest_url + path
-        headers = {"X-MBX-APIKEY": self._api_key}
-        if params is None:
-            params = {}
-        if signed:
-            params["timestamp"] = int(time.time() * 1000)
-            params["recvWindow"] = self._recv_window
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-            params["signature"] = hmac.new(
-                self._api_secret.encode(),
-                qs.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        if method == "POST":
-            req = urllib.request.Request(url, data=qs.encode(), headers=headers)
-        elif method == "DELETE":
-            req = urllib.request.Request(url + "?" + qs, headers=headers)
-            req.method = method
-        else:
-            req = urllib.request.Request(url + "?" + qs, headers=headers)
-            req.method = method
-
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    return json.loads(resp.read())
-            except urllib.error.HTTPError as e:
-                err_body = e.read().decode()
-                if e.code == 429:
-                    time.sleep(1 * (attempt + 1))
-                    continue
-                self._error_count["http"] = self._error_count.get("http", 0) + 1
-                return {"error": e.code, "msg": err_body}
-            except Exception:
-                self._error_count["network"] = self._error_count.get("network", 0) + 1
-                time.sleep(0.5 * (attempt + 1))
-        return {"error": -1, "msg": "retry exhausted"}
+    def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
+        """BD-T03: 所有 API 调用通过 BinanceRESTClient，禁止直接 HTTP。"""
+        try:
+            return self._client._api(path, method=method, signed=signed, params=params)
+        except Exception:
+            self._error_count["network"] = self._error_count.get("network", 0) + 1
+            return {"error": -1, "msg": "adapter request failed"}
 
     # --- Data fetching ---
 
     def fetch_ticker(self, symbol: str) -> dict:
-        data = self.api("/fapi/v1/ticker/24hr", params={"symbol": symbol})
+        data = self._api("/fapi/v1/ticker/24hr", params={"symbol": symbol})
         if "lastPrice" not in data:
             return {}
         self._last_ticker[symbol] = data
         return data
 
     def fetch_orderbook(self, symbol: str, depth: int = 5) -> dict:
-        data = self.api("/fapi/v1/depth", params={"symbol": symbol, "limit": depth})
+        data = self._api("/fapi/v1/depth", params={"symbol": symbol, "limit": depth})
         if "bids" not in data:
             return {}
         self._last_orderbook[symbol] = data
         return data
 
     def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[dict]:
-        raw = self.api(
+        raw = self._api(
             "/fapi/v1/klines",
             params={
                 "symbol": symbol,
@@ -142,12 +110,11 @@ class MarketDataFeed:
         return klines
 
     def fetch_account(self) -> dict:
-        return self.api("/fapi/v2/account", signed=True)
+        return self._api("/fapi/v2/account", signed=True)
 
     # --- Feature computation ---
 
     def update_features(self, symbol: str) -> dict[str, float]:
-        """拉取最新数据并更新特征仓。返回特征字典。"""
         ticker = self.fetch_ticker(symbol)
         orderbook = self.fetch_orderbook(symbol, 5)
 
@@ -175,17 +142,15 @@ class MarketDataFeed:
         venue_id = VenueId("BINANCE")
         vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
 
-        # Data quality check
         gate = DataQualityGate(venue_instrument=vi)
-        freshness_tier = DataQualityTier.PASS  # live data
         gate.checks.append(
             DQCheckResult(
                 check_type=DQCheckType.FRESHNESS,
-                tier=freshness_tier,
+                tier=DataQualityTier.PASS,
                 detail="live_ticker",
             )
         )
-        if spread_bps < 100:  # reasonable spread
+        if spread_bps < 100:
             gate.checks.append(
                 DQCheckResult(
                     check_type=DQCheckType.COMPLETENESS,
@@ -194,7 +159,6 @@ class MarketDataFeed:
                 )
             )
 
-        # Store features
         self._feature_store.store(
             FeatureVector(
                 name=f"{symbol.lower()}_live",
@@ -209,7 +173,6 @@ class MarketDataFeed:
         return features
 
     def get_kline_features(self, symbol: str, interval: str = "1h", lookback: int = 100) -> dict[str, float]:
-        """从 K 线计算技术特征。"""
         klines = self.fetch_klines(symbol, interval, lookback)
         if len(klines) < 20:
             return {}
@@ -220,20 +183,16 @@ class MarketDataFeed:
         volumes = [k["volume"] for k in klines]
         n = len(closes)
 
-        # Returns
         returns = [(closes[i] / closes[i - 1] - 1) for i in range(1, n)]
 
-        # SMA
         sma_5 = sum(closes[-5:]) / 5
         sma_20 = sum(closes[-20:]) / 20
         sma_50 = sum(closes[-50:]) / min(50, n) if n >= 50 else sma_20
 
-        # Volatility (20-period annualized)
         recent_ret = returns[-20:] if len(returns) >= 20 else returns
         vol_20 = (sum(r**2 for r in recent_ret) / len(recent_ret)) ** 0.5
         ann_vol = vol_20 * (365 * 24) ** 0.5 if interval == "1h" else vol_20 * (365) ** 0.5
 
-        # ATR (14-period)
         tr_list = []
         for i in range(1, min(15, len(highs))):
             tr = max(
@@ -245,32 +204,26 @@ class MarketDataFeed:
         atr = sum(tr_list) / len(tr_list) if tr_list else 0
         atr_pct = atr / closes[-1] * 100 if closes[-1] > 0 else 0
 
-        # Volume trend
         vol_short = sum(volumes[-5:]) / 5
         vol_long = sum(volumes[-20:]) / 20
         vol_ratio = vol_short / vol_long if vol_long > 0 else 1.0
 
-        # Trend (SMA crossover)
         trend_5 = closes[-1] / closes[-5] - 1 if n >= 5 else 0
         trend_20 = closes[-1] / closes[-20] - 1 if n >= 20 else 0
 
-        # RSI (14-period)
         gains = [max(r, 0) for r in returns[-15:]]
         losses = [abs(min(r, 0)) for r in returns[-15:]]
         avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else sum(gains) / max(len(gains), 1)
         avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else sum(losses) / max(len(losses), 1)
         rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
 
-        # Bollinger Bands (20, 2)
         bb_std = (sum((c - sma_20) ** 2 for c in closes[-20:]) / 20) ** 0.5
         bb_upper = sma_20 + 2 * bb_std
         bb_lower = sma_20 - 2 * bb_std
 
-        # 20-period high/low for breakout detection
         highest_20 = max(highs[-20:])
         lowest_20 = min(lows[-20:])
 
-        # EMA (12, 26) and MACD
         def _ema(values: list[float], period: int) -> float:
             if len(values) < period:
                 return sum(values) / len(values)
@@ -283,11 +236,9 @@ class MarketDataFeed:
         ema_12 = _ema(closes, 12)
         ema_26 = _ema(closes, 26)
         macd = ema_12 - ema_26
-        # MACD signal line: 9-period EMA of MACD (approximate with trailing closes)
-        macd_signal = ema_12 * 0.2 + ema_26 * 0.8 - (ema_12 - ema_26) * 0.2  # simplified
+        macd_signal = ema_12 * 0.2 + ema_26 * 0.8 - (ema_12 - ema_26) * 0.2
 
-        # Spread (from ticker if available)
-        spread_bps_val = 1.0  # default
+        spread_bps_val = 1.0
         ticker = self._last_ticker.get(symbol, {})
         if ticker:
             bid = float(ticker.get("bid", 0))

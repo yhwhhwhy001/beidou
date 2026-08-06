@@ -38,6 +38,17 @@ class TestQualityScanner(ast.NodeVisitor):
             self._has_assert = False
             self._assert_count = 0
 
+            # BD-T15 fix: Check for @pytest.mark.skip without reason (was dead code in visit_ImportFrom)
+            if hasattr(node, "decorator_list"):
+                for dec in node.decorator_list:
+                    if isinstance(dec, ast.Call):
+                        if isinstance(dec.func, ast.Attribute) and dec.func.attr == "skip":
+                            has_reason = any(k.arg == "reason" for k in dec.keywords) if dec.keywords else False
+                            if not has_reason:
+                                self.findings.append(
+                                    Finding(self.filepath, node.lineno, "WARNING", "@pytest.mark.skip without reason")
+                                )
+
         self.generic_visit(node)
 
         if is_test:
@@ -139,8 +150,8 @@ class TestQualityScanner(ast.NodeVisitor):
                     )
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        # Check for @pytest.mark.skip without reason
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # Check for @pytest.mark.skip without reason (moved from visit_ImportFrom — dead code fix)
         if hasattr(node, "decorator_list"):
             for dec in node.decorator_list:
                 if isinstance(dec, ast.Call):

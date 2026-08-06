@@ -123,9 +123,11 @@ class CertificationFramework:
         return all(scenario.scenario_id in self._results for scenario in self._scenarios)
 
     def evaluate(self) -> GateCertificate:
-        """评估所有场景并生成 Gate 证书。P0 立即 FAIL。"""
+        """评估所有场景并生成 Gate 证书。P0 立即 FAIL；NOT_RUN/NOT_VERIFIABLE 绝不 PASS。"""
         scenarios_completed: list[ScenarioResult] = []
         blocking_p0 = False
+        blocking_not_run = False
+        has_not_verifiable = False
         blocking_failures: list[str] = []
 
         for scenario in self._scenarios:
@@ -138,20 +140,22 @@ class CertificationFramework:
                 )
             scenarios_completed.append(result)
 
-            if scenario.is_blocking and result.status == ScenarioStatus.FAIL:
-                blocking_p0 = True
-                blocking_failures.append(scenario.scenario_id)
+            if scenario.is_blocking:
+                if result.status == ScenarioStatus.FAIL:
+                    blocking_p0 = True
+                    blocking_failures.append(scenario.scenario_id)
+                elif result.status == ScenarioStatus.NOT_RUN:
+                    blocking_not_run = True
+                elif result.status == ScenarioStatus.NOT_VERIFIABLE:
+                    has_not_verifiable = True
 
-        gate_result = GateResult.FAIL if blocking_p0 else GateResult.PASS
-
-        # 检查 NOT_VERIFIABLE
-        not_verifiable = [r for r in scenarios_completed if r.status == ScenarioStatus.NOT_VERIFIABLE]
-        if not_verifiable and not blocking_p0:
-            # 有 NOT_VERIFIABLE 但没有 P0，至少要求所有 blocking 场景通过
-            all_blocking_pass = all(
-                r.status == ScenarioStatus.PASS for r in scenarios_completed if r.scenario.is_blocking
-            )
-            gate_result = GateResult.PASS if all_blocking_pass else GateResult.FAIL
+        # BD-T18 修复: NOT_RUN/NOT_VERIFIABLE 绝不能作为 PASS
+        if blocking_p0:
+            gate_result = GateResult.FAIL
+        elif blocking_not_run or has_not_verifiable:
+            gate_result = GateResult.UNVERIFIABLE
+        else:
+            gate_result = GateResult.PASS
 
         cert = GateCertificate(
             certificate_id=f"cert-{self.gate.value}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",

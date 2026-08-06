@@ -1,0 +1,12 @@
+{
+  "task_id": "BD-T16", "status": "CONDITIONAL_PASS",
+  "branch": "refactor/full-system-convergence-v3",
+  "timestamp": "2026-08-06T14:00:00Z", "agent": "claude-code",
+  "acceptance": {
+    "AC-BD-T16-01": {"status": "PASS", "detail": "PaperMatchingEngine 不再直接 FILLED"},
+    "AC-BD-T16-02": {"status": "PASS", "detail": "手续费/spread/slippage/funding 成本进入 CostEstimate"},
+    "AC-BD-T16-03": {"status": "PASS", "detail": "冻结 seed 确定性 replay 一致"},
+    "AC-BD-T16-04": {"status": "PASS", "detail": "CostPressureSimulator 压力下净收益降低"}
+  },
+  "gate": "G4 CONDITIONAL_PASS (真实市场数据校准待 BD-T18)"
+}

@@ -1,0 +1,12 @@
+{
+  "task_id": "BD-T17", "status": "CONDITIONAL_PASS",
+  "branch": "refactor/full-system-convergence-v3",
+  "timestamp": "2026-08-06T14:00:00Z", "agent": "claude-code",
+  "acceptance": {
+    "AC-BD-T17-01": {"status": "PASS", "detail": "FactorEvaluationPipeline 绑定 dataset manifest"},
+    "AC-BD-T17-02": {"status": "PASS", "detail": "PurgedWalkForward + embargo + CPCV 实现"},
+    "AC-BD-T17-03": {"status": "PASS", "detail": "成本/容量压力下风险单调性验证"},
+    "AC-BD-T17-04": {"status": "PASS", "detail": "统计门槛不达标时 REJECT/SUSPEND"}
+  },
+  "gate": "G3 CONDITIONAL_PASS (真实数据校准待 BD-T18)"
+}

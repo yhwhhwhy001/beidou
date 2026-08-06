@@ -47,6 +47,12 @@ jobs:
       - name: Hardcoded value scan
         run: python scripts/scan_hardcoded.py beidou_* apps
 
+      - name: Forbidden patterns scan
+        run: python delivery/scripts/check_forbidden_patterns.py --repo .
+
+      - name: Package validation
+        run: python delivery/scripts/validate_package.py
+
       - name: Coverage report
         run: pytest tests/ -q --cov --cov-report=xml --cov-report=term-missing
 

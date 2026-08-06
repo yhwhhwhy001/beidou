@@ -99,7 +99,8 @@ def scan_file(filepath: str) -> list[HardcodedFinding]:
     try:
         with open(filepath) as f:
             source = f.read()
-    except (UnicodeDecodeError, PermissionError, IsADirectoryError):
+    except (UnicodeDecodeError, PermissionError, IsADirectoryError) as e:
+        findings.append(HardcodedFinding(filepath, 0, "syntax_error", f"Read error: {e}"))
         return findings
 
     # Regex-based scan
