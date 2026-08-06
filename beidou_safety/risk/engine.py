@@ -181,14 +181,30 @@ class RiskApprovalSignerImpl:
         self._approved: set[RiskApprovalId] = set()
         self._nonces: set[str] = set()
 
-    def _payload(self, approval_id: RiskApprovalId, proposal_hash: str, account_snapshot_hash: str, risk_snapshot_hash: str, policy_version: str, nonce: str) -> str:
+    def _payload(
+        self,
+        approval_id: RiskApprovalId,
+        proposal_hash: str,
+        account_snapshot_hash: str,
+        risk_snapshot_hash: str,
+        policy_version: str,
+        nonce: str,
+    ) -> str:
         data = f"{approval_id}|{proposal_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|{policy_version}|{nonce}"
         return data
 
     def _compute_signature(self, payload: str) -> str:
         return self._hmac.new(self._signing_key, payload.encode(), self._hashlib.sha256).hexdigest()
 
-    def sign(self, approval_id: RiskApprovalId, proposal_hash: str = "", account_snapshot_hash: str = "", risk_snapshot_hash: str = "", policy_version: str = "", nonce: str = "") -> str:
+    def sign(
+        self,
+        approval_id: RiskApprovalId,
+        proposal_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
+    ) -> str:
         """生成绑定所有字段的 HMAC-SHA256 签名。
 
         Raises:
@@ -196,12 +212,23 @@ class RiskApprovalSignerImpl:
         """
         if not self._signing_available:
             raise RuntimeError("SIGNING_UNAVAILABLE: no signing key configured — risk increase denied")
-        payload = self._payload(approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce)
+        payload = self._payload(
+            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce
+        )
         sig = self._compute_signature(payload)
         self._approved.add(approval_id)
         return sig
 
-    async def verify(self, approval_id: RiskApprovalId, signature: str = "", proposal_hash: str = "", account_snapshot_hash: str = "", risk_snapshot_hash: str = "", policy_version: str = "", nonce: str = "") -> bool:
+    async def verify(
+        self,
+        approval_id: RiskApprovalId,
+        signature: str = "",
+        proposal_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
+    ) -> bool:
         """验证签名 — 严格模式，无向后兼容旁路。
 
         拒绝条件：签名缺失、密钥不可用、签名不匹配、重放 nonce。
@@ -212,7 +239,9 @@ class RiskApprovalSignerImpl:
             return False
         if nonce and nonce in self._nonces:
             return False  # 重放攻击拒绝
-        payload = self._payload(approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce)
+        payload = self._payload(
+            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce
+        )
         expected = self._compute_signature(payload)
         ok = self._hmac.compare_digest(signature, expected) and approval_id in self._approved
         if ok and nonce:

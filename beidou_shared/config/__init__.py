@@ -102,7 +102,12 @@ class ConfigProvider:
         "environment": "safety_only",
         "version": "0.0.0",
         "database": {"url": "sqlite:///beidou_state.db", "pool_min": 1, "pool_max": 5},
-        "exchange": {"rest_base_url": "https://testnet.binancefuture.com", "ws_base_url": "", "api_key_ref": "", "api_secret_ref": ""},
+        "exchange": {
+            "rest_base_url": "https://testnet.binancefuture.com",
+            "ws_base_url": "",
+            "api_key_ref": "",
+            "api_secret_ref": "",
+        },
         "risk": {"max_leverage": 3.0, "max_concentration_pct": 50.0, "max_position_notional": 500_000.0},
     }
 
@@ -225,7 +230,11 @@ class ConfigProvider:
             exchange=exchange,
             risk=risk,
             can_write_trades=environment.can_write_trades,
-            raw={k: v for k, v in raw.items() if "key" not in k.lower() and "secret" not in k.lower() and "password" not in k.lower()},
+            raw={
+                k: v
+                for k, v in raw.items()
+                if "key" not in k.lower() and "secret" not in k.lower() and "password" not in k.lower()
+            },
         )
 
         # Compute stable hash

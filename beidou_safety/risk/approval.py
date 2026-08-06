@@ -133,7 +133,9 @@ class PaperApprovalPort:
     防止纸面决策被误路由到执行层。
     """
 
-    def decide(self, snapshot_hash: str, intent_hash: str = "", portfolio_hash: str = "", policy_version: str = "") -> PaperDecision:
+    def decide(
+        self, snapshot_hash: str, intent_hash: str = "", portfolio_hash: str = "", policy_version: str = ""
+    ) -> PaperDecision:
         """生成纸面交易决策。
 
         返回的 PaperDecision 携带 mode=PAPER, non_tradable=true，

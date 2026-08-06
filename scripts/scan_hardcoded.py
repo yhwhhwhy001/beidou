@@ -193,13 +193,18 @@ def main() -> int:
     errors = [
         f
         for f in findings
-        if f.category in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "swallowed_exception", "syntax_error")
+        if f.category
+        in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "swallowed_exception", "syntax_error")
     ]
 
     if findings:
         print(f"\n=== Hardcoded Value Scan: {len(findings)} issues ({len(errors)} blocking) ===")
         for cat, cat_findings in sorted(categories.items()):
-            blocking = "❌" if cat in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "syntax_error") else "⚠️"
+            blocking = (
+                "❌"
+                if cat in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "syntax_error")
+                else "⚠️"
+            )
             print(f"\n  [{cat}] {len(cat_findings)} findings:")
             for f in sorted(cat_findings, key=lambda x: (x.file, x.line)):
                 print(f"    {blocking} {f.file}:{f.line}: {f.message}")
