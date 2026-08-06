@@ -58,3 +58,27 @@ class FeatureStore:
         vals = self._features.get(self._key(name, instrument_id), [])
         versions = {v.version for v in vals}
         return len(versions) <= 1
+
+    def get_as_of(self, name: str, instrument_id: InstrumentId, as_of: datetime) -> FeatureVector | None:
+        """BD-T04: Point-in-Time 查询 — 按 available_at 返回 as-of 时刻可见的最新特征。
+
+        UNKNOWN/BLOCK DQ tier 的特征不可用作策略输入。
+        """
+        key = self._key(name, instrument_id)
+        vals = self._features.get(key, [])
+        best: FeatureVector | None = None
+        for v in vals:
+            if v.available_at and v.available_at <= as_of:
+                if best is None or (v.available_at is not None and best.available_at is not None and v.available_at > best.available_at):
+                    if v.data_quality_tier not in ("BLOCK", "UNKNOWN"):
+                        best = v
+        return best
+
+    def count_safe_for_trading(self) -> int:
+        """BD-T04: 统计 DQ=PASS 的特征数量。"""
+        count = 0
+        for fvs in self._features.values():
+            for fv in fvs:
+                if fv.is_safe_for_trading:
+                    count += 1
+        return count
