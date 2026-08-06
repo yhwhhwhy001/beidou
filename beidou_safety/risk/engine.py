@@ -163,13 +163,27 @@ class RiskApprovalSignerImpl:
     def __init__(self, signing_key: str = "") -> None:
         import hashlib
         import hmac as _hmac
-        self._signing_key = signing_key.encode() if signing_key else b"beidou-default-key"
+        import os as _os
+
+        key = signing_key or _os.environ.get("BEIDOU_SIGNING_KEY", "")
+        if not key:
+            self._signing_key = None  # BD-P0-05: 无密钥 → 无法签名 → fail-closed
+        else:
+            self._signing_key = key.encode()
         self._hmac = _hmac
         self._hashlib = hashlib
         self._approved: set[RiskApprovalId] = set()
 
     def sign(self, approval_id: RiskApprovalId) -> str:
-        """生成 HMAC-SHA256 签名并存储。"""
+        """生成 HMAC-SHA256 签名并存储。
+
+        BD-P0-05: 无签名密钥时 fail-closed — 拒绝签名而非使用默认密钥。
+        """
+        if self._signing_key is None:
+            raise RuntimeError(
+                "BEIDOU_SIGNING_KEY not set — cannot sign risk approvals. "
+                "Set environment variable BEIDOU_SIGNING_KEY to proceed."
+            )
         sig = self._hmac.new(
             self._signing_key,
             str(approval_id).encode(),
