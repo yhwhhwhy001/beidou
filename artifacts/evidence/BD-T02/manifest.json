@@ -1,0 +1,21 @@
+{
+  "task_id": "BD-T02",
+  "status": "PASS",
+  "branch": "refactor/full-system-convergence-v3",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "agent": "claude-code",
+  "acceptance": {
+    "AC-BD-T02-01": {"status": "PASS", "detail": "engine.py/feed.py 不再直接 open config/env.testnet.yaml，统一使用 ConfigProvider"},
+    "AC-BD-T02-02": {"status": "PASS", "detail": "UNKNOWN/缺失环境通过 ConfigProvider._safe_only() 回退 SAFETY_ONLY，can_write_trades=False"},
+    "AC-BD-T02-03": {"status": "PASS", "detail": "TypedSettings.compute_hash() 基于 SHA-256，同一输入生成稳定 checksum"},
+    "AC-BD-T02-04": {"status": "PASS", "detail": "ConfigProvider 校验拒绝明文 api_key/api_secret；新增 .example 文件不含密钥"}
+  },
+  "modified_files": [
+    "beidou_shared/config/__init__.py",
+    "beidou_core/engine.py",
+    "beidou_core/feed.py",
+    "config/env.paper.yaml.example",
+    "config/env.shadow.yaml.example",
+    "config/env.testnet.yaml.example"
+  ]
+}

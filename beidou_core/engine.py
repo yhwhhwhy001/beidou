@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import yaml
+from beidou_shared.config import ConfigProvider, TypedSettings
 
 from beidou_autonomy.mapek import MAPEKController
 from beidou_control.plane import ControlAction, ControlPlane
@@ -688,19 +688,14 @@ class AutonomousEngine:
         # 是否允许 POST/PUT/DELETE 交易写请求
         self._can_write = self._env_mode.can_write_trades
 
-        # Config
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config",
-            "env.testnet.yaml",
-        )
-        with open(config_path) as f:
-            self._config = yaml.safe_load(f)
-
-        binance_cfg = self._config["exchange"]["binance_usdm"]
-        self._rest_url = binance_cfg["rest_base_url"]
-        self._api_key = str(binance_cfg.get("api_key", "")).strip()
-        self._api_secret = str(binance_cfg.get("api_secret", "")).strip()
+        # Config — 使用统一配置提供器，禁止直接读取 YAML
+        # 加载优先级: CLI explicit > BEIDOU_ENV > env-specific file > SAFETY_ONLY
+        config_provider = ConfigProvider()
+        self._settings: TypedSettings = config_provider.load(environment=mode)
+        self._rest_url = self._settings.exchange.rest_base_url
+        self._api_key = ""  # 通过秘密提供器注入，禁止从配置文件读取明文密钥
+        self._api_secret = ""
+        self._config_hash = self._settings.config_hash
 
         # Adapter REST client (BD-02: single adapter boundary)
         self._exchange = BinanceRESTClient(

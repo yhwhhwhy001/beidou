@@ -15,11 +15,10 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
-import yaml
-
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_shared.config import ConfigProvider
 from beidou_shared.types import (
     DataQualityTier,
     InstrumentId,
@@ -33,20 +32,12 @@ class MarketDataFeed:
     """Binance REST 行情数据源。自动重试、DQ 检查、特征存储。"""
 
     def __init__(self) -> None:
-        # Load config
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config",
-            "env.testnet.yaml",
-        )
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-
-        binance_cfg = cfg["exchange"]["binance_usdm"]
-        self._rest_url = binance_cfg["rest_base_url"]
-        self._api_key = str(binance_cfg.get("api_key", "")).strip()
-        self._api_secret = str(binance_cfg.get("api_secret", "")).strip()
-        self._recv_window = binance_cfg.get("recv_window_ms", 60000)
+        # Config — 使用统一配置提供器
+        settings = ConfigProvider().load()
+        self._rest_url = settings.exchange.rest_base_url
+        self._api_key = ""  # 通过秘密提供器注入
+        self._api_secret = ""
+        self._recv_window = 60000
 
         self._feature_store = FeatureStore()
         self._kline_generators: dict[str, KLineGenerator] = {}
