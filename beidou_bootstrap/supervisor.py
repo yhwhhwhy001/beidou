@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import time
 from contextlib import suppress
@@ -179,6 +180,7 @@ class StartupSupervisor:
         return 5 if fatal_triggered else 0
 
     async def run(self) -> int:
+        os.environ["BEIDOU_ENV"] = self.mode
         locked, lock_message = self.lock.acquire()
         if not locked:
             print(f"❌ {lock_message}")
@@ -255,7 +257,10 @@ class StartupSupervisor:
             if self.engine is not None:
                 self.engine._running = False
             if self._engine_task is not None and not self._engine_task.done():
-                self._engine_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await self._engine_task
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._engine_task), timeout=30.0)
+                except TimeoutError:
+                    self._engine_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await self._engine_task
             self.lock.release()
