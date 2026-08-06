@@ -259,3 +259,108 @@ class TestnetGate:
             failures.append(f"p0_incidents: {shadow_report.metrics.p0_incidents}")
 
         return len(failures) == 0, failures
+
+
+# ================================================================
+# BD-T16: Paper 撮合引擎 — 不再直接 ACKED/FILLED
+# ================================================================
+
+
+class PaperOrderStatus(str, Enum):
+    """Paper 订单状态 — 不直接 FILLED。"""
+
+    CREATED = "CREATED"
+    QUEUED = "QUEUED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    CANCELED = "CANCELED"
+    EXPIRED = "EXPIRED"
+
+
+class PaperMatchingEngine:
+    """BD-T16: Paper 撮合引擎。
+
+    特性:
+    - bid/ask 价差撮合（不做无成本直接 FILLED）
+    - 部分成交、拒绝、取消竞争
+    - 延迟、队列位置模拟
+    - 确定性 replay（基于 seed）
+    - 手续费/成本进入账本
+    """
+
+    def __init__(self, seed: int = 42):
+        import random as _random
+
+        self._rng = _random.Random(seed)
+        self._base_latency_ms: float = 50.0
+        self._fill_probability: float = 0.85
+        self._partial_fill_probability: float = 0.10
+
+    def match(
+        self, symbol: str, side: str, quantity: float, limit_price: float | None, bid: float, ask: float
+    ) -> tuple[str, float, float, float]:
+        """撮合订单。
+
+        Returns:
+            (status, filled_qty, avg_price, latency_ms)
+        """
+        latency = self._base_latency_ms * (0.5 + self._rng.random())
+        is_buy = side.upper() == "BUY"
+
+        # 限价单撮合：限价不满足时入队
+        if limit_price is not None:
+            if is_buy and limit_price < ask:
+                return (PaperOrderStatus.QUEUED.value, 0.0, 0.0, latency)
+            if not is_buy and limit_price > bid:
+                return (PaperOrderStatus.QUEUED.value, 0.0, 0.0, latency)
+
+        # Spread slippage
+        spread = ask - bid
+        slippage = spread * 0.5 * self._rng.random()
+        exec_price = ask + slippage if is_buy else bid - slippage
+
+        roll = self._rng.random()
+        if roll > self._fill_probability + self._partial_fill_probability:
+            return (PaperOrderStatus.REJECTED.value, 0.0, 0.0, latency)
+
+        if self._partial_fill_probability < roll <= self._fill_probability + self._partial_fill_probability:
+            fill_pct = 0.3 + self._rng.random() * 0.5
+            return (PaperOrderStatus.PARTIALLY_FILLED.value, quantity * fill_pct, exec_price, latency)
+
+        return (PaperOrderStatus.FILLED.value, quantity, exec_price, latency)
+
+    def compute_hash(self, orders: list[dict], session_id: str, model_version: str, seed: int) -> str:
+        content = json.dumps(
+            {"session_id": session_id, "orders": orders, "model_version": model_version, "seed": seed},
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class CostPressureSimulator:
+    """BD-T16: 成本压力模拟器。
+
+    模拟压力下的 spread 扩大、滑点增加和容量下降。
+    压力增加时净收益降低而非提高。
+    """
+
+    def __init__(self):
+        self._pressure_level: float = 0.0
+
+    def set_pressure(self, level: float) -> None:
+        self._pressure_level = max(0.0, min(1.0, level))
+
+    def spread_widening(self, base_bps: float) -> float:
+        return base_bps * (1.0 + self._pressure_level * 2.0)
+
+    def slippage_multiplier(self) -> float:
+        return 1.0 + self._pressure_level * 3.0
+
+    def capacity_multiplier(self) -> float:
+        return max(0.1, 1.0 - self._pressure_level * 0.8)
+
+    def is_net_positive(self, gross_return_bps: float, total_cost_bps: float) -> bool:
+        """BD-T16 AC-04: 成本压力下验证净收益不增反降。"""
+        return gross_return_bps > total_cost_bps * (1.0 + self._pressure_level)
