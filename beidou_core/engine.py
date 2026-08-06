@@ -2587,6 +2587,8 @@ class AutonomousEngine:
             print("[beidou-autopilot] Control plane: staying NO_NEW_RISK (manual RESUME required)")
 
         self._running = True
+        self._last_realtime = time.time()
+        self._last_recon = time.time()
         print("[beidou-autopilot] ========================================")
         print("[beidou-autopilot] Engine running. Press Ctrl+C to stop.")
         print("[beidou-autopilot] ========================================")
