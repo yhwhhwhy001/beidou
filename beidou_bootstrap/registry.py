@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import time
-from collections.abc import Iterable
 from typing import Any
 
 from .models import CheckResult, CheckSeverity, CheckStatus
@@ -132,14 +131,6 @@ def check_package_imports() -> list[CheckResult]:
     return results
 
 
-def _value_set(items: Iterable[Any]) -> set[str]:
-    values: set[str] = set()
-    for item in items:
-        value = getattr(item, "value", item)
-        values.add(str(value))
-    return values
-
-
 def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     """验证引擎对象、算法图、因子生命周期和风险接线。"""
     checks: list[CheckResult] = []
@@ -177,7 +168,10 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         except Exception as exc:
             graph_error = f"{type(exc).__name__}: {exc}"
 
-    graph_failed = bool(missing_components or invalid_components or graph_error)
+    topology_mismatch = set(topological_order) != component_ids or len(topological_order) != len(component_ids)
+    graph_failed = bool(
+        missing_components or extra_components or invalid_components or graph_error or topology_mismatch
+    )
     checks.append(
         _result(
             "runtime.algorithms.alpha_graph",
@@ -193,6 +187,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
                 "invalid": invalid_components,
                 "topological_order": topological_order,
                 "graph_error": graph_error,
+                "topology_mismatch": topology_mismatch,
             },
         )
     )
@@ -201,6 +196,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     factor_map = getattr(factor_registry, "_factors", {}) if factor_registry is not None else {}
     factor_ids = set(factor_map.keys())
     missing_factors = sorted(EXPECTED_FACTORS - factor_ids)
+    extra_factors = sorted(factor_ids - EXPECTED_FACTORS)
     lifecycle: dict[str, str] = {}
     for factor_id, record in factor_map.items():
         raw_state = getattr(record, "lifecycle", "UNKNOWN")
@@ -208,7 +204,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     active = {factor_id for factor_id, state in lifecycle.items() if state in {"ACTIVE", "CHALLENGER"}}
     strict_mode = mode in {"production", "canary", "live"}
     inactive_expected = sorted(EXPECTED_FACTORS - active)
-    factor_failed = bool(missing_factors or (not strict_mode and inactive_expected))
+    factor_failed = bool(missing_factors or extra_factors or inactive_expected)
     checks.append(
         _result(
             "runtime.algorithms.factor_lifecycle",
@@ -220,6 +216,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
                 "expected": sorted(EXPECTED_FACTORS),
                 "actual": sorted(factor_ids),
                 "missing": missing_factors,
+                "extra": extra_factors,
                 "inactive_expected": inactive_expected,
                 "lifecycle": lifecycle,
                 "strict_mode": strict_mode,
@@ -250,14 +247,38 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         budget = strategy_risk.get_budget(strategy_id) if strategy_risk is not None else None
     except Exception:
         budget = None
+    budget_fields: dict[str, float] = {}
+    budget_valid = budget is not None
+    if budget is not None:
+        for field_name in (
+            "max_drawdown_pct",
+            "max_daily_loss_pct",
+            "max_position_notional",
+            "max_leverage",
+            "risk_per_trade_pct",
+            "max_consecutive_losses",
+        ):
+            try:
+                budget_fields[field_name] = float(getattr(budget, field_name))
+            except (TypeError, ValueError, AttributeError):
+                budget_fields[field_name] = 0.0
+        budget_valid = all(value > 0 for value in budget_fields.values())
+        budget_valid = budget_valid and budget_fields["max_drawdown_pct"] <= 100
+        budget_valid = budget_valid and budget_fields["max_daily_loss_pct"] <= 100
+        budget_valid = budget_valid and budget_fields["risk_per_trade_pct"] <= 100
+
     checks.append(
         _result(
             "runtime.algorithms.risk_budget",
             "策略风险预算",
-            CheckStatus.PASS if budget is not None else CheckStatus.FAIL,
+            CheckStatus.PASS if budget_valid else CheckStatus.FAIL,
             CheckSeverity.P0,
-            "风险预算已加载" if budget is not None else "风险预算缺失，禁止增加风险",
-            evidence={"strategy_id": str(strategy_id), "budget_type": type(budget).__name__ if budget else None},
+            "风险预算已加载且参数有效" if budget_valid else "风险预算缺失或参数无效，禁止增加风险",
+            evidence={
+                "strategy_id": str(strategy_id),
+                "budget_type": type(budget).__name__ if budget else None,
+                "fields": budget_fields,
+            },
         )
     )
 
