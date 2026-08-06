@@ -43,18 +43,18 @@ class Result(Generic[T]):
     ok=True 时 data 有效；ok=False 时 error 有效。
     """
 
-    ok: bool
+    is_ok: bool
     data: T | None = None
     error: AdapterError | None = None
 
     @classmethod
     def success(cls, data: T) -> "Result[T]":
-        return cls(ok=True, data=data)
+        return cls(is_ok=True, data=data)
 
     # 别名：兼容旧代码
     @classmethod
     def ok(cls, data: T) -> "Result[T]":
-        return cls(ok=True, data=data)
+        return cls(is_ok=True, data=data)
 
     @classmethod
     def failure(
@@ -95,7 +95,7 @@ class Result(Generic[T]):
         )
 
     def is_success(self) -> bool:
-        return self.ok
+        return self.is_ok
 
 
 def classify_http_error(http_status: int, response_body: str = "", binance_code: int = 0) -> tuple[ErrorCategory, bool]:

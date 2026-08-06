@@ -46,31 +46,38 @@ class TestQualityScanner(ast.NodeVisitor):
             for child in ast.walk(node):
                 # pytest.raises() context manager
                 if isinstance(child, ast.Call):
-                    if (isinstance(child.func, ast.Attribute) and
-                        child.func.attr == "raises"):
+                    if isinstance(child.func, ast.Attribute) and child.func.attr == "raises":
                         has_valid_test = True
                         break
                 # raise AssertionError is a valid assertion
                 if isinstance(child, ast.Raise):
-                    if (isinstance(child.exc, ast.Call) and
-                        isinstance(child.exc.func, ast.Name) and
-                        child.exc.func.id in ("AssertionError", "ArchitectureViolation")):
+                    if (
+                        isinstance(child.exc, ast.Call)
+                        and isinstance(child.exc.func, ast.Name)
+                        and child.exc.func.id in ("AssertionError", "ArchitectureViolation")
+                    ):
                         has_valid_test = True
                         break
                 # with pytest.raises(...): is also valid
                 if isinstance(child, ast.With):
                     for item in child.items:
                         if isinstance(item.context_expr, ast.Call):
-                            if (isinstance(item.context_expr.func, ast.Attribute) and
-                                item.context_expr.func.attr == "raises"):
+                            if (
+                                isinstance(item.context_expr.func, ast.Attribute)
+                                and item.context_expr.func.attr == "raises"
+                            ):
                                 has_valid_test = True
                                 break
 
             if not self._has_assert and not has_valid_test:
-                self.findings.append(Finding(
-                    self.filepath, node.lineno, "ERROR",
-                    f"Test function '{node.name}' has no assertions — not a valid test"
-                ))
+                self.findings.append(
+                    Finding(
+                        self.filepath,
+                        node.lineno,
+                        "ERROR",
+                        f"Test function '{node.name}' has no assertions — not a valid test",
+                    )
+                )
             self._current_function = None
 
     def visit_Assert(self, node: ast.Assert) -> None:
@@ -79,27 +86,41 @@ class TestQualityScanner(ast.NodeVisitor):
 
         # Check for vacuous assertions
         if isinstance(node.test, ast.Constant):
-            self.findings.append(Finding(
-                self.filepath, node.lineno, "ERROR",
-                f"Vacuous assertion: 'assert {ast.unparse(node.test)}' is always True/False"
-            ))
+            self.findings.append(
+                Finding(
+                    self.filepath,
+                    node.lineno,
+                    "ERROR",
+                    f"Vacuous assertion: 'assert {ast.unparse(node.test)}' is always True/False",
+                )
+            )
 
         # Check for assert len(x) >= 0 (always true)
         if isinstance(node.test, ast.Compare):
-            if (isinstance(node.test.left, ast.Call) and
-                isinstance(node.test.left.func, ast.Name) and
-                node.test.left.func.id == "len"):
+            if (
+                isinstance(node.test.left, ast.Call)
+                and isinstance(node.test.left.func, ast.Name)
+                and node.test.left.func.id == "len"
+            ):
                 for op, comp in zip(node.test.ops, node.test.comparators):
                     if isinstance(op, ast.GtE) and isinstance(comp, ast.Constant) and comp.value == 0:
-                        self.findings.append(Finding(
-                            self.filepath, node.lineno, "ERROR",
-                            "Vacuous assertion: 'assert len(x) >= 0' is always True"
-                        ))
+                        self.findings.append(
+                            Finding(
+                                self.filepath,
+                                node.lineno,
+                                "ERROR",
+                                "Vacuous assertion: 'assert len(x) >= 0' is always True",
+                            )
+                        )
                     if isinstance(op, ast.Gt) and isinstance(comp, ast.Constant) and comp.value == -1:
-                        self.findings.append(Finding(
-                            self.filepath, node.lineno, "ERROR",
-                            "Vacuous assertion: 'assert len(x) > -1' is always True"
-                        ))
+                        self.findings.append(
+                            Finding(
+                                self.filepath,
+                                node.lineno,
+                                "ERROR",
+                                "Vacuous assertion: 'assert len(x) > -1' is always True",
+                            )
+                        )
 
         self.generic_visit(node)
 
@@ -108,27 +129,27 @@ class TestQualityScanner(ast.NodeVisitor):
         for handler in node.handlers:
             if handler.type is None or (isinstance(handler.type, ast.Name) and handler.type.id == "Exception"):
                 if len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass):
-                    self.findings.append(Finding(
-                        self.filepath, handler.lineno, "ERROR",
-                        "'except Exception: pass' — swallowed exception, not allowed"
-                    ))
+                    self.findings.append(
+                        Finding(
+                            self.filepath,
+                            handler.lineno,
+                            "ERROR",
+                            "'except Exception: pass' — swallowed exception, not allowed",
+                        )
+                    )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         # Check for @pytest.mark.skip without reason
-        if hasattr(node, 'decorator_list'):
+        if hasattr(node, "decorator_list"):
             for dec in node.decorator_list:
                 if isinstance(dec, ast.Call):
-                    if (isinstance(dec.func, ast.Attribute) and
-                        dec.func.attr == "skip"):
-                        has_reason = any(
-                            k.arg == "reason" for k in dec.keywords
-                        ) if dec.keywords else False
+                    if isinstance(dec.func, ast.Attribute) and dec.func.attr == "skip":
+                        has_reason = any(k.arg == "reason" for k in dec.keywords) if dec.keywords else False
                         if not has_reason:
-                            self.findings.append(Finding(
-                                self.filepath, node.lineno, "WARNING",
-                                "@pytest.mark.skip without reason"
-                            ))
+                            self.findings.append(
+                                Finding(self.filepath, node.lineno, "WARNING", "@pytest.mark.skip without reason")
+                            )
         self.generic_visit(node)
 
 

@@ -162,7 +162,9 @@ class StopLossCalculator:
             return entry_price * (1 + volatility_pct * multiplier / 100)
 
     @staticmethod
-    def swing_structure(swing_low: float | None, swing_high: float | None, side: OrderSide, entry_price: float = 0.0) -> float:
+    def swing_structure(
+        swing_low: float | None, swing_high: float | None, side: OrderSide, entry_price: float = 0.0
+    ) -> float:
         """基于支撑/阻力位止损。缺数据时回退到固定百分比。"""
         if side == OrderSide.BUY and swing_low is not None:
             return swing_low * 0.999  # 略低于前低
@@ -172,7 +174,7 @@ class StopLossCalculator:
         if side == OrderSide.BUY:
             return entry_price * 0.95 if entry_price > 0 else 0.0
         else:
-            return entry_price * 1.05 if entry_price > 0 else float('inf')
+            return entry_price * 1.05 if entry_price > 0 else float("inf")
 
     @staticmethod
     def calculate(

@@ -19,8 +19,7 @@ def compute_checksum(filepath: str) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def run_migrations(migrations_dir: str = "migrations",
-                   db_url: str | None = None) -> dict:
+def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None) -> dict:
     """按序执行 forward-only 迁移。
 
     返回: {"applied": [...], "skipped": [...], "errors": [...]}
@@ -52,6 +51,7 @@ def run_migrations(migrations_dir: str = "migrations",
 
         try:
             import psycopg
+
             with psycopg.connect(db_url) as conn:
                 with conn.cursor() as cur:
                     # 检查是否已执行
@@ -70,10 +70,8 @@ def run_migrations(migrations_dir: str = "migrations",
 
                     # 记录迁移
                     cur.execute(
-                        "INSERT INTO schema_migrations (version, checksum, description) "
-                        "VALUES (%s, %s, %s)",
-                        (sql_file.stem, checksum,
-                         f"Applied at {datetime.now(timezone.utc).isoformat()}"),
+                        "INSERT INTO schema_migrations (version, checksum, description) VALUES (%s, %s, %s)",
+                        (sql_file.stem, checksum, f"Applied at {datetime.now(timezone.utc).isoformat()}"),
                     )
                     conn.commit()
 
@@ -85,9 +83,9 @@ def run_migrations(migrations_dir: str = "migrations",
             print(f"    ❌ Error: {e}")
             break  # Forward-only: stop on first error
 
-    print(f"\nResult: {len(result['applied'])} applied, "
-          f"{len(result['skipped'])} skipped, "
-          f"{len(result['errors'])} errors")
+    print(
+        f"\nResult: {len(result['applied'])} applied, {len(result['skipped'])} skipped, {len(result['errors'])} errors"
+    )
     return result
 
 

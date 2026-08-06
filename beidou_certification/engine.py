@@ -666,10 +666,16 @@ class CapitalLevel:
 # BD-P2-18: 资本阶梯级别定义
 CAPITAL_LADDER: list[CapitalLevel] = [
     CapitalLevel("shadow", CertificationGate.G6_SHADOW, max_capital=0.0, max_leverage=0.0),
-    CapitalLevel("canary", CertificationGate.G7_L2_CANARY, max_capital=500.0, max_leverage=1.0, min_unattended_hours=24.0),
+    CapitalLevel(
+        "canary", CertificationGate.G7_L2_CANARY, max_capital=500.0, max_leverage=1.0, min_unattended_hours=24.0
+    ),
     CapitalLevel("ramp", CertificationGate.G7_L3_RAMP, max_capital=2000.0, max_leverage=2.0, min_unattended_hours=72.0),
-    CapitalLevel("normal", CertificationGate.G7_L4_NORMAL, max_capital=10000.0, max_leverage=3.0, min_unattended_hours=168.0),
-    CapitalLevel("champion", CertificationGate.G7_L5_CHAMPION, max_capital=50000.0, max_leverage=3.0, min_unattended_hours=720.0),
+    CapitalLevel(
+        "normal", CertificationGate.G7_L4_NORMAL, max_capital=10000.0, max_leverage=3.0, min_unattended_hours=168.0
+    ),
+    CapitalLevel(
+        "champion", CertificationGate.G7_L5_CHAMPION, max_capital=50000.0, max_leverage=3.0, min_unattended_hours=720.0
+    ),
 ]
 
 
@@ -705,9 +711,7 @@ class ProductionLadder:
 
         BD-P2-18 AC-18-01: 不可跳过任何 Gate。
         """
-        target_idx = next(
-            (i for i, lvl in enumerate(CAPITAL_LADDER) if lvl.level == target_level), -1
-        )
+        target_idx = next((i for i, lvl in enumerate(CAPITAL_LADDER) if lvl.level == target_level), -1)
         if target_idx == -1:
             return False, f"Unknown level: {target_level}"
         if target_idx <= self._current_level_index:

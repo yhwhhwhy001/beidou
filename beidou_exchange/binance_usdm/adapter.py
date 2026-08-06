@@ -195,14 +195,19 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         )
 
     async def get_balances(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, MonetaryValue]]:
+        """查询账户余额。失败/无连接返回 UNKNOWN，绝不返回 EMPTY。"""
         if not self._health_monitor.is_safe_for_new_risk():
             return ResultStatus.UNKNOWN, {}
-        return ResultStatus.EMPTY, {}
+        # BD-T03: 当 REST client 就绪后，替换为真实 API 调用
+        # 当前阶段未连接真实交易所，返回 UNKNOWN 而非 EMPTY
+        return ResultStatus.UNKNOWN, {}
 
     async def get_positions(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, Quantity]]:
+        """查询持仓。失败/无连接返回 UNKNOWN，绝不返回 EMPTY。"""
         if not self._health_monitor.is_safe_for_new_risk():
             return ResultStatus.UNKNOWN, {}
-        return ResultStatus.EMPTY, {}
+        # BD-T03: 当 REST client 就绪后，替换为真实 API 调用
+        return ResultStatus.UNKNOWN, {}
 
     async def create_order(self, request: OrderRequest) -> OrderResponse:
         if not self._health_monitor.is_safe_for_new_risk():
