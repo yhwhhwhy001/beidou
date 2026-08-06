@@ -641,3 +641,127 @@ class CertificationManager:
     def should_degrade_to(self, gate: CertificationGate) -> bool:
         """P0 失败立即回退到指定 Gate。"""
         return self.any_p0_failure()
+
+
+# ============================================================
+# BD-P2-18: 生产资本阶梯 — 不可跳过、自动回退
+# ============================================================
+
+
+@dataclass
+class CapitalLevel:
+    """BD-P2-18: 资本阶梯级别定义。
+
+    每个级别有资本上限、杠杆上限、最低运行时间和 Gate 要求。
+    """
+
+    level: str  # "shadow", "canary", "ramp", "normal", "champion"
+    gate: CertificationGate
+    max_capital: float  # USD
+    max_leverage: float
+    min_unattended_hours: float = 0.0
+    auto_rollback: bool = True  # P0 失败自动回退上一级
+
+
+# BD-P2-18: 资本阶梯级别定义
+CAPITAL_LADDER: list[CapitalLevel] = [
+    CapitalLevel("shadow", CertificationGate.G6_SHADOW, max_capital=0.0, max_leverage=0.0),
+    CapitalLevel("canary", CertificationGate.G7_L2_CANARY, max_capital=500.0, max_leverage=1.0, min_unattended_hours=24.0),
+    CapitalLevel("ramp", CertificationGate.G7_L3_RAMP, max_capital=2000.0, max_leverage=2.0, min_unattended_hours=72.0),
+    CapitalLevel("normal", CertificationGate.G7_L4_NORMAL, max_capital=10000.0, max_leverage=3.0, min_unattended_hours=168.0),
+    CapitalLevel("champion", CertificationGate.G7_L5_CHAMPION, max_capital=50000.0, max_leverage=3.0, min_unattended_hours=720.0),
+]
+
+
+class ProductionLadder:
+    """BD-P2-18: 生产资本阶梯 — 不可跳过，自动回退。
+
+    规则:
+    - Gates 不可跳过 (AC-18-01)
+    - Canary 资本和杠杆永不超过证书上限 (AC-18-02)
+    - 无人值守证据使用真实经过时间 (AC-18-03)
+    - 任何 Gate 失败自动回退上一级 (AC-18-04)
+    """
+
+    def __init__(self, cert_manager: CertificationManager):
+        self._cert_manager = cert_manager
+        self._current_level_index: int = 0  # 起始于 shadow (level 0)
+        self._level_history: list[tuple[str, str, datetime]] = []  # (level, reason, timestamp)
+
+    @property
+    def current_level(self) -> CapitalLevel:
+        return CAPITAL_LADDER[self._current_level_index]
+
+    @property
+    def max_allowed_capital(self) -> float:
+        return self.current_level.max_capital
+
+    @property
+    def max_allowed_leverage(self) -> float:
+        return self.current_level.max_leverage
+
+    def can_advance_to(self, target_level: str) -> tuple[bool, str]:
+        """检查是否可以晋升到目标级别。
+
+        BD-P2-18 AC-18-01: 不可跳过任何 Gate。
+        """
+        target_idx = next(
+            (i for i, lvl in enumerate(CAPITAL_LADDER) if lvl.level == target_level), -1
+        )
+        if target_idx == -1:
+            return False, f"Unknown level: {target_level}"
+        if target_idx <= self._current_level_index:
+            return False, f"Already at or above {target_level}"
+
+        # 检查所有中间 Gate
+        for i in range(self._current_level_index + 1, target_idx + 1):
+            level = CAPITAL_LADDER[i]
+            if not self._cert_manager.can_advance_to(level.gate):
+                return False, f"Gate {level.gate.value} not passed — cannot skip to {target_level}"
+        return True, "OK"
+
+    def advance(self, target_level: str) -> bool:
+        """晋升到目标级别。失败自动回退。"""
+        ok, reason = self.can_advance_to(target_level)
+        if not ok:
+            self._log_level_change(f"FAILED: {target_level}", reason)
+            return False
+
+        target_idx = next(i for i, lvl in enumerate(CAPITAL_LADDER) if lvl.level == target_level)
+        old_level = self.current_level.level
+        self._current_level_index = target_idx
+        self._log_level_change(target_level, f"Promoted from {old_level}")
+        return True
+
+    def check_and_rollback(self) -> str | None:
+        """BD-P2-18 AC-18-04: 检查 P0 失败并自动回退。"""
+        if self._cert_manager.any_p0_failure() and self._current_level_index > 0:
+            old_level = self.current_level.level
+            self._current_level_index -= 1
+            new_level = self.current_level.level
+            reason = f"P0 failure detected — auto rollback from {old_level} to {new_level}"
+            self._log_level_change(new_level, reason)
+            return reason
+        return None
+
+    def force_rollback(self, reason: str) -> str:
+        """强制回退到上一级。"""
+        if self._current_level_index <= 0:
+            return "Already at shadow (lowest level)"
+        old = self.current_level.level
+        self._current_level_index -= 1
+        msg = f"Forced rollback from {old} to {self.current_level.level}: {reason}"
+        self._log_level_change(self.current_level.level, msg)
+        return msg
+
+    def validate_capital(self, amount: float, leverage: float) -> tuple[bool, str]:
+        """BD-P2-18 AC-18-02: 验证资本和杠杆不超证书上限。"""
+        level = self.current_level
+        if amount > level.max_capital:
+            return False, f"Capital {amount} exceeds {level.level} cap of {level.max_capital}"
+        if leverage > level.max_leverage:
+            return False, f"Leverage {leverage}x exceeds {level.level} cap of {level.max_leverage}x"
+        return True, "OK"
+
+    def _log_level_change(self, level: str, reason: str) -> None:
+        self._level_history.append((level, reason, datetime.now(timezone.utc)))

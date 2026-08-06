@@ -63,10 +63,11 @@ HARDCODED_PATTERNS = [
      "@pytest.mark.skip 无理由"),
 ]
 
-# Allowlist: (file_suffix, category) pairs that are verified safe
-_PATTERN_ALLOWLIST: set[tuple[str, str]] = {
-    ("beidou_core/engine.py", "direct_approval"),
-}
+# BD-P1-16: Allowlist — 仅保留已验证安全的条目。
+# 禁止 Allowlist 已知 P0 问题。
+# engine.py 的直接审批为 nearline-tick 内联签名（非 Gate 证书），
+# 纳入 BD-P2-18 资本阶梯后进行独立 Gate Runner 替换。
+_PATTERN_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 class HardcodedASTScanner(ast.NodeVisitor):
