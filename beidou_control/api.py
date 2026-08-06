@@ -189,15 +189,15 @@ def create_app(api: ControlPlaneAPI):
         return r.__dict__
 
     @app.get("/trading-eligibility")
-    async def eligibility_endpoint():
+    async def eligibility_endpoint() -> dict:
         return api.trading_eligibility().__dict__
 
     @app.get("/facts")
-    async def facts_endpoint():
+    async def facts_endpoint() -> dict:
         return {"status": "NOT_VERIFIABLE", "message": "Use dedicated facts endpoint"}
 
     @app.post("/emergency/{action}")
-    async def emergency_endpoint(action: str, request: Request):
+    async def emergency_endpoint(action: str, request: Request) -> dict:
         ea = api.emergency(action, "api-user", "api-call")
         if not ea.success:
             raise HTTPException(status_code=400, detail=ea.reason)

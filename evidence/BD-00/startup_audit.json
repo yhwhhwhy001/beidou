@@ -1,9 +1,9 @@
 [
   {
-    "timestamp": "2026-08-06T15:16:23.402231+00:00",
+    "timestamp": "2026-08-06T15:21:32.744050+00:00",
     "event_type": "STARTUP_GATE",
     "environment": "safety_only",
-    "commit": "f043ca21e84d1b1d0badab862437fdc3f546cbd0",
+    "commit": "c511fbd224dbc6d85a174813b70e5d7ac35e79d0",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",

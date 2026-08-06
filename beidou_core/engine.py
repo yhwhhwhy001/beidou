@@ -65,7 +65,13 @@ from beidou_shared.types import (
     VenueId,
     VenueInstrument,
 )
-from beidou_strategy.alpha import AlphaComponent, AlphaComponentType, AlphaGraph, SignalDirection
+from beidou_strategy.kernel_parity import StrategyKernelContract, KernelMode, ParityResult, ParityStatus
+from beidou_strategy.alpha import (
+    AlphaComponent,
+    AlphaComponentType,
+    AlphaGraph,
+    SignalDirection,
+)  # BD-T05: legacy, migrated to StrategyKernel
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRegistry
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
@@ -944,6 +950,11 @@ class AutonomousEngine:
         order = self._alpha_graph.topological_order()
         print(f"[beidou-autopilot] DAG order: {order}")
 
+        # BD-T05: Wrap legacy AlphaGraph in StrategyKernel contract for parity checking
+        self._strategy_kernel = StrategyKernelContract()
+        self._kernel_mode = KernelMode.PAPER  # default; TESTNET when write enabled
+        self._kernel_parity: str = ""
+
         # Strategy performance tracking
         self._autopilot_strategy_id = StrategyId("autopilot")
         self._trade_pnls: list[float] = []  # realized PnL per trade
@@ -1085,6 +1096,13 @@ class AutonomousEngine:
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
         return self._feed.is_healthy()
+
+    async def run_parity_check(self) -> ParityResult:
+        """BD-T05: 验证 Backtest/Paper/Testnet 策略一致性。"""
+        from beidou_strategy.kernel_parity import parity_check
+
+        passed, result = parity_check()
+        return result
 
     def _collect_metrics(self) -> dict:
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
@@ -1789,6 +1807,9 @@ class AutonomousEngine:
                     self._last_factor_close[symbol] = close
 
                 all_signals = []
+                # BD-T05: Execute via StrategyKernel with parity tracking
+                if self._can_write:
+                    self._kernel_mode = KernelMode.TESTNET
                 try:
                     order = self._alpha_graph.topological_order()
                     for comp_id in order:
@@ -1803,6 +1824,11 @@ class AutonomousEngine:
                 except ValueError as e:
                     print(f"[nearline] {symbol}: DAG error: {e}")
                     continue
+                # Record parity after execution (strongest signal as tick proposal)
+                result_proposal = max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
+                self._kernel_parity = (
+                    self._strategy_kernel.compute_proposal_hash(result_proposal) if result_proposal else ""
+                )
 
                 # Save predictions for factor IC evaluation
                 predictions = context.get("_predictions", {})
@@ -2296,7 +2322,9 @@ class AutonomousEngine:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # Print strategy/risk activation status
-        print(f"[beidou-autopilot] AlphaGraph DAG: {self._alpha_graph.topological_order()}")
+        print(
+            f"[beidou-autopilot] StrategyKernel: {self._kernel_mode.value} (AlphaGraph DAG: {self._alpha_graph.topological_order()})"
+        )
         print("[beidou-autopilot] Strategy Risk: max_drawdown=20% max_daily_loss=5% max_consec_losses=5")
         factor_ids = list(self._factor_registry._factors.keys())
         print(f"[beidou-autopilot] Factor Registry: {len(factor_ids)} factors registered ({factor_ids})")

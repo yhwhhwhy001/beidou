@@ -1,4 +1,10 @@
-"""订单状态机、用户数据流、UNKNOWN 恢复与交易所语义归一。"""
+"""BD-T09: 订单状态追踪器 — 当前引擎使用的实现。
+
+迁移计划: OrderStateTracker → OrderAggregate (order_machine.py)
+- OrderAggregate 提供完整事件溯源 + UNKNOWN 恢复
+- 引擎逐步切换: engine.py 中的 OrderStateTracker 引用需替换为 OrderAggregate
+- 切换条件: BD-T18 Testnet 认证完成后
+"""
 
 from __future__ import annotations
 

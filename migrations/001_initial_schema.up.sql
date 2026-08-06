@@ -124,3 +124,84 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     description TEXT
 );
+
+-- BD-T08: Intent Outbox 持久化
+CREATE TABLE IF NOT EXISTS order_intents (
+    id SERIAL PRIMARY KEY,
+    intent_id VARCHAR(255) UNIQUE NOT NULL,
+    account_ref VARCHAR(255) NOT NULL,
+    instrument_id VARCHAR(50) NOT NULL,
+    side VARCHAR(10) NOT NULL,
+    order_type VARCHAR(20) NOT NULL,
+    quantity VARCHAR(50) NOT NULL,
+    price VARCHAR(50),
+    time_in_force VARCHAR(10) DEFAULT 'GTC',
+    client_order_id VARCHAR(255),
+    idempotency_key VARCHAR(255) UNIQUE NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    correlation_id VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS outbox_messages (
+    id SERIAL PRIMARY KEY,
+    message_id VARCHAR(255) UNIQUE NOT NULL,
+    intent_id VARCHAR(255) REFERENCES order_intents(intent_id),
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    lease_owner VARCHAR(255),
+    lease_until TIMESTAMPTZ,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    sent_at TIMESTAMPTZ,
+    acked_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_status_lease ON outbox_messages(status, lease_until)
+    WHERE status IN ('PENDING', 'SENDING');
+
+-- BD-T10: Fill events + Position projection
+CREATE TABLE IF NOT EXISTS fill_events (
+    id SERIAL PRIMARY KEY,
+    trade_id VARCHAR(255) UNIQUE NOT NULL,
+    instrument_id VARCHAR(50) NOT NULL,
+    venue_id VARCHAR(50) NOT NULL,
+    order_id VARCHAR(255),
+    side VARCHAR(10) NOT NULL,
+    price VARCHAR(50) NOT NULL,
+    quantity VARCHAR(50) NOT NULL,
+    fee VARCHAR(50) DEFAULT '0',
+    fee_currency VARCHAR(10) DEFAULT 'USDT',
+    event_time TIMESTAMPTZ NOT NULL,
+    correlation_id VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS position_projection (
+    id SERIAL PRIMARY KEY,
+    instrument_id VARCHAR(50) NOT NULL,
+    venue_id VARCHAR(50) NOT NULL,
+    side VARCHAR(10) NOT NULL,
+    quantity VARCHAR(50) NOT NULL,
+    avg_price VARCHAR(50) NOT NULL,
+    realized_pnl VARCHAR(50) DEFAULT '0',
+    version INT NOT NULL DEFAULT 1,
+    last_fill_id INT REFERENCES fill_events(id),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- BD-T12: Double-entry ledger postings
+CREATE TABLE IF NOT EXISTS ledger_postings (
+    id SERIAL PRIMARY KEY,
+    transaction_id VARCHAR(255) NOT NULL,
+    account_id VARCHAR(255) NOT NULL,
+    currency VARCHAR(10) NOT NULL,
+    amount VARCHAR(50) NOT NULL,
+    direction VARCHAR(10) NOT NULL CHECK (direction IN ('DEBIT', 'CREDIT')),
+    source_event_id VARCHAR(255),
+    posting_type VARCHAR(50) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(transaction_id, account_id, direction)
+);
+
+CREATE INDEX IF NOT EXISTS idx_postings_transaction ON ledger_postings(transaction_id);

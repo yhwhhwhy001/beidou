@@ -20,6 +20,11 @@ class ModuleState(str, Enum):
     RECOVERING = "RECOVERING"
     FAILED = "FAILED"
     LOCKED = "LOCKED"
+    CREATED = "CREATED"
+    INITIALIZING = "INITIALIZING"
+    SUSPENDED = "SUSPENDED"
+    STOPPING = "STOPPING"
+    STOPPED = "STOPPED"
 
 
 class DegradationLevel(str, Enum):
@@ -114,3 +119,43 @@ class ModuleLifecycle:
     def should_restart_directly_to_active(self) -> bool:
         """禁止重启后直接 ACTIVE。必须先 VALIDATING。"""
         return False
+
+
+class StartupWorkflow:
+    """BD-T14: 启动工作流 — 五阶段启动序列。
+
+    1. 进程启动 → schema/migration 检查
+    2. 状态回放 → 从事务日志恢复
+    3. 事实重建 → 从 postings/fills 重建投影
+    4. 交易所对账 → 与交易所独立快照比较
+    5. 保护验证 → 验证所有原生保护
+    完成后 → trading-ready
+    """
+
+    PHASES = [
+        "PROCESS_START",
+        "SCHEMA_CHECK",
+        "STATE_REPLAY",
+        "FACT_REBUILD",
+        "RECONCILIATION",
+        "PROTECTION_VERIFY",
+        "TRADING_READY",
+    ]
+
+    def __init__(self):
+        self._current_phase: str = self.PHASES[0]
+        self._completed: set[str] = set()
+
+    def advance(self, phase: str) -> bool:
+        if phase in self._completed:
+            return False
+        idx = self.PHASES.index(phase)
+        for i in range(idx):
+            if self.PHASES[i] not in self._completed:
+                return False  # 必须按顺序
+        self._current_phase = phase
+        self._completed.add(phase)
+        return True
+
+    def is_trading_ready(self) -> bool:
+        return "TRADING_READY" in self._completed
