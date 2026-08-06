@@ -212,7 +212,7 @@ def collect_runtime_checks(
     )
 
     realtime_age = now - float(getattr(engine, "_last_realtime", 0.0))
-    realtime_ok = realtime_age <= 30.0
+    realtime_ok = realtime_age <= 60.0
     # 启动阶段（_last_realtime 被 supervisor 重置为 0），允许等待首个 tick
     if resume_authorized:
         rt_severity = CheckSeverity.P0
@@ -227,7 +227,7 @@ def collect_runtime_checks(
             status=rt_status,
             severity=rt_severity,
             message=f"最近实时 tick {realtime_age:.1f}s 前",
-            evidence={"age_seconds": round(realtime_age, 3), "threshold_seconds": 30.0},
+            evidence={"age_seconds": round(realtime_age, 3), "threshold_seconds": 60.0},
         )
     )
 

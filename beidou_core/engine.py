@@ -1183,7 +1183,6 @@ class AutonomousEngine:
     async def _realtime_tick(self) -> None:
         """实时时钟：行情轮询 → 保护单检查 → 订单处理 → 对账。"""
         self._tick_count += 1
-        self._last_realtime = time.time()
 
         if self._tick_count % 3 == 0:
             print(
@@ -1204,8 +1203,8 @@ class AutonomousEngine:
                 # Yield event loop between symbols
                 await asyncio.sleep(0)
 
-                # 1. Fetch latest market data
-                features = self._feed.update_features(symbol)
+                # 1. Fetch latest market data (在线程中运行，避免同步 HTTP 阻塞事件循环)
+                features = await asyncio.to_thread(self._feed.update_features, symbol)
                 if not features:
                     continue
 
@@ -1292,6 +1291,8 @@ class AutonomousEngine:
                 str(e)[:200],
                 category="realtime",
             )
+        finally:
+            self._last_realtime = time.time()
 
     async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
         """平仓时取消交易所上的关联条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
@@ -1429,7 +1430,10 @@ class AutonomousEngine:
         """查询活跃订单状态并更新状态机/账本。"""
         for order_id in list(self._active_order_ids):
             # 使用订单自身的 symbol 而非批量循环的 symbol
-            order_sym = self._order_symbols.get(order_id, symbol)
+            order_sym = self._order_symbols.get(order_id)
+            if order_sym is not None and order_sym != symbol:
+                continue  # 跳过不属于当前 symbol 的订单，避免无效 API 调用
+            order_sym = order_sym or symbol
             try:
                 result = await self._api_async(
                     "/fapi/v1/order",

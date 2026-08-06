@@ -84,17 +84,17 @@ class MarketDataFeed:
 
         for attempt in range(3):
             try:
-                with _urllib_request.urlopen(req, timeout=10) as resp:
+                with _urllib_request.urlopen(req, timeout=5) as resp:
                     return _json.loads(resp.read())
             except _urllib_error.HTTPError as e:
                 if e.code == 429:
-                    __import__("time").sleep(1 * (attempt + 1))
+                    __import__("time").sleep(0.3 * (attempt + 1))
                     continue
                 self._error_count["http"] = self._error_count.get("http", 0) + 1
                 return {"error": e.code, "msg": e.read().decode()}
             except Exception as ex:
                 self._error_count["network"] = self._error_count.get("network", 0) + 1
-                __import__("time").sleep(0.5 * (attempt + 1))
+                __import__("time").sleep(0.3 * (attempt + 1))
         return {"error": -1, "msg": "retry exhausted"}
 
     # --- Data fetching ---
