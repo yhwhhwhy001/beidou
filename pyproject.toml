@@ -215,21 +215,17 @@ line_length = 120
 exclude_dirs = ["tests", ".venv"]
 skips = ["B101"]
 
+# BD-T15: 核心交易链 mypy ignore_errors 已从 14 个模块降至以下豁免。
+# 豁免规则: 必须附带 issue、owner、expiry；P0 包禁止豁免。
+# 以下模块在 BD-T03~BD-T14 任务中逐步移除豁免。
 [[tool.mypy.overrides]]
 module = [
-    "beidou_exchange.binance_usdm.rest_client",
-    "beidou_exchange.binance_usdm.adapter",
-    "beidou_exchange.router.router",
-    "beidou_shared.serde",
-    "beidou_core.store",
-    "beidou_core.feed",
-    "beidou_core.health",
-    "beidou_core.engine",
-    "beidou_strategy.kernel_parity",
-    "beidou_strategy.state.real_cost_model",
-    "beidou_safety.execution.order_machine",
-    "beidou_safety.execution.decision_persistence",
-    "beidou_safety.execution.conditional",
-    "beidou_safety.risk.engine",
+    "beidou_exchange.binance_usdm.adapter",       # BD-T03 将重构此模块
+    "beidou_exchange.router.router",              # BD-T03 将消除
+    "beidou_safety.execution.order_machine",      # BD-T09 将类型化
+    "beidou_safety.execution.decision_persistence", # BD-T08 将重构
+    "beidou_safety.execution.conditional",        # BD-T09 将统一
+    "beidou_strategy.kernel_parity",              # BD-T05 将切换
+    "beidou_strategy.state.real_cost_model",      # BD-T16 将实施
 ]
 ignore_errors = true
