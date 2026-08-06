@@ -42,11 +42,20 @@ class ReconciliationEngine:
         self._exchange_facts[f"{facts.account_id}:{facts.venue_id}"] = facts
 
     def reconcile(self, account_id: AccountId, venue_id: VenueId) -> ReconciliationResult:
+        """BD-P0-10: 对账 — 双方缺失 → UNKNOWN，从不匹配。
+
+        AC-10-01: both-sides-missing → UNKNOWN, blocks new risk.
+        AC-10-02: differences never silently ignored.
+        """
         key = f"{account_id}:{venue_id}"
         sys_facts = self._system_facts.get(key)
         ex_facts = self._exchange_facts.get(key)
         if sys_facts is None and ex_facts is None:
-            return ReconciliationResult(matched=True)
+            # BD-P0-10: 双方缺失 → UNKNOWN (fail-closed)
+            return ReconciliationResult(
+                matched=False,
+                differences=["BOTH_SIDES_MISSING: system and exchange facts unavailable — UNKNOWN"],
+            )
         if sys_facts is None or ex_facts is None:
             return ReconciliationResult(
                 matched=False, differences=["One side missing"], system_facts=sys_facts, exchange_facts=ex_facts

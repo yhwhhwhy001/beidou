@@ -32,13 +32,31 @@ class JournalEntry:
 
 
 class ImmutableLedger:
-    """不可变账本。所有经济事件追加写入，不可修改。"""
+    """BD-P0-09: 不可变账本 — 所有经济事件追加写入，禁止 UPDATE/DELETE。
+
+    约束:
+    - append-only: post() 只能追加，不可修改已有条目
+    - 余额平衡: 每次 post 后 total_debit == total_credit
+    - 可重建: 从 entry 序列重建所有投影
+    """
 
     def __init__(self) -> None:
         self._entries: list[JournalEntry] = []
         self._account_balances: dict[str, MonetaryValue] = {}
+        self._frozen: bool = False  # BD-P0-09: 冻结后不可再写入
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    def freeze(self) -> None:
+        """BD-P0-09: 冻结账本 — 认证后禁止所有写入。"""
+        self._frozen = True
 
     def post(self, entry: JournalEntry) -> str:
+        """追加经济事件。BD-P0-09: 冻结后抛出异常。"""
+        if self._frozen:
+            raise RuntimeError("ImmutableLedger is frozen — no new entries allowed")
         self._entries.append(entry)
         key = f"{entry.account_id}:{entry.venue_id}"
         current = self._account_balances.get(key, MonetaryValue(amount="0", currency=entry.debit.currency))
