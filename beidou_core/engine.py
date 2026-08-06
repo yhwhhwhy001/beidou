@@ -1183,8 +1183,6 @@ class AutonomousEngine:
     async def _realtime_tick(self) -> None:
         """实时时钟：行情轮询 → 保护单检查 → 订单处理 → 对账。"""
         self._tick_count += 1
-        _tick_start = time.time()
-        print(f"[realtime] TICK #{self._tick_count} START at tick_count={self._tick_count}")
 
         if self._tick_count % 3 == 0:
             print(
