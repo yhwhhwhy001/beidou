@@ -36,7 +36,7 @@ class StartupSupervisor:
         self.monitor_interval = monitor_interval
         self.writer = EvidenceWriter(project_root)
         self.lock = InstanceLock(project_root / ".beidou" / "beidou.pid")
-        self.report = StartupReport(mode=mode, symbols=symbols, port=port, commit=current_commit())
+        self.report = StartupReport(mode=mode, symbols=symbols, port=port, commit=current_commit(project_root))
         self.engine: Any | None = None
         self._engine_task: asyncio.Task[Any] | None = None
         self._resume_authorized = False
@@ -44,12 +44,63 @@ class StartupSupervisor:
         self._last_error_count = 0
         self._algorithm_probe: dict[str, Any] = {}
         self._last_algorithm_probe_attempt = 0.0
+        self._exchange_algo_snapshot: dict[str, Any] = {"ok": mode != "testnet", "by_symbol": {}}
+        self._last_exchange_algo_probe = 0.0
+        self._exchange_account_snapshot: dict[str, Any] = {"ok": False}
+        self._last_exchange_account_probe = 0.0
+        self._shutdown_requested = False
+        self._control_paused_by_supervisor = False
+        self._engine_failure = ""
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
         for item in checks:
             marker = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "UNKNOWN": "❔"}[item.status.value]
             print(f"{marker} [{item.severity.value}] {item.name}: {item.message}")
+
+    def _install_exchange_write_interlock(self) -> None:
+        """在非写模式从引擎 API 边界拦截所有交易所写请求。"""
+        assert self.engine is not None
+        original_async = self.engine._api_async
+        original_sync = self.engine._api
+        self.engine._supervisor_blocked_writes = []
+
+        def record(path: str, method: str) -> dict[str, Any]:
+            event = {
+                "path": path,
+                "method": method.upper(),
+                "mode": self.mode,
+                "timestamp": time.time(),
+            }
+            self.engine._supervisor_blocked_writes.append(event)
+            return {
+                "code": -3,
+                "error": -3,
+                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {self.mode}",
+            }
+
+        async def guarded_async(
+            path: str,
+            method: str = "GET",
+            signed: bool = False,
+            params: dict[str, Any] | None = None,
+        ) -> Any:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+                return record(path, method)
+            return await original_async(path, method=method, signed=signed, params=params)
+
+        def guarded_sync(
+            path: str,
+            method: str = "GET",
+            signed: bool = False,
+            params: dict[str, Any] | None = None,
+        ) -> Any:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+                return record(path, method)
+            return original_sync(path, method=method, signed=signed, params=params)
+
+        self.engine._api_async = guarded_async
+        self.engine._api = guarded_sync
 
     def _install_resume_interlock(self) -> None:
         """在深度启动门禁通过前阻止引擎内部自动 RESUME。"""
@@ -66,6 +117,117 @@ class StartupSupervisor:
 
         control.execute_action = guarded_execute
         control.execute_action(ControlAction.NO_NEW_RISK)
+        self._control_paused_by_supervisor = True
+
+    def _control_state(self) -> str:
+        if self.engine is None:
+            return "UNKNOWN"
+        try:
+            status = self.engine._control.get_status()
+            return str(getattr(status, "value", status))
+        except Exception:
+            return "UNKNOWN"
+
+    def _is_trading_ready(self) -> bool:
+        return (
+            self._resume_authorized
+            and not self.report.blockers
+            and self._control_state() == "RESUME"
+            and self.report.supervisor_state not in {"FAILED", "LOCKED", "STOPPED"}
+        )
+
+    def _install_health_callbacks(self) -> None:
+        """让 HTTP readiness 与监督器证据保持一致。"""
+        assert self.engine is not None
+
+        def readiness() -> bool:
+            return bool(self.engine._check_ready()) and self.report.supervisor_state == "RUNNING"
+
+        def trading_readiness() -> tuple[bool, str]:
+            ready = self._is_trading_ready()
+            if ready:
+                return True, "SUPERVISOR_VALIDATED"
+            if self.report.blockers:
+                return False, self.report.blockers[0].check_id
+            return False, f"CONTROL_{self._control_state()}"
+
+        def status_info() -> dict[str, Any]:
+            base = dict(self.engine._get_status_info())
+            base["supervisor"] = {
+                "state": self.report.supervisor_state,
+                "phase": self.report.phase,
+                "trading_ready": self._is_trading_ready(),
+                "control_state": self._control_state(),
+                "commit": self.report.commit,
+                "blockers": [item.check_id for item in self.report.blockers],
+                "checks": {item.check_id: item.status.value for item in self.report.checks},
+            }
+            return base
+
+        self.engine._health.set_readiness_check(readiness)
+        self.engine._health.set_trading_readiness(trading_readiness)
+        self.engine._health.set_status_info(status_info)
+
+    async def _refresh_exchange_account_snapshot(self) -> None:
+        """独立读取当前账户事实，拒绝使用陈旧的引擎缓存作为就绪证据。"""
+        if self.engine is None:
+            return
+        now = time.monotonic()
+        if now - self._last_exchange_account_probe < 15.0:
+            return
+        self._last_exchange_account_probe = now
+        try:
+            response = await self.engine._api_async("/fapi/v2/account", signed=True)
+            valid = (
+                isinstance(response, dict)
+                and "totalWalletBalance" in response
+                and isinstance(response.get("positions"), list)
+            )
+            if not valid:
+                raise RuntimeError(str(response)[:300])
+            self._exchange_account_snapshot = {
+                "ok": True,
+                "account": response,
+                "observed_at": time.time(),
+            }
+        except Exception as exc:
+            self._exchange_account_snapshot = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "observed_at": time.time(),
+            }
+
+    async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
+        """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
+        if self.mode != "testnet" or self.engine is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_exchange_algo_probe < 15.0:
+            return
+        self._last_exchange_algo_probe = now
+        try:
+            response = await self.engine._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            if not isinstance(response, list):
+                raise RuntimeError(str(response)[:300])
+            by_symbol: dict[str, list[str]] = {}
+            for item in response:
+                symbol = str(item.get("symbol", ""))
+                algo_id = str(item.get("algoId", ""))
+                if symbol and algo_id:
+                    by_symbol.setdefault(symbol, []).append(algo_id)
+            self._exchange_algo_snapshot = {
+                "ok": True,
+                "by_symbol": by_symbol,
+                "total": sum(len(ids) for ids in by_symbol.values()),
+                "observed_at": time.time(),
+            }
+        except Exception as exc:
+            self._exchange_algo_snapshot = {
+                "ok": False,
+                "by_symbol": {},
+                "error": f"{type(exc).__name__}: {exc}",
+                "observed_at": time.time(),
+            }
 
     def _runtime_checks(self) -> list[CheckResult]:
         assert self.engine is not None
@@ -76,6 +238,8 @@ class StartupSupervisor:
             resume_authorized=self._resume_authorized,
             algorithm_probe=self._algorithm_probe,
             last_error_count=self._last_error_count,
+            exchange_algo_snapshot=self._exchange_algo_snapshot,
+            exchange_account_snapshot=self._exchange_account_snapshot,
         )
         self._last_error_count = error_count
         return checks
@@ -86,12 +250,19 @@ class StartupSupervisor:
         deadline = time.monotonic() + self.startup_timeout
         while time.monotonic() < deadline:
             if self._engine_task.done():
-                with suppress(Exception):
+                try:
                     await self._engine_task
+                except asyncio.CancelledError:
+                    self._engine_failure = "engine task cancelled"
+                except Exception as exc:
+                    self._engine_failure = f"{type(exc).__name__}: {exc}"
                 return False
             lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
             lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
             health_thread = getattr(getattr(self.engine, "_health", None), "_thread", None)
+            if lifecycle_value == "ACTIVE" and self._shutdown_requested:
+                self.engine._running = False
+                return False
             if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
                 if (
                     not self._algorithm_probe.get("ok")
@@ -99,12 +270,18 @@ class StartupSupervisor:
                 ):
                     self._last_algorithm_probe_attempt = time.monotonic()
                     self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                await self._refresh_exchange_account_snapshot()
+                await self._refresh_exchange_algo_snapshot()
                 checks = self._runtime_checks()
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
                 if not self.report.blockers:
                     return True
+            else:
+                self.report.phase = "ENGINE_STARTING"
+                self.report.supervisor_state = "STARTING"
+                self.writer.write(self.report)
             await asyncio.sleep(1)
         return False
 
@@ -114,8 +291,11 @@ class StartupSupervisor:
         from beidou_control.plane import ControlAction
         from beidou_lifecycle.lifecycle import ModuleState
 
+        previous_control = self._control_state()
         with suppress(Exception):
             self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
+        if previous_control == "RESUME":
+            self._control_paused_by_supervisor = True
         lifecycle = self.engine._lifecycle
         if fatal:
             with suppress(Exception):
@@ -145,7 +325,9 @@ class StartupSupervisor:
             result = lifecycle.transition(target)
             if str(getattr(result, "value", result)) != "SUCCESS":
                 return False
-        self.engine._control.execute_action(ControlAction.RESUME)
+        if self._control_paused_by_supervisor:
+            self.engine._control.execute_action(ControlAction.RESUME)
+            self._control_paused_by_supervisor = False
         self._critical_streak = 0
         print("[supervisor] RECOVERED: RECOVERING → VALIDATING → ACTIVE")
         return True
@@ -155,6 +337,8 @@ class StartupSupervisor:
         fatal_triggered = False
         while not self._engine_task.done():
             await asyncio.sleep(self.monitor_interval)
+            await self._refresh_exchange_account_snapshot()
+            await self._refresh_exchange_algo_snapshot()
             checks = self._runtime_checks()
             if await self._recover_if_validated(checks):
                 checks = self._runtime_checks()
@@ -170,16 +354,43 @@ class StartupSupervisor:
                 )
             else:
                 self._critical_streak = 0
-            self.report.trading_ready = not blockers and self._resume_authorized
-            self.report.supervisor_state = (
-                "LOCKED" if fatal_triggered else ("RUNNING" if not blockers else "DEGRADED")
-            )
+            if fatal_triggered:
+                self.report.supervisor_state = "LOCKED"
+            elif blockers:
+                self.report.supervisor_state = "DEGRADED"
+            elif self._control_state() != "RESUME":
+                self.report.supervisor_state = "PAUSED"
+            else:
+                self.report.supervisor_state = "RUNNING"
+            self.report.trading_ready = self._is_trading_ready()
             self.writer.write(self.report)
-        with suppress(asyncio.CancelledError):
+        try:
             await self._engine_task
-        return 5 if fatal_triggered else 0
+        except asyncio.CancelledError:
+            self._engine_failure = "engine task cancelled"
+        except Exception as exc:
+            self._engine_failure = f"{type(exc).__name__}: {exc}"
+
+        self.report.trading_ready = False
+        self.report.phase = "STOPPED"
+        lifecycle = None
+        if self.engine is not None:
+            lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
+        lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
+        if fatal_triggered or lifecycle_value in {"LOCKED", "FAILED"}:
+            self.report.supervisor_state = "LOCKED" if lifecycle_value == "LOCKED" else "FAILED"
+            self.writer.write(self.report)
+            return 5
+        if self._engine_failure:
+            self.report.supervisor_state = "FAILED"
+            self.writer.write(self.report)
+            return 6
+        self.report.supervisor_state = "STOPPED"
+        self.writer.write(self.report)
+        return 0
 
     async def run(self) -> int:
+        os.chdir(self.project_root)
         os.environ["BEIDOU_ENV"] = self.mode
         locked, lock_message = self.lock.acquire()
         if not locked:
@@ -208,7 +419,10 @@ class StartupSupervisor:
             self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
             self.engine._health._port = self.port
             self.engine._last_realtime = 0.0
+            self.engine._last_recon = 0.0
+            self._install_exchange_write_interlock()
             self._install_resume_interlock()
+            self._install_health_callbacks()
 
             wiring = inspect_engine_wiring(self.engine, self.mode)
             self.report.phase = "CONSTRUCTION_VALIDATION"
@@ -224,8 +438,11 @@ class StartupSupervisor:
             loop = asyncio.get_running_loop()
 
             def request_shutdown() -> None:
+                self._shutdown_requested = True
                 if self.engine is not None:
-                    self.engine._running = False
+                    lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
+                    if str(getattr(lifecycle, "value", lifecycle)) == "ACTIVE":
+                        self.engine._running = False
 
             for sig in (signal.SIGINT, signal.SIGTERM):
                 with suppress(NotImplementedError, RuntimeError):
@@ -234,7 +451,14 @@ class StartupSupervisor:
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
             ready = await self._wait_for_startup()
             if not ready:
-                await self._fail_closed("启动超时或引擎提前退出", fatal=True)
+                if self._shutdown_requested:
+                    self.report.supervisor_state = "STOPPED"
+                    self.report.trading_ready = False
+                    self.writer.write(self.report)
+                    print("[supervisor] 启动阶段收到停止请求，安全退出。")
+                    return 0
+                failure_reason = self._engine_failure or "启动超时或引擎提前退出"
+                await self._fail_closed(failure_reason, fatal=True)
                 self.report.supervisor_state = "FAILED"
                 self.report.trading_ready = False
                 self.writer.write(self.report)
@@ -245,8 +469,9 @@ class StartupSupervisor:
             from beidou_control.plane import ControlAction
 
             self.engine._control.execute_action(ControlAction.RESUME)
-            self.report.trading_ready = True
+            self._control_paused_by_supervisor = False
             self.report.supervisor_state = "RUNNING"
+            self.report.trading_ready = self._is_trading_ready()
             self.report.phase = "RUNTIME_MONITORING"
             self.writer.write(self.report)
             print("✅ 深度启动自检通过：环境、模块、算法、数据、账户与安全门禁均已验证。")
