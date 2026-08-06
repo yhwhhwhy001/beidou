@@ -2367,6 +2367,42 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[beidou-autopilot] Warning: exchangeInfo load failed: {e}")
 
+        # BD-FIX: 启动时取消交易所所有已有条件单，避免跨 session 累积重复
+        # 分批取消（每批最多 5 个，批次间隔 2s），避免触发 Binance 限流熔断
+        try:
+            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            if isinstance(existing_algos, list) and existing_algos:
+                cancelled_count = 0
+                batch_size = 5
+                for i in range(0, len(existing_algos), batch_size):
+                    batch = existing_algos[i : i + batch_size]
+
+                    async def _cancel_one(algo: dict) -> bool:
+                        try:
+                            cancel_resp = await self._api_async(
+                                "/fapi/v1/algoOrder",
+                                method="DELETE",
+                                signed=True,
+                                params={"symbol": algo["symbol"], "algoId": int(algo["algoId"])},
+                            )
+                            return "code" not in cancel_resp
+                        except Exception:
+                            return False
+
+                    results = await asyncio.gather(*[_cancel_one(a) for a in batch])
+                    cancelled_count += sum(1 for r in results if r)
+
+                    # 批次间休息，避免触发限流 (Binance testnet 限制较严格)
+                    if i + batch_size < len(existing_algos):
+                        await asyncio.sleep(2)
+
+                print(
+                    f"[beidou-autopilot] Cleaned up {cancelled_count}/{len(existing_algos)} "
+                    f"stale algo orders before recovery"
+                )
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: stale algo cleanup failed: {e}")
+
         try:
             account = await self._api_async("/fapi/v2/account", signed=True)
             positions_list = account.get("positions", [])
