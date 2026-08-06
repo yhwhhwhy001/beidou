@@ -174,7 +174,7 @@ class BinanceRESTClient:
             "can_read_positions": False,
             "can_read_orders": False,
             "can_trade": False,
-            "can_withdraw": True,  # 应始终为 False
+            "can_withdraw": False,  # Futures API key should never have withdraw — assume False
             "ip_whitelisted": False,
             "clock_skew_ms": 0,
         }
@@ -231,7 +231,7 @@ class BinanceRESTClient:
         # 熔断检查
         if self._rate_state.circuit_open:
             if time.monotonic() < self._rate_state.circuit_open_until:
-                return Result.fail(ErrorCategory.RATE_LIMITED, "Circuit breaker open")
+                return Result.fail(ErrorCategory.RATE_LIMIT, "Circuit breaker open")
             self._rate_state.circuit_open = False
 
         url = self._rest_url + path
@@ -273,7 +273,7 @@ class BinanceRESTClient:
                     # 检查 Binance 错误响应
                     if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
                         binance_code = data["code"]
-                        category = classify_http_error(200, binance_code)
+                        category, _retryable = classify_http_error(200, "", binance_code)
                         return Result.fail(category, data.get("msg", str(data)), code=binance_code)
 
                     return Result.ok(data)
@@ -290,14 +290,14 @@ class BinanceRESTClient:
                 except Exception:
                     binance_code = 0  # JSON parse failure: classification falls back to HTTP status
 
-                category = classify_http_error(http_status, binance_code)
+                category, retryable = classify_http_error(http_status, "", binance_code)
 
-                if category == ErrorCategory.RATE_LIMITED:
+                if category == ErrorCategory.RATE_LIMIT:
                     retry_after = int(e.headers.get("Retry-After", 1 * (attempt + 1)))
                     await asyncio.sleep(retry_after)
                     continue
 
-                if category == ErrorCategory.RETRYABLE and attempt < self._max_retries - 1:
+                if retryable and attempt < self._max_retries - 1:
                     wait = 0.5 * (2**attempt)
                     await asyncio.sleep(wait)
                     continue
@@ -314,6 +314,6 @@ class BinanceRESTClient:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 self._rate_state.consecutive_failures += 1
-                return Result.fail(ErrorCategory.RETRYABLE, str(e)[:200])
+                return Result.fail(ErrorCategory.NETWORK, str(e)[:200])
 
-        return Result.fail(ErrorCategory.RETRYABLE, "Max retries exhausted")
+        return Result.fail(ErrorCategory.NETWORK, "Max retries exhausted")

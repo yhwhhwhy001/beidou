@@ -364,9 +364,8 @@ class VolatilityFilter(AlphaComponent):
             reason = "elevated_volatility"
         else:
             # Normal — confirm direction via RSI
-            direction = (
-                SignalDirection.LONG if rsi > 30 else SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
-            )
+            # rsi > 70 → overbought bias SHORT; rsi < 30 → oversold bias LONG
+            direction = SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
             strength = 0.2
             confidence = 0.6
             reason = "normal"
@@ -550,7 +549,7 @@ class TimeExit(AlphaComponent):
         from beidou_strategy.alpha import AlphaSignal
 
         features = context.get("features", {})
-        features.get("close", 0)
+        close_price = features.get("close", 0)
 
         position_info = context.get("_position_info", {})
         has_position = position_info.get("has_position", False)
@@ -931,6 +930,8 @@ class AutonomousEngine:
         self._order_trackers: dict[str, OrderStateTracker] = {}
         self._active_order_ids: set[str] = set()
         self._order_symbols: dict[str, str] = {}  # orderId → symbol mapping
+        self._position_entry_times: dict[str, float] = {}  # position_id → entry timestamp
+        self._close_order_ids: set[str] = set()  # 平仓订单 ID，FILLED 后不创建保护
 
         # State
         self._running = False
@@ -1251,6 +1252,26 @@ class AutonomousEngine:
             self._order_symbols[order_id] = symbol
 
             self._protection.mark_executed(protection.protection_id)
+            # 清理入场时间跟踪（止损/止盈平仓后）
+            self._position_entry_times.pop(protection.position_id, None)
+            # 记录交易结果到策略风控（激活熔断器）
+            pos_protection = self._protection.get_protection(protection.position_id)
+            if pos_protection:
+                entry_price = pos_protection.entry_price
+                exit_price = float(protection.trigger_price.amount)
+                qty = float(protection.quantity.amount)
+                if pos_protection.is_long():
+                    trade_pnl = (exit_price - entry_price) * qty
+                else:
+                    trade_pnl = (entry_price - exit_price) * qty
+                is_win = trade_pnl > 0
+                self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
+                if is_win:
+                    self._win_count += 1
+                else:
+                    self._loss_count += 1
+                self._trade_pnls.append(trade_pnl)
+                print(f"[protection] Trade recorded: PnL={trade_pnl:.2f} win={is_win} total_trades={len(self._trade_pnls)}")
             self._store.save_protection(
                 protection.protection_id,
                 protection.position_id,
@@ -1347,11 +1368,15 @@ class AutonomousEngine:
         print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
-            tracker = OrderStateTracker(order_id=OrderId(str(order["orderId"])))
+            oid_str = str(order["orderId"])
+            # 标记平仓订单（通过 client_order_id 中的 "-close-" 模式识别）
+            if client_id and "-close-" in client_id:
+                self._close_order_ids.add(oid_str)
+                print(f"[order] Marked as close order: {oid_str}")
+            tracker = OrderStateTracker(order_id=OrderId(oid_str))
             tracker.apply(OrderEvent.ACKED)
             tracker.apply(OrderEvent.SENT)
-            self._order_trackers[str(order["orderId"])] = tracker
-            oid_str = str(order["orderId"])
+            self._order_trackers[oid_str] = tracker
             self._active_order_ids.add(oid_str)
             self._order_symbols[oid_str] = order_symbol  # 记录订单所属 symbol
             self._outbox.ack(intent.intent_id)
@@ -1412,13 +1437,20 @@ class AutonomousEngine:
                     tracker.apply(OrderEvent.FILLED)
                     self._active_order_ids.discard(order_id)
 
+                    notional = executed_qty * float(avg_price)
+                    # BUY → 现金流出(credit); SELL → 现金流入(debit)
+                    # 余额 = sum(debit) - sum(credit) = 净现金流入
+                    if result.get("side") == "BUY":
+                        journal_debit, journal_credit = "0", str(notional)
+                    else:
+                        journal_debit, journal_credit = str(notional), "0"
                     entry = JournalEntry(
                         entry_id=f"journal-{order_id}",
                         account_id=AccountId("default"),
                         venue_id=VenueId("BINANCE"),
                         instrument_id=InstrumentId(symbol),
-                        debit=MonetaryValue(amount=str(executed_qty * float(avg_price))),
-                        credit=MonetaryValue(amount=str(executed_qty * float(avg_price))),
+                        debit=MonetaryValue(amount=journal_debit),
+                        credit=MonetaryValue(amount=journal_credit),
                         description=f"{result.get('side')} {executed_qty} {symbol} @ {avg_price} FILLED",
                         correlation_id=CorrelationId(f"exec-{order_id}"),
                     )
@@ -1446,73 +1478,104 @@ class AutonomousEngine:
                         str(avg_price),
                     )
 
-                    # 成交后创建止盈止损保护
-                    entry_price = float(avg_price)
-                    qty = executed_qty
-                    pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
-                    pos_id = f"pos-{order_id}"
+                    # 检查是否为平仓订单（不对平仓成交创建新保护）
+                    is_close_order = order_id in self._close_order_ids
+                    if is_close_order:
+                        self._close_order_ids.discard(order_id)
+                        # 记录平仓交易 PnL
+                        fill_side = result.get("side", "")
+                        for pid, pp in list(self._protection.all_positions().items()):
+                            if str(pp.instrument_id) == symbol:
+                                entry_px = pp.entry_price
+                                exit_px = float(avg_price)
+                                pos_qty = pp.quantity
+                                if pp.is_long():
+                                    trade_pnl = (exit_px - entry_px) * pos_qty
+                                else:
+                                    trade_pnl = (entry_px - exit_px) * pos_qty
+                                is_win = trade_pnl > 0
+                                self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
+                                if is_win:
+                                    self._win_count += 1
+                                else:
+                                    self._loss_count += 1
+                                self._trade_pnls.append(trade_pnl)
+                                self._position_entry_times.pop(pid, None)
+                                self._protection.cancel_protection(pid)
+                                self._protection.remove_position(pid)
+                                print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
+                                break
+                        # 平仓订单不再创建新保护
+                        account_balance = float(self._last_account.get("totalWalletBalance", 0))
+                        if account_balance > 0:
+                            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+                            if account_balance > self._peak_equity:
+                                self._peak_equity = account_balance
+                        # 跳过后续保护创建
+                    else:
+                        # 成交后创建止盈止损保护（仅入场订单）
+                        entry_price = float(avg_price)
+                        qty = executed_qty
+                        pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
+                        pos_id = f"pos-{order_id}"
 
-                    pp = self._protection.create_protection(
-                        position_id=pos_id,
-                        instrument_id=InstrumentId(symbol),
-                        venue_id=VenueId("BINANCE"),
-                        entry_price=entry_price,
-                        quantity=qty,
-                        side=pos_side,
-                        stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 2.0},
-                        take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
-                    )
+                        pp = self._protection.create_protection(
+                            position_id=pos_id,
+                            instrument_id=InstrumentId(symbol),
+                            venue_id=VenueId("BINANCE"),
+                            entry_price=entry_price,
+                            quantity=qty,
+                            side=pos_side,
+                            stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 2.0},
+                            take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
+                        )
+                        # 记录入场时间，供 TimeExit 超时检测使用
+                        self._position_entry_times[pos_id] = time.time()
 
-                    # 将 SL/TP 保护单实际下单到交易所（使用价格精度）
-                    # Testnet 不支持 STOP_MARKET → 回退到本地价格监控
-                    reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
-                    protect_orders = [pp.stop_loss] if pp.stop_loss else []
-                    protect_orders.extend(pp.take_profits)
-                    for p_order in protect_orders:
-                        if p_order is None:
-                            continue
-                        # 已尝试过的保护单不再重复提交（避免 -4120 日志洪流）
-                        if not hasattr(self, "_protection_exchange_attempted"):
-                            self._protection_exchange_attempted: set[str] = set()
-                        if p_order.protection_id in self._protection_exchange_attempted:
-                            continue
-                        self._protection_exchange_attempted.add(p_order.protection_id)
+                        # 将 SL/TP 保护单实际下单到交易所（使用价格精度）
+                        # Testnet 不支持 STOP_MARKET → 回退到本地价格监控
+                        reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
+                        protect_orders = [pp.stop_loss] if pp.stop_loss else []
+                        protect_orders.extend(pp.take_profits)
+                        for p_order in protect_orders:
+                            if p_order is None:
+                                continue
+                            # 已尝试过的保护单不再重复提交（避免 -4120 日志洪流）
+                            if not hasattr(self, "_protection_exchange_attempted"):
+                                self._protection_exchange_attempted: set[str] = set()
+                            if p_order.protection_id in self._protection_exchange_attempted:
+                                continue
+                            self._protection_exchange_attempted.add(p_order.protection_id)
 
-                        prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
-                        qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
-                        price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
-                        sl_params = {
-                            "symbol": symbol,
-                            "side": reduce_side,
-                            "type": "STOP_MARKET",
-                            "quantity": qty_str,
-                            "stopPrice": price_str,
-                            "closePosition": "true",
-                            "workingType": "CONTRACT_PRICE",
-                            "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
-                        }
-                        sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
-                        if "code" in sl_resp and sl_resp.get("code") == -4120:
-                            # 回退: 使用不带 closePosition 的 reduceOnly 版本
-                            sl_params["reduceOnly"] = "true"
-                            sl_params.pop("closePosition", None)
-                            sl_params.pop("workingType", None)
+                            prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                            qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
+                            price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
+                            sl_params = {
+                                "symbol": symbol,
+                                "side": reduce_side,
+                                "type": "STOP_MARKET",
+                                "quantity": qty_str,
+                                "stopPrice": price_str,
+                                "closePosition": "true",
+                                "workingType": "CONTRACT_PRICE",
+                                "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
+                            }
                             sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
-                        if "orderId" in sl_resp:
-                            print(f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}")
-                        elif "code" in sl_resp and sl_resp.get("code") == -4120:
-                            # Testnet: STOP_MARKET 不可用，依赖本地 check_price() + MARKET 单
-                            print(f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)")
-                        else:
-                            print(f"[protection] FAILED {symbol} {p_order.reason}: {sl_resp.get('msg', sl_resp)}")
+                            if "code" in sl_resp and sl_resp.get("code") == -4120:
+                                # 回退: 使用不带 closePosition 的 reduceOnly 版本
+                                sl_params["reduceOnly"] = "true"
+                                sl_params.pop("closePosition", None)
+                                sl_params.pop("workingType", None)
+                                sl_resp = self._api("/fapi/v1/order", method="POST", signed=True, params=sl_params)
+                            if "orderId" in sl_resp:
+                                print(f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}")
+                            elif "code" in sl_resp and sl_resp.get("code") == -4120:
+                                # Testnet: STOP_MARKET 不可用，依赖本地 check_price() + MARKET 单
+                                print(f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)")
+                            else:
+                                print(f"[protection] FAILED {symbol} {p_order.reason}: {sl_resp.get('msg', sl_resp)}")
 
-                    # === NEW: Strategy Risk update on trade fill ===
-                    result.get("side", "")
-                    # PnL will be determined when position closes via reconciliation
-                    # Do NOT hardcode is_win=True or pnl=0.0 — this corrupts risk tracking
-                    # Only record PnL when we have actual realized PnL data
-                    # self._strategy_risk.record_trade requires actual values
-
+                    # === Strategy Risk: update equity on any fill ===
                     account_balance = float(self._last_account.get("totalWalletBalance", 0))
                     if account_balance > 0:
                         self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
@@ -1661,13 +1724,13 @@ class AutonomousEngine:
                 pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
                 if symbol_positions:
                     # Use the first matching position
-                    pos = next(iter(symbol_positions.values()))
+                    pos_id, pos = next(iter(symbol_positions.items()))
                     entry_price = pos.entry_price
                     pos_side = "LONG" if pos.side == OrderSide.BUY else "SHORT"
                     pos_info["has_position"] = True
                     pos_info["entry_price"] = entry_price
                     pos_info["side"] = pos_side
-                    pos_info["entry_time"] = 0  # PositionProtection doesn't track entry_time
+                    pos_info["entry_time"] = self._position_entry_times.get(pos_id, time.time())
                     if entry_price > 0 and close > 0:
                         if pos_side == "LONG":
                             pos_info["pnl_pct"] = (close - entry_price) / entry_price * 100
@@ -1720,16 +1783,55 @@ class AutonomousEngine:
                     print(f"[nearline] {symbol}: SKIP (no signals from DAG)")
                     continue
 
-                # Check if entry signal is actionable
+                # === 3.5 检测 EXIT 组件平仓信号（优先于入场） ===
+                exit_flat_signals = [
+                    s for s in all_signals
+                    if s.component_type == AlphaComponentType.EXIT
+                    and s.direction == SignalDirection.FLAT
+                    and s.strength >= 0.3
+                ]
+                if exit_flat_signals and pos_info["has_position"]:
+                    # 生成平仓订单
+                    close_side = OrderSide.SELL if pos_info["side"] == "LONG" else OrderSide.BUY
+                    close_qty = abs(float(symbol_positions[next(iter(symbol_positions))].quantity)) if symbol_positions else 0.001
+                    from beidou_safety.execution import OrderIntent
+                    close_intent = OrderIntent(
+                        intent_id=f"intent-{symbol}-close-{int(time.time())}",
+                        account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
+                        instrument_id=instrument_id,
+                        side=close_side,
+                        order_type=OrderType.MARKET,
+                        quantity=Quantity(amount=str(close_qty)),
+                        price=Price(amount=str(close)),
+                        time_in_force=TimeInForce.GTC,
+                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time() * 1000)}",
+                        correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
+                        idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
+                        risk_approval_id=str(RiskApprovalId(f"nearline-close-{int(time.time())}")),
+                    )
+                    try:
+                        self._outbox.commit(close_intent)
+                        reasons = [s.metadata.get("reason", "unknown") for s in exit_flat_signals]
+                        print(f"[nearline] {symbol}: CLOSE ORDER → {close_side.value} {close_qty:.4f} reasons={reasons}")
+                    except ValueError:
+                        print(f"[nearline] {symbol}: CLOSE SKIP (duplicate close in window)")
+                    continue  # 平仓后跳过入场逻辑
+
+                # Check if entry signal is actionable (exclude EXIT components)
                 entry_signals = [
-                    s for s in all_signals if s.direction != SignalDirection.NO_ACTION and s.strength >= 0.15
+                    s for s in all_signals
+                    if s.component_type != AlphaComponentType.EXIT
+                    and s.direction != SignalDirection.NO_ACTION
+                    and s.direction != SignalDirection.FLAT
+                    and s.strength >= 0.15
                 ]
                 if not entry_signals:
                     print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
                     continue
 
-                # === 4. Signal fusion (all DAG signals, not just entry) ===
-                fused = self._fuser.fuse(all_signals)
+                # === 4. Signal fusion (ENTRY + FILTER only; EXIT handled above) ===
+                direction_signals = [s for s in all_signals if s.component_type != AlphaComponentType.EXIT]
+                fused = self._fuser.fuse(direction_signals)
                 if fused.direction == SignalDirection.NO_ACTION:
                     # If fusion rejects, check if entry alone would have fired
                     entry_only = [s for s in all_signals if s.component_type == AlphaComponentType.ENTRY]
@@ -2006,6 +2108,13 @@ class AutonomousEngine:
                 print("[offline] DriftDetector: no trade data yet, skipping drift check")
 
             # === 3. Strategy risk: daily PnL reset ===
+            # 检测日期变更，重置每日盈亏统计
+            if not hasattr(self, "_last_daily_reset_day"):
+                self._last_daily_reset_day = now.day
+            if now.day != self._last_daily_reset_day:
+                self._strategy_risk.reset_daily_pnl()
+                self._last_daily_reset_day = now.day
+                print(f"[offline] Daily PnL reset (new day: {now.day})")
             risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
             if risk_state:
                 print(

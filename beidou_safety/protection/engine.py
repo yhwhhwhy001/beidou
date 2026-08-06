@@ -162,13 +162,17 @@ class StopLossCalculator:
             return entry_price * (1 + volatility_pct * multiplier / 100)
 
     @staticmethod
-    def swing_structure(swing_low: float | None, swing_high: float | None, side: OrderSide) -> float:
-        """基于支撑/阻力位止损。"""
+    def swing_structure(swing_low: float | None, swing_high: float | None, side: OrderSide, entry_price: float = 0.0) -> float:
+        """基于支撑/阻力位止损。缺数据时回退到固定百分比。"""
         if side == OrderSide.BUY and swing_low is not None:
             return swing_low * 0.999  # 略低于前低
         elif side == OrderSide.SELL and swing_high is not None:
             return swing_high * 1.001  # 略高于前高
-        return 0.0
+        # 缺数据时回退：固定 5% 止损，避免 0.0 导致的误触发
+        if side == OrderSide.BUY:
+            return entry_price * 0.95 if entry_price > 0 else 0.0
+        else:
+            return entry_price * 1.05 if entry_price > 0 else float('inf')
 
     @staticmethod
     def calculate(
@@ -190,7 +194,7 @@ class StopLossCalculator:
         elif stop_type == StopLossType.VOLATILITY_BASED:
             return StopLossCalculator.volatility_based(entry_price, side, volatility_pct or 1.0, multiplier)
         elif stop_type == StopLossType.SWING_STRUCTURE:
-            return StopLossCalculator.swing_structure(swing_low, swing_high, side)
+            return StopLossCalculator.swing_structure(swing_low, swing_high, side, entry_price)
         elif stop_type == StopLossType.TRAILING:
             # 移动止损初始值 = 固定百分比
             return StopLossCalculator.fixed_percent(entry_price, side, stop_pct)
@@ -293,6 +297,16 @@ class TakeProfitCalculator:
             return TakeProfitCalculator.multi_target(
                 entry_price, stop_loss_price, side, targets or [{"rr_ratio": rr_ratio, "close_pct": 100.0}]
             )
+        elif take_profit_type == TakeProfitType.TRAILING_TAKE_PROFIT:
+            # 移动止盈：初始目标同 FIXED_RR，后续由 TrailingStopUpdater 动态更新
+            return [
+                {
+                    "price": TakeProfitCalculator.fixed_rr(entry_price, stop_loss_price, side, rr_ratio),
+                    "close_pct": 100.0,
+                    "rr_ratio": rr_ratio,
+                    "quantity_pct": 1.0,
+                }
+            ]
         return [{"price": entry_price, "close_pct": 0, "rr_ratio": 0, "quantity_pct": 0}]
 
 
@@ -351,6 +365,14 @@ class ProtectionManager:
             )
             sl_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
             order_type = "STOP_LIMIT" if stop_loss_config.get("use_limit", False) else "STOP_MARKET"
+            # STOP_LIMIT 限价：SELL(SHORT)需低于触发价；BUY(LONG)需高于触发价
+            if order_type == "STOP_LIMIT":
+                if sl_side == OrderSide.SELL:
+                    limit_price = round(stop_price * 0.995, 2)
+                else:
+                    limit_price = round(stop_price * 1.005, 2)
+            else:
+                limit_price = None
             pp.stop_loss = ProtectionOrder(
                 protection_id=f"sl-{position_id}",
                 position_id=position_id,
@@ -358,7 +380,7 @@ class ProtectionManager:
                 venue_id=venue_id,
                 side=sl_side,
                 trigger_price=Price(amount=str(round(stop_price, 2))),
-                order_price=Price(amount=str(round(stop_price * 0.995, 2))) if order_type == "STOP_LIMIT" else None,
+                order_price=Price(amount=str(limit_price)) if limit_price is not None else None,
                 quantity=Quantity(amount=str(quantity)),
                 order_type=order_type,
                 reduce_only=True,

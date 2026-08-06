@@ -51,6 +51,11 @@ class Result(Generic[T]):
     def success(cls, data: T) -> "Result[T]":
         return cls(ok=True, data=data)
 
+    # 别名：兼容旧代码
+    @classmethod
+    def ok(cls, data: T) -> "Result[T]":
+        return cls(ok=True, data=data)
+
     @classmethod
     def failure(
         cls,
@@ -59,6 +64,7 @@ class Result(Generic[T]):
         category: ErrorCategory = ErrorCategory.UNKNOWN,
         retryable: bool = False,
         raw: Any = None,
+        code: int | None = None,
     ) -> "Result[T]":
         return cls(
             ok=False,
@@ -71,13 +77,50 @@ class Result(Generic[T]):
             ),
         )
 
+    # 别名：兼容旧代码
+    @classmethod
+    def fail(
+        cls,
+        category: ErrorCategory,
+        message: str = "",
+        code: int | None = None,
+    ) -> "Result[T]":
+        return cls(
+            ok=False,
+            error=AdapterError(
+                message=message,
+                category=category,
+                raw={"code": code} if code else None,
+            ),
+        )
 
-def classify_http_error(http_status: int, response_body: str = "") -> tuple[ErrorCategory, bool]:
-    """根据 HTTP 状态码分类错误。
+    def is_success(self) -> bool:
+        return self.ok
+
+
+def classify_http_error(http_status: int, response_body: str = "", binance_code: int = 0) -> tuple[ErrorCategory, bool]:
+    """根据 HTTP 状态码和 Binance 业务错误码分类错误。
 
     Returns:
         (ErrorCategory, retryable)
     """
+    # 先按 Binance 业务错误码分类（对 HTTP 200 中的错误）
+    if binance_code < 0:
+        if binance_code in (-1003, -1015, -1016, -1021):
+            return (ErrorCategory.RATE_LIMIT, True)
+        if binance_code in (-2014, -2015):
+            return (ErrorCategory.AUTH_FAILURE, False)
+        if binance_code == -2010:
+            return (ErrorCategory.INSUFFICIENT_BALANCE, False)
+        if binance_code == -2019:
+            return (ErrorCategory.INSUFFICIENT_MARGIN, False)
+        if binance_code in (-2011, -2013, -2021):
+            return (ErrorCategory.ORDER_REJECTED, False)
+        if binance_code == -2022:
+            return (ErrorCategory.POSITION_LIMIT, False)
+        return (ErrorCategory.UNKNOWN, False)
+
+    # HTTP 状态码分类
     if http_status == 429:
         return (ErrorCategory.RATE_LIMIT, True)
     if http_status == 418:

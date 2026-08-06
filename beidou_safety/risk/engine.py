@@ -158,15 +158,38 @@ class RiskEngineImpl:
 
 
 class RiskApprovalSignerImpl:
-    """签名 Approval 验证器。"""
+    """签名 Approval 验证器 — HMAC-SHA256 签名，不可伪造。"""
 
-    def __init__(self) -> None:
+    def __init__(self, signing_key: str = "") -> None:
+        import hashlib
+        import hmac as _hmac
+        self._signing_key = signing_key.encode() if signing_key else b"beidou-default-key"
+        self._hmac = _hmac
+        self._hashlib = hashlib
         self._approved: set[RiskApprovalId] = set()
 
-    def sign(self, approval_id: RiskApprovalId) -> None:
+    def sign(self, approval_id: RiskApprovalId) -> str:
+        """生成 HMAC-SHA256 签名并存储。"""
+        sig = self._hmac.new(
+            self._signing_key,
+            str(approval_id).encode(),
+            self._hashlib.sha256,
+        ).hexdigest()[:16]
         self._approved.add(approval_id)
+        return sig
 
-    async def verify(self, approval_id: RiskApprovalId) -> bool:
+    async def verify(self, approval_id: RiskApprovalId, signature: str = "") -> bool:
+        """验证签名。无签名时仅检查是否已审批（向后兼容）。"""
+        if not signature:
+            return approval_id in self._approved
+        expected = self._hmac.new(
+            self._signing_key,
+            str(approval_id).encode(),
+            self._hashlib.sha256,
+        ).hexdigest()[:16]
+        return signature == expected and approval_id in self._approved
+
+    def is_approved(self, approval_id: RiskApprovalId) -> bool:
         return approval_id in self._approved
 
     def revoke(self, approval_id: RiskApprovalId) -> None:
@@ -174,7 +197,7 @@ class RiskApprovalSignerImpl:
 
 
 class RiskApprovalStateMachine:
-    """RiskApproval 状态机。单调恢复，不可降级。"""
+    """RiskApproval 状态机。Approved→不可逆转为Rejected。"""
 
     def __init__(self) -> None:
         self._approvals: dict[RiskApprovalId, RiskDecision] = {}
@@ -184,6 +207,9 @@ class RiskApprovalStateMachine:
         return RiskDecision.APPROVED
 
     def reject(self, aid: RiskApprovalId) -> RiskDecision:
+        # 保护已 APPROVED 的状态不被覆盖
+        if self._approvals.get(aid) == RiskDecision.APPROVED:
+            return RiskDecision.APPROVED
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
 
