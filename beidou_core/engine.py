@@ -734,7 +734,9 @@ class AutonomousEngine:
             max_leverage=3.0, max_concentration_pct=50.0, max_position_notional=500000.0
         )
         self._risk_engine = RiskEngineImpl()
-        self._approval = RiskApprovalSignerImpl()
+        self._approval = RiskApprovalSignerImpl(
+            signing_key="beidou-paper-mock-key" if not self._can_write else ""
+        )
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
