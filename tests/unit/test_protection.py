@@ -1,4 +1,7 @@
-"""止盈止损保护引擎测试。止损/止盈计算、移动止损、保护单生命周期。"""
+"""止盈止损保护引擎测试。止损/止盈计算、保护单生命周期。
+
+止盈止损执行由交易所 Algo Order API 原生处理，本地监控已移除。
+"""
 
 from __future__ import annotations
 
@@ -12,7 +15,6 @@ from beidou_safety.protection.engine import (
     StopLossType,
     TakeProfitCalculator,
     TakeProfitType,
-    TrailingStopUpdater,
 )
 from beidou_shared.types import InstrumentId, OrderSide, VenueId
 
@@ -64,92 +66,6 @@ class TestStopLossCalculator:
         """移动止损初始值等于固定百分比。"""
         sl = StopLossCalculator.calculate(StopLossType.TRAILING, 100.0, OrderSide.BUY, stop_pct=2.0)
         assert sl == 98.0
-
-
-class TestTrailingStopUpdater:
-    """移动止损更新器测试。"""
-
-    def test_trail_up_long(self):
-        """Long仓位: 价格创新高，止损上移。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=95.0,
-            current_price=105.0,
-            highest_price=105.0,
-            lowest_price=None,
-            side=OrderSide.BUY,
-            trail_pct=2.0,
-        )
-        # 105 * 0.98 = 102.9 > 95
-        assert new_stop > 95.0
-        assert new_stop == 102.9
-
-    def test_trail_no_move_long(self):
-        """Long仓位: 价格未创新高，止损不动。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=98.0,
-            current_price=102.0,
-            highest_price=110.0,
-            lowest_price=None,
-            side=OrderSide.BUY,
-            trail_pct=2.0,
-        )
-        # highest_price=110 is above current, but stop was at 98
-        # 110 * 0.98 = 107.8 > 98, so it should move up
-        assert new_stop == 107.8
-
-    def test_trail_never_goes_down_long(self):
-        """止损只能上移，不能下移。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=102.0,
-            current_price=100.0,
-            highest_price=100.0,
-            lowest_price=None,
-            side=OrderSide.BUY,
-            trail_pct=2.0,
-        )
-        # 100 * 0.98 = 98 < 102, so stay at 102
-        assert new_stop == 102.0
-
-    def test_trail_down_short(self):
-        """Short仓位: 价格创新低，止损下移。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=105.0,
-            current_price=98.0,
-            highest_price=None,
-            lowest_price=95.0,
-            side=OrderSide.SELL,
-            trail_pct=2.0,
-        )
-        # 95 * 1.02 = 96.9 < 105
-        assert new_stop < 105.0
-        assert new_stop == 96.9
-
-    def test_trail_never_goes_up_short(self):
-        """Short止损只能下移。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=97.0,
-            current_price=100.0,
-            highest_price=None,
-            lowest_price=100.0,
-            side=OrderSide.SELL,
-            trail_pct=2.0,
-        )
-        # 100 * 1.02 = 102 > 97, so stay at 97
-        assert new_stop == 97.0
-
-    def test_min_trail_distance(self):
-        """小于最小距离不更新。"""
-        new_stop = TrailingStopUpdater.update(
-            current_stop=98.0,
-            current_price=100.0,
-            highest_price=100.1,
-            lowest_price=None,
-            side=OrderSide.BUY,
-            trail_pct=2.0,
-            min_trail_distance=1.0,
-        )
-        # 100.1 * 0.98 = 98.098, distance = 100.1 - 98.098 = 2.002 > 1.0
-        assert new_stop == 98.1  # rounded to 2 decimal
 
 
 class TestTakeProfitCalculator:
@@ -247,60 +163,6 @@ class TestProtectionManager:
         # Short的止损方向应该是BUY (平空单)
         assert pp.stop_loss.side == OrderSide.BUY
 
-    def test_stop_loss_triggered_long(self):
-        mgr, pid = self._make_manager_with_position()
-        result = mgr.check_price(pid, current_price=94.0)
-        assert result["triggered"] is True
-        assert len(result["stop_loss"]) == 1
-        assert len(result["take_profit"]) == 0
-        assert "STOP" in result["details"][0]
-
-    def test_stop_loss_not_triggered_long(self):
-        mgr, pid = self._make_manager_with_position()
-        result = mgr.check_price(pid, current_price=96.0)
-        assert result["triggered"] is False
-
-    def test_take_profit_triggered_long(self):
-        mgr, pid = self._make_manager_with_position()
-        result = mgr.check_price(pid, current_price=111.0)
-        assert result["triggered"] is True
-        assert len(result["take_profit"]) == 1
-        assert len(result["stop_loss"]) == 0
-
-    def test_both_triggered(self):
-        """极端情况：价格同时触发止损和止盈？不应该发生，但测试两者都能被检测。"""
-        mgr, pid = self._make_manager_with_position()
-        # 这不应该实际发生, 但测试检查逻辑
-        result = mgr.check_price(pid, current_price=50.0)
-        sl_triggered = len(result["stop_loss"]) > 0
-        assert sl_triggered  # 至少止损触发
-
-    def test_trailing_stop_update(self):
-        mgr = ProtectionManager()
-        mgr.create_protection(
-            position_id="pos-trail",
-            instrument_id=InstrumentId("BTCUSDT"),
-            venue_id=VenueId("BINANCE"),
-            entry_price=100.0,
-            quantity=0.1,
-            side=OrderSide.BUY,
-            stop_loss_config={"type": "TRAILING", "stop_pct": 3.0},
-            trailing_config={"trail_pct": 3.0, "min_trail_distance": 0.5},
-        )
-        pp = mgr.get_protection("pos-trail")
-        old_stop = float(pp.stop_loss.trigger_price.amount)
-        assert old_stop == 97.0  # 100 * (1 - 3%)
-
-        # Price goes up → trailing stop should move up
-        pp.update_price_extremes(110.0)
-        pp.highest_price = 110.0
-        pp._protections = mgr._protections  # internal state
-        new_stop = mgr.update_trailing_stop("pos-trail")
-        assert new_stop is not None
-        assert new_stop > 97.0  # stop moved up
-        # 110 * 0.97 = 106.7
-        assert new_stop == round(110.0 * 0.97, 2)
-
     def test_multi_target_take_profit(self):
         mgr = ProtectionManager()
         pp = mgr.create_protection(
@@ -349,32 +211,11 @@ class TestProtectionManager:
         for tp in pp.take_profits:
             assert tp.status == ProtectionStatus.CANCELLED
 
-    def test_mark_executed(self):
-        mgr, pid = self._make_manager_with_position()
-        pp = mgr.get_protection(pid)
-        sl_id = pp.stop_loss.protection_id
-        assert mgr.mark_executed(sl_id) is True
-        assert pp.stop_loss.status == ProtectionStatus.EXECUTED
-
     def test_remove_position(self):
         mgr, pid = self._make_manager_with_position()
         mgr.remove_position(pid)
         assert mgr.get_protection(pid) is None
         assert mgr.position_count() == 0
-
-    def test_get_active_stop_losses(self):
-        mgr, _ = self._make_manager_with_position()
-        mgr.create_protection(
-            position_id="pos-002",
-            instrument_id=InstrumentId("ETHUSDT"),
-            venue_id=VenueId("BINANCE"),
-            entry_price=2000.0,
-            quantity=0.5,
-            side=OrderSide.SELL,
-            stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 3.0},
-        )
-        active_sls = mgr.get_active_stop_losses()
-        assert len(active_sls) == 2
 
     def test_unrealized_pnl(self):
         pp = PositionProtection(

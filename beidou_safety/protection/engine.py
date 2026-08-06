@@ -219,38 +219,6 @@ class StopLossCalculator:
         return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)  # BD-T11 默认回退止损
 
 
-class TrailingStopUpdater:
-    """移动止损更新器 — 随价格有利变动而跟进止损位。"""
-
-    @staticmethod
-    def update(
-        current_stop: float,
-        current_price: float,
-        highest_price: float | None,
-        lowest_price: float | None,
-        side: OrderSide,
-        trail_pct: float = DEFAULT_TRAIL_PCT,
-        min_trail_distance: float = DEFAULT_MIN_TRAIL_DISTANCE,
-    ) -> float:
-        """根据价格极值更新移动止损位。
-
-        Long: 止损位 = max(之前止损位, 最高价 × (1 - trail_pct%))
-        Short: 止损位 = min(之前止损位, 最低价 × (1 + trail_pct%))
-        """
-        trail_factor = trail_pct / 100
-
-        if side == OrderSide.BUY and highest_price is not None:
-            new_stop = highest_price * (1 - trail_factor)
-            # 止损只能上移，不能下移; 且至少保持最小距离
-            if new_stop > current_stop and (highest_price - new_stop) >= min_trail_distance:
-                return round(new_stop, 2)
-        elif side == OrderSide.SELL and lowest_price is not None:
-            new_stop = lowest_price * (1 + trail_factor)
-            if new_stop < current_stop and (new_stop - lowest_price) >= min_trail_distance:
-                return round(new_stop, 2)
-
-        return current_stop
-
 
 class TakeProfitCalculator:
     """止盈计算器 — 基于风险回报比或多目标。"""
@@ -318,7 +286,7 @@ class TakeProfitCalculator:
                 entry_price, stop_loss_price, side, targets or [{"rr_ratio": rr_ratio, "close_pct": 100.0}]
             )
         elif take_profit_type == TakeProfitType.TRAILING_TAKE_PROFIT:
-            # 移动止盈：初始目标同 FIXED_RR，后续由 TrailingStopUpdater 动态更新
+            # 移动止盈：初始目标同 FIXED_RR，后续由交易所 TRAILING_STOP_MARKET 动态跟踪
             return [
                 {
                     "price": TakeProfitCalculator.fixed_rr(entry_price, stop_loss_price, side, rr_ratio),
@@ -452,113 +420,7 @@ class ProtectionManager:
         self._protections[position_id] = pp
         return pp
 
-    # ---- 实时监控 ----
-
-    def check_price(self, position_id: str, current_price: float) -> dict[str, Any]:
-        """检查当前价格是否触发任何保护单。
-
-        返回: {"triggered": bool, "stop_loss": list[ProtectionOrder], "take_profit": list[ProtectionOrder]}
-        """
-        pp = self._protections.get(position_id)
-        result: dict[str, Any] = {"triggered": False, "stop_loss": [], "take_profit": [], "details": []}
-
-        if pp is None:
-            result["details"].append("Position not found")
-            return result
-
-        # 更新价格极值(用于移动止损)
-        pp.update_price_extremes(current_price)
-
-        # 检查止损
-        if pp.stop_loss and pp.stop_loss.is_active():
-            trigger = float(pp.stop_loss.trigger_price.amount)
-            hit_stop = (pp.is_long() and current_price <= trigger) or (pp.is_short() and current_price >= trigger)
-            if hit_stop:
-                pp.stop_loss.status = ProtectionStatus.TRIGGERED
-                pp.stop_loss.triggered_at = datetime.now(timezone.utc)
-                result["triggered"] = True
-                result["stop_loss"].append(pp.stop_loss)
-                result["details"].append(
-                    f"STOP LOSS triggered: {pp.stop_loss.stop_type.value if pp.stop_loss.stop_type else 'N/A'} "
-                    f"price={current_price} <= trigger={trigger}"
-                )
-
-        # 检查止盈
-        for tp in pp.take_profits:
-            if tp.is_active():
-                trigger = float(tp.trigger_price.amount)
-                hit_tp = (pp.is_long() and current_price >= trigger) or (pp.is_short() and current_price <= trigger)
-                if hit_tp:
-                    tp.status = ProtectionStatus.TRIGGERED
-                    tp.triggered_at = datetime.now(timezone.utc)
-                    result["triggered"] = True
-                    result["take_profit"].append(tp)
-                    result["details"].append(
-                        f"TAKE PROFIT triggered: RR={tp.metadata.get('rr_ratio', '?')} "
-                        f"close={tp.metadata.get('close_pct', '?')}% "
-                        f"price={current_price} >= trigger={trigger}"
-                    )
-
-        return result
-
-    def update_trailing_stop(self, position_id: str, trail_pct: float | None = None) -> float | None:
-        """更新移动止损位。返回新的止损价格，如未变化返回 None。"""
-        pp = self._protections.get(position_id)
-        if pp is None or pp.stop_loss is None:
-            return None
-        if pp.stop_loss.stop_type != StopLossType.TRAILING:
-            return None
-
-        trail_pct = trail_pct or pp.trailing_config.get("trail_pct", DEFAULT_TRAIL_PCT)
-        min_dist = pp.trailing_config.get("min_trail_distance", DEFAULT_MIN_TRAIL_DISTANCE)
-
-        old_stop = float(pp.stop_loss.trigger_price.amount)
-        new_stop = TrailingStopUpdater.update(
-            old_stop,
-            pp.entry_price,
-            pp.highest_price,
-            pp.lowest_price,
-            pp.side,
-            trail_pct,
-            min_dist,
-        )
-
-        if new_stop != old_stop:
-            pp.stop_loss = ProtectionOrder(
-                protection_id=pp.stop_loss.protection_id,
-                position_id=pp.stop_loss.position_id,
-                instrument_id=pp.stop_loss.instrument_id,
-                venue_id=pp.stop_loss.venue_id,
-                side=pp.stop_loss.side,
-                trigger_price=Price(amount=str(new_stop)),
-                order_price=pp.stop_loss.order_price,
-                quantity=pp.stop_loss.quantity,
-                order_type=pp.stop_loss.order_type,
-                reduce_only=pp.stop_loss.reduce_only,
-                status=ProtectionStatus.ACTIVE,
-                stop_type=pp.stop_loss.stop_type,
-                reason=f"Trailing stop updated: {old_stop} → {new_stop}",
-                created_at=pp.stop_loss.created_at,
-            )
-            return new_stop
-
-        return None
-
     # ---- 保护单生命周期 ----
-
-    def mark_executed(self, protection_id: str) -> bool:
-        """标记保护单已执行。"""
-        for pp in self._protections.values():
-            if pp.stop_loss and pp.stop_loss.protection_id == protection_id:
-                pp.stop_loss.status = ProtectionStatus.EXECUTED
-                self._history.append(pp.stop_loss)
-                return True
-            for tp in pp.take_profits:
-                if tp.protection_id == protection_id:
-                    tp.status = ProtectionStatus.EXECUTED
-                    self._history.append(tp)
-                    return True
-        return False
 
     def cancel_protection(self, position_id: str) -> list[ProtectionOrder]:
         """取消仓位的所有保护单（平仓时调用）。"""
@@ -585,24 +447,6 @@ class ProtectionManager:
 
     def get_protection(self, position_id: str) -> PositionProtection | None:
         return self._protections.get(position_id)
-
-    def get_active_stop_losses(self) -> list[ProtectionOrder]:
-        result: list[ProtectionOrder] = []
-        for pp in self._protections.values():
-            if pp.stop_loss and pp.stop_loss.is_active():
-                result.append(pp.stop_loss)
-        return result
-
-    def get_active_take_profits(self) -> list[ProtectionOrder]:
-        result: list[ProtectionOrder] = []
-        for pp in self._protections.values():
-            for tp in pp.take_profits:
-                if tp.is_active():
-                    result.append(tp)
-        return result
-
-    def get_history(self) -> list[ProtectionOrder]:
-        return list(self._history)
 
     def all_positions(self) -> dict[str, PositionProtection]:
         return dict(self._protections)

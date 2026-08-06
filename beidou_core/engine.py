@@ -1205,29 +1205,12 @@ class AutonomousEngine:
 
                 price = features["price"]
 
-                # 2. Check protection triggers（仅检查属于当前 symbol 的持仓）
-                for pos_id, pp in list(self._protection.all_positions().items()):
-                    pos_sym = str(pp.instrument_id)
-                    if pos_sym != symbol:
-                        continue  # 跳过不属于当前批次 symbol 的持仓
-                    result = self._protection.check_price(pos_id, price)
-                    if result["triggered"]:
-                        for sl in result["stop_loss"]:
-                            sl_symbol = str(sl.instrument_id) if hasattr(sl, "instrument_id") else symbol
-                            self._alerts.send_incident(
-                                AlertSeverity.HIGH,
-                                f"Stop Loss triggered: {sl_symbol}",
-                                f"Position {pos_id} stop loss at {sl.trigger_price.amount}",
-                                category="protection",
-                            )
-                            if self._can_write:
-                                await self._execute_protection_order(sl, sl_symbol)
-                        for tp in result["take_profit"]:
-                            tp_symbol = str(tp.instrument_id) if hasattr(tp, "instrument_id") else symbol
-                            if self._can_write:
-                                await self._execute_protection_order(tp, tp_symbol)
+                # Track last price for protection status reports
+                if not hasattr(self, "_last_prices"):
+                    self._last_prices: dict[str, float] = {}
+                self._last_prices[symbol] = price
 
-                # 3. Monitor active orders
+                # 2. Monitor active orders (止盈止损由交易所 Algo Order 原生执行，不再本地监控)
                 if self._can_write:
                     await self._monitor_orders(symbol)
 
@@ -1261,6 +1244,40 @@ class AutonomousEngine:
                 await self._reconcile()
                 self._last_recon = time.time()
 
+            # 7. Protection status report (every 60 ticks ≈ 60s)
+            if self._tick_count % 60 == 0:
+                positions = self._protection.all_positions()
+                if positions:
+                    print(f"[protection] ╔══ ACTIVE PROTECTION STATUS ({len(positions)} positions) ══╗")
+                    for pos_id, pp in positions.items():
+                        sym = str(pp.instrument_id)
+                        entry = pp.entry_price
+                        side = "LONG" if pp.is_long() else "SHORT"
+                        sl_info = "NONE"
+                        tp_info = "NONE"
+                        if pp.stop_loss and pp.stop_loss.is_active():
+                            sl_px = float(pp.stop_loss.trigger_price.amount)
+                            if pp.is_long():
+                                sl_dist = (entry - sl_px) / entry * 100
+                            else:
+                                sl_dist = (sl_px - entry) / entry * 100
+                            sl_info = f"{sl_px:.4f} (-{sl_dist:.2f}%)"
+                        if pp.take_profits:
+                            tp_parts = []
+                            for tp in pp.take_profits:
+                                if tp.is_active():
+                                    tp_px = float(tp.trigger_price.amount)
+                                    if pp.is_long():
+                                        tp_dist = (tp_px - entry) / entry * 100
+                                    else:
+                                        tp_dist = (entry - tp_px) / entry * 100
+                                    tp_parts.append(f"{tp_px:.4f} (+{tp_dist:.2f}%)")
+                            if tp_parts:
+                                tp_info = ", ".join(tp_parts)
+                        pnl = pp.unrealized_pnl_pct(self._last_prices.get(sym, entry)) if hasattr(self, "_last_prices") else 0.0
+                        print(f"[protection] ║ {sym} {side} @{entry:.4f} SL={sl_info} TP={tp_info} | PnL={pnl:+.2f}%")
+                    print(f"[protection] ╚{'═' * 50}╝")
+
         except Exception as e:
             self._error_count += 1
             self._alerts.send_incident(
@@ -1270,93 +1287,27 @@ class AutonomousEngine:
                 category="realtime",
             )
 
-    async def _execute_protection_order(self, protection, symbol: str) -> None:
-        """执行保护单（止损/止盈）→ 市价单。"""
-        side = "SELL" if protection.side == OrderSide.SELL else "BUY"
-        client_id = f"beidou-prot-{int(time.time() * 1000)}"
-
-        # 精度修正（复用 _place_order 同样的缓存）
-        prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
-        qty_raw = float(protection.quantity.amount)
-        qty_str = f"{qty_raw:.{prec_map['quantity']}f}"
-
-        print(f"[protection] Executing: {symbol} {side} qty={qty_str} reduceOnly=true")
-        order = await self._api_async(
-            "/fapi/v1/order",
-            method="POST",
-            signed=True,
-            params={
-                "symbol": symbol,
-                "side": side,
-                "type": "MARKET",
-                "quantity": qty_str,
-                "reduceOnly": "true",
-                "newClientOrderId": client_id,
-            },
-        )
-
-        if "orderId" in order:
-            order_id = str(order["orderId"])
-            self._order_count += 1
-
-            tracker = OrderStateTracker(order_id=OrderId(order_id))
-            tracker.apply(OrderEvent.ACKED)
-            tracker.apply(OrderEvent.SENT)
-            self._order_trackers[order_id] = tracker
-            self._active_order_ids.add(order_id)
-            self._order_symbols[order_id] = symbol
-
-            self._protection.mark_executed(protection.protection_id)
-            # 清理入场时间跟踪（止损/止盈平仓后）
-            self._position_entry_times.pop(protection.position_id, None)
-            # 记录交易结果到策略风控（激活熔断器）
-            pos_protection = self._protection.get_protection(protection.position_id)
-            if pos_protection:
-                entry_price = pos_protection.entry_price
-                exit_price = float(protection.trigger_price.amount)
-                qty = float(protection.quantity.amount)
-                if pos_protection.is_long():
-                    trade_pnl = (exit_price - entry_price) * qty
-                else:
-                    trade_pnl = (entry_price - exit_price) * qty
-                is_win = trade_pnl > 0
-                self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
-                if is_win:
-                    self._win_count += 1
-                else:
-                    self._loss_count += 1
-                self._trade_pnls.append(trade_pnl)
-                print(
-                    f"[protection] Trade recorded: PnL={trade_pnl:.2f} win={is_win} total_trades={len(self._trade_pnls)}"
+    async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
+        """平仓时取消交易所上的关联条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
+        if not hasattr(self, "_active_algo_ids"):
+            return
+        algo_ids = self._active_algo_ids.pop(position_id, set())
+        if not algo_ids:
+            return
+        for algo_id in list(algo_ids):
+            try:
+                cancel_resp = await self._api_async(
+                    "/fapi/v1/algoOrder",
+                    method="DELETE",
+                    signed=True,
+                    params={"symbol": symbol, "algoId": int(algo_id)},
                 )
-            self._store.save_protection(
-                protection.protection_id,
-                protection.position_id,
-                symbol,
-                side,
-                protection.trigger_price.amount,
-                str(protection.order_price.amount) if protection.order_price else None,
-                protection.quantity.amount,
-                "MARKET",
-                "EXECUTED",
-            )
-            self._store.save_order_state(
-                order_id,
-                symbol,
-                side,
-                "MARKET",
-                str(float(protection.quantity.amount)),
-                str(protection.order_price.amount) if protection.order_price else None,
-                order.get("status", "NEW"),
-                client_order_id=client_id,
-            )
-        else:
-            err_code = order.get("code", order.get("error", "unknown"))
-            err_msg = order.get("msg", str(order)[:150])
-            print(f"[protection] EXECUTION FAILED {symbol} {side}: code={err_code} msg={err_msg}")
-            # -2022 (ReduceOnly rejected) → 符号错配或无持仓，不标记完成，等待下次正确触发
-            # -2010 (insufficient margin) → 账户问题，稍后重试
-            # 不再自动 mark_executed，避免误标记
+                if "code" not in cancel_resp:
+                    print(f"[protection] Canceled algo order {algo_id} for {symbol}")
+                else:
+                    print(f"[protection] Failed to cancel algo {algo_id}: {cancel_resp.get('msg', cancel_resp)}")
+            except Exception as e:
+                print(f"[protection] Error canceling algo {algo_id}: {e}")
 
     async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
@@ -1572,6 +1523,8 @@ class AutonomousEngine:
                                 self._position_entry_times.pop(pid, None)
                                 self._protection.cancel_protection(pid)
                                 self._protection.remove_position(pid)
+                                # Cancel associated exchange algo orders
+                                await self._cancel_algo_orders(pid, symbol)
                                 print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
                                 break
                         # 平仓订单不再创建新保护
@@ -1601,11 +1554,34 @@ class AutonomousEngine:
                         # 记录入场时间，供 TimeExit 超时检测使用
                         self._position_entry_times[pos_id] = time.time()
 
+                        # --- 打印止盈止损保护摘要 ---
+                        sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
+                        sl_pct = (entry_price - sl_price) / entry_price * 100 if sl_price and pos_side == OrderSide.BUY else (
+                            (sl_price - entry_price) / entry_price * 100 if sl_price else None
+                        )
+                        tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
+                        tp_pcts = []
+                        for tp in pp.take_profits:
+                            tp_px = float(tp.trigger_price.amount)
+                            if pos_side == OrderSide.BUY:
+                                tp_pcts.append(f"{(tp_px - entry_price) / entry_price * 100:+.2f}%")
+                            else:
+                                tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
+
+                        print(
+                            f"[protection] ┌ {'='*60}\n"
+                            f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
+                            f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
+                            f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts))}\n"
+                            f"[protection] └ {'='*60}"
+                        )
+
                         # 将 SL/TP 保护单实际下单到交易所（使用价格精度）
-                        # Testnet 不支持 STOP_MARKET → 回退到本地价格监控
+                        # 止盈止损单通过 Algo Order API 提交到交易所原生执行
                         reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
                         protect_orders = [pp.stop_loss] if pp.stop_loss else []
                         protect_orders.extend(pp.take_profits)
+                        exchange_protection_count = 0
                         for p_order in protect_orders:
                             if p_order is None:
                                 continue
@@ -1619,38 +1595,43 @@ class AutonomousEngine:
                             prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
                             qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
                             price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
-                            sl_params = {
+
+                            # BD-FIX: Binance 2025-12 迁移 — 条件单必须使用 Algo Order API
+                            # 旧端点 POST /fapi/v1/order 的 STOP_MARKET/TAKE_PROFIT_MARKET 已废弃
+                            # 新端点 POST /fapi/v1/algoOrder + algoType=CONDITIONAL + triggerPrice
+                            algo_params = {
                                 "symbol": symbol,
                                 "side": reduce_side,
-                                "type": "STOP_MARKET",
+                                "algoType": "CONDITIONAL",
+                                "type": p_order.order_type,  # STOP_MARKET or TAKE_PROFIT_MARKET
                                 "quantity": qty_str,
-                                "stopPrice": price_str,
-                                "closePosition": "true",
+                                "triggerPrice": price_str,
+                                "reduceOnly": "true",
                                 "workingType": "CONTRACT_PRICE",
-                                "newClientOrderId": f"beidou-{p_order.protection_id[:20]}",
                             }
-                            sl_resp = await self._api_async(
-                                "/fapi/v1/order", method="POST", signed=True, params=sl_params
+                            algo_resp = await self._api_async(
+                                "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
                             )
-                            if "code" in sl_resp and sl_resp.get("code") == -4120:
-                                # 回退: 使用不带 closePosition 的 reduceOnly 版本
-                                sl_params["reduceOnly"] = "true"
-                                sl_params.pop("closePosition", None)
-                                sl_params.pop("workingType", None)
-                                sl_resp = await self._api_async(
-                                    "/fapi/v1/order", method="POST", signed=True, params=sl_params
-                                )
-                            if "orderId" in sl_resp:
+                            if "algoId" in algo_resp:
+                                exchange_protection_count += 1
+                                algo_id = str(algo_resp["algoId"])
+                                # Track algo IDs for cancellation on position close
+                                if not hasattr(self, "_active_algo_ids"):
+                                    self._active_algo_ids: dict[str, set[str]] = {}
+                                self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
                                 print(
-                                    f"[protection] {symbol} {p_order.reason} → orderId={sl_resp['orderId']} stopPrice={price_str}"
-                                )
-                            elif "code" in sl_resp and sl_resp.get("code") == -4120:
-                                # Testnet: STOP_MARKET 不可用，依赖本地 check_price() + MARKET 单
-                                print(
-                                    f"[protection] {symbol} {p_order.reason}: STOP_MARKET unavailable (local guard active)"
+                                    f"[protection] ✅ {symbol} {p_order.reason} → algoId={algo_id} "
+                                    f"triggerPrice={price_str} status={algo_resp.get('algoStatus', 'NEW')}"
                                 )
                             else:
-                                print(f"[protection] FAILED {symbol} {p_order.reason}: {sl_resp.get('msg', sl_resp)}")
+                                err_code = algo_resp.get("code", "unknown")
+                                err_msg = algo_resp.get("msg", str(algo_resp)[:150])
+                                print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
+
+                        if exchange_protection_count > 0:
+                            print(f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)")
+                        else:
+                            print(f"[protection] ❌ 0 protection orders placed — all attempts failed, position UNPROTECTED")
 
                     # === Strategy Risk: update equity on any fill ===
                     account_balance = float(self._last_account.get("totalWalletBalance", 0))
