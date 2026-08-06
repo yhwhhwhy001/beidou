@@ -1,42 +1,23 @@
 [
   {
-    "timestamp": "2026-08-06T10:25:28.428028+00:00",
-    "event_type": "PRODUCTION_BLOCKED",
-    "environment": "production",
-    "commit": "408904f462ea66af6500998fe1bb83961a51494f",
-    "config_hash": "NO_CONFIG",
-    "certificate_status": "NOT_PRESENT",
-    "account_capability": "UNKNOWN",
-    "control_state": "NO_NEW_RISK",
-    "details": {
-      "reason": "PIVOT \u2014 production is permanently prohibited until package completion",
-      "decision": "PIVOT",
-      "mainnet_allowed": false,
-      "blocked_mode": "production"
-    }
-  },
-  {
-    "timestamp": "2026-08-06T10:25:28.428069+00:00",
+    "timestamp": "2026-08-06T12:22:59.361037+00:00",
     "event_type": "STARTUP_GATE",
-    "environment": "production",
-    "commit": "408904f462ea66af6500998fe1bb83961a51494f",
+    "environment": "safety_only",
+    "commit": "ce17371d4a8ae08bb6d3ded43e85524f76f5a2ef",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
     "control_state": "NO_NEW_RISK",
     "details": {
-      "all_checks_passed": false,
+      "all_checks_passed": true,
       "checks": {
-        "production_blocked": false,
+        "production_blocked": true,
         "mainnet_url_blocked": true,
-        "valid_mode": false,
+        "valid_mode": true,
         "credentials_valid": true,
-        "full_mode_requirements": true
+        "write_mode_requirements": true
       },
-      "failures": [
-        "PRODUCTION mode is permanently prohibited",
-        "Mode production is permanently blocked by PIVOT decision"
-      ]
+      "failures": []
     }
   }
 ]

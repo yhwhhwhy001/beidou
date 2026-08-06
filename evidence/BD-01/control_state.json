@@ -1,0 +1,19 @@
+{
+  "control_action": "LOCK",
+  "version": 1,
+  "updated_at": "2026-08-06T12:22:59.374840+00:00",
+  "change_log": [
+    {
+      "timestamp": "2026-08-06T12:22:59.374823+00:00",
+      "old_state": "NO_NEW_RISK",
+      "new_state": "LOCK",
+      "version": 0
+    },
+    {
+      "timestamp": "2026-08-06T12:22:59.374829+00:00",
+      "old_state": "NO_NEW_RISK",
+      "new_state": "LOCK",
+      "version": 1
+    }
+  ]
+}
