@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 
 from .preflight import run_preflight
-from .state import read_status, stop_running_instance
+from .state import inspect_runtime_status, stop_running_instance
 from .supervisor import StartupSupervisor
 
 
@@ -62,7 +62,8 @@ def main(
     直接执行 `beidou`、`北斗` 或 `bd` 等价于 `start`。
     """
     root = _project_root()
-    parsed_symbols = _parse_symbols(symbols)
+    os.chdir(root)
+    os.environ["BEIDOU_ENV"] = mode
 
     if action == "doctor":
         checks, _ = run_preflight(root, mode, port)
@@ -71,7 +72,7 @@ def main(
         raise SystemExit(2 if any(item.is_blocking for item in checks) else 0)
 
     if action == "status":
-        status = read_status(root)
+        status = inspect_runtime_status(root)
         if status is None:
             click.echo("未发现监督器状态证据。")
             raise SystemExit(1)
@@ -82,6 +83,8 @@ def main(
         ok, message = stop_running_instance(root)
         click.echo(message)
         raise SystemExit(0 if ok else 1)
+
+    parsed_symbols = _parse_symbols(symbols)
 
     supervisor = StartupSupervisor(
         project_root=root,
