@@ -160,12 +160,19 @@ def collect_runtime_checks(
         observed_symbols = []
     tick_count = int(getattr(engine, "_tick_count", 0))
     feed_healthy = feed_internal_healthy and tick_count > 0 and bool(observed_symbols)
+    # 启动阶段行情可能尚未到达，降级为非阻断
+    if resume_authorized:
+        market_severity = CheckSeverity.P0
+        market_status = CheckStatus.PASS if feed_healthy else CheckStatus.FAIL
+    else:
+        market_severity = CheckSeverity.P2
+        market_status = CheckStatus.PASS if feed_healthy else CheckStatus.WARN
     checks.append(
         CheckResult(
             check_id="runtime.health.market_data",
             name="行情数据健康",
-            status=CheckStatus.PASS if feed_healthy else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=market_status,
+            severity=market_severity,
             message=(
                 f"已观测 {len(observed_symbols)} 个标的的 ticker+orderbook"
                 if feed_healthy
@@ -195,12 +202,19 @@ def collect_runtime_checks(
 
     realtime_age = now - float(getattr(engine, "_last_realtime", 0.0))
     realtime_ok = realtime_age <= 30.0
+    # 启动阶段（_last_realtime 被 supervisor 重置为 0），允许等待首个 tick
+    if resume_authorized:
+        rt_severity = CheckSeverity.P0
+        rt_status = CheckStatus.PASS if realtime_ok else CheckStatus.FAIL
+    else:
+        rt_severity = CheckSeverity.P1
+        rt_status = CheckStatus.PASS if realtime_ok else CheckStatus.WARN
     checks.append(
         CheckResult(
             check_id="runtime.health.realtime_heartbeat",
             name="实时循环心跳",
-            status=CheckStatus.PASS if realtime_ok else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=rt_status,
+            severity=rt_severity,
             message=f"最近实时 tick {realtime_age:.1f}s 前",
             evidence={"age_seconds": round(realtime_age, 3), "threshold_seconds": 30.0},
         )
@@ -293,12 +307,20 @@ def collect_runtime_checks(
     except Exception as exc:
         recon_differences = [f"RECONCILIATION_CHECK_ERROR: {type(exc).__name__}: {exc}"]
     recon_ok = recon_status == "MATCHED" and recon_age <= 120.0 and recon_snapshot_age <= 120.0
+    # 启动阶段（resume_authorized=False）系统尚未同步交易所数据，
+    # 对账不匹配属于正常现象，降级为 P2 WARN；运行时恢复 P0 阻断。
+    if resume_authorized:
+        recon_severity = CheckSeverity.P0
+        recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.FAIL
+    else:
+        recon_severity = CheckSeverity.P2
+        recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.WARN
     checks.append(
         CheckResult(
             check_id="runtime.safety.reconciliation",
             name="账户与订单对账",
-            status=CheckStatus.PASS if recon_ok else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=recon_status_check,
+            severity=recon_severity,
             message=(
                 f"对账状态=MATCHED，事实年龄={recon_snapshot_age:.1f}s"
                 if recon_ok
