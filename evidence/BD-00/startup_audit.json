@@ -1,9 +1,9 @@
 [
   {
-    "timestamp": "2026-08-05T18:03:00.674530+00:00",
+    "timestamp": "2026-08-06T10:24:20.204843+00:00",
     "event_type": "PRODUCTION_BLOCKED",
     "environment": "production",
-    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
+    "commit": "f20e44e3504d95bdba6dae85d3f9b826a006769f",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -11,40 +11,15 @@
     "details": {
       "reason": "PIVOT \u2014 production is permanently prohibited until package completion",
       "decision": "PIVOT",
-      "mainnet_allowed": false
+      "mainnet_allowed": false,
+      "blocked_mode": "production"
     }
   },
   {
-    "timestamp": "2026-08-05T18:03:00.674575+00:00",
-    "event_type": "CREDENTIAL_MISSING",
-    "environment": "production",
-    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
-    "config_hash": "NO_CONFIG",
-    "certificate_status": "NOT_PRESENT",
-    "account_capability": "UNKNOWN",
-    "control_state": "NO_NEW_RISK",
-    "details": {
-      "reason": "API key missing or too short for non-paper mode"
-    }
-  },
-  {
-    "timestamp": "2026-08-05T18:03:00.674580+00:00",
-    "event_type": "FULL_MODE_BLOCKED",
-    "environment": "production",
-    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
-    "config_hash": "NO_CONFIG",
-    "certificate_status": "NOT_PRESENT",
-    "account_capability": "UNKNOWN",
-    "control_state": "NO_NEW_RISK",
-    "details": {
-      "blocker": "missing_credentials"
-    }
-  },
-  {
-    "timestamp": "2026-08-05T18:03:00.674582+00:00",
+    "timestamp": "2026-08-06T10:24:20.204875+00:00",
     "event_type": "STARTUP_GATE",
     "environment": "production",
-    "commit": "efa5dbbdb09ba362d209302aee93640ca7545b18",
+    "commit": "f20e44e3504d95bdba6dae85d3f9b826a006769f",
     "config_hash": "NO_CONFIG",
     "certificate_status": "NOT_PRESENT",
     "account_capability": "UNKNOWN",
@@ -55,14 +30,12 @@
         "production_blocked": false,
         "mainnet_url_blocked": true,
         "valid_mode": false,
-        "credentials_valid": false,
-        "full_mode_requirements": false
+        "credentials_valid": true,
+        "full_mode_requirements": true
       },
       "failures": [
         "PRODUCTION mode is permanently prohibited",
-        "Invalid mode: production",
-        "Trading credentials missing or invalid",
-        "Full mode requirements not met"
+        "Mode production is permanently blocked by PIVOT decision"
       ]
     }
   }

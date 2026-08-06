@@ -4,14 +4,16 @@
 
 用法:
   python -m apps.autopilot --symbols BTCUSDT,ETHUSDT          # 默认 paper 模式
-  python -m apps.autopilot --mode testnet                      # Testnet 模式
-  python -m apps.autopilot --symbols BTCUSDT --mode full       # 全自动（需完整证书链）
-  python -m apps.autopilot --mode safety_only                  # 仅安全监控
+  python -m apps.autopilot --mode research                     # 因子研究模式 (零写)
+  python -m apps.autopilot --mode shadow                       # 影子交易模式 (零写)
+  python -m apps.autopilot --mode testnet                      # Testnet 模式 (可写)
+  python -m apps.autopilot --mode safety_only                  # 仅安全监控 (零写)
 
 安全约束:
-  - 默认 paper 模式，不会发送任何交易写请求
-  - production 模式永久阻断（PIVOT 决策，直至包完成）
-  - full 模式需要 G5 证书、有效凭据和 testnet URL
+  - RESEARCH / PAPER / SHADOW / SAFETY_ONLY 在类型层禁止交易写请求
+  - CANARY / LIVE 模式永久阻断（PIVOT 决策，直至包完成）
+  - 不存在自动 RESUME — 需持久化 Startup Gate 证书
+  - UNKNOWN 模式 → fail-closed 为 SAFETY_ONLY
 """
 
 from __future__ import annotations
@@ -48,8 +50,8 @@ def main() -> None:
         "--mode",
         type=str,
         default="paper",
-        choices=["full", "paper", "testnet", "safety_only"],
-        help="运行模式: paper=纸上交易(默认), testnet=测试网, full=全自动(需证书), safety_only=仅安全监控",
+        choices=["research", "paper", "shadow", "testnet", "safety_only"],
+        help="运行模式: research=因子研究, paper=纸上交易(默认), shadow=影子交易, testnet=测试网, safety_only=仅安全监控",
     )
     parser.add_argument("--port", type=int, default=9090, help="健康检查端口 (默认: 9090)")
     args = parser.parse_args()
@@ -78,18 +80,20 @@ def main() -> None:
 
     commit = _get_git_commit()
 
-    # 根据 mode 参数确定环境模式
-    if args.mode == "paper":
-        env_mode = EnvironmentMode.PAPER
-    elif args.mode == "testnet":
-        env_mode = EnvironmentMode.TESTNET
-    elif args.mode == "full":
-        # full 模式需要完整证书 — 默认视为 testnet
-        env_mode = EnvironmentMode.TESTNET
-    elif args.mode == "safety_only":
-        env_mode = EnvironmentMode.PAPER
+    # 根据 mode 参数确定环境模式 — 显式映射，禁止回退
+    _MODE_MAP: dict[str, EnvironmentMode] = {
+        "research": EnvironmentMode.RESEARCH,
+        "paper": EnvironmentMode.PAPER,
+        "shadow": EnvironmentMode.SHADOW,
+        "testnet": EnvironmentMode.TESTNET,
+        "safety_only": EnvironmentMode.SAFETY_ONLY,
+    }
+    if args.mode in _MODE_MAP:
+        env_mode = _MODE_MAP[args.mode]
     else:
-        env_mode = EnvironmentMode.PAPER
+        # UNKNOWN mode → fail-closed
+        print(f"[autopilot] FATAL: Unknown mode '{args.mode}' — fail-closed")
+        env_mode = EnvironmentMode.SAFETY_ONLY
 
     # 从配置加载 REST URL（用于 Mainnet 检测）
     try:
@@ -132,6 +136,15 @@ def main() -> None:
         sys.exit(1)
 
     # 写入启动审计事件
+    rejection_reason = ""
+    if env_mode.is_write_blocked:
+        if env_mode == EnvironmentMode.SAFETY_ONLY:
+            rejection_reason = "SAFETY_ONLY mode — trading writes permanently disabled"
+        elif env_mode in (EnvironmentMode.CANARY, EnvironmentMode.LIVE):
+            rejection_reason = f"{env_mode.value} mode — blocked by PIVOT decision"
+        else:
+            rejection_reason = f"{env_mode.value} mode — trading writes disabled at type layer"
+
     audit_event = EnvironmentGuard.generate_startup_audit_event(
         environment=env_mode.value,
         commit=commit,
@@ -139,6 +152,12 @@ def main() -> None:
         certificate_status="NOT_PRESENT",
         account_capability="UNKNOWN",
         control_state="NO_NEW_RISK",
+        extra={
+            "cli_mode": args.mode,
+            "write_enabled": env_mode.can_write_trades,
+            "write_blocked": env_mode.is_write_blocked,
+            "rejection_reason": rejection_reason,
+        },
     )
     os.makedirs("evidence/BD-00", exist_ok=True)
     audit_path = os.path.join("evidence/BD-00", "startup_audit.json")
@@ -157,10 +176,13 @@ def main() -> None:
     print("  北斗 V2.0 Autopilot")
     print(f"  环境: {os.environ['BEIDOU_ENV']}")
     print(f"  品种: {symbols}")
-    print(f"  模式: {args.mode}")
+    print(f"  CLI 模式: {args.mode}")
     print(f"  环境模式: {env_mode.value}")
+    print(f"  写交易: {'ENABLED' if env_mode.can_write_trades else 'BLOCKED'}")
     print(f"  健康端口: {args.port}")
     print(f"  Gate: {gate_result.status.value}")
+    if rejection_reason:
+        print(f"  拒绝原因: {rejection_reason}")
     print("=" * 60)
 
     # 延迟导入，避免启动时的循环依赖

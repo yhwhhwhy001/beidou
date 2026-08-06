@@ -38,10 +38,19 @@ class TestEnvironmentModes:
         assert result.status == StartupGateStatus.FAIL
         assert any("PRODUCTION" in f for f in result.failures)
 
-    def test_safety_only_uses_paper(self):
-        """safety_only 不应发送交易请求。"""
+    def test_safety_only_maps_to_own_mode(self):
+        """SAFETY_ONLY 应映射到独立模式，不发送交易请求且禁止写。"""
+        guard = EnvironmentGuard(mode="safety_only")
+        assert guard._mode == EnvironmentMode.SAFETY_ONLY
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+    def test_paper_mode_still_valid(self):
+        """Paper 模式仍是合法零写模式。"""
         guard = EnvironmentGuard(mode="paper")
         assert guard._mode == EnvironmentMode.PAPER
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
 
 
 class TestMainnetURLDetection:
@@ -229,3 +238,138 @@ class TestForbiddenClaimsScan:
                 f.write("Gate Status: PIVOT — NOT_VERIFIABLE")
             found = EnvironmentGuard.scan_for_forbidden_claims(tmpdir)
             assert len(found) == 0
+
+
+class TestModeMatrix:
+    """BD-P0-00: 运行模式能力矩阵。"""
+
+    def test_research_mode_no_write(self):
+        """RESEARCH 模式禁止写交易。"""
+        guard = EnvironmentGuard(mode="research")
+        assert guard._mode == EnvironmentMode.RESEARCH
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+    def test_paper_mode_no_write(self):
+        """PAPER 模式禁止写交易。"""
+        guard = EnvironmentGuard(mode="paper")
+        assert guard._mode == EnvironmentMode.PAPER
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+    def test_shadow_mode_no_write(self):
+        """SHADOW 模式禁止写交易。"""
+        guard = EnvironmentGuard(mode="shadow")
+        assert guard._mode == EnvironmentMode.SHADOW
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+    def test_safety_only_no_write(self):
+        """SAFETY_ONLY 模式禁止写交易。"""
+        guard = EnvironmentGuard(mode="safety_only")
+        assert guard._mode == EnvironmentMode.SAFETY_ONLY
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+    def test_testnet_can_write(self):
+        """TESTNET 模式允许写交易。"""
+        guard = EnvironmentGuard(mode="testnet")
+        assert guard._mode == EnvironmentMode.TESTNET
+        assert not guard._mode.is_write_blocked
+        assert guard._mode.can_write_trades
+
+    def test_canary_blocked(self):
+        """CANARY 模式在本任务中被阻断。"""
+        guard = EnvironmentGuard(mode="canary")
+        assert guard._mode == EnvironmentMode.CANARY
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+        # 启动应失败
+        result = guard.run_all_checks()
+        assert result.status == StartupGateStatus.FAIL
+        assert any("PIVOT" in f or "blocked" in f.lower() for f in result.failures)
+
+    def test_live_blocked(self):
+        """LIVE 模式在本任务中被阻断。"""
+        guard = EnvironmentGuard(mode="live")
+        assert guard._mode == EnvironmentMode.LIVE
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+        # 启动应失败
+        result = guard.run_all_checks()
+        assert result.status == StartupGateStatus.FAIL
+        assert any("PIVOT" in f or "blocked" in f.lower() for f in result.failures)
+
+    def test_unknown_mode_fail_closed(self):
+        """UNKNOWN 模式应 fail-closed 为 SAFETY_ONLY。"""
+        guard = EnvironmentGuard(mode="garbage_unknown")
+        assert guard._mode == EnvironmentMode.SAFETY_ONLY
+        assert guard._mode.is_write_blocked
+        assert not guard._mode.can_write_trades
+
+
+class TestSafetyOnlyWriteBlocking:
+    """BD-P0-00 AC-00-01: SAFETY_ONLY 交易写请求为 0。"""
+
+    def test_safety_only_gate_passes_without_credentials(self):
+        """SAFETY_ONLY 模式无需凭据即可通过 Gate。"""
+        guard = EnvironmentGuard(
+            mode="safety_only",
+            rest_url="https://testnet.binancefuture.com",
+            api_key="",
+            api_secret="",
+        )
+        result = guard.run_all_checks()
+        assert result.status == StartupGateStatus.PASS
+
+    def test_safety_only_mainnet_url_still_blocked(self):
+        """即使 SAFETY_ONLY 模式，Mainnet URL 仍应阻断。"""
+        guard = EnvironmentGuard(
+            mode="safety_only",
+            rest_url="https://fapi.binance.com",
+        )
+        result = guard.run_all_checks()
+        assert result.status == StartupGateStatus.FAIL
+
+    def test_all_zero_write_modes_pass_without_credentials(self):
+        """所有零写模式无需凭据即可通过 Gate。"""
+        for mode in ("research", "paper", "shadow", "safety_only"):
+            guard = EnvironmentGuard(mode=mode)
+            result = guard.run_all_checks()
+            assert result.status == StartupGateStatus.PASS, f"{mode} should PASS without credentials"
+
+
+class TestNoAutoResume:
+    """BD-P0-00 AC-00-02/03: 删除自动 RESUME，无证书时保持 NO_NEW_RISK。"""
+
+    def test_control_plane_never_auto_resumes(self):
+        """控制面不会自动从 NO_NEW_RISK 变为 RESUME。"""
+        from beidou_control.plane import ControlAction, ControlPlane
+
+        cp = ControlPlane()
+        assert cp.get_status() == ControlAction.NO_NEW_RISK
+        # 任意时间后仍为 NO_NEW_RISK
+        assert cp.get_status() != ControlAction.RESUME
+
+    def test_engine_code_has_no_sleep_resume(self):
+        """engine.py 源码中不得存在 asyncio.sleep(N) 后跟 RESUME 的模式。"""
+        import ast
+        from pathlib import Path
+
+        engine_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "beidou_core" / "engine.py"
+        )
+        content = engine_path.read_text(encoding="utf-8")
+
+        # 检查不存在 "sleep" + "RESUME" 组合（在 15 行窗口内）
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if "sleep" in line and "asyncio" in line:
+                # 检查后续 15 行内是否有 RESUME
+                window = "\n".join(lines[i : i + 15])
+                if "RESUME" in window and "ControlAction.RESUME" in window:
+                    raise AssertionError(
+                        f"engine.py line {i + 1}: asyncio.sleep followed by RESUME detected. "
+                        "Auto RESUME is forbidden per BD-P0-00 AC-00-02."
+                    )

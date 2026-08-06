@@ -649,10 +649,23 @@ class RealMarketStateEstimator:
 class AutonomousEngine:
     """北斗自主运行引擎。三个时钟域的 asyncio 事件循环。"""
 
-    def __init__(self, symbols: list[str], mode: str = "full") -> None:
+    def __init__(self, symbols: list[str], mode: str = "paper") -> None:
         self._symbols = symbols
-        self._mode = mode  # "full", "safety_only", "paper"
-        self._paper_only = mode == "paper"
+        self._cli_mode = mode  # CLI 参数: research/paper/shadow/testnet/safety_only
+
+        # 封闭运行模式枚举 — 决定写能力
+        from beidou_core.guard import EnvironmentMode
+
+        _MODE_MAP = {
+            "research": EnvironmentMode.RESEARCH,
+            "paper": EnvironmentMode.PAPER,
+            "shadow": EnvironmentMode.SHADOW,
+            "testnet": EnvironmentMode.TESTNET,
+            "safety_only": EnvironmentMode.SAFETY_ONLY,
+        }
+        self._env_mode = _MODE_MAP.get(mode, EnvironmentMode.SAFETY_ONLY)
+        # 是否允许 POST/PUT/DELETE 交易写请求
+        self._can_write = self._env_mode.can_write_trades
 
         # Config
         config_path = os.path.join(
@@ -1109,7 +1122,7 @@ class AutonomousEngine:
             "lifecycle_state": self._lifecycle.state.value,
             "control_action": self._control.get_status().value,
             "symbols": self._symbols,
-            "mode": self._mode,
+            "mode": self._env_mode.value,
             "uptime_seconds": round(self._health.uptime_seconds(), 1),
             "last_realtime_tick": self._last_realtime,
             "last_nearline_tick": self._last_nearline,
@@ -1167,15 +1180,15 @@ class AutonomousEngine:
                                 f"Position {pos_id} stop loss at {sl.trigger_price.amount}",
                                 category="protection",
                             )
-                            if not self._paper_only:
+                            if self._can_write:
                                 await self._execute_protection_order(sl, sl_symbol)
                         for tp in result["take_profit"]:
                             tp_symbol = str(tp.instrument_id) if hasattr(tp, 'instrument_id') else symbol
-                            if not self._paper_only:
+                            if self._can_write:
                                 await self._execute_protection_order(tp, tp_symbol)
 
                 # 3. Monitor active orders
-                if not self._paper_only:
+                if self._can_write:
                     await self._monitor_orders(symbol)
 
                 # 4. Save market snapshot
@@ -1196,8 +1209,8 @@ class AutonomousEngine:
                 raw_outbox = len(ob._outbox)
                 raw_processed = len(ob._processed)
                 raw_inbox = len(ob._inbox)
-                print(f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} paper_only={self._paper_only}")
-            if not self._paper_only:
+                print(f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} can_write={self._can_write}")
+            if self._can_write:
                 for intent in unacked:
                     await self._place_order(intent)
 
@@ -1321,7 +1334,8 @@ class AutonomousEngine:
             params["price"] = str(float(intent.price.amount))
             params["timeInForce"] = "GTC"
 
-        if self._paper_only:
+        if not self._can_write:
+            # 零写模式：仅模拟订单状态，不发送任何交易写请求
             tracker = OrderStateTracker(order_id=OrderId(intent.intent_id))
             tracker.apply(OrderEvent.ACKED)
             tracker.apply(OrderEvent.FILLED)
@@ -1913,7 +1927,7 @@ class AutonomousEngine:
 
                 # === 5.5 下发自适应杠杆到交易所，获取实际生效值 ===
                 exchange_leverage = max(1, int(dyn_leverage))  # Binance 最低 1x
-                if not self._paper_only:
+                if self._can_write:
                     actual_lev = self._ensure_leverage(symbol, exchange_leverage)
                     if actual_lev != dyn_leverage:
                         dyn_leverage = float(actual_lev)  # 使用实际杠杆重新计算仓位
@@ -2184,7 +2198,7 @@ class AutonomousEngine:
         print("[beidou-autopilot] ========================================")
         print("[beidou-autopilot] Starting Autonomous Engine V2.0")
         print(f"[beidou-autopilot] Symbols: {self._symbols}")
-        print(f"[beidou-autopilot] Mode: {self._mode}")
+        print(f"[beidou-autopilot] Mode: {self._env_mode.value} (write={'ON' if self._can_write else 'OFF'})")
         print(f"[beidou-autopilot] Exchange: {self._rest_url}")
         print("[beidou-autopilot] ========================================")
 
@@ -2259,14 +2273,11 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后进入 NO_NEW_RISK，完成预热后自动 RESUME
+        # StartupGate: 启动后进入并保持 NO_NEW_RISK
+        # 不存在固定时间自动 RESUME — 需持久化 Startup Gate 证书通过后方可手动 RESUME
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
-
-        # 预热完成后自动 RESUME（24h 无人值守）
-        await asyncio.sleep(10)  # 给系统 10s 稳定时间
-        self._control.execute_action(ControlAction.RESUME)
-        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (persistent — no auto RESUME)")
+        print("[beidou-autopilot] RESUME requires: valid Startup Gate certificate + explicit trigger")
 
         self._running = True
         print("[beidou-autopilot] ========================================")
@@ -2316,7 +2327,7 @@ class AutonomousEngine:
         print("[beidou-autopilot] 1. NO_NEW_RISK")
 
         # 2. Cancel pending orders
-        if not self._paper_only:
+        if self._can_write:
             for order_id in list(self._active_order_ids):
                 for symbol in self._symbols:
                     try:

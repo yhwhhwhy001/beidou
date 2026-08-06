@@ -16,9 +16,47 @@ from enum import Enum
 
 
 class EnvironmentMode(str, Enum):
+    """封闭运行模式枚举。
+
+    写能力分级：
+    - 零写 (no POST/PUT/DELETE): RESEARCH, PAPER, SHADOW, SAFETY_ONLY
+    - 测试写 (testnet only): TESTNET
+    - 实盘写 (gated): CANARY, LIVE — 本任务中继续阻断
+    """
+
+    RESEARCH = "research"
     PAPER = "paper"
+    SHADOW = "shadow"
     TESTNET = "testnet"
-    PRODUCTION = "production"
+    CANARY = "canary"
+    LIVE = "live"
+    SAFETY_ONLY = "safety_only"
+    PRODUCTION = "production"  # 遗留值，与 CANARY/LIVE 同等阻断
+
+    @property
+    def can_write_trades(self) -> bool:
+        """该模式是否允许 POST/PUT/DELETE 交易写请求。
+
+        CANARY 和 LIVE 在本包完成前继续阻断。
+        """
+        return self in (EnvironmentMode.TESTNET,)
+
+    @property
+    def is_write_blocked(self) -> bool:
+        """该模式是否永久阻断写路径。
+
+        RESEARCH, PAPER, SHADOW, SAFETY_ONLY 在类型/依赖注入层禁止写。
+        CANARY, LIVE 在本任务中强制阻断。
+        """
+        return self in (
+            EnvironmentMode.RESEARCH,
+            EnvironmentMode.PAPER,
+            EnvironmentMode.SHADOW,
+            EnvironmentMode.SAFETY_ONLY,
+            EnvironmentMode.CANARY,
+            EnvironmentMode.LIVE,
+            EnvironmentMode.PRODUCTION,
+        )
 
 
 class StartupGateStatus(str, Enum):
@@ -66,9 +104,10 @@ class StartupGateResult:
 class EnvironmentGuard:
     """P0 环境启动守卫。
 
-    只允许 paper / testnet / production 三态。
-    production 在本包完成前永久拒绝。
-    full 模式需要完整的证书链和凭据验证。
+    支持七种封闭运行模式：RESEARCH / PAPER / SHADOW / TESTNET / CANARY / LIVE / SAFETY_ONLY。
+    CANARY 和 LIVE 在本包完成前永久拒绝。
+    零写模式 (RESEARCH / PAPER / SHADOW / SAFETY_ONLY) 在类型层禁止交易写请求。
+    SAFETY_ONLY 不得构造、注入或访问 TradingExchangePort 的写方法。
     """
 
     # 主网 URL 模式 — 任何匹配都触发阻断
@@ -101,7 +140,13 @@ class EnvironmentGuard:
         evidence_dir: str = "evidence/BD-00",
         g5_cert_path: str = "",
     ):
-        self._mode = EnvironmentMode(mode.lower() if mode.lower() in [m.value for m in EnvironmentMode] else "paper")
+        mode_lower = mode.lower()
+        valid_modes = {m.value for m in EnvironmentMode}
+        if mode_lower in valid_modes:
+            self._mode = EnvironmentMode(mode_lower)
+        else:
+            # UNKNOWN mode → fail-closed as SAFETY_ONLY
+            self._mode = EnvironmentMode.SAFETY_ONLY
         self._rest_url = rest_url
         self._api_key = api_key
         self._api_secret = api_secret
@@ -170,14 +215,19 @@ class EnvironmentGuard:
         return any(pattern in url_lower for pattern in self.MAINNET_URL_PATTERNS)
 
     def check_production_block(self) -> bool:
-        """检查 production 模式是否被永久阻断。"""
-        if self._mode == EnvironmentMode.PRODUCTION:
+        """阻断所有实盘写模式 (PRODUCTION, CANARY, LIVE)。"""
+        blocked_modes = {EnvironmentMode.PRODUCTION, EnvironmentMode.CANARY, EnvironmentMode.LIVE}
+        if self._mode in blocked_modes:
             self._audit(
                 "PRODUCTION_BLOCKED",
                 {
-                    "reason": "PIVOT — production is permanently prohibited until package completion",
+                    "reason": (
+                        f"PIVOT — {self._mode.value} is permanently prohibited "
+                        "until package completion"
+                    ),
                     "decision": "PIVOT",
                     "mainnet_allowed": False,
+                    "blocked_mode": self._mode.value,
                 },
             )
             return False
@@ -198,15 +248,19 @@ class EnvironmentGuard:
         return True
 
     def check_trading_credentials(self) -> bool:
-        """检查交易凭据是否存在且有效格式。"""
-        if self._mode == EnvironmentMode.PAPER:
-            return True  # Paper mode 不需要凭据
+        """检查交易凭据是否存在且有效格式。
+
+        只有可写模式 (TESTNET) 需要凭据。
+        零写模式 (RESEARCH, PAPER, SHADOW, SAFETY_ONLY) 无需凭据。
+        """
+        if self._mode.is_write_blocked:
+            return True  # 零写模式 + 阻断模式不需要凭据
 
         if not self._api_key or len(self._api_key) < 10:
             self._audit(
                 "CREDENTIAL_MISSING",
                 {
-                    "reason": "API key missing or too short for non-paper mode",
+                    "reason": f"API key missing or too short for {self._mode.value} mode",
                 },
             )
             return False
@@ -215,7 +269,7 @@ class EnvironmentGuard:
             self._audit(
                 "CREDENTIAL_MISSING",
                 {
-                    "reason": "API secret missing or too short for non-paper mode",
+                    "reason": f"API secret missing or too short for {self._mode.value} mode",
                 },
             )
             return False
@@ -223,20 +277,19 @@ class EnvironmentGuard:
         return True
 
     def check_full_mode_requirements(self, cli_mode: str = "paper") -> bool:
-        """检查 full/testnet 模式的前置条件。
+        """检查可写模式的前置条件。
 
-        full 模式（--mode full）要求：
+        TESTNET 模式要求：
         1. Testnet URL（非 Mainnet）
         2. 有效交易凭据
+
+        full CLI 模式额外要求：
         3. G5 证书 + commit 绑定
 
-        testnet 模式（--mode testnet）仅要求：
-        1. Testnet URL（非 Mainnet）
-        2. 有效交易凭据
-        （不要求 G5 证书 — 留给 BD-13 完成后启用）
+        零写模式无需此检查。
         """
-        if self._mode == EnvironmentMode.PAPER:
-            return True  # Paper 模式无额外要求
+        if self._mode.is_write_blocked:
+            return True  # 零写/阻断模式无额外要求
 
         failures = []
 
@@ -324,23 +377,24 @@ class EnvironmentGuard:
             failures.append(f"Mainnet URL detected: {self._rest_url}")
 
         # Check 3: Environment mode validity
-        valid_mode = self._mode != EnvironmentMode.PRODUCTION
+        blocked = {EnvironmentMode.PRODUCTION, EnvironmentMode.CANARY, EnvironmentMode.LIVE}
+        valid_mode = self._mode not in blocked
         checks["valid_mode"] = valid_mode
         if not valid_mode:
-            failures.append(f"Invalid mode: {self._mode.value}")
+            failures.append(f"Mode {self._mode.value} is permanently blocked by PIVOT decision")
 
-        # Check 4: Credentials (for testnet/full)
+        # Check 4: Credentials (only for write-capable modes)
         creds_ok = self.check_trading_credentials()
         checks["credentials_valid"] = creds_ok
         if not creds_ok:
             failures.append("Trading credentials missing or invalid")
 
-        # Check 5: Full mode requirements
-        if self._mode != EnvironmentMode.PAPER:
+        # Check 5: Write-mode requirements (G5 cert for full CLI)
+        if not self._mode.is_write_blocked:
             full_ok = self.check_full_mode_requirements(cli_mode=cli_mode)
             checks["full_mode_requirements"] = full_ok
             if not full_ok:
-                failures.append("Full mode requirements not met")
+                failures.append("Write-mode requirements not met")
         else:
             checks["full_mode_requirements"] = True
 
