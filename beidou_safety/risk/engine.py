@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -57,7 +58,10 @@ class _PreRiskContext:
 
 
 class RiskSnapshot:
-    """风险快照 — 不可变的风险状态。"""
+    """BD-T07: 风险快照 — 绑定账户/仓位/订单/行情/DQ/交易所健康/对账/组合/策略/时间戳。
+
+    不可变；所有字段必须显式提供；缺失关键字段时 is_complete() 返回 False。
+    """
 
     def __init__(
         self,
@@ -69,6 +73,17 @@ class RiskSnapshot:
         leverage: float,
         concentration_pct: float,
         tail_var_95: float | None = None,
+        # BD-T07 新增字段
+        account_id: str = "",
+        positions: dict | None = None,
+        orders: dict | None = None,
+        dq_tier: str = "UNKNOWN",
+        exchange_health: str = "UNKNOWN",
+        reconciliation_status: str = "UNKNOWN",
+        portfolio_hash: str = "",
+        policy_version: str = "",
+        timestamp: str = "",
+        correlation_id: str = "",
     ):
         self.total_exposure = total_exposure
         self.margin_used = margin_used
@@ -78,6 +93,41 @@ class RiskSnapshot:
         self.leverage = leverage
         self.concentration_pct = concentration_pct
         self.tail_var_95 = tail_var_95
+        # BD-T07: 完整风险上下文
+        self.account_id = account_id
+        self.positions = positions or {}
+        self.orders = orders or {}
+        self.dq_tier = dq_tier
+        self.exchange_health = exchange_health
+        self.reconciliation_status = reconciliation_status
+        self.portfolio_hash = portfolio_hash
+        self.policy_version = policy_version
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
+        self.correlation_id = correlation_id
+
+    def is_complete(self) -> bool:
+        """BD-T07: 检查所有关键字段是否已填充。"""
+        return all(
+            [
+                self.account_id,
+                self.dq_tier != "UNKNOWN",
+                self.exchange_health != "UNKNOWN",
+                self.reconciliation_status != "UNKNOWN",
+                self.policy_version,
+            ]
+        )
+
+    def is_safe_for_risk_increase(self) -> bool:
+        """BD-T07: 任何 UNKNOWN/STALE/BLOCK 状态阻断风险增加。"""
+        if not self.is_complete():
+            return False
+        if self.dq_tier in ("BLOCK", "UNKNOWN"):
+            return False
+        if self.exchange_health in ("UNKNOWN", "UNSAFE"):
+            return False
+        if self.reconciliation_status != "MATCHED":
+            return False
+        return True
 
 
 class PreRiskCheckerImpl:
@@ -157,6 +207,10 @@ class RiskEngineImpl:
         return results
 
 
+# BD-T01: Approval 默认有效期（秒）— 签名未显式指定 expires_at 时使用。
+DEFAULT_APPROVAL_TTL_SECONDS = 300
+
+
 class RiskApprovalSignerImpl:
     """签名 Approval 验证器 — 完全 Fail-Closed。
 
@@ -164,6 +218,7 @@ class RiskApprovalSignerImpl:
     - 无密钥时 SIGNING_UNAVAILABLE，拒绝风险增加。
     - 签名绑定 approval_id、proposal_hash、account_snapshot_hash、
       risk_snapshot_hash、policy_version、expires_at、nonce。
+    - expires_at 默认 = 签名时刻 + DEFAULT_APPROVAL_TTL_SECONDS (300s, BD-T01)。
     - 常量时间比较；过期、篡改、重放、版本不一致均拒绝。
     - 密钥仅从环境/秘密提供器注入；不可写入日志或数据库。
     """
@@ -180,6 +235,8 @@ class RiskApprovalSignerImpl:
         self._hashlib = hashlib
         self._approved: set[RiskApprovalId] = set()
         self._nonces: set[str] = set()
+        # signature → 签名时生效的 expires_at（epoch 秒）— BD-T01 过期校验。
+        self._signed_expiry: dict[str, float] = {}
 
     def _payload(
         self,
@@ -189,8 +246,12 @@ class RiskApprovalSignerImpl:
         risk_snapshot_hash: str,
         policy_version: str,
         nonce: str,
+        expires_at: float,
     ) -> str:
-        data = f"{approval_id}|{proposal_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|{policy_version}|{nonce}"
+        data = (
+            f"{approval_id}|{proposal_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|"
+            f"{policy_version}|{nonce}|{expires_at}"
+        )
         return data
 
     def _compute_signature(self, payload: str) -> str:
@@ -204,18 +265,25 @@ class RiskApprovalSignerImpl:
         risk_snapshot_hash: str = "",
         policy_version: str = "",
         nonce: str = "",
+        expires_at: float | None = None,
     ) -> str:
-        """生成绑定所有字段的 HMAC-SHA256 签名。
+        """生成绑定所有字段（含 expires_at）的 HMAC-SHA256 签名。
+
+        expires_at 未指定时默认 = now + DEFAULT_APPROVAL_TTL_SECONDS (BD-T01)。
+        返回签名并记录其有效期；verify() 使用同一 expires_at 才能通过。
 
         Raises:
             RuntimeError: 签名密钥不可用（SIGNING_UNAVAILABLE）。
         """
         if not self._signing_available:
             raise RuntimeError("SIGNING_UNAVAILABLE: no signing key configured — risk increase denied")
+        if expires_at is None:
+            expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
         payload = self._payload(
-            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce
+            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce, expires_at
         )
         sig = self._compute_signature(payload)
+        self._signed_expiry[sig] = expires_at
         self._approved.add(approval_id)
         return sig
 
@@ -228,19 +296,41 @@ class RiskApprovalSignerImpl:
         risk_snapshot_hash: str = "",
         policy_version: str = "",
         nonce: str = "",
+        expires_at: float | None = None,
     ) -> bool:
         """验证签名 — 严格模式，无向后兼容旁路。
 
-        拒绝条件：签名缺失、密钥不可用、签名不匹配、重放 nonce。
+        拒绝条件：签名缺失、密钥不可用、过期（BD-T01）、签名不匹配、
+        参数与签名时不一致（篡改/版本不匹配）、重放 nonce。
+
+        未显式传入 expires_at 时，使用签名时记录的默认有效期进行
+        过期校验与 payload 重建。
         """
         if not signature:
             return False
         if not self._signing_available:
             return False
+        stored_expiry = self._signed_expiry.get(signature)
+        if stored_expiry is None:
+            return False  # 未知签名 — 未由本签名器签发
+        if expires_at is not None:
+            if expires_at < time.time():
+                return False  # 过期拒绝 (BD-T01)
+            effective_expiry = expires_at
+        else:
+            if stored_expiry < time.time():
+                return False  # 过期拒绝 (BD-T01)
+            effective_expiry = stored_expiry
         if nonce and nonce in self._nonces:
             return False  # 重放攻击拒绝
         payload = self._payload(
-            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce
+            approval_id,
+            proposal_hash,
+            account_snapshot_hash,
+            risk_snapshot_hash,
+            policy_version,
+            nonce,
+            effective_expiry,
         )
         expected = self._compute_signature(payload)
         ok = self._hmac.compare_digest(signature, expected) and approval_id in self._approved

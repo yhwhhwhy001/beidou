@@ -6,7 +6,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # 仅在类型检查时导入 — 运行时注解惰性求值（from __future__ import annotations）
+    from beidou_exchange.core.error_taxonomy import Result
 
 from beidou_shared.types import (
     AccountRef,
@@ -136,3 +140,46 @@ class ExchangeAdapter(ABC):
 
     def supports(self, capability: Capability) -> bool:
         return capability in self.capabilities
+
+
+class MarketDataExchangePort(ABC):
+    """BD-T03: 行情数据端口 — Adapter 唯一提供行情数据。"""
+
+    @abstractmethod
+    async def get_exchange_info(self, symbol: str | None = None) -> Result: ...
+
+    @abstractmethod
+    async def get_closed_klines(self, symbol: str, interval: str, limit: int) -> Result: ...
+
+
+class AccountExchangePort(ABC):
+    """BD-T03: 账户端口 — 余额/仓位查询，失败返回 UNKNOWN 不返回 EMPTY。"""
+
+    @abstractmethod
+    async def get_account_snapshot(self) -> Result: ...
+
+    @abstractmethod
+    async def get_balances(self) -> Result: ...
+
+    @abstractmethod
+    async def get_positions(self) -> Result: ...
+
+
+class TradingExchangePort(ABC):
+    """BD-T03: 交易端口 — 订单创建/查询/取消。"""
+
+    @abstractmethod
+    async def create_order(self, command) -> Result: ...
+
+    @abstractmethod
+    async def query_order_by_client_id(self, symbol: str, client_id: str) -> Result: ...
+
+    @abstractmethod
+    async def cancel_order(self, command) -> Result: ...
+
+
+class UserStreamPort(ABC):
+    """BD-T03: 用户数据流端口 — WebSocket listenKey 管理。"""
+
+    @abstractmethod
+    async def stream_user_events(self) -> Result: ...

@@ -41,11 +41,8 @@ class ReconciliationResult:
 
     @property
     def should_block_new_risk(self) -> bool:
-        """BD-P0-10 AC-10-01: BOTH_SIDES_MISSING → UNKNOWN, blocks new risk。"""
-        return self.status in (
-            ReconciliationStatus.BOTH_SIDES_MISSING,
-            ReconciliationStatus.ERROR,
-        )
+        """BD-P0-10 AC-10-01: 所有非 MATCHED 状态（MISMATCHED/ONE_SIDE_MISSING/BOTH_SIDES_MISSING/ERROR）均阻止新风险。"""
+        return self.status is not ReconciliationStatus.MATCHED
 
 
 @dataclass
@@ -135,6 +132,7 @@ class ReconciliationEngine:
     def repair_strategy(self, result: ReconciliationResult) -> str:
         if result.matched:
             return "NO_ACTION"
-        if any("Balance mismatch" in d for d in result.differences):
-            return "SYSTEM_IS_AUTHORITATIVE"
-        return "INVESTIGATE"
+        # BD-P0-10 / BD-T01: 任何差异（含余额不匹配）都不允许系统单方面以自身
+        # 事实覆盖交易所事实 — SYSTEM_IS_AUTHORITATIVE 已移除。所有不匹配场景
+        # 一律要求人工介入修复。
+        return "MANUAL_REPAIR_REQUIRED"

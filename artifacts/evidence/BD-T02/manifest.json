@@ -2,13 +2,25 @@
   "task_id": "BD-T02",
   "status": "PASS",
   "branch": "refactor/full-system-convergence-v3",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "timestamp": "2026-08-06T15:14:18Z",
   "agent": "claude-code",
   "acceptance": {
-    "AC-BD-T02-01": {"status": "PASS", "detail": "engine.py/feed.py 不再直接 open config/env.testnet.yaml，统一使用 ConfigProvider"},
-    "AC-BD-T02-02": {"status": "PASS", "detail": "UNKNOWN/缺失环境通过 ConfigProvider._safe_only() 回退 SAFETY_ONLY，can_write_trades=False"},
-    "AC-BD-T02-03": {"status": "PASS", "detail": "TypedSettings.compute_hash() 基于 SHA-256，同一输入生成稳定 checksum"},
-    "AC-BD-T02-04": {"status": "PASS", "detail": "ConfigProvider 校验拒绝明文 api_key/api_secret；新增 .example 文件不含密钥"}
+    "AC-BD-T02-01": {
+      "status": "PASS",
+      "detail": "engine.py/feed.py \u4e0d\u518d\u76f4\u63a5 open config/env.testnet.yaml\uff0c\u7edf\u4e00\u4f7f\u7528 ConfigProvider"
+    },
+    "AC-BD-T02-02": {
+      "status": "PASS",
+      "detail": "UNKNOWN/\u7f3a\u5931\u73af\u5883\u901a\u8fc7 ConfigProvider._safe_only() \u56de\u9000 SAFETY_ONLY\uff0ccan_write_trades=False"
+    },
+    "AC-BD-T02-03": {
+      "status": "PASS",
+      "detail": "TypedSettings.compute_hash() \u57fa\u4e8e SHA-256\uff0c\u540c\u4e00\u8f93\u5165\u751f\u6210\u7a33\u5b9a checksum"
+    },
+    "AC-BD-T02-04": {
+      "status": "PASS",
+      "detail": "ConfigProvider \u6821\u9a8c\u62d2\u7edd\u660e\u6587 api_key/api_secret\uff1b\u65b0\u589e .example \u6587\u4ef6\u4e0d\u542b\u5bc6\u94a5"
+    }
   },
   "modified_files": [
     "beidou_shared/config/__init__.py",

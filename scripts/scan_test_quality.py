@@ -150,16 +150,24 @@ class TestQualityScanner(ast.NodeVisitor):
                     )
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        # Check for @pytest.mark.skip without reason (moved from visit_ImportFrom — dead code fix)
-        if hasattr(node, "decorator_list"):
-            for dec in node.decorator_list:
-                if isinstance(dec, ast.Call):
-                    if isinstance(dec.func, ast.Attribute) and dec.func.attr == "skip":
-                        has_reason = any(k.arg == "reason" for k in dec.keywords) if dec.keywords else False
-                        if not has_reason:
+    # BD-T15: Mock production path check
+    def visit_Call(self, node: ast.Call) -> None:
+        """检测 mock.patch 替换生产路径的模式。"""
+        if isinstance(node.func, ast.Attribute):
+            if node.func.attr == "patch" or node.func.attr == "patch_object":
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if any(
+                            p in arg.value
+                            for p in ("beidou_core", "beidou_safety", "beidou_exchange", "beidou_strategy")
+                        ):
                             self.findings.append(
-                                Finding(self.filepath, node.lineno, "WARNING", "@pytest.mark.skip without reason")
+                                Finding(
+                                    self.filepath,
+                                    node.lineno,
+                                    "WARNING",
+                                    f"mock.patch replaces production path: {arg.value}",
+                                )
                             )
         self.generic_visit(node)
 

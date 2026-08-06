@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 from beidou_shared.errors import DomainError, ErrorCategory, FaultSeverity, RecoveryAction
@@ -46,15 +47,42 @@ class Result(Generic[T]):
     is_ok: bool
     data: T | None = None
     error: AdapterError | None = None
+    source: str = ""
+    observed_at: datetime | None = None
+    correlation_id: str = ""
 
     @classmethod
-    def success(cls, data: T) -> "Result[T]":
-        return cls(is_ok=True, data=data)
+    def success(
+        cls,
+        data: T,
+        source: str = "",
+        observed_at: datetime | None = None,
+        correlation_id: str = "",
+    ) -> "Result[T]":
+        return cls(
+            is_ok=True,
+            data=data,
+            source=source,
+            observed_at=observed_at,
+            correlation_id=correlation_id,
+        )
 
     # 别名：兼容旧代码
     @classmethod
-    def ok(cls, data: T) -> "Result[T]":
-        return cls(is_ok=True, data=data)
+    def ok(
+        cls,
+        data: T,
+        source: str = "",
+        observed_at: datetime | None = None,
+        correlation_id: str = "",
+    ) -> "Result[T]":
+        return cls(
+            is_ok=True,
+            data=data,
+            source=source,
+            observed_at=observed_at,
+            correlation_id=correlation_id,
+        )
 
     @classmethod
     def failure(
@@ -65,9 +93,12 @@ class Result(Generic[T]):
         retryable: bool = False,
         raw: Any = None,
         code: int | None = None,
+        source: str = "",
+        observed_at: datetime | None = None,
+        correlation_id: str = "",
     ) -> "Result[T]":
         return cls(
-            ok=False,
+            is_ok=False,
             error=AdapterError(
                 message=message,
                 http_status=http_status,
@@ -75,6 +106,9 @@ class Result(Generic[T]):
                 retryable=retryable,
                 raw=raw,
             ),
+            source=source,
+            observed_at=observed_at,
+            correlation_id=correlation_id,
         )
 
     # 别名：兼容旧代码
@@ -84,14 +118,20 @@ class Result(Generic[T]):
         category: ErrorCategory,
         message: str = "",
         code: int | None = None,
+        source: str = "",
+        observed_at: datetime | None = None,
+        correlation_id: str = "",
     ) -> "Result[T]":
         return cls(
-            ok=False,
+            is_ok=False,
             error=AdapterError(
                 message=message,
                 category=category,
                 raw={"code": code} if code else None,
             ),
+            source=source,
+            observed_at=observed_at,
+            correlation_id=correlation_id,
         )
 
     def is_success(self) -> bool:

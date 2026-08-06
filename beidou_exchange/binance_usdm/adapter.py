@@ -187,9 +187,11 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         return self._health_monitor.venue_health
 
     async def get_account_info(self, account_ref: AccountRef) -> AccountInfo:
+        # BD-T03 修复: can_trade 基于健康检查 + 凭据能力验证，不硬编码 True
+        can_trade = self._health_monitor.is_safe_for_new_risk()
         return AccountInfo(
             account_ref=account_ref,
-            can_trade=True,
+            can_trade=can_trade,
             can_deposit=False,
             can_withdraw=False,
         )
@@ -210,6 +212,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         return ResultStatus.UNKNOWN, {}
 
     async def create_order(self, request: OrderRequest) -> OrderResponse:
+        # BD-T03 修复: 不构造 NEW/FILLED — 无真实传输时返回 UNKNOWN
         if not self._health_monitor.is_safe_for_new_risk():
             return OrderResponse(
                 venue_instrument=request.venue_instrument,
@@ -226,29 +229,13 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 correlation_id=request.correlation_id,
                 raw_response={"reason": "venue_health_unsafe"},
             )
-        from beidou_safety.execution import OrderIntent
-        from beidou_safety.execution.intent import IntentOutbox
-
-        ob = IntentOutbox()
-        intent = OrderIntent(
-            intent_id=f"binance-{request.client_order_id or 'auto'}",
-            account_ref=request.account_ref,
-            instrument_id=request.venue_instrument.instrument_id,
-            side=request.side,
-            order_type=request.order_type,
-            quantity=request.quantity,
-            price=request.price,
-            time_in_force=request.time_in_force,
-            client_order_id=request.client_order_id,
-            correlation_id=request.correlation_id,
-        )
-        ob.commit(intent)
+        # BD-T03: 真实 Transport 接入前返回 UNKNOWN，不构造 NEW
         return OrderResponse(
             venue_instrument=request.venue_instrument,
             account_ref=request.account_ref,
-            order_id=intent.intent_id,
+            order_id="",
             client_order_id=request.client_order_id,
-            status=OrderStatus.NEW,
+            status=OrderStatus.UNKNOWN,
             side=request.side,
             order_type=request.order_type,
             original_quantity=request.quantity,
@@ -256,35 +243,29 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             average_price=None,
             commission=None,
             correlation_id=request.correlation_id,
+            raw_response={"reason": "real_transport_pending_BD-T18"},
         )
 
     async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:
-        from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
-
-        ts = OrderStateTracker(order_id=OrderId(order_id))
-        ts.apply(OrderEvent.CANCEL_REQUESTED)
-        ts.apply(OrderEvent.CANCELED)
+        # BD-T03 修复: 不构造 CANCELED — 真实传输接入前返回 UNKNOWN
         return OrderResponse(
             venue_instrument=venue_instrument,
             account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
             order_id=order_id,
             client_order_id=None,
-            status=ts.status,
+            status=OrderStatus.UNKNOWN,
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             original_quantity=Quantity(amount="0"),
             executed_quantity=Quantity(amount="0"),
             average_price=None,
             commission=None,
+            raw_response={"reason": "real_transport_pending_BD-T18"},
         )
 
     async def get_order_status(self, order_id: str, venue_instrument: VenueInstrument) -> OrderStatus:
-        from beidou_safety.execution.order_state import OrderStateTracker
-
-        ts = OrderStateTracker(order_id=OrderId(order_id))
-        if ts.is_terminal():
-            return ts.status
-        return OrderStatus.NEW
+        # BD-T03 修复: 不返回 NEW — 无真实查询时返回 UNKNOWN
+        return OrderStatus.UNKNOWN
 
     def normalize_error(self, error_code: int, message: str, correlation_id: str | None = None) -> Any:
         return ErrorNormalizer.normalize(str(self._venue_id), error_code, message, correlation_id)

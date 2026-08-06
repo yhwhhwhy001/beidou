@@ -12,7 +12,40 @@ import hashlib
 import hmac
 import os
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+
+class ApprovalSignerPort(ABC):
+    """BD-T01: 签名端口 — 生产/Testnet 实现。无密钥时返回 SIGNING_UNAVAILABLE。"""
+
+    @abstractmethod
+    def sign(
+        self,
+        approval_id,
+        proposal_hash,
+        account_snapshot_hash,
+        risk_snapshot_hash,
+        policy_version,
+        nonce,
+    ) -> str: ...
+
+
+class ApprovalVerifierPort(ABC):
+    """BD-T01: 验证端口 — 常量时间比较。拒绝过期/篡改/重放/版本不匹配。"""
+
+    @abstractmethod
+    def verify(
+        self,
+        approval_id,
+        signature,
+        proposal_hash,
+        account_snapshot_hash,
+        risk_snapshot_hash,
+        policy_version,
+        nonce,
+        expires_at,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)

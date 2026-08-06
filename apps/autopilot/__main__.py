@@ -70,14 +70,11 @@ def main() -> None:
     sys.path.insert(0, proj_root)
     os.chdir(proj_root)
 
-    # 设置环境
-    if "BEIDOU_ENV" not in os.environ:
-        os.environ["BEIDOU_ENV"] = "testnet"
-
     # ================================================================
     # P0 Startup Gate — EnvironmentGuard
     # ================================================================
     from beidou_core.guard import EnvironmentGuard, EnvironmentMode, StartupGateStatus
+    from beidou_shared.config import ConfigProvider
 
     commit = _get_git_commit()
 
@@ -96,25 +93,17 @@ def main() -> None:
         print(f"[autopilot] FATAL: Unknown mode '{args.mode}' — fail-closed")
         env_mode = EnvironmentMode.SAFETY_ONLY
 
-    # 从配置加载 REST URL（用于 Mainnet 检测）
-    try:
-        import yaml
-
-        config_path = os.path.join(proj_root, "config", f"env.{os.environ.get('BEIDOU_ENV', 'testnet')}.yaml")
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                cfg = yaml.safe_load(f)
-            rest_url = cfg.get("exchange", {}).get("binance_usdm", {}).get("rest_base_url", "")
-            api_key = str(cfg.get("exchange", {}).get("binance_usdm", {}).get("api_key", "")).strip()
-            api_secret = str(cfg.get("exchange", {}).get("binance_usdm", {}).get("api_secret", "")).strip()
-        else:
-            rest_url = ""
-            api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
-            api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
-    except Exception:
-        rest_url = ""
-        api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
-        api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
+    # 使用 ConfigProvider 统一加载配置 — 不再硬编码 BEIDOU_ENV=testnet，
+    # 也不再直接读取 YAML 文件。ConfigProvider 是唯一配置入口，
+    # 环境缺失/未知时回退 SAFETY_ONLY（写交易能力为 false）。
+    os.environ["BEIDOU_ENV"] = env_mode.value
+    settings = ConfigProvider().load(environment=env_mode.value)
+    rest_url = settings.exchange.rest_base_url
+    api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
+    api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
+    config_path = ""
+    if settings.source.startswith("env-file:"):
+        config_path = os.path.join(proj_root, "config", f"env.{settings.source.split(':', 1)[1]}.yaml")
 
     # 运行启动门禁
     guard = EnvironmentGuard(
@@ -123,7 +112,7 @@ def main() -> None:
         api_key=api_key,
         api_secret=api_secret,
         commit=commit,
-        config_path=config_path if "config_path" in dir() else "",
+        config_path=config_path,
     )
     gate_result = guard.run_all_checks(cli_mode=args.mode)
 

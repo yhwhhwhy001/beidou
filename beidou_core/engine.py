@@ -896,20 +896,16 @@ class AutonomousEngine:
             self._factor_registry.register(fd)
             all_factor_ids.append(fd.factor_id)
 
-        # Promote all factors through lifecycle chain to CHALLENGER
-        for fid in all_factor_ids:
-            rec = self._factor_registry.get(fid)
-            for target in [
-                FactorLifecycle.RESEARCH,
-                FactorLifecycle.BACKTEST,
-                FactorLifecycle.PAPER_TRADING,
-                FactorLifecycle.CHALLENGER,
-            ]:
-                if not rec.transition(target):
-                    break
+        # BD-T06 修复: 不再自动将因子推进到 CHALLENGER。
+        # 因子生命周期晋级必须通过证据驱动的 PromotionDecision，由独立的 Gate Runner 执行。
+        # 运行时只加载 DB 中标记 ACTIVE 且证书有效的因子版本。
+        active_factors = [
+            fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
+        ]
         print(
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
+        print(f"[beidou-autopilot] Active factors for trading: {active_factors} (auto-promotion disabled)")
 
         # Factor tracking: rolling predictions vs actual returns
         self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}
@@ -1686,13 +1682,14 @@ class AutonomousEngine:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
 
             if not result.matched:
-                real_diffs = [d for d in result.differences if "Balance mismatch" not in d]
-                if real_diffs:
-                    print(f"[recon] Mismatch: {real_diffs}")
+                # BD-T13 修复: 不再过滤余额差异 — 所有差异均触发事故
+                if result.differences:
+                    print(f"[recon] Mismatch: {result.differences}")
+                    severity = AlertSeverity.P0 if result.should_block_new_risk() else AlertSeverity.WARNING
                     self._alerts.send_incident(
-                        AlertSeverity.WARNING,
+                        severity,
                         "Reconciliation mismatch",
-                        "; ".join(real_diffs),
+                        "; ".join(result.differences),
                         category="reconciliation",
                     )
 
@@ -2318,12 +2315,11 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # StartupGate: 启动后短暂 NO_NEW_RISK，随后自动 RESUME
+        # BD-T14 修复: 不再基于固定 sleep 自动 RESUME。
+        # Startup 后保持 NO_NEW_RISK，需通过持久化 Startup Gate 证书 + 手动/API RESUME。
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initial)")
-        await asyncio.sleep(10)
-        self._control.execute_action(ControlAction.RESUME)
-        print("[beidou-autopilot] Control plane: RESUME (auto — startup gate passed)")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (requires manual RESUME via API/control)")
+        # 不自动 RESUME — 需外部验证事实重建、对账、保护验证完成后手动触发
 
         self._running = True
         print("[beidou-autopilot] ========================================")
