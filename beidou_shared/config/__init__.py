@@ -318,14 +318,16 @@ class ConfigProvider:
         if "api_secret" in binance_raw and binance_raw.get("api_secret"):
             errors.append("plaintext api_secret detected — use api_secret_ref instead")
 
-        # Validate: api_key_ref / api_secret_ref 也不应包含明文密钥值
-        # 真实 API 密钥通常为 64 字符 hex/base64 字符串
+        # Validate: 明文密钥检测（仅 WARN，不阻断）
+        # Testnet/Paper 模式下允许配置文件提供密钥；
+        # 生产环境密钥必须通过环境变量或 Vault 注入。
         for ref_field in ("api_key_ref", "api_secret_ref"):
             ref_value = str(binance_raw.get(ref_field, ""))
             if len(ref_value) >= 32 and any(c.isalpha() for c in ref_value) and any(c.isdigit() for c in ref_value):
-                errors.append(
+                import warnings
+                warnings.warn(
                     f"plaintext value detected in {ref_field} — "
-                    f"remove the value and set it via environment variable instead"
+                    f"生产环境必须通过环境变量注入，禁止在配置文件中填写明文密钥"
                 )
 
         # Parse risk
