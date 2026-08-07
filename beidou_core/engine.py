@@ -3062,13 +3062,29 @@ class AutonomousEngine:
             return
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
-        # Verify account access
-        account = await self._api_async(Endpoint.ACCOUNT, signed=True)
+        # Verify account access (testnet 跳过严格检查，demo API 频繁超时)
+        try:
+            account = await asyncio.wait_for(
+                self._api_async(Endpoint.ACCOUNT, signed=True),
+                timeout=5.0,
+            )
+        except (asyncio.TimeoutError, Exception):
+            if self._env_mode.value in ("testnet", "paper"):
+                print("[beidou-autopilot] Account check skipped (testnet/paper mode)")
+                account = {"canTrade": True, "totalWalletBalance": 0}
+            else:
+                print("[beidou-autopilot] FATAL: Cannot access account")
+                self._lifecycle.transition(ModuleState.FAILED)
+                return
         # demo testnet 返回 canTrade/canDeposit，无 totalWalletBalance
         if "totalWalletBalance" not in account and "assets" not in account and "canTrade" not in account:
-            print("[beidou-autopilot] FATAL: Cannot access account")
-            self._lifecycle.transition(ModuleState.FAILED)
-            return
+            if self._env_mode.value in ("testnet", "paper"):
+                account["totalWalletBalance"] = 0.0
+                account["canTrade"] = True
+            else:
+                print("[beidou-autopilot] FATAL: Cannot access account")
+                self._lifecycle.transition(ModuleState.FAILED)
+                return
         self._last_account = account
         init_equity = float(account.get("totalWalletBalance", 0))
         if init_equity == 0 and "canTrade" in account:
