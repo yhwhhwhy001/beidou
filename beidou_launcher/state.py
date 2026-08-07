@@ -196,3 +196,55 @@ def stop_running_instance(project_root: Path) -> tuple[bool, str]:
         return True, f"已向已验证的北斗进程 PID={pid} 发送 SIGTERM"
     except OSError as exc:
         return False, f"停止失败: {exc}"
+
+
+def force_stop_existing(project_root: Path) -> tuple[bool, str]:
+    """启动前强制清理已有北斗实例（SIGTERM → 等待 → SIGKILL）。
+
+    与 stop_running_instance 不同，此函数不要求监督证据新鲜或命令身份匹配，
+    仅基于 PID 文件进行进程终止，确保新启动不受旧实例阻碍。
+    """
+    pid_path = project_root / ".beidou" / "beidou.pid"
+    if not pid_path.exists():
+        return True, "无旧实例需清理"
+
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        with suppress(OSError):
+            pid_path.unlink()
+        return True, "已清理无效 PID 文件"
+
+    if not InstanceLock._pid_alive(pid):
+        with suppress(OSError):
+            pid_path.unlink()
+        return True, f"已清理陈旧 PID 文件 (PID={pid} 已退出)"
+
+    # 进程存活 — 先尝试优雅终止
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        return False, f"无法向 PID={pid} 发送信号: {exc}"
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not InstanceLock._pid_alive(pid):
+            with suppress(OSError):
+                pid_path.unlink()
+            return True, f"已停止旧实例 PID={pid} (SIGTERM)"
+
+        time.sleep(0.5)
+
+    # 优雅终止超时，强制杀死
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError as exc:
+        return False, f"SIGTERM 超时，SIGKILL 失败: {exc}"
+
+    time.sleep(1.0)
+    if not InstanceLock._pid_alive(pid):
+        with suppress(OSError):
+            pid_path.unlink()
+        return True, f"已强制停止旧实例 PID={pid} (SIGKILL)"
+
+    return False, f"无法停止旧实例 PID={pid}，进程仍存活"

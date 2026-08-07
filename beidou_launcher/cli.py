@@ -12,7 +12,7 @@ import click
 from .checks import find_project_root
 from .manifest import DEFAULT_MODE, DEFAULT_SYMBOLS, HEALTH_PORT, SUPPORTED_MODES
 from .preflight import run_preflight
-from .state import inspect_runtime_status, stop_running_instance
+from .state import force_stop_existing, inspect_runtime_status, stop_running_instance
 from .supervisor import BeidouSupervisor
 
 
@@ -82,6 +82,12 @@ def main(
         ok, message = stop_running_instance(root)
         click.echo(message)
         raise SystemExit(0 if ok else 1)
+
+    # 启动前强制清理旧实例，以当前启动为准
+    cleaned, clean_msg = force_stop_existing(root)
+    click.echo(f"{'🧹' if cleaned else '❌'} {clean_msg}")
+    if not cleaned:
+        raise SystemExit(1)
 
     parsed_symbols = _parse_symbols(symbols)
     supervisor = BeidouSupervisor(
