@@ -407,10 +407,16 @@ def collect_runtime_checks(
         all_protected = not missing_protection
         none_protected = not exchange_protected_symbols
         # 部分保护：有持仓已覆盖但部分缺失 → WARN 降级，不阻断全系统
+        # 启动阶段（resume_authorized=False）保护单尚未下发完毕，
+        # FAIL 降级为 P2 WARN，与对账检查保持一致；运行时恢复 P0 阻断。
         if not snapshot_ok:
             coverage_ok = False
-            coverage_status = CheckStatus.FAIL
-            coverage_severity = CheckSeverity.P0
+            if resume_authorized:
+                coverage_status = CheckStatus.FAIL
+                coverage_severity = CheckSeverity.P0
+            else:
+                coverage_status = CheckStatus.WARN
+                coverage_severity = CheckSeverity.P2
             coverage_message = f"交易所保护事实查询失败: {snapshot.get('error', 'UNKNOWN')}"
         elif all_protected:
             coverage_ok = True
@@ -419,8 +425,12 @@ def collect_runtime_checks(
             coverage_message = f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
         elif none_protected:
             coverage_ok = False
-            coverage_status = CheckStatus.FAIL
-            coverage_severity = CheckSeverity.P0
+            if resume_authorized:
+                coverage_status = CheckStatus.FAIL
+                coverage_severity = CheckSeverity.P0
+            else:
+                coverage_status = CheckStatus.WARN
+                coverage_severity = CheckSeverity.P2
             coverage_message = f"全部 {len(open_symbols)} 个持仓标的均无保护单落地"
         else:
             coverage_ok = True

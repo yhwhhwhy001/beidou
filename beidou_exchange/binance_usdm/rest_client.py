@@ -58,6 +58,12 @@ class BinanceRESTClient:
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
 
+    def reset_circuit_breaker(self) -> None:
+        """重置客户端熔断器（启动恢复等关键阶段调用）。"""
+        self._rate_state.circuit_open = False
+        self._rate_state.consecutive_failures = 0
+        self._rate_state.circuit_open_until = 0.0
+
     # === 公共查询（无需签名）===
 
     async def get_server_time(self) -> Result[dict]:

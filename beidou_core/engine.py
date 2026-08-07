@@ -1775,6 +1775,9 @@ class AutonomousEngine:
             if not exchange_positions:
                 return
 
+            # 重置客户端熔断器，确保关键恢复不被限流拦截
+            self._exchange.reset_circuit_breaker()
+
             # 检查哪些已有保护单
             algos_resp = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
             protected_symbols: set[str] = set()
@@ -1855,6 +1858,40 @@ class AutonomousEngine:
                                 print(f"[startup] ⚠️ SL retry FAILED for {symbol}: {sl2.get('msg','?')}")
                 except Exception as e:
                     print(f"[startup] Protection placement error for {symbol}: {e}")
+
+            # 将交易所持仓注册到本地保护系统，避免 system={} 对账 mismatch
+            # 即使保护单下发失败，交易所实际持仓也必须被系统感知
+            registered = 0
+            for symbol, data in exchange_positions.items():
+                try:
+                    existing = [
+                        pp for pp in self._protection.all_positions().values()
+                        if str(pp.instrument_id) == symbol
+                    ]
+                    if existing:
+                        continue
+                    amt = data["amt"]
+                    entry = data["entry"]
+                    if entry <= 0:
+                        features = self._feed.update_features(symbol)
+                        entry = features.get("price", 0) if features else 0
+                        if entry <= 0:
+                            continue
+                    pos_id = f"pos-{symbol}"
+                    pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
+                    self._protection.create_protection(
+                        position_id=pos_id,
+                        instrument_id=InstrumentId(symbol),
+                        venue_id=VenueId("BINANCE"),
+                        entry_price=entry,
+                        quantity=abs(amt),
+                        side=pos_side,
+                    )
+                    registered += 1
+                except Exception:
+                    pass
+            if registered:
+                print(f"[startup] Registered {registered} exchange positions in local state")
         except Exception as e:
             print(f"[startup] Exchange protection check error: {e}")
 
@@ -2603,6 +2640,9 @@ class AutonomousEngine:
                 )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: stale algo cleanup failed: {e}")
+
+        # 清理旧订单可能触发客户端熔断器，重置以确保后续恢复不受影响
+        self._exchange.reset_circuit_breaker()
 
         try:
             account = await self._api_async("/fapi/v2/account", signed=True)
