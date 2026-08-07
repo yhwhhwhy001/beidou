@@ -1917,9 +1917,14 @@ class AutonomousEngine:
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
                 active_ids = getattr(self, "_active_algo_ids", {}).get(pos_id, set())
-                # 检查是否已有活跃的交易所保护单
-                has_exchange_coverage = bool(existing_ids & active_ids) if active_ids else bool(existing_ids)
-                if has_exchange_coverage:
+
+                # 计算该仓位应有保护单数量
+                expected_count = (1 if pp.stop_loss and pp.stop_loss.is_active() else 0) + sum(
+                    1 for tp in pp.take_profits if tp.is_active()
+                )
+                server_count = len(existing_ids)
+                # 交易所已有 >= 期望数量即视为已覆盖
+                if expected_count > 0 and server_count >= expected_count:
                     continue
 
                 # 该持仓的保护单未在交易所落地 — 重试

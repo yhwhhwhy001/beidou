@@ -391,7 +391,7 @@ def collect_runtime_checks(
             expected_orders = expected_by_symbol.get(symbol, 0)
             server_algo_ids = {str(item) for item in server_by_symbol.get(symbol, [])}
             server_order_count = len(server_algo_ids)
-            fully_placed = snapshot_ok and expected_orders > 0 and server_order_count == expected_orders
+            fully_placed = snapshot_ok and expected_orders > 0 and server_order_count >= expected_orders
             protection_evidence.setdefault(symbol, []).append(
                 {
                     "source": "exchange_openAlgoOrders",
