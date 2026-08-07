@@ -1758,9 +1758,72 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[realtime] Reconciliation error: {e}")
 
-    # --- Clock Domain: NEARLINE (every 5min) ---
+    async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
+        """对保护单缺失的持仓进行重试；-2021 错误使用加宽止损距离。"""
+        if not self._can_write:
+            return
+        try:
+            # 查询交易所已有的 algo 订单
+            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            if not isinstance(existing_algos, list):
+                return
+            exchange_algo_symbols: dict[str, set[str]] = {}
+            for item in existing_algos:
+                sym = str(item.get("symbol", ""))
+                aid = str(item.get("algoId", ""))
+                if sym and aid:
+                    exchange_algo_symbols.setdefault(sym, set()).add(aid)
 
-    async def _nearline_tick(self) -> None:
+            for pos_id, pp in list(self._protection.all_positions().items()):
+                symbol = str(pp.instrument_id)
+                if symbol not in exchange_symbols:
+                    continue
+                existing_ids = exchange_algo_symbols.get(symbol, set())
+                active_ids = getattr(self, "_active_algo_ids", {}).get(pos_id, set())
+                # 检查是否已有活跃的交易所保护单
+                has_exchange_coverage = bool(existing_ids & active_ids) if active_ids else bool(existing_ids)
+                if has_exchange_coverage:
+                    continue
+
+                # 该持仓的保护单未在交易所落地 — 重试
+                side = "SELL" if pp.side == OrderSide.BUY else "BUY"
+                prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
+
+                retry_count = getattr(self, "_protection_retries", {}).get(pos_id, 0)
+                if retry_count >= 3:
+                    continue  # 超过最大重试次数
+
+                # 对重试使用加宽止损 (1 + retry * 0.5) 倍距离
+                widen_factor = 1.0 + retry_count * 0.5
+
+                if pp.stop_loss is not None:
+                    orig_price = float(pp.stop_loss.trigger_price.amount)
+                    current_price = float(self._last_prices.get(symbol, orig_price))
+                    # 扩展止损距离
+                    widened_price = current_price - (current_price - orig_price) * widen_factor if pp.side == OrderSide.BUY else current_price + (orig_price - current_price) * widen_factor
+                    price_str = f"{widened_price:.{prec['price']}f}"
+                    algo_resp = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        params={
+                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
+                            "type": pp.stop_loss.order_type, "quantity": qty_str,
+                            "triggerPrice": price_str, "reduceOnly": "true",
+                            "workingType": "CONTRACT_PRICE",
+                        },
+                    )
+                    if "algoId" in algo_resp:
+                        self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
+                        self._protection_retries.pop(pos_id, None)
+                        print(f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}")
+                    else:
+                        err_code = algo_resp.get("code", 0)
+                        retries = self._protection_retries.setdefault(pos_id, 0) + 1
+                        self._protection_retries[pos_id] = retries
+                        print(f"[nearline] ⚠️ Stop loss retry #{retries} FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}")
+
+        except Exception as e:
+            print(f"[nearline] Protection retry error: {e}")
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
 
@@ -1793,6 +1856,9 @@ class AutonomousEngine:
                 self._position_entry_times.pop(old_pid, None)
                 await self._cancel_algo_orders(old_pid, str(old_pp.instrument_id))
                 print(f"[nearline] 🧹 Cleaned up ghost position: {old_pp.instrument_id} (pos={old_pid})")
+
+        # === 保护单缺失重试：对 -2021 (立即触发) 等瞬时失败自动重试 ===
+        await self._retry_missing_protections(exchange_symbols)
 
         try:
             active_symbols = self._trading_pool.active_instruments()
@@ -2581,20 +2647,12 @@ class AutonomousEngine:
         self._health.start()
         print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
 
-        # BD-T14: Startup 后短暂 NO_NEW_RISK，验证通过后 RESUME。
+        # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
+        # 引擎自身不再执行 RESUME（已被 Supervisor 的 resume interlock 拦截）。
         self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (initializing)")
-        # Testnet/Paper 模式下验证通过后自动 RESUME；Production 需手动
-        if self._env_mode.can_write_trades or self._env_mode.value == "paper":
-            await asyncio.sleep(2)
-            # 验证账户连接、DQ、对账基本健康后 RESUME
-            if self._exchange is not None:
-                self._control.execute_action(ControlAction.RESUME)
-                print("[beidou-autopilot] Control plane: RESUME (auto — startup checks passed)")
-            else:
-                print("[beidou-autopilot] Control plane: staying NO_NEW_RISK (exchange not ready)")
-        else:
-            print("[beidou-autopilot] Control plane: staying NO_NEW_RISK (manual RESUME required)")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
+        if self._exchange is None:
+            print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 
         self._running = True
         self._last_realtime = time.time()

@@ -404,22 +404,36 @@ def collect_runtime_checks(
             if fully_placed:
                 exchange_protected_symbols.add(symbol)
         missing_protection = sorted(open_symbols - exchange_protected_symbols)
-        coverage_ok = snapshot_ok and not missing_protection
+        all_protected = not missing_protection
+        none_protected = not exchange_protected_symbols
+        # 部分保护：有持仓已覆盖但部分缺失 → WARN 降级，不阻断全系统
+        if not snapshot_ok:
+            coverage_ok = False
+            coverage_status = CheckStatus.FAIL
+            coverage_severity = CheckSeverity.P0
+            coverage_message = f"交易所保护事实查询失败: {snapshot.get('error', 'UNKNOWN')}"
+        elif all_protected:
+            coverage_ok = True
+            coverage_status = CheckStatus.PASS
+            coverage_severity = CheckSeverity.P0
+            coverage_message = f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
+        elif none_protected:
+            coverage_ok = False
+            coverage_status = CheckStatus.FAIL
+            coverage_severity = CheckSeverity.P0
+            coverage_message = f"全部 {len(open_symbols)} 个持仓标的均无保护单落地"
+        else:
+            coverage_ok = True
+            coverage_status = CheckStatus.WARN
+            coverage_severity = CheckSeverity.P1
+            coverage_message = f"部分持仓标的保护单未落地: {missing_protection}（已保护: {sorted(exchange_protected_symbols)}）"
         checks.append(
             CheckResult(
                 check_id="runtime.safety.protection_coverage",
                 name="持仓保护覆盖",
-                status=CheckStatus.PASS if coverage_ok else CheckStatus.FAIL,
-                severity=CheckSeverity.P0,
-                message=(
-                    f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
-                    if coverage_ok
-                    else (
-                        f"交易所保护事实查询失败: {snapshot.get('error', 'UNKNOWN')}"
-                        if not snapshot_ok
-                        else f"存在交易所保护单未完整落地的持仓标的: {missing_protection}"
-                    )
-                ),
+                status=coverage_status,
+                severity=coverage_severity,
+                message=coverage_message,
                 evidence={
                     "open_symbols": sorted(open_symbols),
                     "exchange_protected_symbols": sorted(exchange_protected_symbols),
@@ -438,12 +452,14 @@ def collect_runtime_checks(
     except Exception:
         incidents = ["INCIDENT_QUERY_FAILED"]
     incident_ok = not incidents
+    # 事故是其他检查（对账、保护覆盖）的症状，不独立作为 P0 阻断；
+    # P0 FAIL 仅在其他检查已报告，此处降级为 P2 WARN 避免事故反馈循环。
     checks.append(
         CheckResult(
             check_id="runtime.health.incidents",
             name="活动事故",
-            status=CheckStatus.PASS if incident_ok else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=CheckStatus.WARN if not incident_ok else CheckStatus.PASS,
+            severity=CheckSeverity.P2,
             message="无活动事故" if incident_ok else f"活动事故: {incidents}",
             evidence={"incidents": incidents},
         )

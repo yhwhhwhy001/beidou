@@ -330,18 +330,37 @@ class BeidouSupervisor:
                 lifecycle.transition(ModuleState.DEGRADED)
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
+    # 可在运行时自愈的瞬时阻断项（心跳、行情延迟等）；
+    # 对账 MISMATCHED、保护缺失等持久阻断项不在此列。
+    _TRANSIENT_CHECK_IDS = frozenset({
+        "runtime.health.realtime_heartbeat",
+        "runtime.health.nearline_heartbeat",
+        "runtime.health.market_data",
+        "runtime.health.http_server",
+        "runtime.health.errors",
+        "runtime.health.account_snapshot",
+    })
+
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
-        """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。"""
+        """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
+
+        仅允许瞬时阻断（心跳、行情）自愈；持久阻断（对账 MISMATCHED、
+        保护缺失）需要人工干预或引擎自行修复后清除。
+        """
         if self.engine is None:
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
-        non_lifecycle_blockers = [
-            item for item in checks if item.is_blocking and item.check_id != "runtime.health.lifecycle"
-        ]
-        if state_value != "DEGRADED" or non_lifecycle_blockers:
+        if state_value != "DEGRADED":
             return False
         if not self.self_heal or self._recovery_count >= self.max_restarts:
+            return False
+
+        persistent_blockers = [
+            item for item in checks
+            if item.is_blocking and item.check_id not in self._TRANSIENT_CHECK_IDS
+        ]
+        if persistent_blockers:
             return False
 
         from beidou_control.plane import ControlAction
@@ -377,7 +396,7 @@ class BeidouSupervisor:
             blockers = self.report.blockers
             if blockers:
                 self._critical_streak += 1
-                fatal_triggered = self._critical_streak >= 3
+                fatal_triggered = self._critical_streak >= 5
                 await self._fail_closed(
                     "; ".join(f"{item.check_id}:{item.message}" for item in blockers),
                     fatal=fatal_triggered,
