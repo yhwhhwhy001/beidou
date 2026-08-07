@@ -1778,6 +1778,15 @@ class AutonomousEngine:
             # 重置客户端熔断器，确保关键恢复不被限流拦截
             self._exchange.reset_circuit_breaker()
 
+            # 若 Phase 1/2 已处理所有持仓，直接跳过
+            local_symbols = {
+                str(pp.instrument_id)
+                for pp in self._protection.all_positions().values()
+            }
+            already_handled = set(exchange_positions.keys()) - local_symbols
+            if not already_handled:
+                return  # 所有持仓已由 Phase 1/2 处理完毕
+
             # 检查哪些已有保护单
             algos_resp = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
             protected_symbols: set[str] = set()
@@ -1894,6 +1903,39 @@ class AutonomousEngine:
                 print(f"[startup] Registered {registered} exchange positions in local state")
         except Exception as e:
             print(f"[startup] Exchange protection check error: {e}")
+
+    async def _cleanup_excess_orders(self) -> None:
+        """每个持仓标的在交易所最多保留 2 个保护单，超量则取消最旧的。
+
+        解决多轮 nearline 重试累积重复订单的问题。
+        """
+        try:
+            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            if not isinstance(existing_algos, list):
+                return
+            # 按标的聚合
+            by_symbol: dict[str, list[dict]] = {}
+            for a in existing_algos:
+                by_symbol.setdefault(a["symbol"], []).append(a)
+
+            for symbol, orders in by_symbol.items():
+                expected = 2  # 1 SL + 1 TP per position
+                excess = len(orders) - expected
+                if excess <= 0:
+                    continue
+                # 按创建时间排序，取消最旧的
+                orders.sort(key=lambda a: a.get("createTime", 0))
+                for a in orders[:excess]:
+                    try:
+                        await self._api_async(
+                            "/fapi/v1/algoOrder", method="DELETE", signed=True,
+                            params={"symbol": symbol, "algoId": int(a["algoId"])},
+                        )
+                        print(f"[nearline] 🧹 Cleaned up excess {a['orderType']} for {symbol} algoId={a['algoId']}")
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[nearline] Excess order cleanup error: {e}")
 
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
         """对保护单缺失的持仓进行重试；同时覆盖止损单和止盈单。
@@ -2065,6 +2107,9 @@ class AutonomousEngine:
                 self._position_entry_times.pop(old_pid, None)
                 await self._cancel_algo_orders(old_pid, str(old_pp.instrument_id))
                 print(f"[nearline] 🧹 Cleaned up ghost position: {old_pp.instrument_id} (pos={old_pid})")
+
+        # === 超量保护单清理：每个持仓最多保留 expected_count 个交易所订单 ===
+        await self._cleanup_excess_orders()
 
         # === 保护单缺失重试：对 -2021 (立即触发) 等瞬时失败自动重试 ===
         await self._retry_missing_protections(exchange_symbols)
