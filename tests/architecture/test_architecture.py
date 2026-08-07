@@ -312,7 +312,7 @@ def test_only_adapter_accesses_binance_api() -> None:
 # ================================================================
 
 MONITORING_PACKAGES = {"beidou_observability", "beidou_launcher"}
-MONITORING_SCRIPTS = {"scripts/ops_monitor.py"}
+MONITORING_SCRIPTS = {"scripts/monitor_daemon.py"}
 
 RISK_INCREASING_PATTERNS = [
     "/fapi/v1/order",
