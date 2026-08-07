@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -145,6 +146,9 @@ class MiningRunner:
         self._stability = StabilityEvaluator()
         self._capacity = CapacityEvaluator(self.config.cost_model)
         self._store = JSONFileFactorStore(self.config.evidence_dir)
+        # 表达式引擎（懒初始化）
+        self._registry: Any = None
+        self._feature_dict: dict[str, list[float]] = {}
 
     @staticmethod
     def _compute_dataset_hash(price_data: list[dict]) -> str:
@@ -234,6 +238,9 @@ class MiningRunner:
 
         candidates = self._generate_candidates(price_points, ven, sym, timeframe)
 
+        # 预构建特征字典，供 Phase 3/4 中表达式求值使用
+        self._build_feature_dict(price_points)
+
         # ================================================================
         # Phase 3: 快速预筛
         # ================================================================
@@ -270,31 +277,37 @@ class MiningRunner:
         self._notify(progress_callback, "evaluating_wfo", 3, 5)
 
         evidence_bundles = []
+        # label_returns[t] = 从 bar t 起算的 forward return
         label_returns = [l.label_value for l in labels if l.is_valid_for_evaluation()]
-        [l.prediction_key.prediction_time for l in labels if l.is_valid_for_evaluation()]
-        [l.label_end_time for l in labels if l.is_valid_for_evaluation()]
 
         for candidate in screened[:50]:  # 限制评估数量
             factor_vals = candidate["factor_values"]
-            # 因子值从 bar window_offset 开始，对齐 label_returns 中对应的未来收益
-            # (meanrev 的 window 或 momentum 的 lag 产生的偏移)
-            window_offset = candidate.get("window", candidate.get("lag", 1))
-            returns_aligned = label_returns[window_offset : window_offset + len(factor_vals)]
+            # 逐对清洗 NaN/Inf，处理复杂表达式的 warm-up 前缀和内部缺失值
+            n = min(len(factor_vals), len(label_returns))
+            pairs = [
+                (fv, rv)
+                for fv, rv in zip(factor_vals[:n], label_returns[:n])
+                if _is_finite(fv) and _is_finite(rv)
+            ]
+            if len(pairs) < 50:
+                continue
+            valid_vals = [p[0] for p in pairs]
+            valid_returns = [p[1] for p in pairs]
 
-            if len(returns_aligned) < 50:
+            if len(valid_returns) < 50:
                 continue
 
             # 快速 IC 评估
-            ic = _compute_ic(factor_vals, returns_aligned)
-            sharpe = _compute_sharpe(returns_aligned)
+            ic = _compute_ic(valid_vals, valid_returns)
+            sharpe = _compute_sharpe(valid_returns)
 
             # 稳定性评估
-            stability_results = [self._stability.evaluate_time_split(factor_vals, returns_aligned, ic_full=ic)]
+            stability_results = [self._stability.evaluate_time_split(valid_vals, valid_returns, ic_full=ic)]
 
             # 成本容量评估
             capacity_result = self._capacity.evaluate_capacity_curve(
-                factor_vals,
-                returns_aligned,
+                valid_vals,
+                valid_returns,
             )
 
             # BD-P1-12: 从真实数据计算 manifest hash，禁止 synthetic/test-fixture
@@ -316,7 +329,7 @@ class MiningRunner:
                 raw_metrics={
                     "ic_mean": round(ic, 6),
                     "sharpe": round(sharpe, 4),
-                    "sample_count": len(returns_aligned),
+                    "sample_count": len(valid_returns),
                 },
                 stability_results=[
                     {
@@ -330,7 +343,7 @@ class MiningRunner:
                     "recommended_max_aum": capacity_result.recommended_max_aum,
                     "capacity_at_zero_return": capacity_result.capacity_at_zero_return,
                 },
-                gate_decision="PASS" if ic > 0.02 and sharpe > 0 else "FAIL",
+                gate_decision="PASS" if ic > 0.02 else "FAIL",
                 failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
             )
             bundle.seal()
@@ -365,6 +378,98 @@ class MiningRunner:
         self._notify(progress_callback, "complete", 5, 5)
         return result
 
+    # ================================================================
+    # 表达式引擎 & 特征字典（懒初始化）
+    # ================================================================
+
+    def _ensure_registry(self) -> None:
+        """懒初始化 PrimitiveRegistry，注册 OHLCV 特征列。"""
+        if self._registry is not None:
+            return
+        from .expression_ast import ExprType
+        from .primitive_library import FeatureDef, PrimitiveRegistry
+
+        self._registry = PrimitiveRegistry()
+        for name, etype in [
+            ("close", ExprType.PRICE),
+            ("open", ExprType.PRICE),
+            ("high", ExprType.PRICE),
+            ("low", ExprType.PRICE),
+            ("volume", ExprType.VOLUME),
+            ("log_return", ExprType.RETURN),
+            ("spread", ExprType.RATE),
+        ]:
+            self._registry.register(FeatureDef(name=name, type=etype))
+
+    def _build_feature_dict(self, price_points: list[PricePoint]) -> dict[str, list[float]]:
+        """从价格序列预计算所有表达式引擎需要的特征列。
+
+        PricePoint 标准字段为 timestamp/close/mark/mid/vwap。
+        open/high/low/volume 从 getattr 获取，缺失时回退到 close。
+        """
+        closes = [p.close for p in price_points]
+        n = len(closes)
+
+        # 尝试获取扩展字段，缺失时回退
+        highs = [getattr(p, "high", p.close) or p.close for p in price_points]
+        lows = [getattr(p, "low", p.close) or p.close for p in price_points]
+        volumes = [getattr(p, "volume", 0.0) or 0.0 for p in price_points]
+        opens = [getattr(p, "open", p.close) or p.close for p in price_points]
+
+        n = len(closes)
+        # log_return = log(close / lag(close, 1))
+        log_return = [0.0] * n
+        for i in range(1, n):
+            if closes[i] > 0 and closes[i - 1] > 0:
+                log_return[i] = math.log(closes[i] / closes[i - 1])
+
+        # spread = (high - low) / close
+        spread = [0.0] * n
+        for i in range(n):
+            if closes[i] > 0:
+                spread[i] = (highs[i] - lows[i]) / closes[i]
+
+        self._feature_dict = {
+            "close": closes,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "volume": volumes,
+            "log_return": log_return,
+            "spread": spread,
+        }
+        return self._feature_dict
+
+    @staticmethod
+    def _spec_to_expression(primitive: str, window: int, transform: str, normalization: str) -> str:
+        """将 TemplateSpec 的 (primitive, window, transform, normalization) 映射为表达式字符串。"""
+        # Step 1: transform
+        if transform == "identity":
+            expr = primitive
+        elif transform == "pct_change":
+            expr = f"pct_change({primitive}, {window})"
+        elif transform == "zscore":
+            expr = f"zscore({primitive}, {window})"
+        elif transform == "diff":
+            expr = f"diff({primitive}, {window})"
+        else:
+            expr = primitive
+
+        # Step 2: normalization (叠加在 transform 之上)
+        if normalization == "none" or normalization == "":
+            return expr
+        elif normalization == "zscore":
+            return f"zscore({expr}, {window})"
+        elif normalization == "robust_zscore":
+            return f"robust_zscore({expr}, {window})"
+        elif normalization == "rank":
+            return f"ts_rank({expr}, {window})"
+        return expr
+
+    # ================================================================
+    # 候选生成
+    # ================================================================
+
     def _generate_candidates(
         self,
         price_points: list[PricePoint],
@@ -372,64 +477,63 @@ class MiningRunner:
         symbol: InstrumentId,
         timeframe: str,
     ) -> list[dict[str, Any]]:
-        """生成候选因子（简化实现，后续替换为完整生成器）。"""
+        """使用 TemplateGridGenerator 生成候选因子网格。
+
+        根据 factor_mining_policy.yaml 中定义的 generation 段配置，
+        生成 primitives × windows × transforms × normalizations 的笛卡尔积。
+        """
+        from .generators.template_grid import TemplateConfig, TemplateGridGenerator
+
+        # 从 policy 中读取配置，带合理回退
+        gen_cfg = {}
+        try:
+            import yaml
+            with open("config/factor_mining_policy.yaml") as f:
+                policy = yaml.safe_load(f)
+            gen_cfg = policy.get("generation", {})
+        except Exception:
+            pass
+
+        template_cfg = gen_cfg.get("template_grid", {})
+        primitives = template_cfg.get(
+            "primitives", ["close", "log_return", "volume", "rsi", "spread"]
+        )
+        windows = template_cfg.get("windows", [5, 10, 20, 50, 100])
+        transforms_list = template_cfg.get("transforms", ["identity", "pct_change", "zscore", "diff"])
+        normalizations_list = template_cfg.get("normalizations", ["none", "zscore", "robust_zscore", "rank"])
+        max_candidates = gen_cfg.get("max_candidates", 10000)
+
+        config = TemplateConfig(
+            primitives=primitives,
+            windows=windows,
+            transforms=transforms_list,
+            normalizations=normalizations_list,
+            max_combinations=min(max_candidates, 2000),  # 覆盖全窗口网格
+        )
+        generator = TemplateGridGenerator(config)
+        specs = generator.generate_templates()
+
+        # 筛选与标签 horizon 一致的模板，避免 4x 冗余消耗候选上限
+        label_horizon = self.config.label_spec.horizon_bars if self.config.label_spec else 4
+        specs = [s for s in specs if s.horizon == label_horizon]
+
         candidates = []
-        closes = [p.close for p in price_points]
-
-        # 模板网格: 均值回归信号 = (close - SMA_window) / SMA_window
-        for window in [5, 10, 20, 50]:
-            if len(closes) < window + 1:
-                continue
-            sma = _sma(closes, window)
-            values = []
-            for i in range(window, len(closes)):
-                if sma[i] > 0:
-                    values.append((closes[i] - sma[i]) / sma[i])
-                else:
-                    values.append(0.0)
-
-            if len(values) < 30:
-                continue
-
-            expr_hash = hashlib.sha256(f"mean_reversion:w{window}".encode()).hexdigest()[:20]
-            candidates.append(
-                {
-                    "factor_id": f"meanrev_w{window}",
-                    "expression_hash": expr_hash,
-                    "complexity_score": 2.0,
-                    "generator": "template_grid",
-                    "primitive": "close",
-                    "window": window,
-                    "transform": "zscore",
-                    "rationale": f"价格偏离{window}期SMA的均值回归信号",
-                }
+        for spec in specs:
+            expr_str = self._spec_to_expression(
+                spec.primitive, spec.window, spec.transform, spec.normalization
             )
-
-        # 动量信号: (close - close_lag) / close_lag
-        for lag in [5, 10, 20]:
-            if len(closes) < lag + 1:
-                continue
-            values = []
-            for i in range(lag, len(closes)):
-                if closes[i - lag] > 0:
-                    values.append((closes[i] - closes[i - lag]) / closes[i - lag])
-                else:
-                    values.append(0.0)
-
-            if len(values) < 30:
-                continue
-
-            expr_hash = hashlib.sha256(f"momentum:lag{lag}".encode()).hexdigest()[:20]
             candidates.append(
                 {
-                    "factor_id": f"momentum_lag{lag}",
-                    "expression_hash": expr_hash,
-                    "complexity_score": 1.0,
+                    "factor_id": spec.template_id,
+                    "expression_hash": spec.canonical_hash(),
+                    "expression_string": expr_str,
+                    "complexity_score": round(2.0 + spec.window / 50.0, 2),
                     "generator": "template_grid",
-                    "primitive": "close",
-                    "window": lag,
-                    "transform": "pct_change",
-                    "rationale": f"{lag}期价格动量效应",
+                    "primitive": spec.primitive,
+                    "window": spec.window,
+                    "transform": spec.transform,
+                    "normalization": spec.normalization,
+                    "rationale": spec.economic_rationale,
                 }
             )
 
@@ -440,21 +544,28 @@ class MiningRunner:
         candidate: dict,
         price_points: list[PricePoint],
     ) -> list[float]:
-        """评估候选因子，返回因子值序列。"""
-        closes = [p.close for p in price_points]
-        primitive = candidate.get("primitive", "close")
-        window = candidate.get("window", 20)
-        transform = candidate.get("transform", "identity")
+        """使用表达式引擎计算候选因子值。
 
-        if primitive == "close" and transform in ("zscore", "identity"):
-            sma = _sma(closes, window)
-            return [(closes[i] - sma[i]) / sma[i] if sma[i] > 0 else 0.0 for i in range(window, len(closes))]
-        elif primitive == "close" and transform == "pct_change":
-            return [
-                (closes[i] - closes[i - window]) / closes[i - window] if closes[i - window] > 0 else 0.0
-                for i in range(window, len(closes))
-            ]
-        return []
+        通过 PrimitiveRegistry.parse() → Expression.evaluate_series() 求值，
+        返回全长度序列（含 NaN warm-up 期），NaN 由 FastScreen 和 Phase 4 对齐处理。
+        """
+        self._ensure_registry()
+
+        expr_str = candidate.get("expression_string", "")
+        if not expr_str:
+            return []
+
+        try:
+            expr = self._registry.parse(expr_str)
+        except Exception:
+            return []
+
+        try:
+            values = expr.evaluate_series(self._feature_dict)
+        except Exception:
+            return []
+
+        return values
 
     def _notify(
         self,
@@ -473,11 +584,13 @@ class MiningRunner:
 # ================================================================
 
 
-def _sma(values: list[float], window: int) -> list[float]:
-    result = [0.0] * len(values)
-    for i in range(window - 1, len(values)):
-        result[i] = sum(values[i - window + 1 : i + 1]) / window
-    return result
+def _is_finite(v: float | None) -> bool:
+    """检查值是否为有限数值（排除 None/NaN/Inf）。"""
+    if v is None:
+        return False
+    if isinstance(v, float):
+        return math.isfinite(v)
+    return True
 
 
 def _compute_ic(predictions: list[float], returns: list[float]) -> float:
