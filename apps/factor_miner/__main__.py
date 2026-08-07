@@ -30,7 +30,8 @@ def cli():
 @click.option("--policy", required=True, help="因子挖掘 policy YAML 路径")
 @click.option("--config", default=None, help="研究数据集配置 YAML 路径")
 @click.option("--output-dir", default="evidence/factors", help="证据输出目录")
-@click.option("--symbol", default="BTCUSDT", show_default=True, help="交易品种")
+@click.option("--symbol", default=None, help="单个交易品种（优先于 --symbols）")
+@click.option("--symbols", default=None, help="逗号分隔多品种，默认 BTCUSDT,ETHUSDT")
 @click.option(
     "--interval",
     default="1h",
@@ -46,7 +47,16 @@ def cli():
     help="K 线条数",
 )
 @click.option("--dry-run", is_flag=True, help="仅验证配置，不执行挖掘")
-def run(policy: str, config: str | None, output_dir: str, symbol: str, interval: str, limit: int, dry_run: bool):
+def run(
+    policy: str,
+    config: str | None,
+    output_dir: str,
+    symbol: str | None,
+    symbols: str | None,
+    interval: str,
+    limit: int,
+    dry_run: bool,
+):
     """执行因子挖掘运行。"""
     click.echo(f"[factor_miner] 启动挖掘运行 (policy={policy})")
 
@@ -67,71 +77,72 @@ def run(policy: str, config: str | None, output_dir: str, symbol: str, interval:
         click.echo("[factor_miner] 配置验证通过")
         return
 
-    # 离线研究工具默认连 testnet，确保 MarketDataFeed 读取 config/env.testnet.yaml
-    os.environ.setdefault("BEIDOU_ENV", "testnet")
+    # 解析品种列表
+    if symbol:
+        symbols_list = [symbol.strip().upper()]
+    elif symbols:
+        symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        from beidou_core.engine import DEFAULT_UNIVERSE
 
-    # 确保输出目录存在
+        symbols_list = list(DEFAULT_UNIVERSE[:4])
+
+    # 离线研究工具默认连 testnet
+    os.environ.setdefault("BEIDOU_ENV", "testnet")
     os.makedirs(output_dir, exist_ok=True)
 
-    click.echo(f"[factor_miner] 全量挖掘运行 (symbol={symbol}, interval={interval}, limit={limit})...")
+    click.echo(f"[factor_miner] 全量挖掘运行 (品种={symbols_list}, interval={interval}, limit={limit})...")
 
     try:
         from beidou_research.mining.runner import MiningRunner, PipelineConfig
-
-        pipeline_config = PipelineConfig.from_yaml(policy)
-        pipeline_config.evidence_dir = output_dir
-        runner = MiningRunner(pipeline_config)
-
-        # 从 MarketDataFeed 拉取历史 K 线作为 price_data
         from beidou_core.feed import MarketDataFeed
 
         feed = MarketDataFeed()
-        click.echo(f"[factor_miner] 拉取 {symbol} {interval} K 线数据...")
+        all_results: list[dict] = []
 
-        klines = feed.fetch_klines(symbol, interval=interval, limit=limit)
-        if not klines:
-            click.echo(f"[factor_miner] ERROR: 无法获取 {symbol} 的历史 K 线数据", err=True)
-            sys.exit(1)
+        for sym in symbols_list:
+            click.echo(f"\n--- {sym} ---")
+            klines = feed.fetch_klines(sym, interval=interval, limit=limit)
+            if len(klines) < 100:
+                click.echo(f"  跳过 (K线不足: {len(klines)} 条)")
+                continue
 
-        # 将 Binance kline 字段映射为 MiningRunner 期望的 PricePoint 格式
-        price_data = [
-            {
-                "timestamp": k["open_time"],  # datetime → PricePoint.timestamp
-                "close": k["close"],
-                "open": k["open"],
-                "high": k["high"],
-                "low": k["low"],
-                "volume": k["volume"],
-            }
-            for k in klines
-        ]
+            price_data = [
+                {
+                    "timestamp": k["open_time"],
+                    "close": k["close"],
+                    "open": k["open"],
+                    "high": k["high"],
+                    "low": k["low"],
+                    "volume": k["volume"],
+                }
+                for k in klines
+            ]
+            click.echo(f"  K线: {len(price_data)} 条")
 
-        click.echo(f"  {symbol}: {len(price_data)} 条 K 线")
+            pipeline_config = PipelineConfig.from_yaml(policy)
+            pipeline_config.evidence_dir = output_dir
+            runner = MiningRunner(pipeline_config)
 
-        click.echo(f"[factor_miner] 开始挖掘 {symbol}...")
-        result = runner.run(
-            price_data=price_data,
-            venue="BINANCE",
-            symbol=symbol,
-            timeframe=interval,
-        )
-        click.echo(f"[factor_miner] 完成!")
-        click.echo(f"  Run ID:       {result.run_id}")
-        click.echo(f"  候选生成:     {result.candidates_generated}")
-        click.echo(f"  预筛通过:     {result.candidates_screened}")
-        click.echo(f"  评估完成:     {result.candidates_evaluated}")
-        click.echo(f"  Gate PASS:    {result.candidates_passed}")
-        click.echo(f"  失败分类:     {result.failure_taxonomy}")
-        click.echo(f"  运行时间:     {result.runtime_seconds:.2f}s")
-        click.echo(f"  状态:         {result.status}")
-        if result.evidence_bundles:
-            click.echo(f"  证据包数量:   {len(result.evidence_bundles)}")
-            passed = sum(1 for b in result.evidence_bundles if b.gate_decision == "PASS")
-            click.echo(f"  证据包 PASS:  {passed}")
+            result = runner.run(
+                price_data=price_data,
+                venue="BINANCE",
+                symbol=sym,
+                timeframe=interval,
+            )
+            click.echo(f"  候选: {result.candidates_generated} | 预筛: {result.candidates_screened} | 评估: {result.candidates_evaluated} | PASS: {result.candidates_passed} | {result.runtime_seconds:.1f}s")
+            all_results.append({"symbol": sym, "result": result})
+
+        # 汇总
+        click.echo(f"\n{'='*50}")
+        click.echo("汇总:")
+        for r in all_results:
+            sym = r["symbol"]
+            res = r["result"]
+            click.echo(f"  {sym}: 候选{res.candidates_generated} 预筛{res.candidates_screened} PASS {res.candidates_passed} ({res.runtime_seconds:.1f}s)")
 
     except ImportError as e:
         click.echo(f"[factor_miner] ERROR: 缺少依赖: {e}", err=True)
-        click.echo("  提示: 请确保 beidou_research 和 beidou_core 包可导入")
         sys.exit(1)
     except Exception as exc:
         click.echo(f"[factor_miner] ERROR: {type(exc).__name__}: {exc}", err=True)
