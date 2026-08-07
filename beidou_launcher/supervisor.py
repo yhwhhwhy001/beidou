@@ -445,8 +445,18 @@ class BeidouSupervisor:
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers
             if blockers:
-                self._critical_streak += 1
-                fatal_triggered = self._critical_streak >= 5
+                # 区分瞬时阻断（可自愈：心跳/行情/对账/保护等）和持久阻断。
+                # 瞬时阻断不计入 _critical_streak，避免引擎自愈过程中被误判致命。
+                persistent_blockers = [
+                    b for b in blockers
+                    if b.check_id not in self._TRANSIENT_CHECK_IDS
+                ]
+                if persistent_blockers:
+                    self._critical_streak += 1
+                    fatal_triggered = self._critical_streak >= 5
+                else:
+                    # 仅有瞬时阻断，引擎可自愈，不触发致命锁定
+                    fatal_triggered = False
                 await self._fail_closed(
                     "; ".join(f"{item.check_id}:{item.message}" for item in blockers),
                     fatal=fatal_triggered,
