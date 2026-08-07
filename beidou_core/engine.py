@@ -2007,9 +2007,14 @@ class AutonomousEngine:
                     else:
                         print(f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}")
 
-                if placed > 0:
+                # 仅当全部保护单落地后才重置计数器；部分成功仍需递增加宽重试
+                if server_count + placed >= expected_count:
                     self._protection_retries.pop(pos_id, None)
-                    print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} orders placed")
+                    print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}")
+                elif placed > 0:
+                    retries = self._protection_retries.setdefault(pos_id, 0) + 1
+                    self._protection_retries[pos_id] = retries
+                    print(f"[nearline] 🔄 Partial retry #{retries}/3 for {symbol}: {placed} placed, {server_count}/{expected_count} — widening next attempt")
                 else:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
                     self._protection_retries[pos_id] = retries
