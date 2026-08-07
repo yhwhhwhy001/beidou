@@ -67,7 +67,7 @@ def run_checks_v11() -> dict:
 
     return {
         "health": summary["status"],
-        "p0_fails": summary["p0_issues"],
+        "p0_fails": summary.get("p0_fails", 0),
         "total_checks": len(results),
         "frequency": freq.level.value,
         "interval_s": freq.interval_seconds,
