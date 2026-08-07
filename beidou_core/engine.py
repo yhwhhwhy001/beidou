@@ -1023,40 +1023,6 @@ class AutonomousEngine:
 
         # BD-T05: Wrap legacy AlphaGraph in StrategyKernel contract for parity checking
         self._strategy_kernel = StrategyKernelContract()
-
-    def _rebuild_alpha_graph(self) -> None:
-        """BF-08: 从 FactorRegistry 重建 AlphaGraph。
-
-        当因子生命周期变更（promotion/degradation/suspension）时调用，
-        确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
-        """
-        active_factor_ids = [fid for fid in self._factor_registry.get_active()
-                             if fid in self._factor_component_registry]
-
-        new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
-        for fid in active_factor_ids:
-            component_cls, _ = self._factor_component_registry[fid]
-            new_graph.add_component(component_cls())
-
-        # Re-wire ENTRY → FILTER → EXIT
-        added = set(active_factor_ids)
-        for entry_id in added & self._entry_ids:
-            for filter_id in added & self._filter_ids:
-                new_graph.connect(entry_id, filter_id)
-        for filter_id in added & self._filter_ids:
-            for exit_id in added & self._exit_ids:
-                new_graph.connect(filter_id, exit_id)
-
-        order = new_graph.topological_order()
-        self._alpha_graph = new_graph
-        # Ensure prediction tracking covers all active factors
-        for fid in active_factor_ids:
-            if fid not in self._factor_predictions:
-                self._factor_predictions[fid] = []
-        print(
-            f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, "
-            f"DAG order: {order}"
-        )
         self._kernel_mode = KernelMode.PAPER  # default; TESTNET when write enabled
         self._kernel_parity: str = ""
 
@@ -1264,6 +1230,40 @@ class AutonomousEngine:
             else None,
             "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
         }
+
+    def _rebuild_alpha_graph(self) -> None:
+        """BF-08: 从 FactorRegistry 重建 AlphaGraph。
+
+        当因子生命周期变更（promotion/degradation/suspension）时调用，
+        确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
+        """
+        active_factor_ids = [fid for fid in self._factor_registry.get_active()
+                             if fid in self._factor_component_registry]
+
+        new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
+        for fid in active_factor_ids:
+            component_cls, _ = self._factor_component_registry[fid]
+            new_graph.add_component(component_cls())
+
+        # Re-wire ENTRY → FILTER → EXIT
+        added = set(active_factor_ids)
+        for entry_id in added & self._entry_ids:
+            for filter_id in added & self._filter_ids:
+                new_graph.connect(entry_id, filter_id)
+        for filter_id in added & self._filter_ids:
+            for exit_id in added & self._exit_ids:
+                new_graph.connect(filter_id, exit_id)
+
+        order = new_graph.topological_order()
+        self._alpha_graph = new_graph
+        # Ensure prediction tracking covers all active factors
+        for fid in active_factor_ids:
+            if fid not in self._factor_predictions:
+                self._factor_predictions[fid] = []
+        print(
+            f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, "
+            f"DAG order: {order}"
+        )
 
     # --- Clock Domain: REALTIME (every 5s) ---
 
