@@ -2075,6 +2075,8 @@ class AutonomousEngine:
 
         except Exception as e:
             print(f"[nearline] Protection retry error: {e}")
+
+    async def _nearline_tick(self) -> None:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
 
