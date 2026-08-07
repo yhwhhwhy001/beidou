@@ -3044,6 +3044,12 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.WARMING)
         self._lifecycle.transition(ModuleState.VALIDATING)
 
+        # BD-FIX: 启动时全量对账自愈 — 在初始对账之前先同步交易所状态，
+        # 清理 DB 中残留的幽灵持仓和过期订单（Binance testnet 返回可能不一致），
+        # 防止对账 MISMATCH → FAIL-CLOSED → LOCKED 链式崩溃。
+        print("[beidou-autopilot] Startup sync: aligning with exchange state...")
+        await self._sync_exchange_state()
+
         # BD-T14 Phase 5: 初始对账 — 在 ACTIVE 转换之前填充对账引擎事实，
         # 避免监督器在引擎首次对账（30s）之前因 BOTH_SIDES_MISSING 误触发 LOCKED。
         try:
