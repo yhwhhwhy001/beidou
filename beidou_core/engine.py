@@ -2564,6 +2564,16 @@ class AutonomousEngine:
         # Lifecycle transitions
         self._lifecycle.transition(ModuleState.WARMING)
         self._lifecycle.transition(ModuleState.VALIDATING)
+
+        # BD-T14 Phase 5: 初始对账 — 在 ACTIVE 转换之前填充对账引擎事实，
+        # 避免监督器在引擎首次对账（30s）之前因 BOTH_SIDES_MISSING 误触发 LOCKED。
+        try:
+            await self._reconcile()
+            self._last_recon = time.time()
+            print("[beidou-autopilot] Initial reconciliation complete")
+        except Exception as e:
+            print(f"[beidou-autopilot] Initial reconciliation failed: {e} — continuing")
+
         self._lifecycle.transition(ModuleState.ACTIVE)
         print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
