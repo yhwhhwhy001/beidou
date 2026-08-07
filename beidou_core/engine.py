@@ -1944,21 +1944,26 @@ class AutonomousEngine:
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
                 if pp.stop_loss is not None and pp.stop_loss.is_active():
-                    orig_price = float(pp.stop_loss.trigger_price.amount)
-                    current_price = float(self._last_prices.get(symbol, orig_price))
-                    if current_price <= 0:
-                        current_price = orig_price
+                    orig_sl_price = float(pp.stop_loss.trigger_price.amount)
+                    current_price = float(self._last_prices.get(symbol, 0))
+                    entry_ref = float(pp.entry_price)
                     # 扩展止损距离（远离市价，避免 -2021 立即触发错误）
-                    if pp.side == OrderSide.BUY:
-                        widened_price = current_price * (1 - (1 - orig_price / current_price) * widen_factor)
+                    if current_price > 0 and abs(orig_sl_price / current_price - 1.0) > 0.001:
+                        # 有行情数据：基于当前价格按比例扩展
+                        if pp.side == OrderSide.BUY:
+                            widened_sl = current_price * (1 - abs(1 - orig_sl_price / current_price) * widen_factor)
+                            widened_sl = min(widened_sl, orig_sl_price)
+                        else:
+                            widened_sl = current_price * (1 + abs(orig_sl_price / current_price - 1) * widen_factor)
+                            widened_sl = max(widened_sl, orig_sl_price)
                     else:
-                        widened_price = current_price * (1 + (orig_price / current_price - 1) * widen_factor)
-                    # 确保扩展后的价格确实比原价更宽
-                    if pp.side == OrderSide.BUY:
-                        widened_price = min(widened_price, orig_price)
-                    else:
-                        widened_price = max(widened_price, orig_price)
-                    price_str = f"{widened_price:.{prec['price']}f}"
+                        # 无行情数据或价格过于接近：基于入场价按固定百分比扩展
+                        base_pct = max(abs(entry_ref - orig_sl_price) / entry_ref, 0.02) if entry_ref > 0 else 0.03
+                        if pp.side == OrderSide.BUY:
+                            widened_sl = entry_ref * (1 - base_pct * widen_factor)
+                        else:
+                            widened_sl = entry_ref * (1 + base_pct * widen_factor)
+                    price_str = f"{widened_sl:.{prec['price']}f}"
                     algo_resp = await self._api_async(
                         "/fapi/v1/algoOrder", method="POST", signed=True,
                         params={
@@ -1980,16 +1985,22 @@ class AutonomousEngine:
                     if not tp.is_active():
                         continue
                     orig_tp_price = float(tp.trigger_price.amount)
-                    current_price = float(self._last_prices.get(symbol, orig_tp_price))
-                    if current_price <= 0:
-                        current_price = orig_tp_price
+                    current_price = float(self._last_prices.get(symbol, 0))
+                    entry_ref = float(pp.entry_price)
                     # 扩展止盈距离（远离市价，增加触发空间）
-                    if pp.side == OrderSide.BUY:
-                        widened_tp = current_price * (1 + (orig_tp_price / current_price - 1) * widen_factor)
-                        widened_tp = max(widened_tp, orig_tp_price)
+                    if current_price > 0 and abs(orig_tp_price / current_price - 1.0) > 0.001:
+                        if pp.side == OrderSide.BUY:
+                            widened_tp = current_price * (1 + abs(orig_tp_price / current_price - 1) * widen_factor)
+                            widened_tp = max(widened_tp, orig_tp_price)
+                        else:
+                            widened_tp = current_price * (1 - abs(1 - orig_tp_price / current_price) * widen_factor)
+                            widened_tp = min(widened_tp, orig_tp_price)
                     else:
-                        widened_tp = current_price * (1 - (1 - orig_tp_price / current_price) * widen_factor)
-                        widened_tp = min(widened_tp, orig_tp_price)
+                        base_pct = max(abs(orig_tp_price - entry_ref) / entry_ref, 0.02) if entry_ref > 0 else 0.03
+                        if pp.side == OrderSide.BUY:
+                            widened_tp = entry_ref * (1 + base_pct * widen_factor)
+                        else:
+                            widened_tp = entry_ref * (1 - base_pct * widen_factor)
                     tp_price_str = f"{widened_tp:.{prec['price']}f}"
                     tp_resp = await self._api_async(
                         "/fapi/v1/algoOrder", method="POST", signed=True,
