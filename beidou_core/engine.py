@@ -1770,9 +1770,63 @@ class AutonomousEngine:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
 
             if not result.matched:
-                # BD-T13 修复: 不再过滤余额差异 — 所有差异均触发事故
+                # BD-FIX: 对账不一致时，先尝试自愈同步（清理幽灵订单/持仓、补齐遗漏追踪），
+                # 再重新对账。只有自愈后仍不一致才触发事故，防止近线下单→成交的
+                # 时序窗口（订单已成交但 _monitor_orders 尚未处理）被误判为永久异常。
                 if result.differences:
-                    print(f"[recon] Mismatch: {result.differences}")
+                    print(f"[recon] Mismatch detected, attempting self-heal: {result.differences}")
+                    try:
+                        await self._sync_exchange_state()
+                        # 自愈后重新对账：用最新交易所状态更新 system_facts 并再次 reconcile
+                        account2, ok2 = await self._api_async_safe("/fapi/v2/account", signed=True)
+                        if ok2 and "positions" in account2:
+                            self._last_account = account2
+                            # 重建系统事实
+                            system_positions2: dict[InstrumentId, Quantity] = {}
+                            for _pos_id, pos in self._protection.all_positions().items():
+                                system_positions2[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
+                            system_facts2 = AccountFactSnapshot(
+                                account_id=AccountId("default"),
+                                venue_id=VenueId("BINANCE"),
+                                balance=MonetaryValue(amount=str(float(account2.get("totalWalletBalance", 0)))),
+                                positions=system_positions2,
+                                open_orders=list(self._active_order_ids),
+                            )
+                            exchange_positions2: dict[InstrumentId, Quantity] = {}
+                            for p in account2.get("positions", []):
+                                amt = float(p.get("positionAmt", 0))
+                                if amt != 0:
+                                    exchange_positions2[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
+                            exchange_open2: list[str] = []
+                            try:
+                                oo2, oo_ok2 = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                                if oo_ok2 and isinstance(oo2, list):
+                                    exchange_open2 = [str(o["orderId"]) for o in oo2]
+                            except Exception:
+                                pass
+                            exchange_facts2 = AccountFactSnapshot(
+                                account_id=AccountId("default"),
+                                venue_id=VenueId("BINANCE"),
+                                balance=MonetaryValue(amount=str(float(account2.get("totalWalletBalance", 0)))),
+                                positions=exchange_positions2,
+                                open_orders=exchange_open2,
+                            )
+                            self._recon.update_system_facts(system_facts2)
+                            self._recon.update_exchange_facts(exchange_facts2)
+                            result2 = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
+                            if result2.matched:
+                                print("[recon] Self-heal SUCCESS — mismatch resolved, no incident raised")
+                                self._last_account = account2
+                                return
+                            else:
+                                print(f"[recon] Self-heal incomplete, remaining diffs: {result2.differences}")
+                                result = result2  # 用自愈后的结果继续触发事故
+                    except Exception as heal_err:
+                        print(f"[recon] Self-heal attempt failed: {heal_err} — falling through to incident")
+
+                # 自愈后仍不一致，触发事故
+                if result.differences:
+                    print(f"[recon] Mismatch (after self-heal): {result.differences}")
                     severity = AlertSeverity.CRITICAL if result.should_block_new_risk else AlertSeverity.WARNING
                     self._alerts.send_incident(
                         severity,
