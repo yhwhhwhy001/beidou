@@ -469,12 +469,15 @@ def collect_runtime_checks(
         missing_protection = sorted(open_symbols - exchange_protected_symbols)
         all_protected = not missing_protection
         none_protected = not exchange_protected_symbols
+        # 保护单宽限期：nearline 批量重建保护单时，cancel+re-place 存在窗口期。
+        # 最近下单后 45s 内，protection_coverage FAIL 降级为 P2 WARN。
+        _protection_grace_active = _last_order_placed_at > 0.0 and (now - _last_order_placed_at) <= 45.0
         # 部分保护：有持仓已覆盖但部分缺失 → WARN 降级，不阻断全系统
         # 启动阶段（resume_authorized=False）保护单尚未下发完毕，
         # FAIL 降级为 P2 WARN，与对账检查保持一致；运行时恢复 P0 阻断。
         if not snapshot_ok:
             coverage_ok = False
-            if resume_authorized:
+            if resume_authorized and not _protection_grace_active:
                 coverage_status = CheckStatus.FAIL
                 coverage_severity = CheckSeverity.P0
             else:
@@ -488,7 +491,7 @@ def collect_runtime_checks(
             coverage_message = f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
         elif none_protected:
             coverage_ok = False
-            if resume_authorized:
+            if resume_authorized and not _protection_grace_active:
                 coverage_status = CheckStatus.FAIL
                 coverage_severity = CheckSeverity.P0
             else:
@@ -516,6 +519,10 @@ def collect_runtime_checks(
                         round(snapshot_age, 3) if snapshot_age != float("inf") else None
                     ),
                     "positions": protection_evidence,
+                    "grace_period_active": _protection_grace_active,
+                    "last_order_placed_age_seconds": (
+                        round(now - _last_order_placed_at, 3) if _last_order_placed_at > 0 else None
+                    ),
                 },
             )
         )
