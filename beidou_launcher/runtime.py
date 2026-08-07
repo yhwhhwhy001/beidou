@@ -369,11 +369,19 @@ def collect_runtime_checks(
     except Exception as exc:
         recon_differences = [f"RECONCILIATION_CHECK_ERROR: {type(exc).__name__}: {exc}"]
     recon_ok = recon_status == "MATCHED" and recon_age <= 120.0 and recon_snapshot_age <= 120.0
+    # 对账宽限期：nearline 下单后 30s 内，订单可能尚未成交，
+    # MISMATCHED 属于正常竞态，降级为 P2 WARN 避免误触发 DEGRADED。
+    _last_order_placed_at = float(getattr(engine, "_last_order_placed_at", 0.0) or 0.0)
+    _recon_grace_active = _last_order_placed_at > 0.0 and (now - _last_order_placed_at) <= 30.0
     # 启动阶段（resume_authorized=False）系统尚未同步交易所数据，
     # 对账不匹配属于正常现象，降级为 P2 WARN；运行时恢复 P0 阻断。
     if resume_authorized:
-        recon_severity = CheckSeverity.P0
-        recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.FAIL
+        if _recon_grace_active and not recon_ok:
+            recon_severity = CheckSeverity.P2
+            recon_status_check = CheckStatus.WARN
+        else:
+            recon_severity = CheckSeverity.P0
+            recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.FAIL
     else:
         recon_severity = CheckSeverity.P2
         recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.WARN
@@ -396,6 +404,10 @@ def collect_runtime_checks(
                     round(recon_snapshot_age, 3) if recon_snapshot_age != float("inf") else None
                 ),
                 "threshold_seconds": 120.0,
+                "grace_period_active": _recon_grace_active,
+                "last_order_placed_age_seconds": (
+                    round(now - _last_order_placed_at, 3) if _last_order_placed_at > 0 else None
+                ),
             },
         )
     )

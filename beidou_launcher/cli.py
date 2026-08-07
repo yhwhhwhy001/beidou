@@ -41,8 +41,8 @@ def _parse_symbols(value: str) -> list[str]:
 @click.option("--self-heal/--no-self-heal", default=True, show_default=True)
 @click.option(
     "--max-restarts",
-    type=click.IntRange(0, 10),
-    default=5,
+    type=click.IntRange(0, 20),
+    default=10,
     show_default=True,
     help="10 分钟滑动窗口内允许的最大恢复次数；超限后需人工介入。",
 )

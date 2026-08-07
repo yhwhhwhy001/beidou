@@ -728,6 +728,7 @@ class AutonomousEngine:
         # Business modules
         self._protection = ProtectionManager()
         self._protection_retries: dict[str, int] = {}  # 保护单重试计数
+        self._last_order_placed_at: float = 0.0  # 最近一次下单时间戳（用于对账宽限期）
         self._outbox = IntentOutbox()
         self._ledger = ImmutableLedger()
         self._recon = ReconciliationEngine()
@@ -1430,6 +1431,7 @@ class AutonomousEngine:
             self._order_count += 1
 
             actual_status = order.get("status", "NEW")
+            self._last_order_placed_at = time.time()
             print(
                 f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')} "
                 f"orderId={order['orderId']} status={actual_status}"
