@@ -1671,9 +1671,26 @@ class AutonomousEngine:
                     "reduceOnly": "true",
                     "workingType": "CONTRACT_PRICE",
                 }
-                algo_resp = await self._api_async(
-                    "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
-                )
+                # BD-FIX: 带重试和指数退避的 algo order 提交，应对 testnet 限流
+                algo_resp = {}
+                max_algo_retries = 3
+                for algo_attempt in range(max_algo_retries):
+                    algo_resp = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
+                    )
+                    if "algoId" in algo_resp:
+                        break
+                    err_code = algo_resp.get("code", 0)
+                    # -4120: 已存在相同的条件单，不需要重试
+                    if err_code == -4120:
+                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: already exists (-4120)")
+                        algo_resp = {"algoId": "existing", "algoStatus": "ACTIVE"}  # 视为成功
+                        break
+                    if algo_attempt < max_algo_retries - 1:
+                        wait = 1.5 * (2 ** algo_attempt)  # 1.5s, 3s, 6s
+                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: retry {algo_attempt+1}/{max_algo_retries} after {wait:.1f}s (err={err_code})")
+                        await asyncio.sleep(wait)
+                        self._exchange.reset_circuit_breaker()  # 重置熔断器重试
                 if "algoId" in algo_resp:
                     exchange_protection_count += 1
                     algo_id = str(algo_resp["algoId"])
@@ -1807,6 +1824,11 @@ class AutonomousEngine:
                             result2 = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
                             if result2.matched:
                                 print("[recon] Self-heal SUCCESS — mismatch resolved, no incident raised")
+                                # 清除之前的对账事故，防止残留 CRITICAL 事故导致监督器 LOCKED
+                                for inc in self._alerts.get_active_incidents():
+                                    if inc.get("title") == "Reconciliation mismatch":
+                                        self._alerts.resolve_incident(inc["incident_id"])
+                                        print(f"[recon] Cleared stale incident: {inc['incident_id']}")
                                 self._last_account = account2
                                 return
                             else:
