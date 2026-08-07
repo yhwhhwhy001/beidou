@@ -1758,6 +1758,106 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[realtime] Reconciliation error: {e}")
 
+    async def _ensure_exchange_position_protections(self) -> None:
+        """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。"""
+        try:
+            account = self._last_account
+            if not account or "positions" not in account:
+                return
+            positions_list = account.get("positions", [])
+            exchange_positions: dict[str, dict] = {}
+            for p in positions_list:
+                amt = float(p.get("positionAmt", 0))
+                symbol = str(p.get("symbol", ""))
+                if abs(amt) > 0 and symbol:
+                    exchange_positions[symbol] = {"amt": amt, "entry": float(p.get("entryPrice", 0))}
+
+            if not exchange_positions:
+                return
+
+            # 检查哪些已有保护单
+            algos_resp = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            protected_symbols: set[str] = set()
+            if isinstance(algos_resp, list):
+                for item in algos_resp:
+                    protected_symbols.add(str(item.get("symbol", "")))
+
+            unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
+            if not unprotected:
+                return
+
+            print(f"[startup] {len(unprotected)} positions without protection, placing orders...")
+            for symbol, data in unprotected.items():
+                try:
+                    amt = data["amt"]
+                    entry = data["entry"]
+                    side = "SELL" if amt > 0 else "BUY"
+                    qty = abs(amt)
+                    prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                    qty_str = f"{qty:.{prec['quantity']}f}"
+
+                    # 使用默认止损（1% ATR 止损 + 1.6 RR 止盈）
+                    stop_pct = 0.01
+                    if amt > 0:
+                        stop_price = entry * (1 - stop_pct)
+                        tp_price = entry * (1 + stop_pct * 1.6)
+                    else:
+                        stop_price = entry * (1 + stop_pct)
+                        tp_price = entry * (1 - stop_pct * 1.6)
+                    stop_str = f"{stop_price:.{prec['price']}f}"
+                    tp_str = f"{tp_price:.{prec['price']}f}"
+
+                    # 止损单
+                    sl_resp = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        params={
+                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
+                            "type": "STOP_MARKET", "quantity": qty_str,
+                            "triggerPrice": stop_str, "reduceOnly": "true",
+                            "workingType": "CONTRACT_PRICE",
+                        },
+                    )
+                    sl_id = str(sl_resp.get("algoId", "")) if "algoId" in sl_resp else ""
+
+                    # 止盈单
+                    tp_resp = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        params={
+                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
+                            "type": "TAKE_PROFIT_MARKET", "quantity": qty_str,
+                            "triggerPrice": tp_str, "reduceOnly": "true",
+                            "workingType": "CONTRACT_PRICE",
+                        },
+                    )
+                    tp_id = str(tp_resp.get("algoId", "")) if "algoId" in tp_resp else ""
+
+                    if sl_id or tp_id:
+                        print(f"[startup] ✅ Protection placed for {symbol}: SL={sl_id} TP={tp_id}")
+                    else:
+                        sl_err = sl_resp.get("msg", "?")
+                        tp_err = tp_resp.get("msg", "?")
+                        print(f"[startup] ⚠️ Protection FAILED for {symbol}: SL={sl_err} TP={tp_err}")
+                        # 对 -2021 错误：加宽止损距重试一次
+                        if sl_resp.get("code") == -2021:
+                            wider_stop = stop_price * (0.98 if amt > 0 else 1.02)
+                            sl2 = await self._api_async(
+                                "/fapi/v1/algoOrder", method="POST", signed=True,
+                                params={
+                                    "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
+                                    "type": "STOP_MARKET", "quantity": qty_str,
+                                    "triggerPrice": f"{wider_stop:.{prec['price']}f}",
+                                    "reduceOnly": "true", "workingType": "CONTRACT_PRICE",
+                                },
+                            )
+                            if "algoId" in sl2:
+                                print(f"[startup] ✅ SL retry OK for {symbol}: algoId={sl2['algoId']}")
+                            else:
+                                print(f"[startup] ⚠️ SL retry FAILED for {symbol}: {sl2.get('msg','?')}")
+                except Exception as e:
+                    print(f"[startup] Protection placement error for {symbol}: {e}")
+        except Exception as e:
+            print(f"[startup] Exchange protection check error: {e}")
+
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
         """对保护单缺失的持仓进行重试；-2021 错误使用加宽止损距离。"""
         if not self._can_write:
@@ -2639,6 +2739,10 @@ class AutonomousEngine:
             print("[beidou-autopilot] Initial reconciliation complete")
         except Exception as e:
             print(f"[beidou-autopilot] Initial reconciliation failed: {e} — continuing")
+
+        # Phase 5b: 交易所残留持仓保护补充 — 检测交易所已有但系统未追踪的持仓，
+        # 立即放置保护单，避免监督器在启动后因 protection_coverage 阻断。
+        await self._ensure_exchange_position_protections()
 
         self._lifecycle.transition(ModuleState.ACTIVE)
         print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
