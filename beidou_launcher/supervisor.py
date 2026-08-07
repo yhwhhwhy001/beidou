@@ -403,6 +403,8 @@ class BeidouSupervisor:
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
         if state_value != "DEGRADED":
+            if state_value not in ("DEGRADED", "ACTIVE"):
+                print(f"[supervisor] RECOVERY SKIP: lifecycle={state_value} (not DEGRADED)")
             return False
         # 时间窗口恢复计数：清理过期记录，仅在窗口内超限时拒绝
         now = time.monotonic()
@@ -411,6 +413,12 @@ class BeidouSupervisor:
             if now - t < self.recovery_window_seconds
         ]
         if not self.self_heal or len(self._recovery_timestamps) >= self.max_restarts:
+            if len(self._recovery_timestamps) >= self.max_restarts:
+                print(
+                    f"[supervisor] RECOVERY BLOCKED: {len(self._recovery_timestamps)}/{self.max_restarts} "
+                    f"in {self.recovery_window_seconds:.0f}s window "
+                    f"(timestamps={[f'{now-t:.0f}s ago' for t in self._recovery_timestamps]})"
+                )
             return False
 
         persistent_blockers = [
