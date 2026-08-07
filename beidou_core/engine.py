@@ -2603,36 +2603,59 @@ class AutonomousEngine:
         print("[beidou-autopilot] Engine running. Press Ctrl+C to stop.")
         print("[beidou-autopilot] ========================================")
 
-        # Main event loop
-        while self._running:
-            try:
-                now = time.time()
-
-                if now - self._last_realtime >= 5:
-                    await self._realtime_tick()
-
-                if now - self._last_nearline >= 300:
-                    await self._nearline_tick()
-
-                if now - self._last_offline >= 3600:
-                    await self._offline_tick()
-
+        # Main event loop — 各时钟域作为独立 asyncio Task 运行，避免
+        # nearline (处理 25 个标的耗时 2+ min) 阻塞 realtime 心跳。
+        async def _realtime_loop() -> None:
+            while self._running:
+                try:
+                    if time.time() - self._last_realtime >= 5:
+                        await self._realtime_tick()
+                except Exception:
+                    self._error_count += 1
                 await asyncio.sleep(1)
 
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                self._error_count += 1
-                if self._error_count > 100:
-                    self._alerts.send_incident(
-                        AlertSeverity.CRITICAL,
-                        "Error threshold exceeded",
-                        f"{self._error_count} errors, locking down",
-                        category="engine",
-                    )
-                    self._lifecycle.transition(ModuleState.LOCKED)
-                    self._running = False
-                await asyncio.sleep(5)
+        async def _nearline_loop() -> None:
+            while self._running:
+                try:
+                    if time.time() - self._last_nearline >= 300:
+                        await self._nearline_tick()
+                except Exception:
+                    self._error_count += 1
+                await asyncio.sleep(10)  # 较粗粒度轮询，nearline 本身耗时较长
+
+        async def _offline_loop() -> None:
+            while self._running:
+                try:
+                    if time.time() - self._last_offline >= 3600:
+                        await self._offline_tick()
+                except Exception:
+                    self._error_count += 1
+                await asyncio.sleep(60)
+
+        tasks = [
+            asyncio.create_task(_realtime_loop()),
+            asyncio.create_task(_nearline_loop()),
+            asyncio.create_task(_offline_loop()),
+        ]
+
+        try:
+            # 等待所有 task 完成（引擎 shutdown 后 _running=False，各 loop 退出）
+            done, pending = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # 检查是否有异常退出的 task
+            for t in done:
+                exc = t.exception()
+                if exc is not None:
+                    self._error_count += 1
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._running = False
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         await self._shutdown()
 
