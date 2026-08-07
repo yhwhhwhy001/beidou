@@ -1783,8 +1783,10 @@ class AutonomousEngine:
                 # 时序窗口（订单已成交但 _monitor_orders 尚未处理）被误判为永久异常。
                 if result.differences:
                     print(f"[recon] Mismatch detected, attempting self-heal: {result.differences}")
+                    heal_attempted = False
                     try:
                         await self._sync_exchange_state()
+                        heal_attempted = True  # 标记自愈已尝试，后续差异降级为 WARNING
                         # 自愈后重新对账：用最新交易所状态更新 system_facts 并再次 reconcile
                         account2, ok2 = await self._api_async_safe("/fapi/v2/account", signed=True)
                         if ok2 and "positions" in account2:
@@ -1838,9 +1840,16 @@ class AutonomousEngine:
                         print(f"[recon] Self-heal attempt failed: {heal_err} — falling through to incident")
 
                 # 自愈后仍不一致，触发事故
+                # BD-FIX: 自愈尝试过但仍不完整 → 差异大概率是近线交易进行中的临时状态，
+                # 降级为 WARNING 避免触发监督器 FAIL-CLOSED → LOCKED。
+                # 自愈未尝试（异常跳过）→ 保留 CRITICAL 以触发安全熔断。
                 if result.differences:
                     print(f"[recon] Mismatch (after self-heal): {result.differences}")
-                    severity = AlertSeverity.CRITICAL if result.should_block_new_risk else AlertSeverity.WARNING
+                    if heal_attempted:
+                        severity = AlertSeverity.WARNING  # 自愈过 → 临时差异
+                        print("[recon] Self-heal was attempted — severity downgraded to WARNING")
+                    else:
+                        severity = AlertSeverity.CRITICAL if result.should_block_new_risk else AlertSeverity.WARNING
                     self._alerts.send_incident(
                         severity,
                         "Reconciliation mismatch",
