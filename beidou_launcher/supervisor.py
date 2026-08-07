@@ -390,6 +390,7 @@ class BeidouSupervisor:
         "runtime.health.account_snapshot",
         "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
         "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
+        "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
     })
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
