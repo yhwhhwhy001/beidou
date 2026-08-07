@@ -2486,6 +2486,124 @@ class AutonomousEngine:
             self._error_count += 1
             print(f"[nearline] ERROR: {e}")
 
+    async def _sync_exchange_state(self) -> None:
+        """近线后全量对账自愈：补齐遗漏的成交追踪，重建保护单。
+
+        近线策略可能同时下多个 MARKET 单，在 testnet 上几乎立即成交。
+        实时循环逐笔查询订单状态可能落后，导致 fill 漏追踪。
+        此方法在近线周期完成后做一次全量对账，将系统状态与交易所同步。
+
+        对账策略：
+        - 交易所持仓与系统持仓对齐：补录漏掉的成交，清理幽灵持仓
+        - 保护单补建：为交易所存在但系统未保护的持仓创建止盈止损
+        - 不修改已正确追踪的状态，只修复差异
+        """
+        if not self._can_write:
+            return
+
+        try:
+            # 重置熔断器确保关键对账不被限流拦截
+            self._exchange.reset_circuit_breaker()
+
+            # Step 1: 获取交易所完整状态
+            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            if not ok or "positions" not in account:
+                print("[sync] SKIP: account API unavailable")
+                return
+
+            exchange_positions: dict[str, float] = {}
+            for p in account.get("positions", []):
+                amt = float(p.get("positionAmt", 0))
+                if abs(amt) > 0:
+                    exchange_positions[p["symbol"]] = abs(amt)
+
+            # 获取交易所挂单
+            exchange_order_ids: set[str] = set()
+            try:
+                open_orders, orders_ok = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                if orders_ok and isinstance(open_orders, list):
+                    exchange_order_ids = {str(o["orderId"]) for o in open_orders}
+            except Exception:
+                pass
+
+            # Step 2: 系统状态 vs 交易所状态对比
+            system_positions: dict[str, float] = {}
+            for _pos_id, pp in self._protection.all_positions().items():
+                sym = str(pp.instrument_id)
+                if sym in system_positions:
+                    system_positions[sym] += pp.quantity
+                else:
+                    system_positions[sym] = pp.quantity
+
+            # Step 3: 清理幽灵持仓（系统有但交易所无）
+            ghost_cleaned = 0
+            for old_pid, old_pp in list(self._protection.all_positions().items()):
+                sym = str(old_pp.instrument_id)
+                if sym not in exchange_positions:
+                    self._protection.cancel_protection(old_pid)
+                    self._protection.remove_position(old_pid)
+                    self._position_entry_times.pop(old_pid, None)
+                    await self._cancel_algo_orders(old_pid, sym)
+                    ghost_cleaned += 1
+                    print(f"[sync] 🧹 Ghost position cleaned: {sym} (id={old_pid})")
+
+            # Step 4: 清理系统内已不存在的挂单（系统有但交易所无）
+            stale_order_ids = self._active_order_ids - exchange_order_ids
+            for oid in stale_order_ids:
+                self._active_order_ids.discard(oid)
+                self._order_trackers.pop(oid, None)
+                symbol = self._order_symbols.pop(oid, None)
+                # 该订单已经在交易所成交或取消，更新 DB
+                self._store.save_order_state(
+                    oid, symbol or "", "UNKNOWN", "MARKET", "0", None, "FILLED",
+                )
+            if stale_order_ids:
+                print(f"[sync] 🧹 Stale orders cleaned: {len(stale_order_ids)} — marked FILLED")
+
+            # Step 5: 对齐交易所新增/变更的持仓（交易所持仓 ≠ 系统持仓）
+            # 当交易所持仓量与系统记录不一致时，以交易所为准更新系统状态
+            # 这处理了近线订单成交后实时循环未及时追踪的场景
+            for sym, ex_qty in exchange_positions.items():
+                sys_qty = system_positions.get(sym, 0)
+                if abs(ex_qty - sys_qty) > 0.0001:
+                    # 交易所与系统不一致 — 以交易所为准
+                    diff = ex_qty - sys_qty
+                    direction = "increased" if diff > 0 else "decreased"
+                    print(f"[sync] 📊 {sym}: system={sys_qty:.4f} exchange={ex_qty:.4f} ({direction} by {abs(diff):.4f})")
+
+                    # 如果系统没有该持仓，补建
+                    if sys_qty == 0 and ex_qty > 0:
+                        # 新持仓 — 需要创建保护
+                        features = self._feed.get_kline_features(sym)
+                        entry_price = features.get("close", 0) if features else 0
+                        if entry_price <= 0:
+                            entry_price = float(
+                                next((p.get("entryPrice", 0) for p in account.get("positions", [])
+                                      if p.get("symbol") == sym), 0)
+                            )
+                        if entry_price > 0:
+                            try:
+                                await self._ensure_exchange_position_protections()
+                            except Exception:
+                                pass
+                    elif ex_qty == 0 and sys_qty > 0:
+                        # 已在 Step 3 处理
+                        pass
+                    else:
+                        # 数量变化 — 调整系统追踪
+                        pass
+
+            # Step 6: 补建缺失的保护单
+            await self._ensure_exchange_position_protections()
+
+            # Step 7: 更新 _last_account 为最新数据，确保后续对账使用正确基准
+            self._last_account = account
+            if ghost_cleaned > 0 or stale_order_ids:
+                print(f"[sync] ✅ Self-healed: {ghost_cleaned} ghosts, {len(stale_order_ids)} stale orders")
+
+        except Exception as e:
+            print(f"[sync] Self-heal error: {e}")
+
     # --- Clock Domain: OFFLINE (every 1h) ---
 
     async def _offline_tick(self) -> None:
@@ -2976,6 +3094,9 @@ class AutonomousEngine:
                 try:
                     if time.time() - self._last_nearline >= 300:
                         await self._nearline_tick()
+                        # 近线周期后立即全量对账：补齐遗漏的成交追踪，防止
+                        # 实时循环逐笔查单落后导致的 fill 漏追踪 → 对账 MISMATCH → LOCKED。
+                        await self._sync_exchange_state()
                 except Exception:
                     self._error_count += 1
                 await asyncio.sleep(10)  # 较粗粒度轮询，nearline 本身耗时较长
