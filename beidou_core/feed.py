@@ -12,6 +12,7 @@ from typing import Any
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_shared.config import ConfigProvider
 from beidou_shared.types import (
@@ -100,14 +101,14 @@ class MarketDataFeed:
     # --- Data fetching ---
 
     def fetch_ticker(self, symbol: str) -> dict:
-        data = self._api("/fapi/v1/ticker/24hr", params={"symbol": symbol})
+        data = self._api(Endpoint.TICKER_24HR, params={"symbol": symbol})
         if "lastPrice" not in data:
             return {}
         self._last_ticker[symbol] = data
         return data
 
     def fetch_orderbook(self, symbol: str, depth: int = 5) -> dict:
-        data = self._api("/fapi/v1/depth", params={"symbol": symbol, "limit": depth})
+        data = self._api(Endpoint.DEPTH, params={"symbol": symbol, "limit": depth})
         if "bids" not in data:
             return {}
         self._last_orderbook[symbol] = data
@@ -115,7 +116,7 @@ class MarketDataFeed:
 
     def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[dict]:
         raw = self._api(
-            "/fapi/v1/klines",
+            Endpoint.KLINES,
             params={
                 "symbol": symbol,
                 "interval": interval,

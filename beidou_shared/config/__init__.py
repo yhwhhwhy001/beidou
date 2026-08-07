@@ -57,6 +57,64 @@ class RiskConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ProductionConfig:
+    """生产运行参数 — 从 YAML `production` 段加载。"""
+
+    # Pre-Risk 不变量
+    max_leverage: float = 3.0
+    max_concentration_pct: float = 50.0
+    max_position_notional: float = 500_000.0
+    # Strategy Risk Budget
+    max_drawdown_pct: float = 20.0
+    max_daily_loss_pct: float = 5.0
+    max_consecutive_losses: int = 5
+    risk_per_trade_pct: float = 1.0
+    min_sharpe_rolling: float = 0.0
+    # Portfolio
+    max_total_leverage: float = 3.0
+    max_instruments: int = 50
+    # Drift Detection
+    drift_threshold: float = 0.1
+
+
+@dataclass(frozen=True, slots=True)
+class InfrastructureConfig:
+    """基础设施连接参数 — 从 YAML `infrastructure` 段加载。"""
+
+    health_host: str = "0.0.0.0"
+    health_port: int = 9090
+    control_host: str = "127.0.0.1"
+    control_port: int = 9090
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_timeout: int = 2
+    s3_bucket: str = "beidou-certificates"
+    s3_endpoint: str = "http://localhost:9000"
+    alerts_file: str = "/tmp/beidou_alerts.jsonl"
+    webhook_timeout: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class CapitalLevelConfig:
+    """单个资本阶梯级别配置。"""
+
+    name: str = ""
+    gate: str = ""
+    max_capital: float = 0.0
+    max_leverage: float = 0.0
+    min_unattended_hours: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class CapitalLadderConfig:
+    """资本阶梯配置 — 从 YAML `production_ladder` 段加载。"""
+
+    current_level: str = "L0_PAPER"
+    levels: tuple[CapitalLevelConfig, ...] = ()
+    capital_limits: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class TypedSettings:
     """类型化配置快照 — 不可变，经过校验。"""
 
@@ -69,6 +127,9 @@ class TypedSettings:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     exchange: ExchangeConfig = field(default_factory=ExchangeConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    production: ProductionConfig = field(default_factory=ProductionConfig)
+    infrastructure: InfrastructureConfig = field(default_factory=InfrastructureConfig)
+    capital_ladder: CapitalLadderConfig = field(default_factory=CapitalLadderConfig)
 
     can_write_trades: bool = False
 
@@ -76,7 +137,14 @@ class TypedSettings:
 
     def compute_hash(self) -> str:
         """计算配置内容的稳定 SHA-256。"""
-        payload = f"{self.environment.value}|{self.database.url}|{self.exchange.rest_base_url}|{self.risk.max_leverage}|{self.risk.max_concentration_pct}"
+        payload = (
+            f"{self.environment.value}"
+            f"|{self.database.url}"
+            f"|{self.exchange.rest_base_url}"
+            f"|{self.risk.max_leverage}|{self.risk.max_concentration_pct}"
+            f"|{self.infrastructure.health_port}"
+            f"|{self.production.max_leverage}|{self.production.max_position_notional}"
+        )
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
@@ -109,6 +177,44 @@ class ConfigProvider:
             "api_secret_ref": "",
         },
         "risk": {"max_leverage": 3.0, "max_concentration_pct": 50.0, "max_position_notional": 500_000.0},
+        "production": {
+            "max_leverage": 3.0,
+            "max_concentration_pct": 50.0,
+            "max_position_notional": 500_000.0,
+            "max_drawdown_pct": 20.0,
+            "max_daily_loss_pct": 5.0,
+            "max_consecutive_losses": 5,
+            "risk_per_trade_pct": 1.0,
+            "min_sharpe_rolling": 0.0,
+            "max_total_leverage": 3.0,
+            "max_instruments": 50,
+            "drift_threshold": 0.1,
+        },
+        "infrastructure": {
+            "health_host": "0.0.0.0",
+            "health_port": 9090,
+            "control_host": "127.0.0.1",
+            "control_port": 9090,
+            "redis_host": "localhost",
+            "redis_port": 6379,
+            "redis_timeout": 2,
+            "s3_bucket": "beidou-certificates",
+            "s3_endpoint": "http://localhost:9000",
+            "alerts_file": "/tmp/beidou_alerts.jsonl",
+            "webhook_timeout": 5,
+        },
+        "production_ladder": {
+            "current_level": "L0_PAPER",
+            "capital_limits": {
+                "L0_PAPER": 0.0,
+                "L1_SHADOW": 0.0,
+                "L2_CANARY": 100.0,
+                "L3_RAMP": 1000.0,
+                "L4_NORMAL": 10000.0,
+                "L5_CHAMPION": 50000.0,
+            },
+            "levels": [],
+        },
     }
 
     def __init__(self, base_config_dir: str = "config"):
@@ -212,12 +318,80 @@ class ConfigProvider:
         if "api_secret" in binance_raw and binance_raw.get("api_secret"):
             errors.append("plaintext api_secret detected — use api_secret_ref instead")
 
+        # Validate: api_key_ref / api_secret_ref 也不应包含明文密钥值
+        # 真实 API 密钥通常为 64 字符 hex/base64 字符串
+        for ref_field in ("api_key_ref", "api_secret_ref"):
+            ref_value = str(binance_raw.get(ref_field, ""))
+            if len(ref_value) >= 32 and any(c.isalpha() for c in ref_value) and any(c.isdigit() for c in ref_value):
+                errors.append(
+                    f"plaintext value detected in {ref_field} — "
+                    f"remove the value and set it via environment variable instead"
+                )
+
         # Parse risk
         risk_raw = raw.get("risk", {})
         risk = RiskConfig(
             max_leverage=float(risk_raw.get("max_leverage", 3.0)),
             max_concentration_pct=float(risk_raw.get("max_concentration_pct", 50.0)),
             max_position_notional=float(risk_raw.get("max_position_notional", 500_000.0)),
+        )
+
+        # Parse production
+        prod_raw = raw.get("production", {})
+        production = ProductionConfig(
+            max_leverage=float(prod_raw.get("max_leverage", risk.max_leverage)),
+            max_concentration_pct=float(prod_raw.get("max_concentration_pct", risk.max_concentration_pct)),
+            max_position_notional=float(prod_raw.get("max_position_notional", risk.max_position_notional)),
+            max_drawdown_pct=float(prod_raw.get("max_drawdown_pct", 20.0)),
+            max_daily_loss_pct=float(prod_raw.get("max_daily_loss_pct", 5.0)),
+            max_consecutive_losses=int(prod_raw.get("max_consecutive_losses", 5)),
+            risk_per_trade_pct=float(prod_raw.get("risk_per_trade_pct", 1.0)),
+            min_sharpe_rolling=float(prod_raw.get("min_sharpe_rolling", 0.0)),
+            max_total_leverage=float(prod_raw.get("max_total_leverage", 3.0)),
+            max_instruments=int(prod_raw.get("max_instruments", 50)),
+            drift_threshold=float(prod_raw.get("drift_threshold", 0.1)),
+        )
+
+        # Parse infrastructure
+        infra_raw = raw.get("infrastructure", {})
+        infra_health = infra_raw.get("health", {})
+        infra_control = infra_raw.get("control", {})
+        infra_redis = infra_raw.get("redis", {})
+        infra_s3 = infra_raw.get("s3", {})
+        infra_alerts = infra_raw.get("alerts", {})
+        infrastructure = InfrastructureConfig(
+            health_host=str(infra_health.get("host", "0.0.0.0")),
+            health_port=int(infra_health.get("port", 9090)),
+            control_host=str(infra_control.get("host", "127.0.0.1")),
+            control_port=int(infra_control.get("port", 9090)),
+            redis_host=str(infra_redis.get("host", "localhost")),
+            redis_port=int(infra_redis.get("port", 6379)),
+            redis_timeout=int(infra_redis.get("timeout_seconds", 2)),
+            s3_bucket=str(infra_s3.get("bucket", "beidou-certificates")),
+            s3_endpoint=str(infra_s3.get("endpoint", "http://localhost:9000")),
+            alerts_file=str(infra_alerts.get("file_path", "/tmp/beidou_alerts.jsonl")),
+            webhook_timeout=int(infra_alerts.get("webhook_timeout", 5)),
+        )
+
+        # Parse capital ladder
+        ladder_raw = raw.get("production_ladder", {})
+        levels_raw = ladder_raw.get("levels", [])
+        capital_levels: list[CapitalLevelConfig] = []
+        for lv in levels_raw:
+            capital_levels.append(
+                CapitalLevelConfig(
+                    name=str(lv.get("name", "")),
+                    gate=str(lv.get("gate", "")),
+                    max_capital=float(lv.get("max_capital", 0.0)),
+                    max_leverage=float(lv.get("max_leverage", 0.0)),
+                    min_unattended_hours=float(lv.get("min_unattended_hours", 0.0)),
+                )
+            )
+        capital_limits_raw = ladder_raw.get("capital_limits", {})
+        capital_ladder = CapitalLadderConfig(
+            current_level=str(ladder_raw.get("current_level", "L0_PAPER")),
+            levels=tuple(capital_levels),
+            capital_limits={str(k): float(v) for k, v in capital_limits_raw.items()} if capital_limits_raw else {},
         )
 
         # Validate LIVE environments cannot use testnet URLs
@@ -233,6 +407,9 @@ class ConfigProvider:
             database=database,
             exchange=exchange,
             risk=risk,
+            production=production,
+            infrastructure=infrastructure,
+            capital_ladder=capital_ladder,
             can_write_trades=environment.can_write_trades,
             raw={
                 k: v
@@ -251,6 +428,9 @@ class ConfigProvider:
             database=settings.database,
             exchange=settings.exchange,
             risk=settings.risk,
+            production=settings.production,
+            infrastructure=settings.infrastructure,
+            capital_ladder=settings.capital_ladder,
             can_write_trades=settings.can_write_trades,
             raw=settings.raw,
         )

@@ -10,7 +10,15 @@ from pathlib import Path
 import click
 
 from .checks import find_project_root
-from .manifest import DEFAULT_MODE, DEFAULT_SYMBOLS, HEALTH_PORT, SUPPORTED_MODES
+from .manifest import (
+    DEFAULT_MODE,
+    DEFAULT_SYMBOLS,
+    HEALTH_PORT,
+    MAX_RESTARTS,
+    MONITOR_INTERVAL,
+    STARTUP_TIMEOUT,
+    SUPPORTED_MODES,
+)
 from .preflight import run_preflight
 from .state import force_stop_existing, inspect_runtime_status, stop_running_instance
 from .supervisor import BeidouSupervisor
@@ -22,7 +30,7 @@ def _parse_symbols(value: str) -> list[str]:
         from beidou_core.engine import DEFAULT_UNIVERSE
 
         return list(DEFAULT_UNIVERSE)
-    return values or ["BTCUSDT", "ETHUSDT"]
+    return values or list(DEFAULT_SYMBOLS)
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
@@ -30,19 +38,19 @@ def _parse_symbols(value: str) -> list[str]:
 @click.option("--mode", type=click.Choice(SUPPORTED_MODES), default=DEFAULT_MODE, show_default=True)
 @click.option("--symbols", default=",".join(DEFAULT_SYMBOLS), show_default=True)
 @click.option("--port", type=click.IntRange(1024, 65535), default=HEALTH_PORT, show_default=True)
-@click.option("--startup-timeout", type=click.FloatRange(30.0, 900.0), default=300.0, show_default=True)
+@click.option("--startup-timeout", type=click.FloatRange(30.0, 900.0), default=STARTUP_TIMEOUT, show_default=True)
 @click.option(
     "--monitor-interval",
     "--poll-interval",
     type=click.FloatRange(1.0, 60.0),
-    default=5.0,
+    default=MONITOR_INTERVAL,
     show_default=True,
 )
 @click.option("--self-heal/--no-self-heal", default=True, show_default=True)
 @click.option(
     "--max-restarts",
     type=click.IntRange(0, 20),
-    default=10,
+    default=MAX_RESTARTS,
     show_default=True,
     help="10 分钟滑动窗口内允许的最大恢复次数；超限后需人工介入。",
 )

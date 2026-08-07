@@ -50,6 +50,22 @@ HARDCODED_PATTERNS = [
 # 纳入 BD-P2-18 资本阶梯后进行独立 Gate Runner 替换。
 _PATTERN_ALLOWLIST: set[tuple[str, str]] = set()
 
+# 新增检测模式
+_EXTRA_PATTERNS = [
+    # 数据库密码明文
+    (r":\/\/\w+:[\w!@#$%^&*()]+\@", "hardcoded_db_password", "数据库连接字符串包含明文密码"),
+    # S3 桶名硬编码
+    (r'bucket\s*=\s*"[a-z][a-z0-9-]+"', "hardcoded_s3_bucket", "S3 桶名硬编码"),
+    # 绝对文件路径 (排除注释)
+    (r'["\']/tmp/', "hardcoded_tmp_path", "硬编码 /tmp/ 路径"),
+    (r'["\']/var/run/', "hardcoded_var_path", "硬编码 /var/run/ 路径"),
+    # localhost + 端口模式
+    (r'localhost:\d{4,5}', "hardcoded_localhost", "硬编码 localhost:PORT"),
+    # 明文 API 密钥（在 YAML 中）
+    (r'api_key_ref:\s*[A-Za-z0-9]{32,}', "plaintext_api_key", "api_key_ref 包含明文密钥值"),
+    (r'api_secret_ref:\s*[A-Za-z0-9]{32,}', "plaintext_api_secret", "api_secret_ref 包含明文密钥值"),
+]
+
 
 class HardcodedASTScanner(ast.NodeVisitor):
     """AST-based scanner for additional hardcoded patterns."""
@@ -105,7 +121,8 @@ def scan_file(filepath: str) -> list[HardcodedFinding]:
 
     # Regex-based scan
     lines = source.split("\n")
-    for pattern, category, message in HARDCODED_PATTERNS:
+    all_patterns = HARDCODED_PATTERNS + _EXTRA_PATTERNS
+    for pattern, category, message in all_patterns:
         for match in re.finditer(pattern, source, re.MULTILINE):
             line_no = source[: match.start()].count("\n") + 1
             # Skip comments (lines starting with # or inside docstrings)
@@ -191,21 +208,23 @@ def main() -> int:
     for f in findings:
         categories.setdefault(f.category, []).append(f)
 
-    errors = [
-        f
-        for f in findings
-        if f.category
-        in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "swallowed_exception", "syntax_error")
-    ]
+    _BLOCKING_CATEGORIES = (
+        "fixed_account_balance",
+        "fixed_pnl",
+        "fixed_health",
+        "mainnet_url",
+        "swallowed_exception",
+        "syntax_error",
+        "hardcoded_db_password",
+        "plaintext_api_key",
+        "plaintext_api_secret",
+    )
+    errors = [f for f in findings if f.category in _BLOCKING_CATEGORIES]
 
     if findings:
         print(f"\n=== Hardcoded Value Scan: {len(findings)} issues ({len(errors)} blocking) ===")
         for cat, cat_findings in sorted(categories.items()):
-            blocking = (
-                "❌"
-                if cat in ("fixed_account_balance", "fixed_pnl", "fixed_health", "mainnet_url", "syntax_error")
-                else "⚠️"
-            )
+            blocking = "❌" if cat in _BLOCKING_CATEGORIES else "⚠️"
             print(f"\n  [{cat}] {len(cat_findings)} findings:")
             for f in sorted(cat_findings, key=lambda x: (x.file, x.line)):
                 print(f"    {blocking} {f.file}:{f.line}: {f.message}")

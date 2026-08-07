@@ -19,9 +19,9 @@ def main() -> None:
 
     import asyncio
 
-    from beidou_core.engine import AutonomousEngine
+    from beidou_core.engine import DEFAULT_UNIVERSE, AutonomousEngine
 
-    engine = AutonomousEngine(symbols=["BTCUSDT", "ETHUSDT"], mode="safety_only")
+    engine = AutonomousEngine(symbols=list(DEFAULT_UNIVERSE)[:2], mode="safety_only")
     asyncio.run(engine.run())
 
 

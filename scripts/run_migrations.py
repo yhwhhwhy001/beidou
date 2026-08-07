@@ -26,7 +26,7 @@ def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None
     """
     db_url = db_url or os.environ.get(
         "DATABASE_URL",
-        "postgresql://beidou_app:beidou_dev_password@localhost:5432/beidou_testnet",
+        "postgresql://beidou_app@localhost:5432/beidou_testnet",
     )
 
     result = {"applied": [], "skipped": [], "errors": []}

@@ -24,6 +24,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer
 from beidou_core.store import PersistentStore
+from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
 from beidou_observability.telemetry import AlertSeverity
@@ -718,8 +719,14 @@ class AutonomousEngine:
         # Infrastructure
         self._store = PersistentStore.get_instance()
         self._feed = MarketDataFeed()
-        self._alerts = AlertDispatcher()
-        self._health = HealthServer(port=9090)
+        self._alerts = AlertDispatcher(
+            webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
+            alerts_file=self._settings.infrastructure.alerts_file,
+        )
+        self._health = HealthServer(
+            port=self._settings.infrastructure.health_port,
+            bind_host=self._settings.infrastructure.health_host,
+        )
 
         # Control plane
         self._control = ControlPlane()
@@ -733,7 +740,9 @@ class AutonomousEngine:
         self._ledger = ImmutableLedger()
         self._recon = ReconciliationEngine()
         self._pre_risk = PreRiskCheckerImpl(
-            max_leverage=3.0, max_concentration_pct=50.0, max_position_notional=500000.0
+            max_leverage=self._settings.production.max_leverage,
+            max_concentration_pct=self._settings.production.max_concentration_pct,
+            max_position_notional=self._settings.production.max_position_notional,
         )
         self._risk_engine = RiskEngineImpl()
         # 仅在正式生产环境 (CANARY/LIVE) 要求真实签名密钥；
@@ -745,14 +754,14 @@ class AutonomousEngine:
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
-        self._optimizer = PortfolioOptimizerImpl(max_total_leverage=3.0)
+        self._optimizer = PortfolioOptimizerImpl(max_total_leverage=self._settings.production.max_total_leverage)
         self._fuser = SignalFuser()
         self._model_registry = ModelRegistry()
-        self._drift_detector = DriftDetector(threshold=0.1)
+        self._drift_detector = DriftDetector(threshold=self._settings.production.drift_threshold)
         self._mapek = MAPEKController()
 
         # === 交易池 — 动态标的管理 ===
-        self._trading_pool = TradingPool(max_instruments=50)
+        self._trading_pool = TradingPool(max_instruments=self._settings.production.max_instruments)
         # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE 需经过评分）
         for sym in symbols if len(symbols) > 2 else DEFAULT_UNIVERSE:
             entry = self._trading_pool.add(sym)
@@ -778,13 +787,13 @@ class AutonomousEngine:
         self._strategy_risk.set_budget(
             RiskBudget(
                 strategy_id=StrategyId("autopilot"),
-                max_drawdown_pct=20.0,
-                max_daily_loss_pct=5.0,
-                max_consecutive_losses=5,
-                max_position_notional=500000.0,
-                max_leverage=3.0,
-                risk_per_trade_pct=1.0,
-                min_sharpe_rolling=0.0,
+                max_drawdown_pct=self._settings.production.max_drawdown_pct,
+                max_daily_loss_pct=self._settings.production.max_daily_loss_pct,
+                max_consecutive_losses=self._settings.production.max_consecutive_losses,
+                max_position_notional=self._settings.production.max_position_notional,
+                max_leverage=self._settings.production.max_leverage,
+                risk_per_trade_pct=self._settings.production.risk_per_trade_pct,
+                min_sharpe_rolling=self._settings.production.min_sharpe_rolling,
             )
         )
 
@@ -1157,7 +1166,7 @@ class AutonomousEngine:
             return current
 
         resp = await self._api_async(
-            "/fapi/v1/leverage",
+            Endpoint.LEVERAGE,
             method="POST",
             signed=True,
             params={"symbol": symbol, "leverage": target_leverage},
@@ -1184,7 +1193,7 @@ class AutonomousEngine:
             actual = target_leverage  # fallback
             try:
                 pos_resp = await self._api_async(
-                    "/fapi/v2/positionRisk",
+                    Endpoint.POSITION_RISK,
                     signed=True,
                     params={"symbol": symbol},
                 )
@@ -1382,7 +1391,7 @@ class AutonomousEngine:
         for algo_id in list(algo_ids):
             try:
                 cancel_resp = await self._api_async(
-                    "/fapi/v1/algoOrder",
+                    Endpoint.ALGO_ORDER,
                     method="DELETE",
                     signed=True,
                     params={"symbol": symbol, "algoId": int(algo_id)},
@@ -1440,7 +1449,7 @@ class AutonomousEngine:
             self._symbol_precision: dict[str, dict[str, int]] = {}
         if order_symbol not in self._symbol_precision:
             try:
-                exchange_info = await self._api_async("/fapi/v1/exchangeInfo")
+                exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
                 found = False
                 for s in exchange_info.get("symbols", []):
                     sym = s.get("symbol", "")
@@ -1469,7 +1478,7 @@ class AutonomousEngine:
             params["price"] = f"{float(price_raw):.{prec['price']}f}"
 
         print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
-        order = await self._api_async("/fapi/v1/order", method="POST", signed=True, params=params)
+        order = await self._api_async(Endpoint.ORDER, method="POST", signed=True, params=params)
         print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
@@ -1520,7 +1529,7 @@ class AutonomousEngine:
             order_sym = order_sym or symbol
             try:
                 result = await self._api_async(
-                    "/fapi/v1/order",
+                    Endpoint.ORDER,
                     signed=True,
                     params={
                         "symbol": order_sym,
@@ -1735,7 +1744,7 @@ class AutonomousEngine:
                 max_algo_retries = 3
                 for algo_attempt in range(max_algo_retries):
                     algo_resp = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
+                        Endpoint.ALGO_ORDER, method="POST", signed=True, params=algo_params
                     )
                     if "algoId" in algo_resp:
                         break
@@ -1785,10 +1794,10 @@ class AutonomousEngine:
         """
         try:
             # 对账优先使用完整 account 端点（含 positions），失败则回退 balance
-            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
             if not ok or "totalWalletBalance" not in account:
                 # 回退：balance 端点无 positions，仅对账余额
-                account, ok = await self._api_async_safe("/fapi/v2/balance", signed=True)
+                account, ok = await self._api_async_safe(Endpoint.BALANCE, signed=True)
                 if not ok or "totalWalletBalance" not in account:
                     print("[recon] SKIP: API unavailable (circuit breaker / rate limit) — keeping last known state")
                     return
@@ -1804,7 +1813,7 @@ class AutonomousEngine:
 
             exchange_open_order_ids: list[str] = []
             try:
-                open_orders, orders_ok = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                open_orders, orders_ok = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
                 if orders_ok and isinstance(open_orders, list):
                     exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
                 elif not orders_ok:
@@ -1847,7 +1856,7 @@ class AutonomousEngine:
                         await self._sync_exchange_state()
                         heal_attempted = True  # 标记自愈已尝试，后续差异降级为 WARNING
                         # 自愈后重新对账：用最新交易所状态更新 system_facts 并再次 reconcile
-                        account2, ok2 = await self._api_async_safe("/fapi/v2/account", signed=True)
+                        account2, ok2 = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
                         if ok2 and "positions" in account2:
                             self._last_account = account2
                             # 重建系统事实
@@ -1868,7 +1877,7 @@ class AutonomousEngine:
                                     exchange_positions2[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
                             exchange_open2: list[str] = []
                             try:
-                                oo2, oo_ok2 = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                                oo2, oo_ok2 = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
                                 if oo_ok2 and isinstance(oo2, list):
                                     exchange_open2 = [str(o["orderId"]) for o in oo2]
                             except Exception:
@@ -1960,7 +1969,7 @@ class AutonomousEngine:
                 return  # 所有持仓已由 Phase 1/2 处理完毕
 
             # 检查哪些已有保护单
-            algos_resp = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            algos_resp = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             protected_symbols: set[str] = set()
             if isinstance(algos_resp, list):
                 for item in algos_resp:
@@ -1993,7 +2002,7 @@ class AutonomousEngine:
 
                     # 止损单
                     sl_resp = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        Endpoint.ALGO_ORDER, method="POST", signed=True,
                         params={
                             "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
                             "type": "STOP_MARKET", "quantity": qty_str,
@@ -2005,7 +2014,7 @@ class AutonomousEngine:
 
                     # 止盈单
                     tp_resp = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        Endpoint.ALGO_ORDER, method="POST", signed=True,
                         params={
                             "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
                             "type": "TAKE_PROFIT_MARKET", "quantity": qty_str,
@@ -2025,7 +2034,7 @@ class AutonomousEngine:
                         if sl_resp.get("code") == -2021:
                             wider_stop = stop_price * (0.98 if amt > 0 else 1.02)
                             sl2 = await self._api_async(
-                                "/fapi/v1/algoOrder", method="POST", signed=True,
+                                Endpoint.ALGO_ORDER, method="POST", signed=True,
                                 params={
                                     "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
                                     "type": "STOP_MARKET", "quantity": qty_str,
@@ -2095,7 +2104,7 @@ class AutonomousEngine:
         解决多轮 nearline 重试累积重复订单的问题。
         """
         try:
-            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if not isinstance(existing_algos, list):
                 return
             # 按标的聚合
@@ -2113,7 +2122,7 @@ class AutonomousEngine:
                 for a in orders[:excess]:
                     try:
                         await self._api_async(
-                            "/fapi/v1/algoOrder", method="DELETE", signed=True,
+                            Endpoint.ALGO_ORDER, method="DELETE", signed=True,
                             params={"symbol": symbol, "algoId": int(a["algoId"])},
                         )
                         print(f"[nearline] 🧹 Cleaned up excess {a['orderType']} for {symbol} algoId={a['algoId']}")
@@ -2132,7 +2141,7 @@ class AutonomousEngine:
             return
         try:
             # 查询交易所已有的 algo 订单
-            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if not isinstance(existing_algos, list):
                 return
             exchange_algo_symbols: dict[str, set[str]] = {}
@@ -2192,7 +2201,7 @@ class AutonomousEngine:
                             widened_sl = entry_ref * (1 + base_pct * widen_factor)
                     price_str = f"{widened_sl:.{prec['price']}f}"
                     algo_resp = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        Endpoint.ALGO_ORDER, method="POST", signed=True,
                         params={
                             "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
                             "type": pp.stop_loss.order_type, "quantity": qty_str,
@@ -2230,7 +2239,7 @@ class AutonomousEngine:
                             widened_tp = entry_ref * (1 - base_pct * widen_factor)
                     tp_price_str = f"{widened_tp:.{prec['price']}f}"
                     tp_resp = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        Endpoint.ALGO_ORDER, method="POST", signed=True,
                         params={
                             "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
                             "type": tp.order_type, "quantity": qty_str,
@@ -2664,7 +2673,7 @@ class AutonomousEngine:
             self._exchange.reset_circuit_breaker()
 
             # Step 1: 获取交易所完整状态
-            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
             if not ok or "positions" not in account:
                 print("[sync] SKIP: account API unavailable")
                 return
@@ -2678,7 +2687,7 @@ class AutonomousEngine:
             # 获取交易所挂单
             exchange_order_ids: set[str] = set()
             try:
-                open_orders, orders_ok = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                open_orders, orders_ok = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
                 if orders_ok and isinstance(open_orders, list):
                     exchange_order_ids = {str(o["orderId"]) for o in open_orders}
             except Exception:
@@ -3000,7 +3009,7 @@ class AutonomousEngine:
         print("[beidou-autopilot] Bootstrapping...")
 
         # Verify exchange connectivity
-        server_time = await self._api_async("/fapi/v1/time")
+        server_time = await self._api_async(Endpoint.SERVER_TIME)
         if "serverTime" not in server_time:
             print("[beidou-autopilot] FATAL: Cannot connect to exchange")
             self._lifecycle.transition(ModuleState.FAILED)
@@ -3008,7 +3017,7 @@ class AutonomousEngine:
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access
-        account = await self._api_async("/fapi/v2/account", signed=True)
+        account = await self._api_async(Endpoint.ACCOUNT, signed=True)
         if "totalWalletBalance" not in account:
             print("[beidou-autopilot] FATAL: Cannot access account")
             self._lifecycle.transition(ModuleState.FAILED)
@@ -3031,7 +3040,7 @@ class AutonomousEngine:
 
         # Restore active_order_ids from exchange
         try:
-            exchange_open = await self._api_async("/fapi/v1/openOrders", signed=True)
+            exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
             if isinstance(exchange_open, list):
                 for o in exchange_open:
                     oid = str(o["orderId"])
@@ -3049,7 +3058,7 @@ class AutonomousEngine:
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
         try:
-            exchange_info = await self._api_async("/fapi/v1/exchangeInfo")
+            exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
             if not hasattr(self, "_symbol_precision"):
                 self._symbol_precision = {}
             for s in exchange_info.get("symbols", []):
@@ -3070,7 +3079,7 @@ class AutonomousEngine:
         # BD-FIX: 启动时取消交易所所有已有条件单，避免跨 session 累积重复
         # 分批取消（每批最多 5 个，批次间隔 2s），避免触发 Binance 限流熔断
         try:
-            existing_algos = await self._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if isinstance(existing_algos, list) and existing_algos:
                 cancelled_count = 0
                 batch_size = 5
@@ -3080,7 +3089,7 @@ class AutonomousEngine:
                     async def _cancel_one(algo: dict) -> bool:
                         try:
                             cancel_resp = await self._api_async(
-                                "/fapi/v1/algoOrder",
+                                Endpoint.ALGO_ORDER,
                                 method="DELETE",
                                 signed=True,
                                 params={"symbol": algo["symbol"], "algoId": int(algo["algoId"])},
@@ -3108,12 +3117,12 @@ class AutonomousEngine:
 
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
-            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
             if not ok or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
                 self._exchange.reset_circuit_breaker()
-                account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+                account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
                 if not ok:
                     print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable)")
                     return
@@ -3179,7 +3188,7 @@ class AutonomousEngine:
             if pending_submissions:
                 async def _submit_algo(sub: dict):
                     sub["result"] = await self._api_async(
-                        "/fapi/v1/algoOrder", method="POST", signed=True, params=sub["algo_params"]
+                        Endpoint.ALGO_ORDER, method="POST", signed=True, params=sub["algo_params"]
                     )
                     return sub
 
@@ -3266,7 +3275,10 @@ class AutonomousEngine:
 
         # Start health server
         self._health.start()
-        print("[beidou-autopilot] Health server: http://0.0.0.0:9090")
+        print(
+            f"[beidou-autopilot] Health server: http://{self._settings.infrastructure.health_host}:"
+            f"{self._settings.infrastructure.health_port}"
+        )
 
         # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
         # 引擎自身不再执行 RESUME（已被 Supervisor 的 resume interlock 拦截）。
@@ -3356,7 +3368,7 @@ class AutonomousEngine:
                 for symbol in self._symbols:
                     try:
                         await self._api_async(
-                            "/fapi/v1/order",
+                            Endpoint.ORDER,
                             method="DELETE",
                             signed=True,
                             params={

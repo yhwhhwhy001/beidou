@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 STATE_FILE = PROJECT_ROOT / ".beidou" / "supervisor-state.json"
 PID_FILE = PROJECT_ROOT / ".beidou" / "monitor_daemon.pid"
 FREQ_FILE = PROJECT_ROOT / ".beidou" / "monitor_freq.json"
-HEALTH_URL = "http://localhost:9090/health"
+HEALTH_URL = os.environ.get("BEIDOU_HEALTH_URL", "http://localhost:9090/health")
 
 
 def load_supervisor_state() -> dict | None:

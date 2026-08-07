@@ -108,11 +108,21 @@ class LeaseManager:
 
     @staticmethod
     def _try_redis_acquire(lease: FencingLease) -> None:
-        """通过 Redis 获取租约（需要 redis 库）。"""
+        """通过 Redis 获取租约（需要 redis 库）。
+
+        Redis 连接参数优先从环境变量 REDIS_URL 读取；
+        否则回退到 BEIDOU_REDIS_HOST / BEIDOU_REDIS_PORT。
+        """
         try:
             import redis
 
-            r = redis.Redis(host="localhost", port=6379, socket_timeout=2)
+            redis_url = os.environ.get("REDIS_URL", "")
+            if redis_url:
+                r = redis.Redis.from_url(redis_url, socket_timeout=2)
+            else:
+                redis_host = os.environ.get("BEIDOU_REDIS_HOST", "localhost")
+                redis_port = int(os.environ.get("BEIDOU_REDIS_PORT", "6379"))
+                r = redis.Redis(host=redis_host, port=redis_port, socket_timeout=2)
             key = f"beidou:lease:{LeaseManager.LEASE_KEY}"
             acquired = r.set(key, lease.instance_id, nx=True, ex=lease.ttl_seconds)
             if acquired:

@@ -14,6 +14,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from beidou_exchange.binance_usdm.endpoints import (
+    CIRCUIT_BREAKER_COOLDOWN,
+    CIRCUIT_BREAKER_THRESHOLD,
+    DEFAULT_HTTP_TIMEOUT,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_ORDER_LIMIT,
+    DEFAULT_RECV_WINDOW_MS,
+    DEFAULT_WEIGHT_LIMIT,
+    Endpoint,
+)
 from beidou_exchange.core.error_taxonomy import (
     ErrorCategory,
     Result,
@@ -26,9 +36,9 @@ class RateLimitState:
     """端点级限频状态。"""
 
     weight_used: int = 0
-    weight_limit: int = 1200
+    weight_limit: int = DEFAULT_WEIGHT_LIMIT
     order_count: int = 0
-    order_limit: int = 10
+    order_limit: int = DEFAULT_ORDER_LIMIT
     last_reset: float = field(default_factory=time.monotonic)
     consecutive_failures: int = 0
     circuit_open: bool = False
@@ -48,7 +58,12 @@ class BinanceRESTClient:
     """
 
     def __init__(
-        self, rest_url: str, api_key: str = "", api_secret: str = "", recv_window: int = 60000, max_retries: int = 3
+        self,
+        rest_url: str,
+        api_key: str = "",
+        api_secret: str = "",
+        recv_window: int = DEFAULT_RECV_WINDOW_MS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
@@ -68,26 +83,26 @@ class BinanceRESTClient:
 
     async def get_server_time(self) -> Result[dict]:
         """获取服务端时间，用于时钟偏差校准。"""
-        return await self._request("GET", "/fapi/v1/time")
+        return await self._request("GET", Endpoint.SERVER_TIME)
 
     async def get_exchange_info(self, symbol: str | None = None) -> Result[dict]:
         """获取交易规则和交易对信息。"""
         params = {"symbol": symbol} if symbol else {}
-        return await self._request("GET", "/fapi/v1/exchangeInfo", params=params)
+        return await self._request("GET", Endpoint.EXCHANGE_INFO, params=params)
 
     async def get_ticker(self, symbol: str) -> Result[dict]:
         """获取24小时价格统计。"""
-        return await self._request("GET", "/fapi/v1/ticker/24hr", params={"symbol": symbol})
+        return await self._request("GET", Endpoint.TICKER_24HR, params={"symbol": symbol})
 
     async def get_depth(self, symbol: str, limit: int = 20) -> Result[dict]:
         """获取订单簿深度。"""
-        return await self._request("GET", "/fapi/v1/depth", params={"symbol": symbol, "limit": limit})
+        return await self._request("GET", Endpoint.DEPTH, params={"symbol": symbol, "limit": limit})
 
     async def get_klines(self, symbol: str, interval: str, limit: int = 500) -> Result[list]:
         """获取K线数据。"""
         return await self._request(
             "GET",
-            "/fapi/v1/klines",
+            Endpoint.KLINES,
             params={
                 "symbol": symbol,
                 "interval": interval,
@@ -103,22 +118,22 @@ class BinanceRESTClient:
         GET /fapi/v1/positionSide/dual (USER_DATA)
         返回: {"dualSidePosition": true} → HEDGE, false → ONE_WAY
         """
-        return await self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+        return await self._request("GET", Endpoint.POSITION_SIDE_DUAL, signed=True)
 
     async def get_account(self) -> Result[dict]:
         """获取账户信息（余额、仓位）。"""
-        return await self._request("GET", "/fapi/v2/account", signed=True)
+        return await self._request("GET", Endpoint.ACCOUNT, signed=True)
 
     async def get_open_orders(self, symbol: str | None = None) -> Result[list]:
         """获取当前挂单。"""
         params = {"symbol": symbol} if symbol else {}
-        return await self._request("GET", "/fapi/v1/openOrders", signed=True, params=params)
+        return await self._request("GET", Endpoint.OPEN_ORDERS, signed=True, params=params)
 
     async def get_order(self, symbol: str, order_id: int) -> Result[dict]:
         """查询单个订单状态。"""
         return await self._request(
             "GET",
-            "/fapi/v1/order",
+            Endpoint.ORDER,
             signed=True,
             params={
                 "symbol": symbol,
@@ -151,13 +166,13 @@ class BinanceRESTClient:
             params["reduceOnly"] = reduce_only
         if client_order_id:
             params["newClientOrderId"] = client_order_id
-        return await self._request("POST", "/fapi/v1/order", signed=True, params=params)
+        return await self._request("POST", Endpoint.ORDER, signed=True, params=params)
 
     async def cancel_order(self, symbol: str, order_id: int) -> Result[dict]:
         """取消订单。"""
         return await self._request(
             "DELETE",
-            "/fapi/v1/order",
+            Endpoint.ORDER,
             signed=True,
             params={
                 "symbol": symbol,
@@ -169,11 +184,11 @@ class BinanceRESTClient:
 
     async def create_listen_key(self) -> Result[dict]:
         """创建用户数据流 listenKey。"""
-        return await self._request("POST", "/fapi/v1/listenKey", signed=True)
+        return await self._request("POST", Endpoint.LISTEN_KEY, signed=True)
 
     async def keepalive_listen_key(self) -> Result[dict]:
         """续期 listenKey。"""
-        return await self._request("PUT", "/fapi/v1/listenKey", signed=True)
+        return await self._request("PUT", Endpoint.LISTEN_KEY, signed=True)
 
     # === 通用请求（兼容遗留 _api 调用） ===
 
@@ -290,7 +305,7 @@ class BinanceRESTClient:
 
                 req.add_header("X-MBX-APIKEY", self._api_key)
 
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT) as resp:
                     data = json.loads(resp.read())
                     self._rate_state.consecutive_failures = 0
 
@@ -327,9 +342,9 @@ class BinanceRESTClient:
                     continue
 
                 self._rate_state.consecutive_failures += 1
-                if self._rate_state.consecutive_failures >= 5:
+                if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
                     self._rate_state.circuit_open = True
-                    self._rate_state.circuit_open_until = time.monotonic() + 30
+                    self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
 
                 return Result.fail(category, error_body[:200], code=http_status)
 

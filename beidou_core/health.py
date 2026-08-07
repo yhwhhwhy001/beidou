@@ -37,8 +37,9 @@ class HealthServer:
     每层有独立回调，可独立查询。
     """
 
-    def __init__(self, port: int = 9090) -> None:
+    def __init__(self, port: int = 9090, bind_host: str = "0.0.0.0") -> None:
         self._port = port
+        self._bind_host = bind_host
         self._start_time = time.time()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -182,7 +183,7 @@ class HealthServer:
                 self.end_headers()
                 self.wfile.write(body)
 
-        self._server = HTTPServer(("0.0.0.0", self._port), Handler)
+        self._server = HTTPServer((self._bind_host, self._port), Handler)
         self._server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()

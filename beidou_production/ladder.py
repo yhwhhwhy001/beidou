@@ -18,14 +18,32 @@ class LadderLevel(str, Enum):
     L5_CHAMPION = "L5_CHAMPION"
 
 
-LEVEL_CAPITAL_LIMITS = {
-    LadderLevel.L0_PAPER: 0.0,
-    LadderLevel.L1_SHADOW: 0.0,
-    LadderLevel.L2_CANARY: 100.0,
-    LadderLevel.L3_RAMP: 1000.0,
-    LadderLevel.L4_NORMAL: 10000.0,
-    LadderLevel.L5_CHAMPION: 50000.0,
-}
+LEVEL_CAPITAL_LIMITS: dict[LadderLevel, float] = {}
+
+
+def _load_capital_limits() -> dict[LadderLevel, float]:
+    """从 ConfigProvider 加载资本限制，不可用时回退默认值。"""
+    try:
+        from beidou_shared.config import ConfigProvider
+
+        settings = ConfigProvider().load()
+        limits = settings.capital_ladder.capital_limits
+        if limits:
+            return {LadderLevel(k): float(v) for k, v in limits.items() if k in LadderLevel.__members__}
+    except Exception:
+        pass
+    # 默认值（与 YAML production_ladder.capital_limits 保持一致）
+    return {
+        LadderLevel.L0_PAPER: 0.0,
+        LadderLevel.L1_SHADOW: 0.0,
+        LadderLevel.L2_CANARY: 100.0,
+        LadderLevel.L3_RAMP: 1000.0,
+        LadderLevel.L4_NORMAL: 10000.0,
+        LadderLevel.L5_CHAMPION: 50000.0,
+    }
+
+
+LEVEL_CAPITAL_LIMITS = _load_capital_limits()
 
 
 @dataclass

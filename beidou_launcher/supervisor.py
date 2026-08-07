@@ -10,6 +10,9 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+
+from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, StartupReport
 from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
@@ -29,10 +32,10 @@ class BeidouSupervisor:
         mode: str,
         symbols: list[str],
         port: int,
-        startup_timeout: float = 300.0,
-        monitor_interval: float = 5.0,
+        startup_timeout: float = STARTUP_TIMEOUT,
+        monitor_interval: float = MONITOR_INTERVAL,
         self_heal: bool = True,
-        max_restarts: int = 2,
+        max_restarts: int = MAX_RESTARTS,
     ) -> None:
         self.project_root = project_root
         self.mode = mode
@@ -185,7 +188,7 @@ class BeidouSupervisor:
             return
         self._last_exchange_account_probe = now
         try:
-            response = await self.engine._api_async("/fapi/v2/account", signed=True)
+            response = await self.engine._api_async(Endpoint.ACCOUNT, signed=True)
             valid = (
                 isinstance(response, dict)
                 and "totalWalletBalance" in response
@@ -214,7 +217,7 @@ class BeidouSupervisor:
             return
         self._last_position_mode_probe = now
         try:
-            response = await self.engine._api_async("/fapi/v1/positionSide/dual", signed=True)
+            response = await self.engine._api_async(Endpoint.POSITION_SIDE_DUAL, signed=True)
             if isinstance(response, dict) and "dualSidePosition" in response:
                 dual_side = bool(response["dualSidePosition"])
                 mode = AccountPositionMode.HEDGE if dual_side else AccountPositionMode.ONE_WAY
@@ -248,7 +251,7 @@ class BeidouSupervisor:
             return
         self._last_exchange_algo_probe = now
         try:
-            response = await self.engine._api_async("/fapi/v1/openAlgoOrders", signed=True)
+            response = await self.engine._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if not isinstance(response, list):
                 raise RuntimeError(str(response)[:300])
             by_symbol: dict[str, list[str]] = {}

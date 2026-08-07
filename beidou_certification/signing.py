@@ -94,8 +94,13 @@ class CertificateStore:
         cert = self._certificates.get(certificate_id)
         return cert is not None and cert.revoked
 
-    def export_to_s3(self, bucket: str = "beidou-certificates", endpoint: str = "http://localhost:9000") -> bool:
-        """导出到 S3/MinIO。"""
+    def export_to_s3(self, bucket: str = "", endpoint: str = "") -> bool:
+        """导出到 S3/MinIO。
+
+        bucket 和 endpoint 优先从参数读取，否则从环境变量读取。
+        """
+        bucket = bucket or os.environ.get("BEIDOU_S3_BUCKET", "beidou-certificates")
+        endpoint = endpoint or os.environ.get("BEIDOU_S3_ENDPOINT", "http://localhost:9000")
         try:
             import json
 

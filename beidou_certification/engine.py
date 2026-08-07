@@ -667,8 +667,8 @@ class CapitalLevel:
     auto_rollback: bool = True  # P0 失败自动回退上一级
 
 
-# BD-P2-18: 资本阶梯级别定义
-CAPITAL_LADDER: list[CapitalLevel] = [
+# BD-P2-18: 资本阶梯级别定义 — 默认值（ConfigProvider 可用时优先从 YAML 加载）
+_DEFAULT_CAPITAL_LADDER: list[CapitalLevel] = [
     CapitalLevel("shadow", CertificationGate.G6_SHADOW, max_capital=0.0, max_leverage=0.0),
     CapitalLevel(
         "canary", CertificationGate.G7_L2_CANARY, max_capital=500.0, max_leverage=1.0, min_unattended_hours=24.0
@@ -681,6 +681,35 @@ CAPITAL_LADDER: list[CapitalLevel] = [
         "champion", CertificationGate.G7_L5_CHAMPION, max_capital=50000.0, max_leverage=3.0, min_unattended_hours=720.0
     ),
 ]
+
+# Gate 名称到 CertificationGate 枚举的映射
+_GATE_NAME_TO_ENUM: dict[str, CertificationGate] = {g.name: g for g in CertificationGate}
+
+
+def _build_ladder_from_config() -> list[CapitalLevel]:
+    """从 ConfigProvider 加载资本阶梯，不可用时回退默认值。"""
+    try:
+        from beidou_shared.config import ConfigProvider
+
+        settings = ConfigProvider().load()
+        levels = settings.capital_ladder.levels
+        if levels:
+            return [
+                CapitalLevel(
+                    level=lv.name,
+                    gate=_GATE_NAME_TO_ENUM.get(lv.gate, CertificationGate.G0_BASELINE),
+                    max_capital=lv.max_capital,
+                    max_leverage=lv.max_leverage,
+                    min_unattended_hours=lv.min_unattended_hours,
+                )
+                for lv in levels
+            ]
+    except Exception:
+        pass
+    return list(_DEFAULT_CAPITAL_LADDER)
+
+
+CAPITAL_LADDER: list[CapitalLevel] = _build_ladder_from_config()
 
 
 class ProductionLadder:
@@ -724,7 +753,8 @@ class ProductionLadder:
         # 检查所有中间 Gate
         for i in range(self._current_level_index + 1, target_idx + 1):
             level = CAPITAL_LADDER[i]
-            if not self._cert_manager.can_advance_to(level.gate):
+            prev_gate = CAPITAL_LADDER[i - 1].gate
+            if not self._cert_manager.can_promote(prev_gate, level.gate):
                 return False, f"Gate {level.gate.value} not passed — cannot skip to {target_level}"
         return True, "OK"
 
