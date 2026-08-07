@@ -175,9 +175,22 @@ class BeidouSupervisor:
             }
             return base
 
+        def factor_provider() -> list[dict]:
+            registry = getattr(self.engine, "_factor_registry", None)
+            if registry is None:
+                return []
+            result = []
+            for fid, rec in registry._factors.items():
+                result.append({
+                    "factor_id": fid,
+                    "lifecycle": str(getattr(rec.lifecycle, "value", rec.lifecycle)),
+                })
+            return result
+
         self.engine._health.set_readiness_check(readiness)
         self.engine._health.set_trading_readiness(trading_readiness)
         self.engine._health.set_status_info(status_info)
+        self.engine._health.set_factor_provider(factor_provider)
 
     async def _refresh_exchange_account_snapshot(self) -> None:
         """独立读取当前账户事实，拒绝使用陈旧的引擎缓存作为就绪证据。"""

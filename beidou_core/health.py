@@ -78,6 +78,9 @@ class HealthServer:
     def set_status_info(self, fn: Callable[[], dict]) -> None:
         self._status_info = fn
 
+    def set_factor_provider(self, fn: Callable[[], list[dict]]) -> None:
+        self._factor_provider = fn
+
     def uptime_seconds(self) -> float:
         return time.time() - self._start_time
 
@@ -149,6 +152,10 @@ class HealthServer:
                             "exit_ready_reason": ex_reason,
                         },
                     )
+                elif self.path == "/factors":
+                    provider = getattr(server, "_factor_provider", None)
+                    factors = provider() if provider else []
+                    self._send_json(200, {"factors": factors, "count": len(factors)})
                 else:
                     self._send_json(404, {"error": "not found"})
 
