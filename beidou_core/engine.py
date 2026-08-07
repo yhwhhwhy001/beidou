@@ -2635,8 +2635,41 @@ class AutonomousEngine:
                         # 已在 Step 3 处理
                         pass
                     else:
-                        # 数量变化 — 调整系统追踪
-                        pass
+                        # 数量变化 — 以交易所为准调整系统追踪
+                        for old_pid, old_pp in list(self._protection.all_positions().items()):
+                            if str(old_pp.instrument_id) == sym:
+                                real_entry = float(next(
+                                    (p.get("entryPrice", 0) for p in account.get("positions", [])
+                                     if p.get("symbol") == sym), old_pp.entry_price
+                                ))
+                                if real_entry <= 0:
+                                    real_entry = old_pp.entry_price
+                                side = OrderSide.BUY if ex_qty > 0 else OrderSide.SELL
+                                new_pos_id = f"pos-synced-{sym}-{int(time.time())}"
+                                old_trailing = old_pp.trailing_config
+                                self._protection.remove_position(old_pid)
+                                self._position_entry_times.pop(old_pid, None)
+                                # 用自适应计算器重新生成保护参数
+                                kf = self._feed.get_kline_features(sym)
+                                ac = AdaptiveProtectionCalculator.calculate(sym, real_entry, kf)
+                                self._protection.create_protection(
+                                    position_id=new_pos_id,
+                                    instrument_id=InstrumentId(sym),
+                                    venue_id=VenueId("BINANCE"),
+                                    entry_price=real_entry,
+                                    quantity=abs(ex_qty),
+                                    side=side,
+                                    stop_loss_config=ac.stop_loss_config,
+                                    take_profit_config=ac.take_profit_config,
+                                    trailing_config=old_trailing,
+                                )
+                                self._position_entry_times[new_pos_id] = time.time()
+                                print(
+                                    f"[sync] 📊 {sym}: quantity adjusted {sys_qty:.4f}→{ex_qty:.4f} "
+                                    f"(pos {old_pid}→{new_pos_id})"
+                                )
+                                await self._cancel_algo_orders(old_pid, sym)
+                                break
 
             # Step 6: 补建缺失的保护单
             await self._ensure_exchange_position_protections()
