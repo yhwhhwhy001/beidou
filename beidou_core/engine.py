@@ -1424,25 +1424,30 @@ class AutonomousEngine:
             tracker.apply(OrderEvent.ACKED)
             tracker.apply(OrderEvent.SENT)
             self._order_trackers[oid_str] = tracker
-            self._active_order_ids.add(oid_str)
-            self._order_symbols[oid_str] = order_symbol  # 记录订单所属 symbol
+            self._order_symbols[oid_str] = order_symbol
             self._outbox.ack(intent.intent_id)
             self._order_count += 1
+
+            actual_status = order.get("status", "NEW")
             print(
                 f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')} "
-                f"orderId={order['orderId']}"
+                f"orderId={order['orderId']} status={actual_status}"
             )
 
-            self._store.save_order_state(
-                str(order["orderId"]),
-                order_symbol,
-                side,
-                order_type,
-                str(float(intent.quantity.amount)),
-                str(float(intent.price.amount)) if intent.price else None,
-                order.get("status", "NEW"),
-                client_order_id=client_id,
-            )
+            # BD-FIX: Binance MARKET 单几乎立即成交（testnet 尤甚）。
+            # 下单响应中的 status 可能已是 FILLED — 此时立即处理成交，
+            # 不加入 _active_order_ids，消除下单→成交→对账之间的时序窗口。
+            if actual_status == "FILLED":
+                print(f"[order] ⚡ Immediate fill detected: {order_symbol} {side} — processing now")
+                await self._process_fill(oid_str, order_symbol, order)
+            else:
+                self._active_order_ids.add(oid_str)
+                self._store.save_order_state(
+                    oid_str, order_symbol, side, order_type,
+                    str(float(intent.quantity.amount)),
+                    str(float(intent.price.amount)) if intent.price else None,
+                    actual_status, client_order_id=client_id,
+                )
         else:
             print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
 
@@ -1484,211 +1489,7 @@ class AutonomousEngine:
                 avg_price = result.get("avgPrice", "0")
 
                 if status == "FILLED":
-                    tracker.apply(OrderEvent.FILLED)
-                    self._active_order_ids.discard(order_id)
-
-                    notional = executed_qty * float(avg_price)
-                    # BUY → 现金流出(credit); SELL → 现金流入(debit)
-                    # 余额 = sum(debit) - sum(credit) = 净现金流入
-                    if result.get("side") == "BUY":
-                        journal_debit, journal_credit = "0", str(notional)
-                    else:
-                        journal_debit, journal_credit = str(notional), "0"
-                    entry = JournalEntry(
-                        entry_id=f"journal-{order_id}",
-                        account_id=AccountId("default"),
-                        venue_id=VenueId("BINANCE"),
-                        instrument_id=InstrumentId(symbol),
-                        debit=MonetaryValue(amount=journal_debit),
-                        credit=MonetaryValue(amount=journal_credit),
-                        description=f"{result.get('side')} {executed_qty} {symbol} @ {avg_price} FILLED",
-                        correlation_id=CorrelationId(f"exec-{order_id}"),
-                    )
-                    self._ledger.post(entry)
-                    self._store.save_ledger_entry(
-                        entry.entry_id,
-                        "default",
-                        "BINANCE",
-                        symbol,
-                        entry.debit.amount,
-                        entry.credit.amount,
-                        entry.description,
-                        str(entry.correlation_id),
-                        entry.timestamp.isoformat(),
-                    )
-                    self._store.save_order_state(
-                        order_id,
-                        symbol,
-                        result.get("side", ""),
-                        result.get("type", ""),
-                        result.get("origQty", "0"),
-                        result.get("price"),
-                        "FILLED",
-                        str(executed_qty),
-                        str(avg_price),
-                    )
-
-                    # 检查是否为平仓订单（不对平仓成交创建新保护）
-                    is_close_order = order_id in self._close_order_ids
-                    if is_close_order:
-                        self._close_order_ids.discard(order_id)
-                        # 记录平仓交易 PnL
-                        fill_side = result.get("side", "")
-                        for pid, pp in list(self._protection.all_positions().items()):
-                            if str(pp.instrument_id) == symbol:
-                                entry_px = pp.entry_price
-                                exit_px = float(avg_price)
-                                pos_qty = pp.quantity
-                                if pp.is_long():
-                                    trade_pnl = (exit_px - entry_px) * pos_qty
-                                else:
-                                    trade_pnl = (entry_px - exit_px) * pos_qty
-                                is_win = trade_pnl > 0
-                                self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
-                                if is_win:
-                                    self._win_count += 1
-                                else:
-                                    self._loss_count += 1
-                                self._trade_pnls.append(trade_pnl)
-                                self._position_entry_times.pop(pid, None)
-                                self._protection.cancel_protection(pid)
-                                self._protection.remove_position(pid)
-                                # Cancel associated exchange algo orders
-                                await self._cancel_algo_orders(pid, symbol)
-                                print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
-                                break
-                        # 平仓订单不再创建新保护
-                        account_balance = float(self._last_account.get("totalWalletBalance", 0))
-                        if account_balance > 0:
-                            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
-                            if account_balance > self._peak_equity:
-                                self._peak_equity = account_balance
-                        # 跳过后续保护创建
-                    else:
-                        # 成交后创建止盈止损保护（仅入场订单）
-                        # 先清理同 symbol 的旧保护单，防止仓位翻转时堆积
-                        for old_pid, old_pp in list(self._protection.all_positions().items()):
-                            if str(old_pp.instrument_id) == symbol:
-                                self._protection.cancel_protection(old_pid)
-                                self._protection.remove_position(old_pid)
-                                self._position_entry_times.pop(old_pid, None)
-                                await self._cancel_algo_orders(old_pid, symbol)
-                                print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
-
-                        entry_price = float(avg_price)
-                        qty = executed_qty
-                        pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
-                        pos_id = f"pos-{order_id}"
-
-                        # 自适应止盈止损：基于 ATR、波动率、点差、价格档位动态计算
-                        kline_features = self._feed.get_kline_features(symbol)
-                        adaptive_cfg = AdaptiveProtectionCalculator.calculate(
-                            symbol, entry_price, kline_features
-                        )
-                        pp = self._protection.create_protection(
-                            position_id=pos_id,
-                            instrument_id=InstrumentId(symbol),
-                            venue_id=VenueId("BINANCE"),
-                            entry_price=entry_price,
-                            quantity=qty,
-                            side=pos_side,
-                            stop_loss_config=adaptive_cfg.stop_loss_config,
-                            take_profit_config=adaptive_cfg.take_profit_config,
-                        )
-                        # 记录入场时间，供 TimeExit 超时检测使用
-                        self._position_entry_times[pos_id] = time.time()
-
-                        # --- 打印止盈止损保护摘要 ---
-                        sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
-                        sl_pct = (entry_price - sl_price) / entry_price * 100 if sl_price and pos_side == OrderSide.BUY else (
-                            (sl_price - entry_price) / entry_price * 100 if sl_price else None
-                        )
-                        tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
-                        tp_pcts = []
-                        for tp in pp.take_profits:
-                            tp_px = float(tp.trigger_price.amount)
-                            if pos_side == OrderSide.BUY:
-                                tp_pcts.append(f"{(tp_px - entry_price) / entry_price * 100:+.2f}%")
-                            else:
-                                tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
-
-                        adaptive_info = (
-                            f"ATR={adaptive_cfg.atr_pct:.2f}% vol={adaptive_cfg.volatility_regime.value} "
-                            f"tier={adaptive_cfg.price_tier.value} regime={adaptive_cfg.market_regime.value} "
-                            f"RR={adaptive_cfg.rr_ratio:.1f}"
-                        )
-                        print(
-                            f"[protection] ┌ {'='*60}\n"
-                            f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
-                            f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
-                            f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts))}\n"
-                            f"[protection] ├─ 📊 {adaptive_info}\n"
-                            f"[protection] └ {'='*60}"
-                        )
-
-                        # 将 SL/TP 保护单实际下单到交易所（使用价格精度）
-                        # 止盈止损单通过 Algo Order API 提交到交易所原生执行
-                        reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
-                        protect_orders = [pp.stop_loss] if pp.stop_loss else []
-                        protect_orders.extend(pp.take_profits)
-                        exchange_protection_count = 0
-                        for p_order in protect_orders:
-                            if p_order is None:
-                                continue
-                            # 已尝试过的保护单不再重复提交（避免 -4120 日志洪流）
-                            if not hasattr(self, "_protection_exchange_attempted"):
-                                self._protection_exchange_attempted: set[str] = set()
-                            if p_order.protection_id in self._protection_exchange_attempted:
-                                continue
-                            self._protection_exchange_attempted.add(p_order.protection_id)
-
-                            prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
-                            qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
-                            price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
-
-                            # BD-FIX: Binance 2025-12 迁移 — 条件单必须使用 Algo Order API
-                            # 旧端点 POST /fapi/v1/order 的 STOP_MARKET/TAKE_PROFIT_MARKET 已废弃
-                            # 新端点 POST /fapi/v1/algoOrder + algoType=CONDITIONAL + triggerPrice
-                            algo_params = {
-                                "symbol": symbol,
-                                "side": reduce_side,
-                                "algoType": "CONDITIONAL",
-                                "type": p_order.order_type,  # STOP_MARKET or TAKE_PROFIT_MARKET
-                                "quantity": qty_str,
-                                "triggerPrice": price_str,
-                                "reduceOnly": "true",
-                                "workingType": "CONTRACT_PRICE",
-                            }
-                            algo_resp = await self._api_async(
-                                "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
-                            )
-                            if "algoId" in algo_resp:
-                                exchange_protection_count += 1
-                                algo_id = str(algo_resp["algoId"])
-                                # Track algo IDs for cancellation on position close
-                                if not hasattr(self, "_active_algo_ids"):
-                                    self._active_algo_ids: dict[str, set[str]] = {}
-                                self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
-                                print(
-                                    f"[protection] ✅ {symbol} {p_order.reason} → algoId={algo_id} "
-                                    f"triggerPrice={price_str} status={algo_resp.get('algoStatus', 'NEW')}"
-                                )
-                            else:
-                                err_code = algo_resp.get("code", "unknown")
-                                err_msg = algo_resp.get("msg", str(algo_resp)[:150])
-                                print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
-
-                        if exchange_protection_count > 0:
-                            print(f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)")
-                        else:
-                            print(f"[protection] ❌ 0 protection orders placed — all attempts failed, position UNPROTECTED")
-
-                    # === Strategy Risk: update equity on any fill ===
-                    account_balance = float(self._last_account.get("totalWalletBalance", 0))
-                    if account_balance > 0:
-                        self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
-                        if account_balance > self._peak_equity:
-                            self._peak_equity = account_balance
+                    await self._process_fill(order_id, order_sym or symbol, result)
 
                 elif status == "CANCELED" or status == "EXPIRED":
                     tracker.apply(OrderEvent.CANCELED)
@@ -1709,6 +1510,196 @@ class AutonomousEngine:
             except Exception as e:
                 # Log error but do NOT silently swallow — maintain visibility
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
+
+    async def _process_fill(self, order_id: str, symbol: str, result: dict) -> None:
+        """处理订单成交：更新状态机、账本、持仓保护。
+
+        从 _monitor_orders 和 _place_order（即时成交）共用，
+        消除近线下单→成交→对账之间的时序窗口。
+        """
+        tracker = self._order_trackers.get(order_id)
+        if not tracker:
+            return
+        tracker.apply(OrderEvent.FILLED)
+        self._active_order_ids.discard(order_id)
+
+        executed_qty = float(result.get("executedQty", 0))
+        avg_price = result.get("avgPrice", "0")
+
+        notional = executed_qty * float(avg_price)
+        if result.get("side") == "BUY":
+            journal_debit, journal_credit = "0", str(notional)
+        else:
+            journal_debit, journal_credit = str(notional), "0"
+        entry = JournalEntry(
+            entry_id=f"journal-{order_id}",
+            account_id=AccountId("default"),
+            venue_id=VenueId("BINANCE"),
+            instrument_id=InstrumentId(symbol),
+            debit=MonetaryValue(amount=journal_debit),
+            credit=MonetaryValue(amount=journal_credit),
+            description=f"{result.get('side')} {executed_qty} {symbol} @ {avg_price} FILLED",
+            correlation_id=CorrelationId(f"exec-{order_id}"),
+        )
+        self._ledger.post(entry)
+        self._store.save_ledger_entry(
+            entry.entry_id, "default", "BINANCE", symbol,
+            entry.debit.amount, entry.credit.amount,
+            entry.description, str(entry.correlation_id), entry.timestamp.isoformat(),
+        )
+        self._store.save_order_state(
+            order_id, symbol, result.get("side", ""), result.get("type", ""),
+            result.get("origQty", "0"), result.get("price"),
+            "FILLED", str(executed_qty), str(avg_price),
+        )
+
+        # 检查是否为平仓订单
+        is_close_order = order_id in self._close_order_ids
+        if is_close_order:
+            self._close_order_ids.discard(order_id)
+            for pid, pp in list(self._protection.all_positions().items()):
+                if str(pp.instrument_id) == symbol:
+                    entry_px = pp.entry_price
+                    exit_px = float(avg_price)
+                    pos_qty = pp.quantity
+                    if pp.is_long():
+                        trade_pnl = (exit_px - entry_px) * pos_qty
+                    else:
+                        trade_pnl = (entry_px - exit_px) * pos_qty
+                    is_win = trade_pnl > 0
+                    self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
+                    if is_win:
+                        self._win_count += 1
+                    else:
+                        self._loss_count += 1
+                    self._trade_pnls.append(trade_pnl)
+                    self._position_entry_times.pop(pid, None)
+                    self._protection.cancel_protection(pid)
+                    self._protection.remove_position(pid)
+                    await self._cancel_algo_orders(pid, symbol)
+                    print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
+                    break
+            account_balance = float(self._last_account.get("totalWalletBalance", 0))
+            if account_balance > 0:
+                self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+                if account_balance > self._peak_equity:
+                    self._peak_equity = account_balance
+        else:
+            # 入场成交 → 创建止盈止损保护
+            for old_pid, old_pp in list(self._protection.all_positions().items()):
+                if str(old_pp.instrument_id) == symbol:
+                    self._protection.cancel_protection(old_pid)
+                    self._protection.remove_position(old_pid)
+                    self._position_entry_times.pop(old_pid, None)
+                    await self._cancel_algo_orders(old_pid, symbol)
+                    print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
+
+            entry_price = float(avg_price)
+            qty = executed_qty
+            pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
+            pos_id = f"pos-{order_id}"
+
+            kline_features = self._feed.get_kline_features(symbol)
+            adaptive_cfg = AdaptiveProtectionCalculator.calculate(
+                symbol, entry_price, kline_features
+            )
+            pp = self._protection.create_protection(
+                position_id=pos_id,
+                instrument_id=InstrumentId(symbol),
+                venue_id=VenueId("BINANCE"),
+                entry_price=entry_price,
+                quantity=qty,
+                side=pos_side,
+                stop_loss_config=adaptive_cfg.stop_loss_config,
+                take_profit_config=adaptive_cfg.take_profit_config,
+            )
+            self._position_entry_times[pos_id] = time.time()
+
+            # 打印保护摘要
+            sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
+            sl_pct = (entry_price - sl_price) / entry_price * 100 if sl_price and pos_side == OrderSide.BUY else (
+                (sl_price - entry_price) / entry_price * 100 if sl_price else None
+            )
+            tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
+            tp_pcts = []
+            for tp in pp.take_profits:
+                tp_px = float(tp.trigger_price.amount)
+                if pos_side == OrderSide.BUY:
+                    tp_pcts.append(f"{(tp_px - entry_price) / entry_price * 100:+.2f}%")
+                else:
+                    tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
+
+            adaptive_info = (
+                f"ATR={adaptive_cfg.atr_pct:.2f}% vol={adaptive_cfg.volatility_regime.value} "
+                f"tier={adaptive_cfg.price_tier.value} regime={adaptive_cfg.market_regime.value} "
+                f"RR={adaptive_cfg.rr_ratio:.1f}"
+            )
+            print(
+                f"[protection] ┌ {'='*60}\n"
+                f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
+                f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
+                f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts))}\n"
+                f"[protection] ├─ 📊 {adaptive_info}\n"
+                f"[protection] └ {'='*60}"
+            )
+
+            # 提交止盈止损到交易所
+            reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
+            protect_orders = [pp.stop_loss] if pp.stop_loss else []
+            protect_orders.extend(pp.take_profits)
+            exchange_protection_count = 0
+            for p_order in protect_orders:
+                if p_order is None:
+                    continue
+                if not hasattr(self, "_protection_exchange_attempted"):
+                    self._protection_exchange_attempted: set[str] = set()
+                if p_order.protection_id in self._protection_exchange_attempted:
+                    continue
+                self._protection_exchange_attempted.add(p_order.protection_id)
+
+                prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
+                price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
+
+                algo_params = {
+                    "symbol": symbol,
+                    "side": reduce_side,
+                    "algoType": "CONDITIONAL",
+                    "type": p_order.order_type,
+                    "quantity": qty_str,
+                    "triggerPrice": price_str,
+                    "reduceOnly": "true",
+                    "workingType": "CONTRACT_PRICE",
+                }
+                algo_resp = await self._api_async(
+                    "/fapi/v1/algoOrder", method="POST", signed=True, params=algo_params
+                )
+                if "algoId" in algo_resp:
+                    exchange_protection_count += 1
+                    algo_id = str(algo_resp["algoId"])
+                    if not hasattr(self, "_active_algo_ids"):
+                        self._active_algo_ids: dict[str, set[str]] = {}
+                    self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                    print(
+                        f"[protection] ✅ {symbol} {p_order.reason} → algoId={algo_id} "
+                        f"triggerPrice={price_str} status={algo_resp.get('algoStatus', 'NEW')}"
+                    )
+                else:
+                    err_code = algo_resp.get("code", "unknown")
+                    err_msg = algo_resp.get("msg", str(algo_resp)[:150])
+                    print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
+
+            if exchange_protection_count > 0:
+                print(f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)")
+            else:
+                print(f"[protection] ❌ 0 protection orders placed — all attempts failed, position UNPROTECTED")
+
+        # Update strategy risk on any fill
+        account_balance = float(self._last_account.get("totalWalletBalance", 0))
+        if account_balance > 0:
+            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+            if account_balance > self._peak_equity:
+                self._peak_equity = account_balance
 
     async def _reconcile(self) -> None:
         """对账：系统状态 vs 交易所状态。
