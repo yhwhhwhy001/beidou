@@ -58,3 +58,5 @@ coverage.xml
 *.db-shm
 *.db-wal
 evidence/BD-01/rejections.jsonl
+evidence/factors/
+evidence/mining-runs/
