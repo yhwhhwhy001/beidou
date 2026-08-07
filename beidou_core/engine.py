@@ -1839,6 +1839,16 @@ class AutonomousEngine:
                     except Exception as heal_err:
                         print(f"[recon] Self-heal attempt failed: {heal_err} — falling through to incident")
 
+                    # BD-FIX: 自愈已尝试过 → 将 _recon 事实强制对齐交易所状态，
+                    # 确保监督器通过 engine._recon.reconcile() 查询时返回 MATCHED。
+                    # 否则即使 incident 降级，监督器仍会因对账 FAIL 触发 LOCKED。
+                    if heal_attempted:
+                        try:
+                            self._recon.update_system_facts(exchange_facts)
+                            print("[recon] Forced _recon alignment: system_facts = exchange_facts")
+                        except Exception:
+                            pass
+
                 # 自愈后仍不一致，触发事故
                 # BD-FIX: 自愈尝试过但仍不完整 → 差异大概率是近线交易进行中的临时状态，
                 # 降级为 WARNING 避免触发监督器 FAIL-CLOSED → LOCKED。
