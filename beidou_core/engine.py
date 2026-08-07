@@ -1896,7 +1896,11 @@ class AutonomousEngine:
             print(f"[startup] Exchange protection check error: {e}")
 
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
-        """对保护单缺失的持仓进行重试；-2021 错误使用加宽止损距离。"""
+        """对保护单缺失的持仓进行重试；同时覆盖止损单和止盈单。
+
+        与保护覆盖检查使用相同的 >= 语义：交易所保护单数量 >= 期望数量
+        即视为已覆盖，避免重复下单。仅对确实缺失的订单类型进行补发。
+        """
         if not self._can_write:
             return
         try:
@@ -1916,7 +1920,6 @@ class AutonomousEngine:
                 if symbol not in exchange_symbols:
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
-                active_ids = getattr(self, "_active_algo_ids", {}).get(pos_id, set())
 
                 # 计算该仓位应有保护单数量
                 expected_count = (1 if pp.stop_loss and pp.stop_loss.is_active() else 0) + sum(
@@ -1927,23 +1930,33 @@ class AutonomousEngine:
                 if expected_count > 0 and server_count >= expected_count:
                     continue
 
-                # 该持仓的保护单未在交易所落地 — 重试
-                side = "SELL" if pp.side == OrderSide.BUY else "BUY"
-                prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
-                qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
-
                 retry_count = getattr(self, "_protection_retries", {}).get(pos_id, 0)
                 if retry_count >= 3:
                     continue  # 超过最大重试次数
 
-                # 对重试使用加宽止损 (1 + retry * 0.5) 倍距离
                 widen_factor = 1.0 + retry_count * 0.5
+                side = "SELL" if pp.side == OrderSide.BUY else "BUY"
+                prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
+                placed = 0
 
-                if pp.stop_loss is not None:
+                # --- 重试止损单 ---
+                # server_count < expected_count 说明有缺失，止损单存在即尝试补发
+                if pp.stop_loss is not None and pp.stop_loss.is_active():
                     orig_price = float(pp.stop_loss.trigger_price.amount)
                     current_price = float(self._last_prices.get(symbol, orig_price))
-                    # 扩展止损距离
-                    widened_price = current_price - (current_price - orig_price) * widen_factor if pp.side == OrderSide.BUY else current_price + (orig_price - current_price) * widen_factor
+                    if current_price <= 0:
+                        current_price = orig_price
+                    # 扩展止损距离（远离市价，避免 -2021 立即触发错误）
+                    if pp.side == OrderSide.BUY:
+                        widened_price = current_price * (1 - (1 - orig_price / current_price) * widen_factor)
+                    else:
+                        widened_price = current_price * (1 + (orig_price / current_price - 1) * widen_factor)
+                    # 确保扩展后的价格确实比原价更宽
+                    if pp.side == OrderSide.BUY:
+                        widened_price = min(widened_price, orig_price)
+                    else:
+                        widened_price = max(widened_price, orig_price)
                     price_str = f"{widened_price:.{prec['price']}f}"
                     algo_resp = await self._api_async(
                         "/fapi/v1/algoOrder", method="POST", signed=True,
@@ -1956,13 +1969,50 @@ class AutonomousEngine:
                     )
                     if "algoId" in algo_resp:
                         self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
-                        self._protection_retries.pop(pos_id, None)
                         print(f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}")
+                        placed += 1
                     else:
-                        err_code = algo_resp.get("code", 0)
-                        retries = self._protection_retries.setdefault(pos_id, 0) + 1
-                        self._protection_retries[pos_id] = retries
-                        print(f"[nearline] ⚠️ Stop loss retry #{retries} FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}")
+                        print(f"[nearline] ⚠️ Stop loss retry FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}")
+
+                # --- 重试止盈单 ---
+                for i, tp in enumerate(pp.take_profits):
+                    if not tp.is_active():
+                        continue
+                    orig_tp_price = float(tp.trigger_price.amount)
+                    current_price = float(self._last_prices.get(symbol, orig_tp_price))
+                    if current_price <= 0:
+                        current_price = orig_tp_price
+                    # 扩展止盈距离（远离市价，增加触发空间）
+                    if pp.side == OrderSide.BUY:
+                        widened_tp = current_price * (1 + (orig_tp_price / current_price - 1) * widen_factor)
+                        widened_tp = max(widened_tp, orig_tp_price)
+                    else:
+                        widened_tp = current_price * (1 - (1 - orig_tp_price / current_price) * widen_factor)
+                        widened_tp = min(widened_tp, orig_tp_price)
+                    tp_price_str = f"{widened_tp:.{prec['price']}f}"
+                    tp_resp = await self._api_async(
+                        "/fapi/v1/algoOrder", method="POST", signed=True,
+                        params={
+                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
+                            "type": tp.order_type, "quantity": qty_str,
+                            "triggerPrice": tp_price_str, "reduceOnly": "true",
+                            "workingType": "CONTRACT_PRICE",
+                        },
+                    )
+                    if "algoId" in tp_resp:
+                        self._active_algo_ids.setdefault(pos_id, set()).add(str(tp_resp["algoId"]))
+                        print(f"[nearline] ✅ Retried take profit #{i} for {symbol} (widened {widen_factor:.1f}x) → algoId={tp_resp['algoId']}")
+                        placed += 1
+                    else:
+                        print(f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}")
+
+                if placed > 0:
+                    self._protection_retries.pop(pos_id, None)
+                    print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} orders placed")
+                else:
+                    retries = self._protection_retries.setdefault(pos_id, 0) + 1
+                    self._protection_retries[pos_id] = retries
+                    print(f"[nearline] ⚠️ Protection retry #{retries}/3 FAILED for {symbol}: no orders placed")
 
         except Exception as e:
             print(f"[nearline] Protection retry error: {e}")
