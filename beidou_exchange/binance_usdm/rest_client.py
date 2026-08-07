@@ -97,6 +97,14 @@ class BinanceRESTClient:
 
     # === 签名请求 ===
 
+    async def get_position_mode(self) -> Result[dict]:
+        """获取当前持仓模式 (ONE_WAY / HEDGE)。
+
+        GET /fapi/v1/positionSide/dual (USER_DATA)
+        返回: {"dualSidePosition": true} → HEDGE, false → ONE_WAY
+        """
+        return await self._request("GET", "/fapi/v1/positionSide/dual", signed=True)
+
     async def get_account(self) -> Result[dict]:
         """获取账户信息（余额、仓位）。"""
         return await self._request("GET", "/fapi/v2/account", signed=True)

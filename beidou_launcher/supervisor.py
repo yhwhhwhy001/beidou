@@ -15,6 +15,10 @@ from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
 from .state import EvidenceWriter, InstanceLock
+from beidou_observability.monitoring.contracts import (
+    AccountPositionMode,
+    PositionModeEvidence,
+)
 
 
 class BeidouSupervisor:
@@ -52,6 +56,8 @@ class BeidouSupervisor:
         self._last_exchange_algo_probe = 0.0
         self._exchange_account_snapshot: dict[str, Any] = {"ok": False}
         self._last_exchange_account_probe = 0.0
+        self._position_mode_evidence: PositionModeEvidence | None = None
+        self._last_position_mode_probe = 0.0
         self._shutdown_requested = False
         self._control_paused_by_supervisor = False
         self._engine_failure = ""
@@ -193,6 +199,44 @@ class BeidouSupervisor:
                 "observed_at": time.time(),
             }
 
+    async def _refresh_position_mode(self) -> None:
+        """读取当前账户 Position Mode (ONE_WAY/HEDGE)。
+
+        启动时至少查询一次，运行中每 300s 复查。UNKNOWN 时 P0。
+        mode 运行中变化 → P0 + NO_NEW_RISK + full revalidation (MON00A-06)。
+        """
+        if self.engine is None:
+            return
+        now = time.monotonic()
+        if self._position_mode_evidence is not None and now - self._last_position_mode_probe < 300.0:
+            return
+        self._last_position_mode_probe = now
+        try:
+            response = await self.engine._api_async("/fapi/v1/positionSide/dual", signed=True)
+            if isinstance(response, dict) and "dualSidePosition" in response:
+                dual_side = bool(response["dualSidePosition"])
+                mode = AccountPositionMode.HEDGE if dual_side else AccountPositionMode.ONE_WAY
+                previous = self._position_mode_evidence
+                previous_mode = previous.mode if previous else None
+                self._position_mode_evidence = PositionModeEvidence(
+                    account_id="", venue="BINANCE_USDM",
+                    mode=mode, source="EXCHANGE_USER_DATA",
+                    source_timestamp=time.time(), observed_at=now,
+                    raw_response=response,
+                )
+                if previous_mode is not None and previous_mode != mode and previous_mode != AccountPositionMode.UNKNOWN:
+                    self.writer.write_event("position_mode_changed", {
+                        "previous": previous_mode.value, "current": mode.value, "observed_at": now,
+                    })
+            else:
+                raise RuntimeError(f"Invalid position mode response: {str(response)[:300]}")
+        except Exception as exc:
+            self._position_mode_evidence = PositionModeEvidence(
+                account_id="", venue="BINANCE_USDM",
+                mode=AccountPositionMode.UNKNOWN, source="EXCHANGE_USER_DATA",
+                observed_at=now, error=f"{type(exc).__name__}: {exc}",
+            )
+
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
         """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
         if self.mode != "testnet" or self.engine is None:
@@ -236,6 +280,7 @@ class BeidouSupervisor:
             last_error_count=self._last_error_count,
             exchange_algo_snapshot=self._exchange_algo_snapshot,
             exchange_account_snapshot=self._exchange_account_snapshot,
+            position_mode_evidence=self._position_mode_evidence,
         )
         self._last_error_count = error_count
         return checks
@@ -284,6 +329,7 @@ class BeidouSupervisor:
                         self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                         print(f"[supervisor] Algorithm probe failed: {exc}")
                 await self._refresh_exchange_account_snapshot()
+                await self._refresh_position_mode()
                 await self._refresh_exchange_algo_snapshot()
                 try:
                     checks = self._runtime_checks()
@@ -387,6 +433,7 @@ class BeidouSupervisor:
         while not self._engine_task.done():
             await asyncio.sleep(self.monitor_interval)
             await self._refresh_exchange_account_snapshot()
+            await self._refresh_position_mode()
             await self._refresh_exchange_algo_snapshot()
             checks = self._runtime_checks()
             if await self._recover_if_validated(checks):
