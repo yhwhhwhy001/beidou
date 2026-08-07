@@ -1415,7 +1415,7 @@ class AutonomousEngine:
 
             self._store.save_order_state(
                 str(order["orderId"]),
-                symbol,
+                order_symbol,
                 side,
                 order_type,
                 str(float(intent.quantity.amount)),
