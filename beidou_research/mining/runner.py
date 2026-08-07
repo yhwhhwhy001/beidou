@@ -276,7 +276,10 @@ class MiningRunner:
 
         for candidate in screened[:50]:  # 限制评估数量
             factor_vals = candidate["factor_values"]
-            returns_aligned = label_returns[: len(factor_vals)]
+            # 因子值从 bar window_offset 开始，对齐 label_returns 中对应的未来收益
+            # (meanrev 的 window 或 momentum 的 lag 产生的偏移)
+            window_offset = candidate.get("window", candidate.get("lag", 1))
+            returns_aligned = label_returns[window_offset : window_offset + len(factor_vals)]
 
             if len(returns_aligned) < 50:
                 continue
@@ -333,9 +336,9 @@ class MiningRunner:
             bundle.seal()
             evidence_bundles.append(bundle)
 
-            # 持久化
+            # 持久化（品种前缀避免多品种覆盖）
             self._store.save_factor_version(
-                candidate["hash"],
+                f"{symbol}:{candidate['hash']}",
                 "2.0.0",
                 bundle.to_dict(),
             )

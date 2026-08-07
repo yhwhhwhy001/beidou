@@ -29,9 +29,24 @@ def cli():
 @cli.command()
 @click.option("--policy", required=True, help="因子挖掘 policy YAML 路径")
 @click.option("--config", default=None, help="研究数据集配置 YAML 路径")
-@click.option("--output-dir", default="evidence/mining-runs", help="输出目录")
+@click.option("--output-dir", default="evidence/factors", help="证据输出目录")
+@click.option("--symbol", default="BTCUSDT", show_default=True, help="交易品种")
+@click.option(
+    "--interval",
+    default="1h",
+    show_default=True,
+    type=click.Choice(["1m", "5m", "15m", "1h", "4h", "1d"]),
+    help="K 线粒度",
+)
+@click.option(
+    "--limit",
+    default=500,
+    show_default=True,
+    type=click.IntRange(100, 1500),
+    help="K 线条数",
+)
 @click.option("--dry-run", is_flag=True, help="仅验证配置，不执行挖掘")
-def run(policy: str, config: str | None, output_dir: str, dry_run: bool):
+def run(policy: str, config: str | None, output_dir: str, symbol: str, interval: str, limit: int, dry_run: bool):
     """执行因子挖掘运行。"""
     click.echo(f"[factor_miner] 启动挖掘运行 (policy={policy})")
 
@@ -52,39 +67,67 @@ def run(policy: str, config: str | None, output_dir: str, dry_run: bool):
         click.echo("[factor_miner] 配置验证通过")
         return
 
-    click.echo("[factor_miner] 全量挖掘运行...")
+    # 离线研究工具默认连 testnet，确保 MarketDataFeed 读取 config/env.testnet.yaml
+    os.environ.setdefault("BEIDOU_ENV", "testnet")
+
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+
+    click.echo(f"[factor_miner] 全量挖掘运行 (symbol={symbol}, interval={interval}, limit={limit})...")
 
     try:
         from beidou_research.mining.runner import MiningRunner, PipelineConfig
 
         pipeline_config = PipelineConfig.from_yaml(policy)
+        pipeline_config.evidence_dir = output_dir
         runner = MiningRunner(pipeline_config)
 
         # 从 MarketDataFeed 拉取历史 K 线作为 price_data
         from beidou_core.feed import MarketDataFeed
-        from beidou_core.engine import DEFAULT_UNIVERSE
 
         feed = MarketDataFeed()
-        symbols = DEFAULT_UNIVERSE[:5]  # 默认前 5 个活跃标的
-        click.echo(f"[factor_miner] 拉取 {len(symbols)} 个标的的历史数据...")
+        click.echo(f"[factor_miner] 拉取 {symbol} {interval} K 线数据...")
 
-        price_data: dict[str, list[dict]] = {}
-        for sym in symbols:
-            try:
-                kline_features = feed.get_kline_features(sym)
-                if kline_features:
-                    price_data[sym] = kline_features
-                    click.echo(f"  {sym}: {len(kline_features)} 条 K 线")
-            except Exception as exc:
-                click.echo(f"  {sym}: 跳过 ({type(exc).__name__})")
-
-        if not price_data:
-            click.echo("[factor_miner] ERROR: 无法获取任何标的的历史数据", err=True)
+        klines = feed.fetch_klines(symbol, interval=interval, limit=limit)
+        if not klines:
+            click.echo(f"[factor_miner] ERROR: 无法获取 {symbol} 的历史 K 线数据", err=True)
             sys.exit(1)
 
-        click.echo(f"[factor_miner] 开始挖掘 ({len(price_data)} 个标的)...")
-        result = runner.run(price_data=price_data)
-        click.echo(f"[factor_miner] 完成: {result}")
+        # 将 Binance kline 字段映射为 MiningRunner 期望的 PricePoint 格式
+        price_data = [
+            {
+                "timestamp": k["open_time"],  # datetime → PricePoint.timestamp
+                "close": k["close"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "volume": k["volume"],
+            }
+            for k in klines
+        ]
+
+        click.echo(f"  {symbol}: {len(price_data)} 条 K 线")
+
+        click.echo(f"[factor_miner] 开始挖掘 {symbol}...")
+        result = runner.run(
+            price_data=price_data,
+            venue="BINANCE",
+            symbol=symbol,
+            timeframe=interval,
+        )
+        click.echo(f"[factor_miner] 完成!")
+        click.echo(f"  Run ID:       {result.run_id}")
+        click.echo(f"  候选生成:     {result.candidates_generated}")
+        click.echo(f"  预筛通过:     {result.candidates_screened}")
+        click.echo(f"  评估完成:     {result.candidates_evaluated}")
+        click.echo(f"  Gate PASS:    {result.candidates_passed}")
+        click.echo(f"  失败分类:     {result.failure_taxonomy}")
+        click.echo(f"  运行时间:     {result.runtime_seconds:.2f}s")
+        click.echo(f"  状态:         {result.status}")
+        if result.evidence_bundles:
+            click.echo(f"  证据包数量:   {len(result.evidence_bundles)}")
+            passed = sum(1 for b in result.evidence_bundles if b.gate_decision == "PASS")
+            click.echo(f"  证据包 PASS:  {passed}")
 
     except ImportError as e:
         click.echo(f"[factor_miner] ERROR: 缺少依赖: {e}", err=True)
@@ -93,6 +136,7 @@ def run(policy: str, config: str | None, output_dir: str, dry_run: bool):
     except Exception as exc:
         click.echo(f"[factor_miner] ERROR: {type(exc).__name__}: {exc}", err=True)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -114,7 +158,7 @@ def report(run_id: str, format: str):
     # 尝试加载已有证据
     import glob
 
-    evidence_dir = "evidence/mining-runs"
+    evidence_dir = "evidence/factors"
     patterns = [
         f"{evidence_dir}/**/{run_id}*.json",
         f"{evidence_dir}/*.json",
