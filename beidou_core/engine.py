@@ -2001,6 +2001,13 @@ class AutonomousEngine:
                             continue
                     pos_id = f"pos-{symbol}"
                     pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
+                    # BD-FIX: 使用自适应计算器生成保护参数，避免 stop_loss/take_profits
+                    # 为 None/空导致保护覆盖检查 expected_orders=0 → FAIL。
+                    # AdaptiveProtectionCalculator 在 kline 缺失时有内置保守默认值。
+                    kline_features = self._feed.get_kline_features(symbol)
+                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(
+                        symbol, entry, kline_features
+                    )
                     self._protection.create_protection(
                         position_id=pos_id,
                         instrument_id=InstrumentId(symbol),
@@ -2008,8 +2015,14 @@ class AutonomousEngine:
                         entry_price=entry,
                         quantity=abs(amt),
                         side=pos_side,
+                        stop_loss_config=adaptive_cfg.stop_loss_config,
+                        take_profit_config=adaptive_cfg.take_profit_config,
                     )
                     registered += 1
+                    print(
+                        f"[startup] Registered {symbol} position {pos_id} with "
+                        f"SL={adaptive_cfg.stop_pct:.1f}% RR={adaptive_cfg.rr_ratio:.1f}"
+                    )
                 except Exception:
                     pass
             if registered:
