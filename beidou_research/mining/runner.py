@@ -357,6 +357,113 @@ class MiningRunner:
             )
 
         # ================================================================
+        # Phase 4.5: 交互因子 & 残差因子（基于 PASS 候选的因子值）
+        # ================================================================
+        passed_screened = [screened[i] for i, b in enumerate(evidence_bundles) if b.gate_decision == "PASS"]
+        if len(passed_screened) >= 2:
+            # 交互因子：PASS 候选的两两乘法组合
+            for i in range(min(len(passed_screened), 5)):
+                for j in range(i + 1, min(len(passed_screened), 5)):
+                    fv_a = passed_screened[i]["factor_values"]
+                    fv_b = passed_screened[j]["factor_values"]
+                    n_interact = min(len(fv_a), len(fv_b), len(label_returns))
+                    # 逐对乘法，NaN 安全
+                    interact_vals = []
+                    interact_returns = []
+                    for k in range(n_interact):
+                        if _is_finite(fv_a[k]) and _is_finite(fv_b[k]) and _is_finite(label_returns[k]):
+                            interact_vals.append(fv_a[k] * fv_b[k])
+                            interact_returns.append(label_returns[k])
+
+                    if len(interact_vals) < 50:
+                        continue
+
+                    ic = _compute_ic(interact_vals, interact_returns)
+                    inter_id = f"interact_{passed_screened[i].get('factor_id','a')}_{passed_screened[j].get('factor_id','b')}"
+                    inter_hash = hashlib.sha256(inter_id.encode()).hexdigest()[:20]
+                    bundle = EvidenceBundle(
+                        bundle_id=f"{run_id}-inter-{inter_hash[:8]}",
+                        candidate_id=inter_hash,
+                        factor_id=inter_id,
+                        factor_version="2.0.0",
+                        candidate_hash=inter_hash,
+                        factor_expression_hash=inter_hash,
+                        dataset_manifest_hash=dataset_manifest_hash,
+                        label_spec_hash=label_spec.to_hash(),
+                        cost_model_version="bf06-v1",
+                        policy_version="2.0.0",
+                        random_seed=self.config.random_seed,
+                        raw_metrics={
+                            "ic_mean": round(ic, 6),
+                            "sharpe": round(_compute_sharpe(interact_returns), 4),
+                            "sample_count": len(interact_vals),
+                        },
+                        stability_results=[],
+                        cost_capacity_results={},
+                        gate_decision="PASS" if ic > 0.02 else "FAIL",
+                        failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
+                    )
+                    bundle.seal()
+                    evidence_bundles.append(bundle)
+                    self._store.save_factor_version(
+                        f"{symbol}:{inter_hash}",
+                        "2.0.0",
+                        bundle.to_dict(),
+                    )
+
+            # 残差因子：对 top-3 PASS 候选做彼此残差化
+            top_pass = sorted(passed_screened, key=lambda c: _compute_ic(c["factor_values"], label_returns[:len(c["factor_values"])]), reverse=True)[:3]
+            if len(top_pass) >= 2:
+                try:
+                    from .generators.residual import compute_residual_values
+
+                    control_fvs = {c.get("factor_id", f"ctrl_{j}"): c["factor_values"] for j, c in enumerate(top_pass[1:])}
+                    residual_vals = compute_residual_values(top_pass[0]["factor_values"], control_fvs)
+                    n_res = min(len(residual_vals), len(label_returns))
+                    res_pairs = [
+                        (residual_vals[k], label_returns[k])
+                        for k in range(n_res)
+                        if _is_finite(residual_vals[k]) and _is_finite(label_returns[k])
+                    ]
+                    if len(res_pairs) >= 50:
+                        res_vals = [p[0] for p in res_pairs]
+                        res_rets = [p[1] for p in res_pairs]
+                        ic = _compute_ic(res_vals, res_rets)
+                        res_id = f"residual_{top_pass[0].get('factor_id','a')}"
+                        res_hash = hashlib.sha256(res_id.encode()).hexdigest()[:20]
+                        bundle = EvidenceBundle(
+                            bundle_id=f"{run_id}-res-{res_hash[:8]}",
+                            candidate_id=res_hash,
+                            factor_id=res_id,
+                            factor_version="2.0.0",
+                            candidate_hash=res_hash,
+                            factor_expression_hash=res_hash,
+                            dataset_manifest_hash=dataset_manifest_hash,
+                            label_spec_hash=label_spec.to_hash(),
+                            cost_model_version="bf06-v1",
+                            policy_version="2.0.0",
+                            random_seed=self.config.random_seed,
+                            raw_metrics={
+                                "ic_mean": round(ic, 6),
+                                "sharpe": round(_compute_sharpe(res_rets), 4),
+                                "sample_count": len(res_vals),
+                            },
+                            stability_results=[],
+                            cost_capacity_results={},
+                            gate_decision="PASS" if ic > 0.02 else "FAIL",
+                            failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
+                        )
+                        bundle.seal()
+                        evidence_bundles.append(bundle)
+                        self._store.save_factor_version(
+                            f"{symbol}:{res_hash}",
+                            "2.0.0",
+                            bundle.to_dict(),
+                        )
+                except Exception:
+                    pass  # 残差化失败不影响主流程
+
+        # ================================================================
         # Phase 5: 多因子汇总
         # ================================================================
         self._notify(progress_callback, "finalizing", 4, 5)
@@ -398,6 +505,7 @@ class MiningRunner:
             ("volume", ExprType.VOLUME),
             ("log_return", ExprType.RETURN),
             ("spread", ExprType.RATE),
+            ("rsi", ExprType.RATE),
         ]:
             self._registry.register(FeatureDef(name=name, type=etype))
 
@@ -429,6 +537,30 @@ class MiningRunner:
             if closes[i] > 0:
                 spread[i] = (highs[i] - lows[i]) / closes[i]
 
+        # RSI(14) — Wilder's smoothing
+        rsi = [0.0] * n
+        period = 14
+        if n > period:
+            gains = [0.0] * n
+            losses = [0.0] * n
+            for i in range(1, n):
+                delta = closes[i] - closes[i - 1]
+                if delta > 0:
+                    gains[i] = delta
+                else:
+                    losses[i] = -delta
+            avg_gain = sum(gains[1:period + 1]) / period
+            avg_loss = sum(losses[1:period + 1]) / period
+            for i in range(period, n):
+                if i > period:
+                    avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+                    avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+                if avg_loss == 0:
+                    rsi[i] = 100.0 if avg_gain > 0 else 0.0
+                else:
+                    rs = avg_gain / avg_loss
+                    rsi[i] = 100.0 - 100.0 / (1.0 + rs)
+
         self._feature_dict = {
             "close": closes,
             "open": opens,
@@ -437,6 +569,7 @@ class MiningRunner:
             "volume": volumes,
             "log_return": log_return,
             "spread": spread,
+            "rsi": rsi,
         }
         return self._feature_dict
 

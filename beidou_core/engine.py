@@ -988,6 +988,52 @@ class AutonomousEngine:
         self._filter_ids = {"momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1"}
         self._exit_ids = {"trailing_exit_v1", "time_exit_v1"}
 
+        # ================================================================
+        # Fix 1: 接线 Factor Registry → 控制面 API
+        # ================================================================
+        if hasattr(self._control, "wire_factor_registry"):
+            self._control.wire_factor_registry(self._factor_registry)
+
+        # ================================================================
+        # Fix 2: 启动 CertificationManager
+        # ================================================================
+        try:
+            from beidou_certification.engine import CertificationManager, G5TestnetCertification, G6ShadowCertification
+
+            self._cert_manager = CertificationManager()
+            if self._env_mode.value in ("testnet", "shadow"):
+                self._cert_manager.register_framework(G5TestnetCertification())
+            if self._env_mode.value in ("shadow",):
+                self._cert_manager.register_framework(G6ShadowCertification())
+        except Exception:
+            self._cert_manager = None
+
+        # ================================================================
+        # Fix 3: 接线 ProductionLadder
+        # ================================================================
+        try:
+            from beidou_certification.engine import ProductionLadder as CertProductionLadder
+
+            if self._cert_manager is not None:
+                self._production_ladder = CertProductionLadder(self._cert_manager)
+            else:
+                self._production_ladder = None
+        except Exception:
+            self._production_ladder = None
+
+        # ================================================================
+        # Fix 4: 接线 ChaosEngine（环境变量开关）
+        # ================================================================
+        self._chaos_engine = None
+        if os.environ.get("BEIDOU_CHAOS_ENABLED", "").lower() == "true":
+            try:
+                from beidou_chaos.engine import ChaosEngine
+
+                self._chaos_engine = ChaosEngine()
+                print("[beidou-autopilot] ChaosEngine activated")
+            except Exception as exc:
+                print(f"[beidou-autopilot] ChaosEngine init failed: {exc}")
+
         self._alpha_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
 
         # 仅添加 FactorRegistry 中标记为 ACTIVE 的因子组件
