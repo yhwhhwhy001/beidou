@@ -1934,8 +1934,8 @@ class AutonomousEngine:
                 if retry_count >= 3:
                     continue  # 超过最大重试次数
 
-                # 首次重试即加宽 (1.5x)，之后每次递增 0.5x
-                widen_factor = 1.5 + retry_count * 0.5
+                # 首次重试即加宽 (2.0x)，之后每次递增 0.5x
+                widen_factor = 2.0 + retry_count * 0.5
                 side = "SELL" if pp.side == OrderSide.BUY else "BUY"
                 prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
                 qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
