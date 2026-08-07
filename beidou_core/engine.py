@@ -727,6 +727,7 @@ class AutonomousEngine:
 
         # Business modules
         self._protection = ProtectionManager()
+        self._protection_retries: dict[str, int] = {}  # 保护单重试计数
         self._outbox = IntentOutbox()
         self._ledger = ImmutableLedger()
         self._recon = ReconciliationEngine()

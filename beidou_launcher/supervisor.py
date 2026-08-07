@@ -42,6 +42,7 @@ class BeidouSupervisor:
         self.monitor_interval = monitor_interval
         self.self_heal = self_heal
         self.max_restarts = max_restarts
+        self.recovery_window_seconds: float = 600.0  # 10 分钟滑动窗口
         self.writer = EvidenceWriter(project_root)
         self.lock = InstanceLock(project_root / ".beidou" / "beidou.pid")
         self.report = StartupReport(mode=mode, symbols=symbols, port=port, commit=current_commit(project_root))
@@ -62,6 +63,7 @@ class BeidouSupervisor:
         self._control_paused_by_supervisor = False
         self._engine_failure = ""
         self._recovery_count = 0
+        self._recovery_timestamps: list[float] = []  # 时间窗口恢复追踪
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
@@ -402,7 +404,13 @@ class BeidouSupervisor:
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
         if state_value != "DEGRADED":
             return False
-        if not self.self_heal or self._recovery_count >= self.max_restarts:
+        # 时间窗口恢复计数：清理过期记录，仅在窗口内超限时拒绝
+        now = time.monotonic()
+        self._recovery_timestamps = [
+            t for t in self._recovery_timestamps
+            if now - t < self.recovery_window_seconds
+        ]
+        if not self.self_heal or len(self._recovery_timestamps) >= self.max_restarts:
             return False
 
         persistent_blockers = [
@@ -423,10 +431,13 @@ class BeidouSupervisor:
             self.engine._control.execute_action(ControlAction.RESUME)
             self._control_paused_by_supervisor = False
         self._critical_streak = 0
+        self._recovery_timestamps.append(time.monotonic())
         self._recovery_count += 1
+        window_active = len(self._recovery_timestamps)
         print(
             f"[supervisor] RECOVERED: RECOVERING → VALIDATING → ACTIVE "
-            f"({self._recovery_count}/{self.max_restarts})"
+            f"({window_active}/{self.max_restarts} in {self.recovery_window_seconds:.0f}s window, "
+            f"total={self._recovery_count})"
         )
         return True
 
