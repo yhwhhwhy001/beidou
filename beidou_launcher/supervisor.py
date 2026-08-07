@@ -331,7 +331,8 @@ class BeidouSupervisor:
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
     # 可在运行时自愈的瞬时阻断项（心跳、行情延迟等）；
-    # 对账 MISMATCHED、保护缺失等持久阻断项不在此列。
+    # 对账 MISMATCHED 在活跃交易中是瞬时状态 — 引擎有 _sync_exchange_state()
+    # 和 _reconcile() 自愈逻辑，可在数秒内修复。只有连续多轮无法自愈时才需人工干预。
     _TRANSIENT_CHECK_IDS = frozenset({
         "runtime.health.realtime_heartbeat",
         "runtime.health.nearline_heartbeat",
@@ -339,6 +340,8 @@ class BeidouSupervisor:
         "runtime.health.http_server",
         "runtime.health.errors",
         "runtime.health.account_snapshot",
+        "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
+        "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
     })
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
