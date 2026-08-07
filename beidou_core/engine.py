@@ -949,7 +949,6 @@ class AutonomousEngine:
         print(
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
-        print(f"[beidou-autopilot] Active factors for trading: {active_factors}")
         if is_production and not active_factors:
             print("[beidou-autopilot] WARNING: No ACTIVE factors — system will not generate trading signals")
 
@@ -959,39 +958,96 @@ class AutonomousEngine:
         self._last_factor_close: dict[str, float] = {}  # symbol → last close for return calc
 
         # ================================================================
-        # Alpha Graph — 8-component DAG
+        # Alpha Graph — Registry-driven component assembly (BF-08)
+        #
+        # 组件注册表：factor_id → (ComponentClass, edges_to)
+        # AlphaGraph 从 FactorRegistry.get_active() 动态构建，
+        # 不再硬编码组件列表。新增因子通过注册表自动接入。
         # ================================================================
+        self._factor_component_registry: dict[str, tuple[type, tuple[str, ...]]] = {
+            "meanrev_entry_v1": (MeanReversionEntry, ()),
+            "trend_entry_v1": (TrendFollowingEntry, ()),
+            "breakout_entry_v1": (BreakoutEntry, ()),
+            "momentum_filter_v1": (MomentumFilter, ()),
+            "volatility_filter_v1": (VolatilityFilter, ()),
+            "volume_filter_v1": (VolumeFilter, ()),
+            "trailing_exit_v1": (TrailingExit, ()),
+            "time_exit_v1": (TimeExit, ()),
+        }
+        # Type-based auto-wiring: ENTRY → FILTER → EXIT
+        self._entry_ids = {"meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1"}
+        self._filter_ids = {"momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1"}
+        self._exit_ids = {"trailing_exit_v1", "time_exit_v1"}
+
         self._alpha_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
-        self._alpha_graph.add_component(MeanReversionEntry())
-        self._alpha_graph.add_component(TrendFollowingEntry())
-        self._alpha_graph.add_component(BreakoutEntry())
-        self._alpha_graph.add_component(MomentumFilter())
-        self._alpha_graph.add_component(VolatilityFilter())
-        self._alpha_graph.add_component(VolumeFilter())
-        self._alpha_graph.add_component(TrailingExit())
-        self._alpha_graph.add_component(TimeExit())
-        # DAG topology: ENTRY → FILTER → EXIT
-        # meanrev → momentum_filter, volatility_filter, volume_filter
-        self._alpha_graph.connect("meanrev_entry_v1", "momentum_filter_v1")
-        self._alpha_graph.connect("meanrev_entry_v1", "volatility_filter_v1")
-        self._alpha_graph.connect("meanrev_entry_v1", "volume_filter_v1")
-        # trend → same filters
-        self._alpha_graph.connect("trend_entry_v1", "momentum_filter_v1")
-        self._alpha_graph.connect("trend_entry_v1", "volatility_filter_v1")
-        self._alpha_graph.connect("trend_entry_v1", "volume_filter_v1")
-        # breakout → same filters
-        self._alpha_graph.connect("breakout_entry_v1", "momentum_filter_v1")
-        self._alpha_graph.connect("breakout_entry_v1", "volatility_filter_v1")
-        self._alpha_graph.connect("breakout_entry_v1", "volume_filter_v1")
-        # filters → exits (only evaluated when position active)
-        self._alpha_graph.connect("momentum_filter_v1", "trailing_exit_v1")
-        self._alpha_graph.connect("volatility_filter_v1", "trailing_exit_v1")
-        self._alpha_graph.connect("volume_filter_v1", "time_exit_v1")
+
+        # 仅添加 FactorRegistry 中标记为 ACTIVE 的因子组件
+        added_components: list[str] = []
+        active_factor_ids = [fid for fid in active_factors if fid in self._factor_component_registry]
+        for fid in active_factor_ids:
+            component_cls, _ = self._factor_component_registry[fid]
+            self._alpha_graph.add_component(component_cls())
+            added_components.append(fid)
+
+        # Auto-wire ENTRY → FILTER → EXIT based on type sets
+        for entry_id in added_components:
+            if entry_id in self._entry_ids:
+                for filter_id in added_components:
+                    if filter_id in self._filter_ids:
+                        self._alpha_graph.connect(entry_id, filter_id)
+
+        for filter_id in added_components:
+            if filter_id in self._filter_ids:
+                for exit_id in added_components:
+                    if exit_id in self._exit_ids:
+                        self._alpha_graph.connect(filter_id, exit_id)
+
         order = self._alpha_graph.topological_order()
+        print(f"[beidou-autopilot] Active factors for trading: {active_factor_ids}")
         print(f"[beidou-autopilot] DAG order: {order}")
+        if len(order) < 2:
+            print(
+                "[beidou-autopilot] WARNING: AlphaGraph has < 2 components — "
+                "system may not generate meaningful signals. "
+                "Check FactorRegistry for ACTIVE factors."
+            )
 
         # BD-T05: Wrap legacy AlphaGraph in StrategyKernel contract for parity checking
         self._strategy_kernel = StrategyKernelContract()
+
+    def _rebuild_alpha_graph(self) -> None:
+        """BF-08: 从 FactorRegistry 重建 AlphaGraph。
+
+        当因子生命周期变更（promotion/degradation/suspension）时调用，
+        确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
+        """
+        active_factor_ids = [fid for fid in self._factor_registry.get_active()
+                             if fid in self._factor_component_registry]
+
+        new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
+        for fid in active_factor_ids:
+            component_cls, _ = self._factor_component_registry[fid]
+            new_graph.add_component(component_cls())
+
+        # Re-wire ENTRY → FILTER → EXIT
+        added = set(active_factor_ids)
+        for entry_id in added & self._entry_ids:
+            for filter_id in added & self._filter_ids:
+                new_graph.connect(entry_id, filter_id)
+        for filter_id in added & self._filter_ids:
+            for exit_id in added & self._exit_ids:
+                new_graph.connect(filter_id, exit_id)
+
+        order = new_graph.topological_order()
+        self._alpha_graph = new_graph
+        # Ensure prediction tracking covers all active factors
+        for fid in active_factor_ids:
+            if fid not in self._factor_predictions:
+                self._factor_predictions[fid] = []
+        print(
+            f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, "
+            f"DAG order: {order}"
+        )
         self._kernel_mode = KernelMode.PAPER  # default; TESTNET when write enabled
         self._kernel_parity: str = ""
 
@@ -2751,6 +2807,7 @@ class AutonomousEngine:
             # === 1. Factor evaluation: compute live IC/ICIR from tracked predictions ===
             print(f"[offline] Factor evaluation: {len(self._factor_returns)} return samples")
             if len(self._factor_returns) > 10:
+                lifecycle_changed = False
                 for fid in self._factor_predictions:
                     preds = self._factor_predictions[fid]
                     returns = (
@@ -2812,9 +2869,15 @@ class AutonomousEngine:
                                 category="factor",
                             )
                             print(f"[offline] Factor {fid}: DEGRADED (ICIR={icir:.3f} < 0.2)")
+                            lifecycle_changed = True
                         elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
                             self._factor_registry.promote_to_active(fid)
                             print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
+                            lifecycle_changed = True
+
+                # Rebuild AlphaGraph if any factor lifecycle changed
+                if lifecycle_changed:
+                    self._rebuild_alpha_graph()
 
                 # Trim prediction buffers
                 max_buf = 500

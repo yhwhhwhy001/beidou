@@ -53,10 +53,48 @@ def run(policy: str, config: str | None, output_dir: str, dry_run: bool):
         return
 
     click.echo("[factor_miner] 全量挖掘运行...")
-    click.echo("[factor_miner] 提示: 请使用 Python API 启动挖掘，提供 price_data:")
-    click.echo("  from beidou_research.mining.runner import MiningRunner, PipelineConfig")
-    click.echo("  runner = MiningRunner(PipelineConfig.from_yaml('config/factor_mining_policy.yaml'))")
-    click.echo("  result = runner.run(price_data=your_data)")
+
+    try:
+        from beidou_research.mining.runner import MiningRunner, PipelineConfig
+
+        pipeline_config = PipelineConfig.from_yaml(policy)
+        runner = MiningRunner(pipeline_config)
+
+        # 从 MarketDataFeed 拉取历史 K 线作为 price_data
+        from beidou_core.feed import MarketDataFeed
+        from beidou_core.engine import DEFAULT_UNIVERSE
+
+        feed = MarketDataFeed()
+        symbols = DEFAULT_UNIVERSE[:5]  # 默认前 5 个活跃标的
+        click.echo(f"[factor_miner] 拉取 {len(symbols)} 个标的的历史数据...")
+
+        price_data: dict[str, list[dict]] = {}
+        for sym in symbols:
+            try:
+                kline_features = feed.get_kline_features(sym)
+                if kline_features:
+                    price_data[sym] = kline_features
+                    click.echo(f"  {sym}: {len(kline_features)} 条 K 线")
+            except Exception as exc:
+                click.echo(f"  {sym}: 跳过 ({type(exc).__name__})")
+
+        if not price_data:
+            click.echo("[factor_miner] ERROR: 无法获取任何标的的历史数据", err=True)
+            sys.exit(1)
+
+        click.echo(f"[factor_miner] 开始挖掘 ({len(price_data)} 个标的)...")
+        result = runner.run(price_data=price_data)
+        click.echo(f"[factor_miner] 完成: {result}")
+
+    except ImportError as e:
+        click.echo(f"[factor_miner] ERROR: 缺少依赖: {e}", err=True)
+        click.echo("  提示: 请确保 beidou_research 和 beidou_core 包可导入")
+        sys.exit(1)
+    except Exception as exc:
+        click.echo(f"[factor_miner] ERROR: {type(exc).__name__}: {exc}", err=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 @cli.command()
