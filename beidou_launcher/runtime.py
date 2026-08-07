@@ -76,6 +76,53 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
         }
 
 
+def _append_position_mode_check(
+    checks: list[CheckResult], evidence: Any, now: float,
+) -> None:
+    """MON00A: Position Mode 运行时检查。
+
+    - UNKNOWN → P0 FAIL (MON00A-05)
+    - 无 evidence → P1 WARN (启动阶段)
+    - ONE_WAY/HEDGE → PASS
+    """
+    if evidence is None:
+        checks.append(CheckResult(
+            check_id="runtime.safety.position_mode",
+            name="账户持仓模式",
+            status=CheckStatus.WARN, severity=CheckSeverity.P1,
+            message="Position Mode 尚未查询，等待交易所响应",
+            evidence={"mode": "UNKNOWN", "reason": "NO_EVIDENCE_YET"},
+        ))
+        return
+
+    mode = getattr(evidence, "mode", None)
+    if mode is None or str(mode) == "AccountPositionMode.UNKNOWN" or (
+        hasattr(mode, "value") and mode.value == "UNKNOWN"
+    ):
+        checks.append(CheckResult(
+            check_id="runtime.safety.position_mode",
+            name="账户持仓模式",
+            status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+            message=f"Position Mode UNKNOWN: {getattr(evidence, 'error', 'API_FAILURE')} — 阻止新增风险",
+            evidence={"mode": "UNKNOWN", "error": getattr(evidence, "error", None)},
+        ))
+        return
+
+    mode_str = mode.value if hasattr(mode, "value") else str(mode)
+    checks.append(CheckResult(
+        check_id="runtime.safety.position_mode",
+        name="账户持仓模式",
+        status=CheckStatus.PASS, severity=CheckSeverity.P0,
+        message=f"Position Mode: {mode_str}",
+        evidence={
+            "mode": mode_str,
+            "source": getattr(evidence, "source", ""),
+            "source_timestamp": getattr(evidence, "source_timestamp", None),
+            "observed_at": getattr(evidence, "observed_at", 0.0),
+        },
+    ))
+
+
 def collect_runtime_checks(
     *,
     engine: Any,
@@ -86,9 +133,13 @@ def collect_runtime_checks(
     last_error_count: int,
     exchange_algo_snapshot: dict[str, Any] | None = None,
     exchange_account_snapshot: dict[str, Any] | None = None,
+    position_mode_evidence: Any = None,
 ) -> tuple[list[CheckResult], int]:
     checks = inspect_engine_wiring(engine, mode)
     now = time.time()
+
+    # Position Mode 检查 (PKG-MON-00A)
+    _append_position_mode_check(checks, position_mode_evidence, now)
 
     lifecycle = getattr(getattr(engine, "_lifecycle", None), "state", None)
     lifecycle_value = str(getattr(lifecycle, "value", lifecycle))

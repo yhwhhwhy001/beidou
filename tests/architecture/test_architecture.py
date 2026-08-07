@@ -305,3 +305,74 @@ def test_only_adapter_accesses_binance_api() -> None:
             + "\n已知违规(待 BD-02 修复):\n"
             + "\n".join(v for v in violations if any(kv in v for kv in KNOWN_VIOLATIONS_UNTIL_BD02))
         )
+
+
+# ================================================================
+# MON00-08: 监控模块架构边界 — 监控代码不得直接发出风险增加订单
+# ================================================================
+
+MONITORING_PACKAGES = {"beidou_observability", "beidou_launcher"}
+MONITORING_SCRIPTS = {"scripts/ops_monitor.py"}
+
+RISK_INCREASING_PATTERNS = [
+    "/fapi/v1/order",
+    "/fapi/v1/batchOrders",
+    "POST /fapi/v1/order",
+    "place_order(",
+    "create_order(",
+    "send_order(",
+    "set_leverage(",
+    "change_position_mode(",
+    "change_margin_type(",
+]
+
+RISK_INCREASING_ALLOWLIST = {
+    "stuck_new_orders",
+    "risk_increase_allowed",
+}
+
+
+def test_monitoring_code_no_risk_increasing_orders() -> None:
+    """MON00-08: 监控代码不得直接发出风险增加订单。
+
+    Monitor 只能读取权威事实、写入 evidence/incident、
+    通过既有 Control Plane 执行安全动作。
+    严禁在监控路径中直接调用下单/改杠杆/改保证金等风险增加操作。
+    """
+    root = Path(__file__).resolve().parent.parent.parent
+    violations: list[str] = []
+
+    for pkg_name in MONITORING_PACKAGES:
+        pkg_dir = root / pkg_name
+        if not pkg_dir.exists():
+            continue
+        for pyfile in pkg_dir.rglob("*.py"):
+            if "__pycache__" in str(pyfile):
+                continue
+            content = pyfile.read_text(encoding="utf-8")
+            rel = pyfile.relative_to(root)
+            for pattern in RISK_INCREASING_PATTERNS:
+                if pattern in content:
+                    is_allowlisted = any(
+                        aw in content and pattern in aw
+                        for aw in RISK_INCREASING_ALLOWLIST
+                    )
+                    if not is_allowlisted:
+                        violations.append(f"{rel}: 监控代码包含禁止的风险增加模式 '{pattern}'")
+
+    for script_path in MONITORING_SCRIPTS:
+        full_path = root / script_path
+        if not full_path.exists():
+            continue
+        content = full_path.read_text(encoding="utf-8")
+        for pattern in RISK_INCREASING_PATTERNS:
+            if pattern in content:
+                is_allowlisted = any(aw in content and pattern in aw for aw in RISK_INCREASING_ALLOWLIST)
+                if not is_allowlisted:
+                    violations.append(f"{script_path}: 监控脚本包含禁止的风险增加模式 '{pattern}'")
+
+    assert not violations, (
+        "监控代码严禁直接发出风险增加订单。"
+        "Monitor 只能通过既有 Control Plane 执行安全动作。"
+        "\n违规:\n" + "\n".join(violations)
+    )
