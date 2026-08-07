@@ -1032,12 +1032,32 @@ class AutonomousEngine:
 
         所有异步代码必须使用此方法，禁止直接 urllib/requests/httpx。
         BinanceRESTClient 提供统一错误分类、限频退避和熔断。
+
+        注意: 失败时返回 {"error": code, "msg": "..."} dict。
+        调用方必须检查 "error" 键是否存在，不可将错误响应当作正常数据。
+        对于关键状态读取，优先使用 _api_async_safe() 以防止熔断级联。
         """
         result = await self._exchange.request(method, path, signed, params)
         if result.is_success():
             return result.data
         err = result.error
         return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+
+    async def _api_async_safe(
+        self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None
+    ) -> tuple[Any, bool]:
+        """安全 API 调用 — 返回 (data, ok) 元组。
+
+        与 _api_async 不同，失败时不返回伪 dict，而是返回 (None, False)。
+        关键状态读取（账户、持仓、订单）必须使用此方法，
+        防止熔断/限流返回的 {"error": ...} 被当作正常数据覆盖有效状态。
+        """
+        result = await self._exchange.request(method, path, signed, params)
+        if result.is_success():
+            return result.data, True
+        err = result.error
+        print(f"[api] {path} FAILED: {err.message if err else 'unknown'} — state NOT updated")
+        return None, False
 
     def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """同步兼容包装 — 委托给 BinanceRESTClient（BD-02 Adapter 边界）。
@@ -1691,14 +1711,19 @@ class AutonomousEngine:
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
 
     async def _reconcile(self) -> None:
-        """对账：系统状态 vs 交易所状态。"""
+        """对账：系统状态 vs 交易所状态。
+
+        熔断保护: API 失败时跳过本轮对账，保留上一次有效对账结果，
+        防止熔断返回的空数据覆盖真实状态引发假阳性 MISMATCH。
+        """
         try:
             # 对账优先使用完整 account 端点（含 positions），失败则回退 balance
-            account = await self._api_async("/fapi/v2/account", signed=True)
-            if "totalWalletBalance" not in account:
+            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            if not ok or "totalWalletBalance" not in account:
                 # 回退：balance 端点无 positions，仅对账余额
-                account = await self._api_async("/fapi/v2/balance", signed=True)
-                if "totalWalletBalance" not in account:
+                account, ok = await self._api_async_safe("/fapi/v2/balance", signed=True)
+                if not ok or "totalWalletBalance" not in account:
+                    print("[recon] SKIP: API unavailable (circuit breaker / rate limit) — keeping last known state")
                     return
 
             balance = float(account.get("totalWalletBalance", 0))
@@ -1712,9 +1737,11 @@ class AutonomousEngine:
 
             exchange_open_order_ids: list[str] = []
             try:
-                open_orders = await self._api_async("/fapi/v1/openOrders", signed=True)
-                if isinstance(open_orders, list):
+                open_orders, orders_ok = await self._api_async_safe("/fapi/v1/openOrders", signed=True)
+                if orders_ok and isinstance(open_orders, list):
                     exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
+                elif not orders_ok:
+                    print("[recon] Open orders query skipped (API unavailable)")
             except Exception as e:
                 print(f"[realtime] Open orders query failed: {e}")
 
@@ -2764,7 +2791,16 @@ class AutonomousEngine:
         self._exchange.reset_circuit_breaker()
 
         try:
-            account = await self._api_async("/fapi/v2/account", signed=True)
+            # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
+            account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+            if not ok or "positions" not in account:
+                print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
+                await asyncio.sleep(3)
+                self._exchange.reset_circuit_breaker()
+                account, ok = await self._api_async_safe("/fapi/v2/account", signed=True)
+                if not ok:
+                    print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable)")
+                    return
             positions_list = account.get("positions", [])
             # Phase 1: 本地创建所有保护单
             pending_submissions: list[dict] = []
