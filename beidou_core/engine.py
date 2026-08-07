@@ -3064,14 +3064,17 @@ class AutonomousEngine:
 
         # Verify account access
         account = await self._api_async(Endpoint.ACCOUNT, signed=True)
-        if "totalWalletBalance" not in account and "assets" not in account:
+        # demo testnet 返回 canTrade/canDeposit，无 totalWalletBalance
+        if "totalWalletBalance" not in account and "assets" not in account and "canTrade" not in account:
             print("[beidou-autopilot] FATAL: Cannot access account")
             self._lifecycle.transition(ModuleState.FAILED)
             return
-        if "totalWalletBalance" not in account:
-            print("[beidou-autopilot] WARN: account response missing totalWalletBalance, using 0")
         self._last_account = account
         init_equity = float(account.get("totalWalletBalance", 0))
+        if init_equity == 0 and "canTrade" in account:
+            # demo testnet 模式下用默认模拟余额
+            init_equity = 10000.0
+            print(f"[beidou-autopilot] Testnet account OK (simulated equity={init_equity})")
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
