@@ -2,8 +2,6 @@
 # Phase 1 (BD-03): PostgreSQL + Redis + MinIO
 # 默认仅绑定 localhost
 
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
