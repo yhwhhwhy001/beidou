@@ -3064,10 +3064,12 @@ class AutonomousEngine:
 
         # Verify account access
         account = await self._api_async(Endpoint.ACCOUNT, signed=True)
-        if "totalWalletBalance" not in account:
+        if "totalWalletBalance" not in account and "assets" not in account:
             print("[beidou-autopilot] FATAL: Cannot access account")
             self._lifecycle.transition(ModuleState.FAILED)
             return
+        if "totalWalletBalance" not in account:
+            print("[beidou-autopilot] WARN: account response missing totalWalletBalance, using 0")
         self._last_account = account
         init_equity = float(account.get("totalWalletBalance", 0))
         self._peak_equity = init_equity
