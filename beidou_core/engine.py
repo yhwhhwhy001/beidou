@@ -3043,7 +3043,10 @@ class AutonomousEngine:
 
     async def _start_loops(self) -> None:
         """启动三层时钟域事件循环（testnet 快速跳过 API 恢复）。"""
+        # 确保 health server 已启动
+        self._health.start()
         self._running = True
+        print("[beidou-autopilot] Health server started")
         async def _rt():
             while self._running:
                 try: await self._realtime_tick()
