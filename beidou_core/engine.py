@@ -2305,9 +2305,9 @@ class AutonomousEngine:
                         print(f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}")
 
                 # 重置计数器（成功或重试完成都更新最后尝试时间）
+                self._protection_retries[f"{pos_id}_last"] = time.time()
                 if server_count + placed >= expected_count:
                     self._protection_retries.pop(pos_id, None)
-                self._protection_retries[f"{pos_id}_last"] = time.time()
                     print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}")
                 elif placed > 0:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
