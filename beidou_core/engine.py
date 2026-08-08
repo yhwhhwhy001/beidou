@@ -1870,7 +1870,11 @@ class AutonomousEngine:
             if exchange_protection_count > 0:
                 print(f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)")
             else:
-                print(f"[protection] ❌ 0 protection orders placed — all attempts failed, position UNPROTECTED")
+                print(f"[protection] ❌ 0 protection orders placed — all attempts failed, will retry in nearline cycle")
+                # 标记待重试，确保 _retry_missing_protections 优先处理
+                if not hasattr(self, "_pending_protection_retry"):
+                    self._pending_protection_retry: set[str] = set()
+                self._pending_protection_retry.add(pos_id)
 
         # Update strategy risk on any fill
         account_balance = float(self._last_account.get("totalWalletBalance", 0))
@@ -2233,20 +2237,27 @@ class AutonomousEngine:
         if not self._can_write:
             return
         try:
-            # 查询交易所已有的 algo 订单
+            # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
             existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
-            if not isinstance(existing_algos, list):
-                return
+            api_ok = isinstance(existing_algos, list)
             exchange_algo_symbols: dict[str, set[str]] = {}
-            for item in existing_algos:
-                sym = str(item.get("symbol", ""))
-                aid = str(item.get("algoId", ""))
-                if sym and aid:
-                    exchange_algo_symbols.setdefault(sym, set()).add(aid)
+            if api_ok:
+                for item in existing_algos:
+                    sym = str(item.get("symbol", ""))
+                    aid = str(item.get("algoId", ""))
+                    if sym and aid:
+                        exchange_algo_symbols.setdefault(sym, set()).add(aid)
 
-            for pos_id, pp in list(self._protection.all_positions().items()):
+            # 优先处理提交失败的待重试持仓
+            pending = getattr(self, "_pending_protection_retry", set())
+            positions = sorted(
+                self._protection.all_positions().items(),
+                key=lambda x: (x[0] not in pending, x[0])  # pending first
+            )
+            for pos_id, pp in positions:
                 symbol = str(pp.instrument_id)
-                if symbol not in exchange_symbols:
+                # API 正常时仅处理有交易所仓位的品种；API 失败时处理所有
+                if api_ok and symbol not in exchange_symbols:
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
 
@@ -2355,6 +2366,7 @@ class AutonomousEngine:
                 self._protection_retries[f"{pos_id}_last"] = time.time()
                 if server_count + placed >= expected_count:
                     self._protection_retries.pop(pos_id, None)
+                    pending.discard(pos_id)  # 成功，移除待重试标记
                     print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}")
                 elif placed > 0:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
