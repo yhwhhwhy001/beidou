@@ -1888,8 +1888,18 @@ class AutonomousEngine:
         slices, algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
+        # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
+        # TWAP 默认 60s 间隔，POV/Adaptive 按切片数均分 alpha_decay_seconds。
+        n_slices = len(slices)
+        slice_interval = 0.0
+        if n_slices > 1:
+            default_interval = getattr(ctx, "alpha_decay_seconds", 60.0) / max(n_slices, 1)
+            slice_interval = max(2.0, min(default_interval, 120.0))  # 2s~120s 范围
         intent_acked = False
-        for qty_str, price_str, order_type, tif, slice_client_id in slices:
+        for idx, (qty_str, price_str, order_type, tif, slice_client_id) in enumerate(slices):
+            # 切片间等待（首个切片立即发送）
+            if idx > 0 and slice_interval > 0:
+                await asyncio.sleep(slice_interval)
             params = {
                 "symbol": order_symbol,
                 "side": side,
@@ -4548,6 +4558,13 @@ class AutonomousEngine:
                 except Exception as e:
                     print(f"[shutdown] Failed to cancel order {order_id}: {e}")
         print(f"[beidou-autopilot] 2. Cancelled {len(self._active_order_ids)} pending orders")
+
+        # 2b. BD-FIX: 停止 WebSocket 连接
+        try:
+            await self._feed.stop_ws()
+            print("[beidou-autopilot] 2b. WebSocket stopped")
+        except Exception as e:
+            print(f"[shutdown] WS stop error: {e}")
 
         # 3. Save checkpoint
         self._mapek.save_checkpoint(

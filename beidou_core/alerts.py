@@ -66,8 +66,8 @@ class AlertDispatcher:
             self._dispatch(incident)
             return incident
 
-        # 检查抑制
-        if self._suppressor.should_suppress(severity, f"{category}:{title}"):
+        # 检查抑制 (BD-FIX: 传递 category/title 用于指纹去重)
+        if self._suppressor.should_suppress(severity, f"{category}:{title}", category=category, title=title):
             return incident
 
         self._dispatch(incident)

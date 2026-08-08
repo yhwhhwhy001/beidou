@@ -149,9 +149,9 @@ class MarketDataFeed:
                 await self._ws_client.subscribe(f"{sym_lower}@depth5@100ms", _on_depth)
                 await self._ws_client.subscribe(f"{sym_lower}@markPrice@1s", _on_mark_price)
 
-            # 启动连接（后台任务）
+            # 启动连接（后台任务）BD-FIX: 保存任务引用以便停止追踪
             import asyncio as _asyncio
-            _asyncio.create_task(self._ws_client.run())
+            self._ws_task = _asyncio.create_task(self._ws_client.run())
             self._ws_active = True
             print(f"[feed] WebSocket started: {len(symbols) * 3} streams for {len(symbols)} symbols")
             return True
@@ -160,6 +160,23 @@ class MarketDataFeed:
             self._ws_client = None
             self._ws_active = False
             return False
+
+    async def stop_ws(self) -> None:
+        """BD-FIX: 安全停止 WebSocket 连接。"""
+        if self._ws_client is not None:
+            try:
+                await self._ws_client.disconnect()
+            except Exception:
+                pass
+            self._ws_client = None
+        if hasattr(self, "_ws_task") and self._ws_task is not None:
+            self._ws_task.cancel()
+            try:
+                await self._ws_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._ws_task = None
+        self._ws_active = False
 
     def is_ws_data_fresh(self, symbol: str) -> bool:
         """检查 WebSocket 数据是否新鲜。超过阈值返回 False（触发 REST 回退）。"""
