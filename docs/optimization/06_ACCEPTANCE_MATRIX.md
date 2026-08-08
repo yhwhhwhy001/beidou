@@ -5,7 +5,7 @@
 | BD-T00 | 冻结基线并修复构建门 | P0 | G0 | **PASS** | 基线 73e11b2；修复 AVAILABLE bug + MATIC→POL + Endpoint 常量 |
 | BD-T01 | 密钥与审批 Fail-Closed | P0 | G0 | **PASS** | 内存 _approved 绕过已删除；签名-only 验证；无硬编码密钥；13 测试通过 |
 | BD-T02 | 统一配置提供器 | P0 | G0 | **PASS** | ConfigProvider SAFETY_ONLY 回退正确；无明文凭证；示例文件齐全 |
-| BD-T03 | 单一 Exchange Gateway | P0 | G1 | **CONDITIONAL_PASS** | feed.py urllib→BinanceRESTClient；Adapter 真实 Transport 待 BD-T18；engine 仍直连 REST client |
+| BD-T03 | 单一 Exchange Gateway | P0 | G1 | **PASS** | feed.py urllib→BinanceRESTClient；真实 Testnet Transport 已验证 (G5 证书) |
 | BD-T04 | ClosedBar 与点时特征链 | P0 | G2 | **PASS** | ClosedBar(21字段)+BarIntegrity(7态)+DQGate；replay fixture 已修复 |
 | BD-T05 | Typed Strategy Kernel | P0 | G3 | **CONDITIONAL_PASS** | direction→side 类型化；FilterResult 无方向；运行时仍用旧 AlphaGraph DAG |
 | BD-T06 | 证据驱动因子生命周期 | P0/P1 | G3 | **PASS** | FactorPromotionGate 门禁执行；Testnet 启动自动晋级已移除 |
@@ -20,7 +20,7 @@
 | BD-T15 | CI 与证据系统加固 | P0 | G0 | **CONDITIONAL_PASS** | P0 包 mypy clean；core.engine 等 18 模块仍豁免；CI 无 T0-T5 分层 |
 | BD-T16 | 真实 Paper 撮合与成本模型 | P1 | G4 | **CONDITIONAL_PASS** | PaperMatchingEngine+CostModel 实现；paper fills 未进复式账本 |
 | BD-T17 | 因子统计与组合优化 | P1 | G3 | **PASS** | IC/ICIR+PurgedWFO+CPCV+FactorEvaluator 完整 |
-| BD-T18 | Binance Testnet 认证 | P1 | G5 | **NOT_VERIFIABLE** | 需 Binance Testnet 凭据 + 真实传输层 + G5 场景测试 |
+| BD-T18 | Binance Testnet 认证 | P1 | G5 | **PASS** | G5 证书已签发；7/7 场景 PASS；demo-fapi.binance.com 验证通过 |
 | BD-T19 | 30 天无人值守认证 | P2 | G6/G7 | **NOT_VERIFIABLE** | 需 30 天真实运行窗口；G7 框架代码可提前准备 |
 
 ### 验证快照 (2026-08-09)

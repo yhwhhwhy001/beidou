@@ -1,0 +1,47 @@
+{
+  "gate": "G5",
+  "status": "PASS",
+  "commit": "6303c6cb45b8342e54927dd6e23d6368bb584164",
+  "testnet_url": "https://demo-fapi.binance.com",
+  "timestamp": "2026-08-08T16:49:00.566139+00:00",
+  "evidence_hash": "2ee161b7fcbacf3b1066ebe40986772e7044fb54fa62941dc14d0f300bd3b4ea",
+  "scenarios": {
+    "server_time": {
+      "status": "PASS",
+      "server_time": 1786207716045
+    },
+    "account_access": {
+      "status": "PASS",
+      "can_trade": true,
+      "can_withdraw": true,
+      "has_balance": true
+    },
+    "exchange_info": {
+      "status": "PASS",
+      "symbol": "BTCUSDT"
+    },
+    "position_mode": {
+      "status": "PASS",
+      "dual_side": false
+    },
+    "open_orders": {
+      "status": "PASS",
+      "count": 0
+    },
+    "reconciliation": {
+      "status": "PASS",
+      "positions": 6
+    },
+    "idempotency": {
+      "status": "PASS",
+      "client_order_id": "g5-cert-1786207740566",
+      "note": "Idempotency framework verified (no duplicate orders from same clientOrderId)"
+    }
+  },
+  "summary": {
+    "total": 7,
+    "pass": 7,
+    "warn": 0,
+    "fail": 0
+  }
+}
