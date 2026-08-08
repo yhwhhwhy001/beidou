@@ -1324,7 +1324,7 @@ class AutonomousEngine:
         # State
         self._running = False
         self._last_realtime = time.time()
-        self._last_nearline = time.time()
+        self._last_nearline = 0.0  # 设为 0 使首次近线 tick 立即执行（而非等 300s）
         self._last_offline = time.time()
         self._last_recon = time.time()
         self._tick_count = 0
