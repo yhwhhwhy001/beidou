@@ -268,12 +268,143 @@ class MarketDataFeed:
         return klines
 
     async def async_update_features(self, symbol: str) -> dict[str, float]:
-        """异步版本 — 在线程池中执行同步 I/O，不阻塞事件循环。"""
-        return await asyncio.to_thread(self.update_features, symbol)
+        """异步版本 — 直接使用共享 REST client，零线程池开销。
+
+        替换原来的 asyncio.to_thread(update_features)，避免嵌套事件循环
+        和线程池耗尽。所有网络 I/O 通过共享 client 的 asyncio.to_thread
+        在单层事件循环中执行。
+        """
+        try:
+            ticker_result = await self._client.request("GET", Endpoint.TICKER_24HR, params={"symbol": symbol})
+            orderbook_result = await self._client.request("GET", Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
+        except Exception:
+            return {}
+
+        if not ticker_result.is_success() or not orderbook_result.is_success():
+            return {}
+
+        ticker = ticker_result.data
+        orderbook = orderbook_result.data
+
+        if "lastPrice" not in ticker or "bids" not in orderbook:
+            return {}
+
+        self._last_ticker[symbol] = ticker
+        self._last_orderbook[symbol] = orderbook
+
+        # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
+        try:
+            last_price = float(ticker["lastPrice"])
+            if symbol not in self._kline_generators:
+                self._kline_generators[symbol] = KLineGenerator(interval="5m")
+            kg = self._kline_generators[symbol]
+            kg.update(
+                price=last_price,
+                volume=float(ticker.get("volume", 0)),
+                timestamp=datetime.now(timezone.utc),
+            )
+        except Exception:
+            pass
+
+        last_price = float(ticker["lastPrice"])
+        bids = orderbook.get("bids", [])
+        asks = orderbook.get("asks", [])
+        if not bids or not asks:
+            best_bid = last_price * 0.999
+            best_ask = last_price * 1.001
+        else:
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+        spread_bps = (best_ask - best_bid) / best_ask * 10000 if best_ask > 0 else 1.0
+        change_pct = float(ticker.get("priceChangePercent", 0))
+
+        features = {
+            "price": last_price,
+            "bid": best_bid,
+            "ask": best_ask,
+            "spread_bps": spread_bps,
+            "change_24h_pct": change_pct,
+            "volume_24h": float(ticker.get("volume", 0)),
+            "high_24h": float(ticker.get("highPrice", 0)),
+            "low_24h": float(ticker.get("lowPrice", 0)),
+        }
+
+        instrument_id = InstrumentId(symbol)
+        venue_id = VenueId("BINANCE")
+        vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
+
+        # 将实时 tick 喂入 KLineGenerator
+        try:
+            gen = self._get_kline_generator(symbol, "1h")
+            gen.process_tick(
+                vi,
+                Price(amount=str(last_price)),
+                Quantity(amount=str(ticker.get("lastQty", "0")) or "0"),
+                datetime.now(timezone.utc),
+                is_taker_buy=True,
+            )
+        except Exception:
+            self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
+            self._last_error_time = time.time()
+
+        gate = DataQualityGate(venue_instrument=vi)
+        gate.checks.append(
+            DQCheckResult(
+                check_type=DQCheckType.FRESHNESS,
+                tier=DataQualityTier.PASS,
+                detail="live_ticker",
+            )
+        )
+        if spread_bps < 100:
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.COMPLETENESS,
+                    tier=DataQualityTier.PASS,
+                    detail=f"spread={spread_bps:.1f}bps",
+                )
+            )
+
+        self._feature_store.store(
+            FeatureVector(
+                name=f"{symbol.lower()}_live",
+                values=features,
+                timestamp=datetime.now(timezone.utc),
+                instrument_id=instrument_id,
+                venue_id=venue_id,
+                version=SchemaVersion("2.0.0"),
+            )
+        )
+
+        return features
 
     async def async_get_kline_features(self, symbol: str, interval: str = "1h", lookback: int = 100) -> dict[str, float]:
-        """异步版本 — 在线程池中执行同步 I/O，不阻塞事件循环。"""
-        return await asyncio.to_thread(self.get_kline_features, symbol, interval, lookback)
+        """异步版本 — 直接使用共享 REST client，零线程池开销。"""
+        kline_result = await self._client.request(
+            "GET", Endpoint.KLINES,
+            params={"symbol": symbol, "interval": interval, "limit": lookback},
+        )
+        if not kline_result.is_success():
+            return {}
+
+        raw = kline_result.data
+        if not isinstance(raw, list):
+            return {}
+
+        klines = []
+        for k in raw:
+            klines.append({
+                "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+                "volume": float(k[5]),
+                "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
+                "quote_volume": float(k[7]),
+                "trades": k[8],
+            })
+
+        return self._compute_kline_features(symbol, interval, klines)
 
     # --- Data fetching (sync) ---
 
@@ -438,7 +569,6 @@ class MarketDataFeed:
                     "trades": gen_last.trade_count,
                 }
         elif not klines and len(gen_klines) >= 20:
-            # REST 不可用时直接用生成 K 线计算特征
             klines = [
                 {
                     "open_time": k.open_time,
@@ -453,6 +583,10 @@ class MarketDataFeed:
                 }
                 for k in gen_klines
             ]
+        return self._compute_kline_features(symbol, interval, klines)
+
+    def _compute_kline_features(self, symbol: str, interval: str, klines: list[dict]) -> dict[str, float]:
+        """从 K 线数据计算技术指标特征。同步和异步路径共享。"""
         if len(klines) < 20:
             return {}
 

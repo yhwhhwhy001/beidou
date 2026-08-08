@@ -17,8 +17,8 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
     started = time.perf_counter()
     try:
         feed = engine._feed
-        kline_features = await asyncio.to_thread(feed.get_kline_features, symbol)
-        live_features = await asyncio.to_thread(feed.update_features, symbol)
+        kline_features = await feed.async_get_kline_features(symbol)
+        live_features = await feed.async_update_features(symbol)
         features = {**kline_features, **live_features}
         if not kline_features or not live_features or float(features.get("close", features.get("price", 0))) <= 0:
             raise RuntimeError("真实 K 线、ticker 或 orderbook 不完整")
