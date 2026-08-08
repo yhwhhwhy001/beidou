@@ -3732,16 +3732,25 @@ class AutonomousEngine:
                     risk_approval_id=str(approval_id),
                 )
 
-                # P1修复: 接线 _pre_risk — 检查 notional/leverage/集中度/在途订单上限
-                pre_risk_ok, pre_risk_reason = self._pre_risk.check(
-                    account_balance=account_balance,
-                    position_notional=position_notional,
-                    leverage=dyn_leverage,
-                    pending_orders=len(self._active_order_ids),
-                    max_position_notional=self._policy_float(
-                        "max_position_notional", self._settings.production.max_position_notional
-                    ),
+                # P1修复: 内联 PreRisk 检查 — 避免 PreRiskCheckerImpl.check() 签名不匹配
+                # 检查 notional/leverage/集中度/在途订单上限
+                max_notional = self._policy_float(
+                    "max_position_notional", self._settings.production.max_position_notional
                 )
+                pre_risk_ok = True
+                pre_risk_reason = ""
+                if dyn_leverage > self._pre_risk.max_leverage:
+                    pre_risk_ok = False
+                    pre_risk_reason = f"leverage {dyn_leverage} > max {self._pre_risk.max_leverage}"
+                elif position_notional > max_notional:
+                    pre_risk_ok = False
+                    pre_risk_reason = f"notional {position_notional:.0f} > max {max_notional:.0f}"
+                elif position_notional > account_balance * dyn_leverage:
+                    pre_risk_ok = False
+                    pre_risk_reason = f"notional exceeds margin (balance={account_balance:.0f} lev={dyn_leverage}x)"
+                elif len(self._active_order_ids) >= 50:
+                    pre_risk_ok = False
+                    pre_risk_reason = f"too many pending orders ({len(self._active_order_ids)})"
                 if not pre_risk_ok:
                     print(f"[nearline] {symbol}: ❌ Pre-risk REJECTED: {pre_risk_reason}")
                     continue
