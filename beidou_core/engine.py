@@ -3847,7 +3847,7 @@ class AutonomousEngine:
 
                         # === ModelRegistry: 因子模型注册 + Champion/Challenger 轮换 ===
                         # 每个因子作为策略模型注册，性能指标 (IC/ICIR/RankIC) 进入 Champion 评选
-                        model_version = SchemaVersion(str(record.version))
+                        model_version = SchemaVersion(str(record.definition.version))
                         model_id = ModelId(f"{fid}-v{model_version}")
                         model_metrics = {
                             "ic": ic_mean,
