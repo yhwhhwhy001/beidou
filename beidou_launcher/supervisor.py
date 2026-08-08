@@ -198,7 +198,11 @@ class BeidouSupervisor:
             return
         # testnet/paper 跳过（同步 urllib 阻塞事件循环）
         if self.mode in ("testnet", "paper"):
-            self._exchange_account_snapshot = {"ok": True, "account": {}, "observed_at": time.time()}
+            self._exchange_account_snapshot = {
+                "ok": True,
+                "account": {"totalWalletBalance": 10000.0, "positions": []},
+                "observed_at": time.time(),
+            }
             return
         now = time.monotonic()
         if now - self._last_exchange_account_probe < 15.0:
