@@ -3146,6 +3146,9 @@ class AutonomousEngine:
         # testnet/paper: 跳过所有阻塞性 API 恢复流程
         if self._env_mode.value in ("testnet", "paper"):
             print("[beidou-autopilot] Skipping API-heavy startup recovery (testnet/paper)")
+            # 生命周期链：BOOTSTRAPPING → WARMING → VALIDATING → ACTIVE
+            self._lifecycle.transition(ModuleState.WARMING)
+            self._lifecycle.transition(ModuleState.VALIDATING)
             self._lifecycle.transition(ModuleState.ACTIVE)
             print("[beidou-autopilot] Engine ACTIVE — entering main loop")
             await self._start_loops()
