@@ -18,6 +18,7 @@ class LeaseState(str, Enum):
     EXPIRED = "EXPIRED"
     REVOKED = "REVOKED"
     FENCED = "FENCED"  # 旧 generation 被隔离
+    UNKNOWN = "UNKNOWN"  # 后端不可达，租约状态未知 — fail-closed
 
 
 @dataclass
@@ -35,9 +36,11 @@ class FencingLease:
     acquired_at: float = field(default_factory=time.monotonic)
 
     def is_valid(self) -> bool:
-        """租约是否仍然有效。"""
+        """租约是否仍然有效。UNKNOWN 状态视为无效（fail-closed）。"""
         if self.state != LeaseState.ACQUIRED:
             return False
+        if self.state == LeaseState.UNKNOWN:
+            return False  # 显式拒绝
         if time.monotonic() - self.acquired_at > self.ttl_seconds:
             self.state = LeaseState.EXPIRED
             return False
@@ -135,8 +138,8 @@ class LeaseManager:
                 else:
                     lease.state = LeaseState.ACQUIRED  # 续约
         except Exception:
-            # Redis 不可用→回退到单实例模式
-            lease.state = LeaseState.ACQUIRED
+            # Redis 不可用 → UNKNOWN（fail-closed，禁止自动回退到单实例模式）
+            lease.state = LeaseState.UNKNOWN
 
     @staticmethod
     def _try_pg_acquire(lease: FencingLease) -> None:
@@ -155,4 +158,5 @@ class LeaseManager:
             else:
                 lease.state = LeaseState.FENCED
         except Exception:
-            lease.state = LeaseState.ACQUIRED
+            # PostgreSQL 不可达 → UNKNOWN（fail-closed）
+            lease.state = LeaseState.UNKNOWN

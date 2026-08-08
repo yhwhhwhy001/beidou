@@ -41,6 +41,14 @@ class ModelRegistry:
             self._models[sid] = []
         self._models[sid].append(model)
 
+    def register_model(self, model: ModelRecord) -> None:
+        """注册模型（register 的语义别名，供调用方统一命名）。"""
+        self.register(model)
+
+    def list_models(self, strategy_id: StrategyId) -> list[ModelRecord]:
+        """列出策略下所有已注册模型（含 Champion/Challenger/Archived）。"""
+        return list(self._models.get(strategy_id, []))
+
     def promote_to_champion(self, strategy_id: StrategyId, model_id: ModelId) -> bool:
         models = self._models.get(strategy_id, [])
         for m in models:

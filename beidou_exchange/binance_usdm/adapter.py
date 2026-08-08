@@ -205,15 +205,37 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         """查询账户余额。失败/无连接返回 UNKNOWN，绝不返回 EMPTY。"""
         if not self._health_monitor.is_safe_for_new_risk():
             return ResultStatus.UNKNOWN, {}
-        # BD-T03: 当 REST client 就绪后，替换为真实 API 调用
-        # 当前阶段未连接真实交易所，返回 UNKNOWN 而非 EMPTY
+        if self._rest_client is not None:
+            try:
+                result = await self._rest_client.request("GET", "/fapi/v2/balance", signed=True)
+                if isinstance(result, list):
+                    balances: dict[str, MonetaryValue] = {}
+                    for b in result:
+                        asset = b.get("asset", "")
+                        bal = b.get("balance", "0")
+                        if float(bal) > 0:
+                            balances[asset] = MonetaryValue(amount=bal)
+                    return ResultStatus.AVAILABLE, balances
+            except Exception:
+                pass
         return ResultStatus.UNKNOWN, {}
 
     async def get_positions(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, Quantity]]:
         """查询持仓。失败/无连接返回 UNKNOWN，绝不返回 EMPTY。"""
         if not self._health_monitor.is_safe_for_new_risk():
             return ResultStatus.UNKNOWN, {}
-        # BD-T03: 当 REST client 就绪后，替换为真实 API 调用
+        if self._rest_client is not None:
+            try:
+                result = await self._rest_client.request("GET", "/fapi/v2/account", signed=True)
+                if isinstance(result, dict) and "positions" in result:
+                    positions: dict[str, Quantity] = {}
+                    for p in result["positions"]:
+                        amt = float(p.get("positionAmt", 0))
+                        if abs(amt) > 0:
+                            positions[p["symbol"]] = Quantity(amount=str(abs(amt)))
+                    return ResultStatus.AVAILABLE, positions
+            except Exception:
+                pass
         return ResultStatus.UNKNOWN, {}
 
     async def create_order(self, request: OrderRequest) -> OrderResponse:
@@ -237,37 +259,37 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         # BD-T18: 有真实传输层时走 API，否则返回 UNKNOWN
         if self._rest_client is not None:
             try:
-                import asyncio
+                from beidou_shared.types import Price as _Price
 
-                result = asyncio.get_event_loop().run_until_complete(
-                    self._rest_client.create_order(
-                        symbol=str(request.venue_instrument.instrument_id),
-                        side=request.side.value if hasattr(request.side, "value") else str(request.side),
-                        order_type=request.order_type.value
-                        if hasattr(request.order_type, "value")
-                        else str(request.order_type),
-                        quantity=float(request.quantity.amount),
-                        price=float(request.price.amount) if request.price else None,
-                        time_in_force=request.time_in_force or "GTC",
-                        client_order_id=request.client_order_id or "",
-                    )
+                result = await self._rest_client.request(
+                    "POST",
+                    "/fapi/v1/order",
+                    signed=True,
+                    params={
+                        "symbol": str(request.venue_instrument.instrument_id),
+                        "side": request.side.value if hasattr(request.side, "value") else str(request.side),
+                        "type": request.order_type.value if hasattr(request.order_type, "value") else str(request.order_type),
+                        "quantity": str(float(request.quantity.amount)),
+                        "price": str(float(request.price.amount)) if request.price else None,
+                        "timeInForce": request.time_in_force or "GTC",
+                        "newClientOrderId": request.client_order_id or "",
+                    },
                 )
-                if result.is_ok and result.data:
-                    data = result.data
+                if isinstance(result, dict) and "orderId" in result:
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
-                        order_id=str(data.get("orderId", "")),
+                        order_id=str(result.get("orderId", "")),
                         client_order_id=request.client_order_id,
                         status=OrderStatus.NEW,
                         side=request.side,
                         order_type=request.order_type,
                         original_quantity=request.quantity,
-                        executed_quantity=Quantity(amount=str(data.get("executedQty", "0"))),
-                        average_price=Price(amount=str(data.get("avgPrice", "0"))) if data.get("avgPrice") else None,
+                        executed_quantity=Quantity(amount=str(result.get("executedQty", "0"))),
+                        average_price=_Price(amount=str(result.get("avgPrice", "0"))) if result.get("avgPrice") else None,
                         commission=None,
                         correlation_id=request.correlation_id,
-                        raw_response=data,
+                        raw_response=result,
                     )
             except Exception:
                 pass

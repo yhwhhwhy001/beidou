@@ -41,6 +41,34 @@ class Endpoint:
     LISTEN_KEY: str = "/fapi/v1/listenKey"
 
 
+class WSEndpoint:
+    """Binance USDⓈ-M Futures WebSocket 端点。"""
+
+    # 公开行情流 (wss://)
+    WS_BASE: str = "wss://fstream.binance.com"
+    WS_BASE_TESTNET: str = "wss://stream.binancefuture.com"
+
+    # 组合流前缀
+    COMBINED_STREAM: str = "/stream?streams="
+
+    # 单流后缀 (小写)
+    TICKER: str = "@ticker"
+    MINI_TICKER: str = "@miniTicker"
+    BOOK_TICKER: str = "@bookTicker"
+    DEPTH5: str = "@depth5@100ms"
+    DEPTH10: str = "@depth10@100ms"
+    DEPTH20: str = "@depth20@100ms"
+    KLINE_1M: str = "@kline_1m"
+    KLINE_5M: str = "@kline_5m"
+    KLINE_1H: str = "@kline_1h"
+    AGG_TRADE: str = "@aggTrade"
+    MARK_PRICE: str = "@markPrice@1s"
+    FUNDING_RATE_WS: str = "@fundingRate"
+
+    # 用户数据流 (需要 listenKey)
+    USER_DATA: str = "/ws/"
+
+
 # 客户端默认参数
 DEFAULT_RECV_WINDOW_MS: int = 60_000
 DEFAULT_MAX_RETRIES: int = 3

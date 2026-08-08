@@ -74,3 +74,15 @@ class TradingPoolManager:
         if entry.capacity_used_pct >= 100.0:
             return ResultStatus.ERROR
         return ResultStatus.SUCCESS
+
+    def update_capacity(self, vi: VenueInstrument, notional: float) -> None:
+        """BD-FIX: 更新容量使用率 — 下单/平仓时调用。"""
+        entry = self._pool.get(self._key(vi))
+        if entry is not None and entry.max_position_notional > 0:
+            entry.capacity_used_pct = min(100.0, (notional / entry.max_position_notional) * 100.0)
+
+    def reset_capacity(self, vi: VenueInstrument) -> None:
+        """BD-FIX: 平仓后重置容量使用率。"""
+        entry = self._pool.get(self._key(vi))
+        if entry is not None:
+            entry.capacity_used_pct = 0.0

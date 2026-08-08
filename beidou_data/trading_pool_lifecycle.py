@@ -56,6 +56,8 @@ class PoolEntry:
     quarantine_reason: str | None = None
     scores: list[InstrumentScore] = field(default_factory=list)
     min_observation_hours: float = 24.0  # 最少观察24小时
+    capacity_used_pct: float = 0.0  # BD-FIX: 容量使用率追踪
+    max_position_notional: float = 0.0  # BD-FIX: 最大持仓名义值
 
 
 class TradingPool:
@@ -143,4 +145,21 @@ class TradingPool:
 
     def is_tradable(self, instrument_id: str) -> bool:
         entry = self._pool.get(instrument_id)
-        return entry is not None and entry.status == PoolStatus.ACTIVE
+        if entry is None or entry.status != PoolStatus.ACTIVE:
+            return False
+        # BD-FIX: 容量门禁 — capacity_used_pct >= 100% 不可交易
+        if entry.capacity_used_pct >= 100.0:
+            return False
+        return True
+
+    def update_capacity(self, instrument_id: str, notional: float) -> None:
+        """BD-FIX: 更新容量使用率。下单时增加，平仓后减少。"""
+        entry = self._pool.get(instrument_id)
+        if entry is not None and entry.max_position_notional > 0:
+            entry.capacity_used_pct = min(100.0, max(0.0, (notional / entry.max_position_notional) * 100.0))
+
+    def set_max_position_notional(self, instrument_id: str, max_notional: float) -> None:
+        """BD-FIX: 设置最大持仓名义值（用于容量计算）。"""
+        entry = self._pool.get(instrument_id)
+        if entry is not None:
+            entry.max_position_notional = max_notional

@@ -118,7 +118,8 @@ class TestOrderStateMachine:
 
 
 class TestImmutableLedger:
-    def test_post_and_balance(self):
+    def test_post_balanced_entries_and_ledger_balance(self):
+        """BD-FIX: 复式记账要求每笔记账平衡 (debit==credit)。"""
         ledger = ImmutableLedger()
         entry = JournalEntry(
             entry_id="je-001",
@@ -126,13 +127,29 @@ class TestImmutableLedger:
             venue_id=VenueId("BINANCE"),
             instrument_id=InstrumentId("BTCUSDT"),
             debit=MonetaryValue(amount="1000"),
-            credit=MonetaryValue(amount="0"),
-            description="Deposit",
+            credit=MonetaryValue(amount="1000"),  # 复式记账: debit==credit
+            description="Trade: BUY BTCUSDT",
             correlation_id=CorrelationId("corr-001"),
         )
         ledger.post(entry)
-        bal = ledger.get_balance(AccountId("test"), VenueId("BINANCE"))
-        assert float(bal.amount) == 1000.0
+        # 每笔记账平衡 → 账本总余额为 0（复式记账恒等式）
+        assert ledger.is_balanced()
+
+    def test_reject_unbalanced_entry(self):
+        """BD-FIX: 不平衡的记账必须拒绝。"""
+        ledger = ImmutableLedger()
+        entry = JournalEntry(
+            entry_id="je-ub",
+            account_id=AccountId("test"),
+            venue_id=VenueId("BINANCE"),
+            instrument_id=InstrumentId("BTCUSDT"),
+            debit=MonetaryValue(amount="1000"),
+            credit=MonetaryValue(amount="0"),
+            description="Unbalanced",
+        )
+        import pytest
+        with pytest.raises(RuntimeError, match="unbalanced"):
+            ledger.post(entry)
 
     def test_verify_attribution(self):
         ledger = ImmutableLedger()
@@ -142,7 +159,7 @@ class TestImmutableLedger:
             venue_id=VenueId("BINANCE"),
             instrument_id=None,
             debit=MonetaryValue(amount="500"),
-            credit=MonetaryValue(amount="0"),
+            credit=MonetaryValue(amount="500"),  # 复式记账
             description="Trade PnL",
             correlation_id=CorrelationId("corr-trade"),
         )

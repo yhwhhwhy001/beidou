@@ -77,6 +77,23 @@ class EvidenceWriter:
         self._last_history_fingerprint = ""
         self._last_history_write = 0.0
 
+    def write_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """追加结构化事件到证据目录（监督事件日志）。
+
+        用于监控阻断转变、持仓模式变更等监督级事件。
+        """
+        event: dict[str, Any] = {
+            "type": event_type,
+            "pid": os.getpid(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **payload,
+        }
+        path = self.evidence_dir / "supervisor-events.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
     def write(self, report: StartupReport) -> None:
         report.updated_at = datetime.now(timezone.utc).isoformat()
         payload = report.to_dict()

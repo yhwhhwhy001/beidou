@@ -697,7 +697,7 @@ def _build_ladder_from_config() -> list[CapitalLevel]:
             return [
                 CapitalLevel(
                     level=lv.name,
-                    gate=_GATE_NAME_TO_ENUM.get(lv.gate, CertificationGate.G0_BASELINE),
+                    gate=_GATE_NAME_TO_ENUM.get(lv.gate, CertificationGate.G5_TESTNET),
                     max_capital=lv.max_capital,
                     max_leverage=lv.max_leverage,
                     min_unattended_hours=lv.min_unattended_hours,

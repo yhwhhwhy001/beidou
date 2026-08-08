@@ -129,6 +129,11 @@ class KLineGenerator:
         key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
         return self._klines.get(key, [])
 
+    def get_current_bar(self, venue_instrument: VenueInstrument) -> OHLCV | None:
+        """返回当前未闭合 K 线（实时 bar），无则 None。"""
+        key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
+        return self._current.get(key)
+
     def revise(self, venue_instrument: VenueInstrument, open_time: datetime, new_ohlcv: OHLCV) -> OHLCV:
         key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
         klines = self._klines.get(key, [])

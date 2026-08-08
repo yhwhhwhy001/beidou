@@ -41,8 +41,9 @@ def main() -> int:
         if NETWORK.search(s) and not any(rel.startswith(x) or "/" + x in rel for x in ALLOWED_NETWORK):
             findings.append((rel, 1, "network_bypass", "network/endpoint outside exchange adapter"))
     if findings:
-        for _x in findings:
-            pass
+        for rel, lineno, rule, detail in findings:
+            print(f"❌ {rel}:{lineno}  [{rule}]  {detail}", flush=True)
+        print(f"\n{len(findings)} forbidden pattern(s) found.  Delivery gate FAILED.")
         return 1
     return 0
 

@@ -354,6 +354,10 @@ class RiskApprovalStateMachine:
         self._approvals: dict[RiskApprovalId, RiskDecision] = {}
 
     def approve(self, aid: RiskApprovalId) -> RiskDecision:
+        """批准审批 — 仅在签名验证通过后调用。调用方必须先验证签名。"""
+        # 如果已存在且未被拒绝，则更新
+        if self._approvals.get(aid) == RiskDecision.REJECTED:
+            return RiskDecision.REJECTED  # 已拒绝不可逆转
         self._approvals[aid] = RiskDecision.APPROVED
         return RiskDecision.APPROVED
 
@@ -363,6 +367,20 @@ class RiskApprovalStateMachine:
             return RiskDecision.APPROVED
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
+
+    def approve_if_verified(self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool) -> RiskDecision:
+        """安全审批 — 必须签名有效 + 风控通过才批准。
+
+        任一条件不满足 → REJECTED。
+        此方法替代直接调用 approve()，确保调用方不可绕过安全检查。
+        """
+        if not signature_valid:
+            self._approvals[aid] = RiskDecision.REJECTED
+            return RiskDecision.REJECTED
+        if not risk_check_passed:
+            self._approvals[aid] = RiskDecision.REJECTED
+            return RiskDecision.REJECTED
+        return self.approve(aid)
 
     def get(self, aid: RiskApprovalId) -> RiskDecision:
         return self._approvals.get(aid, RiskDecision.PENDING)

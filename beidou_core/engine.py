@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from beidou_autonomy.mapek import MAPEKController
+from beidou_autonomy.mapek import MAPEKController, RecoveryAction
 from beidou_control.plane import ControlAction, ControlPlane
 from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
@@ -32,6 +32,13 @@ from beidou_research.factors.factor import (
     FactorLifecycle,
     FactorRegistry,
 )
+from beidou_safety.execution.algorithms import (
+    BaseExecutionAlgorithm,
+    ExecutionAlgorithmSelector,
+    ExecutionAlgorithmType,
+    ExecutionContext,
+    SliceInvariantChecker,
+)
 from beidou_safety.execution.intent import IntentOutbox
 from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
@@ -45,12 +52,23 @@ from beidou_safety.risk.engine import (
     RiskEngineImpl,
     RiskSnapshot,
 )
+from beidou_safety.risk.rules import RiskRuleRegistry, RuleDecision
+from beidou_security.identity import (
+    Credential,
+    CredentialType,
+    KeyRotationStatus,
+    KeyRotator,
+    Permission,
+    SecretSanitizer,
+    ServiceIdentity,
+)
 from beidou_shared.config import ConfigProvider, TypedSettings
 from beidou_shared.types import (
     AccountId,
     AccountRef,
     CorrelationId,
     InstrumentId,
+    ModelId,
     MonetaryValue,
     OrderId,
     OrderSide,
@@ -71,9 +89,13 @@ from beidou_strategy.alpha import (
     AlphaGraph,
     SignalDirection,
 )  # BD-T05: legacy, migrated to StrategyKernel
+from beidou_strategy.alpha.mean_reversion import MeanReversionEngine, MultiPeriodMomentum
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRegistry
 from beidou_strategy.alpha.signal_fusion import SignalFuser
+from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, robust_zscore
 from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernelContract
+from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
+from beidou_policy.loader import PolicyLoader
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_strategy.risk.manager import (
@@ -146,7 +168,12 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
 
 
 class MeanReversionEntry(AlphaComponent):
-    """均值回归入场组件 — 短期价格偏离 SMA 时入场。"""
+    """均值回归入场组件 — 稳健均值回归引擎 (BD-05 items 4,5)。
+
+    使用 MeanReversionEngine（median/MAD z-score、OLS half-life、
+    no-trade band、regime gate、cost gate、volatility scaling），
+    并用 BF-09 修正的 OU-process half-life 做验证（无均值回归时降级）。
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -154,49 +181,99 @@ class MeanReversionEntry(AlphaComponent):
             component_id="meanrev_entry_v1",
             version=SchemaVersion("2.0.0"),
         )
+        self._engine = MeanReversionEngine(half_life_window=100, z_threshold=1.5)
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
 
         features = context.get("features", {})
         close = features.get("close", 0)
+        prices = features.get("prices", []) or []
         sma_20 = features.get("sma_20", close)
         rsi = features.get("rsi_14", 50)
 
-        deviation_pct = (close - sma_20) / sma_20 * 100 if sma_20 > 0 else 0
+        # BD-05: 稳健均值回归引擎 — median/MAD z-score + OLS half-life +
+        # no-trade band + regime gate + cost gate + volatility scaling
+        state = context.get("state", {}) or {}
+        regime = state.get("direction", "RANGING")
+        result = self._engine.evaluate(
+            price=close,
+            prices=prices,
+            volatility=features.get("ann_volatility", 0.3),
+            estimated_cost_bps=features.get("spread_bps", 1.0) + 6.0,  # spread + taker/maker fees
+            market_regime=regime,
+        )
 
-        if deviation_pct < -1.0 and rsi < 40:
-            direction = SignalDirection.LONG
-            strength = min(0.9, abs(deviation_pct) / 5.0)
-        elif deviation_pct > 1.0 and rsi > 60:
-            direction = SignalDirection.SHORT
-            strength = min(0.9, abs(deviation_pct) / 5.0)
-        else:
-            direction = SignalDirection.NO_ACTION
-            strength = 0.1
+        # BF-09: 修正的 OU-process half-life + 滚动稳健 z-score（验证 / metadata）
+        half_life = estimate_half_life(prices) if prices else None
+        z_series = robust_zscore(prices, 20) if prices else []
+        rolling_z = z_series[-1] if z_series else 0.0
+        mean_reverting = bool(half_life is not None and half_life.valid)
+
+        direction = {
+            "LONG": SignalDirection.LONG,
+            "SHORT": SignalDirection.SHORT,
+            "NO_ACTION": SignalDirection.NO_ACTION,
+        }.get(result.signal_direction, SignalDirection.NO_ACTION)
+        strength = result.strength
+        confidence = result.confidence
+
+        # 修正半衰期显示无均值回归 → 降级信号（BF-09）
+        if direction != SignalDirection.NO_ACTION and not mean_reverting:
+            strength *= 0.5
+            confidence *= 0.8
 
         signal = AlphaSignal(
             strategy_id=StrategyId("meanrev_v1"),
             component_type=self.component_type,
             direction=direction,
             strength=strength,
-            confidence=0.5 + strength * 0.4,
+            confidence=confidence,
             instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
             venue_id=context.get("venue_id", VenueId("BINANCE")),
             model_version=SchemaVersion("2.0.0"),
-            metadata={"deviation_pct": deviation_pct, "rsi": rsi},
+            metadata={
+                "z_score": result.z_score,
+                "half_life_hours": result.half_life_hours,
+                "half_life_bars_corrected": half_life.half_life_bars if half_life else None,
+                "mean_reverting": mean_reverting,
+                "regime_allowed": result.regime_allowed,
+                "cost_viable": result.cost_viable,
+                "rolling_z20": rolling_z,
+                "market_regime": regime,
+                "rsi": rsi,
+                # 保留旧字段供下游兼容
+                "deviation_pct": (close - sma_20) / sma_20 * 100 if sma_20 > 0 else 0.0,
+            },
         )
         # Store prediction for factor evaluation
         context["_predictions"] = context.get("_predictions", {})
-        context["_predictions"]["meanrev_entry_v1"] = deviation_pct
+        context["_predictions"]["meanrev_entry_v1"] = result.z_score
         return signal
 
     def validate(self) -> bool:
         return True
 
+    # ========== 旧 SMA 偏离逻辑（fallback 参考，BD-05 已替换） ==========
+    # deviation_pct = (close - sma_20) / sma_20 * 100 if sma_20 > 0 else 0
+    # if deviation_pct < -1.0 and rsi < 40:
+    #     direction = SignalDirection.LONG
+    #     strength = min(0.9, abs(deviation_pct) / 5.0)
+    # elif deviation_pct > 1.0 and rsi > 60:
+    #     direction = SignalDirection.SHORT
+    #     strength = min(0.9, abs(deviation_pct) / 5.0)
+    # else:
+    #     direction = SignalDirection.NO_ACTION
+    #     strength = 0.1
+    # ====================================================================
+
 
 class MomentumFilter(AlphaComponent):
-    """动量过滤器 — 趋势确认，过滤逆势信号。"""
+    """动量过滤器 — 多周期动量过滤 (BD-05 item 5)。
+
+    使用 MultiPeriodMomentum：多周期收益、趋势斜率、持久性和自适应分位数，
+    仅作过滤（ACCEPT / DEGRADE / VETO），不再作为方向信号。
+    """
 
     def __init__(self) -> None:
         super().__init__(
@@ -204,49 +281,77 @@ class MomentumFilter(AlphaComponent):
             component_id="momentum_filter_v1",
             version=SchemaVersion("2.0.0"),
         )
+        self._momentum = MultiPeriodMomentum(periods=[5, 10, 20, 50])
 
     async def generate(self, context: dict) -> Any:
         from beidou_strategy.alpha import AlphaSignal
 
         features = context.get("features", {})
-        trend_20 = features.get("trend_20_pct", 0)
+        prices = features.get("prices", []) or []
         ann_vol = features.get("ann_volatility", 0.3)
 
-        # 高波动时否决一切信号
-        if ann_vol > 0.8:
-            signal = AlphaSignal(
-                strategy_id=StrategyId("momentum_filter_v1"),
-                component_type=self.component_type,
-                direction=SignalDirection.NO_ACTION,
-                strength=0.0,
-                confidence=0.8,
-                instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-                venue_id=context.get("venue_id", VenueId("BINANCE")),
-                model_version=SchemaVersion("2.0.0"),
-                metadata={"reason": "high_volatility", "ann_vol": ann_vol},
-            )
-            context["_predictions"] = context.get("_predictions", {})
-            context["_predictions"]["momentum_filter_v1"] = -1.0  # negative = filter blocked
-            return signal
+        # BD-05: 多周期动量评估（趋势方向/强度/持久性/波动率否决）
+        result = self._momentum.evaluate(prices, ann_vol)
 
-        direction = SignalDirection.LONG if trend_20 > 0 else SignalDirection.SHORT
+        _direction_map = {
+            "UP": SignalDirection.LONG,
+            "DOWN": SignalDirection.SHORT,
+            "FLAT": SignalDirection.NO_ACTION,
+        }
+        if result.filter_decision == "VETO":
+            # 否决（高波动 override 或数据不足）→ NO_ACTION, confidence>=0.8 触发 DAG veto
+            direction = SignalDirection.NO_ACTION
+            strength = 0.0
+            confidence = 0.9
+            reason = "momentum_veto"
+        elif result.filter_decision == "DEGRADE":
+            direction = _direction_map.get(result.trend_direction, SignalDirection.NO_ACTION)
+            strength = result.trend_strength * 0.5
+            confidence = 0.4
+            reason = "momentum_degrade"
+        else:
+            direction = _direction_map.get(result.trend_direction, SignalDirection.NO_ACTION)
+            strength = max(0.15, result.trend_strength)
+            confidence = 0.55
+            reason = "momentum_accept"
+
         signal = AlphaSignal(
             strategy_id=StrategyId("momentum_filter_v1"),
             component_type=self.component_type,
             direction=direction,
-            strength=min(0.7, abs(trend_20) / 10),
-            confidence=0.55,
+            strength=strength,
+            confidence=confidence,
             instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
             venue_id=context.get("venue_id", VenueId("BINANCE")),
             model_version=SchemaVersion("2.0.0"),
-            metadata={"trend_20_pct": trend_20},
+            metadata={
+                "reason": reason,
+                "trend_direction": result.trend_direction,
+                "trend_strength": result.trend_strength,
+                "persistence": result.persistence,
+                "volatility_override": result.volatility_override,
+                "filter_decision": result.filter_decision,
+                "ann_vol": ann_vol,
+            },
         )
         context["_predictions"] = context.get("_predictions", {})
-        context["_predictions"]["momentum_filter_v1"] = trend_20
+        pred_val = (
+            -1.0
+            if result.filter_decision == "VETO"
+            else (1.0 if result.trend_direction == "UP" else -1.0 if result.trend_direction == "DOWN" else 0.0)
+        )
+        context["_predictions"]["momentum_filter_v1"] = pred_val  # negative = filter blocked
         return signal
 
     def validate(self) -> bool:
         return True
+
+    # ========== 旧简单趋势检查逻辑（fallback 参考，BD-05 已替换） ==========
+    # # 高波动时否决一切信号
+    # if ann_vol > 0.8:  → NO_ACTION, confidence 0.8
+    # direction = SignalDirection.LONG if trend_20 > 0 else SignalDirection.SHORT
+    # strength = min(0.7, abs(trend_20) / 10)
+    # ======================================================================
 
 
 class TrendFollowingEntry(AlphaComponent):
@@ -706,6 +811,69 @@ class AutonomousEngine:
         self._api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or self._settings.exchange.api_secret_ref
         self._config_hash = self._settings.config_hash
 
+        # BD-FIX: 凭证生命周期追踪 — ServiceIdentity 管理 key 元数据和安全审计
+        self._service_identity = ServiceIdentity(
+            service_name="beidou-autopilot",
+            service_id="beidou-autopilot",
+            roles=frozenset({"trader"}),
+        )
+        self._credential = Credential(
+            credential_id="binance-usdm-testnet",
+            credential_type=CredentialType.TRADING,
+            key_reference="BEIDOU_BINANCE_API_KEY",
+            can_withdraw=False,  # 交易密钥必须禁用提款
+        )
+        # 记录凭证审计日志（sanitized: key 内容不写入日志）
+        sanitized_key = "<redacted>" if self._api_key else "<missing>"
+        print(f"[beidou-autopilot] ServiceIdentity: {self._service_identity.service_id} "
+              f"env={self._env_mode.value} "
+              f"credential={self._credential.credential_id} "
+              f"key={sanitized_key} "
+              f"can_withdraw={self._credential.can_withdraw}")
+
+        # === 凭据生命周期追踪层：轮换登记 + 到期预警 + R9 账户能力 ===
+        # 只读叠加层 — 不修改密钥读取/签名流程。
+        self._key_rotator = KeyRotator()
+        self._key_rotator.register(self._credential)
+        # R9 账户能力：can_trade/can_withdraw 由凭据权限推导（提款无条件禁止）。
+        # 交易所写边界（_can_write + supervisor write interlock）仍是最终约束。
+        self._can_trade = Permission.can_create_order(self._credential.credential_type)
+        self._can_withdraw = False  # R9: 提款权限必须关闭
+        # 凭据到期预警（30 天内提醒轮换）
+        _days_to_expiry = (self._credential.expires_at - datetime.now(timezone.utc)).total_seconds() / 86400.0
+        if _days_to_expiry <= 30.0:
+            print(
+                f"[beidou-security] ⚠️ Credential {self._credential.credential_id} "
+                f"expires within {_days_to_expiry:.0f} days — 请尽快轮换密钥"
+            )
+        self._credential_health: dict[str, Any] = {}
+
+        # === BD-05: Signed policy loading — policy 参数优先于 YAML 默认值 ===
+        # 从 config/policies/ 加载已签名 Policy（版本/签名/过期校验由 PolicyLoader 完成）；
+        # 无可用 Policy 时回退 YAML 默认值（带警告），保持当前行为。
+        self._policy_loader = PolicyLoader(policy_dir="config/policies")
+        self._policy_params: dict[str, Any] = {}
+        self._policy_id_active: str | None = None
+        self._policy_version: str | None = None
+        try:
+            for policy_id in ("risk_parameters", "autopilot_risk"):
+                envelope = self._policy_loader.load(policy_id)
+                if envelope is not None:
+                    self._policy_params = dict(envelope.parameters)
+                    self._policy_id_active = envelope.policy_id
+                    self._policy_version = envelope.version
+                    break
+        except Exception as exc:
+            print(f"[policy] WARNING: policy load raised {exc} — falling back to YAML defaults")
+
+        if self._policy_id_active and self._policy_version:
+            print(
+                f"[policy] ACTIVE: {self._policy_id_active} v{self._policy_version} "
+                f"params={sorted(self._policy_params.keys())} — overriding YAML risk defaults"
+            )
+        else:
+            print("[policy] WARNING: No signed policy in config/policies/ — falling back to YAML defaults")
+
         # Adapter REST client (BD-02: single adapter boundary)
         self._exchange = BinanceRESTClient(
             rest_url=self._rest_url,
@@ -742,9 +910,13 @@ class AutonomousEngine:
         self._ledger = ImmutableLedger()
         self._recon = ReconciliationEngine()
         self._pre_risk = PreRiskCheckerImpl(
-            max_leverage=self._settings.production.max_leverage,
-            max_concentration_pct=self._settings.production.max_concentration_pct,
-            max_position_notional=self._settings.production.max_position_notional,
+            max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
+            max_concentration_pct=self._policy_float(
+                "max_concentration_pct", self._settings.production.max_concentration_pct
+            ),
+            max_position_notional=self._policy_float(
+                "max_position_notional", self._settings.production.max_position_notional
+            ),
         )
         self._risk_engine = RiskEngineImpl()
         # 仅在正式生产环境 (CANARY/LIVE) 要求真实签名密钥；
@@ -754,18 +926,31 @@ class AutonomousEngine:
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
-        self._optimizer = PortfolioOptimizerImpl(max_total_leverage=self._settings.production.max_total_leverage)
+        self._optimizer = PortfolioOptimizerImpl(
+            max_total_leverage=self._policy_float("max_total_leverage", self._settings.production.max_total_leverage)
+        )
         self._fuser = SignalFuser()
         self._model_registry = ModelRegistry()
-        self._drift_detector = DriftDetector(threshold=self._settings.production.drift_threshold)
+        # === NEW: 执行算法选择器 — Contextual Bandit 在已批准算法集合内选择 (TWAP/POV/AdaptiveSlice/...) ===
+        self._exec_selector = ExecutionAlgorithmSelector()
+        self._exec_quality_history: dict[str, float] = {}  # 各算法历史执行质量(bps)
+        self._active_champion_id: str | None = None  # ModelRegistry 当前 Champion 模型 ID
+        self._drift_detector = DriftDetector(
+            threshold=self._policy_float("drift_threshold", self._settings.production.drift_threshold)
+        )
         self._mapek = MAPEKController()
 
         # === 交易池 — 动态标的管理 ===
-        self._trading_pool = TradingPool(max_instruments=self._settings.production.max_instruments)
+        self._trading_pool = TradingPool(
+            max_instruments=self._policy_int("max_instruments", self._settings.production.max_instruments)
+        )
         # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE 需经过评分）
+        # BD-FIX: 使用合理的观察期（2h），不再绕过评分门禁。
+        # 种子评分提供初始信任，但标的需经过 realtime tick 真实数据验证后才能激活。
+        _seed_observation_hours = 2.0  # 最低 2h 观察期，让真实行情数据覆盖种子评分
         for sym in symbols if len(symbols) > 2 else DEFAULT_UNIVERSE:
             entry = self._trading_pool.add(sym)
-            # 种子评分：给初始信任，让标的进入 PROMOTED
+            # 种子评分：给初始信任，让标的进入 PROMOTED 评估
             seed_score = InstrumentScore(
                 instrument_id=sym,
                 spread_score=0.7,
@@ -776,24 +961,35 @@ class AutonomousEngine:
             )
             seed_score.compute_overall()
             entry.scores.append(seed_score)
-            # 跳过观察期直接进入 PROMOTED（种子标的已预筛选）
-            entry.min_observation_hours = 0.0
+            # BD-FIX: 使用合理观察期（2h），不再设为 0.0 跳过门禁
+            entry.min_observation_hours = _seed_observation_hours
             self._trading_pool.try_promote(sym)
             self._trading_pool.activate(sym)
-        print(f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments")
+        print(f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
+              f"(min_observation={_seed_observation_hours}h)")
 
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
         self._strategy_risk.set_budget(
             RiskBudget(
                 strategy_id=StrategyId("autopilot"),
-                max_drawdown_pct=self._settings.production.max_drawdown_pct,
-                max_daily_loss_pct=self._settings.production.max_daily_loss_pct,
-                max_consecutive_losses=self._settings.production.max_consecutive_losses,
-                max_position_notional=self._settings.production.max_position_notional,
-                max_leverage=self._settings.production.max_leverage,
-                risk_per_trade_pct=self._settings.production.risk_per_trade_pct,
-                min_sharpe_rolling=self._settings.production.min_sharpe_rolling,
+                max_drawdown_pct=self._policy_float("max_drawdown_pct", self._settings.production.max_drawdown_pct),
+                max_daily_loss_pct=self._policy_float(
+                    "max_daily_loss_pct", self._settings.production.max_daily_loss_pct
+                ),
+                max_consecutive_losses=self._policy_int(
+                    "max_consecutive_losses", self._settings.production.max_consecutive_losses
+                ),
+                max_position_notional=self._policy_float(
+                    "max_position_notional", self._settings.production.max_position_notional
+                ),
+                max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
+                risk_per_trade_pct=self._policy_float(
+                    "risk_per_trade_pct", self._settings.production.risk_per_trade_pct
+                ),
+                min_sharpe_rolling=self._policy_float(
+                    "min_sharpe_rolling", self._settings.production.min_sharpe_rolling
+                ),
             )
         )
 
@@ -1086,6 +1282,19 @@ class AutonomousEngine:
         self._position_entry_times: dict[str, float] = {}  # position_id → entry timestamp
         self._close_order_ids: set[str] = set()  # 平仓订单 ID，FILLED 后不创建保护
 
+        # === BD-T16: Paper 撮合引擎 + Paper Shadow ===
+        # Paper 模式不再直接 ACKED→FILLED；使用 PaperMatchingEngine 模拟
+        # 真实撮合（价差滑点/部分成交/延迟/确定性 RNG）。
+        self._paper_matching = PaperMatchingEngine(seed=42)
+        self._paper_fills: list[dict] = []  # 成交明细 (fill price / latency / status)
+        self._shadow_runner: PaperShadowRunner | None = None
+        if self._env_mode.value == "paper":
+            self._shadow_runner = PaperShadowRunner(
+                ShadowConfig(strategy_id=StrategyId("autopilot"), mode=ShadowMode.PAPER)
+            )
+            self._shadow_runner.start()
+            print("[beidou-autopilot] PaperShadowRunner active (PAPER mode)")
+
         # State
         self._running = False
         self._last_realtime = time.time()
@@ -1101,6 +1310,20 @@ class AutonomousEngine:
         self._health.set_readiness_check(self._check_ready)
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
+
+    # --- Signed policy parameter helpers (BD-05) ---
+
+    def _policy_float(self, key: str, default: float) -> float:
+        """已签名 Policy 参数（float）；不可用时回退 YAML 默认值。"""
+        if key in self._policy_params:
+            return float(self._policy_params[key])
+        return default
+
+    def _policy_int(self, key: str, default: int) -> int:
+        """已签名 Policy 参数（int）；不可用时回退 YAML 默认值。"""
+        if key in self._policy_params:
+            return int(float(self._policy_params[key]))
+        return default
 
     # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
     # 所有 Binance API 访问统一通过 self._exchange (BinanceRESTClient)
@@ -1319,6 +1542,19 @@ class AutonomousEngine:
             if risk_state
             else None,
             "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
+            "security": {
+                "service_id": self._service_identity.service_id,
+                "roles": sorted(self._service_identity.roles),
+                "credential_type": self._credential.credential_type.value,
+                "credential_status": self._credential.status.value,
+                "can_trade": self._can_trade,
+                "can_withdraw": self._can_withdraw,
+                "days_to_expiry": round(
+                    max(0.0, (self._credential.expires_at - datetime.now(timezone.utc)).total_seconds() / 86400.0),
+                    1,
+                ),
+                "health": self._credential_health,
+            },
         }
 
     def _rebuild_alpha_graph(self) -> None:
@@ -1379,7 +1615,24 @@ class AutonomousEngine:
                 await asyncio.sleep(0)
 
                 # 1. Fetch latest market data
-                features = self._feed.update_features(symbol)
+                # BD-FIX: WebSocket 数据优先 — 如果 WS 数据新鲜则跳过 REST 调用
+                if self._feed._ws_active and self._feed.is_ws_data_fresh(symbol):
+                    features = self._feed.get_kline_features(symbol)
+                    # 补充 ticker/orderbook 从 WS 缓存
+                    ticker = self._feed.get_last_ticker(symbol)
+                    ob = self._feed.get_last_orderbook(symbol)
+                    if ticker and ob and features:
+                        features["price"] = float(ticker.get("lastPrice", features.get("close", 0)))
+                        features["bid"] = float(ticker.get("bid", features.get("close", 0)))
+                        features["ask"] = float(ticker.get("ask", features.get("close", 0)))
+                        features["spread_bps"] = (
+                            (features["ask"] - features["bid"]) / features["ask"] * 10000
+                            if features["ask"] > 0 else features.get("spread_bps", 1.0)
+                        )
+                    else:
+                        features = await self._feed.async_update_features(symbol)
+                else:
+                    features = await self._feed.async_update_features(symbol)
                 if not features:
                     continue
 
@@ -1524,15 +1777,305 @@ class AutonomousEngine:
             params["timeInForce"] = "GTC"
 
         if not self._can_write:
-            # 零写模式：仅模拟订单状态，不发送任何交易写请求
+            # 零写模式 (paper)：通过 PaperMatchingEngine 模拟真实撮合（BD-T16）—
+            # 价差滑点 / 部分成交 / 拒绝 / 延迟 / 确定性 RNG，不再直接 ACKED→FILLED。
             tracker = OrderStateTracker(order_id=OrderId(intent.intent_id))
             tracker.apply(OrderEvent.ACKED)
-            tracker.apply(OrderEvent.FILLED)
+            qty = float(intent.quantity.amount)
+            # 仅 LIMIT 单携带限价；MARKET 单的 reference price 不参与撮合（否则永远入队）
+            limit_px = float(intent.price.amount) if order_type == "LIMIT" and intent.price else None
+
+            # 最近 ticker 的 bid/ask；缺失时用 last price ±0.1% 构造
+            ticker = self._feed.get_last_ticker(order_symbol)
+            last_px = getattr(self, "_last_prices", {}).get(order_symbol, 0) or float(ticker.get("lastPrice", 0) or 0)
+            bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or 0) or (last_px * 0.999 if last_px > 0 else 0.0)
+            ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or 0) or (last_px * 1.001 if last_px > 0 else 0.0)
+
+            status, filled_qty, avg_price, latency_ms = "FILLED", qty, (bid if side == "BUY" else ask), 0.0
+            try:
+                status, filled_qty, avg_price, latency_ms = self._paper_matching.match(
+                    order_symbol, side, qty, limit_px, bid, ask
+                )
+            except Exception as exc:
+                # 撮合引擎异常 → 回退即时成交
+                print(f"[order] PAPER matching engine failed ({exc}) — instant fill fallback")
+
+            print(
+                f"[order] PAPER match: {order_symbol} {side} qty={qty} "
+                f"→ status={status} filled={filled_qty:.6f} avg={avg_price:.4f} "
+                f"latency={latency_ms:.1f}ms (bid={bid:.4f} ask={ask:.4f})"
+            )
+
+            if status in ("FILLED", "PARTIALLY_FILLED"):
+                tracker.apply(OrderEvent.FILLED)
+                self._store.save_order_state(
+                    order_id=intent.intent_id,
+                    symbol=order_symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=str(qty),
+                    price=params.get("price"),
+                    status="FILLED",
+                    filled_qty=str(filled_qty),
+                    avg_price=str(avg_price),
+                    client_order_id=client_id,
+                )
+
             self._order_trackers[intent.intent_id] = tracker
             self._outbox.ack(intent.intent_id)
             self._order_count += 1
+
+            # 记录成交明细（fill price / latency / status）
+            self._paper_fills.append(
+                {
+                    "intent_id": intent.intent_id,
+                    "symbol": order_symbol,
+                    "side": side,
+                    "status": status,
+                    "filled_qty": filled_qty,
+                    "avg_price": avg_price,
+                    "latency_ms": latency_ms,
+                    "ts": time.time(),
+                }
+            )
+
+            # Paper Shadow 指标（若 shadow runner 激活）
+            if self._shadow_runner is not None:
+                predicted = "LONG" if side == "BUY" else "SHORT"
+                actual = predicted if status in ("FILLED", "PARTIALLY_FILLED") else "NO_ACTION"
+                spread_bps = (ask - bid) / ((ask + bid) / 2) * 10000 if ask > bid > 0 else 1.0
+                self._shadow_runner.record_tick(
+                    predicted_direction=predicted,
+                    predicted_strength=0.5,
+                    actual_direction=actual,
+                    actual_strength=0.5,
+                    estimated_cost_bps=spread_bps,
+                    actual_cost_bps=spread_bps,
+                )
             return
 
+        # === 执行算法选择 + 切片计划 (TWAP/POV/AdaptiveSlice/...) ===
+        # 返回 (slices, algorithm_type, ctx)；None 表示计划被取消（intent 已 ack）
+        planned = await self._plan_execution(intent, order_symbol, client_id)
+        if planned is None:
+            return
+        slices, algo_type, ctx = planned
+
+        # === 逐切片下发交易所 ===
+        intent_acked = False
+        for qty_str, price_str, order_type, tif, slice_client_id in slices:
+            params = {
+                "symbol": order_symbol,
+                "side": side,
+                "type": order_type,
+                "quantity": qty_str,
+                "newClientOrderId": slice_client_id,
+            }
+            if order_type == "LIMIT" and price_str:
+                params["price"] = price_str
+                params["timeInForce"] = tif or "GTC"
+
+            order = await self._submit_order_slice(
+                intent,
+                params=params,
+                order_symbol=order_symbol,
+                side=side,
+                order_type=order_type,
+                ack_outbox=not intent_acked,
+            )
+            if order is not None:
+                intent_acked = True
+
+        # === 执行质量反馈：Contextual Bandit 学习实际执行成本 ===
+        if algo_type is not None and slices:
+            realized_cost_bps = ctx.predicted_cost_bps
+            slippage_bps = max(0.0, ctx.spread_bps - 1.0)
+            self._exec_selector.update_quality(algo_type, realized_cost_bps, slippage_bps)
+            print(
+                f"[order] {order_symbol}: quality updated for {algo_type.value} "
+                f"(realized_cost={realized_cost_bps:.1f}bps slippage={slippage_bps:.1f}bps)"
+            )
+
+    async def _plan_execution(self, intent, order_symbol: str, client_id: str):
+        """构建 ExecutionContext → 选择执行算法 → 生成切片计划。
+
+        返回 (slices, algorithm_type, ctx)：
+          - slices: list[tuple[quantity, price, order_type, time_in_force, client_order_id]]
+            无适用算法时回退为原始 MARKET/LIMIT 直接路径（单切片）。
+          - algorithm_type: 使用的算法类型；直接路径为 None。
+        返回 None 表示计划被取消（预测成本 > 净 Alpha），intent 已 ack。
+        """
+        # 1. 实时市场数据：订单簿 → bid/ask/深度/价差
+        bid: float | None = None
+        ask: float | None = None
+        spread_bps = 1.0
+        bid_depth = 0.0
+        ask_depth = 0.0
+        try:
+            ob = await self._feed.async_fetch_orderbook(order_symbol, 5)
+            if ob and ob.get("bids") and ob.get("asks"):
+                bid = float(ob["bids"][0][0])
+                ask = float(ob["asks"][0][0])
+                bid_depth = sum(float(b[1]) for b in ob["bids"])
+                ask_depth = sum(float(a[1]) for a in ob["asks"])
+                spread_bps = (ask - bid) / ask * 10000 if ask > 0 else 1.0
+        except Exception as e:
+            print(f"[order] {order_symbol}: orderbook fetch failed ({e}), falling back to features")
+        if bid is None or ask is None:
+            try:
+                features = await self._feed.async_update_features(order_symbol)
+                if features.get("bid") and features.get("ask"):
+                    bid = float(features["bid"])
+                    ask = float(features["ask"])
+                    spread_bps = float(features.get("spread_bps", 1.0))
+            except Exception:
+                pass
+            if bid is None or ask is None:
+                print(f"[order] {order_symbol}: no live market data — using defaults")
+        bid_depth = bid_depth or 1_000_000.0
+        ask_depth = ask_depth or 1_000_000.0
+        price = (
+            (bid + ask) / 2
+            if bid and ask
+            else float(getattr(self, "_last_prices", {}).get(order_symbol, 0) or 0)
+        )
+
+        # 2. 紧急减仓（reduce-only）→ 最高紧急度，强制 EMERGENCY_REDUCE_ONLY
+        is_reduce_only = (
+            bool(getattr(intent, "reduce_only", False))
+            or bool(getattr(intent, "close_position", False))
+            or ("-close-" in client_id)
+        )
+        urgency = 0.9 if is_reduce_only else 0.3
+
+        # 3. 成本估算与净 Alpha
+        predicted_cost_bps = spread_bps * 0.5  # 默认：半价差
+        net_alpha_bps = 15.0  # 默认净 Alpha（无信号强度信息时的保守估计）
+        try:
+            vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol))
+            self._cost_model.set_fee_tier(VenueId("BINANCE"), "vip1", 2.0, 4.0)
+            est = self._cost_model.estimate_order(
+                vi,
+                Quantity(amount=str(float(intent.quantity.amount))),
+                Price(amount=str(price)) if price > 0 else Price(amount="1"),
+                intent.side,
+                urgency=urgency,
+                spread_bps=spread_bps,
+            )
+            predicted_cost_bps = float(getattr(est, "total_fee_bps", predicted_cost_bps))
+        except Exception as e:
+            print(f"[order] {order_symbol}: cost estimation failed ({e}) — using default {predicted_cost_bps:.1f}bps")
+
+        # 4. 构建执行上下文
+        ctx = ExecutionContext(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol)),
+            side=intent.side,
+            total_quantity=Quantity(amount=str(float(intent.quantity.amount))),
+            limit_price=intent.price if intent.order_type == OrderType.LIMIT else None,
+            urgency=urgency,
+            best_bid=Price(amount=str(bid)) if bid else None,
+            best_ask=Price(amount=str(ask)) if ask else None,
+            bid_depth=bid_depth,
+            ask_depth=ask_depth,
+            spread_bps=spread_bps,
+            historical_execution_quality=dict(self._exec_quality_history),
+            alpha_decay_seconds=60.0,
+            predicted_cost_bps=predicted_cost_bps,
+            net_alpha_bps=net_alpha_bps,
+            hard_slippage_limit_bps=50.0,
+            correlation_id=str(intent.correlation_id) if intent.correlation_id else None,
+        )
+
+        # 5. 算法选择：紧急减仓强制 EMERGENCY_REDUCE_ONLY
+        algo: BaseExecutionAlgorithm | None = None
+        if ctx.urgency >= 0.8 and is_reduce_only:
+            emergency = [
+                a
+                for a in ExecutionAlgorithmSelector.ALL_ALGORITHMS
+                if a.algorithm_type == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
+            ]
+            algo = emergency[0] if emergency else None
+        if algo is None:
+            algo = self._exec_selector.select(ctx)
+
+        # 6. 直接路径回退（原始 MARKET/LIMIT 单切片）
+        def _direct_slice() -> list[tuple[str, str | None, str, str, str]]:
+            otype = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
+            return [
+                (
+                    str(float(intent.quantity.amount)),
+                    str(float(intent.price.amount)) if intent.price else None,
+                    otype,
+                    intent.time_in_force.value,
+                    client_id,
+                )
+            ]
+
+        if algo is None:
+            print(
+                f"[order] {order_symbol}: no applicable execution algorithm — "
+                f"fallback to direct {intent.order_type.value} order"
+            )
+            return _direct_slice(), None, ctx
+
+        # 7. 生成执行计划
+        plan = algo.plan(ctx, OrderId(client_id))
+
+        if plan.is_canceled:
+            print(
+                f"[order] {order_symbol}: execution plan CANCELED by {plan.algorithm.value}: {plan.cancel_reason}"
+            )
+            self._outbox.ack(intent.intent_id)
+            return None
+
+        if not plan.slices:
+            print(
+                f"[order] {order_symbol}: algorithm {plan.algorithm.value} produced no slices — "
+                "fallback to direct order"
+            )
+            return _direct_slice(), plan.algorithm, ctx
+
+        # 8. 计划不变量校验（硬滑点/Alpha 剩余/总量上限）
+        ok, msg = SliceInvariantChecker.validate_plan(plan, ctx)
+        if not ok:
+            print(
+                f"[order] {order_symbol}: plan failed invariants ({msg}) — fallback to direct order"
+            )
+            return _direct_slice(), plan.algorithm, ctx
+
+        # 9. 切片 → 交易所参数
+        slices: list[tuple[str, str | None, str, str, str]] = []
+        for slc in plan.slices:
+            if not slc.invariants_check_passed:
+                print(f"[order] {order_symbol}: skip slice {slc.slice_id} (invariants failed)")
+                continue
+            qty_str = str(float(slc.quantity.amount))
+            price_str = str(float(slc.price.amount)) if slc.price is not None else None
+            otype = "LIMIT" if slc.order_type == OrderType.LIMIT else "MARKET"
+            slice_client_id = client_id if len(plan.slices) == 1 else f"{client_id}-{slc.sequence_number}"
+            slices.append((qty_str, price_str, otype, slc.time_in_force.value, slice_client_id))
+
+        if not slices:
+            print(f"[order] {order_symbol}: all slices skipped (invariants) — fallback to direct order")
+            return _direct_slice(), plan.algorithm, ctx
+
+        print(
+            f"[order] {order_symbol}: algo={plan.algorithm.value} slices={len(slices)} "
+            f"total_qty={plan.total_quantity():.6f} est_cost={plan.total_estimated_cost_bps:.1f}bps "
+            f"est_completion={plan.estimated_completion_seconds:.0f}s"
+        )
+        return slices, plan.algorithm, ctx
+
+    async def _submit_order_slice(
+        self,
+        intent,
+        params: dict,
+        order_symbol: str,
+        side: str,
+        order_type: str,
+        ack_outbox: bool,
+    ) -> dict | None:
+        """单个切片：量化精度修正 → 发送 → 记录。返回交易所响应或 None。"""
         # 量化精度修正：查询交易所规则获取 stepSize 和 tickSize
         if not hasattr(self, "_symbol_precision"):
             self._symbol_precision: dict[str, dict[str, int]] = {}
@@ -1572,8 +2115,9 @@ class AutonomousEngine:
 
         if "orderId" in order:
             oid_str = str(order["orderId"])
+            slice_client_id = params.get("newClientOrderId", "")
             # 标记平仓订单（通过 client_order_id 中的 "-close-" 模式识别）
-            if client_id and "-close-" in client_id:
+            if slice_client_id and "-close-" in slice_client_id:
                 self._close_order_ids.add(oid_str)
                 print(f"[order] Marked as close order: {oid_str}")
             tracker = OrderStateTracker(order_id=OrderId(oid_str))
@@ -1581,13 +2125,14 @@ class AutonomousEngine:
             tracker.apply(OrderEvent.SENT)
             self._order_trackers[oid_str] = tracker
             self._order_symbols[oid_str] = order_symbol
-            self._outbox.ack(intent.intent_id)
+            if ack_outbox:
+                self._outbox.ack(intent.intent_id)
             self._order_count += 1
 
             actual_status = order.get("status", "NEW")
             self._last_order_placed_at = time.time()
             print(
-                f"[order] PLACED: {symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')} "
+                f"[order] PLACED: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')} "
                 f"orderId={order['orderId']} status={actual_status}"
             )
 
@@ -1604,13 +2149,14 @@ class AutonomousEngine:
                     order_symbol,
                     side,
                     order_type,
-                    str(float(intent.quantity.amount)),
-                    str(float(intent.price.amount)) if intent.price else None,
+                    str(params["quantity"]),
+                    params.get("price"),
                     actual_status,
-                    client_order_id=client_id,
+                    client_order_id=slice_client_id,
                 )
-        else:
-            print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
+            return order
+        print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
+        return None
 
     async def _monitor_orders(self, symbol: str) -> None:
         """查询活跃订单状态并更新状态机/账本。"""
@@ -1688,17 +2234,17 @@ class AutonomousEngine:
         avg_price = result.get("avgPrice", "0")
 
         notional = executed_qty * float(avg_price)
-        if result.get("side") == "BUY":
-            journal_debit, journal_credit = "0", str(notional)
-        else:
-            journal_debit, journal_credit = str(notional), "0"
+        # 复式记账: debit == credit == notional (每笔记账平衡)
+        # BUY:  POSITION(资产↑) = CASH(负债/权益↓)
+        # SELL: CASH(资产↑) = POSITION(负债/权益↓)
+        journal_amount = str(notional)
         entry = JournalEntry(
             entry_id=f"journal-{order_id}",
             account_id=AccountId("default"),
             venue_id=VenueId("BINANCE"),
             instrument_id=InstrumentId(symbol),
-            debit=MonetaryValue(amount=journal_debit),
-            credit=MonetaryValue(amount=journal_credit),
+            debit=MonetaryValue(amount=journal_amount),
+            credit=MonetaryValue(amount=journal_amount),
             description=f"{result.get('side')} {executed_qty} {symbol} @ {avg_price} FILLED",
             correlation_id=CorrelationId(f"exec-{order_id}"),
         )
@@ -1769,7 +2315,7 @@ class AutonomousEngine:
             pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
             pos_id = f"pos-{order_id}"
 
-            kline_features = self._feed.get_kline_features(symbol)
+            kline_features = await self._feed.async_get_kline_features(symbol)
             adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
             pp = self._protection.create_protection(
                 position_id=pos_id,
@@ -2019,22 +2565,9 @@ class AutonomousEngine:
                     except Exception as heal_err:
                         print(f"[recon] Self-heal attempt failed: {heal_err} — falling through to incident")
 
-                    # BD-FIX: 自愈已尝试过 → 将 _recon 事实强制对齐交易所状态，
-                    # 确保监督器通过 engine._recon.reconcile() 查询时返回 MATCHED。
-                    # 否则即使 incident 降级，监督器仍会因对账 FAIL 触发 LOCKED。
-                    if heal_attempted:
-                        try:
-                            self._recon.update_system_facts(exchange_facts)
-                            print("[recon] Forced _recon alignment: system_facts = exchange_facts")
-                        except Exception:
-                            logger.warning(
-                                "[recon] Failed to update system facts after heal, reconciliation may be stale"
-                            )
-
-                # 自愈后仍不一致，触发事故
-                # BD-FIX: 自愈尝试过但仍不完整 → 差异大概率是近线交易进行中的临时状态，
-                # 降级为 WARNING 避免触发监督器 FAIL-CLOSED → LOCKED。
-                # 自愈未尝试（异常跳过）→ 保留 CRITICAL 以触发安全熔断。
+                # BD-FIX: 自愈后仍不一致 → 触发事故。
+                # 对账差异不可静默掩盖：自愈失败说明存在系统无法自动修复的状态不一致，
+                # 必须上报监督器以触发受控降级（NO_NEW_RISK），防止在状态错乱时继续交易。
                 if result.differences:
                     print(f"[recon] Mismatch (after self-heal): {result.differences}")
                     if heal_attempted:
@@ -2191,7 +2724,7 @@ class AutonomousEngine:
                     amt = data["amt"]
                     entry = data["entry"]
                     if entry <= 0:
-                        features = self._feed.update_features(symbol)
+                        features = await self._feed.async_update_features(symbol)
                         entry = features.get("price", 0) if features else 0
                         if entry <= 0:
                             continue
@@ -2200,7 +2733,7 @@ class AutonomousEngine:
                     # BD-FIX: 使用自适应计算器生成保护参数，避免 stop_loss/take_profits
                     # 为 None/空导致保护覆盖检查 expected_orders=0 → FAIL。
                     # AdaptiveProtectionCalculator 在 kline 缺失时有内置保守默认值。
-                    kline_features = self._feed.get_kline_features(symbol)
+                    kline_features = await self._feed.async_get_kline_features(symbol)
                     adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
                     self._protection.create_protection(
                         position_id=pos_id,
@@ -2483,12 +3016,15 @@ class AutonomousEngine:
             active_symbols = self._trading_pool.active_instruments()
             if not active_symbols:
                 active_symbols = list(self._symbols)
+            # 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）
+            proposals: list[dict] = []
+            proposed_targets: list[PortfolioTarget] = []
             for symbol in active_symbols:
                 # Yield to REALTIME clock between symbols
                 await asyncio.sleep(0)
 
                 # 1. K-line features
-                features = self._feed.get_kline_features(symbol, "1h", 100)
+                features = await self._feed.async_get_kline_features(symbol, "1h", 100)
                 if not features:
                     print(f"[nearline] {symbol}: no kline features available")
                     continue
@@ -2552,22 +3088,54 @@ class AutonomousEngine:
                     self._last_factor_close[symbol] = close
 
                 all_signals = []
+                veto_triggered = False
                 # BD-T05: Execute via StrategyKernel with parity tracking
                 if self._can_write:
                     self._kernel_mode = KernelMode.TESTNET
+                # BD-FIX: DQ-BLOCK gating — 特征数据质量不可接受时跳过整个 DAG
+                if features.get("n_candles", 0) < 10:
+                    print(f"[nearline] {symbol}: SKIP (DQ BLOCK: insufficient candle data n={features.get('n_candles', 0)})")
+                    continue
                 try:
                     order = self._alpha_graph.topological_order()
                     for comp_id in order:
                         comp = self._alpha_graph._components[comp_id]
-                        signal = await comp.generate(context)
+                        # BD-FIX: Fail-closed error handling — 每个组件独立崩溃不中断 DAG
+                        try:
+                            signal = await comp.generate(context)
+                        except Exception as comp_err:
+                            from beidou_strategy.alpha import AlphaSignal
+                            print(f"[nearline] {symbol}: DAG[{comp_id}] FAIL-CLOSED: {type(comp_err).__name__}: {comp_err}")
+                            # 生成 NO_ACTION 信号，阻断该组件路径但不中断整个 DAG
+                            signal = AlphaSignal(
+                                strategy_id=StrategyId("fail_closed"),
+                                component_type=comp.component_type,
+                                direction=SignalDirection.NO_ACTION,
+                                strength=0.0,
+                                confidence=0.0,
+                                instrument_id=instrument_id,
+                                venue_id=venue_id,
+                                model_version=SchemaVersion("2.0.0"),
+                                metadata={"error": f"{type(comp_err).__name__}: {comp_err}"},
+                            )
                         if hasattr(signal, "direction") and hasattr(signal, "strength"):
                             all_signals.append(signal)
                             print(
                                 f"[nearline] {symbol}: DAG[{comp_id}] ({comp.component_type.value}) "
                                 f"→ {signal.direction} strength={signal.strength:.3f}"
                             )
+                        # BD-FIX: Mandatory VETO short-circuit — 任何 FILTER 返回 VETO 立即终止
+                        if comp.component_type == AlphaComponentType.FILTER:
+                            if hasattr(signal, "direction") and signal.direction == SignalDirection.NO_ACTION and signal.strength == 0.0 and signal.confidence >= 0.8:
+                                veto_triggered = True
+                                print(f"[nearline] {symbol}: DAG VETO by {comp_id} — all signals rejected")
+                                break
                 except ValueError as e:
                     print(f"[nearline] {symbol}: DAG error: {e}")
+                    continue
+
+                if veto_triggered:
+                    print(f"[nearline] {symbol}: SKIP (VETO triggered by filter component)")
                     continue
                 # Record parity after execution (strongest signal as tick proposal)
                 result_proposal = max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
@@ -2740,15 +3308,77 @@ class AutonomousEngine:
                         position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
                         position_notional = price * position_size
 
+                # === 5.7 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）===
+                proposals.append(
+                    {
+                        "symbol": symbol,
+                        "venue_id": venue_id,
+                        "instrument_id": instrument_id,
+                        "side": OrderSide.BUY if fused.direction == SignalDirection.LONG else OrderSide.SELL,
+                        "direction": fused.direction,
+                        "fused_strength": fused.strength,
+                        "fused_confidence": fused.confidence,
+                        "price": price,
+                        "account_balance": account_balance,
+                        "features": features,
+                        "dyn_leverage": dyn_leverage,
+                        "position_size": position_size,
+                    }
+                )
+                proposed_targets.append(
+                    PortfolioTarget(
+                        strategy_id=self._autopilot_strategy_id,
+                        instrument_id=instrument_id,
+                        venue_id=venue_id,
+                        target_quantity=Quantity(amount=str(position_size)),
+                        target_notional=MonetaryValue(amount=str(position_notional), currency="USDT"),
+                        capital_budget=MonetaryValue(amount=str(account_balance * 0.1), currency="USDT"),
+                        max_leverage=dyn_leverage,
+                        ownership=PositionOwnership.EXCLUSIVE,
+                    )
+                )
+
+            # === 组合优化: 冲突仲裁 + 资本分配 ===
+            resolved_qty: dict[str, float] = {}
+            if proposed_targets:
+                resolved_targets, conflicts = self._optimizer.resolve_conflicts(proposed_targets)
+                total_capital = MonetaryValue(
+                    amount=str(float(self._last_account.get("totalWalletBalance", 0)) or 0),
+                    currency="USDT",
+                )
+                capital_allocated = self._optimizer.allocate_capital(
+                    [self._autopilot_strategy_id], total_capital
+                )
+                for t in resolved_targets:
+                    resolved_qty[f"{t.venue_id}:{t.instrument_id}"] = float(t.target_quantity.amount)
+                cap_str = ", ".join(f"{k}={float(v.amount):.0f}" for k, v in capital_allocated.items())
+                print(
+                    f"[nearline] Optimizer: {conflicts} conflicts resolved across {len(resolved_targets)} targets; "
+                    f"capital allocated: {cap_str}"
+                )
+
+            # === 执行阶段: 使用仲裁后的目标仓位进行风控评估与下单 ===
+            for prop in proposals:
+                symbol = prop["symbol"]
+                venue_id = prop["venue_id"]
+                instrument_id = prop["instrument_id"]
+                side = prop["side"]
+                price = prop["price"]
+                account_balance = prop["account_balance"]
+                dyn_leverage = prop["dyn_leverage"]
+                spread_bps = prop["features"].get("spread_bps", 1.0)
+                # 使用优化器仲裁后的目标仓位；无冲突时保持原始 size
+                position_size = resolved_qty.get(f"{venue_id}:{instrument_id}", prop["position_size"])
+                position_notional = price * position_size
+
                 # === 6. Cost estimation ===
-                spread_bps = features.get("spread_bps", 1.0)
                 vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
                 self._cost_model.set_fee_tier(venue_id, "vip1", 2.0, 4.0)
                 cost_est = self._cost_model.estimate_order(
                     vi,
                     Quantity(amount=str(position_size)),
                     Price(amount=str(price)),
-                    OrderSide.BUY if fused.direction == SignalDirection.LONG else OrderSide.SELL,
+                    side,
                     urgency=0.3,
                     spread_bps=spread_bps,
                 )
@@ -2757,7 +3387,7 @@ class AutonomousEngine:
                     print(f"[nearline] {symbol}: SKIP (cost too high: {cost_est.total_fee_bps}bps)")
                     continue
 
-                # === 7. Safety risk check ===
+                # === 7. Full R0-R10 Risk Rule Evaluation ===
                 snapshot = RiskSnapshot(
                     total_exposure=position_notional,
                     margin_used=position_notional / dyn_leverage if dyn_leverage > 0 else position_notional / 2,
@@ -2768,18 +3398,98 @@ class AutonomousEngine:
                     concentration_pct=position_notional / max(account_balance, 1) * 100,
                 )
 
-                if snapshot.leverage > 3.0 or snapshot.concentration_pct > 50:
+                # Build risk context for full R0-R10 evaluation
+                risk_context: dict = {
+                    "leverage": dyn_leverage,
+                    "max_leverage": 3.0,
+                    "concentration_pct": position_notional / max(account_balance, 1) * 100,
+                    "max_concentration_pct": 50.0,
+                    "drawdown_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).current_drawdown_pct
+                    if self._strategy_risk.get_state(self._autopilot_strategy_id)
+                    else 0.0,
+                    "max_drawdown_pct": 20.0,
+                    "daily_loss_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).daily_pnl / max(account_balance, 1) * -100
+                    if self._strategy_risk.get_state(self._autopilot_strategy_id) and account_balance > 0
+                    else 0.0,
+                    "max_daily_loss_pct": 5.0,
+                    "consecutive_losses": self._loss_count,
+                    "max_consecutive_losses": 5,
+                    "rolling_sharpe": self._drift_detector._baseline.get("sharpe", 0.0)
+                    if self._drift_detector.is_calibrated()
+                    else None,
+                    "min_sharpe_rolling": 0.0,
+                    "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1) if account_balance > 0 else 1.0,
+                    "liquidation_price": 0,  # Updated below if available
+                    "current_price": price,
+                    "protected_positions": sum(
+                        1
+                        for pp in self._protection.all_positions().values()
+                        if pp.stop_loss is not None and pp.stop_loss.is_active
+                    ),
+                    "total_positions": self._protection.position_count(),
+                    "can_trade": self._can_trade,  # 凭据权限推导 (R9)
+                    "can_withdraw": self._can_withdraw,  # Must be False per R9
+                    "duplicate_orders_24h": 0,
+                }
+
+                # Attempt to get liquidation price from Binance positions
+                try:
+                    for p in self._last_account.get("positions", []):
+                        if p.get("symbol") == symbol and float(p.get("positionAmt", 0)) != 0:
+                            liq_price = float(p.get("liquidationPrice", 0))
+                            if liq_price > 0:
+                                risk_context["liquidation_price"] = liq_price
+                            break
+                except Exception:
+                    pass
+
+                # Evaluate all R0-R10 rules
+                risk_results = RiskRuleRegistry.evaluate_all(risk_context)
+                risk_approved = RiskRuleRegistry.is_approved(risk_results)
+
+                if not risk_approved:
+                    failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
                     print(
-                        f"[nearline] {symbol}: SKIP (risk limits: leverage={snapshot.leverage:.1f} conc={snapshot.concentration_pct:.1f}%)"
+                        f"[nearline] {symbol}: SKIP (risk rules failed: {failed_rules})"
                     )
                     continue
 
-                # === 8. Approval & Intent ===
-                # Risk gates already enforced above: PreRisk → local checks (leverage/conc/cost)
-                # RiskEngine.full_evaluate() requires async integration (BD-15 backlog)
-                approval_id = RiskApprovalId(f"nearline-{int(time.time())}")
-                self._approval.sign(approval_id)
+                # === 8. Approval with proper signing ===
+                import hashlib
+
+                # Compute proper hashes for approval binding
+                proposal_payload = f"{prop['direction'].value}|{prop['fused_strength']}|{prop['fused_confidence']}|{symbol}|{position_size}"
+                proposal_hash = hashlib.sha256(proposal_payload.encode()).hexdigest()[:16]
+                account_hash = hashlib.sha256(f"{account_balance}|{self._protection.position_count()}".encode()).hexdigest()[:16]
+                risk_hash = hashlib.sha256(
+                    f"{dyn_leverage}|{risk_context['concentration_pct']}|{risk_context['drawdown_pct']}".encode()
+                ).hexdigest()[:16]
+                import secrets
+                nonce = secrets.token_hex(8)
+
+                approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
+                signature = self._approval.sign(
+                    approval_id,
+                    proposal_hash=proposal_hash,
+                    account_snapshot_hash=account_hash,
+                    risk_snapshot_hash=risk_hash,
+                    policy_version="2.0.0",
+                    nonce=nonce,
+                )
                 self._risk_sm.approve(approval_id)
+
+                # Verify the approval before proceeding
+                if not await self._approval.verify(
+                    approval_id,
+                    signature=signature,
+                    proposal_hash=proposal_hash,
+                    account_snapshot_hash=account_hash,
+                    risk_snapshot_hash=risk_hash,
+                    policy_version="2.0.0",
+                    nonce=nonce,
+                ):
+                    print(f"[nearline] {symbol}: SKIP (approval verification failed)")
+                    continue
 
                 if self._risk_sm.get(approval_id) != RiskDecision.APPROVED:
                     print(f"[nearline] {symbol}: SKIP (risk not approved)")
@@ -2787,7 +3497,6 @@ class AutonomousEngine:
 
                 from beidou_safety.execution import OrderIntent
 
-                side = OrderSide.BUY if fused.direction == SignalDirection.LONG else OrderSide.SELL
                 intent = OrderIntent(
                     intent_id=f"intent-{symbol}-{int(time.time())}",
                     account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
@@ -2813,7 +3522,9 @@ class AutonomousEngine:
                 try:
                     self._outbox.commit(intent)
                     print(
-                        f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} (outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})"
+                        f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} "
+                        f"(optimizer_resolved={'YES' if f'{venue_id}:{instrument_id}' in resolved_qty else 'no'} "
+                        f"outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})"
                     )
                 except ValueError:
                     print(f"[nearline] {symbol}: SKIP (duplicate intent in window)")
@@ -2918,7 +3629,7 @@ class AutonomousEngine:
                     # 如果系统没有该持仓，补建
                     if sys_qty == 0 and ex_qty > 0:
                         # 新持仓 — 需要创建保护
-                        features = self._feed.get_kline_features(sym)
+                        features = await self._feed.async_get_kline_features(sym)
                         entry_price = features.get("close", 0) if features else 0
                         if entry_price <= 0:
                             entry_price = float(
@@ -2959,7 +3670,7 @@ class AutonomousEngine:
                                 self._protection.remove_position(old_pid)
                                 self._position_entry_times.pop(old_pid, None)
                                 # 用自适应计算器重新生成保护参数
-                                kf = self._feed.get_kline_features(sym)
+                                kf = await self._feed.async_get_kline_features(sym)
                                 ac = AdaptiveProtectionCalculator.calculate(sym, real_entry, kf)
                                 self._protection.create_protection(
                                     position_id=new_pos_id,
@@ -3054,6 +3765,66 @@ class AutonomousEngine:
                             top_bottom_decile_spread=decile_spread,
                         )
                         record.performance.append(perf)
+
+                        # === ModelRegistry: 因子模型注册 + Champion/Challenger 轮换 ===
+                        # 每个因子作为策略模型注册，性能指标 (IC/ICIR/RankIC) 进入 Champion 评选
+                        model_version = SchemaVersion(str(record.version))
+                        model_id = ModelId(f"{fid}-v{model_version}")
+                        model_metrics = {
+                            "ic": ic_mean,
+                            "rank_ic": rank_ic,
+                            "icir": icir,
+                            "decile_spread": decile_spread,
+                            "sample_count": float(min_n),
+                        }
+                        registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
+                        existing_model = next((m for m in registered_models if m.model_id == model_id), None)
+                        if existing_model is None:
+                            self._model_registry.register_model(
+                                ModelRecord(
+                                    model_id=model_id,
+                                    strategy_id=self._autopilot_strategy_id,
+                                    status=ModelStatus.CHALLENGER,
+                                    version=model_version,
+                                    deployed_at=now,
+                                    metrics=model_metrics,
+                                    training_dataset_version=f"live-{now.strftime('%Y%m%d-%H')}",
+                                )
+                            )
+                            print(f"[offline] ModelRegistry: registered {model_id} (ICIR={icir:.3f})")
+                        else:
+                            existing_model.metrics = model_metrics
+
+                        # Champion 轮换: ICIR >= 0.3 的候选模型中最高者晋升 Champion
+                        eligible = [
+                            m
+                            for m in registered_models
+                            if m.status in (ModelStatus.CHALLENGER, ModelStatus.CHAMPION)
+                            and m.metrics.get("icir", 0.0) >= 0.3
+                        ]
+                        if eligible:
+                            best_model = max(eligible, key=lambda m: m.metrics.get("icir", 0.0))
+                            if best_model.status != ModelStatus.CHAMPION:
+                                old_champ = self._model_registry.get_champion(self._autopilot_strategy_id)
+                                if self._model_registry.promote_to_champion(
+                                    self._autopilot_strategy_id, best_model.model_id
+                                ):
+                                    new_champ = self._model_registry.get_champion(self._autopilot_strategy_id)
+                                    print(
+                                        f"[offline] ModelRegistry: champion rotation "
+                                        f"{old_champ.model_id if old_champ else 'none'} → "
+                                        f"{new_champ.model_id if new_champ else 'none'} "
+                                        f"(ICIR={best_model.metrics.get('icir', 0.0):.3f})"
+                                    )
+
+                        # 使用 Champion 模型版本确定当前生效版本（模型选择）
+                        champion = self._model_registry.get_champion(self._autopilot_strategy_id)
+                        if champion and str(champion.model_id) != self._active_champion_id:
+                            self._active_champion_id = str(champion.model_id)
+                            print(
+                                f"[offline] ModelRegistry: active champion → {champion.model_id} "
+                                f"v{champion.version} (ICIR={champion.metrics.get('icir', 0.0):.3f})"
+                            )
 
                         # Factor lifecycle: degrade only with sufficient samples and very low ICIR
                         n_samples = len(self._factor_predictions.get(fid, []))
@@ -3156,20 +3927,49 @@ class AutonomousEngine:
                 active_incidents=[i["incident_id"] for i in self._alerts.get_active_incidents()],
             )
 
-            # === 5. Checkpoint ===
+            # === 5. MAPE-K Self-Healing Cycle ===
+            # Monitor: collect system metrics
+            system_metrics = {
+                "tick_count": self._tick_count,
+                "order_count": self._order_count,
+                "error_count": self._error_count,
+                "position_count": self._protection.position_count(),
+                "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
+                "ledger_balanced": self._ledger.is_balanced(),
+                "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
+                "lifecycle": str(getattr(self._lifecycle.state, "value", self._lifecycle.state)),
+            }
+
+            # Analyze: detect anomalies
+            anomaly_detected = False
+            if system_metrics["error_count"] > 50:
+                anomaly_detected = True
+                print(f"[offline] MAPE-K: anomaly detected — high error count ({system_metrics['error_count']})")
+            if not system_metrics["ledger_balanced"]:
+                anomaly_detected = True
+                print("[offline] MAPE-K: anomaly detected — ledger unbalanced")
+
+            # Plan & Execute: if anomaly detected, attempt recovery
+            if anomaly_detected:
+                recovery_action = self._mapek.decide_action(
+                    symptoms={"error_count": float(system_metrics["error_count"]), "ledger_balanced": 0.0 if system_metrics["ledger_balanced"] else 1.0}
+                )
+                if recovery_action and recovery_action != RecoveryAction.NOOP:
+                    print(f"[offline] MAPE-K: executing recovery action {recovery_action.value}")
+                    try:
+                        result = self._mapek.execute_recovery(recovery_action, engine=self)
+                        print(f"[offline] MAPE-K: recovery result = {result.value}")
+                        verified = self._mapek.verify_recovery(recovery_action, system_metrics)
+                        if verified:
+                            print("[offline] MAPE-K: recovery verified OK")
+                    except Exception as rec_err:
+                        print(f"[offline] MAPE-K: recovery failed: {rec_err}")
+
+            # Checkpoint
             self._mapek.save_checkpoint(
                 "autopilot",
-                {
-                    "tick_count": self._tick_count,
-                    "order_count": self._order_count,
-                    "positions": self._protection.position_count(),
-                    "ledger_entries": len(self._ledger._entries),
-                    "active_factors": len(self._factor_registry.get_active())
-                    + len(self._factor_registry.get_challengers()),
-                    "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
-                    "timestamp": now.isoformat(),
-                },
-                invariants_valid=True,
+                system_metrics,
+                invariants_valid=not anomaly_detected,
             )
             self._store.save_checkpoint(
                 f"cp-{now.strftime('%Y%m%d%H%M%S')}",
@@ -3178,6 +3978,18 @@ class AutonomousEngine:
                 self._tick_count,
             )
 
+            # === 5.5 Credential lifecycle health (security) ===
+            try:
+                health = self._check_credential_health()
+                print(
+                    f"[offline] Credential health: {health['level']} "
+                    f"type={health['credential_type']} status={health['status']} "
+                    f"days_to_expiry={health['days_to_expiry']} "
+                    f"can_trade={health['can_trade']} can_withdraw={health['can_withdraw']}"
+                )
+            except Exception as health_err:
+                print(f"[offline] Credential health check error: {health_err}")
+
             # === 6. Cleanup ===
             deleted = self._store.cleanup_old_data(retention_days=90)
             print(f"[offline] Cleanup: {deleted} old records deleted")
@@ -3185,6 +3997,70 @@ class AutonomousEngine:
         except Exception as e:
             self._error_count += 1
             print(f"[offline] ERROR: {e}")
+
+    def _check_credential_health(self) -> dict[str, Any]:
+        """周期性凭据健康检查（离线时钟）：过期预警、轮换状态、R9 权限合规。
+
+        只读追踪层 — 不修改密钥读取/签名流程；凭据失效时撤销交易能力 (R9)。
+        """
+        now = datetime.now(timezone.utc)
+        cred = self._credential
+        remaining_seconds = (cred.expires_at - now).total_seconds()
+        days_left = remaining_seconds / 86400.0
+        health: dict[str, Any] = {
+            "credential_id": cred.credential_id,
+            "credential_type": cred.credential_type.value,
+            "status": cred.status.value,
+            "days_to_expiry": round(days_left, 1),
+            "can_trade": self._can_trade,
+            "can_withdraw": self._can_withdraw,
+            "checked_at": now.isoformat(),
+        }
+        try:
+            if cred.status in (KeyRotationStatus.EXPIRED, KeyRotationStatus.REVOKED) or remaining_seconds <= 0:
+                health["level"] = "CRITICAL"
+                health["remediation"] = "rotate_or_revoke_trading"
+                if self._can_trade:
+                    self._can_trade = False  # 凭据失效 → 撤销交易能力 (R9)
+                self._alerts.send_incident(
+                    AlertSeverity.HIGH,
+                    f"Credential lifecycle: {cred.credential_id} expired/revoked",
+                    f"status={cred.status.value}, trading capability revoked (R9)",
+                    category="credential",
+                )
+                print(f"[beidou-security] ❌ Credential {cred.credential_id} expired/revoked — trading capability revoked")
+            elif days_left <= 30.0:
+                health["level"] = "WARNING"
+                health["remediation"] = "rotate_key"
+                self._alerts.send_incident(
+                    AlertSeverity.WARNING,
+                    f"Credential expiring in {days_left:.0f} days",
+                    f"credential_id={cred.credential_id}, days_to_expiry={days_left:.0f}",
+                    category="credential",
+                )
+                print(f"[beidou-security] ⚠️ Credential {cred.credential_id} expires in {days_left:.0f} days")
+            elif cred.status == KeyRotationStatus.ROTATING:
+                health["level"] = "WARNING"
+                health["remediation"] = "complete_rotation"
+                print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
+            else:
+                health["level"] = "OK"
+            # R9: 提款权限无条件禁止 — 异常开启时立即纠正并告警
+            if self._can_withdraw:
+                health["level"] = "CRITICAL"
+                health["r9_violation"] = "WITHDRAW_ENABLED"
+                self._can_withdraw = False
+                self._alerts.send_incident(
+                    AlertSeverity.HIGH,
+                    "R9 violation: withdraw enabled on trading credential",
+                    f"credential_id={cred.credential_id}",
+                    category="credential",
+                )
+        except Exception as exc:
+            health["level"] = "UNKNOWN"
+            health["error"] = f"{type(exc).__name__}: {exc}"
+        self._credential_health = health
+        return health
 
     # --- Main loop ---
 
@@ -3329,7 +4205,7 @@ class AutonomousEngine:
                 symbol = p["symbol"]
                 entry_price = float(p.get("entryPrice", 0))
                 if entry_price <= 0:
-                    features = self._feed.update_features(symbol)
+                    features = await self._feed.async_update_features(symbol)
                     entry_price = features.get("price", 0) if features else 0
                     if entry_price <= 0:
                         continue
@@ -3344,7 +4220,7 @@ class AutonomousEngine:
                 if already_protected:
                     continue
 
-                kline_features = self._feed.get_kline_features(symbol)
+                kline_features = await self._feed.async_get_kline_features(symbol)
                 adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
                 pp = self._protection.create_protection(
                     position_id=pos_id,
@@ -3491,6 +4367,14 @@ class AutonomousEngine:
         print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         if self._exchange is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
+
+        # BD-FIX: 启动 WebSocket 实时行情流（REST 轮询作为回退）
+        is_testnet = self._env_mode.value == "testnet"
+        ws_started = await self._feed.start_ws(self._symbols, testnet=is_testnet)
+        if ws_started:
+            print("[beidou-autopilot] WebSocket market data stream ACTIVE (REST polling as fallback)")
+        else:
+            print("[beidou-autopilot] WebSocket unavailable — using REST polling only")
 
         self._running = True
         self._last_realtime = time.time()

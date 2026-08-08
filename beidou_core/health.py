@@ -190,8 +190,24 @@ class HealthServer:
                 self.end_headers()
                 self.wfile.write(body)
 
-        self._server = HTTPServer((self._bind_host, self._port), Handler)
-        self._server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # BD-FIX: allow_reuse_address + SO_REUSEADDR 防止 TIME_WAIT 导致的端口冲突。
+        # 启动时如果端口被占用（可能是残留的 TIME_WAIT），最多重试 3 次，间隔 2s。
+        import time as _time
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                self._server = HTTPServer((self._bind_host, self._port), Handler)
+                self._server.allow_reuse_address = True
+                self._server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                break
+            except OSError as exc:
+                last_err = exc
+                if attempt < 2:
+                    _time.sleep(2.0)
+        else:
+            raise OSError(f"HealthServer port {self._port} unavailable after 3 retries: {last_err}") from last_err
+
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 

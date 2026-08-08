@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionModeEvidence,
 )
 
 from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
-from .models import CheckResult, StartupReport
+from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
 from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
@@ -67,6 +68,11 @@ class BeidouSupervisor:
         self._engine_failure = ""
         self._recovery_count = 0
         self._recovery_timestamps: list[float] = []  # 时间窗口恢复追踪
+        # 监控子系统 (MON08)：深度审计调度器与状态
+        self._monitoring_scheduler = DeepAuditScheduler()
+        self._monitoring_state: dict[str, Any] = {}
+        self._last_monitor_loop_ts = 0.0  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
+        self._monitoring_check_states: dict[str, str] = {}  # check_id → 最近状态（阻断转变事件）
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
@@ -172,6 +178,7 @@ class BeidouSupervisor:
                 "commit": self.report.commit,
                 "blockers": [item.check_id for item in self.report.blockers],
                 "checks": {item.check_id: item.status.value for item in self.report.checks},
+                "monitoring": self._monitoring_state,
             }
             return base
 
@@ -316,6 +323,79 @@ class BeidouSupervisor:
         self._last_error_count = error_count
         return checks
 
+    def _merge_monitoring_checks(self, runtime_checks: list[CheckResult]) -> list[CheckResult]:
+        """运行监控子系统深度检查并合并进监督器检查流。
+
+        - 监控子系统结果对相同 check_id 优先（深度审计为准）
+        - MON08 频率策略以监控结果驱动深度审计节奏
+        - 阻断检查以状态转变事件写入证据目录
+        """
+        assert self.engine is not None
+        monitoring_checks: list[CheckResult] = []
+        try:
+            monitoring_checks = collect_monitoring_checks(
+                engine=self.engine,
+                supervisor=self,
+                exchange_account_snapshot=self._exchange_account_snapshot,
+                algorithm_probe=self._algorithm_probe,
+                position_mode_evidence=self._position_mode_evidence,
+                last_loop_at=self._last_monitor_loop_ts,
+                monitor_stall_threshold=max(30.0, self.monitor_interval * 3),
+            )
+        except Exception as exc:
+            print(f"[supervisor] Monitoring checks failed: {type(exc).__name__}: {exc}")
+            import traceback
+
+            traceback.print_exc()
+
+        # MON08 频率策略：监控结果 → 深度审计调度状态
+        from beidou_observability.monitoring.contracts import (
+            CheckSeverity as MonCheckSeverity,
+            CheckStatus as MonCheckStatus,
+        )
+
+        try:
+            scheduler_results = [
+                (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value))
+                for item in monitoring_checks
+            ]
+            open_p0 = any(
+                item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P0 for item in monitoring_checks
+            )
+            open_p1 = any(
+                item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
+            )
+            self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)
+        except Exception:
+            pass
+        self._monitoring_state = {
+            "level": self._monitoring_scheduler.level.value,
+            "interval_seconds": self._monitoring_scheduler.current_interval,
+            "deep_audit_due": self._monitoring_scheduler.should_run_deep_audit(),
+            "last_reason": getattr(self._monitoring_scheduler.state, "last_reason", ""),
+            "monitoring_check_count": len(monitoring_checks),
+        }
+
+        # 阻断检查以状态转变写入证据事件
+        for item in monitoring_checks:
+            if item.is_blocking and self._monitoring_check_states.get(item.check_id) != item.status.value:
+                self.writer.write_event(
+                    "monitoring_check_fail",
+                    {
+                        "check_id": item.check_id,
+                        "message": item.message,
+                        "severity": item.severity.value,
+                        "monitor_level": self._monitoring_state["level"],
+                    },
+                )
+            self._monitoring_check_states[item.check_id] = item.status.value
+
+        # 合并：监控子系统深度审计结果对相同 check_id 优先。
+        # 同 check_id 的多个条目（多模块/多持仓/多订单）全部保留，避免遮蔽单项失败。
+        monitoring_ids = {item.check_id for item in monitoring_checks}
+        retained_runtime = [item for item in runtime_checks if item.check_id not in monitoring_ids]
+        return retained_runtime + monitoring_checks
+
     # 启动阶段只要求关键检查通过；行情、对账、心跳等运行时检查
     # 在引擎运行一段时间后自然会就绪，不应阻断启动。
     _STARTUP_CRITICAL_CHECKS = frozenset(
@@ -366,6 +446,7 @@ class BeidouSupervisor:
                 await self._refresh_exchange_algo_snapshot()
                 try:
                     checks = self._runtime_checks()
+                    checks = self._merge_monitoring_checks(checks)
                 except Exception as exc:
                     print(f"[supervisor] Runtime checks failed: {type(exc).__name__}: {exc}")
                     import traceback
@@ -421,6 +502,13 @@ class BeidouSupervisor:
             "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
             "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
             "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
+            # 监控子系统检查 — 与上列同源的瞬时状态（API 故障/引擎自愈可恢复）
+            "runtime.safety.account",  # INV-002: API 故障 ≠ 空账户，可自愈
+            "runtime.safety.balance_sanity",  # 账户事实缺失可自愈
+            "runtime.execution.order_trace",  # _sync_exchange_state 可自愈在途订单
+            "runtime.health.algorithm_probe",  # 探针重试可自愈
+            "runtime.health.module_progress",  # 心跳类瞬时状态
+            "runtime.health.monitor_self",  # 监督循环自身可恢复
         }
     )
 
@@ -488,6 +576,10 @@ class BeidouSupervisor:
             checks = self._runtime_checks()
             if await self._recover_if_validated(checks):
                 checks = self._runtime_checks()
+            # 运行监控子系统深度检查并合并（账户/保护/对账/执行/模块/探针/自身健康）
+            checks = self._merge_monitoring_checks(checks)
+            self._last_monitor_loop_ts = time.time()
+
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers

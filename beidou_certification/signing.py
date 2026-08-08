@@ -103,24 +103,27 @@ class CertificateStore:
         endpoint = endpoint or os.environ.get("BEIDOU_S3_ENDPOINT", "http://localhost:9000")
         try:
             import json
+            import os as _os
 
-            # MinIO/S3 client
+            export_dir = _os.environ.get("BEIDOU_CERT_EXPORT_DIR", "evidence/certificates")
+            _os.makedirs(export_dir, exist_ok=True)
+
             for _cid, cert in self._certificates.items():
-                # In production: boto3/minio client.put_object(...)
-                json.dumps(
-                    {
-                        "certificate_id": cert.certificate_id,
-                        "gate_id": cert.gate_id,
-                        "repository": cert.repository,
-                        "commit": cert.commit,
-                        "bundle_hash": cert.bundle_hash,
-                        "signature": cert.signature,
-                        "signed_at": cert.signed_at,
-                        "revoked": cert.revoked,
-                    },
-                    indent=2,
-                )
-                # Placeholder for actual S3/MinIO upload
+                cert_data = {
+                    "certificate_id": cert.certificate_id,
+                    "gate_id": cert.gate_id,
+                    "repository": cert.repository,
+                    "commit": cert.commit,
+                    "bundle_hash": cert.bundle_hash,
+                    "signature": cert.signature,
+                    "signed_at": cert.signed_at,
+                    "revoked": cert.revoked,
+                }
+                # 本地文件系统导出（最低可行方案）
+                # 生产环境需替换为 S3/MinIO 上传 (boto3/minio client.put_object)
+                filepath = _os.path.join(export_dir, f"{cert.certificate_id}.json")
+                with open(filepath, "w", encoding="utf-8") as fh:
+                    json.dump(cert_data, fh, indent=2)
             return True
         except Exception:
             return False

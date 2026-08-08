@@ -54,12 +54,31 @@ class ImmutableLedger:
         self._frozen = True
 
     def post(self, entry: JournalEntry) -> str:
-        """追加经济事件。BD-P0-09: 冻结后抛出异常。"""
+        """追加经济事件。BD-P0-09: 冻结后抛出异常。
+
+        强制复式记账约束: debit == credit（单笔记账必须平衡）。
+        拒绝 idempotency 重复: 相同 entry_id 不可重复提交。
+        """
         if self._frozen:
             raise RuntimeError("ImmutableLedger is frozen — no new entries allowed")
+
+        # Idempotency guard: 相同 entry_id 不可重复提交
+        for existing in self._entries:
+            if existing.entry_id == entry.entry_id:
+                raise RuntimeError(f"ImmutableLedger: duplicate entry_id={entry.entry_id} — rejected")
+
+        # 强制复式记账: 单笔记账必须平衡
+        if not entry.is_balanced():
+            raise RuntimeError(
+                f"ImmutableLedger: unbalanced entry_id={entry.entry_id} "
+                f"debit={entry.debit.amount} credit={entry.credit.amount} — rejected"
+            )
+
         self._entries.append(entry)
         key = f"{entry.account_id}:{entry.venue_id}"
         current = self._account_balances.get(key, MonetaryValue(amount="0", currency=entry.debit.currency))
+        # 复式记账: 每笔 entry 的 debit==credit，所以 balance 不变
+        # 保留此逻辑以支持余额快照查询
         new_balance = float(current.amount) + float(entry.debit.amount) - float(entry.credit.amount)
         self._account_balances[key] = MonetaryValue(amount=str(new_balance), currency=current.currency)
         return entry.entry_id

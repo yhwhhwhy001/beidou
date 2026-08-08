@@ -98,10 +98,18 @@ class OrderBookManager:
         # Apply bid updates
         bids = list(self._snapshot.bids)
         for level in diff.bid_updates:
-            if level.price == 0:
-                bids = [b for b in bids if b.price != level.price]
-            else:
-                bids = [b for b in bids if b.price != level.price]
+            # BD-FIX: price=0 是删除标记，但当前协议未携带要删除的 price。
+            # 当 quantity=0 时删除对应价格档位（交易所标准做法）；
+            # 当两者均为 0 时无法确定删除目标，跳过（安全优先）。
+            if level.price == 0 and level.quantity == 0:
+                # 无法识别要删除的价格档位，跳过
+                continue
+            if level.quantity == 0:
+                # quantity=0 → 删除该价格档位
+                bids = [b for b in bids if abs(b.price - level.price) > 1e-15]
+            elif level.price > 0:
+                # 正常更新：先移除旧价位（如果存在），再插入新价位
+                bids = [b for b in bids if abs(b.price - level.price) > 1e-15]
                 bids.append(level)
         bids.sort(key=lambda x: x.price, reverse=True)
         bids = bids[: self._max_depth]
@@ -109,10 +117,13 @@ class OrderBookManager:
         # Apply ask updates
         asks = list(self._snapshot.asks)
         for level in diff.ask_updates:
-            if level.price == 0:
-                asks = [a for a in asks if a.price != level.price]
-            else:
-                asks = [a for a in asks if a.price != level.price]
+            # BD-FIX: same fix as bids — use quantity=0 as deletion signal
+            if level.price == 0 and level.quantity == 0:
+                continue
+            if level.quantity == 0:
+                asks = [a for a in asks if abs(a.price - level.price) > 1e-15]
+            elif level.price > 0:
+                asks = [a for a in asks if abs(a.price - level.price) > 1e-15]
                 asks.append(level)
         asks.sort(key=lambda x: x.price)
         asks = asks[: self._max_depth]

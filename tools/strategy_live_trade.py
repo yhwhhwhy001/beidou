@@ -35,10 +35,11 @@ with open(os.path.join(os.path.dirname(__file__), "..", "config", "env.testnet.y
 
 REST_URL = cfg["exchange"]["binance_usdm"]["rest_base_url"]
 RECV_WINDOW = cfg["exchange"]["binance_usdm"]["recv_window_ms"]
-API_KEY = str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
-API_SECRET = str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
+API_KEY = os.environ.get("BEIDOU_BINANCE_API_KEY", "").strip() or str(cfg["exchange"]["binance_usdm"].get("api_key_ref", "")).strip()
+API_SECRET = os.environ.get("BEIDOU_BINANCE_API_SECRET", "").strip() or str(cfg["exchange"]["binance_usdm"].get("api_secret_ref", "")).strip()
 
-if "请填入" in API_KEY or len(API_KEY) < 10:
+if len(API_KEY) < 10:
+    print("❌ 缺少 API Key，请设置环境变量 BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET")
     sys.exit(1)
 
 
@@ -86,9 +87,11 @@ def check(name, ok, detail=""):
     global passed, failed, step_no
     step_no += 1
     tag = "PASS" if ok else "FAIL"
-    line = f"  [{tag}] S{step_no:02d} {name}"
+    icon = "✅" if ok else "❌"
+    line = f"  {icon} [{tag}] S{step_no:02d} {name}"
     if detail:
         line += f"  |  {detail}"
+    print(line, flush=True)
     if ok:
         passed += 1
     else:
@@ -354,7 +357,7 @@ check(
 )
 
 # Approval
-signer = RiskApprovalSignerImpl()
+signer = RiskApprovalSignerImpl(signing_key="beidou-testnet-mock-key")
 approval_id = RiskApprovalId(f"strategy-approval-{int(time.time())}")
 signer.sign(approval_id)
 sm = RiskApprovalStateMachine()
