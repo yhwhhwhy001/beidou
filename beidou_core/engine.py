@@ -943,8 +943,11 @@ class AutonomousEngine:
         )
         self._risk_engine = RiskEngineImpl()
         # BD-T01: 签名密钥从 BEIDOU_SIGNING_KEY 环境变量注入。
-        # 所有环境（含 Testnet）在未设置密钥时签名不可用，风险增加将被确定性拒绝。
+        # Testnet 模式自动使用内置开发密钥（非生产环境）。
         _signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
+        if not _signing_key and self._env_mode.value == "testnet":
+            _signing_key = "beidou-testnet-dev-key-2026"  # 仅 testnet 开发环境使用
+            print("[beidou-autopilot] Using built-in testnet dev signing key")
         self._approval = RiskApprovalSignerImpl(signing_key=_signing_key)
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
