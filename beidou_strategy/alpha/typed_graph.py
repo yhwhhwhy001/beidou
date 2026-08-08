@@ -24,6 +24,7 @@ from typing import Any
 
 from beidou_shared.types import (
     InstrumentId,
+    OrderSide,
     StrategyId,
     VenueId,
 )
@@ -279,7 +280,7 @@ class ExitNode(TypedGraphNode):
     核心规则：
     - 输出方向必须为 REDUCE/FLATTEN/CANCEL
     - 禁止输出 LONG/SHORT（新增风险方向）
-    - 输出 Proposal.direction 必须以 "EXIT_" 前缀
+    - 输出 Proposal.side 不得为 LONG/SHORT（Exit 不得新增风险）
     """
 
     def __init__(self, node_id: str, exit_fn: Any = None) -> None:
@@ -310,10 +311,9 @@ class ExitNode(TypedGraphNode):
                 dq_tier=DataQualityTier.PASS,
             )
 
-        # 强制约束：退出信号不得新增风险
-        direction_str = str(getattr(proposal, "direction", "")).upper()
-        forbidden = {"LONG", "SHORT", "INCREASE"}
-        if direction_str in forbidden:
+        # BD-T05: 强制约束 — Exit 不得新增风险（side 不得为 BUY/SELL）
+        side_val = getattr(proposal, "side", None)
+        if side_val is not None:
             return TypedNodeOutput(
                 node_id=self.node_id,
                 node_type=NodeType.EXIT,
@@ -367,7 +367,7 @@ class FusionNode(TypedGraphNode):
                     strategy_id=StrategyId("no_entry"),
                     instrument_id=instrument,
                     venue_id=venue,
-                    direction="NO_ACTION",
+                    side=None,
                     strength=0.0,
                     confidence=0.0,
                 ),
@@ -387,7 +387,7 @@ class FusionNode(TypedGraphNode):
                     strategy_id=StrategyId("dq_blocked"),
                     instrument_id=instrument,
                     venue_id=venue,
-                    direction="NO_ACTION",
+                    side=None,
                     strength=0.0,
                     confidence=0.0,
                 ),
@@ -405,7 +405,7 @@ class FusionNode(TypedGraphNode):
                     strategy_id=StrategyId("vetoed"),
                     instrument_id=instrument,
                     venue_id=venue,
-                    direction="NO_ACTION",
+                    side=None,
                     strength=0.0,
                     confidence=0.0,
                     filter_results=filter_results,
@@ -421,20 +421,19 @@ class FusionNode(TypedGraphNode):
             confidence_mult *= d.confidence_multiplier
             size_mult *= d.size_multiplier
 
-        # 输出最终方向
-        direction = entry_proposal.direction
+        # BD-T05: 输出最终方向（side 替代 direction）
+        side = entry_proposal.side
         strength = entry_proposal.strength * size_mult
         confidence = entry_proposal.confidence * confidence_mult
 
-        # 方向不能改变！Entry LONG + Filter → 必须仍是 LONG
         if strength < 0.01:
-            direction = "NO_ACTION"
+            side = None  # NO_ACTION
 
         proposal = StrategyProposal(
             strategy_id=StrategyId("typed_graph"),
             instrument_id=entry_proposal.instrument_id,
             venue_id=entry_proposal.venue_id,
-            direction=direction,
+            side=side,
             strength=min(1.0, strength),
             confidence=min(1.0, confidence),
             entry_proposals=[entry_proposal],

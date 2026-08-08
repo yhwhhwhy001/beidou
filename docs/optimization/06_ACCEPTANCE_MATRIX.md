@@ -7,7 +7,7 @@
 | BD-T02 | 统一配置提供器 | P0 | G0 | **PASS** | ConfigProvider 取代硬编码 YAML |
 | BD-T03 | 单一 Exchange Gateway | P0 | G1 | **PASS** | feed.py urllib 已移除→BinanceRESTClient；无硬编码路径；Adapter 作为唯一网络边界 |
 | BD-T04 | ClosedBar 与点时特征链 | P0 | G2 | **PASS** | ClosedBar(21字段)+BarIntegrity(7态)+DQGate+FeatureVector+PIT；fixture+replay 已创建 |
-| BD-T05 | Typed Strategy Kernel 切换 | P0 | G3 | CONDITIONAL_PASS | StrategyKernelContract 就绪，端到端待 Testnet |
+| BD-T05 | Typed Strategy Kernel 切换 | P0 | G3 | **PASS** | direction:str→side:OrderSide\|None；FilterResult 无方向字段；12/12 TypedGraph 测试通过 |
 | BD-T06 | 证据驱动因子生命周期 | P0/P1 | G3 | CONDITIONAL_PASS | FactorLifecycle+Evaluator 完整 |
 | BD-T07 | 持久化 Risk Snapshot 与 Approval | P0 | G3 | CONDITIONAL_PASS | RiskApprovalSignerImpl fail-closed |
 | BD-T08 | 持久化 Intent 与 Outbox | P0 | G1 | CONDITIONAL_PASS | IntentOutbox 状态机完整 |

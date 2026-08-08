@@ -12,6 +12,7 @@ from enum import Enum
 
 from beidou_shared.types import (
     InstrumentId,
+    OrderSide,
     SchemaVersion,
     StrategyId,
     VenueId,
@@ -91,14 +92,14 @@ class FeatureSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class EntryProposal:
-    """BD-05: 入场提案 — 由 Entry Alpha 节点生成。"""
+    """BD-T05: 入场提案 — 由 Entry Alpha 节点生成。side 替换遗留 direction:str。"""
 
     strategy_id: StrategyId
     instrument_id: InstrumentId
     venue_id: VenueId
-    direction: str  # LONG / SHORT
-    strength: float  # [0, 1]
-    confidence: float  # [0, 1]
+    side: OrderSide | None = None  # BD-T05: 类型化 side (None=NO_ACTION/BOTH)
+    strength: float = 0.0  # [0, 1]
+    confidence: float = 0.0  # [0, 1]
     z_score: float | None = None
     half_life_hours: float | None = None
     no_trade_band_pct: float = 0.0
@@ -120,14 +121,14 @@ class FilterResult:
 
 @dataclass(frozen=True, slots=True)
 class StrategyProposal:
-    """BD-05: 策略最终提案 — DAG 执行结果。"""
+    """BD-T05: 策略最终提案 — DAG 执行结果。side 替换遗留 direction:str。"""
 
     strategy_id: StrategyId
     instrument_id: InstrumentId
     venue_id: VenueId
-    direction: str
-    strength: float
-    confidence: float
+    side: OrderSide | None = None  # BD-T05: 类型化 side (None=NO_ACTION/BOTH)
+    strength: float = 0.0
+    confidence: float = 0.0
     entry_proposals: list[EntryProposal] = field(default_factory=list)
     filter_results: list[FilterResult] = field(default_factory=list)
     conflict_detected: bool = False
@@ -136,14 +137,14 @@ class StrategyProposal:
     feature_snapshot_ref: str = ""
 
     def hash(self) -> str:
-        """BD-P0-04: 稳定哈希 — 相同输入产生相同输出。"""
+        """BD-T05: 稳定哈希 — 绑定 dataset/feature/factor/model/policy/code 版本。"""
         import hashlib
 
         parts = [
             str(self.strategy_id),
             str(self.instrument_id),
             str(self.venue_id),
-            self.direction,
+            str(self.side.value if self.side else "NONE"),
             str(self.strength),
             str(self.confidence),
             str(self.conflict_detected),

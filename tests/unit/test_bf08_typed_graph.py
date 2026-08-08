@@ -18,6 +18,7 @@ import pytest
 
 from beidou_shared.types import (
     InstrumentId,
+    OrderSide,
     StrategyId,
     VenueId,
 )
@@ -43,7 +44,7 @@ async def _make_entry(context: dict) -> EntryProposal:
         strategy_id=StrategyId("test"),
         instrument_id=InstrumentId("BTCUSDT"),
         venue_id=VenueId("BINANCE"),
-        direction="LONG",
+        side=OrderSide.BUY,
         strength=0.7,
         confidence=0.6,
     )
@@ -54,7 +55,7 @@ async def _make_weak_entry(context: dict) -> EntryProposal:
         strategy_id=StrategyId("test"),
         instrument_id=InstrumentId("BTCUSDT"),
         venue_id=VenueId("BINANCE"),
-        direction="SHORT",
+        side=OrderSide.SELL,
         strength=0.3,
         confidence=0.4,
     )
@@ -116,17 +117,17 @@ class TestFilterResultSemantics:
         assert "LONG" not in decisions
         assert "SHORT" not in decisions
 
-    def test_entry_proposal_has_direction(self):
-        """EntryProposal 才包含方向。"""
+    def test_entry_proposal_has_side(self):
+        """BD-T05: EntryProposal 使用类型化 side (OrderSide)。"""
         proposal = EntryProposal(
             strategy_id=StrategyId("test"),
             instrument_id=InstrumentId("BTCUSDT"),
             venue_id=VenueId("BINANCE"),
-            direction="LONG",
+            side=OrderSide.BUY,
             strength=0.5,
             confidence=0.5,
         )
-        assert proposal.direction in ("LONG", "SHORT")
+        assert proposal.side in (OrderSide.BUY, OrderSide.SELL)
 
 
 # ================================================================
@@ -159,8 +160,8 @@ class TestTypedAlphaGraph:
             pass
         else:
             # 不应是 LONG 或 SHORT
-            assert result.direction == "NO_ACTION", (
-                f"Entry LONG + Filter VETO must be NO_ACTION, got {result.direction}"
+            assert result.side is None, (
+                f"Entry LONG + Filter VETO must be None (NO_ACTION), got {result.side}"
             )
 
     @pytest.mark.asyncio
@@ -180,7 +181,7 @@ class TestTypedAlphaGraph:
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "LONG", f"Entry LONG + Filter ACCEPT must be LONG, got {result.direction}"
+        assert result.side == OrderSide.BUY, f"Entry LONG + Filter ACCEPT must be BUY, got {result.side}"
 
     @pytest.mark.asyncio
     async def test_entry_long_bearish_filter_not_become_short(self, sample_context):
@@ -202,7 +203,7 @@ class TestTypedAlphaGraph:
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "LONG", f"Entry LONG + DEGRADE filter must still be LONG, got {result.direction}"
+        assert result.side == OrderSide.BUY, f"Entry LONG + DEGRADE filter must still be BUY, got {result.side}"
         # DEGRADE 降低了信心和强度
         assert result.confidence < 0.6  # original confidence reduced
         assert result.strength < 0.7  # original strength reduced
@@ -267,7 +268,7 @@ class TestTypedAlphaGraph:
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "NO_ACTION"  # 没有 Entry → 无动作
+        assert result.side is None  # 没有 Entry → 无动作
 
     @pytest.mark.asyncio
     async def test_filter_fails_closed_default(self, sample_context):
@@ -289,7 +290,7 @@ class TestTypedAlphaGraph:
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "NO_ACTION"
+        assert result.side is None
 
     @pytest.mark.asyncio
     async def test_graph_hash_deterministic(self):
@@ -325,4 +326,4 @@ class TestTypedAlphaGraph:
 
         result = await graph.execute(sample_context)
         assert result is not None
-        assert result.direction == "LONG"
+        assert result.side == OrderSide.BUY
