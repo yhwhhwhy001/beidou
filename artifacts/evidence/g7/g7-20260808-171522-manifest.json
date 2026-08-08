@@ -1,0 +1,27 @@
+{
+  "window_id": "g7-20260808-171522",
+  "plan_version": "1.0",
+  "duration_days": 30,
+  "started_at": "2026-08-08T17:15:22.508609+00:00",
+  "commit": "7453ddcdf6f35473a2a37dec23f2decd1da78b0d",
+  "g5_certificate_hash": "2ee161b7fcbacf3b1066ebe40986772e7044fb54fa62941dc14d0f300bd3b4ea",
+  "reset_conditions": [
+    "P0 incident",
+    "duplicate order",
+    "unprotected position beyond SLO",
+    "unexplained ledger mismatch",
+    "evidence gap"
+  ],
+  "required_sli": [
+    "data_quality",
+    "order_duplicates",
+    "protection_slo",
+    "reconciliation",
+    "recovery_bounded",
+    "incident_closure",
+    "cost_and_pnl_reporting"
+  ],
+  "mainnet_prohibited": true,
+  "auto_mainnet": false,
+  "disclaimer": "G7 certification does NOT grant Mainnet access. G8 requires separate human approval."
+}
