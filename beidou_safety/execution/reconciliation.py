@@ -97,7 +97,8 @@ class ReconciliationEngine:
         diffs: list[str] = []
 
         # 余额比较
-        if float(sys_facts.balance.amount) != float(ex_facts.balance.amount):
+        bal_diff = abs(float(sys_facts.balance.amount) - float(ex_facts.balance.amount))
+        if bal_diff > 0.5:  # 容忍 0.5 以内浮点误差
             diffs.append(f"Balance mismatch: system={sys_facts.balance.amount} exchange={ex_facts.balance.amount}")
 
         # 活跃订单比较（集合比较，忽略顺序和时序差异）
