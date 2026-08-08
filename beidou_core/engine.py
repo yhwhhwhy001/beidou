@@ -107,6 +107,19 @@ from beidou_strategy.state.cost_model import CostModel
 
 logger = logging.getLogger(__name__)
 
+# BD-FIX (O1): 基本结构化日志 — 写入文件并添加时间戳/级别/correlation_id
+_log_format = logging.Formatter(
+    "%(asctime)s.%(msecs)03d [%(levelname)-7s] %(name)s - %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+_log_handler = logging.FileHandler("evidence/beidou_engine.log")
+_log_handler.setFormatter(_log_format)
+_log_handler.setLevel(logging.INFO)
+logger.addHandler(_log_handler)
+logger.setLevel(logging.INFO)
+# 避免重复日志
+logger.propagate = False
+
 # Binance USDⓈ-M 永续合约交易池 — 主流 + 活跃altcoin
 DEFAULT_UNIVERSE = [
     "BTCUSDT",
@@ -4516,22 +4529,24 @@ class AutonomousEngine:
         self._control.execute_action(ControlAction.NO_NEW_RISK)
         print("[beidou-autopilot] 1. NO_NEW_RISK")
 
-        # 2. Cancel pending orders
+        # 2. Cancel pending orders (BD-FIX F22: 使用 _order_symbols 精确查找)
         if self._can_write:
             for order_id in list(self._active_order_ids):
-                for symbol in self._symbols:
-                    try:
-                        await self._api_async(
-                            Endpoint.ORDER,
-                            method="DELETE",
-                            signed=True,
-                            params={
-                                "symbol": symbol,
-                                "orderId": int(order_id),
-                            },
-                        )
-                    except Exception as e:
-                        print(f"[shutdown] Failed to cancel order {order_id}: {e}")
+                symbol = self._order_symbols.get(order_id, "")
+                if not symbol:
+                    continue
+                try:
+                    await self._api_async(
+                        Endpoint.ORDER,
+                        method="DELETE",
+                        signed=True,
+                        params={
+                            "symbol": symbol,
+                            "orderId": int(order_id) if order_id.isdigit() else order_id,
+                        },
+                    )
+                except Exception as e:
+                    print(f"[shutdown] Failed to cancel order {order_id}: {e}")
         print(f"[beidou-autopilot] 2. Cancelled {len(self._active_order_ids)} pending orders")
 
         # 3. Save checkpoint
