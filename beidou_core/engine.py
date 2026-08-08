@@ -3093,21 +3093,24 @@ class AutonomousEngine:
             f"{len(active_orders)} active orders, {len(protections)} protections"
         )
 
-        # Restore active_order_ids from exchange
-        try:
-            exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
-            if isinstance(exchange_open, list):
-                for o in exchange_open:
-                    oid = str(o["orderId"])
-                    tracker = OrderStateTracker(order_id=OrderId(oid))
-                    tracker.apply(OrderEvent.ACKED)
-                    tracker.apply(OrderEvent.SENT)
-                    if o.get("status") == "PARTIALLY_FILLED":
-                        tracker.apply(OrderEvent.PARTIALLY_FILLED)
-                    self._order_trackers[oid] = tracker
-                    self._active_order_ids.add(oid)
-                print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
-        except Exception as e:
+        # Restore active_order_ids from exchange (testnet 跳过，避免同步HTTP阻塞)
+        if self._env_mode.value in ("testnet", "paper"):
+            print("[beidou-autopilot] Open orders restore skipped (testnet/paper)")
+        else:
+            try:
+                exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
+                if isinstance(exchange_open, list):
+                    for o in exchange_open:
+                        oid = str(o["orderId"])
+                        tracker = OrderStateTracker(order_id=OrderId(oid))
+                        tracker.apply(OrderEvent.ACKED)
+                        tracker.apply(OrderEvent.SENT)
+                        if o.get("status") == "PARTIALLY_FILLED":
+                            tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                        self._order_trackers[oid] = tracker
+                        self._active_order_ids.add(oid)
+                    print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
+            except Exception as e:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
