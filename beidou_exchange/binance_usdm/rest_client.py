@@ -262,7 +262,7 @@ class BinanceRESTClient:
     # === 内部实现 ===
 
     async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
-        """发送 HTTP 请求并返回 Result[T]。"""
+        """发送 HTTP 请求并返回 Result[T]。HTTP 调用在线程池中执行，不阻塞事件循环。"""
         if params is None:
             params = {}
 
@@ -271,7 +271,7 @@ class BinanceRESTClient:
             if time.monotonic() < self._rate_state.circuit_open_until:
                 return Result.fail(ErrorCategory.RATE_LIMIT, "Circuit breaker open")
             self._rate_state.circuit_open = False
-            self._rate_state.consecutive_failures = 0  # 重置计数器，避免立即重新触发熔断
+            self._rate_state.consecutive_failures = 0
 
         url = self._rest_url + path
 
@@ -289,7 +289,6 @@ class BinanceRESTClient:
 
         for attempt in range(self._max_retries):
             try:
-                # 使用同步 urllib（后续升级为 httpx async）
                 import urllib.error
                 import urllib.request
 
@@ -305,29 +304,30 @@ class BinanceRESTClient:
 
                 req.add_header("X-MBX-APIKEY", self._api_key)
 
-                with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT) as resp:
-                    data = json.loads(resp.read())
-                    self._rate_state.consecutive_failures = 0
+                # 在线程池中执行同步 HTTP，不阻塞事件循环
+                body = await asyncio.to_thread(
+                    _sync_urlopen, req, DEFAULT_HTTP_TIMEOUT
+                )
+                data = json.loads(body)
+                self._rate_state.consecutive_failures = 0
 
-                    # 检查 Binance 错误响应
-                    if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
-                        binance_code = data["code"]
-                        category, _retryable = classify_http_error(200, "", binance_code)
-                        return Result.fail(category, data.get("msg", str(data)), code=binance_code)
+                if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
+                    binance_code = data["code"]
+                    category, _retryable = classify_http_error(200, "", binance_code)
+                    return Result.fail(category, data.get("msg", str(data)), code=binance_code)
 
-                    return Result.ok(data)
+                return Result.ok(data)
 
             except urllib.error.HTTPError as e:
                 http_status = e.code
                 error_body = e.read().decode() if e.fp else ""
 
-                # 解析 Binance 错误码
                 binance_code = 0
                 try:
                     err_data = json.loads(error_body)
                     binance_code = err_data.get("code", 0)
                 except Exception:
-                    binance_code = 0  # JSON parse failure: classification falls back to HTTP status
+                    binance_code = 0
 
                 category, retryable = classify_http_error(http_status, "", binance_code)
 
@@ -356,3 +356,11 @@ class BinanceRESTClient:
                 return Result.fail(ErrorCategory.NETWORK, str(e)[:200])
 
         return Result.fail(ErrorCategory.NETWORK, "Max retries exhausted")
+
+
+def _sync_urlopen(req: urllib.request.Request, timeout: int) -> bytes:
+    """同步 HTTP 请求 — 供 asyncio.to_thread 在线程池中调用。"""
+    import urllib.request
+
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()

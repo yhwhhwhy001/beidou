@@ -196,14 +196,6 @@ class BeidouSupervisor:
         """独立读取当前账户事实，拒绝使用陈旧的引擎缓存作为就绪证据。"""
         if self.engine is None:
             return
-        # testnet/paper 跳过（同步 urllib 阻塞事件循环）
-        if self.mode in ("testnet", "paper"):
-            self._exchange_account_snapshot = {
-                "ok": True,
-                "account": {"totalWalletBalance": 10000.0, "positions": []},
-                "observed_at": time.time(),
-            }
-            return
         now = time.monotonic()
         if now - self._last_exchange_account_probe < 15.0:
             return
@@ -234,15 +226,6 @@ class BeidouSupervisor:
         if self.engine is None:
             return
         now = time.monotonic()
-        if self.mode in ("testnet", "paper"):
-            if self._position_mode_evidence is None:
-                self._position_mode_evidence = PositionModeEvidence(
-                    account_id="testnet", venue="BINANCE_USDM",
-                    mode=AccountPositionMode.HEDGE, source="MOCK",
-                    source_timestamp=time.time(), observed_at=now,
-                    raw_response={"dualSidePosition": True},
-                )
-            return
         if self._position_mode_evidence is not None and now - self._last_position_mode_probe < 300.0:
             return
         self._last_position_mode_probe = now
@@ -358,14 +341,11 @@ class BeidouSupervisor:
                     and time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
                 ):
                     self._last_algorithm_probe_attempt = time.monotonic()
-                    if self.mode in ("testnet", "paper"):
-                        self._algorithm_probe = {"ok": True}
-                    else:
-                        try:
-                            self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
-                        except Exception as exc:
-                            self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                            print(f"[supervisor] Algorithm probe failed: {exc}")
+                    try:
+                        self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                    except Exception as exc:
+                        self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        print(f"[supervisor] Algorithm probe failed: {exc}")
                 await self._refresh_exchange_account_snapshot()
                 await self._refresh_position_mode()
                 await self._refresh_exchange_algo_snapshot()

@@ -2714,10 +2714,6 @@ class AutonomousEngine:
         if not self._can_write:
             return
 
-        # testnet/paper: 跳过 API 对账，使用实时行情数据模拟
-        if self._env_mode.value in ("testnet", "paper"):
-            return
-
         try:
             # 重置熔断器确保关键对账不被限流拦截
             self._exchange.reset_circuit_breaker()
@@ -3045,33 +3041,6 @@ class AutonomousEngine:
 
     # --- Main loop ---
 
-    async def _start_loops(self) -> None:
-        """启动三层时钟域事件循环（testnet 快速跳过 API 恢复）。"""
-        # 确保 health server 已启动
-        self._health.start()
-        self._running = True
-        print("[beidou-autopilot] Health server started")
-        async def _rt():
-            while self._running:
-                try: await self._realtime_tick()
-                except Exception: self._error_count += 1
-                await asyncio.sleep(1)
-        async def _nl():
-            while self._running:
-                try:
-                    await self._nearline_tick()
-                    await self._sync_exchange_state()
-                except Exception: self._error_count += 1
-                await asyncio.sleep(10)
-        async def _of():
-            while self._running:
-                try:
-                    if time.time() - self._last_offline >= 3600:
-                        await self._offline_tick()
-                except Exception: self._error_count += 1
-                await asyncio.sleep(60)
-        await asyncio.gather(_rt(), _nl(), _of())
-
     async def run(self) -> None:
         """启动自主运行引擎。"""
         print("[beidou-autopilot] ========================================")
@@ -3085,34 +3054,22 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.BOOTSTRAPPING)
         print("[beidou-autopilot] Bootstrapping...")
 
-        # Verify exchange connectivity (testnet 跳过，同步HTTP阻塞事件循环)
-        if self._env_mode.value in ("testnet", "paper"):
-            print(f"[beidou-autopilot] Exchange check skipped (testnet/paper): {self._rest_url}")
-        else:
-            server_time = await self._api_async(Endpoint.SERVER_TIME)
-            if "serverTime" not in server_time:
-                print("[beidou-autopilot] FATAL: Cannot connect to exchange")
-                self._lifecycle.transition(ModuleState.FAILED)
-                return
-            print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
+        # Verify exchange connectivity
+        server_time = await self._api_async(Endpoint.SERVER_TIME)
+        if "serverTime" not in server_time:
+            print("[beidou-autopilot] FATAL: Cannot connect to exchange")
+            self._lifecycle.transition(ModuleState.FAILED)
+            return
+        print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access
-        # testnet/paper 模式跳过阻塞性 API 调用（demo-fapi 异步上下文 SSL 挂起）
-        if self._env_mode.value in ("testnet", "paper"):
-            print("[beidou-autopilot] Account check skipped (testnet/paper mode)")
-            account = {"canTrade": True, "totalWalletBalance": 0.0, "assets": [], "positions": []}
-        else:
-            account = await self._api_async(Endpoint.ACCOUNT, signed=True)
-            if "totalWalletBalance" not in account and "assets" not in account and "canTrade" not in account:
-                print("[beidou-autopilot] FATAL: Cannot access account")
-                self._lifecycle.transition(ModuleState.FAILED)
-                return
+        account = await self._api_async(Endpoint.ACCOUNT, signed=True)
+        if "totalWalletBalance" not in account and "assets" not in account and "canTrade" not in account:
+            print("[beidou-autopilot] FATAL: Cannot access account")
+            self._lifecycle.transition(ModuleState.FAILED)
+            return
         self._last_account = account
         init_equity = float(account.get("totalWalletBalance", 0))
-        if init_equity == 0 and "canTrade" in account:
-            # demo testnet 模式下用默认模拟余额
-            init_equity = 10000.0
-            print(f"[beidou-autopilot] Testnet account OK (simulated equity={init_equity})")
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
@@ -3127,36 +3084,22 @@ class AutonomousEngine:
             f"{len(active_orders)} active orders, {len(protections)} protections"
         )
 
-        # Restore active_order_ids from exchange (testnet 跳过，避免同步HTTP阻塞)
-        if self._env_mode.value in ("testnet", "paper"):
-            print("[beidou-autopilot] Open orders restore skipped (testnet/paper)")
-        else:
-            try:
-                exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
-                if isinstance(exchange_open, list):
-                    for o in exchange_open:
-                        oid = str(o["orderId"])
-                        tracker = OrderStateTracker(order_id=OrderId(oid))
-                        tracker.apply(OrderEvent.ACKED)
-                        tracker.apply(OrderEvent.SENT)
-                        if o.get("status") == "PARTIALLY_FILLED":
-                            tracker.apply(OrderEvent.PARTIALLY_FILLED)
-                        self._order_trackers[oid] = tracker
-                        self._active_order_ids.add(oid)
-                    print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
-            except Exception as e:
-                print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
-
-        # testnet/paper: 跳过所有阻塞性 API 恢复流程
-        if self._env_mode.value in ("testnet", "paper"):
-            print("[beidou-autopilot] Skipping API-heavy startup recovery (testnet/paper)")
-            # 生命周期链：BOOTSTRAPPING → WARMING → VALIDATING → ACTIVE
-            self._lifecycle.transition(ModuleState.WARMING)
-            self._lifecycle.transition(ModuleState.VALIDATING)
-            self._lifecycle.transition(ModuleState.ACTIVE)
-            print("[beidou-autopilot] Engine ACTIVE — entering main loop")
-            await self._start_loops()
-            return
+        # Restore active_order_ids from exchange
+        try:
+            exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
+            if isinstance(exchange_open, list):
+                for o in exchange_open:
+                    oid = str(o["orderId"])
+                    tracker = OrderStateTracker(order_id=OrderId(oid))
+                    tracker.apply(OrderEvent.ACKED)
+                    tracker.apply(OrderEvent.SENT)
+                    if o.get("status") == "PARTIALLY_FILLED":
+                        tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                    self._order_trackers[oid] = tracker
+                    self._active_order_ids.add(oid)
+                print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
