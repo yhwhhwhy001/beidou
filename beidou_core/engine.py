@@ -103,6 +103,7 @@ from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, 
 from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernelContract
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
 from beidou_policy.loader import PolicyLoader
+from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_strategy.risk.manager import (
