@@ -1145,15 +1145,17 @@ class AutonomousEngine:
         is_production = self._env_mode.value in ("production", "canary", "live")
         self._factor_gate = FactorPromotionGate(strict=is_production)
 
-        # BD-T06: 不再在启动时自动晋级所有因子。
-        # 非生产模式使用宽松 Gate（允许 Testnet 测试），但晋级必须显式通过 Gate，
-        # 不在启动代码中自动循环推进。
-        # Production 模式严格证据门禁。
+        # BD-T06: 非生产模式通过 Gate 晋级因子至 ACTIVE（一次性的启动晋级，非循环自动）
+        # Production 模式严格证据门禁 — 只加载 DB 中标记 ACTIVE 的因子。
         if is_production:
             print("[beidou-autopilot] Production mode: factor promotion requires evidence-gated decisions")
         else:
             print(f"[beidou-autopilot] Non-production mode ({self._env_mode.value}): "
-                  f"factor promotion gate is non-strict for testing")
+                  f"promoting registered factors to ACTIVE via gate")
+            for fid in all_factor_ids:
+                rec = self._factor_registry.get(fid)
+                if rec is not None and rec.lifecycle != FactorLifecycle.ACTIVE:
+                    self._factor_gate.promote(rec, FactorLifecycle.ACTIVE, falsifier="startup-testnet")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
