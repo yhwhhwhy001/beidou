@@ -2213,8 +2213,12 @@ class AutonomousEngine:
                     continue
 
                 retry_count = getattr(self, "_protection_retries", {}).get(pos_id, 0)
-                if retry_count >= 3:
-                    continue  # 超过最大重试次数
+                if retry_count >= 10:
+                    # 超过最大重试：每小时重置一次计数器，避免永久放弃
+                    if retry_count >= 10 and time.time() - self._protection_retries.get(f"{pos_id}_last", 0) > 3600:
+                        self._protection_retries[pos_id] = 0
+                    else:
+                        continue
 
                 # 首次重试即加宽 (2.0x)，之后每次递增 0.5x
                 widen_factor = 2.0 + retry_count * 0.5
@@ -2300,9 +2304,10 @@ class AutonomousEngine:
                     else:
                         print(f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}")
 
-                # 仅当全部保护单落地后才重置计数器；部分成功仍需递增加宽重试
+                # 重置计数器（成功或重试完成都更新最后尝试时间）
                 if server_count + placed >= expected_count:
                     self._protection_retries.pop(pos_id, None)
+                self._protection_retries[f"{pos_id}_last"] = time.time()
                     print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}")
                 elif placed > 0:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
