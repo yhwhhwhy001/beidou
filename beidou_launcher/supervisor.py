@@ -236,7 +236,6 @@ class BeidouSupervisor:
         now = time.monotonic()
         if self.mode in ("testnet", "paper"):
             if self._position_mode_evidence is None:
-                from .models import AccountPositionMode, PositionModeEvidence
                 self._position_mode_evidence = PositionModeEvidence(
                     account_id="testnet", venue="BINANCE_USDM",
                     mode=AccountPositionMode.HEDGE, source="MOCK",
