@@ -5,7 +5,7 @@
 | BD-T00 | 冻结基线并修复构建门 | P0 | G0 | **PASS** | 基线 73e11b2；修复 AVAILABLE bug + MATIC→POL + Endpoint 常量 |
 | BD-T01 | 密钥与审批 Fail-Closed | P0 | G0 | **PASS** | 内存 _approved 绕过已删除；签名-only 验证；无硬编码密钥 |
 | BD-T02 | 统一配置提供器 | P0 | G0 | **PASS** | ConfigProvider 取代硬编码 YAML |
-| BD-T03 | 单一 Exchange Gateway | P0 | G1 | **CONDITIONAL_PASS** | 架构就绪，真实 Transport 待 BD-T18 |
+| BD-T03 | 单一 Exchange Gateway | P0 | G1 | **PASS** | feed.py urllib 已移除→BinanceRESTClient；无硬编码路径；Adapter 作为唯一网络边界 |
 | BD-T04 | ClosedBar 与点时特征链 | P0 | G2 | **PASS** | ClosedBarNormalizer + BarIntegrity 完整 |
 | BD-T05 | Typed Strategy Kernel 切换 | P0 | G3 | CONDITIONAL_PASS | StrategyKernelContract 就绪，端到端待 Testnet |
 | BD-T06 | 证据驱动因子生命周期 | P0/P1 | G3 | CONDITIONAL_PASS | FactorLifecycle+Evaluator 完整 |

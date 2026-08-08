@@ -191,51 +191,32 @@ class MarketDataFeed:
         return (time.time() - last) < self._ws_stale_threshold
 
     def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """BD-T03: 通过 BinanceRESTClient.request() 调用，事件循环兼容。"""
-        import json as _json
-        import urllib.error as _urllib_error
-        import urllib.request as _urllib_request
+        """BD-T03: 通过 BinanceRESTClient 代理 — 所有网络调用收敛到 Adapter 传输层。
 
-        # 直接 HTTP 回退（事件循环中不能用 run_until_complete）
-        url = self._rest_url + path
-        headers = {"X-MBX-APIKEY": self._api_key}
-        if params is None:
-            params = {}
-        if signed and self._api_secret:
-            params["timestamp"] = int(__import__("time").time() * 1000)
-            params["recvWindow"] = self._recv_window
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-            import hashlib as _hashlib
-            import hmac as _hmac
-
-            params["signature"] = _hmac.new(self._api_secret.encode(), qs.encode(), _hashlib.sha256).hexdigest()
-
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        full_url = f"{url}?{qs}" if method == "GET" else url
-        req = _urllib_request.Request(full_url, headers=headers)
-        if method != "GET":
-            req.method = method
-
-        for attempt in range(3):
-            try:
-                with _urllib_request.urlopen(req, timeout=5) as resp:
-                    return _json.loads(resp.read())
-            except _urllib_error.HTTPError as e:
-                if e.code == 429:
-                    __import__("time").sleep(0.3 * (attempt + 1))
-                    continue
-                self._error_count["http"] = self._error_count.get("http", 0) + 1
-                self._last_error_time = time.time()
-                return {"error": e.code, "msg": e.read().decode()}
-            except Exception:
-                self._error_count["network"] = self._error_count.get("network", 0) + 1
-                self._last_error_time = time.time()
-                __import__("time").sleep(0.3 * (attempt + 1))
-        return {"error": -1, "msg": "retry exhausted"}
+        同步包装器：在已有事件循环时通过 asyncio.to_thread 调用，
+        否则尝试新建/获取事件循环执行。
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(
+            self._client.request(method, path, signed=signed, params=params or {})
+        )
+        if isinstance(result, dict):
+            return result
+        return {"error": -1, "msg": str(result)}
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """BD-T03: 异步 API 调用 — 将同步 HTTP 移到线程池，避免阻塞事件循环。"""
-        return await asyncio.to_thread(self._api, path, method=method, signed=signed, params=params)
+        """BD-T03: 异步 API 调用 — 直接通过 BinanceRESTClient.request()。
+
+        不再使用 urllib — 所有 HTTP 调用通过 Adapter 传输层。
+        """
+        result = await self._client.request(method, path, signed=signed, params=params or {})
+        if isinstance(result, dict):
+            return result
+        return {"error": -1, "msg": str(result)}
 
     # --- Data fetching (async) ---
 
@@ -330,7 +311,7 @@ class MarketDataFeed:
         return klines
 
     def fetch_account(self) -> dict:
-        return self._api("/fapi/v2/account", signed=True)
+        return self._api(Endpoint.ACCOUNT, signed=True)
 
     # --- Feature computation ---
 
