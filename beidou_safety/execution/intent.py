@@ -77,8 +77,12 @@ class IntentOutbox:
     def send_to_inbox(self, intent: OrderIntent) -> None:
         self._inbox[intent.intent_id] = intent
 
-    def ack(self, intent_id: str) -> None:
+    def ack(self, intent_id: str, idempotency_key: str = "") -> None:
+        """BD-FIX (F15): ack 同时记录 intent_id 和 idempotency_key，
+        确保已确认意图的幂等键继续被防重保护。"""
         self._processed.add(intent_id)
+        if idempotency_key:
+            self._processed.add(idempotency_key)  # 幂等键也标记为已处理
         self._inbox.pop(intent_id, None)
         # Clean up from _outbox to prevent unbounded growth
         self._outbox = [i for i in self._outbox if i.intent_id != intent_id]

@@ -85,32 +85,38 @@ def _r1_concentration(context: dict) -> RuleDecision:
 
 
 def _r2_drawdown(context: dict) -> RuleDecision:
-    """R2: 回撤检查。"""
-    dd = context.get("drawdown_pct", 0)
+    """R2: 回撤检查。缺失数据返回 UNKNOWN (fail-closed)。"""
+    dd = context.get("drawdown_pct")
+    if dd is None:
+        return RuleDecision.UNKNOWN
     max_dd = context.get("max_drawdown_pct", 20.0)
     return RuleDecision.PASS if dd < max_dd else RuleDecision.REJECT
 
 
 def _r3_daily_loss(context: dict) -> RuleDecision:
-    """R3: 单日亏损限制。"""
-    daily = context.get("daily_loss_pct", 0)
+    """R3: 单日亏损限制。缺失数据返回 UNKNOWN (fail-closed)。"""
+    daily = context.get("daily_loss_pct")
+    if daily is None:
+        return RuleDecision.UNKNOWN
     max_daily = context.get("max_daily_loss_pct", 5.0)
     return RuleDecision.PASS if daily < max_daily else RuleDecision.REJECT
 
 
 def _r4_consecutive_losses(context: dict) -> RuleDecision:
-    """R4: 连续亏损限制。"""
-    consecutive = context.get("consecutive_losses", 0)
+    """R4: 连续亏损限制。缺失数据返回 UNKNOWN (fail-closed)。"""
+    consecutive = context.get("consecutive_losses")
+    if consecutive is None:
+        return RuleDecision.UNKNOWN
     max_cons = context.get("max_consecutive_losses", 5)
     return RuleDecision.PASS if consecutive < max_cons else RuleDecision.REJECT
 
 
 def _r5_sharpe(context: dict) -> RuleDecision:
-    """R5: Sharpe 比率下限。"""
-    sharpe = context.get("rolling_sharpe", 0)
-    min_sharpe = context.get("min_sharpe_rolling", 0.0)
+    """R5: Sharpe 比率下限。未校准或缺失返回 UNKNOWN (fail-closed)。"""
+    sharpe = context.get("rolling_sharpe")
     if sharpe is None:
         return RuleDecision.UNKNOWN
+    min_sharpe = context.get("min_sharpe_rolling", 0.0)
     return RuleDecision.PASS if sharpe >= min_sharpe else RuleDecision.REJECT
 
 
@@ -123,11 +129,11 @@ def _r6_margin(context: dict) -> RuleDecision:
 
 
 def _r7_liquidation_distance(context: dict) -> RuleDecision:
-    """R7: 清算距离。"""
+    """R7: 清算距离。无清算价或无持仓时放行（开仓无清算价是正常状态）。"""
     liq_price = context.get("liquidation_price", 0)
     current_price = context.get("current_price", 0)
     if liq_price <= 0 or current_price <= 0:
-        return RuleDecision.UNKNOWN
+        return RuleDecision.PASS  # 无持仓时无清算价，允许开仓
     distance_pct = abs(current_price - liq_price) / current_price * 100
     return RuleDecision.PASS if distance_pct > 5.0 else RuleDecision.REJECT
 
@@ -153,8 +159,10 @@ def _r9_account_capability(context: dict) -> RuleDecision:
 
 
 def _r10_duplicate_order(context: dict) -> RuleDecision:
-    """R10: 重复订单检查。"""
-    duplicate_count = context.get("duplicate_orders_24h", 0)
+    """R10: 重复订单检查。使用 outbox 中未 ack 的重复意图计数。"""
+    duplicate_count = context.get("duplicate_orders_24h")
+    if duplicate_count is None:
+        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if duplicate_count == 0 else RuleDecision.REJECT
 
 

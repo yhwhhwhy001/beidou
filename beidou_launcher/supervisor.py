@@ -467,6 +467,24 @@ class BeidouSupervisor:
             await asyncio.sleep(1)
         return False
 
+    def _send_supervisor_alert(self, state: str, blockers: list) -> None:
+        """BD-FIX (O2): 监督器 DEGRADED/LOCKED 状态推送告警。"""
+        try:
+            if self.engine is not None:
+                from beidou_observability.telemetry import AlertSeverity
+
+                severity = AlertSeverity.CRITICAL if state == "LOCKED" else AlertSeverity.HIGH
+                blocker_ids = [b.check_id for b in blockers]
+                self.engine._alerts.send_incident(
+                    severity=severity,
+                    title=f"Supervisor {state}",
+                    detail=f"Blockers: {blocker_ids}",
+                    category="supervisor",
+                )
+                print(f"[supervisor] Alert sent: {severity.value} — Supervisor {state}: {blocker_ids}")
+        except Exception as e:
+            print(f"[supervisor] Alert send failed: {e}")
+
     async def _fail_closed(self, reason: str, fatal: bool = False) -> None:
         if self.engine is None:
             return
@@ -601,8 +619,14 @@ class BeidouSupervisor:
                 self._critical_streak = 0
             if fatal_triggered:
                 self.report.supervisor_state = "LOCKED"
+                # BD-FIX: LOCKED 状态推送告警 (O2)
+                self._send_supervisor_alert("LOCKED", blockers)
             elif blockers:
                 self.report.supervisor_state = "DEGRADED"
+                # BD-FIX: DEGRADED 状态推送告警 (持久阻断时)
+                persistent = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
+                if persistent:
+                    self._send_supervisor_alert("DEGRADED", persistent)
             elif self._control_state() != "RESUME":
                 self.report.supervisor_state = "PAUSED"
             else:

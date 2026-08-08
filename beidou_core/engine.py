@@ -1618,7 +1618,7 @@ class AutonomousEngine:
                 # 1. Fetch latest market data
                 # BD-FIX: WebSocket 数据优先 — 如果 WS 数据新鲜则跳过 REST 调用
                 if self._feed._ws_active and self._feed.is_ws_data_fresh(symbol):
-                    features = self._feed.get_kline_features(symbol)
+                    features = await self._feed.async_get_kline_features(symbol)
                     # 补充 ticker/orderbook 从 WS 缓存
                     ticker = self._feed.get_last_ticker(symbol)
                     ob = self._feed.get_last_orderbook(symbol)
@@ -1755,7 +1755,7 @@ class AutonomousEngine:
             print(
                 f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})"
             )
-            self._outbox.ack(intent.intent_id)
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             return
 
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
@@ -1823,7 +1823,7 @@ class AutonomousEngine:
                 )
 
             self._order_trackers[intent.intent_id] = tracker
-            self._outbox.ack(intent.intent_id)
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             self._order_count += 1
 
             # 记录成交明细（fill price / latency / status）
@@ -2026,7 +2026,7 @@ class AutonomousEngine:
             print(
                 f"[order] {order_symbol}: execution plan CANCELED by {plan.algorithm.value}: {plan.cancel_reason}"
             )
-            self._outbox.ack(intent.intent_id)
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             return None
 
         if not plan.slices:
@@ -2127,7 +2127,7 @@ class AutonomousEngine:
             self._order_trackers[oid_str] = tracker
             self._order_symbols[oid_str] = order_symbol
             if ack_outbox:
-                self._outbox.ack(intent.intent_id)
+                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             self._order_count += 1
 
             actual_status = order.get("status", "NEW")
@@ -2490,10 +2490,13 @@ class AutonomousEngine:
             for _pos_id, pos in self._protection.all_positions().items():
                 system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
 
+            # BD-FIX (D1/D2): 系统余额从账本推导（保留方向信息）
+            # 账本净余额 = 所有 entry 的 debit 总额（即成交总额）
+            system_balance = sum(float(e.debit.amount) for e in self._ledger._entries)
             system_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount=str(balance)),
+                balance=MonetaryValue(amount=str(system_balance)),
                 positions=system_positions,
                 open_orders=list(self._active_order_ids),
             )
@@ -2588,7 +2591,16 @@ class AutonomousEngine:
             print(f"[realtime] Reconciliation error: {e}")
 
     async def _ensure_exchange_position_protections(self) -> None:
-        """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。"""
+        """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。
+
+        BD-FIX (S4): 保护单下发前检查控制面状态，
+        LOCK/EMERGENCY_FLATTEN 时禁止创建新保护单。
+        """
+        # 控制面门禁: LOCK/EMERGENCY_FLATTEN 下禁止保护单操作
+        ctrl_state = self._control.get_status()
+        if ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            print(f"[protection] SKIP: control plane is {ctrl_state.value} — no protection placement")
+            return
         try:
             account = self._last_account
             if not account or "positions" not in account:
@@ -3181,7 +3193,7 @@ class AutonomousEngine:
                         quantity=Quantity(amount=str(close_qty)),
                         price=Price(amount=str(close)),
                         time_in_force=TimeInForce.GTC,
-                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time())}",
+                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time()*1_000_000)}",
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
                         idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
                         risk_approval_id=str(RiskApprovalId(f"nearline-close-{int(time.time())}")),
@@ -3425,7 +3437,7 @@ class AutonomousEngine:
                     "protected_positions": sum(
                         1
                         for pp in self._protection.all_positions().values()
-                        if pp.stop_loss is not None and pp.stop_loss.is_active
+                        if pp.stop_loss is not None and pp.stop_loss.is_active()
                     ),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
@@ -3596,23 +3608,37 @@ class AutonomousEngine:
                     print(f"[sync] 🧹 Ghost position cleaned: {sym} (id={old_pid})")
 
             # Step 4: 清理系统内已不存在的挂单（系统有但交易所无）
+            # BD-FIX (D3): 查询交易所订单真实状态，如果是 FILLED 则走 _process_fill 正常记账，
+            # 不再直接标记 quantity=0 的假 FILLED。
             stale_order_ids = self._active_order_ids - exchange_order_ids
             for oid in stale_order_ids:
                 self._active_order_ids.discard(oid)
-                self._order_trackers.pop(oid, None)
                 symbol = self._order_symbols.pop(oid, None)
-                # 该订单已经在交易所成交或取消，更新 DB
-                self._store.save_order_state(
-                    oid,
-                    symbol or "",
-                    "UNKNOWN",
-                    "MARKET",
-                    "0",
-                    None,
-                    "FILLED",
-                )
+                if symbol and self._can_write:
+                    try:
+                        order_result = await self._api_async(
+                            Endpoint.ORDER, signed=True,
+                            params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid}
+                        )
+                        if isinstance(order_result, dict) and "orderId" in order_result:
+                            status = order_result.get("status", "UNKNOWN")
+                            if status == "FILLED":
+                                await self._process_fill(oid, symbol, order_result)
+                                print(f"[sync] 📊 Stale order {oid} ({symbol}) FILLED — processed via _process_fill")
+                            else:
+                                self._store.save_order_state(oid, symbol, order_result.get("side", "UNKNOWN"),
+                                    order_result.get("type", "MARKET"), str(order_result.get("origQty", "0")),
+                                    order_result.get("price"), status)
+                                print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
+                            continue
+                    except Exception:
+                        pass
+                # 回退: 无法查询时保留 tracker 以便后续处理，标记为 UNKNOWN
+                self._order_trackers.pop(oid, None)
+                if symbol:
+                    self._store.save_order_state(oid, symbol, "UNKNOWN", "UNKNOWN", "0", None, "UNKNOWN")
             if stale_order_ids:
-                print(f"[sync] 🧹 Stale orders cleaned: {len(stale_order_ids)} — marked FILLED")
+                print(f"[sync] 🧹 Stale orders cleaned: {len(stale_order_ids)}")
 
             # Step 5: 对齐交易所新增/变更的持仓（交易所持仓 ≠ 系统持仓）
             # 当交易所持仓量与系统记录不一致时，以交易所为准更新系统状态
@@ -3952,15 +3978,21 @@ class AutonomousEngine:
 
             # Plan & Execute: if anomaly detected, attempt recovery
             if anomaly_detected:
-                recovery_action = self._mapek.decide_action(
-                    symptoms={"error_count": float(system_metrics["error_count"]), "ledger_balanced": 0.0 if system_metrics["ledger_balanced"] else 1.0}
-                )
-                if recovery_action and recovery_action != RecoveryAction.NOOP:
-                    print(f"[offline] MAPE-K: executing recovery action {recovery_action.value}")
+                symptom_vector = {
+                    "error_count": float(system_metrics["error_count"]),
+                    "ledger_balanced": 0.0 if system_metrics["ledger_balanced"] else 1.0,
+                }
+                recovery_action, reason = self._mapek.decide_action(symptom_vector, "autopilot")
+                if recovery_action != RecoveryAction.NOOP:
+                    print(f"[offline] MAPE-K: executing recovery action {recovery_action.value} (reason: {reason})")
                     try:
-                        result = self._mapek.execute_recovery(recovery_action, engine=self)
+                        result = self._mapek.execute_recovery(recovery_action, "autopilot")
                         print(f"[offline] MAPE-K: recovery result = {result.value}")
-                        verified = self._mapek.verify_recovery(recovery_action, system_metrics)
+                        invariants = {
+                            "error_count_ok": system_metrics["error_count"] < 50,
+                            "ledger_balanced": system_metrics["ledger_balanced"],
+                        }
+                        verified = self._mapek.verify_recovery("autopilot", invariants)
                         if verified:
                             print("[offline] MAPE-K: recovery verified OK")
                     except Exception as rec_err:

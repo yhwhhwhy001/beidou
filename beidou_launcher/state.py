@@ -115,6 +115,17 @@ class EvidenceWriter:
         fingerprint = json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True)
         now = time.monotonic()
         if fingerprint != self._last_history_fingerprint or now - self._last_history_write >= 60.0:
+            # BD-FIX (P3): 文件超过 10MB 时轮转，仅保留最近 500 条记录
+            max_size = 10 * 1024 * 1024
+            max_lines = 500
+            try:
+                if self.history_path.exists() and self.history_path.stat().st_size > max_size:
+                    lines = self.history_path.read_text().strip().splitlines()
+                    trimmed = lines[-max_lines:]
+                    with self.history_path.open("w", encoding="utf-8") as fh:
+                        fh.write("\n".join(trimmed) + "\n")
+            except Exception:
+                pass
             with self.history_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
                 handle.flush()

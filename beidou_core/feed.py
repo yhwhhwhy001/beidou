@@ -319,7 +319,7 @@ class MarketDataFeed:
         try:
             last_price = float(ticker["lastPrice"])
             if symbol not in self._kline_generators:
-                self._kline_generators[symbol] = KLineGenerator(symbol=symbol, interval="5m")
+                self._kline_generators[symbol] = KLineGenerator(interval="5m")
             kg = self._kline_generators[symbol]
             kg.update(
                 price=last_price,

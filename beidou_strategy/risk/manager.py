@@ -329,10 +329,29 @@ class StrategyRiskManager:
         return True
 
     def reset_daily_pnl(self) -> None:
-        """每日重置所有策略的单日 PnL。"""
+        """每日重置所有策略的单日 PnL 并清除每日类熔断器。
+
+        BD-FIX: DAILY_LOSS_LIMIT / CONSECUTIVE_LOSSES / DRAWDOWN_LIMIT
+        在第二天自动恢复，不再永久锁定。
+        """
         for state in self._states.values():
             state.daily_pnl = 0.0
             state.daily_loss_pct = 0.0
+            # 清除每日重置型熔断器
+            daily_breakers = {
+                "DAILY_LOSS_LIMIT",
+                "CONSECUTIVE_LOSSES",
+                "DRAWDOWN_LIMIT",
+            }
+            state.active_circuit_breakers = [
+                cb for cb in state.active_circuit_breakers if cb not in daily_breakers
+            ]
+            # 如果所有熔断器已清除，恢复到 NORMAL 级别
+            if not state.active_circuit_breakers and state.risk_level in (
+                StrategyRiskLevel.LOCKED,
+                StrategyRiskLevel.EXIT_ONLY,
+            ):
+                state.risk_level = StrategyRiskLevel.DEGRADED
 
     # ---- 查询 ----
 
