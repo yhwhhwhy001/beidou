@@ -443,7 +443,9 @@ class ConfigProvider:
 
     def _safe_only(self, reason: str) -> TypedSettings:
         """返回 SAFETY_ONLY 回退配置，写交易能力为 false。"""
+        merged = dict(self._SAFE_DEFAULTS)
+        merged["reason"] = reason
         return self._parse_and_validate(
-            {"environment": "safety_only", "reason": reason},
+            merged,
             source=f"safety_only:{reason[:50]}",
         )
