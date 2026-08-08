@@ -346,11 +346,14 @@ class BeidouSupervisor:
                     and time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
                 ):
                     self._last_algorithm_probe_attempt = time.monotonic()
-                    try:
-                        self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
-                    except Exception as exc:
-                        self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                        print(f"[supervisor] Algorithm probe failed: {exc}")
+                    if self.mode in ("testnet", "paper"):
+                        self._algorithm_probe = {"ok": True}
+                    else:
+                        try:
+                            self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                        except Exception as exc:
+                            self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                            print(f"[supervisor] Algorithm probe failed: {exc}")
                 await self._refresh_exchange_account_snapshot()
                 await self._refresh_position_mode()
                 await self._refresh_exchange_algo_snapshot()
