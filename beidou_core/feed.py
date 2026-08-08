@@ -53,6 +53,7 @@ class MarketDataFeed:
         self._last_ticker: dict[str, dict] = {}
         self._last_orderbook: dict[str, dict] = {}
         self._error_count: dict[str, int] = {}
+        self._last_error_time: float = 0.0  # 最近一次错误的时刻，用于衰减判断
         self._start_time = time.time()
 
         # WebSocket 实时行情（可选）
@@ -88,6 +89,12 @@ class MarketDataFeed:
         return time.time() - self._start_time
 
     def is_healthy(self) -> bool:
+        # 错误计数时间衰减：若 120s 内无新错误，清零计数器
+        # 避免启动初期瞬时错误（如空 URL）永久毒化健康状态
+        now = time.time()
+        if self._last_error_time > 0 and now - self._last_error_time > 120:
+            self._error_count.clear()
+            self._last_error_time = 0.0
         total_errors = sum(self._error_count.values())
         ws_ok = True
         if self._ws_client is not None:
@@ -218,9 +225,11 @@ class MarketDataFeed:
                     __import__("time").sleep(0.3 * (attempt + 1))
                     continue
                 self._error_count["http"] = self._error_count.get("http", 0) + 1
+                self._last_error_time = time.time()
                 return {"error": e.code, "msg": e.read().decode()}
             except Exception:
                 self._error_count["network"] = self._error_count.get("network", 0) + 1
+                self._last_error_time = time.time()
                 __import__("time").sleep(0.3 * (attempt + 1))
         return {"error": -1, "msg": "retry exhausted"}
 
@@ -387,6 +396,7 @@ class MarketDataFeed:
         except Exception:
             # KLine 聚合失败不得阻断 feature 更新
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
+            self._last_error_time = time.time()
 
         gate = DataQualityGate(venue_instrument=vi)
         gate.checks.append(

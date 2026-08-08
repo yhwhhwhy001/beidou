@@ -41,8 +41,9 @@ def _protection_order_fact(order, *, kind: str, symbol: str):
     """把引擎 ProtectionOrder 转换为监控子系统的 ProtectionFact。"""
     from beidou_observability.monitoring.checks.protection import ProtectionFact
 
+    protection_id = str(getattr(order, "protection_id", "") or "")
     return ProtectionFact(
-        protection_id=str(getattr(order, "protection_id", "") or ""),
+        protection_id=protection_id,
         position_key=symbol,
         kind=kind,
         order_id="",
@@ -51,7 +52,7 @@ def _protection_order_fact(order, *, kind: str, symbol: str):
         quantity=str(getattr(order, "quantity", "") or ""),
         trigger_price=str(getattr(order, "trigger_price", "") or ""),
         status=str(getattr(getattr(order, "status", None), "value", "") or ""),
-        origin_trace_id="",
+        origin_trace_id=protection_id,  # 每个保护单的 protection_id 唯一，SL/TP 不会误判为重复
         strategy_id="autopilot",
         generation=0,
     )
@@ -195,7 +196,7 @@ def collect_monitoring_checks(
         exchange_positions = []
         for p in ex_positions:
             try:
-                if abs(float(p.get("positionAmt", 0) or 0)) <= 0:
+                if abs(float(p.get("positionAmt", 0) or 0)) <= 1e-6:
                     continue
                 exchange_positions.append(
                     ExchangeEconomicPosition(
@@ -238,7 +239,17 @@ def collect_monitoring_checks(
     # === 5. 深度对账 (MON03 R1~R6) ===
     try:
         last_account = getattr(engine, "_last_account", None) or {}
-        ex_positions = last_account.get("positions", []) if isinstance(last_account, dict) else []
+        ex_positions_raw = last_account.get("positions", []) if isinstance(last_account, dict) else []
+        # 过滤零仓位：Binance API 返回全部合约仓位（含零余额），
+        # 不过滤会导致 hundreds 个零仓位与本地保护单对比产生大量 UNKNOWN
+        ex_positions: list[dict] = []
+        for p in ex_positions_raw:
+            try:
+                if abs(float(p.get("positionAmt", 0) or 0)) <= 1e-6:
+                    continue
+                ex_positions.append(p)
+            except (TypeError, ValueError):
+                continue
         local_positions = []
         protection = getattr(engine, "_protection", None)
         if protection is not None and callable(getattr(protection, "all_positions", None)):
