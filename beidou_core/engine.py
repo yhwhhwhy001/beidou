@@ -3078,13 +3078,16 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.BOOTSTRAPPING)
         print("[beidou-autopilot] Bootstrapping...")
 
-        # Verify exchange connectivity
-        server_time = await self._api_async(Endpoint.SERVER_TIME)
-        if "serverTime" not in server_time:
-            print("[beidou-autopilot] FATAL: Cannot connect to exchange")
-            self._lifecycle.transition(ModuleState.FAILED)
-            return
-        print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
+        # Verify exchange connectivity (testnet 跳过，同步HTTP阻塞事件循环)
+        if self._env_mode.value in ("testnet", "paper"):
+            print(f"[beidou-autopilot] Exchange check skipped (testnet/paper): {self._rest_url}")
+        else:
+            server_time = await self._api_async(Endpoint.SERVER_TIME)
+            if "serverTime" not in server_time:
+                print("[beidou-autopilot] FATAL: Cannot connect to exchange")
+                self._lifecycle.transition(ModuleState.FAILED)
+                return
+            print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access
         # testnet/paper 模式跳过阻塞性 API 调用（demo-fapi 异步上下文 SSL 挂起）
