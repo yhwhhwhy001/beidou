@@ -1145,28 +1145,15 @@ class AutonomousEngine:
         is_production = self._env_mode.value in ("production", "canary", "live")
         self._factor_gate = FactorPromotionGate(strict=is_production)
 
-        if not is_production:
-            # Testnet/Paper: 非严格模式，自动晋级到 ACTIVE
-            for fid in all_factor_ids:
-                rec = self._factor_registry.get(fid)
-                for target in [
-                    FactorLifecycle.GENERATED,
-                    FactorLifecycle.SANITY_PASSED,
-                    FactorLifecycle.RESEARCH_VALIDATED,
-                    FactorLifecycle.OOS_VERIFIED,
-                    FactorLifecycle.COST_CAPACITY_VERIFIED,
-                    FactorLifecycle.PAPER_TRADING,
-                    FactorLifecycle.CHALLENGER,
-                    FactorLifecycle.ACTIVE,
-                ]:
-                    if rec.lifecycle == target:
-                        continue
-                    decision = self._factor_gate.promote(rec, target, falsifier="autopilot-testnet")
-                    if not decision.approved:
-                        break
-        else:
-            # Production: 严格门禁，只加载 DB 中标记 ACTIVE 的因子
+        # BD-T06: 不再在启动时自动晋级所有因子。
+        # 非生产模式使用宽松 Gate（允许 Testnet 测试），但晋级必须显式通过 Gate，
+        # 不在启动代码中自动循环推进。
+        # Production 模式严格证据门禁。
+        if is_production:
             print("[beidou-autopilot] Production mode: factor promotion requires evidence-gated decisions")
+        else:
+            print(f"[beidou-autopilot] Non-production mode ({self._env_mode.value}): "
+                  f"factor promotion gate is non-strict for testing")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
@@ -1583,8 +1570,12 @@ class AutonomousEngine:
         当因子生命周期变更（promotion/degradation/suspension）时调用，
         确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
         """
+        # BD-T06: 非生产模式包含 CHALLENGER+PAPER_TRADING 因子用于测试
+        trading_factors = set(self._factor_registry.get_active())
+        if not (self._env_mode.value in ("production", "canary", "live")):
+            trading_factors.update(self._factor_registry.get_challengers())
         active_factor_ids = [
-            fid for fid in self._factor_registry.get_active() if fid in self._factor_component_registry
+            fid for fid in trading_factors if fid in self._factor_component_registry
         ]
 
         new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
@@ -4464,19 +4455,25 @@ class AutonomousEngine:
 
         # BD-T14 Phase 5: 初始对账 — 在 ACTIVE 转换之前填充对账引擎事实，
         # 避免监督器在引擎首次对账（30s）之前因 BOTH_SIDES_MISSING 误触发 LOCKED。
+        recon_ok = False
         try:
             await self._reconcile()
             self._last_recon = time.time()
+            recon_ok = True
             print("[beidou-autopilot] Initial reconciliation complete")
         except Exception as e:
-            print(f"[beidou-autopilot] Initial reconciliation failed: {e} — continuing")
+            print(f"[beidou-autopilot] Initial reconciliation failed: {e} — blocking ACTIVE")
 
-        # Phase 5b: 交易所残留持仓保护补充 — 检测交易所已有但系统未追踪的持仓，
-        # 立即放置保护单，避免监督器在启动后因 protection_coverage 阻断。
+        # Phase 5b: 交易所残留持仓保护补充
         await self._ensure_exchange_position_protections()
 
-        self._lifecycle.transition(ModuleState.ACTIVE)
-        print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
+        # BD-T14: 对账未完成 → 不进入 ACTIVE，保持在 DEGRADED
+        if not recon_ok:
+            self._lifecycle.transition(ModuleState.DEGRADED)
+            print("[beidou-autopilot] State: DEGRADED (reconciliation not verified)")
+        else:
+            self._lifecycle.transition(ModuleState.ACTIVE)
+            print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
         # Start health server
         self._health.start()

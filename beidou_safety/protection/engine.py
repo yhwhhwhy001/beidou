@@ -43,7 +43,7 @@ DEFAULT_RR_RATIO = 2.0  # BD-T11 v1: 默认风险回报比
 DEFAULT_MULTIPLIER = 2.0  # BD-T11 v1: ATR/历史波动率止损默认倍数
 DEFAULT_TRAIL_PCT = 2.0  # BD-T11 v1: 移动止损默认百分比
 DEFAULT_MIN_TRAIL_DISTANCE = 0.5  # BD-T11 v1: 移动止损最小距离
-DEFAULT_FALLBACK_STOP_PCT = 5.0  # BD-T11 v1: swing 结构缺数据回退止损百分比
+DEFAULT_FALLBACK_STOP_PCT = 0.0  # BD-T11: 缺数据时返回 0（无法计算保护=NO_NEW_RISK），不再硬编码 5%
 
 
 class StopLossType(str, Enum):

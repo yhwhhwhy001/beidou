@@ -234,19 +234,18 @@ class AdaptiveProtectionCalculator:
             AdaptiveProtectionConfig
         """
         if features is None or not features:
-            # 无数据时使用保守默认值
+            # BD-T11: 无数据时不使用硬编码回退 — 返回 stop_pct=0 阻断新风险
             price_tier = cls._classify_price_tier(entry_price)
-            fallback_stop = max(cls._MIN_STOP_BY_TIER[price_tier], 3.0)
             return AdaptiveProtectionConfig(
-                stop_loss_config={"type": "ATR_BASED", "stop_pct": fallback_stop, "multiplier": ATR_MULTIPLIER},
+                stop_loss_config={"type": "ATR_BASED", "stop_pct": 0.0, "multiplier": ATR_MULTIPLIER},
                 take_profit_config={"type": "FIXED_RR", "rr_ratio": BASE_RR_RATIO},
-                stop_pct=fallback_stop,
+                stop_pct=0.0,
                 rr_ratio=BASE_RR_RATIO,
                 atr_pct=0.0,
                 volatility_regime=VolatilityRegime.NORMAL,
                 price_tier=price_tier,
                 market_regime=MarketRegime.RANGING,
-                metadata={"fallback": True},
+                metadata={"fallback": True, "blocked": True, "reason": "NO_MARKET_DATA"},
             )
 
         # 提取特征

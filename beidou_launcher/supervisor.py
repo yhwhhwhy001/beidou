@@ -12,6 +12,7 @@ from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks  # type: ignore[attr-defined]  # re-exported without __all__
+from beidou_safety.execution.recovery import RecoveryEngine
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionModeEvidence,
@@ -70,6 +71,7 @@ class BeidouSupervisor:
         self._recovery_timestamps: list[float] = []  # 时间窗口恢复追踪
         # 监控子系统 (MON08)：深度审计调度器与状态
         self._monitoring_scheduler = DeepAuditScheduler()
+        self._recovery_engine = RecoveryEngine()  # BD-T14: 恢复引擎接线
         self._monitoring_state: dict[str, Any] = {}
         self._last_monitor_loop_ts = 0.0  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
         self._monitoring_check_states: dict[str, str] = {}  # check_id → 最近状态（阻断转变事件）
@@ -567,6 +569,9 @@ class BeidouSupervisor:
 
         from beidou_control.plane import ControlAction
         from beidou_lifecycle.lifecycle import ModuleState
+
+        # BD-T14: RecoveryEngine 记录恢复尝试
+        self._recovery_engine.start_recovery(f"auto-{int(time.time())}")
 
         for target in (ModuleState.RECOVERING, ModuleState.VALIDATING, ModuleState.ACTIVE):
             result = lifecycle.transition(target)

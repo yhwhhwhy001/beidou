@@ -240,16 +240,17 @@ class TestFullCalculation:
         assert cfg.stop_pct >= 1.5
 
     def test_fallback_no_features(self):
-        """无市场数据时使用保守默认值。"""
+        """BD-T11: 无市场数据时 stop_pct=0（阻断新风险），不再使用 3% 硬编码回退。"""
         cfg = AdaptiveProtectionCalculator.calculate("UNKNOWN", 100.0, features=None)
-        assert cfg.stop_pct >= 3.0  # fallback: max(min_stop, 3.0)
-        assert cfg.rr_ratio == BASE_RR_RATIO
+        assert cfg.stop_pct == 0.0  # BD-T11: 缺数据 → 0.0 阻断
         assert cfg.metadata.get("fallback") is True
+        assert cfg.metadata.get("blocked") is True
 
     def test_fallback_empty_features(self):
-        """空特征时使用默认值。"""
+        """空特征时阻塞新风险。"""
         cfg = AdaptiveProtectionCalculator.calculate("UNKNOWN", 100.0, features={})
         assert cfg.metadata.get("fallback") is True
+        assert cfg.metadata.get("blocked") is True
 
     def test_metadata_included(self):
         """计算结果包含诊断元数据。"""
