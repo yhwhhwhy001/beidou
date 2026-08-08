@@ -254,6 +254,15 @@ class PersistentStore:
         rows = conn.execute("SELECT * FROM protection_orders WHERE status='ACTIVE'").fetchall()
         return [dict(r) for r in rows]
 
+    def remove_protection(self, position_id: str) -> None:
+        """BD-FIX: 从DB中标记保护单为非活跃。"""
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE protection_orders SET status='CANCELLED' WHERE position_id=? AND status='ACTIVE'",
+            (position_id,),
+        )
+        conn.commit()
+
     # --- Checkpoints ---
 
     def save_checkpoint(

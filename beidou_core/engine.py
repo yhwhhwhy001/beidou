@@ -1759,6 +1759,18 @@ class AutonomousEngine:
             except Exception as e:
                 print(f"[protection] Error canceling algo {algo_id}: {e}")
 
+    def _remove_protection_with_cleanup(self, pid: str, symbol: str) -> None:
+        """BD-FIX: 移除保护单并清理DB+幽灵algo追踪。"""
+        self._protection.cancel_protection(pid)
+        self._protection.remove_position(pid)
+        self._position_entry_times.pop(pid, None)
+        self._protection_exchange_attempted.discard(pid)
+        # 持久化删除
+        try:
+            self._store.remove_protection(pid)
+        except Exception:
+            pass
+
     async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
 
@@ -2330,9 +2342,7 @@ class AutonomousEngine:
                     self._trade_pnls.append(trade_pnl)
                     if len(self._trade_pnls) > 10000:
                         self._trade_pnls = self._trade_pnls[-5000:]
-                    self._position_entry_times.pop(pid, None)
-                    self._protection.cancel_protection(pid)
-                    self._protection.remove_position(pid)
+                    self._remove_protection_with_cleanup(pid, symbol)
                     await self._cancel_algo_orders(pid, symbol)
                     print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
                     break
@@ -2345,9 +2355,7 @@ class AutonomousEngine:
             # 入场成交 → 创建止盈止损保护
             for old_pid, old_pp in list(self._protection.all_positions().items()):
                 if str(old_pp.instrument_id) == symbol:
-                    self._protection.cancel_protection(old_pid)
-                    self._protection.remove_position(old_pid)
-                    self._position_entry_times.pop(old_pid, None)
+                    self._remove_protection_with_cleanup(old_pid, symbol)
                     await self._cancel_algo_orders(old_pid, symbol)
                     print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
 
@@ -2369,6 +2377,13 @@ class AutonomousEngine:
                 take_profit_config=adaptive_cfg.take_profit_config,
             )
             self._position_entry_times[pos_id] = time.time()
+            # BD-FIX: 持久化保护单状态
+            self._store.save_protection(
+                pos_id, symbol, "BINANCE", entry_price, qty,
+                pos_side.value if hasattr(pos_side, 'value') else str(pos_side),
+                str(adaptive_cfg.stop_loss_config) if adaptive_cfg.stop_loss_config else "",
+                str(adaptive_cfg.take_profit_config) if adaptive_cfg.take_profit_config else "",
+            )
 
             # 打印保护摘要
             sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
@@ -3053,9 +3068,7 @@ class AutonomousEngine:
 
         for old_pid, old_pp in list(self._protection.all_positions().items()):
             if str(old_pp.instrument_id) not in exchange_symbols:
-                self._protection.cancel_protection(old_pid)
-                self._protection.remove_position(old_pid)
-                self._position_entry_times.pop(old_pid, None)
+                self._remove_protection_with_cleanup(old_pid, str(old_pp.instrument_id))
                 await self._cancel_algo_orders(old_pid, str(old_pp.instrument_id))
                 print(f"[nearline] 🧹 Cleaned up ghost position: {old_pp.instrument_id} (pos={old_pid})")
 
@@ -3734,8 +3747,7 @@ class AutonomousEngine:
                                 side = OrderSide.BUY if ex_qty > 0 else OrderSide.SELL
                                 new_pos_id = f"pos-synced-{sym}-{int(time.time())}"
                                 old_trailing = old_pp.trailing_config
-                                self._protection.remove_position(old_pid)
-                                self._position_entry_times.pop(old_pid, None)
+                                self._remove_protection_with_cleanup(old_pid, sym)
                                 # 用自适应计算器重新生成保护参数
                                 kf = await self._feed.async_get_kline_features(sym)
                                 ac = AdaptiveProtectionCalculator.calculate(sym, real_entry, kf)
