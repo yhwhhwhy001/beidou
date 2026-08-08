@@ -942,9 +942,10 @@ class AutonomousEngine:
             ),
         )
         self._risk_engine = RiskEngineImpl()
-        # BD-T01: 不再硬编码默认/模拟密钥。签名密钥仅从 BEIDOU_SIGNING_KEY 环境变量注入。
+        # BD-T01: 签名密钥从 BEIDOU_SIGNING_KEY 环境变量注入。
         # 所有环境（含 Testnet）在未设置密钥时签名不可用，风险增加将被确定性拒绝。
-        self._approval = RiskApprovalSignerImpl(signing_key="")
+        _signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
+        self._approval = RiskApprovalSignerImpl(signing_key=_signing_key)
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
