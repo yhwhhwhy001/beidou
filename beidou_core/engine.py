@@ -3781,6 +3781,7 @@ class AutonomousEngine:
             self._error_count += 1
             print(f"[nearline] ERROR: {e}")
         finally:
+            pass
 
     async def _sync_exchange_state(self) -> None:
         """近线后全量对账自愈：补齐遗漏的成交追踪，重建保护单。
