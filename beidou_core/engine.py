@@ -40,7 +40,14 @@ from beidou_safety.execution.algorithms import (
     SliceInvariantChecker,
 )
 from beidou_safety.execution.intent import IntentOutbox
-from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
+from beidou_safety.execution.ledger import (
+    AccountType,
+    ImmutableLedger,
+    LedgerTransaction,
+    LedgerTransactionType,
+    Posting,
+    PostingSide,
+)
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
 from beidou_safety.protection.engine import ProtectionManager
@@ -2284,31 +2291,50 @@ class AutonomousEngine:
         avg_price = result.get("avgPrice", "0")
 
         notional = executed_qty * float(avg_price)
-        # 复式记账: debit == credit == notional (每笔记账平衡)
-        # BUY:  POSITION(资产↑) = CASH(负债/权益↓)
-        # SELL: CASH(资产↑) = POSITION(负债/权益↓)
+        # BD-T12: 复式记账 — LedgerTransaction + Posting (≥2)
         journal_amount = str(notional)
-        entry = JournalEntry(
-            entry_id=f"journal-{order_id}",
-            account_id=AccountId("default"),
-            venue_id=VenueId("BINANCE"),
-            instrument_id=InstrumentId(symbol),
-            debit=MonetaryValue(amount=journal_amount),
-            credit=MonetaryValue(amount=journal_amount),
-            description=f"{result.get('side')} {executed_qty} {symbol} @ {avg_price} FILLED",
+        tx_id = f"tx-{order_id}"
+        side_desc = result.get("side", "")
+        is_buy = side_desc.upper() == "BUY"
+        tx = LedgerTransaction(
+            transaction_id=tx_id,
+            transaction_type=LedgerTransactionType.FILL,
+            source_event_id=f"fill-{order_id}",
+            postings=(
+                Posting(
+                    posting_id=f"{tx_id}-p1",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=journal_amount),
+                    side=PostingSide.DEBIT,
+                    description=f"{side_desc} {executed_qty} {symbol} @ {avg_price}",
+                ),
+                Posting(
+                    posting_id=f"{tx_id}-p2",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=journal_amount),
+                    side=PostingSide.CREDIT,
+                    description=f"{side_desc} {executed_qty} {symbol} @ {avg_price}",
+                ),
+            ),
             correlation_id=CorrelationId(f"exec-{order_id}"),
         )
-        self._ledger.post(entry)
+        self._ledger.post(tx)
         self._store.save_ledger_entry(
-            entry.entry_id,
+            tx_id,
             "default",
             "BINANCE",
             symbol,
-            entry.debit.amount,
-            entry.credit.amount,
-            entry.description,
-            str(entry.correlation_id),
-            entry.timestamp.isoformat(),
+            journal_amount,
+            journal_amount,
+            tx.postings[0].description,
+            str(tx.correlation_id),
+            tx.timestamp.isoformat(),
         )
         self._store.save_order_state(
             order_id,
@@ -2544,9 +2570,11 @@ class AutonomousEngine:
             for _pos_id, pos in self._protection.all_positions().items():
                 system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
 
-            # BD-FIX (D1/D2): 系统余额从账本推导（保留方向信息）
-            # 账本净余额 = 所有 entry 的 debit 总额（即成交总额）
-            system_balance = sum(float(e.debit.amount) for e in self._ledger._entries)
+            # BD-T12: 系统余额从复式账本推导
+            system_balance = sum(
+                float(p.amount.amount) for tx in self._ledger._transactions
+                for p in tx.postings if p.side == PostingSide.DEBIT
+            )
             system_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),

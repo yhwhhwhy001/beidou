@@ -36,7 +36,7 @@ def load_raw_klines(path: Path) -> list[dict]:
 def replay(raw_klines: list[dict], symbol: str) -> tuple[list[ClosedBarResult], list[FeatureVector], str, str]:
     normalizer = ClosedBarNormalizer()
     quality_gate = DataQualityGate()
-    kline_gen = KLineGenerator()
+    kline_gen = KLineGenerator(interval="1h")
     venue_instrument = VenueInstrument(
         venue_id=VenueId("BINANCE"),
         instrument_id=InstrumentId(symbol),
