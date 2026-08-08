@@ -345,6 +345,23 @@ class PersistentStore:
 
     # --- Maintenance ---
 
+    def clean_stale_new_orders(self, max_age_hours: int = 24) -> int:
+        """清理前次 session 遗留的 NEW 状态订单。
+
+        NEW 订单超过 max_age_hours 未推进到后续状态即为陈旧，
+        应在启动时自动清理，避免状态残留污染新 session。
+        返回清理数量。
+        """
+        conn = self._get_conn()
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+        cutoff_str = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        deleted = conn.execute(
+            "DELETE FROM order_states WHERE status = 'NEW' AND updated_at < ?",
+            (cutoff_str,),
+        ).rowcount
+        conn.commit()
+        return deleted
+
     def cleanup_old_data(self, retention_days: int = 90) -> int:
         conn = self._get_conn()
         cutoff = datetime.now(timezone.utc).timestamp() - retention_days * 86400

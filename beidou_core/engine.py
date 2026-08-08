@@ -909,7 +909,7 @@ class AutonomousEngine:
 
         # Infrastructure
         self._store = PersistentStore.get_instance()
-        self._feed = MarketDataFeed()
+        self._feed = MarketDataFeed(client=self._exchange)  # 共享引擎的 REST client，避免独立无凭证实例
         self._alerts = AlertDispatcher(
             webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
             alerts_file=self._settings.infrastructure.alerts_file,
@@ -4361,6 +4361,22 @@ class AutonomousEngine:
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
+
+        # Start WebSocket real-time market data stream
+        print("[beidou-autopilot] Starting WebSocket market data...")
+        ws_ok = await self._feed.start_ws(self._symbols, testnet=(self._env_mode.value == "testnet"))
+        if ws_ok:
+            print("[beidou-autopilot] WebSocket market data stream active")
+        else:
+            print("[beidou-autopilot] WebSocket unavailable — falling back to REST polling")
+
+        # Clean stale NEW orders from previous sessions
+        print("[beidou-autopilot] Cleaning stale orders from previous sessions...")
+        try:
+            stale_cleaned = self._store.clean_stale_new_orders()
+            print(f"[beidou-autopilot] Cleaned {stale_cleaned} stale NEW orders from previous sessions")
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: stale order cleanup failed: {e}")
 
         # Restore state from persistence
         print("[beidou-autopilot] Restoring state...")

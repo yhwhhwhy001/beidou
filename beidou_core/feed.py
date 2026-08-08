@@ -34,7 +34,7 @@ class MarketDataFeed:
     禁止绕过 Adapter 直接发送网络请求。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, client: Any = None) -> None:
         settings = ConfigProvider().load()
         self._rest_url = settings.exchange.rest_base_url
         self._api_key = ""  # 通过秘密提供器注入
@@ -42,11 +42,15 @@ class MarketDataFeed:
         self._recv_window = DEFAULT_RECV_WINDOW_MS
 
         # BD-T03: 使用 BinanceRESTClient 作为唯一网络传输
-        self._client = BinanceRESTClient(
-            rest_url=self._rest_url,
-            api_key=self._api_key,
-            api_secret=self._api_secret,
-        )
+        # 优先使用注入的 client（引擎共享），否则创建独立实例
+        if client is not None:
+            self._client = client
+        else:
+            self._client = BinanceRESTClient(
+                rest_url=self._rest_url,
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+            )
 
         self._feature_store = FeatureStore()
         self._kline_generators: dict[str, KLineGenerator] = {}
@@ -61,6 +65,11 @@ class MarketDataFeed:
         self._ws_active = False
         self._ws_last_update: dict[str, float] = {}  # symbol → last WS update time
         self._ws_stale_threshold = 60.0  # WS 数据超时阈值（秒）
+
+    def set_client(self, client: Any) -> None:
+        """注入共享的 REST client（引擎启动时调用，替代独立实例）。"""
+        self._client = client
+        self._rest_url = getattr(client, "rest_url", self._rest_url)
 
     def _get_kline_generator(self, symbol: str, interval: str = "1h") -> KLineGenerator:
         """按 symbol:interval 惰性创建 KLineGenerator（真实 tick → OHLCV 聚合）。"""
