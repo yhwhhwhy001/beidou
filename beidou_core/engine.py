@@ -2714,6 +2714,10 @@ class AutonomousEngine:
         if not self._can_write:
             return
 
+        # testnet/paper: 跳过 API 对账，使用实时行情数据模拟
+        if self._env_mode.value in ("testnet", "paper"):
+            return
+
         try:
             # 重置熔断器确保关键对账不被限流拦截
             self._exchange.reset_circuit_breaker()
