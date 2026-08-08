@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -69,7 +69,7 @@ class Incident:
     root_cause_category: str | None = None
     status: IncidentStatus = IncidentStatus.DETECTED
     auto_action: AutoAction = AutoAction.NOOP
-    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone(timedelta(hours=8))))
     acknowledged_at: datetime | None = None
     resolved_at: datetime | None = None
     evidence_snapshots: list[dict[str, Any]] = field(default_factory=list)

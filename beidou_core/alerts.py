@@ -32,7 +32,8 @@ class AlertDispatcher:
         self._lock = threading.Lock()
         self._active_incidents: dict[str, Incident] = {}
         self._alert_count: dict[str, int] = {}
-        self._start_time = datetime.now(timezone.utc)
+        self._tz = timezone(__import__("datetime").timedelta(hours=8))
+        self._start_time = datetime.now(self._tz)
         self._portfolio_provider: Callable[[], str] | None = None
 
     def set_portfolio_provider(self, fn: Callable[[], str]) -> None:
@@ -48,7 +49,7 @@ class AlertDispatcher:
         category: str = "runtime",
     ) -> Incident:
         """创建并分发事故告警。"""
-        incident_id = f"inc-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{category}"
+        incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S')}-{category}"
 
         incident = Incident(
             incident_id=incident_id,
@@ -108,51 +109,53 @@ class AlertDispatcher:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _send_webhook(self, incident: Incident) -> None:
-        """发送 webhook 告警。自动识别推送服务类型。
-
-        支持: Server酱 / PushPlus / 企业微信 / 飞书(Lark) / 通用 JSON
-        """
+        """发送 webhook 告警。支持飞书/Server酱/PushPlus/企业微信/通用JSON。"""
         url = self._webhook_url
+        ts = incident.detected_at.strftime("%m-%d %H:%M")
         title = f"[{incident.severity.value}] {incident.title}"
-        desc = f"{incident.description}\n操作: {incident.auto_action.value}\n时间: {incident.detected_at.isoformat()}\nID: {incident.incident_id}"
-        # 追加持仓摘要
+        # 正文：事件+操作+时间
+        body = f"**{incident.description}**\n操作: {incident.auto_action.value}  |  {ts} UTC+8"
+        # 追加持仓
+        portfolio = ""
         if self._portfolio_provider:
             try:
                 portfolio = self._portfolio_provider()
-                if portfolio:
-                    desc += f"\n\n{portfolio}"
             except Exception:
                 pass
 
         try:
-            if "sctapi.ftqq.com" in url:
-                payload = json.dumps({"title": title, "desp": desc}).encode()
-            elif "pushplus.plus" in url:
-                payload = json.dumps({
-                    "token": url.split("token=")[-1] if "token=" in url else "",
-                    "title": title, "content": desc,
-                }).encode()
-            elif "open.feishu.cn" in url or "open.larksuite.com" in url:
-                # 飞书/Lark 机器人
+            if "open.feishu.cn" in url or "open.larksuite.com" in url:
+                # 飞书卡片
+                elements = [
+                    {"tag": "markdown", "content": body},
+                ]
+                if portfolio:
+                    elements.append({"tag": "hr"})
+                    elements.append({"tag": "markdown", "content": portfolio})
+                elements.append({"tag": "note", "elements": [
+                    {"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id} | {ts}"}
+                ]})
                 payload = json.dumps({
                     "msg_type": "interactive",
                     "card": {
                         "header": {
                             "title": {"content": title, "tag": "plain_text"},
-                            "template": "red" if incident.severity.value == "CRITICAL" else "yellow",
+                            "template": "red" if incident.severity.value in ("CRITICAL","LOCKDOWN") else "yellow",
                         },
-                        "elements": [
-                            {"tag": "markdown", "content": desc.replace("\n", "\n\n")},
-                            {"tag": "note", "elements": [
-                                {"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id}"}
-                            ]},
-                        ],
+                        "elements": elements,
                     },
+                }).encode()
+            elif "sctapi.ftqq.com" in url:
+                payload = json.dumps({"title": title, "desp": f"{body}\n\n{portfolio}"}).encode()
+            elif "pushplus.plus" in url:
+                payload = json.dumps({
+                    "token": url.split("token=")[-1] if "token=" in url else "",
+                    "title": title, "content": f"{body}\n\n{portfolio}",
                 }).encode()
             elif "qyapi.weixin.qq.com" in url:
                 payload = json.dumps({
                     "msgtype": "markdown",
-                    "markdown": {"content": f"## {title}\n{desc}"},
+                    "markdown": {"content": f"## {title}\n{body}\n\n{portfolio}"},
                 }).encode()
             else:
                 payload = json.dumps({
@@ -161,6 +164,7 @@ class AlertDispatcher:
                     "title": incident.title, "description": incident.description,
                     "auto_action": incident.auto_action.value,
                     "detected_at": incident.detected_at.isoformat(),
+                    "portfolio": portfolio,
                 }).encode()
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})

@@ -1243,32 +1243,49 @@ class AutonomousEngine:
         return result
 
     def _portfolio_summary(self) -> str:
-        """生成持仓摘要（品种+数量+盈亏），供告警 webhook 使用。"""
-        lines = ["📊 当前持仓:"]
+        """生成持仓摘要（品种/数量/入场/现价/盈亏%/盈亏$），供告警 webhook。"""
+        lines = []
         try:
             positions = self._protection.all_positions()
             if not positions:
-                return "📊 当前持仓: 无"
+                return "📊 当前无持仓"
+            total_pnl = 0.0
+            total_notional = 0.0
             for pos_id, pp in sorted(positions.items()):
                 sym = str(pp.instrument_id)
                 qty = float(pp.quantity)
                 entry = float(pp.entry_price)
-                current = float(self._last_prices.get(sym, 0))
+                current = float(self._last_prices.get(sym, entry))
+                notional = qty * current
+                total_notional += notional
                 if current > 0 and entry > 0:
                     pnl_pct = (current / entry - 1) * 100
                     if pp.side.value == "SELL":
                         pnl_pct = -pnl_pct
-                    icon = "🟢" if pnl_pct > 0 else ("🔴" if pnl_pct < 0 else "⚪")
-                    lines.append(f"  {icon} {sym}: {qty:.4f} @{entry:.2f}→{current:.2f} ({pnl_pct:+.2f}%)")
+                    pnl_usd = notional - (qty * entry)
+                    if pp.side.value == "SELL":
+                        pnl_usd = (qty * entry) - notional
+                    total_pnl += pnl_usd
+                    icon = "🟢" if pnl_pct > 0 else ("🔴" if pnl_pct < -0.01 else "⚪")
+                    lines.append(
+                        f"  {icon} **{sym}**  {qty:.4f}  "
+                        f"@{entry:.2f}→{current:.2f}  "
+                        f"**{pnl_pct:+.2f}%** (${pnl_usd:+.2f})"
+                    )
                 else:
-                    lines.append(f"  ⚪ {sym}: {qty:.4f} @{entry:.2f}")
-            # 汇总
-            total_positions = len(positions)
-            up_count = sum(1 for l in lines if "🟢" in l)
-            down_count = sum(1 for l in lines if "🔴" in l)
-            lines.append(f"  总计: {total_positions}仓 | 🟢{up_count} 🔴{down_count}")
+                    lines.append(f"  ⚪ **{sym}**  {qty:.4f}  @{entry:.2f}")
+
+            if lines:
+                lines.insert(0, "📊 持仓")
+                up = sum(1 for l in lines if "🟢" in l)
+                dn = sum(1 for l in lines if "🔴" in l)
+                lines.append(
+                    f"\n📈 总敞口 ${total_notional:,.0f}  |  "
+                    f"浮动盈亏 **${total_pnl:+,.2f}**  |  "
+                    f"🟢{up} 🔴{dn}"
+                )
         except Exception as e:
-            lines.append(f"  (获取失败: {e})")
+            return f"📊 持仓获取异常: {e}"
         return "\n".join(lines)
 
     def _collect_metrics(self) -> dict:
