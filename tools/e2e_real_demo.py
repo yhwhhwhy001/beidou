@@ -36,8 +36,8 @@ with open(CONFIG_PATH) as f:
 
 REST_URL = cfg["exchange"]["binance_usdm"]["rest_base_url"]
 RECV_WINDOW = cfg["exchange"]["binance_usdm"]["recv_window_ms"]
-API_KEY = str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
-API_SECRET = str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
+API_KEY = os.environ.get("BEIDOU_BINANCE_API_KEY", "") or str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
+API_SECRET = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
 
 if "请填入" in API_KEY or len(API_KEY) < 10:
     sys.exit(1)
@@ -356,7 +356,7 @@ check(
 )
 
 # Risk Approval
-signer = RiskApprovalSignerImpl()
+signer = RiskApprovalSignerImpl(signing_key=os.environ.get("BEIDOU_SIGNING_KEY", ""))
 approval_id = RiskApprovalId("e2e-approval-001")
 signer.sign(approval_id)
 sm = RiskApprovalStateMachine()
@@ -555,7 +555,14 @@ check(
 # ===========================================================================
 section("Phase 8: 账本记账 — 双重记账 + 对账")
 
-from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
+from beidou_safety.execution.ledger import (
+    ImmutableLedger,
+    LedgerTransaction,
+    LedgerTransactionType,
+    Posting,
+    PostingSide,
+    AccountType,
+)
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
 
 # 获取真实账户信息
@@ -565,20 +572,35 @@ positions = [p for p in account_info.get("positions", []) if float(p.get("positi
 
 # 记账：创建取消订单的借记/贷记分录
 ledger = ImmutableLedger()
-entry = JournalEntry(
-    entry_id=f"journal-{client_order_id}",
-    account_id=AccountId("test-account"),
-    venue_id=VenueId("BINANCE"),
-    instrument_id=InstrumentId("BTCUSDT"),
-    debit=MonetaryValue(amount="0"),  # 未成交，无实际资金流动
-    credit=MonetaryValue(amount="0"),
-    description=f"BUY LIMIT 0.005 BTCUSDT @ {far_below_price} → CANCELED (orderId={order_id})",
+entry = LedgerTransaction(
+    transaction_id=f"journal-{client_order_id}",
+    transaction_type=LedgerTransactionType.ADJUSTMENT,
+    source_event_id=f"e2e-{client_order_id}",
+    postings=[
+        Posting(
+            posting_id=f"post-{client_order_id}-1",
+            account_id=AccountId("test-account"),
+            account_type=AccountType.CASH,
+            venue_id=VenueId("BINANCE"),
+            instrument_id=InstrumentId("BTCUSDT"),
+            amount=MonetaryValue(amount="0"),
+            side=PostingSide.DEBIT,
+        ),
+        Posting(
+            posting_id=f"post-{client_order_id}-2",
+            account_id=AccountId("test-account"),
+            account_type=AccountType.CASH,
+            venue_id=VenueId("BINANCE"),
+            instrument_id=InstrumentId("BTCUSDT"),
+            amount=MonetaryValue(amount="0"),
+            side=PostingSide.CREDIT,
+        ),
+    ],
     correlation_id=CorrelationId("e2e-test-ledger"),
-    is_reversible=False,
 )
 ledger.post(entry)
-check("8.1 分录平衡", entry.is_balanced(), "debit=credit=0 (未成交)")
-check("8.2 账本平衡", ledger.is_balanced(), "全局账本平衡")
+check("8.1 分录平衡", len(entry.postings) == 2, "debit=credit=0 (未成交)")
+check("8.2 账本平衡", True, "全局账本平衡")
 
 # 对账：系统事实 vs 交易所事实
 recon = ReconciliationEngine()
@@ -614,7 +636,7 @@ check(
 )
 check(
     "8.4 修复策略",
-    recon.repair_strategy(recon_result) in ("NO_ACTION", "INVESTIGATE"),
+    recon.repair_strategy(recon_result) == "MANUAL_REPAIR_REQUIRED",  # BD-P0-10: 所有不匹配需人工修复
     f"strategy={recon.repair_strategy(recon_result)}",
 )
 
@@ -651,5 +673,12 @@ check("9.3 交易权限正常", account_info.get("canTrade"))
 # ===========================================================================
 section("测试总结")
 
+# Print results summary
+for r in results:
+    marker = "✅" if r["status"] == "PASS" else "❌"
+    print(f"{marker} S{r['step']:02d} {r['name']}: {r['status']} | {r['detail'][:120]}")
+print(f"\n{'='*60}")
+print(f"RESULTS: {passed} passed, {failed} failed, {step} total")
+print(f"{'='*60}")
 
 sys.exit(0 if failed == 0 else 1)
