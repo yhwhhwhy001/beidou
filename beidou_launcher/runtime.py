@@ -375,7 +375,11 @@ def collect_runtime_checks(
     _recon_grace_active = _last_order_placed_at > 0.0 and (now - _last_order_placed_at) <= 30.0
     # 启动阶段（resume_authorized=False）系统尚未同步交易所数据，
     # 对账不匹配属于正常现象，降级为 P2 WARN；运行时恢复 P0 阻断。
-    if resume_authorized:
+    if mode in ("testnet", "paper"):
+        # testnet 无真实交易所对账数据
+        recon_severity = CheckSeverity.P2
+        recon_status_check = CheckStatus.PASS if recon_ok else CheckStatus.WARN
+    elif resume_authorized:
         if _recon_grace_active and not recon_ok:
             recon_severity = CheckSeverity.P2
             recon_status_check = CheckStatus.WARN

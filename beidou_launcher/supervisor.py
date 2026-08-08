@@ -235,6 +235,14 @@ class BeidouSupervisor:
             return
         now = time.monotonic()
         if self.mode in ("testnet", "paper"):
+            if self._position_mode_evidence is None:
+                from .models import AccountPositionMode, PositionModeEvidence
+                self._position_mode_evidence = PositionModeEvidence(
+                    account_id="testnet", venue="BINANCE_USDM",
+                    mode=AccountPositionMode.HEDGE, source="MOCK",
+                    source_timestamp=time.time(), observed_at=now,
+                    raw_response={"dualSidePosition": True},
+                )
             return
         if self._position_mode_evidence is not None and now - self._last_position_mode_probe < 300.0:
             return
