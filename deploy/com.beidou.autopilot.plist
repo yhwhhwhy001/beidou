@@ -7,26 +7,13 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/maguannan/beidou/.venv/bin/python</string>
-        <string>-u</string>
-        <string>-m</string>
-        <string>apps.autopilot</string>
-        <string>--symbols</string>
-        <string>BTCUSDT,ETHUSDT</string>
-        <string>--mode</string>
-        <string>testnet</string>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>eval "$(grep '^export BEIDOU_' /Users/maguannan/.zshrc)" &amp;&amp; export BEIDOU_ENV=testnet PYTHONUNBUFFERED=1 &amp;&amp; /opt/homebrew/bin/beidou start</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>/Users/maguannan/beidou</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>BEIDOU_ENV</key>
-        <string>testnet</string>
-        <key>PYTHONUNBUFFERED</key>
-        <string>1</string>
-    </dict>
 
     <key>RunAtLoad</key>
     <true/>
@@ -38,9 +25,9 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>/tmp/beidou_autopilot.log</string>
+    <string>/tmp/beidou_launchd.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/tmp/beidou_autopilot_err.log</string>
+    <string>/tmp/beidou_launchd_err.log</string>
 </dict>
 </plist>

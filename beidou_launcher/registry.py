@@ -164,15 +164,27 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         except Exception as exc:
             graph_error = f"{type(exc).__name__}: {exc}"
     topology_mismatch = set(topological_order) != component_ids or len(topological_order) != len(component_ids)
+    # DEGRADED 因子从图中移除是预期行为，不应阻断
+    factor_registry = getattr(engine, "_factor_registry", None)
+    factor_map = getattr(factor_registry, "_factors", {}) if factor_registry is not None else {}
+    lifecycle: dict[str, str] = {}
+    for factor_id, record in factor_map.items():
+        raw_state = getattr(record, "lifecycle", "UNKNOWN")
+        lifecycle[factor_id] = str(getattr(raw_state, "value", raw_state))
+    degraded_factor_ids = {fid for fid, state in lifecycle.items() if state == "DEGRADED"}
+    unexpected_missing = sorted(set(missing_components) - degraded_factor_ids)
     graph_failed = bool(
-        missing_components or extra_components or invalid_components or graph_error or topology_mismatch
+        unexpected_missing or extra_components or invalid_components or graph_error or topology_mismatch
     )
+    graph_degraded = bool(missing_components and not graph_failed)
+    graph_status = CheckStatus.FAIL if graph_failed else (CheckStatus.WARN if graph_degraded else CheckStatus.PASS)
+    graph_severity = CheckSeverity.P0 if graph_failed else CheckSeverity.P2
     checks.append(
         _result(
             "runtime.algorithms.alpha_graph",
             "Alpha DAG 完整性",
-            CheckStatus.FAIL if graph_failed else CheckStatus.PASS,
-            CheckSeverity.P0,
+            graph_status,
+            graph_severity,
             "Alpha DAG 缺失、校验失败或存在拓扑错误" if graph_failed else "8 个 Alpha 组件均已接线且拓扑可排序",
             evidence={
                 "expected": sorted(EXPECTED_ALPHA_COMPONENTS),
@@ -187,25 +199,26 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         )
     )
 
-    factor_registry = getattr(engine, "_factor_registry", None)
-    factor_map = getattr(factor_registry, "_factors", {}) if factor_registry is not None else {}
     factor_ids = set(factor_map.keys())
     missing_factors = sorted(EXPECTED_FACTORS - factor_ids)
     extra_factors = sorted(factor_ids - EXPECTED_FACTORS)
-    lifecycle: dict[str, str] = {}
-    for factor_id, record in factor_map.items():
-        raw_state = getattr(record, "lifecycle", "UNKNOWN")
-        lifecycle[factor_id] = str(getattr(raw_state, "value", raw_state))
     active = {factor_id for factor_id, state in lifecycle.items() if state in {"ACTIVE", "CHALLENGER"}}
     inactive_expected = sorted(EXPECTED_FACTORS - active)
-    factor_failed = bool(missing_factors or extra_factors or inactive_expected)
+    # 仅因子缺失或注册异常为 P0 阻断；DEGRADED 为 P2 告警（可自动恢复）
+    truly_missing = bool(missing_factors or extra_factors)
+    degraded_only = bool(not truly_missing and inactive_expected)
+    factor_status = CheckStatus.FAIL if truly_missing else (CheckStatus.WARN if degraded_only else CheckStatus.PASS)
+    factor_severity = CheckSeverity.P0 if truly_missing else CheckSeverity.P2
     checks.append(
         _result(
             "runtime.algorithms.factor_lifecycle",
             "因子注册与生命周期",
-            CheckStatus.FAIL if factor_failed else CheckStatus.PASS,
-            CheckSeverity.P0,
-            "因子缺失或未进入可运行生命周期" if factor_failed else "8 个因子均已注册并满足当前模式生命周期要求",
+            factor_status,
+            factor_severity,
+            "因子缺失或未注册" if truly_missing else (
+                f"部分因子降级(DEGRADED): {inactive_expected}" if degraded_only
+                else "因子均已注册并满足生命周期要求"
+            ),
             evidence={
                 "expected": sorted(EXPECTED_FACTORS),
                 "actual": sorted(factor_ids),

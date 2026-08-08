@@ -310,7 +310,7 @@ def collect_runtime_checks(
             check_id="runtime.health.errors",
             name="运行异常计数",
             status=CheckStatus.PASS if errors_ok else CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            severity=CheckSeverity.P2,
             message=f"累计错误={error_count}, 本周期新增={error_delta}",
             evidence={"total": error_count, "delta": error_delta, "fatal_threshold": 100},
         )

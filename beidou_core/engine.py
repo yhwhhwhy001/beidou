@@ -2914,9 +2914,10 @@ class AutonomousEngine:
                         )
                         record.performance.append(perf)
 
-                        # Factor lifecycle: degrade if IC degrades significantly
-                        if record.lifecycle == FactorLifecycle.ACTIVE and icir < 0.2:
-                            self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f}")
+                        # Factor lifecycle: degrade only with sufficient samples and very low ICIR
+                        n_samples = len(self._factor_predictions.get(fid, []))
+                        if record.lifecycle == FactorLifecycle.ACTIVE and n_samples >= 50 and icir < 0.05:
+                            self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f} (n={n_samples})")
                             self._alerts.send_incident(
                                 AlertSeverity.WARNING,
                                 f"Factor degraded: {fid}",
@@ -2928,6 +2929,11 @@ class AutonomousEngine:
                         elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
                             self._factor_registry.promote_to_active(fid)
                             print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
+                            lifecycle_changed = True
+                        elif record.lifecycle == FactorLifecycle.DEGRADED and icir >= 0.3:
+                            # 退化因子恢复: DEGRADED → CHALLENGER（需重新验证再晋升ACTIVE）
+                            record.restart_as_challenger()
+                            print(f"[offline] Factor {fid}: RECOVERED to CHALLENGER (ICIR={icir:.3f})")
                             lifecycle_changed = True
 
                 # Rebuild AlphaGraph if any factor lifecycle changed
