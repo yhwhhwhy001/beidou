@@ -3917,13 +3917,17 @@ class AutonomousEngine:
                             print(f"[offline] Factor {fid}: DEGRADED (ICIR={icir:.3f} < 0.2)")
                             lifecycle_changed = True
                         elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
-                            self._factor_registry.promote_to_active(fid)
-                            print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
-                            lifecycle_changed = True
+                            # BD-T06: 必须通过 FactorPromotionGate，不再直接 promote_to_active
+                            decision = self._factor_gate.promote(record, FactorLifecycle.ACTIVE, falsifier="offline-monitor")
+                            if decision.approved:
+                                print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
+                                lifecycle_changed = True
                         elif record.lifecycle == FactorLifecycle.DEGRADED and icir >= 0.3:
-                            # 退化因子恢复: DEGRADED → CHALLENGER（需重新验证再晋升ACTIVE）
-                            record.restart_as_challenger()
-                            print(f"[offline] Factor {fid}: RECOVERED to CHALLENGER (ICIR={icir:.3f})")
+                            # BD-T06: 退化恢复也走 Gate — DEGRADED→CHALLENGER（需重新验证）
+                            decision = self._factor_gate.promote(record, FactorLifecycle.CHALLENGER, falsifier="offline-monitor")
+                            if decision.approved:
+                                print(f"[offline] Factor {fid}: RECOVERED to CHALLENGER (ICIR={icir:.3f})")
+                                lifecycle_changed = True
                             lifecycle_changed = True
 
                 # Rebuild AlphaGraph if any factor lifecycle changed
