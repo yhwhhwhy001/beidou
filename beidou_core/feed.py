@@ -404,9 +404,38 @@ class MarketDataFeed:
                 "trades": k[8],
             })
 
+        # 合并 KLineGenerator 实时聚合的 K 线
+        gen_klines = self.get_generated_klines(symbol, interval)
+        if gen_klines and klines:
+            gen_last = gen_klines[-1]
+            if gen_last.open_time >= klines[-1]["open_time"]:
+                klines[-1] = {
+                    "open_time": gen_last.open_time,
+                    "open": float(gen_last.open.amount),
+                    "high": float(gen_last.high.amount),
+                    "low": float(gen_last.low.amount),
+                    "close": float(gen_last.close.amount),
+                    "volume": float(gen_last.volume.amount),
+                    "close_time": gen_last.close_time,
+                    "quote_volume": float(gen_last.quote_volume.amount) if gen_last.quote_volume else 0.0,
+                    "trades": gen_last.trade_count,
+                }
+        elif not klines and len(gen_klines) >= 20:
+            klines = [
+                {
+                    "open_time": k.open_time,
+                    "open": float(k.open.amount),
+                    "high": float(k.high.amount),
+                    "low": float(k.low.amount),
+                    "close": float(k.close.amount),
+                    "volume": float(k.volume.amount),
+                    "close_time": k.close_time,
+                    "quote_volume": float(k.quote_volume.amount) if k.quote_volume else 0.0,
+                    "trades": k.trade_count,
+                }
+                for k in gen_klines
+            ]
         return self._compute_kline_features(symbol, interval, klines)
-
-    # --- Data fetching (sync) ---
 
     def fetch_ticker(self, symbol: str) -> dict:
         data = self._api(Endpoint.TICKER_24HR, params={"symbol": symbol})
