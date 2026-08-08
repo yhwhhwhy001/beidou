@@ -21,7 +21,7 @@
 | BD-T16 | 真实 Paper 撮合与成本模型 | P1 | G4 | **CONDITIONAL_PASS** | PaperMatchingEngine+CostModel 实现；paper fills 未进复式账本 |
 | BD-T17 | 因子统计与组合优化 | P1 | G3 | **PASS** | IC/ICIR+PurgedWFO+CPCV+FactorEvaluator 完整 |
 | BD-T18 | Binance Testnet 认证 | P1 | G5 | **PASS** | G5 证书已签发；7/7 场景 PASS；demo-fapi.binance.com 验证通过 |
-| BD-T19 | 30 天无人值守认证 | P2 | G6/G7 | **NOT_VERIFIABLE** | 需 30 天真实运行窗口；G7 框架代码可提前准备 |
+| BD-T19 | 30 天无人值守认证 | P2 | G6/G7 | **CONDITIONAL_PASS** | 框架已完成 (UnattendedCertification+SLI+报告); 窗口 g7-20260808-165129 已激活; 等待 30 天 (预计 2026-09-07) |
 
 ### 验证快照 (2026-08-09)
 
