@@ -1155,7 +1155,22 @@ class AutonomousEngine:
             for fid in all_factor_ids:
                 rec = self._factor_registry.get(fid)
                 if rec is not None and rec.lifecycle != FactorLifecycle.ACTIVE:
-                    self._factor_gate.promote(rec, FactorLifecycle.ACTIVE, falsifier="startup-testnet")
+                    # BD-T06: 逐级晋级通过状态机 (IDEA→GENERATED→...→ACTIVE)
+                    for target in [
+                        FactorLifecycle.GENERATED,
+                        FactorLifecycle.SANITY_PASSED,
+                        FactorLifecycle.RESEARCH_VALIDATED,
+                        FactorLifecycle.OOS_VERIFIED,
+                        FactorLifecycle.COST_CAPACITY_VERIFIED,
+                        FactorLifecycle.PAPER_TRADING,
+                        FactorLifecycle.CHALLENGER,
+                        FactorLifecycle.ACTIVE,
+                    ]:
+                        if rec.lifecycle == target:
+                            continue
+                        decision = self._factor_gate.promote(rec, target, falsifier="startup-testnet")
+                        if not decision.approved:
+                            break
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
