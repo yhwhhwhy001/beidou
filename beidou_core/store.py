@@ -36,6 +36,7 @@ class PersistentStore:
             self._local.conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn.execute("PRAGMA busy_timeout=10000")  # BD-FIX: 10s 忙等
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
 

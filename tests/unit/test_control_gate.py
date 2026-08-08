@@ -172,22 +172,23 @@ class TestIntentValidation:
         assert not cp.should_accept(intent)
 
     def test_lock_rejects_flatten_without_emergency(self):
-        """LOCK 状态下，无 Emergency Policy 签名的 FLATTEN 应被拒绝。"""
+        """BD-FIX (S1): LOCK 状态下拒绝所有 FLATTEN 操作（无论是否有签名）。"""
         cp = ControlPlane()
         cp.execute_action(ControlAction.LOCK)
         intent = _make_intent(side=OrderSide.SELL, close_position=True, emergency_signed=False)
         result = cp.validate_intent(intent)
         assert not result.allowed
-        assert result.reason_code == "LOCK_NO_EMERGENCY_SIGNATURE"
+        assert result.reason_code == "LOCK_REJECTS_ALL"
 
-    def test_lock_accepts_emergency_flatten(self):
-        """LOCK 状态下，有 Emergency Policy 签名的 FLATTEN 应被允许。"""
+    def test_lock_rejects_all_including_emergency(self):
+        """BD-FIX (S1): LOCK 状态下拒绝所有操作，包括 emergency_signed FLATTEN。
+        紧急平仓必须先切换到 EMERGENCY_FLATTEN 模式。"""
         cp = ControlPlane()
         cp.execute_action(ControlAction.LOCK)
         intent = _make_intent(side=OrderSide.SELL, close_position=True, emergency_signed=True)
         result = cp.validate_intent(intent)
-        assert result.allowed, f"Emergency-signed FLATTEN should be allowed in LOCK, got {result.reason_code}"
-        assert result.reason_code == "LOCK_EMERGENCY_OVERRIDE"
+        assert not result.allowed, f"LOCK should reject emergency FLATTEN, got allowed={result.allowed}"
+        assert result.reason_code == "LOCK_REJECTS_ALL"
 
     def test_resume_accepts_all_intents(self):
         cp = ControlPlane()
@@ -280,7 +281,7 @@ class TestRejectionAudit:
         d = record.to_dict()
         assert d["intent_id"] == "dict-test"
         assert d["control_state"] == "LOCK"
-        assert d["reason_code"] == "LOCK_REJECTS_INCREASE"
+        assert d["reason_code"] == "LOCK_REJECTS_ALL"
         assert "state_version" in d
 
     def test_rejection_reason_code_format(self):

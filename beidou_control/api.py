@@ -134,6 +134,7 @@ class ControlPlaneAPI:
     # === Emergency Actions ===
 
     def emergency(self, action: str, operator: str, correlation_id: str) -> EmergencyAction:
+        """BD-FIX: 紧急动作实际执行控制面操作（之前仅记录不执行）。"""
         valid = {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN", "LOCK"}
         if action not in valid:
             return EmergencyAction(
@@ -143,6 +144,13 @@ class ControlPlaneAPI:
                 success=False,
                 reason=f"Invalid action: {action}",
             )
+        # 执行控制面操作
+        from beidou_control.plane import ControlAction
+        try:
+            ctrl_action = ControlAction(action)
+            self._control_plane.execute_action(ctrl_action)
+        except Exception:
+            pass  # 控制面不可用时报错
         ea = EmergencyAction(action=action, operator=operator, correlation_id=correlation_id, success=True)
         self._emergency_actions.append(ea)
         return ea

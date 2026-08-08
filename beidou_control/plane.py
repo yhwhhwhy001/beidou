@@ -233,22 +233,12 @@ class ControlPlane:
         allowed_directions = CONTROL_ALLOW_MATRIX.get(self._action, {RiskDirection.QUERY})
 
         # LOCK 状态特殊处理：FLATTEN/CANCEL 需要 Emergency Policy 签名
-        if self._action == ControlAction.LOCK and direction in (
-            RiskDirection.FLATTEN,
-            RiskDirection.CANCEL,
-        ):
-            emergency_signed = getattr(intent, "emergency_policy_signed", False)
-            if emergency_signed:
-                return ValidationResult(
-                    allowed=True,
-                    reason_code="LOCK_EMERGENCY_OVERRIDE",
-                    state_version=self._version,
-                    control_state=self._action.value,
-                    risk_direction=direction,
-                )
+        # BD-FIX (S1): LOCK 状态下拒绝所有操作（移除可被布尔字段绕过的紧急旁路）。
+        # 紧急平仓必须先将控制面切换到 EMERGENCY_FLATTEN。
+        if self._action == ControlAction.LOCK:
             return ValidationResult(
                 allowed=False,
-                reason_code="LOCK_NO_EMERGENCY_SIGNATURE",
+                reason_code="LOCK_REJECTS_ALL",
                 state_version=self._version,
                 control_state=self._action.value,
                 risk_direction=direction,

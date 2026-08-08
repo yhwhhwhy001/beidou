@@ -43,6 +43,9 @@ class FeatureStore:
         if key not in self._features:
             self._features[key] = []
         self._features[key].append(fv)
+        # BD-FIX: 每 key 最多保留 200 条特征快照，防止 WS 掉线时无限增长
+        if len(self._features[key]) > 200:
+            self._features[key] = self._features[key][-100:]
 
     def get_latest(self, name: str, instrument_id: InstrumentId) -> FeatureVector | None:
         key = self._key(name, instrument_id)

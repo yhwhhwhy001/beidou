@@ -48,7 +48,9 @@ class HealthServer:
         self._liveness_check: Callable[[], HealthState] = lambda: HealthState.HEALTHY
         self._readiness_check: Callable[[], bool] = lambda: True
         self._trading_readiness_check: Callable[[], tuple[bool, str]] = lambda: (False, "NO_CERTIFICATE")
-        self._exit_readiness_check: Callable[[], tuple[bool, str]] = lambda: (True, "EXIT_ONLY_AVAILABLE")
+        self._exit_readiness_check: Callable[[], tuple[bool, str]] = lambda: (
+            False, "EXIT_READINESS_NOT_CONFIGURED"
+        )  # BD-FIX: 默认返回不可退出，需显式设置
 
         # 其他回执
         self._metrics_collector: Callable[[], dict] = lambda: {}

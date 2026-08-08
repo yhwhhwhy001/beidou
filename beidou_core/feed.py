@@ -330,9 +330,16 @@ class MarketDataFeed:
             pass  # KLineGenerator 故障不影响主流程
 
         last_price = float(ticker["lastPrice"])
-        best_bid = float(orderbook["bids"][0][0])
-        best_ask = float(orderbook["asks"][0][0])
-        spread_bps = (best_ask - best_bid) / best_ask * 10000
+        # BD-FIX: 空 orderbook 保护（流动性稀薄标的）
+        bids = orderbook.get("bids", [])
+        asks = orderbook.get("asks", [])
+        if not bids or not asks:
+            best_bid = last_price * 0.999
+            best_ask = last_price * 1.001
+        else:
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+        spread_bps = (best_ask - best_bid) / best_ask * 10000 if best_ask > 0 else 1.0
         change_pct = float(ticker.get("priceChangePercent", 0))
 
         features = {

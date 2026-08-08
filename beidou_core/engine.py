@@ -1758,6 +1758,18 @@ class AutonomousEngine:
             self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             return
 
+        # BD-FIX: Intent dead-letter — 超过最大重试次数的意图标记为失败
+        if not hasattr(self, "_intent_retry_count"):
+            self._intent_retry_count: dict[str, int] = {}
+        retries = self._intent_retry_count.get(intent.intent_id, 0) + 1
+        self._intent_retry_count[intent.intent_id] = retries
+        MAX_INTENT_RETRIES = 50
+        if retries > MAX_INTENT_RETRIES:
+            print(f"[order] ❌ Intent {intent.intent_id} DEAD-LETTER after {retries} retries")
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            self._intent_retry_count.pop(intent.intent_id, None)
+            return
+
         side = "BUY" if intent.side == OrderSide.BUY else "SELL"
         order_type = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
         # BD-P0-07: Client Order ID 从 Intent ID 确定性派生，重试时可恢复
@@ -2230,6 +2242,9 @@ class AutonomousEngine:
             return
         tracker.apply(OrderEvent.FILLED)
         self._active_order_ids.discard(order_id)
+        # BD-FIX: FILLED 后清理 tracker 和 symbol 映射，防止内存泄漏
+        self._order_trackers.pop(order_id, None)
+        self._order_symbols.pop(order_id, None)
 
         executed_qty = float(result.get("executedQty", 0))
         avg_price = result.get("avgPrice", "0")
@@ -2290,6 +2305,8 @@ class AutonomousEngine:
                     else:
                         self._loss_count += 1
                     self._trade_pnls.append(trade_pnl)
+                    if len(self._trade_pnls) > 10000:
+                        self._trade_pnls = self._trade_pnls[-5000:]
                     self._position_entry_times.pop(pid, None)
                     self._protection.cancel_protection(pid)
                     self._protection.remove_position(pid)
@@ -4027,6 +4044,14 @@ class AutonomousEngine:
             deleted = self._store.cleanup_old_data(retention_days=90)
             print(f"[offline] Cleanup: {deleted} old records deleted")
 
+            # BD-FIX: 内存清理 — 定期清除过期追踪数据
+            if hasattr(self, "_intent_retry_count") and len(self._intent_retry_count) > 200:
+                self._intent_retry_count = dict(list(self._intent_retry_count.items())[-100:])
+            if hasattr(self, "_paper_fills") and len(self._paper_fills) > 5000:
+                self._paper_fills = self._paper_fills[-2000:]
+            if hasattr(self, "_protection_exchange_attempted") and len(self._protection_exchange_attempted) > 1000:
+                self._protection_exchange_attempted = set(list(self._protection_exchange_attempted)[-500:])
+
         except Exception as e:
             self._error_count += 1
             print(f"[offline] ERROR: {e}")
@@ -4423,8 +4448,11 @@ class AutonomousEngine:
                 try:
                     if time.time() - self._last_realtime >= 5:
                         await self._realtime_tick()
-                except Exception:
+                except Exception as exc:
                     self._error_count += 1
+                    import traceback as _tb
+                    print(f"[realtime] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
+                    _tb.print_exc()
                 await asyncio.sleep(1)
 
         async def _nearline_loop() -> None:
@@ -4432,20 +4460,24 @@ class AutonomousEngine:
                 try:
                     if time.time() - self._last_nearline >= 300:
                         await self._nearline_tick()
-                        # 近线周期后立即全量对账：补齐遗漏的成交追踪，防止
-                        # 实时循环逐笔查单落后导致的 fill 漏追踪 → 对账 MISMATCH → LOCKED。
                         await self._sync_exchange_state()
-                except Exception:
+                except Exception as exc:
                     self._error_count += 1
-                await asyncio.sleep(10)  # 较粗粒度轮询，nearline 本身耗时较长
+                    import traceback as _tb
+                    print(f"[nearline] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
+                    _tb.print_exc()
+                await asyncio.sleep(10)
 
         async def _offline_loop() -> None:
             while self._running:
                 try:
                     if time.time() - self._last_offline >= 3600:
                         await self._offline_tick()
-                except Exception:
+                except Exception as exc:
                     self._error_count += 1
+                    import traceback as _tb
+                    print(f"[offline] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
+                    _tb.print_exc()
                 await asyncio.sleep(60)
 
         tasks = [
