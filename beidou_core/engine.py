@@ -932,10 +932,9 @@ class AutonomousEngine:
             ),
         )
         self._risk_engine = RiskEngineImpl()
-        # 仅在正式生产环境 (CANARY/LIVE) 要求真实签名密钥；
-        # 其他环境 (RESEARCH/PAPER/SHADOW/TESTNET/SAFETY_ONLY) 使用 mock 密钥。
-        _needs_real_signing = self._env_mode.value in ("canary", "live")
-        self._approval = RiskApprovalSignerImpl(signing_key="" if _needs_real_signing else "beidou-testnet-mock-key")
+        # BD-T01: 不再硬编码默认/模拟密钥。签名密钥仅从 BEIDOU_SIGNING_KEY 环境变量注入。
+        # 所有环境（含 Testnet）在未设置密钥时签名不可用，风险增加将被确定性拒绝。
+        self._approval = RiskApprovalSignerImpl(signing_key="")
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()

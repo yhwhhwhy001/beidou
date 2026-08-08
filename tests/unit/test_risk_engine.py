@@ -124,13 +124,14 @@ class TestRiskApproval:
         assert not asyncio.run(signer.verify(aid, signature=sig, proposal_hash="hash-B", nonce="nonce-005"))
 
     def test_revoke(self):
-        """撤销后验证应失败。"""
+        """BD-T01: 吊销签名后验证应失败 — 基于签名撤销集，不再基于内存集合。"""
         signer = self._make_signer()
         aid = RiskApprovalId("approval-006")
         sig = signer.sign(aid, nonce="nonce-006")
-        signer.revoke(aid)
         import asyncio
 
+        # 吊销签名
+        signer.revoke(sig)
         assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-006"))
 
     def test_signing_unavailable_verify_denied(self, monkeypatch):

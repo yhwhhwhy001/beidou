@@ -231,10 +231,11 @@ class RiskApprovalSignerImpl:
         self._signing_key: bytes = self._key_material.encode() if self._key_material else b""
         self._hmac = _hmac
         self._hashlib = hashlib
-        self._approved: set[RiskApprovalId] = set()
         self._nonces: set[str] = set()
         # signature → 签名时生效的 expires_at（epoch 秒）— BD-T01 过期校验。
         self._signed_expiry: dict[str, float] = {}
+        # BD-T01: 已撤销签名集合 — 显式吊销的签名不可再验证通过。
+        self._revoked_sigs: set[str] = set()
 
     def _payload(
         self,
@@ -282,7 +283,6 @@ class RiskApprovalSignerImpl:
         )
         sig = self._compute_signature(payload)
         self._signed_expiry[sig] = expires_at
-        self._approved.add(approval_id)
         return sig
 
     async def verify(
@@ -308,6 +308,8 @@ class RiskApprovalSignerImpl:
             return False
         if not self._signing_available:
             return False
+        if signature in self._revoked_sigs:
+            return False  # BD-T01: 显式吊销的签名不可验证
         stored_expiry = self._signed_expiry.get(signature)
         if stored_expiry is None:
             return False  # 未知签名 — 未由本签名器签发
@@ -331,7 +333,7 @@ class RiskApprovalSignerImpl:
             effective_expiry,
         )
         expected = self._compute_signature(payload)
-        ok = self._hmac.compare_digest(signature, expected) and approval_id in self._approved
+        ok = self._hmac.compare_digest(signature, expected)
         if ok and nonce:
             self._nonces.add(nonce)
         return ok
@@ -341,10 +343,17 @@ class RiskApprovalSignerImpl:
         return self._signing_available
 
     def is_approved(self, approval_id: RiskApprovalId) -> bool:
-        return approval_id in self._approved
+        """BD-T01: 不再基于内存集合 — 审批状态应由 RiskApprovalStateMachine 管理。
 
-    def revoke(self, approval_id: RiskApprovalId) -> None:
-        self._approved.discard(approval_id)
+        签名器仅负责密码学验证；is_approved() 始终返回 False，
+        调用方必须显式调用 verify() 进行签名验证。
+        """
+        return False
+
+    def revoke(self, signature: str) -> None:
+        """BD-T01: 吊销指定签名 — 将其加入撤销集，后续 verify() 将拒绝。"""
+        self._revoked_sigs.add(signature)
+        self._signed_expiry.pop(signature, None)
 
 
 class RiskApprovalStateMachine:
