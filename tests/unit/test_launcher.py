@@ -150,22 +150,62 @@ def _runtime_engine() -> Any:
         (["algo-1", "algo-2", "algo-3"], CheckStatus.PASS),
     ],
 )
-def test_protection_requires_exact_exchange_orders(algo_ids: list[str], expected_status: CheckStatus) -> None:
+def test_protection_coverage_moved_to_monitoring(algo_ids: list[str], expected_status: CheckStatus) -> None:
+    """Phase 1 去重后: protection_coverage 迁移至 monitoring/ 子系统。
+
+    旧 runtime 比对 exchange openAlgoOrders vs 本地预期订单数；
+    新 monitoring 检查本地保护配置语义（SL/TP 是否存在、重复、幽灵仓位）。
+    本测试验证架构迁移正确 + monitoring 正确生成检查。
+    """
     from beidou_launcher.runtime import collect_runtime_checks
+    from beidou_observability.monitoring import collect_monitoring_checks
+    from beidou_observability.monitoring.contracts import AccountPositionMode, PositionModeEvidence
 
     engine = _runtime_engine()
+
+    # 1. 架构验证：runtime 检查不再包含 protection_coverage
     checks, _ = collect_runtime_checks(
-        engine=engine,
-        mode="testnet",
-        port=9090,
-        resume_authorized=True,
-        algorithm_probe={"ok": True},
-        last_error_count=0,
+        engine=engine, mode="testnet", port=9090, resume_authorized=True,
+        algorithm_probe={"ok": True}, last_error_count=0,
         exchange_algo_snapshot={"ok": True, "by_symbol": {"BTCUSDT": algo_ids}, "observed_at": time.time()},
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
     )
-    result = next(item for item in checks if item.check_id == "runtime.safety.protection_coverage")
-    assert result.status == expected_status
+    runtime_ids = {item.check_id for item in checks}
+    assert "runtime.safety.protection_coverage" not in runtime_ids, (
+        "protection_coverage 已迁移至 monitoring/，runtime 不应生成此 check_id"
+    )
+
+    # 2. 集成验证：monitoring 正确生成 protection_coverage 检查
+    mock_sl = SimpleNamespace(
+        protection_id="sl-btc-001", side=SimpleNamespace(value="SELL"),
+        quantity="1.0", trigger_price="50000", status=SimpleNamespace(value="ACTIVE"),
+    )
+    mock_tps = [SimpleNamespace(
+        protection_id=f"tp-btc-{i:03d}", side=SimpleNamespace(value="SELL"),
+        quantity="1.0", trigger_price=f"{60000 + i * 1000}",
+        status=SimpleNamespace(value="ACTIVE"),
+    ) for i in range(len(algo_ids))]
+    engine._protection = SimpleNamespace(all_positions=lambda: {
+        "pos-BTCUSDT": SimpleNamespace(
+            instrument_id="BTCUSDT", stop_loss=mock_sl, take_profits=mock_tps,
+            quantity=1.0, side=SimpleNamespace(value="BUY"),
+        )
+    })
+    pos_evidence = PositionModeEvidence(
+        account_id="test", venue="BINANCE_USDM", mode=AccountPositionMode.ONE_WAY,
+        source="EXCHANGE_USER_DATA", source_timestamp=time.time(), observed_at=time.time(),
+    )
+    mon_checks = collect_monitoring_checks(
+        engine=engine, supervisor=None,
+        exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
+        algorithm_probe={"ok": True}, position_mode_evidence=pos_evidence,
+    )
+    protection_results = [c for c in mon_checks if c.check_id == "runtime.safety.protection_coverage"]
+    assert len(protection_results) > 0, "monitoring 子系统应生成 protection_coverage 检查"
+    # monitoring 语义: 本地有 SL+TP 配置 → PASS
+    assert protection_results[0].status == CheckStatus.PASS, (
+        f"本地 SL+TP 配置完整应返回 PASS，实际: {protection_results[0].status.value}"
+    )
 
 
 def test_stop_requires_fresh_matching_process_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,33 +277,49 @@ def test_nonwrite_exchange_interlock_blocks_mutations(tmp_path: Path) -> None:
     assert calls == [("GET", "/time")]
 
 
-def test_reconciliation_mismatch_blocks_runtime() -> None:
+def test_reconciliation_moved_to_monitoring() -> None:
+    """Phase 1 去重后: reconciliation 迁移至 monitoring/ 子系统深度检查。
+
+    旧 runtime 使用 engine._recon.reconcile() 的快照对账；
+    新 monitoring 使用 perform_reconciliation() 直接比对 exchange vs local positions。
+    本测试验证架构迁移正确 + monitoring 正确生成检查。
+    """
     from beidou_launcher.runtime import collect_runtime_checks
+    from beidou_observability.monitoring import collect_monitoring_checks
 
     engine = _runtime_engine()
-    facts = SimpleNamespace(timestamp=datetime.now(timezone.utc))
-    engine._recon = SimpleNamespace(
-        reconcile=lambda _account, _venue: SimpleNamespace(
-            status=SimpleNamespace(value="MISMATCHED"),
-            differences=["Position mismatch"],
-            exchange_facts=facts,
-            system_facts=facts,
-        )
-    )
+
+    # 1. 架构验证：runtime 检查不再包含 reconciliation
     checks, _ = collect_runtime_checks(
-        engine=engine,
-        mode="testnet",
-        port=9090,
-        resume_authorized=True,
-        algorithm_probe={"ok": True},
-        last_error_count=0,
-        exchange_algo_snapshot={
-            "ok": True,
-            "by_symbol": {"BTCUSDT": ["algo-1", "algo-2"]},
-            "observed_at": time.time(),
-        },
+        engine=engine, mode="testnet", port=9090, resume_authorized=True,
+        algorithm_probe={"ok": True}, last_error_count=0,
+        exchange_algo_snapshot={"ok": True, "by_symbol": {"BTCUSDT": ["algo-1", "algo-2"]}, "observed_at": time.time()},
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
     )
-    result = next(item for item in checks if item.check_id == "runtime.safety.reconciliation")
-    assert result.status == CheckStatus.FAIL
-    assert result.is_blocking is True
+    runtime_ids = {item.check_id for item in checks}
+    assert "runtime.safety.reconciliation" not in runtime_ids, (
+        "reconciliation 已迁移至 monitoring/，runtime 不应生成此 check_id"
+    )
+
+    # 2. 集成验证：monitoring 正确生成 reconciliation 检查
+    mock_protected = SimpleNamespace(
+        instrument_id="BTCUSDT", stop_loss=object(), take_profits=[object()],
+        quantity=1.0, side=SimpleNamespace(value="BUY"),
+    )
+    engine._protection = SimpleNamespace(all_positions=lambda: {"pos-BTCUSDT": mock_protected})
+    engine._ledger = SimpleNamespace(_entries=[])
+    engine._last_account = {
+        "totalWalletBalance": "1000",
+        "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}],
+    }
+    mon_checks = collect_monitoring_checks(
+        engine=engine, supervisor=None,
+        exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
+        algorithm_probe={"ok": True},
+    )
+    recon_result = next((c for c in mon_checks if c.check_id == "runtime.safety.reconciliation"), None)
+    assert recon_result is not None, "monitoring 子系统应生成 reconciliation 检查"
+    # monitoring 语义: exchange 与 local positions 一致时返回 PASS
+    assert recon_result.status == CheckStatus.PASS, (
+        f"positions 一致的 reconciliation 应返回 PASS，实际: {recon_result.status.value} — {recon_result.message}"
+    )

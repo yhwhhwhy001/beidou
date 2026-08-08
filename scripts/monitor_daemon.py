@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""北斗运营监控守护进程 — V1.1 MonitoringService 包装器。
+"""北斗运营监控守护进程 — V1.2 持久化 + 告警接线。
 
-替代 V1.0 版本，使用 beidou_observability/monitoring/ 模块。
+替代 V1.1 版本：
+- 持久化检查结果到 MonitoringRepository (SQLite)
+- 异常时触发告警 (AlertDispatcher)
+- 交叉验证健康端点与监督器状态
+- 写入本地状态文件 (JSONL)
 
 用法:
   python scripts/monitor_daemon.py start      — 后台启动
@@ -28,6 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 STATE_FILE = PROJECT_ROOT / ".beidou" / "supervisor-state.json"
 PID_FILE = PROJECT_ROOT / ".beidou" / "monitor_daemon.pid"
 FREQ_FILE = PROJECT_ROOT / ".beidou" / "monitor_freq.json"
+DAEMON_LOG = PROJECT_ROOT / ".beidou" / "monitor_daemon.jsonl"
 HEALTH_URL = os.environ.get("BEIDOU_HEALTH_URL", "http://localhost:9090/health")
 
 
@@ -41,8 +46,61 @@ def load_supervisor_state() -> dict | None:
         return None
 
 
-def run_checks_v11() -> dict:
-    """使用 V1.1 MonitoringService 执行全维度检查。"""
+def persist_result(result: dict) -> None:
+    """追加检查结果到 JSONL 日志文件（持久化）。"""
+    DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with DAEMON_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        pass
+
+
+def send_alert_if_critical(result: dict) -> None:
+    """P0 故障时通过 AlertDispatcher 推送告警。"""
+    p0_fails = result.get("p0_fails", 0)
+    if p0_fails == 0:
+        return
+    try:
+        from beidou_observability.telemetry import AlertSeverity
+        from beidou_core.alerts import AlertDispatcher
+
+        dispatcher = AlertDispatcher()
+        severity = AlertSeverity.CRITICAL if p0_fails >= 3 else AlertSeverity.HIGH
+        failed_checks = [c["check_id"] for c in result.get("checks", []) if c["status"] == "FAIL"]
+        dispatcher.send_incident(
+            severity=severity,
+            title=f"Monitor Daemon: {p0_fails} P0 failures",
+            description=f"Failed checks: {failed_checks}",
+            category="monitor_daemon",
+        )
+    except Exception:
+        pass
+
+
+def cross_validate_health(health_data: dict | None, state: dict | None) -> dict[str, str]:
+    """交叉验证健康端点与监督器状态。"""
+    issues: dict[str, str] = {}
+    if health_data is None and state is None:
+        issues["cross_validate"] = "BOTH_UNAVAILABLE"
+    elif health_data is None:
+        issues["cross_validate"] = "HEALTH_ENDPOINT_DOWN"
+    elif state is None:
+        issues["cross_validate"] = "SUPERVISOR_STATE_MISSING"
+    else:
+        h_ready = health_data.get("ready", False)
+        s_state = state.get("supervisor_state", "UNKNOWN")
+        if h_ready and s_state not in ("RUNNING",):
+            issues["cross_validate"] = f"HEALTH_READY_BUT_SUPERVISOR_{s_state}"
+        elif not h_ready and s_state == "RUNNING":
+            issues["cross_validate"] = "SUPERVISOR_RUNNING_BUT_HEALTH_NOT_READY"
+    return issues
+
+
+def run_checks_v12() -> dict:
+    """使用 V1.2 MonitoringService 执行全维度检查 + 持久化 + 告警。"""
     from beidou_observability.monitoring.contracts import (
         CheckSeverity,
         CheckStatus,
@@ -53,6 +111,18 @@ def run_checks_v11() -> dict:
 
     svc = MonitoringService()
     state = load_supervisor_state()
+
+    # 交叉验证: 获取健康端点响应并与监督器状态比对
+    health_data: dict | None = None
+    try:
+        import urllib.request
+
+        resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
+        health_data = json.loads(resp.read())
+    except Exception:
+        pass
+
+    cross_issues = cross_validate_health(health_data, state)
 
     results: list[MonitoringCheckResult] = []
 
@@ -69,22 +139,45 @@ def run_checks_v11() -> dict:
                     )
                 )
 
+    # 交叉验证失败作为额外检查
+    if cross_issues:
+        for key, msg in cross_issues.items():
+            results.append(
+                MonitoringCheckResult(
+                    check_id="monitor_daemon.cross_validate",
+                    status=CheckStatus.FAIL,
+                    severity=CheckSeverity.P1,
+                    message=f"{key}: {msg}",
+                )
+            )
+
     summary = health_summary(results)
     freq = svc.repo.get_frequency_state()
 
-    return {
+    result = {
         "health": summary["status"],
         "p0_fails": summary.get("p0_fails", 0),
         "total_checks": len(results),
         "frequency": freq.level.value,
         "interval_s": freq.interval_seconds,
         "open_incidents": len(svc.get_incidents(active_only=True)),
+        "cross_validation": cross_issues,
         "checks": [
             {"check_id": r.check_id, "status": r.status.value, "severity": r.severity.value, "message": r.message}
             for r in results
         ],
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
+
+    # V1.2 新增: 持久化 + 告警
+    persist_result(result)
+    send_alert_if_critical(result)
+
+    # 持久化到 MonitoringRepository
+    with contextlib.suppress(Exception):
+        svc.repo.save_check_results(results)
+
+    return result
 
 
 def write_pid() -> None:
@@ -103,73 +196,76 @@ def signal_handler(signum, frame):
 
 
 def run_foreground() -> None:
-    """前台运行 — 每 30s 检查，自适应频率。"""
+    """前台运行 — 每 30s 检查，持久化 + 告警。"""
     write_pid()
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    print(f"[monitor_daemon] PID={os.getpid()} 已启动, 轮询间隔=30s, 日志={DAEMON_LOG}")
     try:
         while True:
-            try:
-                import urllib.request
-
-                resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
-                json.loads(resp.read())
-            except Exception:
-                pass
-
-            with contextlib.suppress(Exception):
-                run_checks_v11()
-
+            result = run_checks_v12()
+            p0 = result["p0_fails"]
+            health = result["health"]
+            print(f"[monitor_daemon] {datetime.now(timezone.utc).strftime('%H:%M:%S')} "
+                  f"health={health} p0_fails={p0} checks={result['total_checks']} "
+                  f"incidents={result['open_incidents']}")
+            if result.get("cross_validation"):
+                print(f"[monitor_daemon] ⚠️ 交叉验证失败: {result['cross_validation']}")
             time.sleep(30)
     finally:
         cleanup_pid()
+        print("[monitor_daemon] 已停止")
 
 
 def run_once() -> None:
-    """单次检查。"""
-    try:
-        import urllib.request
-
-        resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
-        json.loads(resp.read())
-    except Exception:
-        pass
-
-    result = run_checks_v11()
+    """单次检查 — 输出到 stdout + 持久化。"""
+    result = run_checks_v12()
+    print(f"Health: {result['health']} | P0 Fails: {result['p0_fails']} | Checks: {result['total_checks']}")
+    if result.get("cross_validation"):
+        print(f"Cross-validation: {result['cross_validation']}")
     for c in result["checks"]:
-        "✅" if c["status"] == "PASS" else "⚠️" if c["status"] == "WARN" else "❌"
+        emoji = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "UNKNOWN": "❔"}.get(c["status"], "❔")
+        print(f"  {emoji} [{c['severity']}] {c['check_id']}: {c['message']}")
 
 
 def stop_daemon() -> bool:
     if not PID_FILE.exists():
+        print("守护进程未运行")
         return False
     try:
         pid = int(PID_FILE.read_text().strip())
         os.kill(pid, signal.SIGTERM)
+        print(f"已向 PID={pid} 发送 SIGTERM")
         return True
     except ProcessLookupError:
         PID_FILE.unlink()
+        print("守护进程已退出，清理 PID 文件")
         return False
-    except Exception:
+    except Exception as exc:
+        print(f"停止失败: {exc}")
         return False
 
 
 def status_daemon() -> bool:
     if not PID_FILE.exists():
+        print("守护进程未运行")
         return False
     try:
         pid = int(PID_FILE.read_text().strip())
         os.kill(pid, 0)
+        print(f"守护进程运行中: PID={pid}")
         return True
     except (ProcessLookupError, OSError):
         PID_FILE.unlink()
+        print("守护进程已退出（陈旧 PID 文件已清理）")
         return False
 
 
 # CLI
 if __name__ == "__main__":
     if len(sys.argv) < 2:
+        print("用法: monitor_daemon.py {start|start-fg|stop|status|run-once}")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -177,7 +273,6 @@ if __name__ == "__main__":
     if cmd == "start":
         if status_daemon():
             sys.exit(1)
-        # Fork to background
         if os.fork() > 0:
             sys.exit(0)
         os.setsid()
@@ -187,13 +282,14 @@ if __name__ == "__main__":
         run_foreground()
 
     elif cmd == "stop":
-        stop_daemon()
+        sys.exit(0 if stop_daemon() else 1)
 
     elif cmd == "status":
-        status_daemon()
+        sys.exit(0 if status_daemon() else 1)
 
     elif cmd == "run-once":
         run_once()
 
     else:
+        print(f"未知命令: {cmd}")
         sys.exit(1)

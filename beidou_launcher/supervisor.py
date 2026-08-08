@@ -75,6 +75,14 @@ class BeidouSupervisor:
         self._monitoring_state: dict[str, Any] = {}
         self._last_monitor_loop_ts = 0.0  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
         self._monitoring_check_states: dict[str, str] = {}  # check_id → 最近状态（阻断转变事件）
+        # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
+        from .models import HealthDebounce
+
+        self._health_debounce = HealthDebounce()
+        # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
+        from .g7_tracker import G7LiveTracker
+
+        self._g7_tracker = G7LiveTracker()
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
@@ -173,6 +181,36 @@ class BeidouSupervisor:
                 return False, self.report.blockers[0].check_id
             return False, f"CONTROL_{self._control_state()}"
 
+        # BD-FIX: Liveness 接线 — 检测进程假死/事件循环卡住
+        from beidou_core.health import HealthState
+
+        def liveness() -> HealthState:
+            lifecycle = getattr(engine, "_lifecycle", None)
+            lifecycle_state = str(getattr(getattr(lifecycle, "state", None), "value", ""))
+            if lifecycle_state == "LOCKED":
+                return HealthState.UNHEALTHY
+            # 监控循环心跳：超过 monitor_interval * 3 无活动 → DEGRADED
+            if time.monotonic() - self._last_monitor_loop_ts > self.monitor_interval * 3:
+                return HealthState.DEGRADED
+            return HealthState.HEALTHY
+
+        # BD-FIX: Exit Readiness 接线 — 检测安全退出条件
+        def exit_readiness() -> tuple[bool, str]:
+            active_orders = getattr(engine, "_active_order_ids", None) or set()
+            if active_orders:
+                return False, f"HAS_ACTIVE_ORDERS:{len(active_orders)}"
+            try:
+                recon = getattr(engine, "_recon", None)
+                if recon is not None:
+                    result = recon.reconcile("default", "BINANCE")
+                    raw_status = getattr(result, "status", None)
+                    status_str = str(getattr(raw_status, "value", raw_status))
+                    if status_str != "MATCHED":
+                        return False, f"RECON_{status_str}"
+            except Exception:
+                return False, "RECON_CHECK_FAILED"
+            return True, "READY"
+
         def status_info() -> dict[str, Any]:
             base = dict(engine._get_status_info())
             base["supervisor"] = {
@@ -184,6 +222,7 @@ class BeidouSupervisor:
                 "blockers": [item.check_id for item in self.report.blockers],
                 "checks": {item.check_id: item.status.value for item in self.report.checks},
                 "monitoring": self._monitoring_state,
+                "g7_sli": self._g7_tracker.summary(),
             }
             return base
 
@@ -201,8 +240,37 @@ class BeidouSupervisor:
                 )
             return result
 
+        # P2: 监控指标注入 Prometheus /metrics
+        engine_metrics_fn = getattr(self.engine._health, "_metrics_collector", lambda: {})
+
+        def metrics_with_monitoring() -> dict[str, Any]:
+            base = engine_metrics_fn()
+            # 监控检查状态指标: 按 check_id 分组
+            for item in self.report.checks:
+                safe_id = item.check_id.replace(".", "_").replace("-", "_")
+                base[f"check_{safe_id}"] = {
+                    "PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3
+                }.get(item.status.value, 3)
+            # 监督器状态
+            base["supervisor_state"] = {
+                "RUNNING": 0, "PAUSED": 1, "DEGRADED": 2, "LOCKED": 3, "FAILED": 4, "STOPPED": 5
+            }.get(self.report.supervisor_state, -1)
+            # 防抖窗口状态
+            base["debounce_window_size"] = len(self._health_debounce.window)
+            # G7 SLI 指标
+            g7 = self._g7_tracker.summary()
+            base["g7_overall_pass_rate"] = g7["overall_pass_rate"]
+            base["g7_all_passing"] = 1 if g7["all_slis_passing"] else 0
+            for sli_name, sli_data in g7["slis"].items():
+                base[f"g7_sli_{sli_name}_pass_rate"] = sli_data["window_pass_rate"]
+            return base
+
+        self.engine._health.set_metrics_collector(metrics_with_monitoring)
+
         self.engine._health.set_readiness_check(readiness)
         self.engine._health.set_trading_readiness(trading_readiness)
+        self.engine._health.set_liveness_check(liveness)
+        self.engine._health.set_exit_readiness(exit_readiness)
         self.engine._health.set_status_info(status_info)
         self.engine._health.set_factor_provider(factor_provider)
 
@@ -331,9 +399,11 @@ class BeidouSupervisor:
     def _merge_monitoring_checks(self, runtime_checks: list[CheckResult]) -> list[CheckResult]:
         """运行监控子系统深度检查并合并进监督器检查流。
 
-        - 监控子系统结果对相同 check_id 优先（深度审计为准）
-        - MON08 频率策略以监控结果驱动深度审计节奏
-        - 阻断检查以状态转变事件写入证据目录
+        架构分工 (Phase 1 去重后):
+        - runtime.py: 仅引擎内部状态检查 (lifecycle/control_plane/heartbeat/market_data/errors/incidents)
+        - monitoring/: 所有需要外部事实的深度检查 (account/reconciliation/protection/order_trace/module_progress)
+        - 两个管道无 check_id 重叠，直接拼接即可。MON08 频率策略以监控结果驱动深度审计节奏。
+        - 阻断检查以状态转变事件写入证据目录。
         """
         assert self.engine is not None
         monitoring_checks: list[CheckResult] = []
@@ -412,7 +482,8 @@ class BeidouSupervisor:
             "runtime.algorithms.risk_budget",
             "runtime.health.lifecycle",
             "runtime.health.http_server",
-            "runtime.health.account_snapshot",
+            # Phase 1 去重后: account_snapshot → monitoring check_account_unknown (INV-002)
+            "runtime.safety.account",
         }
     )
 
@@ -446,9 +517,11 @@ class BeidouSupervisor:
                     except Exception as exc:
                         self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                         print(f"[supervisor] Algorithm probe failed: {exc}")
-                await self._refresh_exchange_account_snapshot()
-                await self._refresh_position_mode()
-                await self._refresh_exchange_algo_snapshot()
+                await asyncio.gather(
+                    self._refresh_exchange_account_snapshot(),
+                    self._refresh_position_mode(),
+                    self._refresh_exchange_algo_snapshot(),
+                )
                 try:
                     checks = self._runtime_checks()
                     checks = self._merge_monitoring_checks(checks)
@@ -483,7 +556,7 @@ class BeidouSupervisor:
                 self.engine._alerts.send_incident(
                     severity=severity,
                     title=f"Supervisor {state}",
-                    detail=f"Blockers: {blocker_ids}",
+                    description=f"Blockers: {blocker_ids}",
                     category="supervisor",
                 )
                 print(f"[supervisor] Alert sent: {severity.value} — Supervisor {state}: {blocker_ids}")
@@ -521,7 +594,7 @@ class BeidouSupervisor:
             "runtime.health.market_data",
             "runtime.health.http_server",
             "runtime.health.errors",
-            "runtime.health.account_snapshot",
+            # Phase 1 去重: account_snapshot → monitoring (runtime.safety.account + runtime.safety.balance_sanity 已在下方)
             "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
             "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
             "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
@@ -581,6 +654,7 @@ class BeidouSupervisor:
             self.engine._control.execute_action(ControlAction.RESUME)
             self._control_paused_by_supervisor = False
         self._critical_streak = 0
+        self._health_debounce.reset()  # Phase 3: 恢复成功后重置防抖窗口
         self._recovery_timestamps.append(time.monotonic())
         self._recovery_count += 1
         window_active = len(self._recovery_timestamps)
@@ -596,9 +670,12 @@ class BeidouSupervisor:
         fatal_triggered = False
         while not self._engine_task.done():
             await asyncio.sleep(self.monitor_interval)
-            await self._refresh_exchange_account_snapshot()
-            await self._refresh_position_mode()
-            await self._refresh_exchange_algo_snapshot()
+            # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）
+            await asyncio.gather(
+                self._refresh_exchange_account_snapshot(),
+                self._refresh_position_mode(),
+                self._refresh_exchange_algo_snapshot(),
+            )
             checks = self._runtime_checks()
             if await self._recover_if_validated(checks):
                 checks = self._runtime_checks()
@@ -609,37 +686,54 @@ class BeidouSupervisor:
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers
-            if blockers:
-                # 区分瞬时阻断（可自愈：心跳/行情/对账/保护等）和持久阻断。
-                # 瞬时阻断不计入 _critical_streak，避免引擎自愈过程中被误判致命。
-                persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
-                if persistent_blockers:
-                    self._critical_streak += 1
-                    fatal_triggered = self._critical_streak >= 5
-                else:
-                    # 仅有瞬时阻断，引擎可自愈，不触发致命锁定
-                    fatal_triggered = False
+
+            # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动
+            # 区分瞬时阻断（心跳/行情/对账/保护等可自愈）和持久阻断
+            persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
+            has_persistent = bool(persistent_blockers)
+
+            debounce_action = self._health_debounce.feed(has_persistent)
+
+            if debounce_action == "LOCKED":
+                # 防抖器判定: 连续 lock_after 次持久阻断 → LOCKED
                 await self._fail_closed(
-                    "; ".join(f"{item.check_id}:{item.message}" for item in blockers),
-                    fatal=fatal_triggered,
+                    "防抖器: 连续持久阻断 → LOCKED: "
+                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                    fatal=True,
                 )
-            else:
-                self._critical_streak = 0
-            if fatal_triggered:
                 self.report.supervisor_state = "LOCKED"
-                # BD-FIX: LOCKED 状态推送告警 (O2)
-                self._send_supervisor_alert("LOCKED", blockers)
-            elif blockers:
+                self._send_supervisor_alert("LOCKED", persistent_blockers)
+            elif debounce_action == "DEGRADED":
+                # 防抖器判定: 连续 degrade_after 次持久阻断 → DEGRADED
+                await self._fail_closed(
+                    "防抖器: 连续持久阻断 → DEGRADED: "
+                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                    fatal=False,
+                )
                 self.report.supervisor_state = "DEGRADED"
-                # BD-FIX: DEGRADED 状态推送告警 (持久阻断时)
-                persistent = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
-                if persistent:
-                    self._send_supervisor_alert("DEGRADED", persistent)
-            elif self._control_state() != "RESUME":
-                self.report.supervisor_state = "PAUSED"
+                self._send_supervisor_alert("DEGRADED", persistent_blockers)
+            elif debounce_action == "RUNNING":
+                # 防抖器判定干净 — 可恢复
+                if self.report.supervisor_state in ("DEGRADED",):
+                    await self._recover_if_validated(checks)
+                if self._control_state() != "RESUME":
+                    self.report.supervisor_state = "PAUSED"
+                else:
+                    self.report.supervisor_state = "RUNNING"
             else:
-                self.report.supervisor_state = "RUNNING"
+                # UNCHANGED: 防抖器计数中，保持当前状态
+                # 有持久阻断时仍调用 fail_closed 降低控制面（但不改变 supervisor_state）
+                if has_persistent:
+                    await self._fail_closed(
+                        "持久阻断检测（防抖计数中）: "
+                        + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                        fatal=False,
+                    )
+
             self.report.trading_ready = self._is_trading_ready()
+            # P1: G7 实时 SLI 追踪 — 每个周期更新
+            self._g7_tracker.feed(checks)
+            self._g7_tracker.feed_recovery_context(self._recovery_count, self.max_restarts)
             self.writer.write(self.report)
         try:
             await self._engine_task
