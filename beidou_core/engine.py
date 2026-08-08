@@ -723,6 +723,7 @@ class AutonomousEngine:
             webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
             alerts_file=self._settings.infrastructure.alerts_file,
         )
+        self._alerts.set_portfolio_provider(self._portfolio_summary)
         self._health = HealthServer(
             port=self._settings.infrastructure.health_port,
             bind_host=self._settings.infrastructure.health_host,
@@ -1240,6 +1241,35 @@ class AutonomousEngine:
 
         passed, result = parity_check()
         return result
+
+    def _portfolio_summary(self) -> str:
+        """生成持仓摘要（品种+数量+盈亏），供告警 webhook 使用。"""
+        lines = ["📊 当前持仓:"]
+        try:
+            positions = self._protection.all_positions()
+            if not positions:
+                return "📊 当前持仓: 无"
+            for pos_id, pp in sorted(positions.items()):
+                sym = str(pp.instrument_id)
+                qty = float(pp.quantity)
+                entry = float(pp.entry_price)
+                current = float(self._last_prices.get(sym, 0))
+                if current > 0 and entry > 0:
+                    pnl_pct = (current / entry - 1) * 100
+                    if pp.side.value == "SELL":
+                        pnl_pct = -pnl_pct
+                    icon = "🟢" if pnl_pct > 0 else ("🔴" if pnl_pct < 0 else "⚪")
+                    lines.append(f"  {icon} {sym}: {qty:.4f} @{entry:.2f}→{current:.2f} ({pnl_pct:+.2f}%)")
+                else:
+                    lines.append(f"  ⚪ {sym}: {qty:.4f} @{entry:.2f}")
+            # 汇总
+            total_positions = len(positions)
+            up_count = sum(1 for l in lines if "🟢" in l)
+            down_count = sum(1 for l in lines if "🔴" in l)
+            lines.append(f"  总计: {total_positions}仓 | 🟢{up_count} 🔴{down_count}")
+        except Exception as e:
+            lines.append(f"  (获取失败: {e})")
+        return "\n".join(lines)
 
     def _collect_metrics(self) -> dict:
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)

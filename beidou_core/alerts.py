@@ -33,6 +33,11 @@ class AlertDispatcher:
         self._active_incidents: dict[str, Incident] = {}
         self._alert_count: dict[str, int] = {}
         self._start_time = datetime.now(timezone.utc)
+        self._portfolio_provider: Callable[[], str] | None = None
+
+    def set_portfolio_provider(self, fn: Callable[[], str]) -> None:
+        """注入持仓摘要提供器，webhook 推送时追加到描述末尾。"""
+        self._portfolio_provider = fn
 
     def send_incident(
         self,
@@ -110,6 +115,14 @@ class AlertDispatcher:
         url = self._webhook_url
         title = f"[{incident.severity.value}] {incident.title}"
         desc = f"{incident.description}\n操作: {incident.auto_action.value}\n时间: {incident.detected_at.isoformat()}\nID: {incident.incident_id}"
+        # 追加持仓摘要
+        if self._portfolio_provider:
+            try:
+                portfolio = self._portfolio_provider()
+                if portfolio:
+                    desc += f"\n\n{portfolio}"
+            except Exception:
+                pass
 
         try:
             if "sctapi.ftqq.com" in url:
