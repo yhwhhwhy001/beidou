@@ -820,6 +820,8 @@ class AutonomousEngine:
         self._env_mode = _MODE_MAP.get(mode, EnvironmentMode.SAFETY_ONLY)
         # 是否允许 POST/PUT/DELETE 交易写请求
         self._can_write = self._env_mode.can_write_trades
+        # P0修复: Paper/Shadow 模式的模拟执行标志（不写交易所，但需要执行 Paper 撮合）
+        self._can_simulate = not self._can_write and self._env_mode.value in ("paper", "shadow", "research")
 
         # Config — 使用统一配置提供器，禁止直接读取 YAML
         # 加载优先级: CLI explicit > BEIDOU_ENV > env-specific file > SAFETY_ONLY
@@ -1470,9 +1472,21 @@ class AutonomousEngine:
             self._leverage_cache[symbol] = actual
             print(f"[leverage] {symbol}: cannot lower to {target_leverage}x, keeping {actual}x (existing positions)")
             return actual
+        elif err_code == -2028:
+            # -2028: 仓位存在所以无法改杠杆 → 查询实际杠杆
+            try:
+                pos_resp = await self._api_async(Endpoint.POSITION_INFO, signed=True, params={"symbol": symbol})
+                if isinstance(pos_resp, list) and pos_resp:
+                    actual = int(pos_resp[0].get("leverage", target_leverage)) if pos_resp[0].get("leverage") else target_leverage
+                    print(f"[leverage] {symbol}: -2028 resolved: actual={actual}x")
+                    return actual
+            except Exception:
+                pass
+            return -1  # 无法确认实际杠杆 → UNKNOWN → 风控阻断
         else:
-            print(f"[leverage] FAILED {symbol}: {resp.get('msg', resp)}")
-            return target_leverage  # 返回目标值让流程继续
+            # P2修复: 非预期错误不返回 target_leverage（fail-open → fail-closed）
+            print(f"[leverage] FAILED {symbol}: code={err_code} {resp.get('msg', resp)}")
+            return -1  # UNKNOWN → R0/R6 阻断，而非静默继续
 
     # --- Health & Metrics ---
 
@@ -1696,7 +1710,8 @@ class AutonomousEngine:
                 print(
                     f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} can_write={self._can_write}"
                 )
-            if self._can_write:
+            # P0修复: Paper/Shadow 模式也需要执行 intent（通过 _place_order 的 Paper 撮合分支）
+            if self._can_write or self._can_simulate:
                 for intent in unacked:
                     await self._place_order(intent)
 
@@ -1923,6 +1938,15 @@ class AutonomousEngine:
             slice_interval = max(2.0, min(default_interval, 120.0))  # 2s~120s 范围
         intent_acked = False
         for idx, (qty_str, price_str, order_type, tif, slice_client_id) in enumerate(slices):
+            # P0 修复: 每切片前复检控制面状态，防止中途 NO_NEW_RISK/LOCK 后剩余切片照常发送
+            if idx > 0 and not self._control.should_accept(intent):
+                print(
+                    f"[order] ⚠️ TWAP ABORTED after {idx}/{n_slices} slices: "
+                    f"control plane rejected (state={self._control.get_status().value} v{self._control.version})"
+                )
+                if not intent_acked:
+                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                return  # 提前终止 TWAP，不再发送剩余切片
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
                 await asyncio.sleep(slice_interval)
@@ -2217,6 +2241,44 @@ class AutonomousEngine:
                     client_order_id=slice_client_id,
                 )
             return order
+
+        # P0修复: -4141 重复 clientOrderId → 查询已有订单恢复状态，而非当作失败重试
+        err_code = order.get("code", 0) if isinstance(order, dict) else 0
+        if err_code == -4141:
+            client_id = params.get("newClientOrderId", "")
+            print(f"[order] -4141 DUPLICATE clientOrderId={client_id} — querying existing order")
+            try:
+                query_resp = await self._api_async(
+                    Endpoint.ALL_ORDERS, signed=True,
+                    params={"symbol": order_symbol, "origClientOrderId": client_id},
+                )
+                if isinstance(query_resp, list) and query_resp:
+                    existing = query_resp[0]
+                    oid_str = str(existing.get("orderId", ""))
+                    if oid_str:
+                        actual_status = existing.get("status", "UNKNOWN")
+                        print(f"[order] RECOVERED from -4141: orderId={oid_str} status={actual_status}")
+                        tracker = OrderStateTracker(order_id=OrderId(oid_str))
+                        tracker.apply(OrderEvent.ACKED)
+                        tracker.apply(OrderEvent.SENT)
+                        self._order_trackers[oid_str] = tracker
+                        self._order_symbols[oid_str] = order_symbol
+                        if ack_outbox:
+                            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                        self._order_count += 1
+                        self._last_order_placed_at = time.time()
+                        if actual_status == "FILLED":
+                            await self._process_fill(oid_str, order_symbol, existing)
+                        else:
+                            self._active_order_ids.add(oid_str)
+                        return existing
+            except Exception as qe:
+                print(f"[order] -4141 recovery query failed: {qe}")
+            # 恢复失败 → 将此 intent 视为已存在，ack 避免死循环重试
+            if ack_outbox:
+                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            return None
+
         print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
         return None
 
@@ -2242,6 +2304,15 @@ class AutonomousEngine:
                     if result.get("msg") and (
                         "Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))
                     ):
+                        # P2 修复: 订单消失时记录 WARN 事件，区分正常成交清理 vs 异常丢失
+                        tracker = self._order_trackers.get(order_id)
+                        last_status = str(getattr(getattr(tracker, "status", None), "value", "UNKNOWN"))
+                        is_expected = last_status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED")
+                        if not is_expected:
+                            print(
+                                f"[order] ⚠️ UNEXPECTED DISAPPEARANCE: orderId={order_id} symbol={order_sym} "
+                                f"last_status={last_status} exchange_msg={result.get('msg')}"
+                            )
                         self._active_order_ids.discard(order_id)
                         self._order_trackers.pop(order_id, None)
                     continue
@@ -2254,8 +2325,8 @@ class AutonomousEngine:
                 if not tracker:
                     continue
 
-                float(result.get("executedQty", 0))
-                result.get("avgPrice", "0")
+                executed_qty = float(result.get("executedQty", 0))
+                avg_price = result.get("avgPrice", "0")
 
                 if status == "FILLED":
                     await self._process_fill(order_id, order_sym or symbol, result)
@@ -2275,6 +2346,45 @@ class AutonomousEngine:
 
                 elif status == "PARTIALLY_FILLED":
                     tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                    # P1修复: 部分成交入账 — 记录已执行数量到账本
+                    if executed_qty > 0 and float(avg_price or 0) > 0:
+                        partial_notional = executed_qty * float(avg_price)
+                        side_desc = result.get("side", "")
+                        is_buy = side_desc.upper() == "BUY"
+                        tx_id = f"tx-{order_id}-partial-{int(time.time())}"
+                        tx = LedgerTransaction(
+                            transaction_id=tx_id,
+                            transaction_type=LedgerTransactionType.FILL,
+                            source_event_id=f"fill-{order_id}-partial",
+                            postings=(
+                                Posting(
+                                    posting_id=f"{tx_id}-p1",
+                                    account_id=AccountId("default"),
+                                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                                    venue_id=VenueId("BINANCE"),
+                                    instrument_id=InstrumentId(order_sym or symbol),
+                                    amount=MonetaryValue(amount=str(partial_notional)),
+                                    side=PostingSide.DEBIT,
+                                    description=f"PARTIAL {side_desc} {executed_qty} {order_sym or symbol} @ {avg_price}",
+                                ),
+                                Posting(
+                                    posting_id=f"{tx_id}-p2",
+                                    account_id=AccountId("default"),
+                                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                                    venue_id=VenueId("BINANCE"),
+                                    instrument_id=InstrumentId(order_sym or symbol),
+                                    amount=MonetaryValue(amount=str(partial_notional)),
+                                    side=PostingSide.CREDIT,
+                                    description=f"PARTIAL {side_desc} {executed_qty} {order_sym or symbol} @ {avg_price}",
+                                ),
+                            ),
+                            correlation_id=CorrelationId(f"exec-{order_id}"),
+                        )
+                        self._ledger.post(tx)
+                        print(
+                            f"[order] PARTIAL FILL recorded: {order_sym or symbol} {side_desc} "
+                            f"qty={executed_qty} @ {avg_price} notional={partial_notional:.2f}"
+                        )
 
             except Exception as e:
                 # Log error but do NOT silently swallow — maintain visibility
@@ -2578,11 +2688,14 @@ class AutonomousEngine:
             for _pos_id, pos in self._protection.all_positions().items():
                 system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
 
-            # BD-T12: 系统余额从复式账本推导
-            system_balance = sum(
-                float(p.amount.amount) for tx in self._ledger._transactions
-                for p in tx.postings if p.side == PostingSide.DEBIT
-            )
+            # P0修复: 系统余额从 Cash 账户净额推导 (CREDIT流入 - DEBIT流出)
+            # 旧实现错误地将全部 DEBIT 分录求和(=累计成交额)，而非账户权益
+            system_balance = abs(sum(
+                float(p.amount.amount) * (1 if p.side == PostingSide.CREDIT else -1)
+                for tx in self._ledger._transactions
+                for p in tx.postings
+                if p.account_type == AccountType.CASH
+            ))
             system_facts = AccountFactSnapshot(
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),
@@ -2906,6 +3019,10 @@ class AutonomousEngine:
         即视为已覆盖，避免重复下单。仅对确实缺失的订单类型进行补发。
         """
         if not self._can_write:
+            return
+        # P2修复: LOCK 状态下跳过所有 API 操作（系统完全冻结）
+        if self._control.get_status() == ControlAction.LOCK:
+            print("[nearline] Protection retry skipped: control plane is LOCKED")
             return
         try:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
@@ -3284,7 +3401,9 @@ class AutonomousEngine:
                         client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time()*1_000_000)}",
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
                         idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
-                        risk_approval_id=str(RiskApprovalId(f"nearline-close-{int(time.time())}")),
+                        # P1修复: 平仓不经过 R0-R10 审批（风险降低方向），
+                        # 使用特殊标记 RISK_EXEMPT_CLOSE 替代虚假审批 ID
+                        risk_approval_id="RISK_EXEMPT_CLOSE",
                         reduce_only=True,
                     )
                     # P0 Gate 1: 控制面校验
@@ -3517,7 +3636,7 @@ class AutonomousEngine:
                     "max_consecutive_losses": 5,
                     "rolling_sharpe": self._drift_detector._baseline.get("sharpe", 0.0)
                     if self._drift_detector.is_calibrated()
-                    else None,
+                    else 0.0,  # P0修复: 未校准时使用中性基线(0.0 >= min_sharpe=0.0)，避免新账户R5 UNKNOWN死锁
                     "min_sharpe_rolling": 0.0,
                     "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1) if account_balance > 0 else 1.0,
                     "liquidation_price": 0,  # Updated below if available
@@ -3612,6 +3731,20 @@ class AutonomousEngine:
                     idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
                     risk_approval_id=str(approval_id),
                 )
+
+                # P1修复: 接线 _pre_risk — 检查 notional/leverage/集中度/在途订单上限
+                pre_risk_ok, pre_risk_reason = self._pre_risk.check(
+                    account_balance=account_balance,
+                    position_notional=position_notional,
+                    leverage=dyn_leverage,
+                    pending_orders=len(self._active_order_ids),
+                    max_position_notional=self._policy_float(
+                        "max_position_notional", self._settings.production.max_position_notional
+                    ),
+                )
+                if not pre_risk_ok:
+                    print(f"[nearline] {symbol}: ❌ Pre-risk REJECTED: {pre_risk_reason}")
+                    continue
 
                 # P0 Gate 1: 控制面校验（Outbox 提交前）
                 if not self._control.should_accept(intent):
