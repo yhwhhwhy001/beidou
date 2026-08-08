@@ -132,7 +132,7 @@ DEFAULT_UNIVERSE = [
     "AVAXUSDT",
     "DOTUSDT",
     "LINKUSDT",
-    "MATICUSDT",
+    "POLUSDT",
     "UNIUSDT",
     "ATOMUSDT",
     "LTCUSDT",

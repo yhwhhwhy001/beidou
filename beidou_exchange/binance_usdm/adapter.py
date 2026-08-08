@@ -207,7 +207,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return ResultStatus.UNKNOWN, {}
         if self._rest_client is not None:
             try:
-                result = await self._rest_client.request("GET", "/fapi/v2/balance", signed=True)
+                result = await self._rest_client.request("GET", Endpoint.BALANCE, signed=True)
                 if isinstance(result, list):
                     balances: dict[str, MonetaryValue] = {}
                     for b in result:
@@ -215,7 +215,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         bal = b.get("balance", "0")
                         if float(bal) > 0:
                             balances[asset] = MonetaryValue(amount=bal)
-                    return ResultStatus.AVAILABLE, balances
+                    return ResultStatus.SUCCESS, balances
             except Exception:
                 pass
         return ResultStatus.UNKNOWN, {}
@@ -226,14 +226,14 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return ResultStatus.UNKNOWN, {}
         if self._rest_client is not None:
             try:
-                result = await self._rest_client.request("GET", "/fapi/v2/account", signed=True)
+                result = await self._rest_client.request("GET", Endpoint.ACCOUNT, signed=True)
                 if isinstance(result, dict) and "positions" in result:
                     positions: dict[str, Quantity] = {}
                     for p in result["positions"]:
                         amt = float(p.get("positionAmt", 0))
                         if abs(amt) > 0:
                             positions[p["symbol"]] = Quantity(amount=str(abs(amt)))
-                    return ResultStatus.AVAILABLE, positions
+                    return ResultStatus.SUCCESS, positions
             except Exception:
                 pass
         return ResultStatus.UNKNOWN, {}

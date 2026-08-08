@@ -2,7 +2,7 @@
 
 | 任务 | 名称 | 级别 | Gate | 状态 | 备注 |
 |---|---|---|---|---|---|
-| BD-T00 | 冻结基线并修复构建门 | P0 | G0 | **PASS** | compileall+collect+format+test 全部通过 |
+| BD-T00 | 冻结基线并修复构建门 | P0 | G0 | **PASS** | 基线 73e11b2；修复 AVAILABLE bug + MATIC→POL + Endpoint 常量 |
 | BD-T01 | 密钥与审批 Fail-Closed | P0 | G0 | **PASS** | 默认密钥已移除，无签名旁路已消除 |
 | BD-T02 | 统一配置提供器 | P0 | G0 | **PASS** | ConfigProvider 取代硬编码 YAML |
 | BD-T03 | 单一 Exchange Gateway | P0 | G1 | **CONDITIONAL_PASS** | 架构就绪，真实 Transport 待 BD-T18 |

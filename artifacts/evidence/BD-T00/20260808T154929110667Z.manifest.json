@@ -1,0 +1,22 @@
+{
+  "task_id": "BD-T00",
+  "commit": "73e11b2f2067381fd77e18209a64d65ecefb9b1b",
+  "branch": "main",
+  "config_hash": "",
+  "policy_versions": {},
+  "command": [
+    "pytest",
+    "tests",
+    "-q"
+  ],
+  "exit_code": 0,
+  "started_at": "2026-08-08T15:49:29.110807+00:00",
+  "finished_at": "2026-08-08T15:49:30.852698+00:00",
+  "stdout_path": "artifacts/evidence/BD-T00/20260808T154929110667Z.stdout.log",
+  "stderr_path": "artifacts/evidence/BD-T00/20260808T154929110667Z.stderr.log",
+  "stdout_sha256": "ee994f3a23942fc0f2688c2af6eeaff77bad2f59a7d6b188e4aa08f7a136cf70",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "artifact_hashes": {},
+  "agent_id": "unknown-agent",
+  "status": "PASS"
+}
