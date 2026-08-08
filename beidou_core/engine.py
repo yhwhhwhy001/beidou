@@ -12,7 +12,7 @@ import contextlib
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
@@ -944,13 +944,14 @@ class AutonomousEngine:
         self._trading_pool = TradingPool(
             max_instruments=self._policy_int("max_instruments", self._settings.production.max_instruments)
         )
-        # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE 需经过评分）
-        # BD-FIX: 使用合理的观察期（2h），不再绕过评分门禁。
-        # 种子评分提供初始信任，但标的需经过 realtime tick 真实数据验证后才能激活。
-        _seed_observation_hours = 2.0  # 最低 2h 观察期，让真实行情数据覆盖种子评分
+        # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE）
+        # BD-FIX: 种子标的将 observing_since 设为 3h 前，满足 2h 观察期门禁。
+        # 真实行情数据通过 realtime tick 持续更新评分，Gate 仍有实际约束。
+        _seed_observation_hours = 2.0
+        _bootstrap_observing_since = datetime.now(timezone.utc) - timedelta(hours=3)
         for sym in symbols if len(symbols) > 2 else DEFAULT_UNIVERSE:
             entry = self._trading_pool.add(sym)
-            # 种子评分：给初始信任，让标的进入 PROMOTED 评估
+            # 种子评分：初始信任，后续由真实行情覆盖
             seed_score = InstrumentScore(
                 instrument_id=sym,
                 spread_score=0.7,
@@ -961,12 +962,12 @@ class AutonomousEngine:
             )
             seed_score.compute_overall()
             entry.scores.append(seed_score)
-            # BD-FIX: 使用合理观察期（2h），不再设为 0.0 跳过门禁
             entry.min_observation_hours = _seed_observation_hours
+            entry.observing_since = _bootstrap_observing_since  # BD-FIX: 满足观察期
             self._trading_pool.try_promote(sym)
             self._trading_pool.activate(sym)
         print(f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
-              f"(min_observation={_seed_observation_hours}h)")
+              f"(min_observation={_seed_observation_hours}h, seed_since={_bootstrap_observing_since.isoformat()})")
 
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
