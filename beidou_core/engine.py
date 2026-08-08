@@ -8,15 +8,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
-import json
+import contextlib
+import logging
 import os
 import time
 from datetime import datetime, timezone
 from typing import Any
-
-from beidou_shared.config import ConfigProvider, TypedSettings
 
 from beidou_autonomy.mapek import MAPEKController
 from beidou_control.plane import ControlAction, ControlPlane
@@ -24,6 +21,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer
 from beidou_core.store import PersistentStore
+from beidou_data.trading_pool_lifecycle import InstrumentScore, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
@@ -39,7 +37,6 @@ from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
 from beidou_safety.protection.engine import ProtectionManager
-from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_safety.risk.engine import (
     PostRiskMonitor,
     PreRiskCheckerImpl,
@@ -48,6 +45,7 @@ from beidou_safety.risk.engine import (
     RiskEngineImpl,
     RiskSnapshot,
 )
+from beidou_shared.config import ConfigProvider, TypedSettings
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -67,7 +65,6 @@ from beidou_shared.types import (
     VenueId,
     VenueInstrument,
 )
-from beidou_strategy.kernel_parity import StrategyKernelContract, KernelMode, ParityResult, ParityStatus
 from beidou_strategy.alpha import (
     AlphaComponent,
     AlphaComponentType,
@@ -76,14 +73,17 @@ from beidou_strategy.alpha import (
 )  # BD-T05: legacy, migrated to StrategyKernel
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRegistry
 from beidou_strategy.alpha.signal_fusion import SignalFuser
+from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernelContract
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
+from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_strategy.risk.manager import (
     RiskBudget,
     StrategyRiskLevel,
     StrategyRiskManager,
 )
 from beidou_strategy.state.cost_model import CostModel
-from beidou_data.trading_pool_lifecycle import TradingPool, PoolStatus, InstrumentScore
+
+logger = logging.getLogger(__name__)
 
 # Binance USDⓈ-M 永续合约交易池 — 主流 + 活跃altcoin
 DEFAULT_UNIVERSE = [
@@ -578,7 +578,7 @@ class TimeExit(AlphaComponent):
         from beidou_strategy.alpha import AlphaSignal
 
         features = context.get("features", {})
-        close_price = features.get("close", 0)
+        features.get("close", 0)
 
         position_info = context.get("_position_info", {})
         has_position = position_info.get("has_position", False)
@@ -714,6 +714,7 @@ class AutonomousEngine:
         )
         # BD-T18: 创建 adapter 并注入 REST client 作为唯一网络传输
         from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+
         self._adapter = BinanceUsdmAdapter(rest_client=self._exchange)
 
         # Infrastructure
@@ -749,9 +750,7 @@ class AutonomousEngine:
         # 仅在正式生产环境 (CANARY/LIVE) 要求真实签名密钥；
         # 其他环境 (RESEARCH/PAPER/SHADOW/TESTNET/SAFETY_ONLY) 使用 mock 密钥。
         _needs_real_signing = self._env_mode.value in ("canary", "live")
-        self._approval = RiskApprovalSignerImpl(
-            signing_key="" if _needs_real_signing else "beidou-testnet-mock-key"
-        )
+        self._approval = RiskApprovalSignerImpl(signing_key="" if _needs_real_signing else "beidou-testnet-mock-key")
         self._risk_sm = RiskApprovalStateMachine()
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
@@ -1239,7 +1238,7 @@ class AutonomousEngine:
         """BD-T05: 验证 Backtest/Paper/Testnet 策略一致性。"""
         from beidou_strategy.kernel_parity import parity_check
 
-        passed, result = parity_check()
+        _passed, result = parity_check()
         return result
 
     def _portfolio_summary(self) -> str:
@@ -1251,7 +1250,7 @@ class AutonomousEngine:
                 return "📊 当前无持仓"
             total_pnl = 0.0
             total_notional = 0.0
-            for pos_id, pp in sorted(positions.items()):
+            for _pos_id, pp in sorted(positions.items()):
                 sym = str(pp.instrument_id)
                 qty = float(pp.quantity)
                 entry = float(pp.entry_price)
@@ -1280,9 +1279,7 @@ class AutonomousEngine:
                 up = sum(1 for l in lines if "🟢" in l)
                 dn = sum(1 for l in lines if "🔴" in l)
                 lines.append(
-                    f"\n📈 总敞口 ${total_notional:,.0f}  |  "
-                    f"浮动盈亏 **${total_pnl:+,.2f}**  |  "
-                    f"🟢{up} 🔴{dn}"
+                    f"\n📈 总敞口 ${total_notional:,.0f}  |  浮动盈亏 **${total_pnl:+,.2f}**  |  🟢{up} 🔴{dn}"
                 )
         except Exception as e:
             return f"📊 持仓获取异常: {e}"
@@ -1330,8 +1327,9 @@ class AutonomousEngine:
         当因子生命周期变更（promotion/degradation/suspension）时调用，
         确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
         """
-        active_factor_ids = [fid for fid in self._factor_registry.get_active()
-                             if fid in self._factor_component_registry]
+        active_factor_ids = [
+            fid for fid in self._factor_registry.get_active() if fid in self._factor_component_registry
+        ]
 
         new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
         for fid in active_factor_ids:
@@ -1353,10 +1351,7 @@ class AutonomousEngine:
         for fid in active_factor_ids:
             if fid not in self._factor_predictions:
                 self._factor_predictions[fid] = []
-        print(
-            f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, "
-            f"DAG order: {order}"
-        )
+        print(f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, DAG order: {order}")
 
     # --- Clock Domain: REALTIME (every 5s) ---
 
@@ -1434,7 +1429,7 @@ class AutonomousEngine:
                 positions = self._protection.all_positions()
                 if positions:
                     print(f"[protection] ╔══ ACTIVE PROTECTION STATUS ({len(positions)} positions) ══╗")
-                    for pos_id, pp in positions.items():
+                    for _pos_id, pp in positions.items():
                         sym = str(pp.instrument_id)
                         entry = pp.entry_price
                         side = "LONG" if pp.is_long() else "SHORT"
@@ -1442,10 +1437,7 @@ class AutonomousEngine:
                         tp_info = "NONE"
                         if pp.stop_loss and pp.stop_loss.is_active():
                             sl_px = float(pp.stop_loss.trigger_price.amount)
-                            if pp.is_long():
-                                sl_dist = (entry - sl_px) / entry * 100
-                            else:
-                                sl_dist = (sl_px - entry) / entry * 100
+                            sl_dist = (entry - sl_px) / entry * 100 if pp.is_long() else (sl_px - entry) / entry * 100
                             sl_info = f"{sl_px:.4f} (-{sl_dist:.2f}%)"
                         if pp.take_profits:
                             tp_parts = []
@@ -1459,7 +1451,11 @@ class AutonomousEngine:
                                     tp_parts.append(f"{tp_px:.4f} (+{tp_dist:.2f}%)")
                             if tp_parts:
                                 tp_info = ", ".join(tp_parts)
-                        pnl = pp.unrealized_pnl_pct(self._last_prices.get(sym, entry)) if hasattr(self, "_last_prices") else 0.0
+                        pnl = (
+                            pp.unrealized_pnl_pct(self._last_prices.get(sym, entry))
+                            if hasattr(self, "_last_prices")
+                            else 0.0
+                        )
                         print(f"[protection] ║ {sym} {side} @{entry:.4f} SL={sl_info} TP={tp_info} | PnL={pnl:+.2f}%")
                     print(f"[protection] ╚{'═' * 50}╝")
 
@@ -1604,10 +1600,14 @@ class AutonomousEngine:
             else:
                 self._active_order_ids.add(oid_str)
                 self._store.save_order_state(
-                    oid_str, order_symbol, side, order_type,
+                    oid_str,
+                    order_symbol,
+                    side,
+                    order_type,
                     str(float(intent.quantity.amount)),
                     str(float(intent.price.amount)) if intent.price else None,
-                    actual_status, client_order_id=client_id,
+                    actual_status,
+                    client_order_id=client_id,
                 )
         else:
             print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
@@ -1646,8 +1646,8 @@ class AutonomousEngine:
                 if not tracker:
                     continue
 
-                executed_qty = float(result.get("executedQty", 0))
-                avg_price = result.get("avgPrice", "0")
+                float(result.get("executedQty", 0))
+                result.get("avgPrice", "0")
 
                 if status == "FILLED":
                     await self._process_fill(order_id, order_sym or symbol, result)
@@ -1704,14 +1704,26 @@ class AutonomousEngine:
         )
         self._ledger.post(entry)
         self._store.save_ledger_entry(
-            entry.entry_id, "default", "BINANCE", symbol,
-            entry.debit.amount, entry.credit.amount,
-            entry.description, str(entry.correlation_id), entry.timestamp.isoformat(),
+            entry.entry_id,
+            "default",
+            "BINANCE",
+            symbol,
+            entry.debit.amount,
+            entry.credit.amount,
+            entry.description,
+            str(entry.correlation_id),
+            entry.timestamp.isoformat(),
         )
         self._store.save_order_state(
-            order_id, symbol, result.get("side", ""), result.get("type", ""),
-            result.get("origQty", "0"), result.get("price"),
-            "FILLED", str(executed_qty), str(avg_price),
+            order_id,
+            symbol,
+            result.get("side", ""),
+            result.get("type", ""),
+            result.get("origQty", "0"),
+            result.get("price"),
+            "FILLED",
+            str(executed_qty),
+            str(avg_price),
         )
 
         # 检查是否为平仓订单
@@ -1723,10 +1735,7 @@ class AutonomousEngine:
                     entry_px = pp.entry_price
                     exit_px = float(avg_price)
                     pos_qty = pp.quantity
-                    if pp.is_long():
-                        trade_pnl = (exit_px - entry_px) * pos_qty
-                    else:
-                        trade_pnl = (entry_px - exit_px) * pos_qty
+                    trade_pnl = (exit_px - entry_px) * pos_qty if pp.is_long() else (entry_px - exit_px) * pos_qty
                     is_win = trade_pnl > 0
                     self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
                     if is_win:
@@ -1761,9 +1770,7 @@ class AutonomousEngine:
             pos_id = f"pos-{order_id}"
 
             kline_features = self._feed.get_kline_features(symbol)
-            adaptive_cfg = AdaptiveProtectionCalculator.calculate(
-                symbol, entry_price, kline_features
-            )
+            adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
             pp = self._protection.create_protection(
                 position_id=pos_id,
                 instrument_id=InstrumentId(symbol),
@@ -1778,8 +1785,10 @@ class AutonomousEngine:
 
             # 打印保护摘要
             sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
-            sl_pct = (entry_price - sl_price) / entry_price * 100 if sl_price and pos_side == OrderSide.BUY else (
-                (sl_price - entry_price) / entry_price * 100 if sl_price else None
+            sl_pct = (
+                (entry_price - sl_price) / entry_price * 100
+                if sl_price and pos_side == OrderSide.BUY
+                else ((sl_price - entry_price) / entry_price * 100 if sl_price else None)
             )
             tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
             tp_pcts = []
@@ -1796,12 +1805,12 @@ class AutonomousEngine:
                 f"RR={adaptive_cfg.rr_ratio:.1f}"
             )
             print(
-                f"[protection] ┌ {'='*60}\n"
+                f"[protection] ┌ {'=' * 60}\n"
                 f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
                 f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
-                f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts))}\n"
+                f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts, strict=False))}\n"
                 f"[protection] ├─ 📊 {adaptive_info}\n"
-                f"[protection] └ {'='*60}"
+                f"[protection] └ {'=' * 60}"
             )
 
             # 提交止盈止损到交易所
@@ -1848,8 +1857,10 @@ class AutonomousEngine:
                         algo_resp = {"algoId": "existing", "algoStatus": "ACTIVE"}  # 视为成功
                         break
                     if algo_attempt < max_algo_retries - 1:
-                        wait = 1.5 * (2 ** algo_attempt)  # 1.5s, 3s, 6s
-                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: retry {algo_attempt+1}/{max_algo_retries} after {wait:.1f}s (err={err_code})")
+                        wait = 1.5 * (2**algo_attempt)  # 1.5s, 3s, 6s
+                        print(
+                            f"[protection] ⚠️ {symbol} {p_order.reason}: retry {algo_attempt + 1}/{max_algo_retries} after {wait:.1f}s (err={err_code})"
+                        )
                         await asyncio.sleep(wait)
                         self._exchange.reset_circuit_breaker()  # 重置熔断器重试
                 if "algoId" in algo_resp:
@@ -1868,9 +1879,11 @@ class AutonomousEngine:
                     print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
 
             if exchange_protection_count > 0:
-                print(f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)")
+                print(
+                    f"[protection] 🏦 {exchange_protection_count} protection orders placed on exchange (Algo Order API)"
+                )
             else:
-                print(f"[protection] ❌ 0 protection orders placed — all attempts failed, will retry in nearline cycle")
+                print("[protection] ❌ 0 protection orders placed — all attempts failed, will retry in nearline cycle")
                 # 标记待重试，确保 _retry_missing_protections 优先处理
                 if not hasattr(self, "_pending_protection_retry"):
                     self._pending_protection_retry: set[str] = set()
@@ -1978,7 +1991,9 @@ class AutonomousEngine:
                                 if oo_ok2 and isinstance(oo2, list):
                                     exchange_open2 = [str(o["orderId"]) for o in oo2]
                             except Exception:
-                                pass
+                                logger.warning(
+                                    "[recon] Open orders query failed in reconciliation, proceeding with exchange positions only"
+                                )
                             exchange_facts2 = AccountFactSnapshot(
                                 account_id=AccountId("default"),
                                 venue_id=VenueId("BINANCE"),
@@ -2012,7 +2027,9 @@ class AutonomousEngine:
                             self._recon.update_system_facts(exchange_facts)
                             print("[recon] Forced _recon alignment: system_facts = exchange_facts")
                         except Exception:
-                            pass
+                            logger.warning(
+                                "[recon] Failed to update system facts after heal, reconciliation may be stale"
+                            )
 
                 # 自愈后仍不一致，触发事故
                 # BD-FIX: 自愈尝试过但仍不完整 → 差异大概率是近线交易进行中的临时状态，
@@ -2057,10 +2074,7 @@ class AutonomousEngine:
             self._exchange.reset_circuit_breaker()
 
             # 若 Phase 1/2 已处理所有持仓，直接跳过
-            local_symbols = {
-                str(pp.instrument_id)
-                for pp in self._protection.all_positions().values()
-            }
+            local_symbols = {str(pp.instrument_id) for pp in self._protection.all_positions().values()}
             already_handled = set(exchange_positions.keys()) - local_symbols
             if not already_handled:
                 return  # 所有持仓已由 Phase 1/2 处理完毕
@@ -2099,11 +2113,17 @@ class AutonomousEngine:
 
                     # 止损单
                     sl_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True,
+                        Endpoint.ALGO_ORDER,
+                        method="POST",
+                        signed=True,
                         params={
-                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
-                            "type": "STOP_MARKET", "quantity": qty_str,
-                            "triggerPrice": stop_str, "reduceOnly": "true",
+                            "symbol": symbol,
+                            "side": side,
+                            "algoType": "CONDITIONAL",
+                            "type": "STOP_MARKET",
+                            "quantity": qty_str,
+                            "triggerPrice": stop_str,
+                            "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
                         },
                     )
@@ -2111,11 +2131,17 @@ class AutonomousEngine:
 
                     # 止盈单
                     tp_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True,
+                        Endpoint.ALGO_ORDER,
+                        method="POST",
+                        signed=True,
                         params={
-                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
-                            "type": "TAKE_PROFIT_MARKET", "quantity": qty_str,
-                            "triggerPrice": tp_str, "reduceOnly": "true",
+                            "symbol": symbol,
+                            "side": side,
+                            "algoType": "CONDITIONAL",
+                            "type": "TAKE_PROFIT_MARKET",
+                            "quantity": qty_str,
+                            "triggerPrice": tp_str,
+                            "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
                         },
                     )
@@ -2131,18 +2157,24 @@ class AutonomousEngine:
                         if sl_resp.get("code") == -2021:
                             wider_stop = stop_price * (0.98 if amt > 0 else 1.02)
                             sl2 = await self._api_async(
-                                Endpoint.ALGO_ORDER, method="POST", signed=True,
+                                Endpoint.ALGO_ORDER,
+                                method="POST",
+                                signed=True,
                                 params={
-                                    "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
-                                    "type": "STOP_MARKET", "quantity": qty_str,
+                                    "symbol": symbol,
+                                    "side": side,
+                                    "algoType": "CONDITIONAL",
+                                    "type": "STOP_MARKET",
+                                    "quantity": qty_str,
                                     "triggerPrice": f"{wider_stop:.{prec['price']}f}",
-                                    "reduceOnly": "true", "workingType": "CONTRACT_PRICE",
+                                    "reduceOnly": "true",
+                                    "workingType": "CONTRACT_PRICE",
                                 },
                             )
                             if "algoId" in sl2:
                                 print(f"[startup] ✅ SL retry OK for {symbol}: algoId={sl2['algoId']}")
                             else:
-                                print(f"[startup] ⚠️ SL retry FAILED for {symbol}: {sl2.get('msg','?')}")
+                                print(f"[startup] ⚠️ SL retry FAILED for {symbol}: {sl2.get('msg', '?')}")
                 except Exception as e:
                     print(f"[startup] Protection placement error for {symbol}: {e}")
 
@@ -2152,8 +2184,7 @@ class AutonomousEngine:
             for symbol, data in exchange_positions.items():
                 try:
                     existing = [
-                        pp for pp in self._protection.all_positions().values()
-                        if str(pp.instrument_id) == symbol
+                        pp for pp in self._protection.all_positions().values() if str(pp.instrument_id) == symbol
                     ]
                     if existing:
                         continue
@@ -2170,9 +2201,7 @@ class AutonomousEngine:
                     # 为 None/空导致保护覆盖检查 expected_orders=0 → FAIL。
                     # AdaptiveProtectionCalculator 在 kline 缺失时有内置保守默认值。
                     kline_features = self._feed.get_kline_features(symbol)
-                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(
-                        symbol, entry, kline_features
-                    )
+                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
                     self._protection.create_protection(
                         position_id=pos_id,
                         instrument_id=InstrumentId(symbol),
@@ -2189,7 +2218,7 @@ class AutonomousEngine:
                         f"SL={adaptive_cfg.stop_pct:.1f}% RR={adaptive_cfg.rr_ratio:.1f}"
                     )
                 except Exception:
-                    pass
+                    logger.warning("[startup] Failed to register protection for position, skipped")
             if registered:
                 print(f"[startup] Registered {registered} exchange positions in local state")
         except Exception as e:
@@ -2219,12 +2248,18 @@ class AutonomousEngine:
                 for a in orders[:excess]:
                     try:
                         await self._api_async(
-                            Endpoint.ALGO_ORDER, method="DELETE", signed=True,
+                            Endpoint.ALGO_ORDER,
+                            method="DELETE",
+                            signed=True,
                             params={"symbol": symbol, "algoId": int(a["algoId"])},
                         )
                         print(f"[nearline] 🧹 Cleaned up excess {a['orderType']} for {symbol} algoId={a['algoId']}")
                     except Exception:
-                        pass
+                        logger.warning(
+                            "[nearline] Failed to clean up excess algo order for %s algoId=%s",
+                            symbol,
+                            a.get("algoId", "?"),
+                        )
         except Exception as e:
             print(f"[nearline] Excess order cleanup error: {e}")
 
@@ -2252,7 +2287,7 @@ class AutonomousEngine:
             pending = getattr(self, "_pending_protection_retry", set())
             positions = sorted(
                 self._protection.all_positions().items(),
-                key=lambda x: (x[0] not in pending, x[0])  # pending first
+                key=lambda x: (x[0] not in pending, x[0]),  # pending first
             )
             for pos_id, pp in positions:
                 symbol = str(pp.instrument_id)
@@ -2309,20 +2344,30 @@ class AutonomousEngine:
                             widened_sl = entry_ref * (1 + base_pct * widen_factor)
                     price_str = f"{widened_sl:.{prec['price']}f}"
                     algo_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True,
+                        Endpoint.ALGO_ORDER,
+                        method="POST",
+                        signed=True,
                         params={
-                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
-                            "type": pp.stop_loss.order_type, "quantity": qty_str,
-                            "triggerPrice": price_str, "reduceOnly": "true",
+                            "symbol": symbol,
+                            "side": side,
+                            "algoType": "CONDITIONAL",
+                            "type": pp.stop_loss.order_type,
+                            "quantity": qty_str,
+                            "triggerPrice": price_str,
+                            "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
                         },
                     )
                     if "algoId" in algo_resp:
                         self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
-                        print(f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}")
+                        print(
+                            f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}"
+                        )
                         placed += 1
                     else:
-                        print(f"[nearline] ⚠️ Stop loss retry FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}")
+                        print(
+                            f"[nearline] ⚠️ Stop loss retry FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}"
+                        )
 
                 # --- 重试止盈单 ---
                 for i, tp in enumerate(pp.take_profits):
@@ -2347,31 +2392,45 @@ class AutonomousEngine:
                             widened_tp = entry_ref * (1 - base_pct * widen_factor)
                     tp_price_str = f"{widened_tp:.{prec['price']}f}"
                     tp_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True,
+                        Endpoint.ALGO_ORDER,
+                        method="POST",
+                        signed=True,
                         params={
-                            "symbol": symbol, "side": side, "algoType": "CONDITIONAL",
-                            "type": tp.order_type, "quantity": qty_str,
-                            "triggerPrice": tp_price_str, "reduceOnly": "true",
+                            "symbol": symbol,
+                            "side": side,
+                            "algoType": "CONDITIONAL",
+                            "type": tp.order_type,
+                            "quantity": qty_str,
+                            "triggerPrice": tp_price_str,
+                            "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
                         },
                     )
                     if "algoId" in tp_resp:
                         self._active_algo_ids.setdefault(pos_id, set()).add(str(tp_resp["algoId"]))
-                        print(f"[nearline] ✅ Retried take profit #{i} for {symbol} (widened {widen_factor:.1f}x) → algoId={tp_resp['algoId']}")
+                        print(
+                            f"[nearline] ✅ Retried take profit #{i} for {symbol} (widened {widen_factor:.1f}x) → algoId={tp_resp['algoId']}"
+                        )
                         placed += 1
                     else:
-                        print(f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}")
+                        print(
+                            f"[nearline] ⚠️ Take profit #{i} retry FAILED for {symbol}: {tp_resp.get('msg', str(tp_resp)[:100])}"
+                        )
 
                 # 重置计数器（成功或重试完成都更新最后尝试时间）
                 self._protection_retries[f"{pos_id}_last"] = time.time()
                 if server_count + placed >= expected_count:
                     self._protection_retries.pop(pos_id, None)
                     pending.discard(pos_id)  # 成功，移除待重试标记
-                    print(f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}")
+                    print(
+                        f"[nearline] ✅ Protection retry complete for {symbol}: {placed} placed, total {server_count + placed}/{expected_count}"
+                    )
                 elif placed > 0:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
                     self._protection_retries[pos_id] = retries
-                    print(f"[nearline] 🔄 Partial retry #{retries}/3 for {symbol}: {placed} placed, {server_count}/{expected_count} — widening next attempt")
+                    print(
+                        f"[nearline] 🔄 Partial retry #{retries}/3 for {symbol}: {placed} placed, {server_count}/{expected_count} — widening next attempt"
+                    )
                 else:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
                     self._protection_retries[pos_id] = retries
@@ -2801,7 +2860,7 @@ class AutonomousEngine:
                 if orders_ok and isinstance(open_orders, list):
                     exchange_order_ids = {str(o["orderId"]) for o in open_orders}
             except Exception:
-                pass
+                logger.warning("[sync] Failed to query open orders during exchange state sync")
 
             # Step 2: 系统状态 vs 交易所状态对比
             system_positions: dict[str, float] = {}
@@ -2832,7 +2891,13 @@ class AutonomousEngine:
                 symbol = self._order_symbols.pop(oid, None)
                 # 该订单已经在交易所成交或取消，更新 DB
                 self._store.save_order_state(
-                    oid, symbol or "", "UNKNOWN", "MARKET", "0", None, "FILLED",
+                    oid,
+                    symbol or "",
+                    "UNKNOWN",
+                    "MARKET",
+                    "0",
+                    None,
+                    "FILLED",
                 )
             if stale_order_ids:
                 print(f"[sync] 🧹 Stale orders cleaned: {len(stale_order_ids)} — marked FILLED")
@@ -2846,7 +2911,9 @@ class AutonomousEngine:
                     # 交易所与系统不一致 — 以交易所为准
                     diff = ex_qty - sys_qty
                     direction = "increased" if diff > 0 else "decreased"
-                    print(f"[sync] 📊 {sym}: system={sys_qty:.4f} exchange={ex_qty:.4f} ({direction} by {abs(diff):.4f})")
+                    print(
+                        f"[sync] 📊 {sym}: system={sys_qty:.4f} exchange={ex_qty:.4f} ({direction} by {abs(diff):.4f})"
+                    )
 
                     # 如果系统没有该持仓，补建
                     if sys_qty == 0 and ex_qty > 0:
@@ -2855,14 +2922,18 @@ class AutonomousEngine:
                         entry_price = features.get("close", 0) if features else 0
                         if entry_price <= 0:
                             entry_price = float(
-                                next((p.get("entryPrice", 0) for p in account.get("positions", [])
-                                      if p.get("symbol") == sym), 0)
+                                next(
+                                    (
+                                        p.get("entryPrice", 0)
+                                        for p in account.get("positions", [])
+                                        if p.get("symbol") == sym
+                                    ),
+                                    0,
+                                )
                             )
                         if entry_price > 0:
-                            try:
+                            with contextlib.suppress(Exception):
                                 await self._ensure_exchange_position_protections()
-                            except Exception:
-                                pass
                     elif ex_qty == 0 and sys_qty > 0:
                         # 已在 Step 3 处理
                         pass
@@ -2870,10 +2941,16 @@ class AutonomousEngine:
                         # 数量变化 — 以交易所为准调整系统追踪
                         for old_pid, old_pp in list(self._protection.all_positions().items()):
                             if str(old_pp.instrument_id) == sym:
-                                real_entry = float(next(
-                                    (p.get("entryPrice", 0) for p in account.get("positions", [])
-                                     if p.get("symbol") == sym), old_pp.entry_price
-                                ))
+                                real_entry = float(
+                                    next(
+                                        (
+                                            p.get("entryPrice", 0)
+                                            for p in account.get("positions", [])
+                                            if p.get("symbol") == sym
+                                        ),
+                                        old_pp.entry_price,
+                                    )
+                                )
                                 if real_entry <= 0:
                                     real_entry = old_pp.entry_price
                                 side = OrderSide.BUY if ex_qty > 0 else OrderSide.SELL
@@ -3268,13 +3345,14 @@ class AutonomousEngine:
                     continue
 
                 kline_features = self._feed.get_kline_features(symbol)
-                adaptive_cfg = AdaptiveProtectionCalculator.calculate(
-                    symbol, entry_price, kline_features
-                )
+                adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
                 pp = self._protection.create_protection(
-                    position_id=pos_id, instrument_id=InstrumentId(symbol),
-                    venue_id=VenueId("BINANCE"), entry_price=entry_price,
-                    quantity=qty, side=pos_side,
+                    position_id=pos_id,
+                    instrument_id=InstrumentId(symbol),
+                    venue_id=VenueId("BINANCE"),
+                    entry_price=entry_price,
+                    quantity=qty,
+                    side=pos_side,
                     stop_loss_config=adaptive_cfg.stop_loss_config,
                     take_profit_config=adaptive_cfg.take_profit_config,
                 )
@@ -3290,18 +3368,27 @@ class AutonomousEngine:
                     prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
                     qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
                     price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
-                    pending_submissions.append({
-                        "symbol": symbol, "pos_id": pos_id, "reason": p_order.reason,
-                        "algo_params": {
-                            "symbol": symbol, "side": reduce_side,
-                            "algoType": "CONDITIONAL", "type": p_order.order_type,
-                            "quantity": qty_str, "triggerPrice": price_str,
-                            "reduceOnly": "true", "workingType": "CONTRACT_PRICE",
-                        },
-                    })
+                    pending_submissions.append(
+                        {
+                            "symbol": symbol,
+                            "pos_id": pos_id,
+                            "reason": p_order.reason,
+                            "algo_params": {
+                                "symbol": symbol,
+                                "side": reduce_side,
+                                "algoType": "CONDITIONAL",
+                                "type": p_order.order_type,
+                                "quantity": qty_str,
+                                "triggerPrice": price_str,
+                                "reduceOnly": "true",
+                                "workingType": "CONTRACT_PRICE",
+                            },
+                        }
+                    )
 
             # Phase 2: 分批提交条件单到交易所（每批 5 个，间隔 2s，避免限流熔断）
             if pending_submissions:
+
                 async def _submit_algo(sub: dict):
                     sub["result"] = await self._api_async(
                         Endpoint.ALGO_ORDER, method="POST", signed=True, params=sub["algo_params"]
@@ -3312,14 +3399,12 @@ class AutonomousEngine:
                 batch_size = 5
                 for i in range(0, len(pending_submissions), batch_size):
                     batch = pending_submissions[i : i + batch_size]
-                    batch_results = await asyncio.gather(
-                        *[_submit_algo(s) for s in batch], return_exceptions=True
-                    )
+                    batch_results = await asyncio.gather(*[_submit_algo(s) for s in batch], return_exceptions=True)
                     results.extend(batch_results)
                     if i + batch_size < len(pending_submissions):
                         await asyncio.sleep(2)
                 recovered_by_pos: dict[str, dict] = {}
-                for sub, res in zip(pending_submissions, results):
+                for sub, res in zip(pending_submissions, results, strict=False):
                     if isinstance(res, Exception):
                         print(f"[startup] Recovery ERROR {sub['symbol']} {sub['reason']}: {res}")
                         continue
@@ -3338,17 +3423,21 @@ class AutonomousEngine:
                     else:
                         rec = recovered_by_pos.setdefault(pos_id, {"symbol": symbol, "placed": 0, "total": 0})
                         rec["total"] += 1
-                        print(f"[startup] Recovery FAILED {symbol} {sub['reason']}: "
-                              f"{algo_resp.get('msg', str(algo_resp)[:100])}")
+                        print(
+                            f"[startup] Recovery FAILED {symbol} {sub['reason']}: "
+                            f"{algo_resp.get('msg', str(algo_resp)[:100])}"
+                        )
 
                 for pos_id, rec in recovered_by_pos.items():
-                    print(f"[startup] Recovered position {rec['symbol']}: "
-                          f"{rec['placed']}/{rec['total']} placed")
+                    print(f"[startup] Recovered position {rec['symbol']}: {rec['placed']}/{rec['total']} placed")
                 total_placed = sum(r["placed"] for r in recovered_by_pos.values())
-                print(f"[beidou-autopilot] Restored protections for {len(recovered_by_pos)} positions ({total_placed} orders)")
+                print(
+                    f"[beidou-autopilot] Restored protections for {len(recovered_by_pos)} positions ({total_placed} orders)"
+                )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: Position protection recovery failed: {e}")
             import traceback
+
             traceback.print_exc()
 
         # Print strategy/risk activation status
@@ -3450,7 +3539,7 @@ class AutonomousEngine:
 
         try:
             # 等待所有 task 完成（引擎 shutdown 后 _running=False，各 loop 退出）
-            done, pending = await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )

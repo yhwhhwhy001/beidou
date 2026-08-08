@@ -32,7 +32,6 @@ from beidou_shared.types import (
     VenueId,
 )
 
-
 # ================================================================
 # BD-T11: 保护参数默认值 — 来自版本化策略配置 (v1)。
 # 禁止在调用点硬编码策略数值（stop_pct / rr_ratio / multiplier /
@@ -217,7 +216,6 @@ class StopLossCalculator:
             # 移动止损初始值 = 固定百分比
             return StopLossCalculator.fixed_percent(entry_price, side, stop_pct)
         return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)  # BD-T11 默认回退止损
-
 
 
 class TakeProfitCalculator:

@@ -4,10 +4,18 @@
 本脚本输出固定语义 NON_CERTIFYING，禁止调用任何生产晋级 API。
 不产生 G5-G8 Certificate 或 ladder 晋级记录。
 """
+
 from __future__ import annotations
 
-import sys, os, json, hashlib, hmac, time, urllib.request, urllib.error
-from datetime import datetime, timezone, timedelta
+import hashlib
+import hmac
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 _proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,7 +32,10 @@ API_KEY = str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
 API_SECRET = str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
 
 # === 测试框架 ===
-passed = 0; failed = 0; step_no = 0
+passed = 0
+failed = 0
+step_no = 0
+
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     global passed, failed, step_no
@@ -33,14 +44,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     line = f"  [{tag}] S{step_no:02d} {name}"
     if detail:
         line += f"  |  {detail}"
-    print(line)
-    if ok: passed += 1
-    else: failed += 1
+    if ok:
+        passed += 1
+    else:
+        failed += 1
+
 
 def section(title: str) -> None:
-    print(f"\n{'='*70}")
-    print(f"  {title}")
-    print(f"{'='*70}")
+    pass
+
 
 # === Binance API ===
 def api(path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
@@ -62,18 +74,20 @@ def api(path: str, method: str = "GET", signed: bool = False, params: dict | Non
     else:
         req = urllib.request.Request(url + "?" + qs, headers=headers)
         req.method = method
-    for attempt in range(3):
+    for _attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             err = {"error": e.code, "msg": e.read().decode()}
             if e.code == 429:
-                time.sleep(1); continue
+                time.sleep(1)
+                continue
             return err
-        except Exception as e:
+        except Exception:
             time.sleep(0.5)
     return {"error": -1, "msg": "retry exhausted"}
+
 
 # ================================================================
 # Phase 0: 拉取历史 K 线数据
@@ -91,29 +105,42 @@ for symbol in SYMBOLS:
     for interval in INTERVALS:
         limits = {"5m": 1000, "15m": 500, "1h": 300, "4h": 200, "1d": 90}
         limit = limits.get(interval, 100)
-        klines_raw = api("/fapi/v1/klines", params={
-            "symbol": symbol, "interval": interval, "limit": limit,
-        })
+        klines_raw = api(
+            "/fapi/v1/klines",
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit,
+            },
+        )
 
         if isinstance(klines_raw, list) and len(klines_raw) > 0:
             klines = []
             for k in klines_raw:
-                klines.append({
-                    "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                    "open": float(k[1]), "high": float(k[2]),
-                    "low": float(k[3]), "close": float(k[4]),
-                    "volume": float(k[5]),
-                    "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
-                    "quote_volume": float(k[7]), "trades": k[8],
-                })
+                klines.append(
+                    {
+                        "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                        "open": float(k[1]),
+                        "high": float(k[2]),
+                        "low": float(k[3]),
+                        "close": float(k[4]),
+                        "volume": float(k[5]),
+                        "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
+                        "quote_volume": float(k[7]),
+                        "trades": k[8],
+                    }
+                )
             historical_data[symbol][interval] = klines
 
             first_ts = klines[0]["open_time"].strftime("%Y-%m-%d %H:%M")
             last_ts = klines[-1]["open_time"].strftime("%Y-%m-%d %H:%M")
             total_duration = (klines[-1]["open_time"] - klines[0]["open_time"]).total_seconds()
 
-            check(f"0.{symbol} {interval}m Klines", True,
-                  f"{len(klines)} candles  [{first_ts} → {last_ts}]  span={total_duration/3600:.1f}h")
+            check(
+                f"0.{symbol} {interval}m Klines",
+                True,
+                f"{len(klines)} candles  [{first_ts} → {last_ts}]  span={total_duration / 3600:.1f}h",
+            )
         else:
             check(f"0.{symbol} {interval}m Klines", False, f"API error: {klines_raw}")
 
@@ -122,15 +149,19 @@ for symbol in SYMBOLS:
 # ================================================================
 section("Phase 1: 数据质量门禁 — 历史数据完整性验证")
 
-from beidou_shared.types import (
-    VenueId, InstrumentId, VenueInstrument, Price, Quantity,
-    MonetaryValue, OrderSide, OrderType, OrderId, TimeInForce,
-    AccountId, AccountRef, CorrelationId, StrategyId, ModelId,
-    DataQualityTier, SchemaVersion, RiskApprovalId, RiskDecision,
-    GateResult, ResultStatus,
-)
-from beidou_data.quality import DataQualityGate, DQCheckType, DQCheckResult
 from beidou_data.feature_store import FeatureStore, FeatureVector
+from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_shared.types import (
+    CorrelationId,
+    DataQualityTier,
+    InstrumentId,
+    OrderSide,
+    Price,
+    Quantity,
+    SchemaVersion,
+    VenueId,
+    VenueInstrument,
+)
 
 for symbol in SYMBOLS:
     vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol))
@@ -146,32 +177,39 @@ for symbol in SYMBOLS:
         last_candle = klines_5m[-1]
         age_minutes = (now - last_candle["close_time"]).total_seconds() / 60
         freshness_tier = DataQualityTier.PASS if age_minutes < 15 else DataQualityTier.DEGRADED
-        gate.checks.append(DQCheckResult(
-            check_type=DQCheckType.FRESHNESS, tier=freshness_tier,
-            detail=f"last_candle_age={age_minutes:.0f}min"
-        ))
+        gate.checks.append(
+            DQCheckResult(
+                check_type=DQCheckType.FRESHNESS, tier=freshness_tier, detail=f"last_candle_age={age_minutes:.0f}min"
+            )
+        )
 
     # Completeness: check for gaps
     if len(klines_5m) >= 2:
         max_gap = max(
-            (klines_5m[i]["open_time"] - klines_5m[i-1]["close_time"]).total_seconds()
+            (klines_5m[i]["open_time"] - klines_5m[i - 1]["close_time"]).total_seconds()
             for i in range(1, len(klines_5m))
         )
         completeness_tier = DataQualityTier.PASS if max_gap <= 600 else DataQualityTier.DEGRADED
-        gate.checks.append(DQCheckResult(
-            check_type=DQCheckType.COMPLETENESS, tier=completeness_tier,
-            detail=f"max_gap={max_gap:.0f}s  candles={len(klines_5m)}"
-        ))
+        gate.checks.append(
+            DQCheckResult(
+                check_type=DQCheckType.COMPLETENESS,
+                tier=completeness_tier,
+                detail=f"max_gap={max_gap:.0f}s  candles={len(klines_5m)}",
+            )
+        )
 
-    check(f"1.1 {symbol} 数据质量", gate.is_safe_for_trading(),
-          f"tier={gate.overall_tier().value}  fresh={freshness_tier.value if klines_5m else 'N/A'}")
+    check(
+        f"1.1 {symbol} 数据质量",
+        gate.is_safe_for_trading(),
+        f"tier={gate.overall_tier().value}  fresh={freshness_tier.value if klines_5m else 'N/A'}",
+    )
 
     # Feature Store: compute rolling features
     fs = FeatureStore()
     if klines_1h:
         closes = [k["close"] for k in klines_1h]
         volumes = [k["volume"] for k in klines_1h]
-        returns = [(closes[i] / closes[i-1] - 1) for i in range(1, len(closes))]
+        returns = [(closes[i] / closes[i - 1] - 1) for i in range(1, len(closes))]
 
         # Volatility (20-period annualized)
         if len(returns) >= 20:
@@ -185,21 +223,29 @@ for symbol in SYMBOLS:
         vol_ma_short = sum(volumes[-5:]) / min(len(volumes[-5:]), 5) if volumes else 0
         vol_ma_long = sum(volumes[-20:]) / min(len(volumes[-20:]), 20) if volumes else 0
 
-        fs.store(FeatureVector(
-            name=f"{symbol.lower()}_features",
-            values={
-                "close": closes[-1], "ann_volatility": ann_vol,
-                "volume_ratio": vol_ma_short / vol_ma_long if vol_ma_long > 0 else 1.0,
-                "n_candles": len(closes),
-                "trend_5h": closes[-1] / closes[-5] - 1 if len(closes) >= 5 else 0,
-                "trend_20h": closes[-1] / closes[-20] - 1 if len(closes) >= 20 else 0,
-            },
-            timestamp=now, instrument_id=InstrumentId(symbol),
-            venue_id=VenueId("BINANCE"), version=SchemaVersion("2.0.0"),
-        ))
+        fs.store(
+            FeatureVector(
+                name=f"{symbol.lower()}_features",
+                values={
+                    "close": closes[-1],
+                    "ann_volatility": ann_vol,
+                    "volume_ratio": vol_ma_short / vol_ma_long if vol_ma_long > 0 else 1.0,
+                    "n_candles": len(closes),
+                    "trend_5h": closes[-1] / closes[-5] - 1 if len(closes) >= 5 else 0,
+                    "trend_20h": closes[-1] / closes[-20] - 1 if len(closes) >= 20 else 0,
+                },
+                timestamp=now,
+                instrument_id=InstrumentId(symbol),
+                venue_id=VenueId("BINANCE"),
+                version=SchemaVersion("2.0.0"),
+            )
+        )
 
-        check(f"1.2 {symbol} 特征仓", fs.get_latest(f"{symbol.lower()}_features", InstrumentId(symbol)) is not None,
-              f"close={closes[-1]:.2f}  ann_vol={ann_vol*100:.1f}%  candles={len(closes)}")
+        check(
+            f"1.2 {symbol} 特征仓",
+            fs.get_latest(f"{symbol.lower()}_features", InstrumentId(symbol)) is not None,
+            f"close={closes[-1]:.2f}  ann_vol={ann_vol * 100:.1f}%  candles={len(closes)}",
+        )
 
 # ================================================================
 # Phase 2: 市场状态三维模型 — 历史数据驱动
@@ -227,7 +273,7 @@ for symbol in SYMBOLS:
     if len(closes) >= 14:
         tr_list = []
         for i in range(1, min(15, len(highs))):
-            tr = max(highs[-i] - lows[-i], abs(highs[-i] - closes[-i-1]), abs(lows[-i] - closes[-i-1]))
+            tr = max(highs[-i] - lows[-i], abs(highs[-i] - closes[-i - 1]), abs(lows[-i] - closes[-i - 1]))
             tr_list.append(tr)
         atr = sum(tr_list) / len(tr_list) if tr_list else 0
         vol_pct = atr / closes[-1] * 100 if closes[-1] > 0 else 0
@@ -246,18 +292,24 @@ for symbol in SYMBOLS:
             spread_bps = (best_ask - best_bid) / best_ask * 10000
 
     mse = MarketStateEstimator()
-    state = mse.estimate(VenueId("BINANCE"), InstrumentId(symbol), {
-        "trend": 1 if trend_signal == "UP" else -1,
-        "volatility": vol_pct / 100,
-        "spread_bps": spread_bps,
-    })
+    state = mse.estimate(
+        VenueId("BINANCE"),
+        InstrumentId(symbol),
+        {
+            "trend": 1 if trend_signal == "UP" else -1,
+            "volatility": vol_pct / 100,
+            "spread_bps": spread_bps,
+        },
+    )
 
-    check(f"2.1 {symbol} 市场状态",
-          True,
-          f"direction={state.direction.regime}  "
-          f"stress={state.stress.level}  "
-          f"quality={state.quality.tier}  "
-          f"rollback={state.rollback_rate_pct:.1f}%")
+    check(
+        f"2.1 {symbol} 市场状态",
+        True,
+        f"direction={state.direction.regime}  "
+        f"stress={state.stress.level}  "
+        f"quality={state.quality.tier}  "
+        f"rollback={state.rollback_rate_pct:.1f}%",
+    )
 
 # ================================================================
 # Phase 3: 成本模型精度 — 历史数据回测校准
@@ -289,10 +341,9 @@ for symbol in SYMBOLS:
         exit_price = next_k["open"]
 
         # Predict cost
-        est = cm.estimate_order(vi, Quantity(amount="0.01"),
-                                Price(amount=str(entry_price)),
-                                OrderSide.BUY, urgency=0.5,
-                                spread_bps=0.5)
+        est = cm.estimate_order(
+            vi, Quantity(amount="0.01"), Price(amount=str(entry_price)), OrderSide.BUY, urgency=0.5, spread_bps=0.5
+        )
         predicted_bps = est.total_fee_bps
 
         # Actual: fee + realized slippage
@@ -308,16 +359,23 @@ for symbol in SYMBOLS:
         deviation = abs(avg_pred - avg_actual)
         is_accurate = deviation < 5.0  # within 5bps
 
-        cost_results.append({
-            "symbol": symbol, "samples": len(predictions),
-            "predicted_bps": avg_pred, "actual_bps": avg_actual,
-            "deviation_bps": deviation, "accurate": is_accurate,
-        })
+        cost_results.append(
+            {
+                "symbol": symbol,
+                "samples": len(predictions),
+                "predicted_bps": avg_pred,
+                "actual_bps": avg_actual,
+                "deviation_bps": deviation,
+                "accurate": is_accurate,
+            }
+        )
 
-        check(f"3.1 {symbol} 成本精度",
-              is_accurate,
-              f"pred={avg_pred:.1f}bps  actual={avg_actual:.1f}bps  "
-              f"deviation={deviation:.1f}bps  samples={len(predictions)}")
+        check(
+            f"3.1 {symbol} 成本精度",
+            is_accurate,
+            f"pred={avg_pred:.1f}bps  actual={avg_actual:.1f}bps  "
+            f"deviation={deviation:.1f}bps  samples={len(predictions)}",
+        )
 
 # ================================================================
 # Phase 4: Alpha 因子研究 — IC/ICIR/分层回测
@@ -325,9 +383,11 @@ for symbol in SYMBOLS:
 section("Phase 4: Alpha 因子研究 — IC/ICIR/分层回测/边际贡献")
 
 from beidou_research.factors.factor import (
-    FactorDefinition, FactorRecord, FactorLifecycle,
-    FactorEvaluator, FactorRegistry, FactorPerformance,
-    MarginalContribution,
+    FactorDefinition,
+    FactorEvaluator,
+    FactorLifecycle,
+    FactorPerformance,
+    FactorRegistry,
 )
 
 evaluator = FactorEvaluator()
@@ -336,33 +396,45 @@ registry = FactorRegistry()
 # 定义3个因子
 factors_def = [
     FactorDefinition(
-        factor_id="momentum_20h", name="Momentum 20h", version=SchemaVersion("1.0.0"),
+        factor_id="momentum_20h",
+        name="Momentum 20h",
+        version=SchemaVersion("1.0.0"),
         description="20小时动量 — 过去20根1h K线累计收益",
-        author="beidou-research", category="momentum",
+        author="beidou-research",
+        category="momentum",
         universe=frozenset({VenueId("BINANCE")}),
         instrument_types=frozenset({"perpetual"}),
         economic_rationale="趋势延续效应",
-        lookback_period="20h", rebalance_interval="1h",
+        lookback_period="20h",
+        rebalance_interval="1h",
         tags=frozenset({"trend", "momentum"}),
     ),
     FactorDefinition(
-        factor_id="meanrev_5h", name="Mean Reversion 5h", version=SchemaVersion("1.0.0"),
+        factor_id="meanrev_5h",
+        name="Mean Reversion 5h",
+        version=SchemaVersion("1.0.0"),
         description="5小时均值回归 — 短期超买超卖反转",
-        author="beidou-research", category="mean_reversion",
+        author="beidou-research",
+        category="mean_reversion",
         universe=frozenset({VenueId("BINANCE")}),
         instrument_types=frozenset({"perpetual"}),
         economic_rationale="短期过度反应后的均值回归",
-        lookback_period="5h", rebalance_interval="1h",
+        lookback_period="5h",
+        rebalance_interval="1h",
         tags=frozenset({"mean_reversion", "short_term"}),
     ),
     FactorDefinition(
-        factor_id="vol_breakout", name="Volatility Breakout", version=SchemaVersion("1.0.0"),
+        factor_id="vol_breakout",
+        name="Volatility Breakout",
+        version=SchemaVersion("1.0.0"),
         description="波动率突破 — 成交量放大+波动率扩张信号",
-        author="beidou-research", category="volatility",
+        author="beidou-research",
+        category="volatility",
         universe=frozenset({VenueId("BINANCE")}),
         instrument_types=frozenset({"perpetual"}),
         economic_rationale="波动率聚集效应 — 大波动后往往继续大波动",
-        lookback_period="24h", rebalance_interval="4h",
+        lookback_period="24h",
+        rebalance_interval="4h",
         tags=frozenset({"volatility", "breakout"}),
     ),
 ]
@@ -387,23 +459,23 @@ if klines_1h:
 
     for i in range(20, len(closes) - 1):
         # Momentum: 20-period return
-        mom = closes[i] / closes[i-20] - 1
+        mom = closes[i] / closes[i - 20] - 1
         momentum_preds.append(mom)
 
         # Mean reversion: deviation from 5-period MA
-        ma5 = sum(closes[i-4:i+1]) / 5
+        ma5 = sum(closes[i - 4 : i + 1]) / 5
         mr = (ma5 - closes[i]) / closes[i]
         meanrev_preds.append(mr)
 
         # Vol breakout: volume spike + range expansion
-        avg_vol = sum(volumes[i-19:i+1]) / 20
+        avg_vol = sum(volumes[i - 19 : i + 1]) / 20
         vol_ratio = volumes[i] / avg_vol if avg_vol > 0 else 1.0
         range_ratio = (highs[i] - lows[i]) / closes[i]
         vb = vol_ratio * range_ratio * 100
         vol_breakout_preds.append(vb)
 
         # 前向收益
-        fwd_ret = closes[i+1] / closes[i] - 1
+        fwd_ret = closes[i + 1] / closes[i] - 1
         forward_returns.append(fwd_ret)
 
     # 计算每个因子的 IC/ICIR
@@ -420,7 +492,7 @@ if klines_1h:
         # ICIR over rolling 20-period windows
         ic_series = []
         for j in range(0, len(preds) - 20, 5):
-            ic_window, _ = evaluator.compute_ic(preds[j:j+20], forward_returns[j:j+20])
+            ic_window, _ = evaluator.compute_ic(preds[j : j + 20], forward_returns[j : j + 20])
             ic_series.append(ic_window)
         icir = evaluator.compute_icir(ic_series)
 
@@ -433,8 +505,12 @@ if klines_1h:
             factor_id=fid,
             evaluation_period="historical_1h",
             sample_count=len(preds),
-            ic_mean=ic, ic_std=0.0, icir=icir,
-            rank_ic_mean=rank_ic, rank_ic_std=0.0, rank_icir=0.0,
+            ic_mean=ic,
+            ic_std=0.0,
+            icir=icir,
+            rank_ic_mean=rank_ic,
+            rank_ic_std=0.0,
+            rank_icir=0.0,
             top_bottom_decile_spread=decile,
             turnover_pct=turnover * 100,
         )
@@ -449,11 +525,13 @@ if klines_1h:
 
         is_positive = ic > 0
         is_significant = icir > 0.3
-        check(f"4.2 {fid} IC/ICIR",
-              is_positive,
-              f"IC={ic:.4f}  RankIC={rank_ic:.4f}  ICIR={icir:.2f}  "
-              f"decile_spread={decile*100:.2f}%  samples={len(preds)}  "
-              f"{'✅ SIGNIFICANT' if is_significant else '⚠️ weak'}")
+        check(
+            f"4.2 {fid} IC/ICIR",
+            is_positive,
+            f"IC={ic:.4f}  RankIC={rank_ic:.4f}  ICIR={icir:.2f}  "
+            f"decile_spread={decile * 100:.2f}%  samples={len(preds)}  "
+            f"{'✅ SIGNIFICANT' if is_significant else '⚠️ weak'}",
+        )
 
     # VIF and marginal contribution
     corr_matrix = {
@@ -464,12 +542,16 @@ if klines_1h:
     # Compute actual correlations
     if len(momentum_preds) > 1:
         n = min(len(momentum_preds), len(meanrev_preds), len(vol_breakout_preds))
-        for a_name, a_preds in [("momentum_20h", momentum_preds[:n]),
-                                 ("meanrev_5h", meanrev_preds[:n]),
-                                 ("vol_breakout", vol_breakout_preds[:n])]:
-            for b_name, b_preds in [("momentum_20h", momentum_preds[:n]),
-                                     ("meanrev_5h", meanrev_preds[:n]),
-                                     ("vol_breakout", vol_breakout_preds[:n])]:
+        for a_name, a_preds in [
+            ("momentum_20h", momentum_preds[:n]),
+            ("meanrev_5h", meanrev_preds[:n]),
+            ("vol_breakout", vol_breakout_preds[:n]),
+        ]:
+            for b_name, b_preds in [
+                ("momentum_20h", momentum_preds[:n]),
+                ("meanrev_5h", meanrev_preds[:n]),
+                ("vol_breakout", vol_breakout_preds[:n]),
+            ]:
                 if a_name != b_name:
                     corr, _ = evaluator.compute_ic(a_preds, b_preds)
                     corr_matrix[a_name][b_name] = corr
@@ -480,37 +562,43 @@ if klines_1h:
         if record and record.performance:
             perf = record.performance[-1]
             mc = evaluator.compute_marginal_contribution(
-                perf, [], corr_matrix,
+                perf,
+                [],
+                corr_matrix,
             )
             record.marginal_contributions.append(mc)
 
             # Promote to challenger if conditions met
-            can_challenge = (perf.icir > 0.3 and not mc.has_adverse_collinearity())
+            can_challenge = perf.icir > 0.3 and not mc.has_adverse_collinearity()
             if can_challenge:
                 registry.promote_to_challenger(fid)
                 registry.promote_to_active(fid)
 
-            check(f"4.3 {fid} VIF+边际贡献",
-                  not mc.has_adverse_collinearity(),
-                  f"VIF={vif:.2f}  marginal_sharpe={mc.marginal_sharpe:.3f}  "
-                  f"diversification={mc.diversification_benefit:.3f}  "
-                  f"lifecycle={record.lifecycle.value}")
+            check(
+                f"4.3 {fid} VIF+边际贡献",
+                not mc.has_adverse_collinearity(),
+                f"VIF={vif:.2f}  marginal_sharpe={mc.marginal_sharpe:.3f}  "
+                f"diversification={mc.diversification_benefit:.3f}  "
+                f"lifecycle={record.lifecycle.value}",
+            )
 
 # ================================================================
 # Phase 5: 反作弊回测 — ReplayValidator
 # ================================================================
 section("Phase 5: 反作弊回测 — 未来函数/幸存者偏差/数据泄露检测")
 
-from beidou_research.backtest.replay import ReplayValidator, CheatDetection, ReplayResult
+from beidou_research.backtest.replay import CheatDetection, ReplayResult, ReplayValidator
 
 validator = ReplayValidator()
 
 # Test 1: Future function check
 signal_time = now - timedelta(hours=1)
 data_time = now  # data available after signal
-check("5.1 未来函数检测",
-      validator.check_future_function(signal_time, data_time),
-      f"signal={signal_time.isoformat()} ≤ data={data_time.isoformat()}")
+check(
+    "5.1 未来函数检测",
+    validator.check_future_function(signal_time, data_time),
+    f"signal={signal_time.isoformat()} ≤ data={data_time.isoformat()}",
+)
 
 # Test 2: Event time inversion
 events = [
@@ -519,16 +607,17 @@ events = [
     (now - timedelta(hours=1), now - timedelta(minutes=30)),
 ]
 inversions = validator.check_event_time_inversion(events)
-check("5.2 事件时间反转", len(inversions) == 0,
-      f"inversions={len(inversions)} (0=clean)")
+check("5.2 事件时间反转", len(inversions) == 0, f"inversions={len(inversions)} (0=clean)")
 
 # Test 3: Survivorship bias
 hist_instruments = {"BTCUSDT", "ETHUSDT", "BNBUSDT"}
 current_instruments = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 survivors = validator.check_survivorship(hist_instruments, current_instruments)
-check("5.3 幸存者偏差", len(survivors) <= 1,
-      f"historical_only={hist_instruments - current_instruments}  "
-      f"new_instruments={survivors}")
+check(
+    "5.3 幸存者偏差",
+    len(survivors) <= 1,
+    f"historical_only={hist_instruments - current_instruments}  new_instruments={survivors}",
+)
 
 # Test 4: Full replay result
 replay = ReplayResult(
@@ -547,12 +636,14 @@ replay = ReplayResult(
     pnl_deviation_pct=0.0,
     correlation_id=CorrelationId("historical-cert"),
 )
-check("5.4 反作弊综合", validator.all_checks_pass(replay),
-      f"all={sum(1 for v in replay.cheat_checks.values())}/{len(replay.cheat_checks)} checks pass")
+check(
+    "5.4 反作弊综合",
+    validator.all_checks_pass(replay),
+    f"all={sum(1 for v in replay.cheat_checks.values())}/{len(replay.cheat_checks)} checks pass",
+)
 
 validator.set_baseline(replay.output_hash)
-check("5.5 确定性验证", validator.verify_determinism(replay),
-      f"baseline={replay.output_hash[:16]}...")
+check("5.5 确定性验证", validator.verify_determinism(replay), f"baseline={replay.output_hash[:16]}...")
 
 # ================================================================
 # Phase 6: 策略风险与降级条件验证 (NON_CERTIFYING)
@@ -561,10 +652,9 @@ section("Phase 6: 策略风险 — 回撤/熔断/降级条件 (NON_CERTIFYING)")
 
 # NON_CERTIFYING: 本脚本不生成任何 G5-G8 Certificate 或 ladder 晋级记录。
 # 所有历史诊断结果仅供研究参考，不可用于生产晋级决策。
-print("  ⚠️  NON_CERTIFYING — 本脚本不产生认证证书或晋级记录")
-print("  ⚠️  PIVOT decision in effect — Mainnet PROHIBITED")
 
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
+
 optimizer = PortfolioOptimizerImpl()
 
 # 模拟回撤场景（仅诊断，非认证）
@@ -579,40 +669,20 @@ for name, drawdown, sharpe, incidents in test_scenarios:
     # Diagnostic only — no production ladder API calls
     should_degrade = drawdown > 20.0 or incidents > 3
     if name == "normal":
-        check(f"6.1 {name}", not should_degrade,
-              f"dd={drawdown}% sharpe={sharpe} incidents={incidents} → NO_DEGRADE")
+        check(f"6.1 {name}", not should_degrade, f"dd={drawdown}% sharpe={sharpe} incidents={incidents} → NO_DEGRADE")
     elif name == "severe_drawdown":
-        check(f"6.1 {name}", should_degrade,
-              f"dd={drawdown}% > 20% → WOULD DEGRADE (diagnostic only)")
+        check(f"6.1 {name}", should_degrade, f"dd={drawdown}% > 20% → WOULD DEGRADE (diagnostic only)")
     elif name == "incident_spike":
-        check(f"6.1 {name}", should_degrade,
-              f"incidents={incidents} > 3 → WOULD DEGRADE (diagnostic only)")
+        check(f"6.1 {name}", should_degrade, f"incidents={incidents} > 3 → WOULD DEGRADE (diagnostic only)")
 
 # ================================================================
 # SUMMARY (NON_CERTIFYING)
 # ================================================================
 section("诊断总结")
 
-print(f"")
-print(f"  状态: NON_CERTIFYING")
-print(f"  数据源: Binance Testnet 历史K线 ({len(SYMBOLS)}品种 x {len(INTERVALS)}周期)")
 if klines_1h:
     duration_h = (klines_1h[-1]["open_time"] - klines_1h[0]["open_time"]).total_seconds() / 3600
-    print(f"  数据跨度: {duration_h:.1f} 小时 ({duration_h/24:.1f} 天)")
 if klines_1h:
-    print(f"  样本数量: {len(klines_1h)}根1h K线")
-print(f"")
-print(f"  数据质量检查: 完成")
-print(f"  市场状态分析: 完成")
-print(f"  成本模型校准: 完成")
-print(f"  Factor Research: 3因子 IC/ICIR 全部计算")
-print(f"  Anti-Cheat: 反作弊检查执行")
-print(f"")
-print(f"  ⚠️  不产生 G5-G8 Certificate")
-print(f"  ⚠️  不产生 production ladder 晋级记录")
-print(f"  ⚠️  不可用于 full mode 启动认证")
-print(f"")
-print(f"  结果: {passed}/{step_no} passed, {failed} failed")
-print(f"{'='*70}")
+    pass
 
 sys.exit(0 if failed == 0 else 1)

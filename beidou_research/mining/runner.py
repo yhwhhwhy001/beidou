@@ -286,7 +286,7 @@ class MiningRunner:
             n = min(len(factor_vals), len(label_returns))
             pairs = [
                 (fv, rv)
-                for fv, rv in zip(factor_vals[:n], label_returns[:n])
+                for fv, rv in zip(factor_vals[:n], label_returns[:n], strict=False)
                 if _is_finite(fv) and _is_finite(rv)
             ]
             if len(pairs) < 50:
@@ -379,7 +379,7 @@ class MiningRunner:
                         continue
 
                     ic = _compute_ic(interact_vals, interact_returns)
-                    inter_id = f"interact_{passed_screened[i].get('factor_id','a')}_{passed_screened[j].get('factor_id','b')}"
+                    inter_id = f"interact_{passed_screened[i].get('factor_id', 'a')}_{passed_screened[j].get('factor_id', 'b')}"
                     inter_hash = hashlib.sha256(inter_id.encode()).hexdigest()[:20]
                     bundle = EvidenceBundle(
                         bundle_id=f"{run_id}-inter-{inter_hash[:8]}",
@@ -412,12 +412,18 @@ class MiningRunner:
                     )
 
             # 残差因子：对 top-3 PASS 候选做彼此残差化
-            top_pass = sorted(passed_screened, key=lambda c: _compute_ic(c["factor_values"], label_returns[:len(c["factor_values"])]), reverse=True)[:3]
+            top_pass = sorted(
+                passed_screened,
+                key=lambda c: _compute_ic(c["factor_values"], label_returns[: len(c["factor_values"])]),
+                reverse=True,
+            )[:3]
             if len(top_pass) >= 2:
                 try:
                     from .generators.residual import compute_residual_values
 
-                    control_fvs = {c.get("factor_id", f"ctrl_{j}"): c["factor_values"] for j, c in enumerate(top_pass[1:])}
+                    control_fvs = {
+                        c.get("factor_id", f"ctrl_{j}"): c["factor_values"] for j, c in enumerate(top_pass[1:])
+                    }
                     residual_vals = compute_residual_values(top_pass[0]["factor_values"], control_fvs)
                     n_res = min(len(residual_vals), len(label_returns))
                     res_pairs = [
@@ -429,7 +435,7 @@ class MiningRunner:
                         res_vals = [p[0] for p in res_pairs]
                         res_rets = [p[1] for p in res_pairs]
                         ic = _compute_ic(res_vals, res_rets)
-                        res_id = f"residual_{top_pass[0].get('factor_id','a')}"
+                        res_id = f"residual_{top_pass[0].get('factor_id', 'a')}"
                         res_hash = hashlib.sha256(res_id.encode()).hexdigest()[:20]
                         bundle = EvidenceBundle(
                             bundle_id=f"{run_id}-res-{res_hash[:8]}",
@@ -549,8 +555,8 @@ class MiningRunner:
                     gains[i] = delta
                 else:
                     losses[i] = -delta
-            avg_gain = sum(gains[1:period + 1]) / period
-            avg_loss = sum(losses[1:period + 1]) / period
+            avg_gain = sum(gains[1 : period + 1]) / period
+            avg_loss = sum(losses[1 : period + 1]) / period
             for i in range(period, n):
                 if i > period:
                     avg_gain = (avg_gain * (period - 1) + gains[i]) / period
@@ -621,6 +627,7 @@ class MiningRunner:
         gen_cfg = {}
         try:
             import yaml
+
             with open("config/factor_mining_policy.yaml") as f:
                 policy = yaml.safe_load(f)
             gen_cfg = policy.get("generation", {})
@@ -628,9 +635,7 @@ class MiningRunner:
             pass
 
         template_cfg = gen_cfg.get("template_grid", {})
-        primitives = template_cfg.get(
-            "primitives", ["close", "log_return", "volume", "rsi", "spread"]
-        )
+        primitives = template_cfg.get("primitives", ["close", "log_return", "volume", "rsi", "spread"])
         windows = template_cfg.get("windows", [5, 10, 20, 50, 100])
         transforms_list = template_cfg.get("transforms", ["identity", "pct_change", "zscore", "diff"])
         normalizations_list = template_cfg.get("normalizations", ["none", "zscore", "robust_zscore", "rank"])
@@ -652,9 +657,7 @@ class MiningRunner:
 
         candidates = []
         for spec in specs:
-            expr_str = self._spec_to_expression(
-                spec.primitive, spec.window, spec.transform, spec.normalization
-            )
+            expr_str = self._spec_to_expression(spec.primitive, spec.window, spec.transform, spec.normalization)
             candidates.append(
                 {
                     "factor_id": spec.template_id,

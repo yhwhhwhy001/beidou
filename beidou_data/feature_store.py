@@ -68,12 +68,20 @@ class FeatureStore:
         vals = self._features.get(key, [])
         best: FeatureVector | None = None
         for v in vals:
-            if v.available_at and v.available_at <= as_of:
-                if best is None or (
-                    v.available_at is not None and best.available_at is not None and v.available_at > best.available_at
-                ):
-                    if v.data_quality_tier not in ("BLOCK", "UNKNOWN"):
-                        best = v
+            if (
+                v.available_at
+                and v.available_at <= as_of
+                and (
+                    best is None
+                    or (
+                        v.available_at is not None
+                        and best.available_at is not None
+                        and v.available_at > best.available_at
+                    )
+                )
+                and v.data_quality_tier not in ("BLOCK", "UNKNOWN")
+            ):
+                best = v
         return best
 
     def count_safe_for_trading(self) -> int:

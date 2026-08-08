@@ -1,18 +1,37 @@
 """北斗运营保障面 — 监控模块 V1.1。"""
+
+from beidou_observability.monitoring.clock_integrity import ClockIntegrity
 from beidou_observability.monitoring.contracts import *
-from beidou_observability.monitoring.evidence import EvidenceBundle, EvidenceRecord, from_check_result, verify_evidence_integrity
-from beidou_observability.monitoring.fact_collector import FactCollector, FactDomain, CollectedFact
-from beidou_observability.monitoring.frequency_policy import init_frequency_state, is_due, is_promotion_clean, restart_frequency_state, update_frequency, LEVEL_INTERVALS, PROMOTION_STREAK_REQUIRED
-from beidou_observability.monitoring.rate_limit_budget import RateLimitBudget, EndpointBudget
+from beidou_observability.monitoring.evidence import (
+    EvidenceBundle,
+    EvidenceRecord,
+    from_check_result,
+    verify_evidence_integrity,
+)
+from beidou_observability.monitoring.fact_collector import CollectedFact, FactCollector, FactDomain
+from beidou_observability.monitoring.frequency_policy import (
+    LEVEL_INTERVALS,
+    PROMOTION_STREAK_REQUIRED,
+    init_frequency_state,
+    is_due,
+    is_promotion_clean,
+    restart_frequency_state,
+    update_frequency,
+)
+from beidou_observability.monitoring.health_aggregator import (
+    aggregate_health,
+    enforce_inv006,
+    enforce_inv007,
+    health_summary,
+)
+from beidou_observability.monitoring.incident_manager import IncidentManager
+from beidou_observability.monitoring.instrumentation import InstrumentationPolicy, InstrumentationRecorder, TraceEvent
+from beidou_observability.monitoring.rate_limit_budget import EndpointBudget, RateLimitBudget
 from beidou_observability.monitoring.repository import MonitoringRepository
-from beidou_observability.monitoring.snapshot_broker import SnapshotBroker, SnapshotFact, SnapshotSource
-from beidou_observability.monitoring.health_aggregator import aggregate_health, enforce_inv006, enforce_inv007, health_summary
-from beidou_observability.monitoring.service import MonitoringService, create_monitoring_cli
+from beidou_observability.monitoring.retention import RetentionPolicy, RetentionTier
 from beidou_observability.monitoring.rollout import RolloutManager
 from beidou_observability.monitoring.scheduler import DeepAuditScheduler
+from beidou_observability.monitoring.service import MonitoringService, create_monitoring_cli
+from beidou_observability.monitoring.snapshot_broker import SnapshotBroker, SnapshotFact, SnapshotSource
 from beidou_observability.monitoring.storm_detector import StormDetector
-from beidou_observability.monitoring.incident_manager import IncidentManager
-from beidou_observability.monitoring.clock_integrity import ClockIntegrity
-from beidou_observability.monitoring.retention import RetentionPolicy, RetentionTier
-from beidou_observability.monitoring.instrumentation import TraceEvent, InstrumentationRecorder, InstrumentationPolicy
-from beidou_observability.monitoring.watchdog import Watchdog, COMPONENT_FAILURE_MATRIX
+from beidou_observability.monitoring.watchdog import COMPONENT_FAILURE_MATRIX, Watchdog

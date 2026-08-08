@@ -125,9 +125,7 @@ class RiskSnapshot:
             return False
         if self.exchange_health in ("UNKNOWN", "UNSAFE"):
             return False
-        if self.reconciliation_status != "MATCHED":
-            return False
-        return True
+        return self.reconciliation_status == "MATCHED"
 
 
 class PreRiskCheckerImpl:

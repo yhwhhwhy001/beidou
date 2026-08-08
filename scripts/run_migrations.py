@@ -42,50 +42,39 @@ def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None
         result["errors"].append("No .up.sql migration files found")
         return result
 
-    print(f"Migration runner — {len(up_files)} migrations found")
-    print(f"Database: {db_url.split('@')[1] if '@' in db_url else db_url}")
-
     for sql_file in up_files:
         checksum = compute_checksum(str(sql_file))
-        print(f"  → {sql_file.name} (sha256={checksum[:16]}...)")
 
         try:
             import psycopg
 
-            with psycopg.connect(db_url) as conn:
-                with conn.cursor() as cur:
-                    # 检查是否已执行
-                    cur.execute(
-                        "SELECT 1 FROM schema_migrations WHERE version = %s",
-                        (sql_file.stem,),
-                    )
-                    if cur.fetchone():
-                        result["skipped"].append(str(sql_file.name))
-                        print(f"    ⏭ Already applied, skipping")
-                        continue
+            with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+                # 检查是否已执行
+                cur.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = %s",
+                    (sql_file.stem,),
+                )
+                if cur.fetchone():
+                    result["skipped"].append(str(sql_file.name))
+                    continue
 
-                    # 执行迁移
-                    sql = sql_file.read_text()
-                    cur.execute(sql)
+                # 执行迁移
+                sql = sql_file.read_text()
+                cur.execute(sql)
 
-                    # 记录迁移
-                    cur.execute(
-                        "INSERT INTO schema_migrations (version, checksum, description) VALUES (%s, %s, %s)",
-                        (sql_file.stem, checksum, f"Applied at {datetime.now(timezone.utc).isoformat()}"),
-                    )
-                    conn.commit()
+                # 记录迁移
+                cur.execute(
+                    "INSERT INTO schema_migrations (version, checksum, description) VALUES (%s, %s, %s)",
+                    (sql_file.stem, checksum, f"Applied at {datetime.now(timezone.utc).isoformat()}"),
+                )
+                conn.commit()
 
             result["applied"].append(str(sql_file.name))
-            print(f"    ✅ Applied")
 
         except Exception as e:
             result["errors"].append(f"{sql_file.name}: {e}")
-            print(f"    ❌ Error: {e}")
             break  # Forward-only: stop on first error
 
-    print(
-        f"\nResult: {len(result['applied'])} applied, {len(result['skipped'])} skipped, {len(result['errors'])} errors"
-    )
     return result
 
 

@@ -353,10 +353,7 @@ def test_monitoring_code_no_risk_increasing_orders() -> None:
             rel = pyfile.relative_to(root)
             for pattern in RISK_INCREASING_PATTERNS:
                 if pattern in content:
-                    is_allowlisted = any(
-                        aw in content and pattern in aw
-                        for aw in RISK_INCREASING_ALLOWLIST
-                    )
+                    is_allowlisted = any(aw in content and pattern in aw for aw in RISK_INCREASING_ALLOWLIST)
                     if not is_allowlisted:
                         violations.append(f"{rel}: 监控代码包含禁止的风险增加模式 '{pattern}'")
 

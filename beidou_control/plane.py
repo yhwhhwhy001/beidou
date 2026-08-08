@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -372,9 +371,6 @@ class ControlPlane:
         self._log_state_change(self._action.value, ControlAction.LOCK.value)
         return self.execute_action(ControlAction.LOCK)
 
-    def get_unknown_or_differences(self) -> list[str]:
-        return []  # placeholder for future reconciliation
-
     def update_account_overview(self, overview: AccountFactOverview) -> None:
         self._account_overview[f"{overview.account_id}:{overview.venue_id}"] = overview
 
@@ -393,7 +389,6 @@ from beidou_shared.types import (
     InstrumentId,
     MonetaryValue,
     Quantity,
-    ResultStatus,
     VenueId,
 )
 

@@ -250,10 +250,7 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             )
         else:
             cred_severity = CheckSeverity.P2
-            cred_fail_msg = (
-                "未提供 API Key/Secret，引擎将无法读取真实账户数据。"
-                "非写模式下此为警告，引擎会降级运行。"
-            )
+            cred_fail_msg = "未提供 API Key/Secret，引擎将无法读取真实账户数据。非写模式下此为警告，引擎会降级运行。"
         checks.append(
             _result(
                 "preflight.engine_account_credentials",

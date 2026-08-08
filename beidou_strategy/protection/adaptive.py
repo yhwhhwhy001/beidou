@@ -14,34 +14,36 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-
 # ================================================================
 # 可调常量 — BD-T11 v2 自适应策略参数
 # ================================================================
-ATR_MULTIPLIER = 2.0          # ATR 止损倍数
-BASE_RR_RATIO = 2.0            # 基础风险回报比
-MAX_STOP_PCT = 5.0             # 风控硬上限
-MIN_RR_RATIO = 1.0             # 最低风险回报比
-MAX_RR_RATIO = 5.0             # 最高风险回报比
+ATR_MULTIPLIER = 2.0  # ATR 止损倍数
+BASE_RR_RATIO = 2.0  # 基础风险回报比
+MAX_STOP_PCT = 5.0  # 风控硬上限
+MIN_RR_RATIO = 1.0  # 最低风险回报比
+MAX_RR_RATIO = 5.0  # 最高风险回报比
 
 
 class VolatilityRegime(str, Enum):
     """波动率区间。"""
-    LOW = "LOW"          # 年化波动 < 20%
-    NORMAL = "NORMAL"    # 20% - 40%
-    HIGH = "HIGH"        # > 40%
+
+    LOW = "LOW"  # 年化波动 < 20%
+    NORMAL = "NORMAL"  # 20% - 40%
+    HIGH = "HIGH"  # > 40%
 
 
 class PriceTier(str, Enum):
     """价格档位 — 决定最小止损百分比，避免低价币种精度问题。"""
-    MICRO = "MICRO"       # < $1
-    LOW = "LOW"           # $1 - $10
-    MID = "MID"           # $10 - $100
-    HIGH = "HIGH"         # > $100
+
+    MICRO = "MICRO"  # < $1
+    LOW = "LOW"  # $1 - $10
+    MID = "MID"  # $10 - $100
+    HIGH = "HIGH"  # > $100
 
 
 class MarketRegime(str, Enum):
     """市场状态 — 影响止盈策略。"""
+
     TRENDING_UP = "TRENDING_UP"
     TRENDING_DOWN = "TRENDING_DOWN"
     RANGING = "RANGING"
@@ -51,6 +53,7 @@ class MarketRegime(str, Enum):
 @dataclass(frozen=True, slots=True)
 class AdaptiveProtectionConfig:
     """自适应保护配置 — 计算结果的不可变载体。"""
+
     stop_loss_config: dict[str, Any]
     take_profit_config: dict[str, Any]
     stop_pct: float
@@ -73,21 +76,21 @@ class AdaptiveProtectionCalculator:
 
     # ---- 价格档位 → 最小止损百分比 ----
     _MIN_STOP_BY_TIER: dict[PriceTier, float] = {
-        PriceTier.MICRO: 2.5,   # < $1: 至少 2.5% 防止四舍五入
-        PriceTier.LOW: 2.0,     # $1-10: 至少 2.0%
-        PriceTier.MID: 1.2,     # $10-100: 至少 1.2%
-        PriceTier.HIGH: 0.8,    # > $100: 至少 0.8%
+        PriceTier.MICRO: 2.5,  # < $1: 至少 2.5% 防止四舍五入
+        PriceTier.LOW: 2.0,  # $1-10: 至少 2.0%
+        PriceTier.MID: 1.2,  # $10-100: 至少 1.2%
+        PriceTier.HIGH: 0.8,  # > $100: 至少 0.8%
     }
 
     # ---- 波动率区间 → 止损调整系数 ----
     _VOL_REGIME_FACTOR: dict[VolatilityRegime, float] = {
-        VolatilityRegime.LOW: 1.5,     # 低波时放宽止损，避免噪音触发
-        VolatilityRegime.NORMAL: 1.0,   # 正常区间标准倍数
-        VolatilityRegime.HIGH: 1.3,     # 高波时加宽止损，避免频繁触发
+        VolatilityRegime.LOW: 1.5,  # 低波时放宽止损，避免噪音触发
+        VolatilityRegime.NORMAL: 1.0,  # 正常区间标准倍数
+        VolatilityRegime.HIGH: 1.3,  # 高波时加宽止损，避免频繁触发
     }
 
     # ---- 波动率区间阈值 ----
-    _VOL_LOW_THRESHOLD = 0.20   # 20% 年化
+    _VOL_LOW_THRESHOLD = 0.20  # 20% 年化
     _VOL_HIGH_THRESHOLD = 0.40  # 40% 年化
 
     @classmethod

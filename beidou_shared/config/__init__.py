@@ -284,10 +284,7 @@ class ConfigProvider:
 
         # Parse environment — 兼容字符串和 dict 两种格式
         env_raw = raw.get("environment", "safety_only")
-        if isinstance(env_raw, dict):
-            env_name = str(env_raw.get("name", "safety_only"))
-        else:
-            env_name = str(env_raw)
+        env_name = str(env_raw.get("name", "safety_only")) if isinstance(env_raw, dict) else str(env_raw)
         try:
             environment = Environment(env_name)
         except ValueError:
@@ -325,9 +322,11 @@ class ConfigProvider:
             ref_value = str(binance_raw.get(ref_field, ""))
             if len(ref_value) >= 32 and any(c.isalpha() for c in ref_value) and any(c.isdigit() for c in ref_value):
                 import warnings
+
                 warnings.warn(
                     f"plaintext value detected in {ref_field} — "
-                    f"生产环境必须通过环境变量注入，禁止在配置文件中填写明文密钥"
+                    f"生产环境必须通过环境变量注入，禁止在配置文件中填写明文密钥",
+                    stacklevel=2,
                 )
 
         # Parse risk

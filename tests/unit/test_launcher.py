@@ -144,8 +144,11 @@ def _runtime_engine() -> Any:
 
 @pytest.mark.parametrize(
     ("algo_ids", "expected_status"),
-    [(["algo-1"], CheckStatus.FAIL), (["algo-1", "algo-2"], CheckStatus.PASS),
-     (["algo-1", "algo-2", "algo-3"], CheckStatus.PASS)],
+    [
+        (["algo-1"], CheckStatus.FAIL),
+        (["algo-1", "algo-2"], CheckStatus.PASS),
+        (["algo-1", "algo-2", "algo-3"], CheckStatus.PASS),
+    ],
 )
 def test_protection_requires_exact_exchange_orders(algo_ids: list[str], expected_status: CheckStatus) -> None:
     from beidou_launcher.runtime import collect_runtime_checks

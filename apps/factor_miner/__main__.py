@@ -94,8 +94,8 @@ def run(
     click.echo(f"[factor_miner] 全量挖掘运行 (品种={symbols_list}, interval={interval}, limit={limit})...")
 
     try:
-        from beidou_research.mining.runner import MiningRunner, PipelineConfig
         from beidou_core.feed import MarketDataFeed
+        from beidou_research.mining.runner import MiningRunner, PipelineConfig
 
         feed = MarketDataFeed()
         all_results: list[dict] = []
@@ -130,16 +130,20 @@ def run(
                 symbol=sym,
                 timeframe=interval,
             )
-            click.echo(f"  候选: {result.candidates_generated} | 预筛: {result.candidates_screened} | 评估: {result.candidates_evaluated} | PASS: {result.candidates_passed} | {result.runtime_seconds:.1f}s")
+            click.echo(
+                f"  候选: {result.candidates_generated} | 预筛: {result.candidates_screened} | 评估: {result.candidates_evaluated} | PASS: {result.candidates_passed} | {result.runtime_seconds:.1f}s"
+            )
             all_results.append({"symbol": sym, "result": result})
 
         # 汇总
-        click.echo(f"\n{'='*50}")
+        click.echo(f"\n{'=' * 50}")
         click.echo("汇总:")
         for r in all_results:
             sym = r["symbol"]
             res = r["result"]
-            click.echo(f"  {sym}: 候选{res.candidates_generated} 预筛{res.candidates_screened} PASS {res.candidates_passed} ({res.runtime_seconds:.1f}s)")
+            click.echo(
+                f"  {sym}: 候选{res.candidates_generated} 预筛{res.candidates_screened} PASS {res.candidates_passed} ({res.runtime_seconds:.1f}s)"
+            )
 
     except ImportError as e:
         click.echo(f"[factor_miner] ERROR: 缺少依赖: {e}", err=True)

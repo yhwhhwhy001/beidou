@@ -12,7 +12,7 @@ from typing import Any
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
-from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.binance_usdm.endpoints import DEFAULT_RECV_WINDOW_MS, Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_shared.config import ConfigProvider
 from beidou_shared.types import (
@@ -36,6 +36,7 @@ class MarketDataFeed:
         self._rest_url = settings.exchange.rest_base_url
         self._api_key = ""  # 通过秘密提供器注入
         self._api_secret = ""
+        self._recv_window = DEFAULT_RECV_WINDOW_MS
 
         # BD-T03: 使用 BinanceRESTClient 作为唯一网络传输
         self._client = BinanceRESTClient(
@@ -75,6 +76,7 @@ class MarketDataFeed:
             qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
             import hashlib as _hashlib
             import hmac as _hmac
+
             params["signature"] = _hmac.new(self._api_secret.encode(), qs.encode(), _hashlib.sha256).hexdigest()
 
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -93,7 +95,7 @@ class MarketDataFeed:
                     continue
                 self._error_count["http"] = self._error_count.get("http", 0) + 1
                 return {"error": e.code, "msg": e.read().decode()}
-            except Exception as ex:
+            except Exception:
                 self._error_count["network"] = self._error_count.get("network", 0) + 1
                 __import__("time").sleep(0.3 * (attempt + 1))
         return {"error": -1, "msg": "retry exhausted"}

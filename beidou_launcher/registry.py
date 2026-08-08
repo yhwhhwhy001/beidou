@@ -215,9 +215,10 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             "因子注册与生命周期",
             factor_status,
             factor_severity,
-            "因子缺失或未注册" if truly_missing else (
-                f"部分因子降级(DEGRADED): {inactive_expected}" if degraded_only
-                else "因子均已注册并满足生命周期要求"
+            "因子缺失或未注册"
+            if truly_missing
+            else (
+                f"部分因子降级(DEGRADED): {inactive_expected}" if degraded_only else "因子均已注册并满足生命周期要求"
             ),
             evidence={
                 "expected": sorted(EXPECTED_FACTORS),

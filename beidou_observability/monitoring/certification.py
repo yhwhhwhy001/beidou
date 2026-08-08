@@ -1,6 +1,10 @@
 """PKG-MON-11: 72h 认证运行器 — 真实经过时间、不可模拟 (INV-012)。"""
+
 from __future__ import annotations
-import hashlib, json, os, time
+
+import hashlib
+import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,9 +13,11 @@ from typing import Any
 CERTIFICATION_HOURS = 72
 CERTIFICATION_SECONDS = CERTIFICATION_HOURS * 3600
 
+
 @dataclass(slots=True)
 class CertificationState:
     """72h 认证状态 — 不可伪造时间 (INV-012)。"""
+
     certification_id: str
     started_at: float = field(default_factory=time.time)
     evidence_dir: Path = field(default_factory=lambda: Path("evidence/certification"))

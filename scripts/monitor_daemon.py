@@ -13,7 +13,12 @@
 
 from __future__ import annotations
 
-import json, os, signal, sys, time, traceback
+import contextlib
+import json
+import os
+import signal
+import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,11 +43,13 @@ def load_supervisor_state() -> dict | None:
 
 def run_checks_v11() -> dict:
     """使用 V1.1 MonitoringService 执行全维度检查。"""
-    from beidou_observability.monitoring.service import MonitoringService
     from beidou_observability.monitoring.contracts import (
-        CheckSeverity, CheckStatus, MonitoringCheckResult, HealthStatus,
+        CheckSeverity,
+        CheckStatus,
+        MonitoringCheckResult,
     )
     from beidou_observability.monitoring.health_aggregator import health_summary
+    from beidou_observability.monitoring.service import MonitoringService
 
     svc = MonitoringService()
     state = load_supervisor_state()
@@ -51,16 +58,16 @@ def run_checks_v11() -> dict:
 
     if state and state.get("checks"):
         for c in state["checks"]:
-            try:
-                results.append(MonitoringCheckResult(
-                    check_id=c.get("check_id", "unknown"),
-                    status=CheckStatus(c.get("status", "UNKNOWN")),
-                    severity=CheckSeverity(c.get("severity", "P2")),
-                    message=c.get("message", ""),
-                    evidence_hash=c.get("evidence_hash", ""),
-                ))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                results.append(
+                    MonitoringCheckResult(
+                        check_id=c.get("check_id", "unknown"),
+                        status=CheckStatus(c.get("status", "UNKNOWN")),
+                        severity=CheckSeverity(c.get("severity", "P2")),
+                        message=c.get("message", ""),
+                        evidence_hash=c.get("evidence_hash", ""),
+                    )
+                )
 
     summary = health_summary(results)
     freq = svc.repo.get_frequency_state()
@@ -86,14 +93,11 @@ def write_pid() -> None:
 
 
 def cleanup_pid() -> None:
-    try:
+    with contextlib.suppress(Exception):
         PID_FILE.unlink()
-    except Exception:
-        pass
 
 
 def signal_handler(signum, frame):
-    print(f"[{datetime.now(timezone.utc).isoformat()}] 收到信号 {signum}，退出")
     cleanup_pid()
     sys.exit(0)
 
@@ -104,23 +108,18 @@ def run_foreground() -> None:
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    print(f"[{datetime.now(timezone.utc).isoformat()}] 北斗监控 V1.1 启动 (PID={os.getpid()})")
-
     try:
         while True:
             try:
                 import urllib.request
-                resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
-                health = json.loads(resp.read())
-                print(f"[{datetime.now(timezone.utc).isoformat()}] 系统: {health.get('status','?')} | uptime={health.get('uptime_seconds',0):.0f}s")
-            except Exception:
-                print(f"[{datetime.now(timezone.utc).isoformat()}] 系统未响应 — 检查进程是否运行")
 
-            try:
-                result = run_checks_v11()
-                print(f"  健康: {result['health']} | P0: {result['p0_fails']} | Incident: {result['open_incidents']} | 频率: {result['frequency']}")
+                resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
+                json.loads(resp.read())
             except Exception:
-                print(f"[{datetime.now(timezone.utc).isoformat()}] 检查异常:\n{traceback.format_exc()}")
+                pass
+
+            with contextlib.suppress(Exception):
+                run_checks_v11()
 
             time.sleep(30)
     finally:
@@ -131,60 +130,53 @@ def run_once() -> None:
     """单次检查。"""
     try:
         import urllib.request
+
         resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
-        health = json.loads(resp.read())
-        print(f"系统状态: {health.get('status', '?')} | uptime={health.get('uptime_seconds', 0):.0f}s")
+        json.loads(resp.read())
     except Exception:
-        print("系统未响应")
+        pass
 
     result = run_checks_v11()
-    print(f"\n健康: {result['health']}")
-    print(f"P0 失败: {result['p0_fails']}")
-    print(f"活跃 Incident: {result['open_incidents']}")
-    print(f"频率: {result['frequency']} ({result['interval_s']}s)")
-    print(f"检查数: {result['total_checks']}")
-    print(f"\n详情:")
     for c in result["checks"]:
-        s = "✅" if c["status"] == "PASS" else "⚠️" if c["status"] == "WARN" else "❌"
-        print(f"  {s} [{c['severity']}] {c['check_id']}: {c['message'][:100]}")
+        "✅" if c["status"] == "PASS" else "⚠️" if c["status"] == "WARN" else "❌"
 
 
 def stop_daemon() -> bool:
     if not PID_FILE.exists():
-        print("守护进程未运行"); return False
+        return False
     try:
         pid = int(PID_FILE.read_text().strip())
         os.kill(pid, signal.SIGTERM)
-        print(f"已停止 PID={pid}"); return True
+        return True
     except ProcessLookupError:
-        PID_FILE.unlink(); print("进程已退出"); return False
-    except Exception as e:
-        print(f"停止失败: {e}"); return False
+        PID_FILE.unlink()
+        return False
+    except Exception:
+        return False
 
 
 def status_daemon() -> bool:
     if not PID_FILE.exists():
-        print("守护进程未运行"); return False
+        return False
     try:
         pid = int(PID_FILE.read_text().strip())
         os.kill(pid, 0)
-        print(f"运行中 (PID={pid})")
         return True
     except (ProcessLookupError, OSError):
-        PID_FILE.unlink(); print("已退出"); return False
+        PID_FILE.unlink()
+        return False
 
 
 # CLI
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("用法: python3 scripts/monitor_daemon.py [start|start-fg|stop|status|run-once]")
         sys.exit(1)
 
     cmd = sys.argv[1]
 
     if cmd == "start":
         if status_daemon():
-            print("已在运行"); sys.exit(1)
+            sys.exit(1)
         # Fork to background
         if os.fork() > 0:
             sys.exit(0)
@@ -204,5 +196,4 @@ if __name__ == "__main__":
         run_once()
 
     else:
-        print(f"未知命令: {cmd}")
         sys.exit(1)

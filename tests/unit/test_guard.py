@@ -363,7 +363,6 @@ class TestNoAutoResume:
     @pytest.mark.skip(reason="testnet mode requires auto-RESUME for 24h unattended operation")
     def test_engine_code_has_no_sleep_resume(self):
         """engine.py 源码中不得存在 asyncio.sleep(N) 后跟 RESUME 的模式。"""
-        import ast
         from pathlib import Path
 
         engine_path = Path(__file__).resolve().parent.parent.parent / "beidou_core" / "engine.py"

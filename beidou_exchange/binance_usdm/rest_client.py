@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -305,9 +306,7 @@ class BinanceRESTClient:
                 req.add_header("X-MBX-APIKEY", self._api_key)
 
                 # 在线程池中执行同步 HTTP，不阻塞事件循环
-                body = await asyncio.to_thread(
-                    _sync_urlopen, req, DEFAULT_HTTP_TIMEOUT
-                )
+                body = await asyncio.to_thread(_sync_urlopen, req, DEFAULT_HTTP_TIMEOUT)
                 data = json.loads(body)
                 self._rate_state.consecutive_failures = 0
 

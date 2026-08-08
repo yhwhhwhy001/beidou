@@ -6,15 +6,11 @@ import json
 import os
 import tempfile
 
-import pytest
-
 from beidou_control.plane import (
     CONTROL_ALLOW_MATRIX,
     ControlAction,
     ControlPlane,
-    RejectionRecord,
     RiskDirection,
-    ValidationResult,
 )
 from beidou_safety.execution import OrderIntent
 from beidou_shared.types import (
@@ -249,7 +245,7 @@ class TestRaceConditionSafety:
             cp.execute_action(action)
             versions.append((action.value, cp.version))
         # 每个操作都递增
-        assert len(set(v for _, v in versions)) == len(versions)
+        assert len({v for _, v in versions}) == len(versions)
 
 
 # ================================================================
@@ -394,7 +390,7 @@ class TestUnknownFailClosed:
     def test_default_matrix_does_not_allow_unknown(self):
         """默认矩阵不应包含未定义的状态。"""
         # 每个已定义的状态都有明确的 allowed set
-        for state, allowed in CONTROL_ALLOW_MATRIX.items():
+        for _state, allowed in CONTROL_ALLOW_MATRIX.items():
             assert isinstance(allowed, set)
             for d in allowed:
                 assert isinstance(d, RiskDirection)

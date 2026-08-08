@@ -23,7 +23,6 @@ from beidou_shared.types import (
     HealthStatus,
     InstrumentId,
     MonetaryValue,
-    OrderId,
     OrderSide,
     OrderStatus,
     OrderType,
@@ -239,11 +238,14 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         if self._rest_client is not None:
             try:
                 import asyncio
+
                 result = asyncio.get_event_loop().run_until_complete(
                     self._rest_client.create_order(
                         symbol=str(request.venue_instrument.instrument_id),
-                        side=request.side.value if hasattr(request.side, 'value') else str(request.side),
-                        order_type=request.order_type.value if hasattr(request.order_type, 'value') else str(request.order_type),
+                        side=request.side.value if hasattr(request.side, "value") else str(request.side),
+                        order_type=request.order_type.value
+                        if hasattr(request.order_type, "value")
+                        else str(request.order_type),
                         quantity=float(request.quantity.amount),
                         price=float(request.price.amount) if request.price else None,
                         time_in_force=request.time_in_force or "GTC",
@@ -267,8 +269,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         correlation_id=request.correlation_id,
                         raw_response=data,
                     )
-            except Exception as e:
-                print(f"[adapter] create_order API failed: {e}")
+            except Exception:
+                pass
         return OrderResponse(
             venue_instrument=request.venue_instrument,
             account_ref=request.account_ref,
@@ -282,7 +284,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             average_price=None,
             commission=None,
             correlation_id=request.correlation_id,
-            raw_response={"reason": "real_transport_pending_BD-T18" if self._rest_client is None else "api_call_failed"},
+            raw_response={
+                "reason": "real_transport_pending_BD-T18" if self._rest_client is None else "api_call_failed"
+            },
         )
 
     async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:

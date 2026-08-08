@@ -5,12 +5,10 @@ from __future__ import annotations
 import pytest
 
 from beidou_strategy.protection.adaptive import (
-    ATR_MULTIPLIER,
     BASE_RR_RATIO,
     MAX_STOP_PCT,
     MIN_RR_RATIO,
     AdaptiveProtectionCalculator,
-    AdaptiveProtectionConfig,
     MarketRegime,
     PriceTier,
     VolatilityRegime,
@@ -88,7 +86,7 @@ class TestStopPctComputation:
     """止损百分比计算测试。"""
 
     def test_btc_like_low_vol(self):
-        """BTC 类：高价、低波 → 止损约为 ATR * 2 * 1.5(low vol) """
+        """BTC 类：高价、低波 → 止损约为 ATR * 2 * 1.5(low vol)"""
         stop_pct, regime, tier = AdaptiveProtectionCalculator.compute_stop_pct(
             atr_pct=0.30, ann_vol=0.18, spread_bps=1.0, price=65000.0
         )
@@ -98,7 +96,7 @@ class TestStopPctComputation:
         assert tier == PriceTier.HIGH
 
     def test_eth_like_normal_vol(self):
-        """ETH 类：中价、正常波 → ATR * 2 * 1.0 """
+        """ETH 类：中价、正常波 → ATR * 2 * 1.0"""
         stop_pct, regime, tier = AdaptiveProtectionCalculator.compute_stop_pct(
             atr_pct=0.50, ann_vol=0.30, spread_bps=1.0, price=2000.0
         )
@@ -109,7 +107,7 @@ class TestStopPctComputation:
 
     def test_doge_like_micro_price(self):
         """DOGE 类：极低价、高波 → min_stop 至少 2.5%"""
-        stop_pct, regime, tier = AdaptiveProtectionCalculator.compute_stop_pct(
+        stop_pct, _regime, tier = AdaptiveProtectionCalculator.compute_stop_pct(
             atr_pct=0.54, ann_vol=0.37, spread_bps=2.0, price=0.07
         )
         # 0.54 * 2 * 1.0 * (1 + 1/200) = 1.08%, but min_stop for MICRO = 2.5%
@@ -158,9 +156,7 @@ class TestRRComputation:
 
     def test_ranging_lower_rr(self):
         """震荡市 RR 降低（快止盈）。"""
-        rr, regime = AdaptiveProtectionCalculator.compute_rr_ratio(
-            stop_pct=1.0, trend_20_pct=1.0, rsi=50, ann_vol=0.30
-        )
+        rr, regime = AdaptiveProtectionCalculator.compute_rr_ratio(stop_pct=1.0, trend_20_pct=1.0, rsi=50, ann_vol=0.30)
         # BASE 2.0 * 0.8 * 1.0 * 1.0 = 1.6
         assert rr < BASE_RR_RATIO
         assert regime == MarketRegime.RANGING
@@ -199,8 +195,12 @@ class TestFullCalculation:
     def test_btc_scenario(self):
         """BTC 场景：64650 入场，低波，弱趋势。"""
         features = _make_features(
-            close=64650.0, atr_pct=0.30, ann_volatility=0.18,
-            rsi_14=55.0, trend_20_pct=1.5, spread_bps=0.5,
+            close=64650.0,
+            atr_pct=0.30,
+            ann_volatility=0.18,
+            rsi_14=55.0,
+            trend_20_pct=1.5,
+            spread_bps=0.5,
         )
         cfg = AdaptiveProtectionCalculator.calculate("BTCUSDT", 64650.0, features)
         assert cfg.stop_pct >= 0.8  # min for HIGH tier
@@ -212,8 +212,12 @@ class TestFullCalculation:
     def test_doge_scenario(self):
         """DOGE 场景：0.07 入场，高波。"""
         features = _make_features(
-            close=0.0693, atr_pct=0.54, ann_volatility=0.37,
-            rsi_14=48.0, trend_20_pct=-3.0, spread_bps=5.0,
+            close=0.0693,
+            atr_pct=0.54,
+            ann_volatility=0.37,
+            rsi_14=48.0,
+            trend_20_pct=-3.0,
+            spread_bps=5.0,
         )
         cfg = AdaptiveProtectionCalculator.calculate("DOGEUSDT", 0.0693, features)
         # Must be at least 2.5% for MICRO tier
@@ -223,8 +227,12 @@ class TestFullCalculation:
     def test_link_scenario(self):
         """LINK 场景：8.26 入场，极高波动。"""
         features = _make_features(
-            close=8.26, atr_pct=0.67, ann_volatility=0.48,
-            rsi_14=62.0, trend_20_pct=8.0, spread_bps=3.0,
+            close=8.26,
+            atr_pct=0.67,
+            ann_volatility=0.48,
+            rsi_14=62.0,
+            trend_20_pct=8.0,
+            spread_bps=3.0,
         )
         cfg = AdaptiveProtectionCalculator.calculate("LINKUSDT", 8.26, features)
         assert cfg.volatility_regime == VolatilityRegime.HIGH

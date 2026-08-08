@@ -61,24 +61,22 @@ class TestQualityScanner(ast.NodeVisitor):
                         has_valid_test = True
                         break
                 # raise AssertionError is a valid assertion
-                if isinstance(child, ast.Raise):
-                    if (
-                        isinstance(child.exc, ast.Call)
-                        and isinstance(child.exc.func, ast.Name)
-                        and child.exc.func.id in ("AssertionError", "ArchitectureViolation")
-                    ):
-                        has_valid_test = True
-                        break
+                if isinstance(child, ast.Raise) and (
+                    isinstance(child.exc, ast.Call)
+                    and isinstance(child.exc.func, ast.Name)
+                    and child.exc.func.id in ("AssertionError", "ArchitectureViolation")
+                ):
+                    has_valid_test = True
+                    break
                 # with pytest.raises(...): is also valid
                 if isinstance(child, ast.With):
                     for item in child.items:
-                        if isinstance(item.context_expr, ast.Call):
-                            if (
-                                isinstance(item.context_expr.func, ast.Attribute)
-                                and item.context_expr.func.attr == "raises"
-                            ):
-                                has_valid_test = True
-                                break
+                        if isinstance(item.context_expr, ast.Call) and (
+                            isinstance(item.context_expr.func, ast.Attribute)
+                            and item.context_expr.func.attr == "raises"
+                        ):
+                            has_valid_test = True
+                            break
 
             if not self._has_assert and not has_valid_test:
                 self.findings.append(
@@ -107,31 +105,30 @@ class TestQualityScanner(ast.NodeVisitor):
             )
 
         # Check for assert len(x) >= 0 (always true)
-        if isinstance(node.test, ast.Compare):
-            if (
-                isinstance(node.test.left, ast.Call)
-                and isinstance(node.test.left.func, ast.Name)
-                and node.test.left.func.id == "len"
-            ):
-                for op, comp in zip(node.test.ops, node.test.comparators):
-                    if isinstance(op, ast.GtE) and isinstance(comp, ast.Constant) and comp.value == 0:
-                        self.findings.append(
-                            Finding(
-                                self.filepath,
-                                node.lineno,
-                                "ERROR",
-                                "Vacuous assertion: 'assert len(x) >= 0' is always True",
-                            )
+        if isinstance(node.test, ast.Compare) and (
+            isinstance(node.test.left, ast.Call)
+            and isinstance(node.test.left.func, ast.Name)
+            and node.test.left.func.id == "len"
+        ):
+            for op, comp in zip(node.test.ops, node.test.comparators, strict=False):
+                if isinstance(op, ast.GtE) and isinstance(comp, ast.Constant) and comp.value == 0:
+                    self.findings.append(
+                        Finding(
+                            self.filepath,
+                            node.lineno,
+                            "ERROR",
+                            "Vacuous assertion: 'assert len(x) >= 0' is always True",
                         )
-                    if isinstance(op, ast.Gt) and isinstance(comp, ast.Constant) and comp.value == -1:
-                        self.findings.append(
-                            Finding(
-                                self.filepath,
-                                node.lineno,
-                                "ERROR",
-                                "Vacuous assertion: 'assert len(x) > -1' is always True",
-                            )
+                    )
+                if isinstance(op, ast.Gt) and isinstance(comp, ast.Constant) and comp.value == -1:
+                    self.findings.append(
+                        Finding(
+                            self.filepath,
+                            node.lineno,
+                            "ERROR",
+                            "Vacuous assertion: 'assert len(x) > -1' is always True",
                         )
+                    )
 
         self.generic_visit(node)
 
@@ -156,19 +153,22 @@ class TestQualityScanner(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute):
             if node.func.attr == "patch" or node.func.attr == "patch_object":
                 for arg in node.args:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        if any(
+                    if (
+                        isinstance(arg, ast.Constant)
+                        and isinstance(arg.value, str)
+                        and any(
                             p in arg.value
                             for p in ("beidou_core", "beidou_safety", "beidou_exchange", "beidou_strategy")
-                        ):
-                            self.findings.append(
-                                Finding(
-                                    self.filepath,
-                                    node.lineno,
-                                    "WARNING",
-                                    f"mock.patch replaces production path: {arg.value}",
-                                )
+                        )
+                    ):
+                        self.findings.append(
+                            Finding(
+                                self.filepath,
+                                node.lineno,
+                                "WARNING",
+                                f"mock.patch replaces production path: {arg.value}",
                             )
+                        )
         self.generic_visit(node)
 
 
@@ -201,26 +201,20 @@ def scan_directory(test_dir: str) -> list[Finding]:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        test_dir = "tests"
-    else:
-        test_dir = sys.argv[1]
+    test_dir = "tests" if len(sys.argv) < 2 else sys.argv[1]
 
     if not os.path.isdir(test_dir):
-        print(f"ERROR: {test_dir} is not a directory")
         return 1
 
     findings = scan_directory(test_dir)
     errors = [f for f in findings if f.severity == "ERROR"]
-    warnings = [f for f in findings if f.severity == "WARNING"]
+    [f for f in findings if f.severity == "WARNING"]
 
     if findings:
-        print(f"\n=== Test Quality Scan: {len(findings)} issues ({len(errors)} errors, {len(warnings)} warnings) ===")
-        for f in sorted(findings, key=lambda x: (x.file, x.line)):
-            prefix = "❌" if f.severity == "ERROR" else "⚠️"
-            print(f"  {prefix} {f.file}:{f.line}: {f.message}")
+        for _f in sorted(findings, key=lambda x: (x.file, x.line)):
+            pass
     else:
-        print("✅ Test quality scan: no issues found")
+        pass
 
     return 1 if errors else 0
 

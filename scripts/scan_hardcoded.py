@@ -60,10 +60,10 @@ _EXTRA_PATTERNS = [
     (r'["\']/tmp/', "hardcoded_tmp_path", "硬编码 /tmp/ 路径"),
     (r'["\']/var/run/', "hardcoded_var_path", "硬编码 /var/run/ 路径"),
     # localhost + 端口模式
-    (r'localhost:\d{4,5}', "hardcoded_localhost", "硬编码 localhost:PORT"),
+    (r"localhost:\d{4,5}", "hardcoded_localhost", "硬编码 localhost:PORT"),
     # 明文 API 密钥（在 YAML 中）
-    (r'api_key_ref:\s*[A-Za-z0-9]{32,}', "plaintext_api_key", "api_key_ref 包含明文密钥值"),
-    (r'api_secret_ref:\s*[A-Za-z0-9]{32,}', "plaintext_api_secret", "api_secret_ref 包含明文密钥值"),
+    (r"api_key_ref:\s*[A-Za-z0-9]{32,}", "plaintext_api_key", "api_key_ref 包含明文密钥值"),
+    (r"api_secret_ref:\s*[A-Za-z0-9]{32,}", "plaintext_api_secret", "api_secret_ref 包含明文密钥值"),
 ]
 
 
@@ -222,14 +222,10 @@ def main() -> int:
     errors = [f for f in findings if f.category in _BLOCKING_CATEGORIES]
 
     if findings:
-        print(f"\n=== Hardcoded Value Scan: {len(findings)} issues ({len(errors)} blocking) ===")
-        for cat, cat_findings in sorted(categories.items()):
-            blocking = "❌" if cat in _BLOCKING_CATEGORIES else "⚠️"
-            print(f"\n  [{cat}] {len(cat_findings)} findings:")
+        for _cat, cat_findings in sorted(categories.items()):
             for f in sorted(cat_findings, key=lambda x: (x.file, x.line)):
-                print(f"    {blocking} {f.file}:{f.line}: {f.message}")
+                pass
     else:
-        print("✅ Hardcoded scan: no issues found")
         return 0
 
     return 1 if errors else 0

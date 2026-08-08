@@ -1,7 +1,5 @@
 """PKG-20A/B/C: Risk Engine 测试。"""
 
-import os
-
 import pytest
 
 from beidou_safety.risk import PreRiskContext

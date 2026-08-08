@@ -98,7 +98,7 @@ class OrderAggregate:
     def from_tracker(cls, tracker) -> "OrderAggregate":
         """BD-T09: 从旧 OrderStateTracker 迁移到统一 OrderAggregate。"""
         agg = cls(order_id=tracker.order_id, symbol="", side="")
-        for event, ts in tracker._events:
+        for event, _ts in tracker._events:
             agg.apply(event)
         return agg
 

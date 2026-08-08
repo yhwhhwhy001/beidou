@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_observability.monitoring.contracts import (
+    AccountPositionMode,
+    PositionModeEvidence,
+)
 
 from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, StartupReport
@@ -18,10 +22,6 @@ from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
 from .state import EvidenceWriter, InstanceLock
-from beidou_observability.monitoring.contracts import (
-    AccountPositionMode,
-    PositionModeEvidence,
-)
 
 
 class BeidouSupervisor:
@@ -181,10 +181,12 @@ class BeidouSupervisor:
                 return []
             result = []
             for fid, rec in registry._factors.items():
-                result.append({
-                    "factor_id": fid,
-                    "lifecycle": str(getattr(rec.lifecycle, "value", rec.lifecycle)),
-                })
+                result.append(
+                    {
+                        "factor_id": fid,
+                        "lifecycle": str(getattr(rec.lifecycle, "value", rec.lifecycle)),
+                    }
+                )
             return result
 
         self.engine._health.set_readiness_check(readiness)
@@ -237,22 +239,33 @@ class BeidouSupervisor:
                 previous = self._position_mode_evidence
                 previous_mode = previous.mode if previous else None
                 self._position_mode_evidence = PositionModeEvidence(
-                    account_id="", venue="BINANCE_USDM",
-                    mode=mode, source="EXCHANGE_USER_DATA",
-                    source_timestamp=time.time(), observed_at=now,
+                    account_id="",
+                    venue="BINANCE_USDM",
+                    mode=mode,
+                    source="EXCHANGE_USER_DATA",
+                    source_timestamp=time.time(),
+                    observed_at=now,
                     raw_response=response,
                 )
                 if previous_mode is not None and previous_mode != mode and previous_mode != AccountPositionMode.UNKNOWN:
-                    self.writer.write_event("position_mode_changed", {
-                        "previous": previous_mode.value, "current": mode.value, "observed_at": now,
-                    })
+                    self.writer.write_event(
+                        "position_mode_changed",
+                        {
+                            "previous": previous_mode.value,
+                            "current": mode.value,
+                            "observed_at": now,
+                        },
+                    )
             else:
                 raise RuntimeError(f"Invalid position mode response: {str(response)[:300]}")
         except Exception as exc:
             self._position_mode_evidence = PositionModeEvidence(
-                account_id="", venue="BINANCE_USDM",
-                mode=AccountPositionMode.UNKNOWN, source="EXCHANGE_USER_DATA",
-                observed_at=now, error=f"{type(exc).__name__}: {exc}",
+                account_id="",
+                venue="BINANCE_USDM",
+                mode=AccountPositionMode.UNKNOWN,
+                source="EXCHANGE_USER_DATA",
+                observed_at=now,
+                error=f"{type(exc).__name__}: {exc}",
             )
 
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
@@ -305,16 +318,18 @@ class BeidouSupervisor:
 
     # 启动阶段只要求关键检查通过；行情、对账、心跳等运行时检查
     # 在引擎运行一段时间后自然会就绪，不应阻断启动。
-    _STARTUP_CRITICAL_CHECKS = frozenset({
-        "runtime.wiring.core",
-        "runtime.algorithms.alpha_graph",
-        "runtime.algorithms.factor_lifecycle",
-        "runtime.algorithms.trading_pool",
-        "runtime.algorithms.risk_budget",
-        "runtime.health.lifecycle",
-        "runtime.health.http_server",
-        "runtime.health.account_snapshot",
-    })
+    _STARTUP_CRITICAL_CHECKS = frozenset(
+        {
+            "runtime.wiring.core",
+            "runtime.algorithms.alpha_graph",
+            "runtime.algorithms.factor_lifecycle",
+            "runtime.algorithms.trading_pool",
+            "runtime.algorithms.risk_budget",
+            "runtime.health.lifecycle",
+            "runtime.health.http_server",
+            "runtime.health.account_snapshot",
+        }
+    )
 
     async def _wait_for_startup(self) -> bool:
         assert self.engine is not None
@@ -354,16 +369,14 @@ class BeidouSupervisor:
                 except Exception as exc:
                     print(f"[supervisor] Runtime checks failed: {type(exc).__name__}: {exc}")
                     import traceback
+
                     traceback.print_exc()
                     checks = []
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
                 # 启动阶段仅阻断关键接线/生命周期/账户检查
-                startup_blockers = [
-                    c for c in checks
-                    if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS
-                ]
+                startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
                 if not startup_blockers:
                     return True
             else:
@@ -397,17 +410,19 @@ class BeidouSupervisor:
     # 可在运行时自愈的瞬时阻断项（心跳、行情延迟等）；
     # 对账 MISMATCHED 在活跃交易中是瞬时状态 — 引擎有 _sync_exchange_state()
     # 和 _reconcile() 自愈逻辑，可在数秒内修复。只有连续多轮无法自愈时才需人工干预。
-    _TRANSIENT_CHECK_IDS = frozenset({
-        "runtime.health.realtime_heartbeat",
-        "runtime.health.nearline_heartbeat",
-        "runtime.health.market_data",
-        "runtime.health.http_server",
-        "runtime.health.errors",
-        "runtime.health.account_snapshot",
-        "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
-        "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
-        "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
-    })
+    _TRANSIENT_CHECK_IDS = frozenset(
+        {
+            "runtime.health.realtime_heartbeat",
+            "runtime.health.nearline_heartbeat",
+            "runtime.health.market_data",
+            "runtime.health.http_server",
+            "runtime.health.errors",
+            "runtime.health.account_snapshot",
+            "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
+            "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
+            "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
+        }
+    )
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
@@ -425,22 +440,18 @@ class BeidouSupervisor:
             return False
         # 时间窗口恢复计数：清理过期记录，仅在窗口内超限时拒绝
         now = time.monotonic()
-        self._recovery_timestamps = [
-            t for t in self._recovery_timestamps
-            if now - t < self.recovery_window_seconds
-        ]
+        self._recovery_timestamps = [t for t in self._recovery_timestamps if now - t < self.recovery_window_seconds]
         if not self.self_heal or len(self._recovery_timestamps) >= self.max_restarts:
             if len(self._recovery_timestamps) >= self.max_restarts:
                 print(
                     f"[supervisor] RECOVERY BLOCKED: {len(self._recovery_timestamps)}/{self.max_restarts} "
                     f"in {self.recovery_window_seconds:.0f}s window "
-                    f"(timestamps={[f'{now-t:.0f}s ago' for t in self._recovery_timestamps]})"
+                    f"(timestamps={[f'{now - t:.0f}s ago' for t in self._recovery_timestamps]})"
                 )
             return False
 
         persistent_blockers = [
-            item for item in checks
-            if item.is_blocking and item.check_id not in self._TRANSIENT_CHECK_IDS
+            item for item in checks if item.is_blocking and item.check_id not in self._TRANSIENT_CHECK_IDS
         ]
         if persistent_blockers:
             return False
@@ -483,10 +494,7 @@ class BeidouSupervisor:
             if blockers:
                 # 区分瞬时阻断（可自愈：心跳/行情/对账/保护等）和持久阻断。
                 # 瞬时阻断不计入 _critical_streak，避免引擎自愈过程中被误判致命。
-                persistent_blockers = [
-                    b for b in blockers
-                    if b.check_id not in self._TRANSIENT_CHECK_IDS
-                ]
+                persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
                 if persistent_blockers:
                     self._critical_streak += 1
                     fatal_triggered = self._critical_streak >= 5

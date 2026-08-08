@@ -77,7 +77,9 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
 
 
 def _append_position_mode_check(
-    checks: list[CheckResult], evidence: Any, now: float,
+    checks: list[CheckResult],
+    evidence: Any,
+    now: float,
 ) -> None:
     """MON00A: Position Mode 运行时检查。
 
@@ -86,41 +88,52 @@ def _append_position_mode_check(
     - ONE_WAY/HEDGE → PASS
     """
     if evidence is None:
-        checks.append(CheckResult(
-            check_id="runtime.safety.position_mode",
-            name="账户持仓模式",
-            status=CheckStatus.WARN, severity=CheckSeverity.P1,
-            message="Position Mode 尚未查询，等待交易所响应",
-            evidence={"mode": "UNKNOWN", "reason": "NO_EVIDENCE_YET"},
-        ))
+        checks.append(
+            CheckResult(
+                check_id="runtime.safety.position_mode",
+                name="账户持仓模式",
+                status=CheckStatus.WARN,
+                severity=CheckSeverity.P1,
+                message="Position Mode 尚未查询，等待交易所响应",
+                evidence={"mode": "UNKNOWN", "reason": "NO_EVIDENCE_YET"},
+            )
+        )
         return
 
     mode = getattr(evidence, "mode", None)
-    if mode is None or str(mode) == "AccountPositionMode.UNKNOWN" or (
-        hasattr(mode, "value") and mode.value == "UNKNOWN"
+    if (
+        mode is None
+        or str(mode) == "AccountPositionMode.UNKNOWN"
+        or (hasattr(mode, "value") and mode.value == "UNKNOWN")
     ):
-        checks.append(CheckResult(
-            check_id="runtime.safety.position_mode",
-            name="账户持仓模式",
-            status=CheckStatus.FAIL, severity=CheckSeverity.P0,
-            message=f"Position Mode UNKNOWN: {getattr(evidence, 'error', 'API_FAILURE')} — 阻止新增风险",
-            evidence={"mode": "UNKNOWN", "error": getattr(evidence, "error", None)},
-        ))
+        checks.append(
+            CheckResult(
+                check_id="runtime.safety.position_mode",
+                name="账户持仓模式",
+                status=CheckStatus.FAIL,
+                severity=CheckSeverity.P0,
+                message=f"Position Mode UNKNOWN: {getattr(evidence, 'error', 'API_FAILURE')} — 阻止新增风险",
+                evidence={"mode": "UNKNOWN", "error": getattr(evidence, "error", None)},
+            )
+        )
         return
 
     mode_str = mode.value if hasattr(mode, "value") else str(mode)
-    checks.append(CheckResult(
-        check_id="runtime.safety.position_mode",
-        name="账户持仓模式",
-        status=CheckStatus.PASS, severity=CheckSeverity.P0,
-        message=f"Position Mode: {mode_str}",
-        evidence={
-            "mode": mode_str,
-            "source": getattr(evidence, "source", ""),
-            "source_timestamp": getattr(evidence, "source_timestamp", None),
-            "observed_at": getattr(evidence, "observed_at", 0.0),
-        },
-    ))
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.position_mode",
+            name="账户持仓模式",
+            status=CheckStatus.PASS,
+            severity=CheckSeverity.P0,
+            message=f"Position Mode: {mode_str}",
+            evidence={
+                "mode": mode_str,
+                "source": getattr(evidence, "source", ""),
+                "source_timestamp": getattr(evidence, "source_timestamp", None),
+                "observed_at": getattr(evidence, "observed_at", 0.0),
+            },
+        )
+    )
 
 
 def collect_runtime_checks(
@@ -203,9 +216,7 @@ def collect_runtime_checks(
             status=CheckStatus.WARN if blocked_writes else CheckStatus.PASS,
             severity=CheckSeverity.P1,
             message=(
-                f"已拦截 {len(blocked_writes)} 次非授权交易所写请求"
-                if blocked_writes
-                else "未发现非授权交易所写请求"
+                f"已拦截 {len(blocked_writes)} 次非授权交易所写请求" if blocked_writes else "未发现非授权交易所写请求"
             ),
             evidence={"blocked_count": len(blocked_writes), "recent": blocked_writes[-20:]},
         )
@@ -359,9 +370,7 @@ def collect_runtime_checks(
         exchange_facts = getattr(reconciliation, "exchange_facts", None)
         system_facts = getattr(reconciliation, "system_facts", None)
         timestamps = [
-            getattr(facts, "timestamp", None)
-            for facts in (exchange_facts, system_facts)
-            if facts is not None
+            getattr(facts, "timestamp", None) for facts in (exchange_facts, system_facts) if facts is not None
         ]
         valid_timestamps = [item.timestamp() for item in timestamps if item is not None]
         if valid_timestamps:
@@ -476,7 +485,6 @@ def collect_runtime_checks(
         # 启动阶段（resume_authorized=False）保护单尚未下发完毕，
         # FAIL 降级为 P2 WARN，与对账检查保持一致；运行时恢复 P0 阻断。
         if not snapshot_ok:
-            coverage_ok = False
             if resume_authorized and not _protection_grace_active:
                 coverage_status = CheckStatus.FAIL
                 coverage_severity = CheckSeverity.P0
@@ -485,12 +493,10 @@ def collect_runtime_checks(
                 coverage_severity = CheckSeverity.P2
             coverage_message = f"交易所保护事实查询失败: {snapshot.get('error', 'UNKNOWN')}"
         elif all_protected:
-            coverage_ok = True
             coverage_status = CheckStatus.PASS
             coverage_severity = CheckSeverity.P0
             coverage_message = f"全部 {len(open_symbols)} 个持仓标的均有当前交易所保护单"
         elif none_protected:
-            coverage_ok = False
             if resume_authorized and not _protection_grace_active:
                 coverage_status = CheckStatus.FAIL
                 coverage_severity = CheckSeverity.P0
@@ -499,10 +505,11 @@ def collect_runtime_checks(
                 coverage_severity = CheckSeverity.P2
             coverage_message = f"全部 {len(open_symbols)} 个持仓标的均无保护单落地"
         else:
-            coverage_ok = True
             coverage_status = CheckStatus.WARN
             coverage_severity = CheckSeverity.P1
-            coverage_message = f"部分持仓标的保护单未落地: {missing_protection}（已保护: {sorted(exchange_protected_symbols)}）"
+            coverage_message = (
+                f"部分持仓标的保护单未落地: {missing_protection}（已保护: {sorted(exchange_protected_symbols)}）"
+            )
         checks.append(
             CheckResult(
                 check_id="runtime.safety.protection_coverage",
@@ -515,9 +522,7 @@ def collect_runtime_checks(
                     "exchange_protected_symbols": sorted(exchange_protected_symbols),
                     "missing": missing_protection,
                     "exchange_snapshot": snapshot,
-                    "exchange_snapshot_age_seconds": (
-                        round(snapshot_age, 3) if snapshot_age != float("inf") else None
-                    ),
+                    "exchange_snapshot_age_seconds": (round(snapshot_age, 3) if snapshot_age != float("inf") else None),
                     "positions": protection_evidence,
                     "grace_period_active": _protection_grace_active,
                     "last_order_placed_age_seconds": (

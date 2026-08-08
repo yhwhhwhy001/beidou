@@ -9,6 +9,7 @@ import contextlib
 import json
 import threading
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -118,10 +119,8 @@ class AlertDispatcher:
         # 追加持仓
         portfolio = ""
         if self._portfolio_provider:
-            try:
+            with contextlib.suppress(Exception):
                 portfolio = self._portfolio_provider()
-            except Exception:
-                pass
 
         try:
             if "open.feishu.cn" in url or "open.larksuite.com" in url:
@@ -132,40 +131,53 @@ class AlertDispatcher:
                 if portfolio:
                     elements.append({"tag": "hr"})
                     elements.append({"tag": "markdown", "content": portfolio})
-                elements.append({"tag": "note", "elements": [
-                    {"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id} | {ts}"}
-                ]})
-                payload = json.dumps({
-                    "msg_type": "interactive",
-                    "card": {
-                        "header": {
-                            "title": {"content": title, "tag": "plain_text"},
-                            "template": "red" if incident.severity.value in ("CRITICAL","LOCKDOWN") else "yellow",
+                elements.append(
+                    {
+                        "tag": "note",
+                        "elements": [{"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id} | {ts}"}],
+                    }
+                )
+                payload = json.dumps(
+                    {
+                        "msg_type": "interactive",
+                        "card": {
+                            "header": {
+                                "title": {"content": title, "tag": "plain_text"},
+                                "template": "red" if incident.severity.value in ("CRITICAL", "LOCKDOWN") else "yellow",
+                            },
+                            "elements": elements,
                         },
-                        "elements": elements,
-                    },
-                }).encode()
+                    }
+                ).encode()
             elif "sctapi.ftqq.com" in url:
                 payload = json.dumps({"title": title, "desp": f"{body}\n\n{portfolio}"}).encode()
             elif "pushplus.plus" in url:
-                payload = json.dumps({
-                    "token": url.split("token=")[-1] if "token=" in url else "",
-                    "title": title, "content": f"{body}\n\n{portfolio}",
-                }).encode()
+                payload = json.dumps(
+                    {
+                        "token": url.split("token=")[-1] if "token=" in url else "",
+                        "title": title,
+                        "content": f"{body}\n\n{portfolio}",
+                    }
+                ).encode()
             elif "qyapi.weixin.qq.com" in url:
-                payload = json.dumps({
-                    "msgtype": "markdown",
-                    "markdown": {"content": f"## {title}\n{body}\n\n{portfolio}"},
-                }).encode()
+                payload = json.dumps(
+                    {
+                        "msgtype": "markdown",
+                        "markdown": {"content": f"## {title}\n{body}\n\n{portfolio}"},
+                    }
+                ).encode()
             else:
-                payload = json.dumps({
-                    "incident_id": incident.incident_id,
-                    "severity": incident.severity.value,
-                    "title": incident.title, "description": incident.description,
-                    "auto_action": incident.auto_action.value,
-                    "detected_at": incident.detected_at.isoformat(),
-                    "portfolio": portfolio,
-                }).encode()
+                payload = json.dumps(
+                    {
+                        "incident_id": incident.incident_id,
+                        "severity": incident.severity.value,
+                        "title": incident.title,
+                        "description": incident.description,
+                        "auto_action": incident.auto_action.value,
+                        "detected_at": incident.detected_at.isoformat(),
+                        "portfolio": portfolio,
+                    }
+                ).encode()
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5)

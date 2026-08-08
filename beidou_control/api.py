@@ -168,6 +168,7 @@ class ControlPlaneAPI:
         """BD-T14: 手动 RESUME — 验证通过后恢复交易能力。"""
         if self._control_plane is not None:
             from beidou_control.plane import ControlAction
+
             result = self._control_plane.execute_action(ControlAction.RESUME)
             return {"action": "RESUME", "success": result, "new_status": str(self._control_plane.get_status())}
         return {"action": "RESUME", "success": False, "error": "control_plane not wired"}
@@ -188,11 +189,15 @@ class ControlPlaneAPI:
             return []
         result = []
         for fid, rec in self._factor_registry._factors.items():
-            result.append({
-                "factor_id": fid,
-                "lifecycle": rec.lifecycle.value,
-                "can_transition_to": [t.value for t in rec._valid_transitions()] if hasattr(rec, '_valid_transitions') else [],
-            })
+            result.append(
+                {
+                    "factor_id": fid,
+                    "lifecycle": rec.lifecycle.value,
+                    "can_transition_to": [t.value for t in rec._valid_transitions()]
+                    if hasattr(rec, "_valid_transitions")
+                    else [],
+                }
+            )
         return result
 
     def promote_factor(self, factor_id: str, target_state: str) -> dict:
@@ -204,6 +209,7 @@ class ControlPlaneAPI:
             return {"success": False, "error": f"factor {factor_id} not found"}
         try:
             from beidou_research.factors.factor import FactorLifecycle
+
             target = FactorLifecycle(target_state)
             ok = rec.transition(target)
             return {"success": ok, "factor_id": factor_id, "new_state": rec.lifecycle.value, "target": target_state}
@@ -215,6 +221,7 @@ class ControlPlaneAPI:
         if not self._factor_registry:
             return {"success": False, "error": "factor_registry not wired"}
         from beidou_research.factors.factor import FactorLifecycle
+
         results = {}
         for fid, rec in self._factor_registry._factors.items():
             # 按生命周期链逐步晋级

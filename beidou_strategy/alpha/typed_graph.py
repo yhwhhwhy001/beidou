@@ -299,7 +299,6 @@ class ExitNode(TypedGraphNode):
                 output_hash="exit_error",
                 data=None,
                 dq_tier=DataQualityTier.DEGRADED,
-                failure_policy=NodeFailurePolicy.FAIL_CLOSED,
             )
 
         if proposal is None:
