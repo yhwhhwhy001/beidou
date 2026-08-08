@@ -196,6 +196,9 @@ class BeidouSupervisor:
         """独立读取当前账户事实，拒绝使用陈旧的引擎缓存作为就绪证据。"""
         if self.engine is None:
             return
+        # testnet/paper 跳过（同步 urllib 阻塞事件循环）
+        if self.mode in ("testnet", "paper"):
+            return
         now = time.monotonic()
         if now - self._last_exchange_account_probe < 15.0:
             return
@@ -226,6 +229,8 @@ class BeidouSupervisor:
         if self.engine is None:
             return
         now = time.monotonic()
+        if self.mode in ("testnet", "paper"):
+            return
         if self._position_mode_evidence is not None and now - self._last_position_mode_probe < 300.0:
             return
         self._last_position_mode_probe = now
