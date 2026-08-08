@@ -103,27 +103,47 @@ class AlertDispatcher:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _send_webhook(self, incident: Incident) -> None:
-        payload = json.dumps(
-            {
-                "incident_id": incident.incident_id,
-                "severity": incident.severity.value,
-                "title": incident.title,
-                "description": incident.description,
-                "auto_action": incident.auto_action.value,
-                "detected_at": incident.detected_at.isoformat(),
-            }
-        ).encode()
+        """发送 webhook 告警。自动识别微信推送服务类型。
+
+        支持: Server酱 (sctapi.ftqq.com) / PushPlus (pushplus.plus) /
+              企业微信机器人 (qyapi.weixin.qq.com) / 通用 JSON
+        """
+        url = self._webhook_url
+        title = f"[{incident.severity.value}] {incident.title}"
+        desc = f"{incident.description}\n\n操作: {incident.auto_action.value}\n时间: {incident.detected_at.isoformat()}\nID: {incident.incident_id}"
 
         try:
-            req = urllib.request.Request(
-                self._webhook_url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
+            if "sctapi.ftqq.com" in url:
+                # Server酱 (微信推送)
+                payload = json.dumps({"title": title, "desp": desc}).encode()
+            elif "pushplus.plus" in url:
+                # PushPlus (微信推送)
+                payload = json.dumps({
+                    "token": url.split("token=")[-1] if "token=" in url else "",
+                    "title": title,
+                    "content": desc,
+                }).encode()
+            elif "qyapi.weixin.qq.com" in url:
+                # 企业微信机器人
+                payload = json.dumps({
+                    "msgtype": "markdown",
+                    "markdown": {"content": f"## {title}\n{desc}"},
+                }).encode()
+            else:
+                # 通用 JSON webhook
+                payload = json.dumps({
+                    "incident_id": incident.incident_id,
+                    "severity": incident.severity.value,
+                    "title": incident.title,
+                    "description": incident.description,
+                    "auto_action": incident.auto_action.value,
+                    "detected_at": incident.detected_at.isoformat(),
+                }).encode()
+
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5)
         except Exception:
-            # Webhook 失败不应影响主流程，但必须记录
-            pass
+            pass  # Webhook 失败不影响主流程
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:
