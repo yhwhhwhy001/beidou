@@ -3041,6 +3041,30 @@ class AutonomousEngine:
 
     # --- Main loop ---
 
+    async def _start_loops(self) -> None:
+        """启动三层时钟域事件循环（testnet 快速跳过 API 恢复）。"""
+        self._running = True
+        async def _rt():
+            while self._running:
+                try: await self._realtime_tick()
+                except Exception: self._error_count += 1
+                await asyncio.sleep(1)
+        async def _nl():
+            while self._running:
+                try:
+                    await self._nearline_tick()
+                    await self._sync_exchange_state()
+                except Exception: self._error_count += 1
+                await asyncio.sleep(10)
+        async def _of():
+            while self._running:
+                try:
+                    if time.time() - self._last_offline >= 3600:
+                        await self._offline_tick()
+                except Exception: self._error_count += 1
+                await asyncio.sleep(60)
+        await asyncio.gather(_rt(), _nl(), _of())
+
     async def run(self) -> None:
         """启动自主运行引擎。"""
         print("[beidou-autopilot] ========================================")
@@ -3118,7 +3142,7 @@ class AutonomousEngine:
             print("[beidou-autopilot] Skipping API-heavy startup recovery (testnet/paper)")
             self._lifecycle.transition(ModuleState.ACTIVE)
             print("[beidou-autopilot] Engine ACTIVE — entering main loop")
-            await self._run_loop()
+            await self._start_loops()
             return
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
