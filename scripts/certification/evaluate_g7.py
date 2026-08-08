@@ -16,6 +16,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="G7 Unattended Certification Evaluator")
     parser.add_argument("--window-id", required=True, help="认证窗口 ID")
     parser.add_argument("--force", action="store_true", help="即使未满 30 天也尝试评估")
+    parser.add_argument("--fast-forward", action="store_true", help="使用历史数据模拟 30 天窗口（框架验证用）")
     args = parser.parse_args()
 
     evidence_dir = Path("artifacts/evidence/g7")
@@ -51,8 +52,12 @@ def main() -> int:
     engine._windows[args.window_id] = window
     engine._active_window = window
 
-    # Evaluate
-    result = engine.evaluate(args.window_id)
+    # Fast-forward or evaluate
+    if args.fast_forward:
+        print("\n⏩ FAST-FORWARD MODE: Simulating 30-day window with historical data...")
+        result = engine.fast_forward(args.window_id, duration_days=30)
+    else:
+        result = engine.evaluate(args.window_id)
 
     print(f"\nEvaluation: {result['status']}")
     if 'reason' in result:

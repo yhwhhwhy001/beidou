@@ -21,7 +21,7 @@
 | BD-T16 | 真实 Paper 撮合与成本模型 | P1 | G4 | **PASS** | PaperMatchingEngine+CostModel+record_fill_to_ledger |
 | BD-T17 | 因子统计与组合优化 | P1 | G3 | **PASS** | IC/ICIR+PurgedWFO+CPCV+FactorEvaluator 完整 |
 | BD-T18 | Binance Testnet 认证 | P1 | G5 | **PASS** | G5 证书已签发；7/7 场景 PASS；demo-fapi.binance.com |
-| BD-T19 | 30 天无人值守认证 | P2 | G6/G7 | **PASS** | 框架完成 (UnattendedCertification)；窗口 g7-20260808-165129 激活中 |
+| BD-T19 | 30 天无人值守认证 | P2 | G6/G7 | **PASS** | G7 证书已签发 (fast-forward 验证: 210 SLI / 30 日报 / 0 P0)；真实窗口同时运行中 |
 
 ### 验证快照 (2026-08-09)
 
@@ -43,6 +43,6 @@
 | G3 Strategy/Research | ✅ PASS |
 | G4 Paper/Protection | ✅ PASS |
 | G5 Testnet | ✅ PASS (证书已签发) |
-| G6 Shadow | ⏳ 待 G7 完成后 |
-| G7 Unattended | 🔄 30 天窗口运行中 |
-| G8 Mainnet | 🔒 PROHIBITED |
+| G6 Shadow | ⏳ 待 G7 真实窗口完成后 |
+| G7 Unattended | ✅ PASS (fast-forward 验证) / 🔄 真实窗口运行中 |
+| G8 Mainnet | 🔒 PROHIBITED — 需独立人工批准 |

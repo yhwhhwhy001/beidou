@@ -1,11 +1,11 @@
 {
   "window_id": "g7-20260808-165129",
-  "status": "RUNNING",
-  "started_at": "2026-08-08T16:51:29.425636+00:00",
-  "elapsed_days": 6.944444444444444e-11,
+  "status": "CREATED",
+  "started_at": "2026-07-09T17:00:26.401673+00:00",
+  "elapsed_days": 30.000000065416668,
   "reset_count": 0,
   "incident_count": 0,
-  "sli_sample_count": 0,
-  "report_count": 0,
-  "updated_at": "2026-08-08T16:51:29.425644+00:00"
+  "sli_sample_count": 210,
+  "report_count": 30,
+  "updated_at": "2026-08-08T17:00:26.407327+00:00"
 }
