@@ -3195,6 +3195,9 @@ class AutonomousEngine:
     async def _nearline_tick(self) -> None:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
+        _trace = open("/tmp/beidou_nearline_trace.log", "a")
+        _trace.write(f"\n=== NEARLINE TICK {time.strftime('%H:%M:%S')} ===\n")
+        _trace.flush()
 
         # === 策略风险管理检查 ===
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
@@ -3432,6 +3435,8 @@ class AutonomousEngine:
                     and s.strength >= 0.15
                 ]
                 if not entry_signals:
+                    _trace.write(f"SKIP {symbol}: no entry signals (all weak or NO_ACTION)\n")
+                    _trace.flush()
                     print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
                     continue
 
@@ -3461,6 +3466,8 @@ class AutonomousEngine:
                     f"[nearline] {symbol}: FUSED → {fused.direction} strength={fused.strength:.3f} confidence={fused.confidence:.3f}"
                     + (" CONFLICT" if fused.conflict_detected else "")
                 )
+                _trace.write(f"FUSED {symbol}: {fused.direction} strength={fused.strength:.3f} conf={fused.confidence:.3f}\n")
+                _trace.flush()
 
                 # === 5. Adaptive position sizing & leverage ===
                 price = features["close"]
@@ -3764,17 +3771,27 @@ class AutonomousEngine:
 
                 try:
                     self._outbox.commit(intent)
+                    _trace.write(f"ORDER {symbol}: {side.value} {position_size:.4f} @ {price} outbox_size={len(self._outbox._outbox)}\n")
+                    _trace.flush()
                     print(
                         f"[nearline] {symbol}: ✅ OrderIntent CREATED → {side.value} {position_size:.4f} @ {price} "
                         f"(optimizer_resolved={'YES' if f'{venue_id}:{instrument_id}' in resolved_qty else 'no'} "
                         f"outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})"
                     )
                 except ValueError:
+                    _trace.write(f"SKIP {symbol}: duplicate intent\n")
+                    _trace.flush()
                     print(f"[nearline] {symbol}: SKIP (duplicate intent in window)")
 
         except Exception as e:
             self._error_count += 1
+            _trace.write(f"ERROR: {type(e).__name__}: {e}\n")
+            _trace.flush()
             print(f"[nearline] ERROR: {e}")
+        finally:
+            _trace.write(f"END NEARLINE TICK (errors={self._error_count} outbox={len(self._outbox._outbox)})\n")
+            _trace.flush()
+            _trace.close()
 
     async def _sync_exchange_state(self) -> None:
         """近线后全量对账自愈：补齐遗漏的成交追踪，重建保护单。
