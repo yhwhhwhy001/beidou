@@ -16,11 +16,12 @@ class ReconciliationStatus(str, Enum):
     MISMATCHED = "MISMATCHED"
     ONE_SIDE_MISSING = "ONE_SIDE_MISSING"
     BOTH_SIDES_MISSING = "BOTH_SIDES_MISSING"  # → UNKNOWN, blocks new risk
+    STALE = "STALE"  # BD-T13: 数据过期，阻断新风险
     ERROR = "ERROR"
 
     @property
     def is_safe(self) -> bool:
-        """是否可以安全继续交易。BOTH_SIDES_MISSING/ERROR → unsafe。"""
+        """是否可以安全继续交易。仅 MATCHED 可安全。"""
         return self in (ReconciliationStatus.MATCHED,)
 
 

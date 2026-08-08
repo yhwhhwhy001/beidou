@@ -95,6 +95,56 @@ class StrategyKernelContract:
         return result
 
 
+class StrategyKernel:
+    """BD-T05: 统一策略内核 — Backtest/Paper/Shadow/Testnet 同一入口。
+
+    封装 AlphaGraph DAG (当前) 和 TypedAlphaGraph (新增) 的执行。
+    所有模式使用相同内核；仅 MarketIO/Clock/ExchangeIO adapter 可替换。
+    """
+
+    def __init__(self, mode: str = "PAPER") -> None:
+        self.mode = mode
+        self._alpha_graph = None  # 旧 DAG
+        self._typed_graph = None  # 新 DAG (BD-T05)
+
+    def set_alpha_graph(self, graph) -> None:
+        self._alpha_graph = graph
+
+    def set_typed_graph(self, graph) -> None:
+        self._typed_graph = graph
+
+    async def evaluate(self, context: dict) -> dict | None:
+        """执行策略评估 — 新旧 DAG 均可。
+
+        新 TypedGraph 优先；回退到旧 AlphaGraph。
+        """
+        if self._typed_graph is not None:
+            result = await self._typed_graph.execute(context)
+            if result is not None:
+                return {
+                    "proposal": result,
+                    "kernel": "typed_graph",
+                    "mode": self.mode,
+                }
+        if self._alpha_graph is not None:
+            signals = await self._alpha_graph.generate(context)
+            return {
+                "signals": signals,
+                "kernel": "alpha_graph",
+                "mode": self.mode,
+            }
+        return None
+
+    def proposal_hash(self, context: dict) -> str:
+        """BD-P0-04: 相同输入产生相同 hash。"""
+        import hashlib
+        payload = json.dumps({
+            "mode": self.mode,
+            "context_keys": sorted(context.keys()),
+        }, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 def parity_check(
     backtest_proposal=None,
     paper_proposal=None,

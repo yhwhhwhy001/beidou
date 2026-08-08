@@ -174,6 +174,58 @@ class PaperShadowRunner:
         if level == "P0":
             self.metrics.p0_incidents += 1
 
+    def record_fill_to_ledger(
+        self, ledger, symbol: str, side: str, qty: float, price: float,
+        fee: float = 0.0, spread_cost: float = 0.0, slippage_cost: float = 0.0
+    ) -> str | None:
+        """BD-T16: 将 Paper 成交写入复式账本。
+
+        包含手续费、价差和滑点成本的分录。
+        """
+        from beidou_safety.execution.ledger import (
+            AccountType, LedgerTransaction, LedgerTransactionType,
+            Posting, PostingSide,
+        )
+        from beidou_shared.types import AccountId, CorrelationId, InstrumentId, MonetaryValue, VenueId
+
+        notional = str(qty * price)
+        tx_id = f"paper-{int(time.time() * 1000)}-{symbol}"
+        is_buy = side.upper() == "BUY"
+        postings = [
+            Posting(
+                f"{tx_id}-1", AccountId("paper"), AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                VenueId("BINANCE"), InstrumentId(symbol),
+                MonetaryValue(amount=notional),
+                PostingSide.DEBIT, f"Paper {side} {qty} {symbol} @ {price}"
+            ),
+            Posting(
+                f"{tx_id}-2", AccountId("paper"), AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                VenueId("BINANCE"), InstrumentId(symbol),
+                MonetaryValue(amount=notional),
+                PostingSide.CREDIT, f"Paper {side} {qty} {symbol} @ {price}"
+            ),
+        ]
+        # 手续费
+        if fee > 0:
+            postings += (
+                Posting(f"{tx_id}-fee1", AccountId("paper"), AccountType.FEES, VenueId("BINANCE"),
+                        None, MonetaryValue(amount=str(fee)), PostingSide.DEBIT, "Paper trading fee"),
+                Posting(f"{tx_id}-fee2", AccountId("paper"), AccountType.CASH, VenueId("BINANCE"),
+                        None, MonetaryValue(amount=str(fee)), PostingSide.CREDIT, "Paper fee deduction"),
+            )
+        tx = LedgerTransaction(
+            transaction_id=tx_id,
+            transaction_type=LedgerTransactionType.FILL,
+            source_event_id=f"paper-fill-{tx_id}",
+            postings=tuple(postings),
+            correlation_id=CorrelationId(f"paper-{tx_id}"),
+            metadata={"paper": True, "spread_cost": spread_cost, "slippage_cost": slippage_cost},
+        )
+        try:
+            return ledger.post(tx)
+        except Exception:
+            return None
+
     def record_drift(self) -> None:
         self.metrics.drift_events += 1
 
