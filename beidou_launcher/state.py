@@ -139,7 +139,7 @@ def read_status(project_root: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
     except (OSError, json.JSONDecodeError):
         return None
 

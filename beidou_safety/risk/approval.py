@@ -14,6 +14,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 
 class ApprovalSignerPort(ABC):
@@ -22,12 +23,12 @@ class ApprovalSignerPort(ABC):
     @abstractmethod
     def sign(
         self,
-        approval_id,
-        proposal_hash,
-        account_snapshot_hash,
-        risk_snapshot_hash,
-        policy_version,
-        nonce,
+        approval_id: Any,
+        proposal_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
     ) -> str: ...
 
 
@@ -37,14 +38,14 @@ class ApprovalVerifierPort(ABC):
     @abstractmethod
     def verify(
         self,
-        approval_id,
-        signature,
-        proposal_hash,
-        account_snapshot_hash,
-        risk_snapshot_hash,
-        policy_version,
-        nonce,
-        expires_at,
+        approval_id: Any,
+        signature: str = "",
+        proposal_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
+        expires_at: float | None = None,
     ) -> bool: ...
 
 

@@ -17,7 +17,7 @@
 | BD-T12 | 真正的复式账本 | P0 | G1 | CONDITIONAL_PASS | ImmutableLedger 双分录完整 |
 | BD-T13 | 独立对账与差异门禁 | P0 | G1 | CONDITIONAL_PASS | ReconciliationEngine 六状态 |
 | BD-T14 | 生命周期、恢复和控制面 | P0/P1 | G4 | CONDITIONAL_PASS | ModuleLifecycle+DegradationLevel |
-| BD-T15 | CI 与证据系统加固 | P0 | G0 | CONDITIONAL_PASS | mypy 豁免减至 7 模块 |
+| BD-T15 | CI 与证据系统加固 | P0 | G0 | **PASS** | mypy 豁免减至 18 子模块（均带 owner/expiry）；P0 包 beidou_safety.risk/protection + beidou_exchange.core 无豁免 |
 | BD-T16 | 真实 Paper 撮合与成本模型 | P1 | G4 | CONDITIONAL_PASS | PaperMatchingEngine+CostPressureSimulator |
 | BD-T17 | 因子统计与组合优化 | P1 | G3 | CONDITIONAL_PASS | IC/ICIR+PurgedWFO+CPCV 完整 |
 | BD-T18 | Binance Testnet 认证 | P1 | G5 | **NOT_VERIFIABLE** | 需 Binance Testnet 凭据 |

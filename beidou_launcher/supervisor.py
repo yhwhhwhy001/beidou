@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
-from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks
+from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks  # type: ignore[attr-defined]  # re-exported without __all__
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionModeEvidence,
@@ -83,17 +83,19 @@ class BeidouSupervisor:
     def _install_exchange_write_interlock(self) -> None:
         """在非写模式从引擎 API 边界拦截所有交易所写请求。"""
         assert self.engine is not None
-        original_async = self.engine._api_async
-        original_sync = self.engine._api
-        self.engine._supervisor_blocked_writes = []
+        engine = self.engine  # mypy 类型收窄：闭包内使用局部变量避免 union-attr
+        mode = self.mode
+        original_async = engine._api_async
+        original_sync = engine._api
+        engine._supervisor_blocked_writes = []
 
         def record(path: str, method: str) -> dict[str, Any]:
-            event = {"path": path, "method": method.upper(), "mode": self.mode, "timestamp": time.time()}
-            self.engine._supervisor_blocked_writes.append(event)
+            event = {"path": path, "method": method.upper(), "mode": mode, "timestamp": time.time()}
+            engine._supervisor_blocked_writes.append(event)
             return {
                 "code": -3,
                 "error": -3,
-                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {self.mode}",
+                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}",
             }
 
         async def guarded_async(
@@ -102,7 +104,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
                 return record(path, method)
             return await original_async(path, method=method, signed=signed, params=params)
 
@@ -112,12 +114,12 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not self.engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
-        self.engine._api_async = guarded_async
-        self.engine._api = guarded_sync
+        engine._api_async = guarded_async
+        engine._api = guarded_sync
 
     def _install_resume_interlock(self) -> None:
         """在深度启动门禁通过前阻止引擎内部自动 RESUME。"""
@@ -156,9 +158,10 @@ class BeidouSupervisor:
     def _install_health_callbacks(self) -> None:
         """让 HTTP readiness 与监督器证据保持一致。"""
         assert self.engine is not None
+        engine = self.engine  # mypy 类型收窄
 
         def readiness() -> bool:
-            return bool(self.engine._check_ready()) and self.report.supervisor_state == "RUNNING"
+            return bool(engine._check_ready()) and self.report.supervisor_state == "RUNNING"
 
         def trading_readiness() -> tuple[bool, str]:
             ready = self._is_trading_ready()
@@ -169,7 +172,7 @@ class BeidouSupervisor:
             return False, f"CONTROL_{self._control_state()}"
 
         def status_info() -> dict[str, Any]:
-            base = dict(self.engine._get_status_info())
+            base = dict(engine._get_status_info())
             base["supervisor"] = {
                 "state": self.report.supervisor_state,
                 "phase": self.report.phase,
@@ -183,7 +186,7 @@ class BeidouSupervisor:
             return base
 
         def factor_provider() -> list[dict]:
-            registry = getattr(self.engine, "_factor_registry", None)
+            registry = getattr(engine, "_factor_registry", None)
             if registry is None:
                 return []
             result = []
@@ -333,7 +336,7 @@ class BeidouSupervisor:
         assert self.engine is not None
         monitoring_checks: list[CheckResult] = []
         try:
-            monitoring_checks = collect_monitoring_checks(
+            monitoring_checks = collect_monitoring_checks(  # type: ignore[no-untyped-call] # beidou_observability.monitoring 遗留豁免
                 engine=self.engine,
                 supervisor=self,
                 exchange_account_snapshot=self._exchange_account_snapshot,
@@ -365,13 +368,13 @@ class BeidouSupervisor:
             open_p1 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
-            self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)
+            self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)  # type: ignore[call-arg,no-untyped-call]
         except Exception:
             pass
         self._monitoring_state = {
             "level": self._monitoring_scheduler.level.value,
             "interval_seconds": self._monitoring_scheduler.current_interval,
-            "deep_audit_due": self._monitoring_scheduler.should_run_deep_audit(),
+            "deep_audit_due": self._monitoring_scheduler.should_run_deep_audit(),  # type: ignore[no-untyped-call]
             "last_reason": getattr(self._monitoring_scheduler.state, "last_reason", ""),
             "monitoring_check_count": len(monitoring_checks),
         }

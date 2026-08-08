@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from beidou_shared.types import (
     AccountRef,
@@ -174,7 +175,7 @@ class RiskEngineImpl:
     def __init__(self) -> None:
         self._rules: dict[RiskRuleLevel, list] = {}
 
-    def add_rule(self, level: RiskRuleLevel, check_fn) -> None:
+    def add_rule(self, level: RiskRuleLevel, check_fn: Any) -> None:
         if level not in self._rules:
             self._rules[level] = []
         self._rules[level].append(check_fn)
@@ -398,8 +399,8 @@ class RiskApprovalStateMachine:
 class PostRiskMonitor:
     """Post-Risk 监控。仅监控和降级，不能放行。"""
 
-    def __init__(self):
-        self._violations: list[dict] = []
+    def __init__(self) -> None:
+        self._violations: list[dict[str, Any]] = []
 
     def record_violation(self, detail: str) -> None:
         self._violations.append({"detail": detail, "timestamp": datetime.now(timezone.utc)})

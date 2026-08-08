@@ -241,24 +241,49 @@ line-length = 120
 profile = "black"
 line_length = 120
 
-# === Mypy overrides: 遗留代码模块 ===
-# beidou_observability.monitoring: 181 errors, 全部 no-untyped-def/no-untyped-call (无类型注解遗留代码)
-# beidou_research.mining/factors: 38+ errors, no-any-return (pandas/numpy 互操作)
-# beidou_core.engine: 30+ errors, FactorRecord/str + InstrumentId/str 类型混用 (DAG 连接层)
-# beidou_launcher/safety/strategy/exchange: 各自少量 no-untyped-def 遗留
-# beidou_shared.serde: msgpack 无 stub + no-any-return
-# beidou_data/lifecycle/production/certification: 各 <10 个 no-untyped-def
+# === Mypy overrides: BD-T15 收紧豁免 ===
+# P0 核心链 (beidou_safety.risk, beidou_safety.protection, beidou_exchange.core)
+# 不再享有 ignore_errors — 错误已逐行修复或标注 type: ignore。
+#
+# 以下模块保留豁免，每个带 issue/owner/expiry：
+# - beidou_core.engine: ~30+ 类型错误（4597 行遗留代码），BD-T05 重构中解决
+# - beidou_safety/execution/*: no-untyped-def 遗留，BD-T08-T10 重构中解决
+# - beidou_observability.monitoring.*: 无类型注解遗留代码
+# - beidou_strategy/*: 少量遗留
+# - beidou_data/*, beidou_lifecycle/*: no-untyped-def 遗留
 [[tool.mypy.overrides]]
 module = [
-    "beidou_observability.monitoring.*",
-    "beidou_research.mining.*", "beidou_research.factors.*",
-    "beidou_core.engine", "beidou_core.health", "beidou_core.store", "beidou_core.feed", "beidou_core.alerts",
-    "beidou_launcher.*", "beidou_safety.*", "beidou_strategy.*",
-    "beidou_exchange.*", "beidou_shared.serde.*",
-    "beidou_data.*", "beidou_lifecycle.*", "beidou_production.*", "beidou_certification.*",
-    "beidou_infra.*", "beidou_control.*", "beidou_research.backtest.*",
+    "beidou_core.engine",                   # ~30+ errors / owner: core / expiry: 2026-11-30 (BD-T05 解决)
+    "beidou_core.health",                    # no-untyped-def / owner: core / expiry: 2026-09-30
+    "beidou_core.store",                     # no-any-return / owner: core / expiry: 2026-09-30
+    "beidou_core.feed",                      # no-untyped-def 遗留 / owner: core / expiry: 2026-10-31
+    "beidou_core.alerts",                    # dict-item 类型不匹配 / owner: core / expiry: 2026-09-30
+    "beidou_safety.execution.*",            # no-untyped-def 遗留 / owner: safety / expiry: 2026-11-30 (BD-T08-T10)
+    "beidou_observability.monitoring.*",     # 无类型注解遗留 / owner: infra / expiry: 2026-09-30
+    "beidou_strategy.*",                     # 少量遗留 / owner: strategy / expiry: 2026-10-31 (BD-T05)
+    "beidou_data.*",                         # no-untyped-def / owner: data / expiry: 2026-10-31
+    "beidou_lifecycle.*",                    # no-untyped-def 遗留 / owner: infra / expiry: 2026-10-31
+    "beidou_production.*",                   # no-untyped-def 遗留 / owner: infra / expiry: 2026-10-31
+    "beidou_certification.*",               # no-untyped-def 遗留 / owner: infra / expiry: 2026-10-31
+    "beidou_control.*",                      # no-untyped-def 遗留 / owner: infra / expiry: 2026-10-31
+    "beidou_research.mining.*",             # pandas/numpy 互操作 / owner: research / expiry: 2026-10-31
+    "beidou_research.factors.*",            # pandas/numpy 互操作 / owner: research / expiry: 2026-10-31
+    "beidou_research.backtest.*",           # pandas/numpy 互操作 / owner: research / expiry: 2026-10-31
+    "beidou_shared.serde.*",                # msgpack 无 stub / owner: infra / expiry: 2026-09-30
+    "beidou_launcher.cli",                   # click decorator 类型推断限制 / owner: infra / expiry: 2026-09-30
+    "beidou_exchange.router.*",             # 间接导出 / owner: exchange / expiry: 2026-09-30
+    "beidou_exchange.binance_usdm.*",       # ws/rest client union-attr/no-any-return / owner: exchange / expiry: 2026-10-31
+    "beidou_infra.*",                        # Connection type/store_adapter/redis stub / owner: infra / expiry: 2026-10-31
 ]
 ignore_errors = true
+
+# BD-T15: 以下 P0 包不再享有 ignore_errors：
+# ✅ beidou_safety.risk.* — 类型错误已修复
+# ✅ beidou_safety.protection.* — clean
+# ✅ beidou_exchange.core.* — clean
+# ✅ beidou_launcher.* (除 cli) — supervisor.py 类型收窄已修复
+# beidou_shared.* (除 serde) — clean
+# 新增豁免需满足：issue + owner + expiry；P0 包禁止新增豁免。
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

@@ -181,7 +181,7 @@ def collect_runtime_checks(
 
     control = getattr(engine, "_control", None)
     try:
-        raw_control_state = control.get_status()
+        raw_control_state = control.get_status() if control is not None else "UNKNOWN"
         control_state = str(getattr(raw_control_state, "value", raw_control_state))
     except Exception:
         control_state = "UNKNOWN"
@@ -224,7 +224,7 @@ def collect_runtime_checks(
 
     feed = getattr(engine, "_feed", None)
     try:
-        feed_internal_healthy = bool(feed.is_healthy())
+        feed_internal_healthy = bool(feed.is_healthy()) if feed is not None else False
         ticker_symbols = set(getattr(feed, "_last_ticker", {}).keys())
         orderbook_symbols = set(getattr(feed, "_last_orderbook", {}).keys())
         observed_symbols = sorted(ticker_symbols & orderbook_symbols)
