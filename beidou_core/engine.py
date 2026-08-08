@@ -3111,7 +3111,7 @@ class AutonomousEngine:
                         self._active_order_ids.add(oid)
                     print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
             except Exception as e:
-            print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
+                print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
