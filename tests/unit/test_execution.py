@@ -6,7 +6,14 @@ from beidou_safety.execution.conditional import (
     PositionManager,
 )
 from beidou_safety.execution.intent import IntentOutbox
-from beidou_safety.execution.ledger import ImmutableLedger, JournalEntry
+from beidou_safety.execution.ledger import (
+    AccountType,
+    ImmutableLedger,
+    LedgerTransaction,
+    LedgerTransactionType,
+    Posting,
+    PostingSide,
+)
 from beidou_safety.execution.order_state import (
     OrderEvent,
     OrderStateTracker,
@@ -118,53 +125,104 @@ class TestOrderStateMachine:
 
 
 class TestImmutableLedger:
-    def test_post_balanced_entries_and_ledger_balance(self):
-        """BD-FIX: 复式记账要求每笔记账平衡 (debit==credit)。"""
-        ledger = ImmutableLedger()
-        entry = JournalEntry(
-            entry_id="je-001",
-            account_id=AccountId("test"),
-            venue_id=VenueId("BINANCE"),
-            instrument_id=InstrumentId("BTCUSDT"),
-            debit=MonetaryValue(amount="1000"),
-            credit=MonetaryValue(amount="1000"),  # 复式记账: debit==credit
-            description="Trade: BUY BTCUSDT",
-            correlation_id=CorrelationId("corr-001"),
+    """BD-T12: 复式账本 — LedgerTransaction + Posting 不可变追加。"""
+
+    def _make_fill_tx(self, tx_id: str, event_id: str, amount: str = "1000") -> LedgerTransaction:
+        """构造标准的成交记账交易（2 个 posting: CASH debit + POSITION_COST credit）。"""
+        return LedgerTransaction(
+            transaction_id=tx_id,
+            transaction_type=LedgerTransactionType.FILL,
+            source_event_id=event_id,
+            postings=(
+                Posting("p1", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
+                        InstrumentId("BTCUSDT"), MonetaryValue(amount=amount), PostingSide.DEBIT, "buy BTC"),
+                Posting("p2", AccountId("main"), AccountType.POSITION_COST, VenueId("BINANCE"),
+                        InstrumentId("BTCUSDT"), MonetaryValue(amount=amount), PostingSide.CREDIT, "cost basis"),
+            ),
+            correlation_id=CorrelationId(f"corr-{tx_id}"),
         )
-        ledger.post(entry)
-        # 每笔记账平衡 → 账本总余额为 0（复式记账恒等式）
+
+    def test_post_balanced_transaction(self):
+        """BD-T12: 复式记账 — ≥2 Posting，借贷平衡。"""
+        ledger = ImmutableLedger()
+        tx = self._make_fill_tx("tx-001", "fill-001", "1000")
+        assert tx.is_balanced()
+        ledger.post(tx)
         assert ledger.is_balanced()
+        assert ledger.transaction_count == 1
 
-    def test_reject_unbalanced_entry(self):
-        """BD-FIX: 不平衡的记账必须拒绝。"""
-        ledger = ImmutableLedger()
-        entry = JournalEntry(
-            entry_id="je-ub",
-            account_id=AccountId("test"),
-            venue_id=VenueId("BINANCE"),
-            instrument_id=InstrumentId("BTCUSDT"),
-            debit=MonetaryValue(amount="1000"),
-            credit=MonetaryValue(amount="0"),
-            description="Unbalanced",
+    def test_reject_unbalanced_transaction(self):
+        """BD-T12: 不平衡的交易必须拒绝。"""
+        unbalanced = LedgerTransaction(
+            transaction_id="tx-ub",
+            transaction_type=LedgerTransactionType.FILL,
+            postings=(
+                Posting("p1", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
+                        None, MonetaryValue(amount="1000"), PostingSide.DEBIT, ""),
+                Posting("p2", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
+                        None, MonetaryValue(amount="500"), PostingSide.CREDIT, ""),
+            ),
         )
-        import pytest
-        with pytest.raises(RuntimeError, match="unbalanced"):
-            ledger.post(entry)
+        import pytest as _pytest
+        with _pytest.raises(RuntimeError, match="unbalanced"):
+            ImmutableLedger().post(unbalanced)
 
-    def test_verify_attribution(self):
+    def test_reject_duplicate_event_id(self):
+        """BD-T12: 相同 source_event_id 不可重复提交（幂等）。"""
         ledger = ImmutableLedger()
-        entry = JournalEntry(
-            entry_id="je-002",
-            account_id=AccountId("test"),
-            venue_id=VenueId("BINANCE"),
-            instrument_id=None,
-            debit=MonetaryValue(amount="500"),
-            credit=MonetaryValue(amount="500"),  # 复式记账
-            description="Trade PnL",
-            correlation_id=CorrelationId("corr-trade"),
+        tx = self._make_fill_tx("tx-001", "fill-001")
+        ledger.post(tx)
+        tx2 = self._make_fill_tx("tx-002", "fill-001")  # 相同 event_id
+        import pytest as _pytest
+        with _pytest.raises(RuntimeError, match="duplicate source_event_id"):
+            ledger.post(tx2)
+
+    def test_reversal_transaction(self):
+        """BD-T12: 反转交易 — 创建反向分录，不原地编辑。"""
+        ledger = ImmutableLedger()
+        tx = self._make_fill_tx("tx-001", "fill-001", "1000")
+        ledger.post(tx)
+
+        reversal = ledger.reverse_transaction("tx-001", "tx-rev-001", "correction")
+        assert reversal.is_correction
+        assert reversal.reverses_transaction_id == "tx-001"
+        ledger.post(reversal)
+
+        # 反转后余额归零
+        bal = ledger.get_balance(AccountId("main"), VenueId("BINANCE"))
+        assert abs(float(bal.amount)) < 1e-12
+
+    def test_trial_balance(self):
+        """BD-T12: 试算表 — 所有账户余额汇总。"""
+        ledger = ImmutableLedger()
+        ledger.post(self._make_fill_tx("tx-001", "fill-001", "1000"))
+        tb = ledger.get_trial_balance()
+        assert len(tb) >= 2  # CASH + POSITION_COST
+
+    def test_rebuild_projection(self):
+        """BD-T12: 从 posting 序列重建投影。"""
+        ledger = ImmutableLedger()
+        ledger.post(self._make_fill_tx("tx-001", "fill-001", "1000"))
+        proj = ledger.rebuild_projection()
+        assert proj["transaction_count"] == 1
+        assert proj["is_balanced"]
+
+    def test_fee_transaction(self):
+        """BD-T12: 手续费交易 — FEE posting。"""
+        fee_tx = LedgerTransaction(
+            transaction_id="tx-fee-001",
+            transaction_type=LedgerTransactionType.FEE,
+            source_event_id="fee-001",
+            postings=(
+                Posting("p1", AccountId("main"), AccountType.FEES, VenueId("BINANCE"),
+                        None, MonetaryValue(amount="10"), PostingSide.DEBIT, "trading fee"),
+                Posting("p2", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
+                        None, MonetaryValue(amount="10"), PostingSide.CREDIT, "fee deduction"),
+            ),
         )
-        ledger.post(entry)
-        assert ledger.verify_attribution(entry)
+        ledger = ImmutableLedger()
+        ledger.post(fee_tx)
+        assert ledger.is_balanced()
 
 
 class TestReconciliation:
