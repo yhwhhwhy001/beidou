@@ -103,39 +103,49 @@ class AlertDispatcher:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _send_webhook(self, incident: Incident) -> None:
-        """发送 webhook 告警。自动识别微信推送服务类型。
+        """发送 webhook 告警。自动识别推送服务类型。
 
-        支持: Server酱 (sctapi.ftqq.com) / PushPlus (pushplus.plus) /
-              企业微信机器人 (qyapi.weixin.qq.com) / 通用 JSON
+        支持: Server酱 / PushPlus / 企业微信 / 飞书(Lark) / 通用 JSON
         """
         url = self._webhook_url
         title = f"[{incident.severity.value}] {incident.title}"
-        desc = f"{incident.description}\n\n操作: {incident.auto_action.value}\n时间: {incident.detected_at.isoformat()}\nID: {incident.incident_id}"
+        desc = f"{incident.description}\n操作: {incident.auto_action.value}\n时间: {incident.detected_at.isoformat()}\nID: {incident.incident_id}"
 
         try:
             if "sctapi.ftqq.com" in url:
-                # Server酱 (微信推送)
                 payload = json.dumps({"title": title, "desp": desc}).encode()
             elif "pushplus.plus" in url:
-                # PushPlus (微信推送)
                 payload = json.dumps({
                     "token": url.split("token=")[-1] if "token=" in url else "",
-                    "title": title,
-                    "content": desc,
+                    "title": title, "content": desc,
+                }).encode()
+            elif "open.feishu.cn" in url or "open.larksuite.com" in url:
+                # 飞书/Lark 机器人
+                payload = json.dumps({
+                    "msg_type": "interactive",
+                    "card": {
+                        "header": {
+                            "title": {"content": title, "tag": "plain_text"},
+                            "template": "red" if incident.severity.value == "CRITICAL" else "yellow",
+                        },
+                        "elements": [
+                            {"tag": "markdown", "content": desc.replace("\n", "\n\n")},
+                            {"tag": "note", "elements": [
+                                {"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id}"}
+                            ]},
+                        ],
+                    },
                 }).encode()
             elif "qyapi.weixin.qq.com" in url:
-                # 企业微信机器人
                 payload = json.dumps({
                     "msgtype": "markdown",
                     "markdown": {"content": f"## {title}\n{desc}"},
                 }).encode()
             else:
-                # 通用 JSON webhook
                 payload = json.dumps({
                     "incident_id": incident.incident_id,
                     "severity": incident.severity.value,
-                    "title": incident.title,
-                    "description": incident.description,
+                    "title": incident.title, "description": incident.description,
                     "auto_action": incident.auto_action.value,
                     "detected_at": incident.detected_at.isoformat(),
                 }).encode()
@@ -143,7 +153,7 @@ class AlertDispatcher:
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5)
         except Exception:
-            pass  # Webhook 失败不影响主流程
+            pass
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:
