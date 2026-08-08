@@ -3113,6 +3113,14 @@ class AutonomousEngine:
             except Exception as e:
                 print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
+        # testnet/paper: 跳过所有阻塞性 API 恢复流程
+        if self._env_mode.value in ("testnet", "paper"):
+            print("[beidou-autopilot] Skipping API-heavy startup recovery (testnet/paper)")
+            self._lifecycle.transition(ModuleState.ACTIVE)
+            print("[beidou-autopilot] Engine ACTIVE — entering main loop")
+            await self._run_loop()
+            return
+
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
         try:
