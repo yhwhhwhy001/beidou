@@ -2,9 +2,10 @@ schema_version: "1.0"
 run_id: 2026-08-09-full-system-convergence
 project:
   path: /Users/maguannan/beidou
-  version: 52cd5558fe0336e1553df5bb63f9dadcb1f0cecc
+  version: bef91c76b4f286c03143ce6dbedf18d53e3d5ee9
   branch: codex/full-system-convergence-v3
   environment: local
+  code_commit_message: "fix: converge v3 execution and research fact chains"
 authority:
   code_changes: true
   git_remote: false
@@ -12,7 +13,7 @@ authority:
   production_mutation: false
   trading_actions: false
   external_messages: false
-active_phase: G4
+active_phase: G7
 requirements:
   - id: BD-V3-01-A
     status: COMPLETE
@@ -24,15 +25,19 @@ requirements:
     status: COMPLETE
   - id: BD-V3-06-A
     status: COMPLETE
+  - id: BD-V3-02-A
+    status: PARTIAL
+  - id: BD-V3-04-A
+    status: PARTIAL
 gates:
   G0: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [00-context.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
   G1: {progress: COMPLETE, decision: APPROVED, evidence: [00-context.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
   G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "旧事实链仍未收敛", updated_at: 2026-08-09T02:15:41Z}
   G3: {progress: COMPLETE, decision: READY, evidence: [docs/optimization/v3/01_FAIL_CLOSED.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
-  G4: {progress: IN_PROGRESS, decision: null, evidence: [06-implementation-log.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
+  G4: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [docs/optimization/v3/03_EXECUTION_FACT_CHAIN.md, 06-implementation-log.md], reason: "本地执行事实链切片已验证；PostgreSQL/完整恢复合同未完成", updated_at: 2026-08-09T03:12:49Z}
   G5: {progress: BLOCKED, decision: UNRESOLVED, evidence: [domain-trading-readiness.md], reason: "运行时 P0 与事实链缺陷未关闭", updated_at: 2026-08-09T02:15:41Z}
   G6: {progress: BLOCKED, decision: FAIL, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "独立红队 P0 未关闭", updated_at: 2026-08-09T02:15:41Z}
-  G7: {progress: IN_PROGRESS, decision: null, evidence: [06-implementation-log.md], reason: "仅完成本地回归切片", updated_at: 2026-08-09T02:15:41Z}
+  G7: {progress: IN_PROGRESS, decision: null, evidence: [docs/optimization/v3/04_RESEARCH_GATE.md, 06-implementation-log.md], reason: "本地回归通过；真实 G5/G7 未执行，旧窗口 NOT_VERIFIABLE", updated_at: 2026-08-09T03:12:49Z}
   G8: {progress: BLOCKED, decision: null, evidence: [], reason: "尚无完整验收", updated_at: 2026-08-09T02:15:41Z}
   G9: {progress: BLOCKED, decision: null, evidence: [], reason: "未达到发布条件", updated_at: 2026-08-09T02:15:41Z}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "未授权生产/无人值守运行", updated_at: 2026-08-09T02:15:41Z}
@@ -44,21 +49,25 @@ blockers:
   - id: K02
     severity: P0
     status: OPEN
-    statement: "主链仍使用 SQLite/内存 Outbox/账本/对账。"
+    statement: "Outbox/账本已落到同一 SQLite WAL，但 PostgreSQL/PITR 和独立三方对账仍未接入；对账投影仍有进程内事实。"
   - id: K03
     severity: P0
     status: OPEN
-    statement: "ExchangeAdapter 尚未成为唯一网络写边界。"
+    statement: "引擎/行情订单写入已收敛到 BinanceUsdmAdapter；完整 Algo/用户流/错误分类/事件补洞合同仍未完成。"
   - id: K04
     severity: P0
     status: OPEN
-    statement: "保护、订单恢复和 UNKNOWN 语义尚未完成。"
+    statement: "Intent UNKNOWN、保护 PENDING/ACK 和启动不取消未归属条件单已收敛；owner/generation、精确成交重放和治理恢复仍未完成。"
   - id: K06
     severity: P0
     status: OPEN
-    statement: "PIT/标签/统计 Alpha 证据未完成。"
+    statement: "闭合 bar、manifest 绑定、WFO/CPCV/多重检验已进入运行器；真实 manifest、sealed OOS、成本容量和晋级证据仍缺失。"
+  - id: K07
+    severity: P1
+    status: OPEN
+    statement: "变更文件质量门通过，但项目级 Ruff 有既有错误且 mypy 被仓库 SQLite 二进制输入阻断；CI/恢复/混沌门未验证。"
 residual_risks:
-  - "当前 Mac LaunchAgent 尚未按 V3 目标重构。"
+  - "当前 Mac LaunchAgent 尚未按 V3 目标重构，运行实例本轮未重启或安全停机。"
   - "Python 3.12 固定运行时和外部加密备份尚未提供。"
   - "未执行真实 Testnet 读快照或停机，本文不证明交易所账户状态。"
-next_authorized_action: "继续本地 BD-V3-02/03 实现与验证；执行当前实例处置前需单独授权只读交易所取证和安全停机。"
+next_authorized_action: "先完成 PostgreSQL/独立对账/保护 owner-generation 与全项目质量门，再经单独授权获取交易所只读快照、处置当前实例并从零重跑真实 G5/G7；不得启动 Mainnet。"
