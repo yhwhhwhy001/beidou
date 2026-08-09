@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -24,7 +25,6 @@ from typing import Any
 
 from beidou_shared.types import (
     InstrumentId,
-    OrderSide,
     StrategyId,
     VenueId,
 )
@@ -136,18 +136,63 @@ class FeatureNode(TypedGraphNode):
         self.feature_names = feature_names
 
     async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
-        features = context.get("features", {})
-        values = {name: features.get(name, 0.0) for name in self.feature_names}
-        dq_tier = (
-            DataQualityTier.PASS if all(name in features for name in self.feature_names) else DataQualityTier.DEGRADED
-        )
+        features = context.get("features")
+        missing: list[str] = []
+        invalid: list[str] = []
+        if not isinstance(features, dict):
+            missing = list(self.feature_names)
+            features = {}
+        else:
+            for name in self.feature_names:
+                if name not in features:
+                    missing.append(name)
+                    continue
+                value = features[name]
+                if isinstance(value, bool):
+                    invalid.append(name)
+                    continue
+                try:
+                    if not math.isfinite(float(value)):
+                        invalid.append(name)
+                except (TypeError, ValueError):
+                    invalid.append(name)
 
-        return TypedNodeOutput(
+        if missing or invalid:
+            # A missing feature is not a lower-quality usable feature.  Filling
+            # it with 0.0 can manufacture a signal (and makes the downstream
+            # fusion node believe the input was complete), so block the graph
+            # and retain the exact evidence needed to diagnose the feed.
+            blocked = TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.FEATURE,
+                output_hash="",
+                data={},
+                dq_tier=DataQualityTier.BLOCK,
+                metadata={"missing_features": missing, "invalid_features": invalid},
+            )
+            return TypedNodeOutput(
+                node_id=blocked.node_id,
+                node_type=blocked.node_type,
+                output_hash=blocked.compute_hash(),
+                data=blocked.data,
+                dq_tier=blocked.dq_tier,
+                metadata=blocked.metadata,
+            )
+
+        values = {name: features[name] for name in self.feature_names}
+        output = TypedNodeOutput(
             node_id=self.node_id,
             node_type=NodeType.FEATURE,
             output_hash="",
             data=values,
-            dq_tier=dq_tier,
+            dq_tier=DataQualityTier.PASS,
+        )
+        return TypedNodeOutput(
+            node_id=output.node_id,
+            node_type=output.node_type,
+            output_hash=output.compute_hash(),
+            data=output.data,
+            dq_tier=output.dq_tier,
         )
 
 

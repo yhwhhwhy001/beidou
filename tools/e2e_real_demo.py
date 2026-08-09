@@ -36,8 +36,13 @@ with open(CONFIG_PATH) as f:
 
 REST_URL = cfg["exchange"]["binance_usdm"]["rest_base_url"]
 RECV_WINDOW = cfg["exchange"]["binance_usdm"]["recv_window_ms"]
-API_KEY = os.environ.get("BEIDOU_BINANCE_API_KEY", "") or str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
-API_SECRET = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
+API_KEY = (
+    os.environ.get("BEIDOU_BINANCE_API_KEY", "") or str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
+)
+API_SECRET = (
+    os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
+    or str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
+)
 
 if "请填入" in API_KEY or len(API_KEY) < 10:
     sys.exit(1)
@@ -556,12 +561,12 @@ check(
 section("Phase 8: 账本记账 — 双重记账 + 对账")
 
 from beidou_safety.execution.ledger import (
+    AccountType,
     ImmutableLedger,
     LedgerTransaction,
     LedgerTransactionType,
     Posting,
     PostingSide,
-    AccountType,
 )
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
 
@@ -676,9 +681,9 @@ section("测试总结")
 # Print results summary
 for r in results:
     marker = "✅" if r["status"] == "PASS" else "❌"
-    print(f"{marker} S{r['step']:02d} {r['name']}: {r['status']} | {r['detail'][:120]}")
-print(f"\n{'='*60}")
-print(f"RESULTS: {passed} passed, {failed} failed, {step} total")
-print(f"{'='*60}")
+    print(f"{marker} S{r['step']:02d} {r['name']}: {r['status']} | {r['detail'][:120]}")  # noqa: T201
+print(f"\n{'=' * 60}")  # noqa: T201
+print(f"RESULTS: {passed} passed, {failed} failed, {step} total")  # noqa: T201
+print(f"{'=' * 60}")  # noqa: T201
 
 sys.exit(0 if failed == 0 else 1)

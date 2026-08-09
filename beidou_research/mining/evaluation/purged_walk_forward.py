@@ -62,6 +62,7 @@ class FoldConfig:
     embargo_fraction: float = 0.02  # embargo 区间占比
     min_train_samples: int = 100  # 最小训练样本数
     min_test_samples: int = 20  # 最小测试样本数
+    min_folds_for_verdict: int = 5  # 研究准入所需的最少有效折数
     random_seed: int = 42  # 固定 seed 保证可复现
 
 
@@ -120,13 +121,16 @@ class FoldBuilder:
             test_start = train_end
             test_end = start_time + timedelta(seconds=test_end_offset)
 
-            # Purge: 移除训练集最后 label_horizon_days 与测试集重叠的样本
+            # Purge: 记录测试开始后的标签隔离窗口。训练样本实际按
+            # ``label_end <= test_start`` 分配，避免任何标签区间穿过测试集。
             purge_duration = label_horizon_days * 2  # 至少 2× horizon
             purge_end = test_start + timedelta(days=purge_duration)
 
-            # Embargo: purge 后额外禁止
+            # Embargo 是测试集之后的训练隔离窗口。当前是 expanding
+            # walk-forward（训练只取测试集之前），因此不会筛掉测试样本；
+            # 仍保留真实边界供相邻 fold/审计使用。
             embargo_duration = label_horizon_days * 1
-            embargo_end = purge_end + timedelta(days=embargo_duration)
+            embargo_end = test_end + timedelta(days=embargo_duration)
 
             folds.append(
                 Fold(
@@ -172,16 +176,15 @@ class FoldBuilder:
             for pred_time, label_end in zip(sample_times, label_end_times, strict=False):
                 # 分配样本
                 if fold.train_start <= pred_time < fold.train_end:
-                    # 检查是否需要 purge
-                    if label_end <= fold.train_end:
+                    # 标签结束时间不得穿过测试集起点；否则属于 purge。
+                    if label_end <= fold.test_start:
                         train_count += 1
                     # else: 标签与测试集重叠，purge 掉
 
                 elif fold.test_start <= pred_time < fold.test_end:
-                    # 检查是否在 embargo 区间
-                    if pred_time >= fold.embargo_end:
-                        test_count += 1
-                    # else: 在 embargo 区间，跳过
+                    # 测试样本本身是被隔离的 OOS 观测，不能因为测试后
+                    # 的 embargo 边界而被删除。embargo 约束训练侧。
+                    test_count += 1
 
             updated_folds.append(
                 Fold(
@@ -310,12 +313,15 @@ class PurgedWalkForward:
             and f.test_sample_count >= self.config.min_test_samples
         ]
 
-        if len(valid_folds) < 2:
+        if len(valid_folds) < self.config.min_folds_for_verdict:
             return PurgedWFOResult(
                 folds=folds,
                 fold_results=[],
                 n_folds_completed=len(valid_folds),
-                failure_reasons=["insufficient_valid_folds"],
+                failure_reasons=[
+                    "insufficient_valid_folds",
+                    f"required={self.config.min_folds_for_verdict}",
+                ],
                 gate_result=GateResult.UNVERIFIABLE,
             )
 
@@ -328,7 +334,7 @@ class PurgedWalkForward:
             for i, (t, le) in enumerate(zip(sample_times, label_end_times, strict=False)):
                 if fold.train_start <= t < fold.train_end and le <= fold.train_end:
                     train_indices.append(i)
-                elif fold.test_start <= t < fold.test_end and t >= fold.embargo_end:
+                elif fold.test_start <= t < fold.test_end:
                     test_indices.append(i)
 
             if evaluator is not None:
@@ -347,12 +353,15 @@ class PurgedWalkForward:
 
         # 4. 汇总统计
         n_completed = len([r for r in fold_results if not r.failure_reason])
-        if n_completed < 2:
+        if n_completed < self.config.min_folds_for_verdict:
             return PurgedWFOResult(
                 folds=valid_folds,
                 fold_results=fold_results,
                 n_folds_completed=n_completed,
-                failure_reasons=["too_few_completed_folds"],
+                failure_reasons=[
+                    "too_few_completed_folds",
+                    f"required={self.config.min_folds_for_verdict}",
+                ],
                 gate_result=GateResult.UNVERIFIABLE,
             )
 

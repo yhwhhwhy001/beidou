@@ -36,7 +36,15 @@ class CheckResult:
 
     @property
     def is_blocking(self) -> bool:
-        return self.status == CheckStatus.FAIL and self.severity in {CheckSeverity.P0, CheckSeverity.P1}
+        # UNKNOWN is an absent fact, not a successful check.  Treating a P0/P1
+        # UNKNOWN as non-blocking lets a monitoring adapter silently turn an
+        # account, protection, reconciliation, or liveness query failure into
+        # a RESUME/READY certificate.  Only low-severity diagnostic UNKNOWNs
+        # may remain non-blocking.
+        return self.status in {CheckStatus.FAIL, CheckStatus.UNKNOWN} and self.severity in {
+            CheckSeverity.P0,
+            CheckSeverity.P1,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -65,7 +73,11 @@ class StartupReport:
 
     @property
     def passed(self) -> bool:
-        return not self.blockers
+        # An empty check list during PREFLIGHT/ENGINE_STARTING is not a
+        # successful run.  ``passed`` is a certificate field, so it requires
+        # the same live authority conditions as readiness rather than merely
+        # absence of currently collected blockers.
+        return self.trading_ready and self.supervisor_state == "RUNNING" and not self.blockers
 
     def replace_phase_checks(self, phase_prefix: str, checks: list[CheckResult]) -> None:
         self.checks = [item for item in self.checks if not item.check_id.startswith(phase_prefix)] + checks
@@ -141,15 +153,15 @@ class HealthDebounce:
             return None
 
         # LOCKED: 连续 lock_after 次全部持久阻断
-        if len(recent) >= self.lock_after and all(recent[-self.lock_after:]):
+        if len(recent) >= self.lock_after and all(recent[-self.lock_after :]):
             return "LOCKED"
 
         # DEGRADED: 连续 degrade_after 次全部持久阻断
-        if all(recent[-self.degrade_after:]):
+        if all(recent[-self.degrade_after :]):
             return "DEGRADED"
 
         # 恢复: 连续 recover_after 次全部干净
-        if len(recent) >= self.recover_after and not any(recent[-self.recover_after:]):
+        if len(recent) >= self.recover_after and not any(recent[-self.recover_after :]):
             return "RUNNING"
 
         return None  # 保持当前状态

@@ -16,7 +16,7 @@ bd
 
 1. 检查 Python `>=3.12,<4.0`、Git commit、工作区、项目结构、端口和证据目录。
 2. 导入并检查 19 个业务包，执行 EnvironmentGuard、凭据和 Testnet 签名密钥门禁。
-3. 使用权限为 `0600` 的 PID 锁阻止重复实例。
+3. 使用权限为 `0600` 的 PID 锁阻止重复实例；启动不会自动 SIGTERM/SIGKILL 旧实例。
 4. Research、Paper、Shadow、Safety-only 模式在引擎 API 边界拦截 `POST/PUT/PATCH/DELETE`。
 5. 深度检查完成前拦截引擎内部 `RESUME`，保持 `NO_NEW_RISK`。
 6. 精确验证 29 个核心对象、8 个 Alpha DAG 节点、8 个因子、交易池和风险预算。
@@ -53,11 +53,16 @@ beidou status
 beidou stop
 ```
 
+重复启动会直接拒绝并保留现有实例；如需停止，必须先由人工确认订单/保护事实，再使用 `beidou stop`。
 `beidou stop` 只有在 PID、最新监督器证据和进程命令身份一致时才发送 `SIGTERM`，避免 PID 复用误杀其他进程。
+
+仓库中的 `deploy/com.beidou.autopilot.plist` 是未安装的安全模板：直接执行固定入口，不经过
+shell/eval，不携带凭据，且 `KeepAlive=false`。在受控密钥提供器、版本化制品、独立 watchdog
+和恢复演练完成前，不得把它加载为无人值守生产服务。
 
 ## 健康与证据
 
-- `/ready`：引擎和监督器均处于 RUNNING。
+- `/ready`：监督器已授权、无当前 P0/P1 blocker、控制面与新鲜事实满足 readiness；进程 RUNNING 或 HTTP 200 本身不构成 ready。
 - `/trading-ready`：全部深度证据通过且控制面为 RESUME。
 - `/status`：包含监督器阶段、阻断项和检查结果。
 - `.beidou/supervisor-state.json`：当前原子状态。

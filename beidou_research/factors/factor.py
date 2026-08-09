@@ -168,6 +168,26 @@ class FactorRecord:
         self.retirement_evidence["restarted_at"] = datetime.now(timezone.utc).isoformat()
         return True
 
+    def has_authorized_active_evidence(self) -> bool:
+        """Return whether ACTIVE is backed by a sealed promotion artifact.
+
+        ``lifecycle`` is intentionally mutable for compatibility with older
+        research tooling.  Execution paths must therefore consult this
+        predicate instead of treating a local ACTIVE enum as authorization.
+        """
+
+        if self.lifecycle != FactorLifecycle.ACTIVE:
+            return False
+        return any(
+            decision.approved
+            and decision.to_state == FactorLifecycle.ACTIVE
+            and bool(decision.evidence_artifact_hash.strip())
+            and bool(decision.commit.strip())
+            and bool(decision.dataset_hash.strip())
+            and bool(decision.policy_version.strip())
+            for decision in self.promotion_history
+        )
+
 
 # ================================================================
 # BD-T06: 证据驱动的因子晋级系统 (Production 模式)
@@ -194,6 +214,7 @@ class PromotionDecision:
     evidence_ids: list[str] = field(default_factory=list)
     policy_version: str = ""
     falsifier: str = ""  # 谁执行了此决策
+    evidence_artifact_hash: str = ""  # sealed EvidenceBundle.artifact_hash
     # 性能指标
     ic: float = 0.0
     rank_ic: float = 0.0
@@ -256,10 +277,18 @@ PROMOTION_EVIDENCE_REQUIREMENTS: dict[FactorLifecycle, dict] = {
         "description": "Challenger 阶段完成，实盘信号质量好，延迟在 SLO 内",
     },
     FactorLifecycle.ACTIVE: {
-        "required_evidence": [],  # ACTIVE 不需要晋级，但需要持续监控
-        "min_icir": 0.0,
-        "min_sample_count": 0,
-        "description": "活跃交易中，需持续监控 IC 衰减和共线性",
+        # ACTIVE is a production authorization, not a diagnostic label.  It
+        # therefore needs an explicit, independently replayable promotion
+        # envelope even when the source state is CHALLENGER.
+        "required_evidence": [
+            "sealed_oos_verified",
+            "cost_capacity_verified",
+            "paper_shadow_verified",
+            "active_approval",
+        ],
+        "min_icir": 0.1,
+        "min_sample_count": 500,
+        "description": "活跃交易中，必须绑定 sealed OOS、成本容量、Paper/Shadow 和具名批准",
     },
 }
 
@@ -267,11 +296,15 @@ PROMOTION_EVIDENCE_REQUIREMENTS: dict[FactorLifecycle, dict] = {
 class FactorPromotionGate:
     """BD-T06: 因子晋级门禁 — 验证每个阶段所需证据。
 
-    Production 模式强制证据门禁；Testnet/Paper 模式可选绕过。
+    所有环境都强制证据门禁；Testnet/Paper 不能绕过生产语义。
     """
 
     def __init__(self, strict: bool = True):
-        self._strict = strict  # Production=True, Testnet=False
+        # ``strict=False`` used to be an environment escape hatch.  Keeping
+        # the parameter for API compatibility but refusing the bypass makes a
+        # testnet startup unable to manufacture an ACTIVE factor.
+        self._strict = True
+        self._requested_strict = strict
 
     def validate_evidence(
         self,
@@ -285,6 +318,7 @@ class FactorPromotionGate:
         dataset_hash: str = "",
         policy_version: str = "",
         falsifier: str = "system",
+        evidence_bundle: Any | None = None,
     ) -> PromotionDecision:
         """验证晋级证据是否满足目标阶段要求。
 
@@ -295,15 +329,15 @@ class FactorPromotionGate:
 
         decision_id = f"promo-{factor_id}-{target_state.value}-{uuid.uuid4().hex[:8]}"
 
-        # 非严格模式直接通过
-        if not self._strict:
+        allowed_targets = FACTOR_LIFECYCLE_TRANSITIONS.get(current_state, set())
+        if target_state not in allowed_targets:
             return PromotionDecision(
                 decision_id=decision_id,
                 factor_id=factor_id,
                 from_state=current_state,
                 to_state=target_state,
-                approved=True,
-                reason=f"Non-strict mode: auto-promoted to {target_state.value}",
+                approved=False,
+                reason=f"Invalid lifecycle transition: {current_state.value} -> {target_state.value}",
                 factor_version=factor_version,
                 commit=commit,
                 dataset_hash=dataset_hash,
@@ -325,6 +359,61 @@ class FactorPromotionGate:
             )
 
         failures: list[str] = []
+
+        # All research-to-runtime transitions need reproducible provenance;
+        # an arbitrary list of evidence labels is not a substitute for the
+        # sealed artifact that produced them.  ACTIVE is a production
+        # authorization and therefore additionally requires a complete,
+        # promotable EvidenceBundle bound to this exact factor/data/policy.
+        evidence_bound_states = {
+            FactorLifecycle.RESEARCH_VALIDATED,
+            FactorLifecycle.OOS_VERIFIED,
+            FactorLifecycle.COST_CAPACITY_VERIFIED,
+            FactorLifecycle.PAPER_TRADING,
+            FactorLifecycle.CHALLENGER,
+            FactorLifecycle.ACTIVE,
+        }
+        if target_state in evidence_bound_states:
+            bindings = {
+                "commit": commit,
+                "dataset_hash": dataset_hash,
+                "policy_version": policy_version,
+                "falsifier": falsifier,
+            }
+            missing_bindings = [
+                name
+                for name, value in bindings.items()
+                if not isinstance(value, str) or not value.strip() or value.strip().upper() == "UNKNOWN"
+            ]
+            if missing_bindings:
+                failures.append(f"Missing provenance bindings: {missing_bindings}")
+
+        if target_state == FactorLifecycle.ACTIVE:
+            if evidence_bundle is None:
+                failures.append("ACTIVE requires a sealed EvidenceBundle")
+            else:
+                try:
+                    promotable, bundle_reason = evidence_bundle.can_promote()
+                except Exception as exc:
+                    promotable = False
+                    bundle_reason = f"bundle_contract_error:{type(exc).__name__}"
+                if not promotable:
+                    failures.append(f"EvidenceBundle not promotable: {bundle_reason}")
+                else:
+                    bundle_factor_id = str(getattr(evidence_bundle, "factor_id", ""))
+                    bundle_factor_version = str(getattr(evidence_bundle, "factor_version", ""))
+                    bundle_dataset_hash = str(getattr(evidence_bundle, "dataset_manifest_hash", ""))
+                    bundle_policy_version = str(getattr(evidence_bundle, "policy_version", ""))
+                    if bundle_factor_id != factor_id:
+                        failures.append("EvidenceBundle factor_id mismatch")
+                    if factor_version and bundle_factor_version != factor_version:
+                        failures.append("EvidenceBundle factor_version mismatch")
+                    if dataset_hash and bundle_dataset_hash != dataset_hash:
+                        failures.append("EvidenceBundle dataset_manifest_hash mismatch")
+                    if policy_version and bundle_policy_version != policy_version:
+                        failures.append("EvidenceBundle policy_version mismatch")
+
+        evidence_artifact_hash = str(getattr(evidence_bundle, "artifact_hash", "") or "")
 
         # 检查必需证据
         required = requirements.get("required_evidence", [])
@@ -357,6 +446,7 @@ class FactorPromotionGate:
                 evidence_ids=evidence_ids or [],
                 policy_version=policy_version,
                 falsifier=falsifier,
+                evidence_artifact_hash=evidence_artifact_hash,
                 ic=performance.ic_mean if performance else 0.0,
                 icir=performance.icir if performance else 0.0,
                 sample_count=performance.sample_count if performance else 0,
@@ -376,6 +466,7 @@ class FactorPromotionGate:
             evidence_ids=evidence_ids or [],
             policy_version=policy_version,
             falsifier=falsifier,
+            evidence_artifact_hash=evidence_artifact_hash,
             ic=performance.ic_mean if performance else 0.0,
             icir=performance.icir if performance else 0.0,
             sample_count=performance.sample_count if performance else 0,
@@ -607,7 +698,9 @@ class FactorRegistry:
             return False
         if record.lifecycle not in (FactorLifecycle.PAPER_TRADING, FactorLifecycle.SUSPENDED):
             return False
-        return record.transition(FactorLifecycle.CHALLENGER)
+        # 不能通过这个兼容方法绕过 CHALLENGER 阶段证据；生产路径使用
+        # FactorPromotionGate.promote(...) 并持久化 PromotionDecision。
+        return False
 
     def promote_to_active(self, factor_id: str) -> bool:
         record = self._factors.get(factor_id)
@@ -615,13 +708,14 @@ class FactorRegistry:
             return False
         if record.lifecycle != FactorLifecycle.CHALLENGER:
             return False
-        # 必须经过完整评估
-        if not record.performance:
+        # ACTIVE 是生产授权，不是“最近 ICIR 足够高”的诊断标签。只有
+        # FactorPromotionGate 生成并记录 approved PromotionDecision 后，
+        # 这里才允许返回成功；兼容调用没有证据参数，必须 fail closed。
+        if not any(
+            decision.approved and decision.to_state == FactorLifecycle.ACTIVE for decision in record.promotion_history
+        ):
             return False
-        last_perf = record.performance[-1]
-        if last_perf.icir < 0.3:
-            return False
-        return record.transition(FactorLifecycle.ACTIVE)
+        return record.lifecycle == FactorLifecycle.ACTIVE
 
     def degrade(self, factor_id: str, reason: str) -> bool:
         record = self._factors.get(factor_id)

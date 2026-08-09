@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import platform
 import socket
@@ -15,6 +17,147 @@ from .models import CheckResult, CheckSeverity, CheckStatus
 from .registry import check_package_imports
 
 WRITE_MODE = "testnet"
+
+
+def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, dict[str, Any]]:
+    """Read-only verify the predecessor G5 certificate for writable Testnet.
+
+    The engine/ladder may expose G5 status after construction, but allowing a
+    writable worker to reach that point without a bound PASS certificate makes
+    the launch gate dependent on implementation order.  Verify the artifact
+    before constructing the engine; this probe never performs exchange I/O.
+    """
+
+    certificate_path = project_root / "artifacts" / "evidence" / "testnet" / "g5-certificate.json"
+    plan_path = project_root / "config" / "g5-testnet-plan.yaml"
+    evidence: dict[str, Any] = {
+        "certificate_path": str(certificate_path),
+        "plan_path": str(plan_path),
+        "commit": commit,
+    }
+    if not certificate_path.is_file():
+        return False, "G5 certificate is missing", evidence
+    if not plan_path.is_file():
+        return False, "G5 plan is missing", evidence
+    try:
+        import yaml
+
+        certificate = json.loads(certificate_path.read_text(encoding="utf-8"))
+        plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+        expected_scenarios = plan.get("scenarios") if isinstance(plan, dict) else None
+        max_notional = plan.get("max_test_notional_usdt", 20) if isinstance(plan, dict) else 20
+        if not isinstance(certificate, dict) or not isinstance(expected_scenarios, list) or not expected_scenarios:
+            return False, "G5 certificate or scenario plan is malformed", evidence
+        from beidou_certification.gate_verifier import verify_g5_certificate
+
+        verification = verify_g5_certificate(
+            certificate,
+            expected_commit=commit,
+            expected_scenarios=[str(item) for item in expected_scenarios],
+            max_notional_usdt=float(max_notional),
+        )
+        evidence["verification"] = verification.to_dict()
+        if not verification.passed:
+            return False, "G5 certificate is not independently verifiable", evidence
+        return True, "G5 Testnet certificate verified", evidence
+    except Exception as exc:
+        return False, "G5 certificate verification failed", {**evidence, "error_type": type(exc).__name__}
+
+
+def _postgres_authority_probe(project_root: Path, database_url: str) -> tuple[bool, str, dict[str, Any]]:
+    """Read-only verify the PostgreSQL authority and immutable migration head.
+
+    The engine already refuses an unavailable or incomplete PostgreSQL store,
+    but startup evidence must expose that fact before a worker is constructed.
+    This probe never creates tables, runs migrations, or returns a DSN/error
+    string that could contain credentials.
+    """
+
+    evidence: dict[str, Any] = {
+        "backend": "postgresql",
+        "configured": bool(database_url),
+        "required_tables": [],
+        "required_migrations": [],
+        "missing_tables": [],
+        "missing_migrations": [],
+        "checksum_mismatch": [],
+    }
+    if not database_url.lower().startswith(("postgresql://", "postgres://")):
+        return False, "PostgreSQL DSN is not configured", {**evidence, "backend": "unsupported"}
+
+    try:
+        from beidou_infra.postgres_store import PostgresPersistentStore
+
+        required_tables = tuple(PostgresPersistentStore._required_tables)
+        required_versions = tuple(PostgresPersistentStore._required_migration_versions)
+    except Exception as exc:
+        return (
+            False,
+            "PostgreSQL runtime contract unavailable",
+            {**evidence, "error_type": type(exc).__name__},
+        )
+
+    evidence["required_tables"] = list(required_tables)
+    evidence["required_migrations"] = list(required_versions)
+    migration_dir = project_root / "migrations"
+    expected_checksums: dict[str, str] = {}
+    missing_files: list[str] = []
+    for version in required_versions:
+        migration_file = migration_dir / f"{version}.sql"
+        if not migration_file.is_file():
+            missing_files.append(migration_file.name)
+            continue
+        expected_checksums[version] = hashlib.sha256(migration_file.read_bytes()).hexdigest()
+    if missing_files:
+        return (
+            False,
+            "Required PostgreSQL migration files are missing",
+            {**evidence, "missing_migration_files": missing_files},
+        )
+
+    try:
+        import psycopg
+
+        # A bounded connect is essential: a dead database cannot hold the
+        # launcher indefinitely while the operator believes it is guarded.
+        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn:
+            missing_tables: list[str] = []
+            for table in required_tables:
+                row = conn.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone()
+                if row is None or row[0] is None:
+                    missing_tables.append(table)
+            rows = conn.execute(
+                "SELECT version, checksum FROM schema_migrations WHERE version = ANY(%s)",
+                (list(required_versions),),
+            ).fetchall()
+    except Exception as exc:
+        return (
+            False,
+            "PostgreSQL authority connection failed",
+            {**evidence, "error_type": type(exc).__name__},
+        )
+
+    applied = {str(row[0]): str(row[1]) for row in (rows or []) if row and row[0] is not None}
+    missing_migrations = [version for version in required_versions if version not in applied]
+    checksum_mismatch = [
+        version
+        for version in required_versions
+        if version in applied and applied[version] != expected_checksums.get(version)
+    ]
+    evidence.update(
+        {
+            "missing_tables": missing_tables,
+            "missing_migrations": missing_migrations,
+            "checksum_mismatch": checksum_mismatch,
+        }
+    )
+    if missing_tables:
+        return False, "PostgreSQL required tables are missing", evidence
+    if missing_migrations:
+        return False, "PostgreSQL migration head is incomplete", evidence
+    if checksum_mismatch:
+        return False, "PostgreSQL migration checksum drift detected", evidence
+    return True, "PostgreSQL authority and migration head verified", evidence
 
 
 def current_commit(project_root: Path | None = None) -> str:
@@ -136,6 +279,9 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             )
         )
     elif dirty_files:
+        # Writable Testnet is a real execution environment.  A dirty worktree
+        # makes the running artifact and its evidence non-reproducible, so it
+        # remains a P0 startup blocker just like any other write mode.
         strict = mode == WRITE_MODE
         checks.append(
             CheckResult(
@@ -237,6 +383,19 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 evidence={"source": settings.source, "config_hash": settings.config_hash, "rest_url": rest_url},
             )
         )
+        if mode == WRITE_MODE:
+            g5_ok, g5_message, g5_evidence = _g5_certificate_probe(project_root, commit)
+            checks.append(
+                _result(
+                    "preflight.g5_certificate",
+                    "G5 Testnet 证书",
+                    g5_ok,
+                    CheckSeverity.P0,
+                    g5_message,
+                    f"{g5_message}；Testnet 保持阻断",
+                    evidence=g5_evidence,
+                )
+            )
         effective_api_key = api_key_env or settings.exchange.api_key_ref
         effective_api_secret = api_secret_env or settings.exchange.api_secret_ref
         account_credentials_ok = len(effective_api_key) >= 10 and len(effective_api_secret) >= 10
@@ -268,19 +427,99 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 warn=(not account_credentials_ok and mode != WRITE_MODE),
             )
         )
-        # 签名密钥仅 canary/live 强制要求；testnet 及以下使用 mock 密钥。
-        # 引擎层已在 RiskApprovalSignerImpl 中处理，预检不再重复拦截。
+        # BD-V3/T01: Testnet 风险增加必须有真实批准签名密钥。
+        # 缺少密钥不得由引擎回退到 mock/default key；预检直接阻断启动。
         if mode == WRITE_MODE:
             checks.append(
                 _result(
                     "preflight.signing_key",
                     "风险批准签名密钥",
                     len(signing_key) >= 16,
-                    CheckSeverity.P2,
+                    CheckSeverity.P0,
                     "BEIDOU_SIGNING_KEY 已提供",
-                    "Testnet 模式未设置 BEIDOU_SIGNING_KEY，引擎将使用内置 mock 签名密钥",
+                    "Testnet 模式缺少 BEIDOU_SIGNING_KEY，风险增加路径被阻断",
                     evidence={"present": bool(signing_key), "length": len(signing_key)},
-                    warn=(len(signing_key) < 16),
+                    warn=False,
+                )
+            )
+            policy_dir = project_root / "config" / "policies"
+            valid_policy_id: str | None = None
+            policy_error = ""
+            try:
+                from beidou_policy.loader import PolicyLoader
+
+                policy_loader = PolicyLoader(policy_dir=str(policy_dir), signing_key=signing_key)
+                for candidate in ("risk_parameters", "autopilot_risk"):
+                    envelope = policy_loader.load(candidate)
+                    if envelope is None:
+                        continue
+                    complete, completeness_message = envelope.validate_risk_parameters()
+                    if complete:
+                        valid_policy_id = candidate
+                        break
+                    policy_error = f"{candidate}: {completeness_message}"
+                if valid_policy_id is None:
+                    policy_error = policy_error or "no valid signed policy envelope"
+            except Exception as exc:
+                policy_error = f"{type(exc).__name__}: {exc}"
+            checks.append(
+                _result(
+                    "preflight.signed_policy",
+                    "签名风险策略",
+                    valid_policy_id is not None,
+                    CheckSeverity.P0,
+                    f"有效签名策略已加载: {valid_policy_id}",
+                    f"Testnet 缺少有效签名风险策略: {policy_error}",
+                    evidence={
+                        "policy_dir": str(policy_dir),
+                        "policy_id": valid_policy_id,
+                        "available": policy_dir.exists(),
+                    },
+                )
+            )
+            # Writable Testnet must use the configured PostgreSQL authority;
+            # SQLite is diagnostic-only and cannot provide restart/fencing
+            # truth for an execution worker.
+            database_url = str(getattr(settings.database, "url", "") or "")
+            postgres_backend_ok = database_url.lower().startswith(("postgresql://", "postgres://"))
+            checks.append(
+                _result(
+                    "preflight.state_backend",
+                    "交易状态持久化后端",
+                    postgres_backend_ok,
+                    CheckSeverity.P0,
+                    "Testnet 配置指向 PostgreSQL 持久化权威源",
+                    "Testnet 禁止使用缺少事务出站链的 SQLite/未知状态后端",
+                    evidence={"backend": "postgresql" if postgres_backend_ok else "unsupported"},
+                )
+            )
+            if postgres_backend_ok:
+                postgres_ok, postgres_message, postgres_evidence = _postgres_authority_probe(project_root, database_url)
+                checks.append(
+                    _result(
+                        "preflight.state_backend_connection",
+                        "PostgreSQL 权威源连通与迁移头",
+                        postgres_ok,
+                        CheckSeverity.P0,
+                        postgres_message,
+                        f"{postgres_message}；Testnet 保持阻断",
+                        evidence=postgres_evidence,
+                    )
+                )
+            fencing_token_text = os.environ.get("BEIDOU_FENCING_TOKEN", "").strip()
+            try:
+                fencing_token_ok = int(fencing_token_text) > 0
+            except (TypeError, ValueError):
+                fencing_token_ok = False
+            checks.append(
+                _result(
+                    "preflight.fencing_token",
+                    "执行租约 fencing token",
+                    fencing_token_ok,
+                    CheckSeverity.P0,
+                    "BEIDOU_FENCING_TOKEN 为正整数",
+                    "Testnet 缺少有效 BEIDOU_FENCING_TOKEN，双 worker/旧租约隔离未建立",
+                    evidence={"present": bool(fencing_token_text), "valid": fencing_token_ok},
                 )
             )
     except Exception as exc:

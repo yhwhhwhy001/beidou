@@ -208,13 +208,10 @@ def main() -> int:
 
     findings = scan_directory(test_dir)
     errors = [f for f in findings if f.severity == "ERROR"]
-    [f for f in findings if f.severity == "WARNING"]
 
     if findings:
-        for _f in sorted(findings, key=lambda x: (x.file, x.line)):
-            pass
-    else:
-        pass
+        for finding in sorted(findings, key=lambda x: (x.file, x.line)):
+            print(f"{finding.severity} {finding.file}:{finding.line}: {finding.message}")
 
     return 1 if errors else 0
 

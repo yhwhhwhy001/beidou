@@ -25,7 +25,10 @@ def perform_reconciliation(
 ):
     result = ReconciliationResult(observed_at=time.time())
     step_map = step_size_map or {}
-    if ex_positions and local_positions:
+    if ex_positions is None or local_positions is None:
+        result.unknown += 1
+        result.details.append({"scope": "R1", "status": "MISSING_POSITION_FACT_SOURCE"})
+    else:
         ex_map = {p.get("symbol", ""): p for p in ex_positions if p.get("symbol")}
         lo_map = {p.get("symbol", ""): p for p in local_positions if p.get("symbol")}
         for sym in set(ex_map) | set(lo_map):
@@ -69,14 +72,32 @@ def build_reconciliation_check(r):
             message=f"Recon: {r.matched}M/{r.mismatched}X/{r.unknown}U",
             observed_at=now,
         )
+    # ``unsupported`` means a required fact source (currently the durable
+    # ledger/R5 side) was unavailable.  It is not a clean zero-difference
+    # result: reporting PASS here would let a monitoring-only projection
+    # contradict the engine's authoritative three-way gate.
+    if r.unsupported > 0:
+        return MonitoringCheckResult(
+            check_id="runtime.safety.reconciliation",
+            entity_type="system",
+            entity_id="recon",
+            status=CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
+            message=f"Recon fact source unsupported: {r.unsupported}",
+            observed_at=now,
+        )
     if r.unknown > 0:
         return MonitoringCheckResult(
             check_id="runtime.safety.reconciliation",
             entity_type="system",
             entity_id="recon",
-            status=CheckStatus.WARN,
-            severity=CheckSeverity.P1,
-            message=f"Recon: {r.matched}M/{r.unknown}U",
+            # UNKNOWN is a missing fact, not a transient warning.  The
+            # supervisor's blocking semantics only treat FAIL P0/P1 as an
+            # authority blocker, so downgrade here would recreate the exact
+            # stale-fact/resume failure this check is meant to prevent.
+            status=CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
+            message=f"Recon UNKNOWN: {r.matched}M/{r.unknown}U",
             observed_at=now,
         )
     return MonitoringCheckResult(

@@ -130,7 +130,7 @@ class GateRunner:
         "G8": ["unattended_30d"],
     }
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._results: dict[str, dict[str, ScenarioStatus]] = {}
 
     def run_gate(self, gate_id: str, scenario_results: dict[str, ScenarioStatus]) -> GateResult:

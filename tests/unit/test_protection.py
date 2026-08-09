@@ -106,6 +106,14 @@ class TestTakeProfitCalculator:
         assert len(result) == 1
         assert result[0]["price"] == 115.0  # 100 + 5*3
 
+    def test_missing_market_inputs_are_rejected(self):
+        with pytest.raises(ValueError, match="atr is required"):
+            StopLossCalculator.calculate(StopLossType.ATR_BASED, 100.0, OrderSide.BUY)
+        with pytest.raises(ValueError, match="volatility_pct is required"):
+            StopLossCalculator.calculate(StopLossType.VOLATILITY_BASED, 100.0, OrderSide.BUY)
+        with pytest.raises(ValueError, match="unavailable"):
+            StopLossCalculator.swing_structure(None, None, OrderSide.BUY, entry_price=100.0)
+
 
 class TestProtectionManager:
     """保护管理器测试。"""
@@ -129,7 +137,10 @@ class TestProtectionManager:
         pp = mgr.get_protection(pid)
         assert pp is not None
         assert pp.stop_loss is not None
-        assert pp.stop_loss.is_active()
+        # Local definitions are not venue facts until an exchange ACK binds
+        # an owner/order id.
+        assert pp.stop_loss.status == ProtectionStatus.CREATED
+        assert not pp.stop_loss.is_active()
         assert pp.stop_loss.stop_type == StopLossType.FIXED_PERCENT
         trigger = float(pp.stop_loss.trigger_price.amount)
         assert trigger == 95.0  # 100 * (1 - 5%)
@@ -138,7 +149,8 @@ class TestProtectionManager:
 
         assert len(pp.take_profits) == 1
         tp = pp.take_profits[0]
-        assert tp.is_active()
+        assert tp.status == ProtectionStatus.CREATED
+        assert not tp.is_active()
         assert tp.take_profit_type == TakeProfitType.FIXED_RR
         tp_price = float(tp.trigger_price.amount)
         assert tp_price == 110.0  # 100 + 5*2
@@ -202,6 +214,45 @@ class TestProtectionManager:
         sl_price = float(pp.stop_loss.trigger_price.amount)
         assert sl_price == 1900.0  # 2000 - 50*2
 
+    def test_zero_distance_stop_is_rejected_at_manager_boundary(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="stop_pct"):
+            mgr.create_protection(
+                position_id="pos-zero-stop",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 0.0},
+            )
+
+    def test_take_profit_cannot_bypass_stop_loss(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="explicit stop-loss"):
+            mgr.create_protection(
+                position_id="pos-tp-only",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
+            )
+
+    def test_reversed_stop_direction_is_rejected(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="stop_pct"):
+            mgr.create_protection(
+                position_id="pos-reversed-stop",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": -1.0},
+            )
+
     def test_cancel_protections(self):
         mgr, pid = self._make_manager_with_position()
         cancelled = mgr.cancel_protection(pid)
@@ -210,6 +261,27 @@ class TestProtectionManager:
         assert pp.stop_loss.status == ProtectionStatus.CANCELLED
         for tp in pp.take_profits:
             assert tp.status == ProtectionStatus.CANCELLED
+
+    def test_venue_ack_is_required_for_active_status(self):
+        mgr = ProtectionManager()
+        pp = mgr.create_protection(
+            position_id="pos-owned",
+            instrument_id=InstrumentId("BTCUSDT"),
+            venue_id=VenueId("BINANCE"),
+            entry_price=100.0,
+            quantity=0.1,
+            side=OrderSide.BUY,
+            stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 5.0},
+            owner_id="beidou-autopilot",
+            position_generation=4,
+            session_id="session-1",
+        )
+        assert pp.stop_loss.status == ProtectionStatus.CREATED
+        assert pp.stop_loss.owner_id == "beidou-autopilot"
+        assert pp.stop_loss.position_generation == 4
+        pp.stop_loss.exchange_order_id = "algo-1"
+        pp.stop_loss.status = ProtectionStatus.ACTIVE
+        assert pp.stop_loss.is_active()
 
     def test_remove_position(self):
         mgr, pid = self._make_manager_with_position()

@@ -215,7 +215,7 @@ class RiskApprovalSignerImpl:
 
     设计不变量：
     - 无密钥时 SIGNING_UNAVAILABLE，拒绝风险增加。
-    - 签名绑定 approval_id、proposal_hash、account_snapshot_hash、
+    - 签名绑定 approval_id、proposal_hash、intent_hash、account_snapshot_hash、
       risk_snapshot_hash、policy_version、expires_at、nonce。
     - expires_at 默认 = 签名时刻 + DEFAULT_APPROVAL_TTL_SECONDS (300s, BD-T01)。
     - 常量时间比较；过期、篡改、重放、版本不一致均拒绝。
@@ -242,6 +242,7 @@ class RiskApprovalSignerImpl:
         self,
         approval_id: RiskApprovalId,
         proposal_hash: str,
+        intent_hash: str,
         account_snapshot_hash: str,
         risk_snapshot_hash: str,
         policy_version: str,
@@ -249,7 +250,7 @@ class RiskApprovalSignerImpl:
         expires_at: float,
     ) -> str:
         data = (
-            f"{approval_id}|{proposal_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|"
+            f"{approval_id}|{proposal_hash}|{intent_hash}|{account_snapshot_hash}|{risk_snapshot_hash}|"
             f"{policy_version}|{nonce}|{expires_at}"
         )
         return data
@@ -261,6 +262,7 @@ class RiskApprovalSignerImpl:
         self,
         approval_id: RiskApprovalId,
         proposal_hash: str = "",
+        intent_hash: str = "",
         account_snapshot_hash: str = "",
         risk_snapshot_hash: str = "",
         policy_version: str = "",
@@ -280,22 +282,63 @@ class RiskApprovalSignerImpl:
         if expires_at is None:
             expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
         payload = self._payload(
-            approval_id, proposal_hash, account_snapshot_hash, risk_snapshot_hash, policy_version, nonce, expires_at
+            approval_id,
+            proposal_hash,
+            intent_hash,
+            account_snapshot_hash,
+            risk_snapshot_hash,
+            policy_version,
+            nonce,
+            expires_at,
         )
         sig = self._compute_signature(payload)
         self._signed_expiry[sig] = expires_at
         return sig
+
+    def issue_for_approved_risk(
+        self,
+        approval_id: RiskApprovalId,
+        *,
+        risk_approved: bool,
+        proposal_hash: str = "",
+        intent_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
+        expires_at: float | None = None,
+    ) -> str:
+        """Issue a signature only after the caller proves risk approval.
+
+        Keeping this boundary in the signer prevents callers from treating a
+        cryptographic signature as an approval by itself.
+        """
+
+        if not risk_approved:
+            raise RuntimeError("RISK_NOT_APPROVED: approval signature not issued")
+        return self.sign(
+            approval_id,
+            proposal_hash=proposal_hash,
+            intent_hash=intent_hash,
+            account_snapshot_hash=account_snapshot_hash,
+            risk_snapshot_hash=risk_snapshot_hash,
+            policy_version=policy_version,
+            nonce=nonce,
+            expires_at=expires_at,
+        )
 
     async def verify(
         self,
         approval_id: RiskApprovalId,
         signature: str = "",
         proposal_hash: str = "",
+        intent_hash: str = "",
         account_snapshot_hash: str = "",
         risk_snapshot_hash: str = "",
         policy_version: str = "",
         nonce: str = "",
         expires_at: float | None = None,
+        consume_nonce: bool = True,
     ) -> bool:
         """验证签名 — 严格模式，无向后兼容旁路。
 
@@ -303,7 +346,8 @@ class RiskApprovalSignerImpl:
         参数与签名时不一致（篡改/版本不匹配）、重放 nonce。
 
         未显式传入 expires_at 时，使用签名时记录的默认有效期进行
-        过期校验与 payload 重建。
+        过期校验与 payload 重建。``consume_nonce=False`` 仅用于提交前
+        的预检；最终发送边界必须使用默认值消费 nonce。
         """
         if not signature:
             return False
@@ -327,6 +371,7 @@ class RiskApprovalSignerImpl:
         payload = self._payload(
             approval_id,
             proposal_hash,
+            intent_hash,
             account_snapshot_hash,
             risk_snapshot_hash,
             policy_version,
@@ -335,7 +380,7 @@ class RiskApprovalSignerImpl:
         )
         expected = self._compute_signature(payload)
         ok = self._hmac.compare_digest(signature, expected)
-        if ok and nonce:
+        if ok and nonce and consume_nonce:
             self._nonces.add(nonce)
         return ok
 
@@ -355,6 +400,20 @@ class RiskApprovalSignerImpl:
         """BD-T01: 吊销指定签名 — 将其加入撤销集，后续 verify() 将拒绝。"""
         self._revoked_sigs.add(signature)
         self._signed_expiry.pop(signature, None)
+
+    def restore_signature(self, signature: str, expires_at: float) -> bool:
+        """Restore non-secret signature metadata for an unresolved intent.
+
+        Restart recovery may rehydrate a durable approval envelope, but never
+        the signing key.  HMAC verification still recomputes the signature
+        with the newly injected key; this method only restores the expiry
+        index required by the fail-closed verifier.
+        """
+
+        if not self._signing_available or not signature or expires_at <= time.time():
+            return False
+        self._signed_expiry[signature] = float(expires_at)
+        return True
 
 
 class RiskApprovalStateMachine:
@@ -378,7 +437,9 @@ class RiskApprovalStateMachine:
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
 
-    def approve_if_verified(self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool) -> RiskDecision:
+    def approve_if_verified(
+        self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool
+    ) -> RiskDecision:
         """安全审批 — 必须签名有效 + 风控通过才批准。
 
         任一条件不满足 → REJECTED。

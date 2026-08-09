@@ -1,5 +1,6 @@
 """PKG-32: Infrastructure 测试。事实源、RPO/RTO、灾备恢复、健康探针。"""
 
+from beidou_core.store import PersistentStore
 from beidou_infra import (
     BackupVerification,
     DisasterRecoveryPlan,
@@ -8,6 +9,7 @@ from beidou_infra import (
     LivenessProbe,
     ReadinessProbe,
     RPO_RTO_Target,
+    SQLiteBackupManager,
     StartupProbe,
 )
 from beidou_lifecycle import DegradationLevel
@@ -64,6 +66,42 @@ class TestBackupVerification:
             intent_integrity=True,
         )
         assert not bv.is_valid()
+
+    def test_backup_without_reconciliation_is_not_valid(self):
+        bv = BackupVerification(
+            backup_id="bkp-003",
+            data_domain="account_facts",
+            restore_successful=True,
+            ledger_balanced=True,
+            intent_integrity=True,
+            reconciliation_passed=False,
+            invariants_check={"account": True},
+        )
+        assert not bv.is_valid()
+
+    def test_sqlite_backup_is_verified_and_encryption_requires_explicit_key(self, tmp_path):
+        source = tmp_path / "source.db"
+        PersistentStore(str(source))
+        backup = tmp_path / "backup.db"
+        manager = SQLiteBackupManager()
+        manifest = manager.create(source, backup, backup_id="bkp-local-1")
+        assert manifest.integrity_check is True
+        verified = manager.verify(backup)
+        assert verified.passed is True
+        assert verified.row_counts["user_stream_events"] == 0
+
+        encrypted = tmp_path / "backup.db.enc"
+        key = b"k" * 32
+        encrypted_manifest = manager.encrypt(backup, encrypted, key=key)
+        assert encrypted_manifest.plaintext_size_bytes == backup.stat().st_size
+        restored = tmp_path / "restored.db"
+        manager.decrypt(encrypted, restored, key=key)
+        assert manager.verify(restored).passed is True
+
+        import pytest
+
+        with pytest.raises(ValueError, match="32 key bytes"):
+            manager.encrypt(backup, tmp_path / "bad.enc", key=b"short")
 
 
 class TestDisasterRecovery:

@@ -22,7 +22,7 @@ from beidou_research.mining.persistence import JSONFileFactorStore
 
 
 @click.group()
-def cli():
+def cli() -> None:
     """北斗因子挖掘 CLI — 离线研究工具。"""
 
 
@@ -31,7 +31,7 @@ def cli():
 @click.option("--config", default=None, help="研究数据集配置 YAML 路径")
 @click.option("--output-dir", default="evidence/factors", help="证据输出目录")
 @click.option("--symbol", default=None, help="单个交易品种（优先于 --symbols）")
-@click.option("--symbols", default=None, help="逗号分隔多品种，默认 BTCUSDT,ETHUSDT")
+@click.option("--symbols", default=None, help="逗号分隔多品种；必须显式提供")
 @click.option(
     "--interval",
     default="1h",
@@ -56,7 +56,7 @@ def run(
     interval: str,
     limit: int,
     dry_run: bool,
-):
+) -> None:
     """执行因子挖掘运行。"""
     click.echo(f"[factor_miner] 启动挖掘运行 (policy={policy})")
 
@@ -83,9 +83,9 @@ def run(
     elif symbols:
         symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
-        from beidou_core.engine import DEFAULT_UNIVERSE
-
-        symbols_list = list(DEFAULT_UNIVERSE[:4])
+        raise click.ClickException("必须通过 --symbol 或 --symbols 显式指定研究品种")
+    if not symbols_list or any(item in {"ALL", "DEFAULT"} for item in symbols_list):
+        raise click.ClickException("固定 DEFAULT/ALL 交易池已禁用，请指定实际品种")
 
     # 离线研究工具默认连 testnet
     os.environ.setdefault("BEIDOU_ENV", "testnet")
@@ -115,6 +115,7 @@ def run(
                     "high": k["high"],
                     "low": k["low"],
                     "volume": k["volume"],
+                    "is_closed": k.get("is_closed") is True,
                 }
                 for k in klines
             ]
@@ -158,7 +159,7 @@ def run(
 
 @cli.command()
 @click.option("--run-id", required=True, help="运行 ID")
-def resume(run_id: str):
+def resume(run_id: str) -> None:
     """从检查点恢复挖掘运行。"""
     click.echo(f"[factor_miner] 恢复运行: {run_id}")
 
@@ -166,7 +167,7 @@ def resume(run_id: str):
 @cli.command()
 @click.option("--run-id", required=True, help="运行 ID")
 @click.option("--format", default="html", type=click.Choice(["html", "json", "parquet"]))
-def report(run_id: str, format: str):
+def report(run_id: str, format: str) -> None:
     """生成挖掘运行报告。"""
     click.echo(f"[factor_miner] 生成报告: {run_id} (format={format})")
 
@@ -195,7 +196,7 @@ def report(run_id: str, format: str):
 
 @cli.command()
 @click.option("--factor-version", required=True, help="因子版本 ID")
-def validate_factor(factor_version: str):
+def validate_factor(factor_version: str) -> None:
     """验证因子版本并输出 Gate 状态。"""
     click.echo(f"[factor_miner] 验证因子: {factor_version}")
     store = JSONFileFactorStore("evidence/factors")
@@ -216,7 +217,7 @@ def validate_factor(factor_version: str):
 @cli.command()
 @click.option("--candidate", required=True, help="候选因子 ID")
 @click.option("--champion", required=True, help="冠军因子 ID")
-def compare(candidate: str, champion: str):
+def compare(candidate: str, champion: str) -> None:
     """比较候选因子与冠军因子的增量贡献。"""
     click.echo(f"[factor_miner] 比较: {candidate} vs {champion}")
     click.echo("[factor_miner] 增量贡献分析:")

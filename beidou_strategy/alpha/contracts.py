@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -137,20 +139,25 @@ class StrategyProposal:
     feature_snapshot_ref: str = ""
 
     def hash(self) -> str:
-        """BD-T05: 稳定哈希 — 绑定 dataset/feature/factor/model/policy/code 版本。"""
-        import hashlib
+        """BD-T05: stable hash over the complete final proposal contract."""
 
-        parts = [
-            str(self.strategy_id),
-            str(self.instrument_id),
-            str(self.venue_id),
-            str(self.side.value if self.side else "NONE"),
-            str(self.strength),
-            str(self.confidence),
-            str(self.conflict_detected),
-            str(self.policy_version),
-        ]
-        return hashlib.sha256(":".join(parts).encode()).hexdigest()[:16]
+        def canonical(value):
+            if isinstance(value, Enum):
+                return value.value
+            if isinstance(value, dict):
+                return {str(key): canonical(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+            if isinstance(value, (list, tuple)):
+                return [canonical(item) for item in value]
+            if hasattr(value, "__dataclass_fields__"):
+                return {
+                    name: canonical(getattr(value, name))
+                    for name in value.__dataclass_fields__
+                    if name not in {"timestamp", "ingest_time"}
+                }
+            return value
+
+        payload = json.dumps(canonical(self), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)

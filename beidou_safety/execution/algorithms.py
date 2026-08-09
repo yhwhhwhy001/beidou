@@ -9,6 +9,7 @@ Contextual Bandit 仅在已批准算法集合内选择，不得改变方向/数�
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -96,16 +97,20 @@ class ExecutionPlan:
         return all(s.invariants_check_passed for s in self.slices)
 
 
-class BaseExecutionAlgorithm:
+class BaseExecutionAlgorithm(ABC):
     """执行算法抽象基类。"""
 
     algorithm_type: ExecutionAlgorithmType
 
+    @abstractmethod
     def can_handle(self, ctx: ExecutionContext) -> bool:
-        raise NotImplementedError
+        """Return whether this concrete algorithm can safely handle ``ctx``."""
+        ...
 
+    @abstractmethod
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
-        raise NotImplementedError
+        """Build a governed plan; concrete algorithms must implement this."""
+        ...
 
     def check_invariants(self, ctx: ExecutionContext) -> tuple[bool, str]:
         """检查在途不变量。"""

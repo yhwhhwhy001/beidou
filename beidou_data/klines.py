@@ -22,7 +22,8 @@ class OHLCV:
     quote_volume: Quantity | None = None
     trade_count: int = 0
     taker_buy_volume: Quantity | None = None
-    is_closed: bool = True
+    # Missing venue/clock evidence must never become a usable closed bar.
+    is_closed: bool = False
     revision_number: int = 0
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 from typing import Any
 
 # ================================================================
@@ -62,7 +63,7 @@ class AdaptiveProtectionConfig:
     volatility_regime: VolatilityRegime
     price_tier: PriceTier
     market_regime: MarketRegime
-    metadata: dict[str, float]
+    metadata: dict[str, Any]
 
 
 class AdaptiveProtectionCalculator:
@@ -92,6 +93,43 @@ class AdaptiveProtectionCalculator:
     # ---- 波动率区间阈值 ----
     _VOL_LOW_THRESHOLD = 0.20  # 20% 年化
     _VOL_HIGH_THRESHOLD = 0.40  # 40% 年化
+
+    _REQUIRED_FEATURES = (
+        "close",
+        "atr_pct",
+        "ann_volatility",
+        "rsi_14",
+        "trend_20_pct",
+        "spread_bps",
+    )
+
+    @classmethod
+    def _blocked_config(cls, entry_price: float, reason: str) -> AdaptiveProtectionConfig:
+        """Return an explicitly non-tradable configuration.
+
+        A protection calculator may be called while restoring a position, so
+        its return type cannot simply be ``None``.  The blocked shape keeps the
+        caller auditable while ensuring no missing input is silently converted
+        into a stop, target, or spread default.
+        """
+
+        try:
+            price = float(entry_price)
+        except (TypeError, ValueError):
+            price = 0.0
+        if not isfinite(price) or price <= 0:
+            price = 0.0
+        return AdaptiveProtectionConfig(
+            stop_loss_config={"type": "ATR_BASED", "stop_pct": 0.0, "multiplier": ATR_MULTIPLIER},
+            take_profit_config={"type": "FIXED_RR", "rr_ratio": BASE_RR_RATIO},
+            stop_pct=0.0,
+            rr_ratio=BASE_RR_RATIO,
+            atr_pct=0.0,
+            volatility_regime=VolatilityRegime.NORMAL,
+            price_tier=cls._classify_price_tier(price),
+            market_regime=MarketRegime.RANGING,
+            metadata={"fallback": True, "blocked": True, "reason": reason},
+        )
 
     @classmethod
     def _classify_price_tier(cls, price: float) -> PriceTier:
@@ -227,39 +265,35 @@ class AdaptiveProtectionCalculator:
         Args:
             symbol: 交易对 (如 "BTCUSDT")
             entry_price: 入场价格
-            features: 市场特征数据 (来自 MarketDataFeed.get_kline_features)
-                      如果为 None，使用保守默认值
+            features: 市场特征数据 (来自 MarketDataFeed.get_kline_features)。
+                      缺失或非法字段会返回 blocked 配置，不使用交易默认值。
 
         Returns:
             AdaptiveProtectionConfig
         """
         if features is None or not features:
-            # BD-T11: 无数据时不使用硬编码回退 — 返回 stop_pct=0 阻断新风险
-            price_tier = cls._classify_price_tier(entry_price)
-            return AdaptiveProtectionConfig(
-                stop_loss_config={"type": "ATR_BASED", "stop_pct": 0.0, "multiplier": ATR_MULTIPLIER},
-                take_profit_config={"type": "FIXED_RR", "rr_ratio": BASE_RR_RATIO},
-                stop_pct=0.0,
-                rr_ratio=BASE_RR_RATIO,
-                atr_pct=0.0,
-                volatility_regime=VolatilityRegime.NORMAL,
-                price_tier=price_tier,
-                market_regime=MarketRegime.RANGING,
-                metadata={"fallback": True, "blocked": True, "reason": "NO_MARKET_DATA"},
-            )
+            return cls._blocked_config(entry_price, "NO_MARKET_DATA")
+
+        missing = [name for name in cls._REQUIRED_FEATURES if name not in features]
+        if missing:
+            return cls._blocked_config(entry_price, "MISSING_MARKET_FEATURES:" + ",".join(missing))
 
         # 提取特征
-        atr_pct = features.get("atr_pct", 1.0)
-        ann_vol = features.get("ann_volatility", 0.30)
-        rsi = features.get("rsi_14", 50.0)
-        trend_20 = features.get("trend_20_pct", 0.0)
-        spread_bps = features.get("spread_bps", 1.0)
-        current_price = features.get("close", entry_price)
+        try:
+            values = {name: float(features[name]) for name in cls._REQUIRED_FEATURES}
+        except (TypeError, ValueError, KeyError):
+            return cls._blocked_config(entry_price, "INVALID_MARKET_FEATURES")
+        if any(not isfinite(value) for value in values.values()):
+            return cls._blocked_config(entry_price, "NONFINITE_MARKET_FEATURES")
 
-        # 如果 ATR 无效，用波动率估算
-        if atr_pct <= 0 or atr_pct > 20:
-            atr_pct = ann_vol / (365 * 24) ** 0.5 * 100  # 从年化波动率反推小时 ATR%
-            atr_pct = max(0.1, min(atr_pct, 10.0))
+        current_price = values["close"]
+        atr_pct = values["atr_pct"]
+        ann_vol = values["ann_volatility"]
+        rsi = values["rsi_14"]
+        trend_20 = values["trend_20_pct"]
+        spread_bps = values["spread_bps"]
+        if current_price <= 0 or atr_pct <= 0 or atr_pct > 20 or ann_vol <= 0 or spread_bps < 0 or not 0 <= rsi <= 100:
+            return cls._blocked_config(entry_price, "OUT_OF_RANGE_MARKET_FEATURES")
 
         # 计算止损
         stop_pct, vol_regime, price_tier = cls.compute_stop_pct(

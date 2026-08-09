@@ -456,17 +456,30 @@ class IsolationValidator:
         # 但如果有重叠且双方都含有 label，则需要检验 label 独立性
         overlap = times_1h & times_5m
         if overlap:
-            labels_1h = {p.label_value for p in group_1h if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()}
-            labels_5m = {p.label_value for p in group_5m if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()}
-            # 如果两个 timeframe 对同一时刻给出不同方向标签，需要确认不是交叉污染
-            # 允许不同方向（不同 timeframe 自然有不同信号），但记录告警
+            labels_1h = {
+                p.label_value
+                for p in group_1h
+                if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()
+            }
+            labels_5m = {
+                p.label_value
+                for p in group_5m
+                if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()
+            }
+            # 同一 prediction_time 的相反方向标签无法从该接口证明独立，
+            # 不能把冲突样本带入可晋级证据；不同 timeframe 必须重新生成
+            # 具有独立样本身份的标签后再验证。
             if labels_1h and labels_5m:
-                # 方向相反且数值显著 → 潜在交叉污染
-                for l1 in labels_1h:
-                    for l2 in labels_5m:
-                        if (l1 > 0 > l2) or (l1 < 0 < l2):
-                            # 方向相反：不同 timeframe 可以有不同信号，不放行但标记
-                            pass
+                conflicting_direction = False
+                for label_1h in labels_1h:
+                    for label_5m in labels_5m:
+                        if (label_1h > 0 > label_5m) or (label_1h < 0 < label_5m):
+                            conflicting_direction = True
+                            break
+                    if conflicting_direction:
+                        break
+                if conflicting_direction:
+                    return False
 
         return True  # 分组本身就是隔离；交叉污染由 timeframe 字段检查保证
 

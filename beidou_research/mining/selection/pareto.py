@@ -39,9 +39,6 @@ class ParetoSelector:
       minimize: turnover, drawdown, correlation, complexity, parameter sensitivity
     """
 
-    def __init__(self) -> None:
-        pass
-
     def compute_pareto_fronts(
         self,
         candidates: list[dict[str, Any]],
@@ -170,7 +167,7 @@ class ParetoSelector:
         """两个候选的欧几里得距离。"""
         all_keys = set(a.metrics.keys()) | set(b.metrics.keys())
         dist = 0.0
-        for k in all_keys:
+        for k in sorted(all_keys):
             va = a.metrics.get(k, 0.0)
             vb = b.metrics.get(k, 0.0)
             dist += (va - vb) ** 2

@@ -27,7 +27,14 @@ def check_component_health(components=None):
 
 
 def check_monitor_loop_health(last_loop_at, max_stall=30.0):
-    now = time.time()
+    """Check the supervisor loop using a monotonic timestamp.
+
+    ``last_loop_at`` is produced by ``BeidouSupervisor`` with
+    ``time.monotonic()``.  The observed-at field remains wall-clock time for
+    evidence serialization, but elapsed time must never mix the two domains.
+    """
+
+    now = time.monotonic()
     elapsed = now - last_loop_at if last_loop_at > 0 else 0
     if elapsed > max_stall:
         return MonitoringCheckResult(

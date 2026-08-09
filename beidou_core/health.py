@@ -37,7 +37,7 @@ class HealthServer:
     每层有独立回调，可独立查询。
     """
 
-    def __init__(self, port: int = 9090, bind_host: str = "0.0.0.0") -> None:
+    def __init__(self, port: int = 9090, bind_host: str = "127.0.0.1") -> None:
         self._port = port
         self._bind_host = bind_host
         self._start_time = time.time()
@@ -49,7 +49,8 @@ class HealthServer:
         self._readiness_check: Callable[[], bool] = lambda: True
         self._trading_readiness_check: Callable[[], tuple[bool, str]] = lambda: (False, "NO_CERTIFICATE")
         self._exit_readiness_check: Callable[[], tuple[bool, str]] = lambda: (
-            False, "EXIT_READINESS_NOT_CONFIGURED"
+            False,
+            "EXIT_READINESS_NOT_CONFIGURED",
         )  # BD-FIX: 默认返回不可退出，需显式设置
 
         # 其他回执
@@ -91,7 +92,7 @@ class HealthServer:
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                pass  # Suppress access logs
+                return None  # Suppress access logs
 
             def do_GET(self):
                 if self.path == "/health":
@@ -214,6 +215,13 @@ class HealthServer:
         self._thread.start()
 
     def stop(self) -> None:
-        if self._server:
-            self._server.shutdown()
-            self._server = None
+        server = self._server
+        if server is None:
+            return
+        server.shutdown()
+        server.server_close()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._thread = None
+        self._server = None

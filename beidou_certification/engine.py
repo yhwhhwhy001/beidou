@@ -8,6 +8,7 @@ G8: 30天无人值守 + Owner失联安全。
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -16,6 +17,8 @@ from typing import Any
 from beidou_shared.types import (
     GateResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CertificationGate(str, Enum):
@@ -704,8 +707,8 @@ def _build_ladder_from_config() -> list[CapitalLevel]:
                 )
                 for lv in levels
             ]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("capital ladder config unavailable; using fail-safe defaults: %s", type(exc).__name__)
     return list(_DEFAULT_CAPITAL_LADDER)
 
 

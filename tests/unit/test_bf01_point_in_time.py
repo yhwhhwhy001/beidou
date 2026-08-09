@@ -550,3 +550,9 @@ class TestIsolationValidator:
         ]
         violations = IsolationValidator.validate_batch(preds)
         assert len(violations) >= 1
+
+    def test_conflicting_overlapping_labels_fail_closed(self):
+        labels_1h = [_make_label(_make_pk(timeframe="1h"), label_value=0.02)]
+        labels_5m = [_make_label(_make_pk(timeframe="5m"), label_value=-0.01)]
+
+        assert IsolationValidator.validate_timeframe_isolation(labels_1h, labels_5m) is False

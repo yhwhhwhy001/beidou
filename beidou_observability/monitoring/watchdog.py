@@ -44,27 +44,32 @@ class Watchdog:
 
 COMPONENT_FAILURE_MATRIX = {
     "main_loop": ComponentHealth(
-        component="main_loop", healthy=True, safe_action="NO_NEW_RISK", recovery_gate="loop_progress_pass"
+        # Static declarations are not live evidence; start UNKNOWN/unsafe
+        # until the corresponding probe records a fresh heartbeat.
+        component="main_loop",
+        healthy=False,
+        safe_action="NO_NEW_RISK",
+        recovery_gate="loop_progress_pass",
     ),
     "scheduler": ComponentHealth(
-        component="scheduler", healthy=True, safe_action="ALERT", recovery_gate="scheduler_progress"
+        component="scheduler", healthy=False, safe_action="ALERT", recovery_gate="scheduler_progress"
     ),
     "fact_collector": ComponentHealth(
-        component="fact_collector", healthy=True, safe_action="NO_NEW_RISK", recovery_gate="fresh_authoritative_fact"
+        component="fact_collector", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="fresh_authoritative_fact"
     ),
     "incident_manager": ComponentHealth(
-        component="incident_manager", healthy=True, safe_action="NO_NEW_RISK", recovery_gate="durable_incident_rw"
+        component="incident_manager", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="durable_incident_rw"
     ),
     "evidence_writer": ComponentHealth(
-        component="evidence_writer", healthy=True, safe_action="ALERT", recovery_gate="durable_evidence_probe"
+        component="evidence_writer", healthy=False, safe_action="ALERT", recovery_gate="durable_evidence_probe"
     ),
     "repository": ComponentHealth(
-        component="repository", healthy=True, safe_action="NO_NEW_RISK", recovery_gate="transactional_rw_probe"
+        component="repository", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="transactional_rw_probe"
     ),
     "watchdog": ComponentHealth(
-        component="watchdog", healthy=True, safe_action="OUTER_WATCHDOG_DETECT", recovery_gate="watchdog_heartbeat"
+        component="watchdog", healthy=False, safe_action="OUTER_WATCHDOG_DETECT", recovery_gate="watchdog_heartbeat"
     ),
     "metrics_exporter": ComponentHealth(
-        component="metrics_exporter", healthy=True, safe_action="NONE", recovery_gate="exporter_recovered"
+        component="metrics_exporter", healthy=False, safe_action="NONE", recovery_gate="exporter_recovered"
     ),
 }

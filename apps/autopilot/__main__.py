@@ -44,7 +44,7 @@ def _get_git_commit() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="北斗 V2.0 Autopilot")
     parser.add_argument(
-        "--symbols", type=str, default="BTCUSDT,ETHUSDT", help="交易品种，逗号分隔 (默认: BTCUSDT,ETHUSDT)"
+        "--symbols", type=str, default="", help="显式交易品种，逗号分隔；禁止固定 DEFAULT/ALL 交易池回退"
     )
     parser.add_argument(
         "--mode",
@@ -56,14 +56,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=9090, help="健康检查端口 (默认: 9090)")
     args = parser.parse_args()
 
-    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-
-    # 特殊关键字：ALL/DEFAULT 展开为完整交易池
-    if symbols == ["ALL"] or symbols == ["DEFAULT"]:
-        from beidou_core.engine import DEFAULT_UNIVERSE
-
-        symbols = list(DEFAULT_UNIVERSE)
-        print(f"[autopilot] 展开 DEFAULT_UNIVERSE → {len(symbols)} 个标的")
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    if not symbols or any(symbol in {"ALL", "DEFAULT"} for symbol in symbols):
+        parser.error("必须显式提供交易品种；固定 DEFAULT/ALL 交易池已禁用")
 
     # 确保项目根目录在 path 上
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -157,8 +152,10 @@ def main() -> None:
         try:
             with open(audit_path) as f:
                 existing = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass  # 首次启动时审计文件不存在是正常情况
+        except FileNotFoundError:
+            existing = []  # 首次启动时审计文件不存在是正常情况
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("STARTUP_AUDIT_CORRUPT") from exc
     existing.append(audit_event.to_dict())
     with open(audit_path, "w") as f:
         json.dump(existing, f, indent=2)
@@ -184,7 +181,7 @@ def main() -> None:
     # 信号处理
     loop = asyncio.new_event_loop()
 
-    def shutdown():
+    def shutdown() -> None:
         print("\n[autopilot] Received shutdown signal...")
         engine._running = False
 
@@ -197,7 +194,7 @@ def main() -> None:
     try:
         loop.run_until_complete(engine.run())
     except KeyboardInterrupt:
-        pass
+        return
     finally:
         loop.close()
         print("[autopilot] Goodbye.")

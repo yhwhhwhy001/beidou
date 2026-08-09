@@ -12,6 +12,7 @@ from beidou_research.mining.contracts import (
     PriceType,
     ReturnType,
 )
+from beidou_research.mining.evaluation.cost_capacity import CostModel
 from beidou_research.mining.label_builder import (
     CostEstimate,
     LabelBuilder,
@@ -108,6 +109,55 @@ class TestCostEstimate:
 
 class TestLabelBuilder:
     """LabelBuilder 验收测试。"""
+
+    def test_configured_cost_model_is_used_for_labels(self, sample_prices):
+        configured = CostEstimate(fee_bps=20.0, spread_bps=3.0, slippage_bps=2.0, funding_bps=1.0, total_bps=26.0)
+        builder = LabelBuilder(cost_model=configured)
+        spec = LabelSpec(label_id="custom-cost", horizon_bars=4, cost_adjusted=True)
+
+        labels = builder.build_labels(
+            sample_prices,
+            spec,
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            FactorId("test_factor"),
+            SchemaVersion("1.0.0"),
+        )
+
+        assert labels
+        assert all(label.expected_cost_bps == 26.0 for label in labels)
+
+    def test_pipeline_cost_model_contract_is_adapted(self, sample_prices):
+        configured = CostModel(
+            taker_fee_bps=20.0,
+            avg_spread_bps=3.0,
+            slippage_bps=2.0,
+            funding_rate_8h_pct=0.01,
+        )
+        builder = LabelBuilder(cost_model=configured)
+        labels = builder.build_labels(
+            sample_prices,
+            LabelSpec(label_id="pipeline-cost", horizon_bars=4, cost_adjusted=True),
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            FactorId("test_factor"),
+            SchemaVersion("1.0.0"),
+        )
+
+        assert labels
+        assert labels[0].expected_cost_bps == pytest.approx(25.5)
+        assert labels[0].cost_model_version == configured.model_version
+
+    def test_missing_requested_price_type_is_not_filled_from_close(self, sample_prices):
+        point = sample_prices[0]
+        assert point.get_price(PriceType.MARK) == point.mark
+        assert point.get_price(PriceType.MID) == point.mid
+        assert point.get_price(PriceType.VWAP) == point.vwap
+
+        point.mark = None
+        assert point.get_price(PriceType.MARK) is None
 
     def test_build_labels_basic(self, label_builder, sample_prices):
         """基本标签构造。"""

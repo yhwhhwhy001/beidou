@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 class PoolStatus(str, Enum):
@@ -73,9 +74,32 @@ class TradingPool:
     DEGRADE_THRESHOLD = 0.3  # 综合评分 < 0.3 触发降级
     DEGRADE_CONSECUTIVE = 3  # 连续3次低于阈值才降级（迟滞）
 
-    def __init__(self, max_instruments: int = 50):
+    def __init__(
+        self,
+        max_instruments: int = 50,
+        event_sink: Any = None,
+        initial_state: list[dict[str, Any]] | None = None,
+        policy_version: str = "UNKNOWN",
+        source: str = "MARKET_QUALITY_OBSERVATION",
+    ):
         self._pool: dict[str, PoolEntry] = {}
         self._max_instruments = max_instruments
+        self._event_sink = event_sink
+        self._policy_version = policy_version
+        self._source = source
+        # Restore persisted state on startup
+        if initial_state:
+            for state in initial_state:
+                inst_id = str(state.get("instrument_id", ""))
+                if not inst_id:
+                    continue
+                entry = PoolEntry(instrument_id=inst_id)
+                raw_status = str(state.get("status", "OBSERVING"))
+                try:
+                    entry.status = PoolStatus(raw_status)
+                except ValueError:
+                    entry.status = PoolStatus.OBSERVING
+                self._pool[inst_id] = entry
 
     def add(self, instrument_id: str) -> PoolEntry:
         if instrument_id not in self._pool:
@@ -148,9 +172,7 @@ class TradingPool:
         if entry is None or entry.status != PoolStatus.ACTIVE:
             return False
         # BD-FIX: 容量门禁 — capacity_used_pct >= 100% 不可交易
-        if entry.capacity_used_pct >= 100.0:
-            return False
-        return True
+        return not entry.capacity_used_pct >= 100.0
 
     def update_capacity(self, instrument_id: str, notional: float) -> None:
         """BD-FIX: 更新容量使用率。下单时增加，平仓后减少。"""

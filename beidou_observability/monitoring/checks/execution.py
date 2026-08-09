@@ -54,9 +54,12 @@ def check_order_trace(traces):
                     check_id="runtime.execution.order_trace",
                     entity_type="order",
                     entity_id=t.correlation_id,
-                    status=CheckStatus.WARN,
-                    severity=CheckSeverity.P1,
-                    message=f"DUPLICATE ({t.duplicate_count}x)",
+                    # Duplicate execution identity is an unresolved fact,
+                    # not an informational warning.  Keep the authority
+                    # closed until the venue/order journal is reconciled.
+                    status=CheckStatus.FAIL,
+                    severity=CheckSeverity.P0,
+                    message=f"DUPLICATE UNKNOWN ({t.duplicate_count}x)",
                     observed_at=time.time(),
                 )
             )

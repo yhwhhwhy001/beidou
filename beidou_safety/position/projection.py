@@ -32,6 +32,7 @@ class FillEvent:
 
     trade_id + venue 组成全局唯一幂等键。
     """
+
     fill_id: str
     trade_id: str
     venue_id: VenueId
@@ -46,7 +47,7 @@ class FillEvent:
     sequence: int = 0
 
     def idempotency_key(self) -> str:
-        return f"{self.trade_id}:{self.venue_id.value}"
+        return f"{self.trade_id}:{self.venue_id}"
 
 
 @dataclass
@@ -56,6 +57,7 @@ class PositionAggregate:
     支持 add/reduce/flatten/reverse/partial/fees/realized PnL。
     reduce-only/close-position 绝不允许增加绝对风险。
     """
+
     instrument_id: InstrumentId
     venue_id: VenueId
     side: PositionSide = PositionSide.FLAT
@@ -143,7 +145,7 @@ class PositionProjection:
         """从 fills 重建所有仓位。"""
         positions: dict[str, PositionAggregate] = {}
         for fill in sorted(self._fills, key=lambda f: f.sequence):
-            key = f"{fill.instrument_id.value}:{fill.venue_id.value}"
+            key = f"{fill.instrument_id}:{fill.venue_id}"
             if key not in positions:
                 positions[key] = PositionAggregate(
                     instrument_id=fill.instrument_id,

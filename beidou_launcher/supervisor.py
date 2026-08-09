@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
-from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks  # type: ignore[attr-defined]  # re-exported without __all__
-from beidou_safety.execution.recovery import RecoveryEngine
+from beidou_observability.monitoring import (  # type: ignore[attr-defined]  # re-exported without __all__
+    DeepAuditScheduler,
+    collect_monitoring_checks,
+)
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionModeEvidence,
 )
+from beidou_safety.execution.recovery import RecoveryEngine
 
 from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
@@ -24,6 +28,22 @@ from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
 from .state import EvidenceWriter, InstanceLock
+
+logger = logging.getLogger(__name__)
+
+
+def _state_after_persistent_block(current_state: str, has_persistent_blocker: bool) -> str:
+    """Make a persistent runtime blocker visible in the supervisor state immediately.
+
+    Health debounce may delay the escalation to ``LOCKED`` but must never leave
+    the control-plane certificate looking ``RUNNING`` while a P0/P1 blocker is
+    already present.  Terminal states stay terminal until an explicit lifecycle
+    action handles them.
+    """
+
+    if has_persistent_blocker and current_state not in {"LOCKED", "FAILED", "STOPPED"}:
+        return "DEGRADED"
+    return current_state
 
 
 class BeidouSupervisor:
@@ -73,7 +93,11 @@ class BeidouSupervisor:
         self._monitoring_scheduler = DeepAuditScheduler()
         self._recovery_engine = RecoveryEngine()  # BD-T14: 恢复引擎接线
         self._monitoring_state: dict[str, Any] = {}
-        self._last_monitor_loop_ts = 0.0  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
+        # Use the monotonic clock for the supervisor-loop heartbeat.  The
+        # monitoring check and the HTTP liveness callback must share this
+        # clock domain; wall-clock timestamps can make a healthy loop appear
+        # permanently stalled (or hide a stall after an NTP adjustment).
+        self._last_monitor_loop_ts = time.monotonic()  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
         self._monitoring_check_states: dict[str, str] = {}  # check_id → 最近状态（阻断转变事件）
         # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
         from .models import HealthDebounce
@@ -83,6 +107,14 @@ class BeidouSupervisor:
         from .g7_tracker import G7LiveTracker
 
         self._g7_tracker = G7LiveTracker()
+        # The live tracker is informational; the certification producer is
+        # the durable source used by the real G7 window.  It never creates or
+        # starts a window automatically, so a missing/legacy window remains
+        # NOT_VERIFIABLE rather than silently starting certification.
+        from beidou_certification.unattended import UnattendedCertification
+
+        self._g7_certification = UnattendedCertification(str(project_root / "artifacts" / "evidence" / "g7"))
+        self._g7_observed_incident_ids: set[str] = set()
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
@@ -100,13 +132,41 @@ class BeidouSupervisor:
         engine._supervisor_blocked_writes = []
 
         def record(path: str, method: str) -> dict[str, Any]:
-            event = {"path": path, "method": method.upper(), "mode": mode, "timestamp": time.time()}
+            event = {
+                "path": path,
+                "method": method.upper(),
+                "mode": mode,
+                "timestamp": time.time(),
+                "reason": "authority_not_active",
+            }
             engine._supervisor_blocked_writes.append(event)
             return {
                 "code": -3,
                 "error": -3,
-                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}",
+                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}; authority_not_active",
             }
+
+        def write_allowed(method: str, params: dict[str, Any] | None = None) -> bool:
+            # 环境变量 _can_write 只是能力上限，不是运行时授权。
+            # 只有监督器确认无阻断、控制面 RESUME 且本轮授权仍有效时才允许
+            # 新风险写入；NO_NEW_RISK/EXIT_ONLY 仍允许显式撤单和
+            # reduce-only/closePosition 退出，避免安全门禁反而阻断平仓。
+            if not bool(engine._can_write):
+                return False
+            if self._is_trading_ready():
+                return True
+            method_upper = method.upper()
+            params = params or {}
+
+            def enabled(value: Any) -> bool:
+                if isinstance(value, bool):
+                    return value
+                return str(value).strip().lower() in {"1", "true", "yes"}
+
+            reducing = enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
+            return self._control_state() in {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN"} and (
+                method_upper == "DELETE" or reducing
+            )
 
         async def guarded_async(
             path: str,
@@ -114,7 +174,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                 return record(path, method)
             return await original_async(path, method=method, signed=signed, params=params)
 
@@ -124,12 +184,39 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
         engine._api_async = guarded_async
         engine._api = guarded_sync
+
+        # Engine 的部分保护/订单路径直接调用 typed adapter
+        # (create_order/create_algo_order/cancel_algo_order)，不会经过
+        # ``_api_async``。把同一互锁下沉到 adapter.request，确保不存在
+        # “REST 包装已拦截、typed adapter 仍可写”的第二条交易所写路径。
+        adapter = getattr(engine, "_adapter", None)
+        adapter_request = getattr(adapter, "request", None)
+        if adapter is not None and callable(adapter_request):
+            from beidou_exchange.core.error_taxonomy import Result
+            from beidou_shared.errors import ErrorCategory
+
+            async def guarded_adapter_request(
+                method: str,
+                path: str,
+                signed: bool = False,
+                params: dict[str, Any] | None = None,
+            ) -> Any:
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+                    record(path, method)
+                    return Result.failure(
+                        "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
+                        category=ErrorCategory.UNKNOWN,
+                        source="beidou_supervisor_interlock",
+                    )
+                return await adapter_request(method, path, signed=signed, params=params)
+
+            adapter.request = guarded_adapter_request
 
     def _install_resume_interlock(self) -> None:
         """在深度启动门禁通过前阻止引擎内部自动 RESUME。"""
@@ -162,7 +249,11 @@ class BeidouSupervisor:
             self._resume_authorized
             and not self.report.blockers
             and self._control_state() == "RESUME"
-            and self.report.supervisor_state not in {"FAILED", "LOCKED", "STOPPED"}
+            # Readiness is a runtime certificate, not merely a control-plane
+            # action.  A stale/partially-started report must not advertise
+            # trading while the supervisor is still STARTING, PAUSED or
+            # DEGRADED.
+            and self.report.supervisor_state == "RUNNING"
         )
 
     def _install_health_callbacks(self) -> None:
@@ -171,7 +262,9 @@ class BeidouSupervisor:
         engine = self.engine  # mypy 类型收窄
 
         def readiness() -> bool:
-            return bool(engine._check_ready()) and self.report.supervisor_state == "RUNNING"
+            # /ready 不能在 P0 blocker 存在时继续返回 true。进程存活由 /health
+            # 单独表示；服务 readiness 必须与当前 authority/监督状态一致。
+            return self._is_trading_ready()
 
         def trading_readiness() -> tuple[bool, str]:
             ready = self._is_trading_ready()
@@ -223,6 +316,7 @@ class BeidouSupervisor:
                 "checks": {item.check_id: item.status.value for item in self.report.checks},
                 "monitoring": self._monitoring_state,
                 "g7_sli": self._g7_tracker.summary(),
+                "g7_certification": self._g7_certification_summary(),
             }
             return base
 
@@ -241,19 +335,22 @@ class BeidouSupervisor:
             return result
 
         # P2: 监控指标注入 Prometheus /metrics
-        engine_metrics_fn = getattr(self.engine._health, "_metrics_collector", lambda: {})
+        engine_metrics_fn: Callable[[], dict[str, Any]] = getattr(self.engine._health, "_metrics_collector", lambda: {})
 
         def metrics_with_monitoring() -> dict[str, Any]:
             base = engine_metrics_fn()
             # 监控检查状态指标: 按 check_id 分组
             for item in self.report.checks:
                 safe_id = item.check_id.replace(".", "_").replace("-", "_")
-                base[f"check_{safe_id}"] = {
-                    "PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3
-                }.get(item.status.value, 3)
+                base[f"check_{safe_id}"] = {"PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3}.get(item.status.value, 3)
             # 监督器状态
             base["supervisor_state"] = {
-                "RUNNING": 0, "PAUSED": 1, "DEGRADED": 2, "LOCKED": 3, "FAILED": 4, "STOPPED": 5
+                "RUNNING": 0,
+                "PAUSED": 1,
+                "DEGRADED": 2,
+                "LOCKED": 3,
+                "FAILED": 4,
+                "STOPPED": 5,
             }.get(self.report.supervisor_state, -1)
             # 防抖窗口状态
             base["debounce_window_size"] = len(self._health_debounce.window)
@@ -396,6 +493,110 @@ class BeidouSupervisor:
         self._last_error_count = error_count
         return checks
 
+    def _g7_certification_summary(self) -> dict[str, Any]:
+        """Expose durable G7 producer state without certifying it."""
+        try:
+            windows = self._g7_certification.list_windows()
+            active = [item for item in windows if item.get("status") in {"CREATED", "RUNNING", "PAUSED"}]
+            return {
+                "active_windows": active,
+                "state_load_errors": list(self._g7_certification.state_load_errors),
+            }
+        except Exception as exc:
+            return {"active_windows": [], "state_load_errors": [type(exc).__name__]}
+
+    def _record_g7_certification_evidence(self, checks: list[CheckResult]) -> None:
+        """Persist one real monitoring cycle into an explicitly started G7 window.
+
+        This is intentionally producer-only: it records facts and daily
+        reports, but never evaluates or signs a certificate.  Any missing
+        check is recorded as a failed SLI; a P0 blocker also opens a durable
+        P0 incident and resets the window through the certification engine.
+        """
+        from datetime import datetime, timezone
+
+        from beidou_certification.unattended import (
+            IncidentRecord,
+            IncidentSeverity,
+            SLICategory,
+            SLISample,
+            WindowStatus,
+        )
+
+        active_windows = [
+            item for item in self._g7_certification.list_windows() if item.get("status") == WindowStatus.RUNNING.value
+        ]
+        if not active_windows:
+            return
+        # A single producer window is the governed contract.  If operators
+        # accidentally leave multiple RUNNING windows, record into the newest
+        # one and surface the ambiguity in status rather than fan out writes.
+        active_windows.sort(key=lambda item: str(item.get("window_id", "")))
+        window_id = str(active_windows[-1]["window_id"])
+        window = self._g7_certification.get_window(window_id)
+        if window is None or not window.evidence_state_complete:
+            return
+
+        by_id: dict[str, list[CheckResult]] = {}
+        for item in checks:
+            by_id.setdefault(item.check_id, []).append(item)
+
+        def all_pass(check_id: str) -> bool:
+            results = by_id.get(check_id, [])
+            return bool(results) and all(item.status.value == "PASS" for item in results)
+
+        order_results = by_id.get("runtime.execution.order_trace", [])
+        order_ok = bool(order_results) and all(
+            item.status.value == "PASS" and "DUP" not in item.message for item in order_results
+        )
+        samples = [
+            (SLICategory.DATA_QUALITY, all_pass("runtime.health.market_data")),
+            (SLICategory.ORDER_DUPLICATES, order_ok),
+            (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage")),
+            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation")),
+            (SLICategory.RECOVERY_BOUNDED, self._recovery_count <= self.max_restarts),
+            (SLICategory.INCIDENT_CLOSURE, all_pass("runtime.health.incidents")),
+            (SLICategory.COST_PNL_REPORTING, all_pass("runtime.safety.cost_and_pnl_reporting")),
+        ]
+        cycle = int(self._g7_tracker.summary().get("cycles", 0))
+        observed_at = datetime.now(timezone.utc)
+        self._g7_certification.record_batch_sli(
+            window_id,
+            [
+                SLISample(
+                    category=category,
+                    value=1.0 if passed else 0.0,
+                    threshold=1.0,
+                    passed=passed,
+                    timestamp=observed_at,
+                    metadata={"source": "supervisor_checks", "cycle": cycle},
+                )
+                for category, passed in samples
+            ],
+        )
+        window.total_recovery_count = self._recovery_count
+
+        for item in checks:
+            if not (item.is_blocking and item.severity.value == "P0"):
+                continue
+            incident_id = f"g7-{window_id}-{item.check_id}"
+            if incident_id in self._g7_observed_incident_ids:
+                continue
+            self._g7_observed_incident_ids.add(incident_id)
+            self._g7_certification.open_incident(
+                window_id,
+                IncidentRecord(
+                    incident_id=incident_id,
+                    severity=IncidentSeverity.P0,
+                    title=item.check_id,
+                    description=item.message,
+                    evidence={"cycle": cycle, "check": item.to_dict()},
+                ),
+            )
+        # Idempotent by date; repeated monitoring cycles do not create fake
+        # duplicate daily reports.
+        self._g7_certification.generate_daily_report(window_id)
+
     def _merge_monitoring_checks(self, runtime_checks: list[CheckResult]) -> list[CheckResult]:
         """运行监控子系统深度检查并合并进监督器检查流。
 
@@ -406,6 +607,15 @@ class BeidouSupervisor:
         - 阻断检查以状态转变事件写入证据目录。
         """
         assert self.engine is not None
+        # Webhook delivery is a durable side effect, not a best-effort log.
+        # Retry at most one due item per monitoring cycle so a dead channel is
+        # visible in delivery health without starving safety checks.
+        try:
+            retry_pending = getattr(getattr(self.engine, "_alerts", None), "retry_pending", None)
+            if callable(retry_pending):
+                retry_pending(max_items=1)
+        except Exception as exc:
+            logger.warning("alert delivery retry failed: %s: %s", type(exc).__name__, str(exc)[:160])
         monitoring_checks: list[CheckResult] = []
         try:
             monitoring_checks = collect_monitoring_checks(  # type: ignore[no-untyped-call] # beidou_observability.monitoring 遗留豁免
@@ -422,17 +632,32 @@ class BeidouSupervisor:
             import traceback
 
             traceback.print_exc()
+            # Monitoring is part of the execution safety certificate.  If it
+            # cannot run, an empty result set must never be interpreted as a
+            # clean runtime.  Emit a durable P0 blocker so the monitor loop
+            # revokes authority and readiness stays false.
+            monitoring_checks = [
+                CheckResult(
+                    check_id="runtime.monitoring.execution",
+                    name="监控执行链",
+                    status=CheckStatus.FAIL,
+                    severity=CheckSeverity.P0,
+                    message=f"监控检查执行失败: {type(exc).__name__}",
+                    evidence={"error": f"{type(exc).__name__}: {str(exc)[:240]}"},
+                )
+            ]
 
         # MON08 频率策略：监控结果 → 深度审计调度状态
         from beidou_observability.monitoring.contracts import (
             CheckSeverity as MonCheckSeverity,
+        )
+        from beidou_observability.monitoring.contracts import (
             CheckStatus as MonCheckStatus,
         )
 
         try:
             scheduler_results = [
-                (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value))
-                for item in monitoring_checks
+                (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value)) for item in monitoring_checks
             ]
             open_p0 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P0 for item in monitoring_checks
@@ -441,8 +666,8 @@ class BeidouSupervisor:
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
             self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)  # type: ignore[call-arg,no-untyped-call]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
             "level": self._monitoring_scheduler.level.value,
             "interval_seconds": self._monitoring_scheduler.current_interval,
@@ -534,9 +759,11 @@ class BeidouSupervisor:
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
-                # 启动阶段仅阻断关键接线/生命周期/账户检查
+                # 只有所有 P0/P1 blocker 都已清除才允许授权 RESUME。
+                # 关键检查过滤只用于诊断“启动尚未完成”，不能把实时心跳、
+                # 对账、保护或订单链故障隐藏在控制面证书之后。
                 startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
-                if not startup_blockers:
+                if not startup_blockers and not self.report.blockers:
                     return True
             else:
                 self.report.phase = "ENGINE_STARTING"
@@ -570,6 +797,9 @@ class BeidouSupervisor:
         from beidou_lifecycle.lifecycle import ModuleState
 
         previous_control = self._control_state()
+        # 一旦监督器因运行时事实降级，之前的启动授权失效；恢复必须重新
+        # 经过新鲜事实、对账和具名人工授权，不能由健康防抖器自动 RESUME。
+        self._resume_authorized = False
         with suppress(Exception):
             self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
         if previous_control == "RESUME":
@@ -584,37 +814,24 @@ class BeidouSupervisor:
                 lifecycle.transition(ModuleState.DEGRADED)
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
-    # 可在运行时自愈的瞬时阻断项（心跳、行情延迟等）；
-    # 对账 MISMATCHED 在活跃交易中是瞬时状态 — 引擎有 _sync_exchange_state()
-    # 和 _reconcile() 自愈逻辑，可在数秒内修复。只有连续多轮无法自愈时才需人工干预。
-    _TRANSIENT_CHECK_IDS = frozenset(
-        {
-            "runtime.health.realtime_heartbeat",
-            "runtime.health.nearline_heartbeat",
-            "runtime.health.market_data",
-            "runtime.health.http_server",
-            "runtime.health.errors",
-            # Phase 1 去重: account_snapshot → monitoring (runtime.safety.account + runtime.safety.balance_sanity 已在下方)
-            "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
-            "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
-            "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
-            # 监控子系统检查 — 与上列同源的瞬时状态（API 故障/引擎自愈可恢复）
-            "runtime.safety.account",  # INV-002: API 故障 ≠ 空账户，可自愈
-            "runtime.safety.balance_sanity",  # 账户事实缺失可自愈
-            "runtime.execution.order_trace",  # _sync_exchange_state 可自愈在途订单
-            "runtime.health.algorithm_probe",  # 探针重试可自愈
-            "runtime.health.module_progress",  # 心跳类瞬时状态
-            "runtime.health.monitor_self",  # 监督循环自身可恢复
-        }
-    )
+    # V3 安全语义：运行时的每个 P0/P1 事实失败都是 authority blocker。
+    # “瞬时”只能影响诊断、告警和人工处置，绝不能绕过新风险写边界。
+    # 这里故意不维护可自动恢复的白名单：心跳、模块进度、对账、订单链、
+    # 保护覆盖等任一事实失真时，必须撤销当前授权并重新走启动/恢复门禁。
+    # 这条约束防止 supervisor 在 stale heartbeat 或卡死订单链期间继续声称
+    # RESUME/READY，也防止健康防抖器把安全故障误判成可自愈抖动。
+    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset()
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
-        """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
+        """在仍有有效授权时，经过 RECOVERING→VALIDATING→ACTIVE。
 
-        仅允许瞬时阻断（心跳、行情）自愈；持久阻断（对账 MISMATCHED、
-        保护缺失）需要人工干预或引擎自行修复后清除。
+        ``_fail_closed`` 会撤销授权；因此运行时事实故障不能靠“干净几轮”
+        自动回到 RESUME。重新授权必须由受治理的启动/人工恢复流程完成。
         """
         if self.engine is None:
+            return False
+        if not self._resume_authorized:
+            # _fail_closed() 已撤销原授权；无具名新授权时禁止自动恢复。
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
@@ -682,19 +899,44 @@ class BeidouSupervisor:
                 self._refresh_position_mode(),
                 self._refresh_exchange_algo_snapshot(),
             )
+            # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
+            # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
             checks = self._runtime_checks()
-            if await self._recover_if_validated(checks):
-                checks = self._runtime_checks()
-            # 运行监控子系统深度检查并合并（账户/保护/对账/执行/模块/探针/自身健康）
             checks = self._merge_monitoring_checks(checks)
-            self._last_monitor_loop_ts = time.time()
+            try:
+                self._record_g7_certification_evidence(checks)
+            except Exception as exc:
+                # A started G7 window is itself an evidence contract.  If the
+                # producer cannot persist a cycle, do not keep RESUME under a
+                # false certification narrative; surface a P0 blocker.
+                checks.append(
+                    CheckResult(
+                        check_id="runtime.g7.certification.persistence",
+                        name="G7 证据持久化",
+                        status=CheckStatus.FAIL,
+                        severity=CheckSeverity.P0,
+                        message=f"G7 证据写入失败: {type(exc).__name__}",
+                        evidence={"error": type(exc).__name__},
+                    )
+                )
+            self._last_monitor_loop_ts = time.monotonic()
+
+            if (
+                not any(item.is_blocking for item in checks)
+                and self._resume_authorized
+                and await self._recover_if_validated(checks)
+            ):
+                # 只有仍然有效的授权才可以执行已经授权的恢复路径；
+                # _fail_closed 后 _resume_authorized=False，不能由清洁窗口重置。
+                checks = self._runtime_checks()
+                checks = self._merge_monitoring_checks(checks)
 
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers
 
-            # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动
-            # 区分瞬时阻断（心跳/行情/对账/保护等可自愈）和持久阻断
+            # Phase 3: 健康防抖器 — 滑动窗口只决定 DEGRADED→LOCKED 的升级
+            # 速度；它不能让任何 P0/P1 事实失真继续持有 RESUME 授权。
             persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
             has_persistent = bool(persistent_blockers)
 
@@ -719,35 +961,40 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
-                # 防抖器判定干净 — 可恢复
-                if self.report.supervisor_state in ("DEGRADED",):
-                    await self._recover_if_validated(checks)
+                # 干净窗口只说明当前检查没有 blocker；它不是新的授权。
+                # 控制面若仍为 NO_NEW_RISK/EXIT_ONLY，保持 PAUSED，等待受治理
+                # 的恢复/启动动作显式发出 RESUME。
                 if self._control_state() != "RESUME":
-                    # BD-FIX: 安全网 — 若已授权且无 blocker，控制面却卡在 NO_NEW_RISK/EXIT_ONLY，
-                    # 补发 RESUME（LOCK/EMERGENCY_FLATTEN 需人工解除，不自动恢复）。
-                    if (
-                        self._resume_authorized
-                        and self._control_state() in ("NO_NEW_RISK", "EXIT_ONLY")
-                        and not blockers
-                    ):
-                        from beidou_control.plane import ControlAction
-                        self.engine._control.execute_action(ControlAction.RESUME)
-                        print("[supervisor] Safety net: Re-issued RESUME (autorized, no blockers, control was paused)")
                     self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
-                # UNCHANGED: 防抖器计数中，保持当前状态
-                # 有持久阻断时仍调用 fail_closed 降低控制面（但不改变 supervisor_state）
+                # UNCHANGED: 防抖器计数中，控制面仍必须立即降级；
+                # 防抖只延迟 DEGRADED→LOCKED 的升级，不能让证书继续声称 RUNNING。
                 if has_persistent:
+                    previous_state = self.report.supervisor_state
                     await self._fail_closed(
                         "持久阻断检测（防抖计数中）: "
                         + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
                         fatal=False,
                     )
+                    self.report.supervisor_state = _state_after_persistent_block(previous_state, True)
+                    if self.report.supervisor_state == "DEGRADED" and previous_state != "DEGRADED":
+                        self._send_supervisor_alert("DEGRADED", persistent_blockers)
 
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新
+            try:
+                active_windows = [
+                    item
+                    for item in self._g7_certification.list_windows()
+                    if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
+                ]
+                set_window_state = getattr(self._g7_tracker, "set_durable_window_state", None)
+                if callable(set_window_state):
+                    set_window_state(running=len(active_windows) == 1, evidence_state_complete=len(active_windows) == 1)
+            except Exception as exc:
+                logger.warning("G7 durable window state unavailable: %s: %s", type(exc).__name__, str(exc)[:160])
             self._g7_tracker.feed(checks)
             self._g7_tracker.feed_recovery_context(self._recovery_count, self.max_restarts)
             self.writer.write(self.report)

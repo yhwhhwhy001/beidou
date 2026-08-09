@@ -252,6 +252,29 @@ class TestFullCalculation:
         assert cfg.metadata.get("fallback") is True
         assert cfg.metadata.get("blocked") is True
 
+    def test_partial_features_never_use_trading_defaults(self):
+        """部分行情特征必须阻断，不能补成可交易配置。"""
+        features = _make_features()
+        del features["spread_bps"]
+        cfg = AdaptiveProtectionCalculator.calculate("UNKNOWN", 100.0, features)
+        assert cfg.stop_pct == 0.0
+        assert cfg.metadata == {
+            "fallback": True,
+            "blocked": True,
+            "reason": "MISSING_MARKET_FEATURES:spread_bps",
+        }
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [("atr_pct", 0.0), ("ann_volatility", 0.0), ("spread_bps", -1.0), ("rsi_14", 101.0)],
+    )
+    def test_invalid_features_fail_closed(self, field: str, value: float):
+        features = _make_features(**{field: value})
+        cfg = AdaptiveProtectionCalculator.calculate("UNKNOWN", 100.0, features)
+        assert cfg.stop_pct == 0.0
+        assert cfg.metadata["blocked"] is True
+        assert cfg.metadata["reason"] == "OUT_OF_RANGE_MARKET_FEATURES"
+
     def test_metadata_included(self):
         """计算结果包含诊断元数据。"""
         features = _make_features()

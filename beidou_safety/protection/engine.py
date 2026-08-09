@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from math import isfinite
 from typing import Any
 
 from beidou_shared.types import (
@@ -43,7 +44,6 @@ DEFAULT_RR_RATIO = 2.0  # BD-T11 v1: 默认风险回报比
 DEFAULT_MULTIPLIER = 2.0  # BD-T11 v1: ATR/历史波动率止损默认倍数
 DEFAULT_TRAIL_PCT = 2.0  # BD-T11 v1: 移动止损默认百分比
 DEFAULT_MIN_TRAIL_DISTANCE = 0.5  # BD-T11 v1: 移动止损最小距离
-DEFAULT_FALLBACK_STOP_PCT = 0.0  # BD-T11: 缺数据时返回 0（无法计算保护=NO_NEW_RISK），不再硬编码 5%
 
 
 class StopLossType(str, Enum):
@@ -92,6 +92,13 @@ class ProtectionOrder:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     triggered_at: datetime | None = None
     correlation_id: CorrelationId | None = None
+    # Venue ownership is part of the durable fact, not inferred from a local
+    # object.  A local definition remains CREATED until a venue ACK supplies
+    # the exchange order id.
+    owner_id: str = "UNKNOWN"
+    position_generation: int = 0
+    session_id: str = ""
+    exchange_order_id: str | None = None
 
     def is_stop_loss(self) -> bool:
         return self.stop_type is not None
@@ -120,6 +127,9 @@ class PositionProtection:
     highest_price: float | None = None  # long仓用
     lowest_price: float | None = None  # short仓用
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    owner_id: str = "UNKNOWN"
+    position_generation: int = 0
+    session_id: str = ""
 
     def is_long(self) -> bool:
         return self.side == OrderSide.BUY
@@ -151,45 +161,64 @@ class StopLossCalculator:
     """止损计算器 — 根据类型计算止损价格。"""
 
     @staticmethod
+    def _finite_positive(value: Any, name: str) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be finite and positive") from exc
+        if not isfinite(numeric) or numeric <= 0:
+            raise ValueError(f"{name} must be finite and positive")
+        return numeric
+
+    @staticmethod
     def fixed_percent(entry_price: float, side: OrderSide, stop_pct: float) -> float:
         """固定百分比止损。例如 stop_pct=2.0 → 入场价下方2%。"""
-        if side == OrderSide.BUY:
-            return entry_price * (1 - stop_pct / 100)
-        else:
-            return entry_price * (1 + stop_pct / 100)
+        entry_price = StopLossCalculator._finite_positive(entry_price, "entry_price")
+        stop_pct = StopLossCalculator._finite_positive(stop_pct, "stop_pct")
+        stop_price = entry_price * (1 - stop_pct / 100) if side == OrderSide.BUY else entry_price * (1 + stop_pct / 100)
+        return StopLossCalculator._finite_positive(stop_price, "stop_price")
 
     @staticmethod
     def atr_based(entry_price: float, side: OrderSide, atr: float, multiplier: float = DEFAULT_MULTIPLIER) -> float:
         """ATR 波动率止损。止损距离 = ATR × 倍数。"""
-        if side == OrderSide.BUY:
-            return entry_price - atr * multiplier
-        else:
-            return entry_price + atr * multiplier
+        entry_price = StopLossCalculator._finite_positive(entry_price, "entry_price")
+        atr = StopLossCalculator._finite_positive(atr, "atr")
+        multiplier = StopLossCalculator._finite_positive(multiplier, "multiplier")
+        stop_price = entry_price - atr * multiplier if side == OrderSide.BUY else entry_price + atr * multiplier
+        return StopLossCalculator._finite_positive(stop_price, "stop_price")
 
     @staticmethod
     def volatility_based(
         entry_price: float, side: OrderSide, volatility_pct: float, multiplier: float = DEFAULT_MULTIPLIER
     ) -> float:
         """历史波动率止损。"""
+        entry_price = StopLossCalculator._finite_positive(entry_price, "entry_price")
+        volatility_pct = StopLossCalculator._finite_positive(volatility_pct, "volatility_pct")
+        multiplier = StopLossCalculator._finite_positive(multiplier, "multiplier")
         if side == OrderSide.BUY:
-            return entry_price * (1 - volatility_pct * multiplier / 100)
+            stop_price = entry_price * (1 - volatility_pct * multiplier / 100)
         else:
-            return entry_price * (1 + volatility_pct * multiplier / 100)
+            stop_price = entry_price * (1 + volatility_pct * multiplier / 100)
+        return StopLossCalculator._finite_positive(stop_price, "stop_price")
 
     @staticmethod
     def swing_structure(
         swing_low: float | None, swing_high: float | None, side: OrderSide, entry_price: float = 0.0
     ) -> float:
-        """基于支撑/阻力位止损。缺数据时回退到固定百分比。"""
+        """基于支撑/阻力位止损。缺数据时明确阻断。"""
         if side == OrderSide.BUY and swing_low is not None:
-            return swing_low * 0.999  # 略低于前低
+            swing_low = StopLossCalculator._finite_positive(swing_low, "swing_low")
+            stop_price = swing_low * 0.999  # 略低于前低
+            if entry_price > 0 and stop_price >= entry_price:
+                raise ValueError("swing_low does not provide a protective long stop")
+            return StopLossCalculator._finite_positive(stop_price, "stop_price")
         elif side == OrderSide.SELL and swing_high is not None:
-            return swing_high * 1.001  # 略高于前高
-        # 缺数据时回退：BD-T11 默认止损百分比，避免 0.0 导致的误触发
-        if side == OrderSide.BUY:
-            return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100) if entry_price > 0 else 0.0
-        else:
-            return entry_price * (1 + DEFAULT_FALLBACK_STOP_PCT / 100) if entry_price > 0 else float("inf")
+            swing_high = StopLossCalculator._finite_positive(swing_high, "swing_high")
+            stop_price = swing_high * 1.001  # 略高于前高
+            if entry_price > 0 and stop_price <= entry_price:
+                raise ValueError("swing_high does not provide a protective short stop")
+            return StopLossCalculator._finite_positive(stop_price, "stop_price")
+        raise ValueError("swing structure is unavailable")
 
     @staticmethod
     def calculate(
@@ -207,15 +236,19 @@ class StopLossCalculator:
         if stop_type == StopLossType.FIXED_PERCENT:
             return StopLossCalculator.fixed_percent(entry_price, side, stop_pct)
         elif stop_type == StopLossType.ATR_BASED:
-            return StopLossCalculator.atr_based(entry_price, side, atr or 0.0, multiplier)
+            if atr is None:
+                raise ValueError("atr is required for ATR_BASED protection")
+            return StopLossCalculator.atr_based(entry_price, side, atr, multiplier)
         elif stop_type == StopLossType.VOLATILITY_BASED:
-            return StopLossCalculator.volatility_based(entry_price, side, volatility_pct or 1.0, multiplier)
+            if volatility_pct is None:
+                raise ValueError("volatility_pct is required for VOLATILITY_BASED protection")
+            return StopLossCalculator.volatility_based(entry_price, side, volatility_pct, multiplier)
         elif stop_type == StopLossType.SWING_STRUCTURE:
             return StopLossCalculator.swing_structure(swing_low, swing_high, side, entry_price)
         elif stop_type == StopLossType.TRAILING:
             # 移动止损初始值 = 固定百分比
             return StopLossCalculator.fixed_percent(entry_price, side, stop_pct)
-        return entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)  # BD-T11 默认回退止损
+        raise ValueError(f"unsupported stop-loss type: {stop_type}")
 
 
 class TakeProfitCalculator:
@@ -226,7 +259,12 @@ class TakeProfitCalculator:
         entry_price: float, stop_loss_price: float, side: OrderSide, rr_ratio: float = DEFAULT_RR_RATIO
     ) -> float:
         """基于风险回报比的止盈。风险 = |入场-止损| × RR。"""
+        entry_price = StopLossCalculator._finite_positive(entry_price, "entry_price")
+        stop_loss_price = StopLossCalculator._finite_positive(stop_loss_price, "stop_loss_price")
+        rr_ratio = StopLossCalculator._finite_positive(rr_ratio, "rr_ratio")
         risk = abs(entry_price - stop_loss_price)
+        if risk <= 0:
+            raise ValueError("take-profit requires a non-zero stop distance")
         if side == OrderSide.BUY:
             return entry_price + risk * rr_ratio
         else:
@@ -293,7 +331,7 @@ class TakeProfitCalculator:
                     "quantity_pct": 1.0,
                 }
             ]
-        return [{"price": entry_price, "close_pct": 0, "rr_ratio": 0, "quantity_pct": 0}]
+        raise ValueError(f"unsupported take-profit type: {take_profit_type}")
 
 
 class ProtectionManager:
@@ -322,8 +360,23 @@ class ProtectionManager:
         stop_loss_config: dict[str, Any] | None = None,
         take_profit_config: dict[str, Any] | None = None,
         trailing_config: dict[str, float] | None = None,
+        owner_id: str = "UNKNOWN",
+        position_generation: int = 0,
+        session_id: str = "",
     ) -> PositionProtection:
         """为一笔新仓位创建完整的保护方案。"""
+        try:
+            entry_value = float(entry_price)
+            quantity_value = float(quantity)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("entry_price and quantity must be finite numbers") from exc
+        if not isfinite(entry_value) or entry_value <= 0:
+            raise ValueError("entry_price must be finite and positive")
+        if not isfinite(quantity_value) or quantity_value <= 0:
+            raise ValueError("quantity must be finite and positive")
+        if take_profit_config and not stop_loss_config:
+            raise ValueError("take-profit protection requires an explicit stop-loss")
+
         pp = PositionProtection(
             position_id=position_id,
             instrument_id=instrument_id,
@@ -332,6 +385,9 @@ class ProtectionManager:
             quantity=quantity,
             side=side,
             trailing_config=trailing_config or {},
+            owner_id=owner_id or "UNKNOWN",
+            position_generation=int(position_generation),
+            session_id=session_id or "",
         )
         pp.update_price_extremes(entry_price)
 
@@ -349,6 +405,16 @@ class ProtectionManager:
                 swing_low=stop_loss_config.get("swing_low"),
                 swing_high=stop_loss_config.get("swing_high"),
             )
+            try:
+                trigger_value = round(float(stop_price), 2)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("stop-loss trigger must be finite and positive") from exc
+            if not isfinite(trigger_value) or trigger_value <= 0:
+                raise ValueError("stop-loss trigger must be finite and positive")
+            if side == OrderSide.BUY and trigger_value >= entry_value:
+                raise ValueError("long stop-loss must be strictly below entry price")
+            if side == OrderSide.SELL and trigger_value <= entry_value:
+                raise ValueError("short stop-loss must be strictly above entry price")
             sl_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
             order_type = "STOP_LIMIT" if stop_loss_config.get("use_limit", False) else "STOP_MARKET"
             # STOP_LIMIT 限价：SELL(SHORT)需低于触发价；BUY(LONG)需高于触发价
@@ -365,24 +431,30 @@ class ProtectionManager:
                 instrument_id=instrument_id,
                 venue_id=venue_id,
                 side=sl_side,
-                trigger_price=Price(amount=str(round(stop_price, 2))),
+                trigger_price=Price(amount=str(trigger_value)),
                 order_price=Price(amount=str(limit_price)) if limit_price is not None else None,
                 quantity=Quantity(amount=str(quantity)),
                 order_type=order_type,
                 reduce_only=True,
-                status=ProtectionStatus.ACTIVE,
+                status=ProtectionStatus.CREATED,
                 stop_type=sl_type,
                 reason=f"Stop Loss: {sl_type.value}",
+                owner_id=owner_id or "UNKNOWN",
+                position_generation=int(position_generation),
+                session_id=session_id or "",
+                metadata={
+                    "owner_id": owner_id or "UNKNOWN",
+                    "position_generation": int(position_generation),
+                    "session_id": session_id or "",
+                },
             )
 
         # 止盈
         if take_profit_config:
+            if pp.stop_loss is None:
+                raise ValueError("take-profit protection requires an explicit stop-loss")
             tp_type = TakeProfitType(take_profit_config.get("type", "FIXED_RR"))
-            stop_price_for_rr = (
-                float(pp.stop_loss.trigger_price.amount)
-                if pp.stop_loss
-                else entry_price * (1 - DEFAULT_FALLBACK_STOP_PCT / 100)
-            )
+            stop_price_for_rr = float(pp.stop_loss.trigger_price.amount)
             tp_targets = TakeProfitCalculator.calculate(
                 tp_type,
                 entry_price,
@@ -393,7 +465,24 @@ class ProtectionManager:
             )
             tp_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
             for i, target in enumerate(tp_targets):
-                qty = quantity * target["quantity_pct"]
+                try:
+                    target_price = float(target["price"])
+                    quantity_pct = float(target["quantity_pct"])
+                except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError("take-profit target is incomplete") from exc
+                if (
+                    not isfinite(target_price)
+                    or target_price <= 0
+                    or not isfinite(quantity_pct)
+                    or quantity_pct <= 0
+                    or quantity_pct > 1
+                ):
+                    raise ValueError("take-profit target is outside safe bounds")
+                if side == OrderSide.BUY and target_price <= entry_value:
+                    raise ValueError("long take-profit must be above entry price")
+                if side == OrderSide.SELL and target_price >= entry_value:
+                    raise ValueError("short take-profit must be below entry price")
+                qty = quantity_value * quantity_pct
                 if qty <= 0:
                     continue
                 tp_order = ProtectionOrder(
@@ -407,16 +496,57 @@ class ProtectionManager:
                     quantity=Quantity(amount=str(round(qty, 4))),
                     order_type="TAKE_PROFIT_MARKET",
                     reduce_only=True,
-                    status=ProtectionStatus.ACTIVE,
+                    status=ProtectionStatus.CREATED,
                     take_profit_type=tp_type,
                     reason=f"Take Profit {i + 1}/{len(tp_targets)}: RR={target['rr_ratio']} "
                     f"close={target['close_pct']}%",
-                    metadata={"rr_ratio": target["rr_ratio"], "close_pct": target["close_pct"]},
+                    metadata={
+                        "rr_ratio": target["rr_ratio"],
+                        "close_pct": target["close_pct"],
+                        "owner_id": owner_id or "UNKNOWN",
+                        "position_generation": int(position_generation),
+                        "session_id": session_id or "",
+                    },
+                    owner_id=owner_id or "UNKNOWN",
+                    position_generation=int(position_generation),
+                    session_id=session_id or "",
                 )
                 pp.take_profits.append(tp_order)
 
         self._protections[position_id] = pp
         return pp
+
+    def restore_position_protection(self, protection: PositionProtection) -> PositionProtection:
+        """Restore an already ACK-backed position projection.
+
+        Startup recovery must not call :meth:`create_protection` for a
+        durable ACTIVE row: that method intentionally creates a new local
+        definition and would make the subsequent venue submission look like
+        a fresh protection.  This boundary only accepts a fully reconstructed
+        projection; callers remain responsible for validating the durable
+        owner, generation, venue ids and exchange ACKs before calling it.
+        """
+
+        if not isinstance(protection, PositionProtection):
+            raise TypeError("position protection projection must be PositionProtection")
+        if not protection.position_id or not str(protection.instrument_id):
+            raise ValueError("position protection identity is incomplete")
+        if not isfinite(float(protection.entry_price)) or protection.entry_price <= 0:
+            raise ValueError("position protection entry price must be finite and positive")
+        if not isfinite(float(protection.quantity)) or protection.quantity <= 0:
+            raise ValueError("position protection quantity must be finite and positive")
+        orders = ([protection.stop_loss] if protection.stop_loss is not None else []) + list(protection.take_profits)
+        if not orders:
+            raise ValueError("position protection requires at least one order")
+        for order in orders:
+            if order.position_id != protection.position_id:
+                raise ValueError("protection order position identity mismatch")
+            if order.status != ProtectionStatus.ACTIVE or not order.exchange_order_id:
+                raise ValueError("restored protection order must be ACK-backed ACTIVE")
+            if not order.reduce_only:
+                raise ValueError("restored protection order must be reduce-only")
+        self._protections[protection.position_id] = protection
+        return protection
 
     # ---- 保护单生命周期 ----
 
@@ -426,12 +556,12 @@ class ProtectionManager:
         if pp is None:
             return []
         cancelled: list[ProtectionOrder] = []
-        if pp.stop_loss and pp.stop_loss.is_active():
+        if pp.stop_loss and pp.stop_loss.status in (ProtectionStatus.CREATED, ProtectionStatus.ACTIVE):
             pp.stop_loss.status = ProtectionStatus.CANCELLED
             cancelled.append(pp.stop_loss)
             self._history.append(pp.stop_loss)
         for tp in pp.take_profits:
-            if tp.is_active():
+            if tp.status in (ProtectionStatus.CREATED, ProtectionStatus.ACTIVE):
                 tp.status = ProtectionStatus.CANCELLED
                 cancelled.append(tp)
                 self._history.append(tp)

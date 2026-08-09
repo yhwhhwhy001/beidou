@@ -343,9 +343,7 @@ class StrategyRiskManager:
                 "CONSECUTIVE_LOSSES",
                 "DRAWDOWN_LIMIT",
             }
-            state.active_circuit_breakers = [
-                cb for cb in state.active_circuit_breakers if cb not in daily_breakers
-            ]
+            state.active_circuit_breakers = [cb for cb in state.active_circuit_breakers if cb not in daily_breakers]
             # 如果所有熔断器已清除，恢复到 NORMAL 级别
             if not state.active_circuit_breakers and state.risk_level in (
                 StrategyRiskLevel.LOCKED,

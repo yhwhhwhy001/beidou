@@ -1,18 +1,23 @@
-"""行情数据源 — BD-T03: 所有网络调用通过 BinanceRESTClient (Adapter 内部传输)。
+"""行情数据源 — BD-T03: 所有网络调用通过 BinanceUsdmAdapter 传输。
 
-禁止直接使用 urllib/httpx/aiohttp，禁止硬编码 /fapi/ 端点。
+禁止建立绕过适配器的底层 HTTP 连接，也禁止硬编码交易所端点。
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
+import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from beidou_data.feature_store import FeatureStore, FeatureVector
-from beidou_data.klines import KLineGenerator, OHLCV
+from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
+from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
 from beidou_exchange.binance_usdm.endpoints import DEFAULT_RECV_WINDOW_MS, Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_shared.config import ConfigProvider
@@ -26,12 +31,14 @@ from beidou_shared.types import (
     VenueInstrument,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class MarketDataFeed:
     """Binance REST 行情数据源 — BD-T03 收敛。
 
-    所有 HTTP 调用通过 BinanceRESTClient (Adapter 内部传输)。
-    禁止绕过 Adapter 直接发送网络请求。
+    所有 HTTP 调用通过 BinanceUsdmAdapter；REST client 只作为 Adapter 的
+    内部 transport。禁止行情层直接持有或调用底层 REST transport。
     """
 
     def __init__(self, client: Any = None) -> None:
@@ -41,15 +48,17 @@ class MarketDataFeed:
         self._api_secret = ""
         self._recv_window = DEFAULT_RECV_WINDOW_MS
 
-        # BD-T03: 使用 BinanceRESTClient 作为唯一网络传输
-        # 优先使用注入的 client（引擎共享），否则创建独立实例
+        # BD-T03: 使用注入的 Adapter 作为唯一网络传输。独立研究工具没有
+        # 注入 client 时也必须先构造 Adapter，不能让行情层绕过协议边界。
         if client is not None:
             self._client = client
         else:
-            self._client = BinanceRESTClient(
-                rest_url=self._rest_url,
-                api_key=self._api_key,
-                api_secret=self._api_secret,
+            self._client = BinanceUsdmAdapter(
+                rest_client=BinanceRESTClient(
+                    rest_url=self._rest_url,
+                    api_key=self._api_key,
+                    api_secret=self._api_secret,
+                )
             )
 
         self._feature_store = FeatureStore()
@@ -80,18 +89,14 @@ class MarketDataFeed:
             self._kline_generators[key] = gen
         return gen
 
-    def get_generated_klines(self, symbol: str, interval: str = "1h") -> list[OHLCV]:
-        """返回 KLineGenerator 的已闭合 K 线 + 当前未闭合 bar。
-
-        由实时 tick 聚合生成，与 REST klines 并行使用
-        （KLineGenerator 的 get_klines() 返回已闭合 K 线）。
-        """
+    def get_generated_klines(self, symbol: str, interval: str = "1h", *, include_current: bool = False) -> list[OHLCV]:
+        """Return generated bars; research features use closed bars by default."""
         gen = self._get_kline_generator(symbol, interval)
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol))
         klines = gen.get_klines(vi)
         current = gen.get_current_bar(vi)
-        if current is not None:
-            klines = klines + [current]
+        if include_current and current is not None and current.is_closed:
+            klines = [*klines, current]
         return klines
 
     def uptime_seconds(self) -> float:
@@ -167,12 +172,13 @@ class MarketDataFeed:
 
             # 启动连接（后台任务）BD-FIX: 保存任务引用以便停止追踪
             import asyncio as _asyncio
+
             self._ws_task = _asyncio.create_task(self._ws_client.run())
             self._ws_active = True
-            print(f"[feed] WebSocket started: {len(symbols) * 3} streams for {len(symbols)} symbols")
+            logger.info("WebSocket started: %s streams for %s symbols", len(symbols) * 3, len(symbols))
             return True
         except Exception as e:
-            print(f"[feed] WebSocket unavailable ({e}), falling back to REST polling")
+            logger.warning("WebSocket unavailable (%s), falling back to REST polling", e)
             self._ws_client = None
             self._ws_active = False
             return False
@@ -180,17 +186,23 @@ class MarketDataFeed:
     async def stop_ws(self) -> None:
         """BD-FIX: 安全停止 WebSocket 连接。"""
         if self._ws_client is not None:
-            try:
-                await self._ws_client.disconnect()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                # BinanceUsdmWebSocketClient exposes ``close``.  Keep a
+                # compatibility fallback for injected test transports, but
+                # never silently skip the actual close hook.
+                close = getattr(self._ws_client, "close", None)
+                if callable(close):
+                    result = close()
+                else:
+                    disconnect = getattr(self._ws_client, "disconnect", None)
+                    result = disconnect() if callable(disconnect) else None
+                if inspect.isawaitable(result):
+                    await result
             self._ws_client = None
         if hasattr(self, "_ws_task") and self._ws_task is not None:
             self._ws_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._ws_task
-            except (asyncio.CancelledError, Exception):
-                pass
             self._ws_task = None
         self._ws_active = False
 
@@ -210,22 +222,141 @@ class MarketDataFeed:
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(
-            self._client.request(method, path, signed=signed, params=params or {})
-        )
-        if isinstance(result, dict):
-            return result
-        return {"error": -1, "msg": str(result)}
+        result = loop.run_until_complete(self._client.request(method, path, signed=signed, params=params or {}))
+        return self._unwrap_result(result)
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """BD-T03: 异步 API 调用 — 直接通过 BinanceRESTClient.request()。
-
-        不再使用 urllib — 所有 HTTP 调用通过 Adapter 传输层。
-        """
+        """BD-T03: 异步 API 调用统一通过 BinanceRESTClient.request()。"""
         result = await self._client.request(method, path, signed=signed, params=params or {})
-        if isinstance(result, dict):
+        return self._unwrap_result(result)
+
+    @staticmethod
+    def _unwrap_result(result: Any) -> Any:
+        """Normalize Adapter ``Result`` and legacy dict transports at the feed boundary."""
+
+        if hasattr(result, "is_success"):
+            if result.is_success():
+                return result.data
+            error = getattr(result, "error", None)
+            return {"error": -1, "msg": str(error or "market data request failed")}
+        if isinstance(result, (dict, list)):
             return result
         return {"error": -1, "msg": str(result)}
+
+    @staticmethod
+    def _parse_rest_kline(raw: Any, now: datetime, *, include_closed: bool) -> dict[str, Any] | None:
+        """Parse one Binance REST kline without manufacturing market facts.
+
+        REST responses are an external trust boundary.  A malformed row must
+        not become a zero/NaN feature, and a still-forming row must not enter a
+        strategy observation set.  Callers deliberately skip invalid rows;
+        the downstream feature gate still requires a sufficient, valid sample.
+        """
+
+        if not isinstance(raw, (list, tuple)) or len(raw) < 9:
+            return None
+
+        def _finite(value: Any) -> float | None:
+            if isinstance(value, bool):
+                return None
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return parsed if math.isfinite(parsed) else None
+
+        open_ms = _finite(raw[0])
+        close_ms = _finite(raw[6])
+        if open_ms is None or close_ms is None or open_ms < 0 or close_ms <= open_ms:
+            return None
+
+        try:
+            open_time = datetime.fromtimestamp(open_ms / 1000, tz=timezone.utc)
+            close_time = datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+        if close_time > now:
+            return None
+
+        values: dict[str, float] = {}
+        for name, index in (("open", 1), ("high", 2), ("low", 3), ("close", 4), ("volume", 5)):
+            parsed = _finite(raw[index])
+            if parsed is None:
+                return None
+            if name == "volume":
+                if parsed < 0:
+                    return None
+            elif parsed <= 0:
+                return None
+            values[name] = parsed
+
+        if values["high"] < max(values["open"], values["close"], values["low"]):
+            return None
+        if values["low"] > min(values["open"], values["close"], values["high"]):
+            return None
+
+        quote_volume = _finite(raw[7])
+        if quote_volume is None or quote_volume < 0:
+            return None
+
+        parsed_row: dict[str, Any] = {
+            "open_time": open_time,
+            "open": values["open"],
+            "high": values["high"],
+            "low": values["low"],
+            "close": values["close"],
+            "volume": values["volume"],
+            "close_time": close_time,
+            "quote_volume": quote_volume,
+            "trades": raw[8],
+        }
+        if include_closed:
+            parsed_row["is_closed"] = True
+        return parsed_row
+
+    @staticmethod
+    def _is_valid_feature_bar(bar: Any) -> bool:
+        """Validate bars from REST or the local generator before indicators."""
+
+        if not isinstance(bar, dict):
+            return False
+        open_time = bar.get("open_time")
+        close_time = bar.get("close_time")
+        if not isinstance(open_time, datetime) or not isinstance(close_time, datetime) or close_time <= open_time:
+            return False
+
+        values: dict[str, float] = {}
+        for name in ("open", "high", "low", "close", "volume"):
+            value = bar.get(name)
+            if isinstance(value, bool):
+                return False
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if not math.isfinite(parsed):
+                return False
+            if name == "volume" and parsed < 0:
+                return False
+            if name != "volume" and parsed <= 0:
+                return False
+            values[name] = parsed
+        if values["high"] < max(values["open"], values["close"], values["low"]):
+            return False
+        if values["low"] > min(values["open"], values["close"], values["high"]):
+            return False
+        if "is_closed" in bar and not isinstance(bar["is_closed"], bool):
+            return False
+        quote_volume = bar.get("quote_volume")
+        if quote_volume is not None:
+            try:
+                quote_value = float(quote_volume)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if not math.isfinite(quote_value) or quote_value < 0:
+                return False
+        return True
 
     # --- Data fetching (async) ---
 
@@ -251,20 +382,11 @@ class MarketDataFeed:
         if not isinstance(raw, list):
             return []
         klines = []
+        now = datetime.now(timezone.utc)
         for k in raw:
-            klines.append(
-                {
-                    "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low": float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5]),
-                    "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
-                    "quote_volume": float(k[7]),
-                    "trades": k[8],
-                }
-            )
+            parsed = self._parse_rest_kline(k, now, include_closed=False)
+            if parsed is not None:
+                klines.append(parsed)
         return klines
 
     async def async_update_features(self, symbol: str) -> dict[str, float]:
@@ -275,31 +397,35 @@ class MarketDataFeed:
         在单层事件循环中执行。
         """
         try:
-            ticker_result = await self._client.request("GET", Endpoint.TICKER_24HR, params={"symbol": symbol})
-            orderbook_result = await self._client.request("GET", Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
+            ticker_result = await self._api_async(Endpoint.TICKER_24HR, params={"symbol": symbol})
+            orderbook_result = await self._api_async(Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
         except Exception as exc:
             logger.warning("async_update_features request failed for %s: %s", symbol, exc)
             return {}
 
-        if not ticker_result.is_success() or not orderbook_result.is_success():
-            logger.warning("async_update_features API error for %s: ticker=%s orderbook=%s",
-                           symbol, ticker_result.error if hasattr(ticker_result, 'error') else 'fail',
-                           orderbook_result.error if hasattr(orderbook_result, 'error') else 'fail')
+        if not isinstance(ticker_result, dict) or not isinstance(orderbook_result, dict):
+            return {}
+        if "error" in ticker_result or "error" in orderbook_result:
+            logger.warning("async_update_features API error for %s", symbol)
             return {}
 
-        ticker = ticker_result.data
-        orderbook = orderbook_result.data
+        ticker = ticker_result
+        orderbook = orderbook_result
 
         if "lastPrice" not in ticker or "bids" not in orderbook:
-            logger.warning("async_update_features incomplete data for %s: has_lastPrice=%s has_bids=%s",
-                           symbol, "lastPrice" in ticker, "bids" in orderbook)
+            logger.warning(
+                "async_update_features incomplete data for %s: has_lastPrice=%s has_bids=%s",
+                symbol,
+                "lastPrice" in ticker,
+                "bids" in orderbook,
+            )
             return {}
 
         self._last_ticker[symbol] = ticker
         self._last_orderbook[symbol] = orderbook
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
-        try:
+        with contextlib.suppress(Exception):
             last_price = float(ticker["lastPrice"])
             if symbol not in self._kline_generators:
                 self._kline_generators[symbol] = KLineGenerator(interval="5m")
@@ -309,19 +435,19 @@ class MarketDataFeed:
                 volume=float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
-        except Exception:
-            pass
 
         last_price = float(ticker["lastPrice"])
         bids = orderbook.get("bids", [])
         asks = orderbook.get("asks", [])
         if not bids or not asks:
-            best_bid = last_price * 0.999
-            best_ask = last_price * 1.001
-        else:
-            best_bid = float(bids[0][0])
-            best_ask = float(asks[0][0])
-        spread_bps = (best_ask - best_bid) / best_ask * 10000 if best_ask > 0 else 1.0
+            logger.warning("async_update_features missing two-sided order book for %s", symbol)
+            return {}
+        best_bid = float(bids[0][0])
+        best_ask = float(asks[0][0])
+        if not (0 < best_bid <= best_ask):
+            logger.warning("async_update_features invalid two-sided order book for %s", symbol)
+            return {}
+        spread_bps = (best_ask - best_bid) / best_ask * 10000
         change_pct = float(ticker.get("priceChangePercent", 0))
 
         features = {
@@ -383,32 +509,23 @@ class MarketDataFeed:
 
         return features
 
-    async def async_get_kline_features(self, symbol: str, interval: str = "1h", lookback: int = 100) -> dict[str, float]:
-        """异步版本 — 直接使用共享 REST client，零线程池开销。"""
-        kline_result = await self._client.request(
-            "GET", Endpoint.KLINES,
+    async def async_get_kline_features(self, symbol: str, interval: str = "1h", lookback: int = 100) -> dict[str, Any]:
+        """异步版本 — 经 Adapter 统一边界获取闭合 K 线。"""
+        raw = await self._api_async(
+            Endpoint.KLINES,
             params={"symbol": symbol, "interval": interval, "limit": lookback},
         )
-        if not kline_result.is_success():
+        if isinstance(raw, dict) and "error" in raw:
             return {}
-
-        raw = kline_result.data
         if not isinstance(raw, list):
             return {}
 
         klines = []
+        now = datetime.now(timezone.utc)
         for k in raw:
-            klines.append({
-                "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5]),
-                "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
-                "quote_volume": float(k[7]),
-                "trades": k[8],
-            })
+            parsed = self._parse_rest_kline(k, now, include_closed=True)
+            if parsed is not None:
+                klines.append(parsed)
 
         # 合并 KLineGenerator 实时聚合的 K 线
         gen_klines = self.get_generated_klines(symbol, interval)
@@ -425,6 +542,7 @@ class MarketDataFeed:
                     "close_time": gen_last.close_time,
                     "quote_volume": float(gen_last.quote_volume.amount) if gen_last.quote_volume else 0.0,
                     "trades": gen_last.trade_count,
+                    "is_closed": bool(gen_last.is_closed),
                 }
         elif not klines and len(gen_klines) >= 20:
             klines = [
@@ -438,6 +556,7 @@ class MarketDataFeed:
                     "close_time": k.close_time,
                     "quote_volume": float(k.quote_volume.amount) if k.quote_volume else 0.0,
                     "trades": k.trade_count,
+                    "is_closed": bool(k.is_closed),
                 }
                 for k in gen_klines
             ]
@@ -469,20 +588,11 @@ class MarketDataFeed:
         if not isinstance(raw, list):
             return []
         klines = []
+        now = datetime.now(timezone.utc)
         for k in raw:
-            klines.append(
-                {
-                    "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low": float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5]),
-                    "close_time": datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc),
-                    "quote_volume": float(k[7]),
-                    "trades": k[8],
-                }
-            )
+            parsed = self._parse_rest_kline(k, now, include_closed=True)
+            if parsed is not None:
+                klines.append(parsed)
         return klines
 
     def fetch_account(self) -> dict:
@@ -498,7 +608,7 @@ class MarketDataFeed:
             return {}
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
-        try:
+        with contextlib.suppress(Exception):
             last_price = float(ticker["lastPrice"])
             if symbol not in self._kline_generators:
                 self._kline_generators[symbol] = KLineGenerator(interval="5m")
@@ -508,20 +618,20 @@ class MarketDataFeed:
                 volume=float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
-        except Exception:
-            pass  # KLineGenerator 故障不影响主流程
 
         last_price = float(ticker["lastPrice"])
         # BD-FIX: 空 orderbook 保护（流动性稀薄标的）
         bids = orderbook.get("bids", [])
         asks = orderbook.get("asks", [])
         if not bids or not asks:
-            best_bid = last_price * 0.999
-            best_ask = last_price * 1.001
-        else:
-            best_bid = float(bids[0][0])
-            best_ask = float(asks[0][0])
-        spread_bps = (best_ask - best_bid) / best_ask * 10000 if best_ask > 0 else 1.0
+            logger.warning("update_features missing two-sided order book for %s", symbol)
+            return {}
+        best_bid = float(bids[0][0])
+        best_ask = float(asks[0][0])
+        if not (0 < best_bid <= best_ask):
+            logger.warning("update_features invalid two-sided order book for %s", symbol)
+            return {}
+        spread_bps = (best_ask - best_bid) / best_ask * 10000
         change_pct = float(ticker.get("priceChangePercent", 0))
 
         features = {
@@ -620,9 +730,9 @@ class MarketDataFeed:
             ]
         return self._compute_kline_features(symbol, interval, klines)
 
-    def _compute_kline_features(self, symbol: str, interval: str, klines: list[dict]) -> dict[str, float]:
+    def _compute_kline_features(self, symbol: str, interval: str, klines: list[dict]) -> dict[str, Any]:
         """从 K 线数据计算技术指标特征。同步和异步路径共享。"""
-        if len(klines) < 20:
+        if len(klines) < 20 or any(not self._is_valid_feature_bar(bar) for bar in klines):
             return {}
 
         closes = [k["close"] for k in klines]
@@ -686,7 +796,7 @@ class MarketDataFeed:
         macd = ema_12 - ema_26
         macd_signal = ema_12 * 0.2 + ema_26 * 0.8 - (ema_12 - ema_26) * 0.2
 
-        spread_bps_val = 1.0
+        spread_bps_val: float | None = None
         ticker = self._last_ticker.get(symbol, {})
         if ticker:
             bid = float(ticker.get("bid", 0))
@@ -694,7 +804,8 @@ class MarketDataFeed:
             if bid > 0 and ask > 0:
                 spread_bps_val = (ask - bid) / ((bid + ask) / 2) * 10000
 
-        return {
+        latest = klines[-1]
+        features: dict[str, Any] = {
             "close": closes[-1],
             "prices": closes,  # 完整收盘价序列 — 供 alpha 因子（z-score / half-life）使用
             "sma_5": sma_5,
@@ -716,8 +827,22 @@ class MarketDataFeed:
             "ema_26": ema_26,
             "macd": macd,
             "macd_signal": macd_signal,
-            "spread_bps": spread_bps_val,
+            **({"spread_bps": spread_bps_val} if spread_bps_val is not None else {}),
         }
+        # Strategy execution is allowed only from an explicitly closed bar.
+        # These fields are first-class evidence, not inferred defaults.  The
+        # retrieval time is the earliest local claim for data availability; a
+        # caller with stronger venue evidence may replace it before hashing.
+        available_at = datetime.now(timezone.utc)
+        features.update(
+            {
+                "bar_open_time": latest.get("open_time"),
+                "bar_close_time": latest.get("close_time"),
+                "bar_available_at": available_at,
+                "bar_is_closed": latest.get("is_closed") is True,
+            }
+        )
+        return features
 
     def get_feature_store(self) -> FeatureStore:
         return self._feature_store

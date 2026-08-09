@@ -56,6 +56,7 @@ class LedgerTransactionType(str, Enum):
 @dataclass(frozen=True, slots=True)
 class Posting:
     """单个分录 — 绑定账户、金额、方向。"""
+
     posting_id: str
     account_id: AccountId
     account_type: AccountType
@@ -69,6 +70,7 @@ class Posting:
 @dataclass(frozen=True, slots=True)
 class LedgerTransaction:
     """一笔完整的复式记账交易 — ≥2 个 Posting，借贷平衡。"""
+
     transaction_id: str
     transaction_type: LedgerTransactionType
     postings: tuple[Posting, ...]  # 不可变序列，≥2 个
@@ -97,10 +99,18 @@ class LedgerTransaction:
         return all(abs(b) < 1e-12 for b in balances.values())
 
     def total_debit(self, currency: str = "USDT") -> float:
-        return sum(float(p.amount.amount) for p in self.postings if p.side == PostingSide.DEBIT and p.amount.currency == currency)
+        return sum(
+            float(p.amount.amount)
+            for p in self.postings
+            if p.side == PostingSide.DEBIT and p.amount.currency == currency
+        )
 
     def total_credit(self, currency: str = "USDT") -> float:
-        return sum(float(p.amount.amount) for p in self.postings if p.side == PostingSide.CREDIT and p.amount.currency == currency)
+        return sum(
+            float(p.amount.amount)
+            for p in self.postings
+            if p.side == PostingSide.CREDIT and p.amount.currency == currency
+        )
 
 
 class ImmutableLedger:
@@ -131,23 +141,27 @@ class ImmutableLedger:
     def freeze(self) -> None:
         self._frozen = True
 
-    def post(self, tx: LedgerTransaction) -> str:
-        """追加交易。返回 transaction_id。"""
+    def validate(self, tx: LedgerTransaction) -> None:
+        """Validate a transaction without mutating the in-memory journal.
+
+        The execution engine persists the durable journal before appending to
+        its process-local projection.  Keeping validation side-effect free
+        lets that ordering fail closed: a malformed or duplicate transaction
+        is rejected before SQLite can contain a new fact.
+        """
+
         if self._frozen:
             raise RuntimeError("ImmutableLedger is frozen")
-
-        # 幂等：source_event_id 不可重复
         if tx.source_event_id and tx.source_event_id in self._seen_event_ids:
             raise RuntimeError(f"ImmutableLedger: duplicate source_event_id={tx.source_event_id}")
-
-        # 幂等：transaction_id 不可重复
         if tx.transaction_id in self._seen_transaction_ids:
             raise RuntimeError(f"ImmutableLedger: duplicate transaction_id={tx.transaction_id}")
-
         if not tx.is_balanced():
-            raise RuntimeError(
-                f"ImmutableLedger: unbalanced transaction {tx.transaction_id} — rejected"
-            )
+            raise RuntimeError(f"ImmutableLedger: unbalanced transaction {tx.transaction_id} — rejected")
+
+    def post(self, tx: LedgerTransaction) -> str:
+        """追加交易。返回 transaction_id。"""
+        self.validate(tx)
 
         self._transactions.append(tx)
         if tx.source_event_id:
@@ -164,16 +178,18 @@ class ImmutableLedger:
         reversed_postings: list[Posting] = []
         for i, p in enumerate(original.postings):
             reversed_side = PostingSide.CREDIT if p.side == PostingSide.DEBIT else PostingSide.DEBIT
-            reversed_postings.append(Posting(
-                posting_id=f"{reversal_tx_id}-{i}",
-                account_id=p.account_id,
-                account_type=p.account_type,
-                venue_id=p.venue_id,
-                instrument_id=p.instrument_id,
-                amount=p.amount,
-                side=reversed_side,
-                description=f"REVERSAL of {original_tx_id}: {reason}",
-            ))
+            reversed_postings.append(
+                Posting(
+                    posting_id=f"{reversal_tx_id}-{i}",
+                    account_id=p.account_id,
+                    account_type=p.account_type,
+                    venue_id=p.venue_id,
+                    instrument_id=p.instrument_id,
+                    amount=p.amount,
+                    side=reversed_side,
+                    description=f"REVERSAL of {original_tx_id}: {reason}",
+                )
+            )
 
         return LedgerTransaction(
             transaction_id=reversal_tx_id,

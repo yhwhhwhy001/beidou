@@ -78,6 +78,7 @@ research = [
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+force-exclude = true
 exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "build", "dist", "beidou_state.db*", "beidou_monitor_state.json", "beidou_repair_log.jsonl"]
 
 [tool.ruff.lint]
@@ -93,7 +94,7 @@ ignore = ["S101", "S104", "RUF001", "RUF002", "RUF003"]
 "beidou_observability/monitoring/__init__.py" = ["E702", "E701", "T201", "E501", "F401"]
 "delivery/scripts/**/*.py" = ["E702", "E701", "E501"]
 "tools/**/*.py" = ["E701", "E702", "E402", "S310", "S108", "S607", "S603", "E741", "B007", "N806"]
-"scripts/**/*.py" = ["E702", "E701", "S110", "SIM102", "S607", "S108", "E501", "F403", "N806", "E741", "B007"]
+"scripts/**/*.py" = ["E702", "E701", "S110", "SIM102", "S607", "S108", "E501", "F403", "N806", "E741", "B007", "T201"]
 "scripts/scan_hardcoded.py" = ["E702", "E701", "S110", "SIM102", "S607", "S108", "E501", "F403", "N806", "E741", "B007"]
 "scripts/monitor_daemon.py" = ["E702", "S110", "S310"]
 "beidou_core/engine.py" = ["T201", "S310", "E501", "E741", "N806", "B007"]
@@ -173,6 +174,8 @@ line-ending = "auto"
 
 [tool.mypy]
 python_version = "3.12"
+exclude = "(^|/)(beidou_state\\.db(?:-(?:shm|wal))?)$"
+explicit_package_bases = true
 strict = true
 warn_unused_configs = true
 warn_redundant_casts = true

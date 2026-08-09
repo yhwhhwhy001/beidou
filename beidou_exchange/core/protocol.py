@@ -99,6 +99,108 @@ class OrderResponse:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass(frozen=True, slots=True)
+class AlgoOrderSnapshot:
+    """Typed venue acknowledgement for a conditional/Algo order.
+
+    ``ACTIVE`` is never inferred from local construction.  The adapter must
+    return a non-empty venue id, symbol, side, order type, trigger price and
+    venue status before an engine can bind ownership to this snapshot.
+    """
+
+    algo_id: str
+    venue_instrument: VenueInstrument
+    account_ref: AccountRef
+    side: OrderSide
+    order_type: OrderType
+    quantity: Quantity
+    trigger_price: Price
+    status: str
+    client_algo_id: str | None = None
+    reduce_only: bool | None = None
+    close_position: bool | None = None
+    position_side: str | None = None
+    update_time_ms: int | None = None
+    raw_response: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class UserStreamEvent:
+    """Normalized user-stream event; missing event identity stays UNKNOWN."""
+
+    event_type: str
+    event_id: str
+    event_time_ms: int
+    transaction_time_ms: int | None
+    sequence: int | None
+    raw_event: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class UserOrderUpdate:
+    """Normalized Binance ``ORDER_TRADE_UPDATE`` payload.
+
+    Cumulative quantity is the venue high-water mark; ``last_quantity`` and
+    ``trade_id`` identify the incremental execution.  The raw event remains
+    attached so an independent replay can re-derive the projection.
+    """
+
+    event: UserStreamEvent
+    order_id: str
+    client_order_id: str
+    symbol: InstrumentId
+    side: OrderSide
+    order_type: OrderType
+    order_status: OrderStatus
+    execution_type: str
+    original_quantity: Quantity
+    cumulative_quantity: Quantity
+    last_quantity: Quantity
+    last_price: Price
+    average_price: Price
+    trade_id: str | None
+    commission: MonetaryValue
+    realized_pnl: MonetaryValue | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserBalanceUpdate:
+    """One absolute wallet-balance row from ``ACCOUNT_UPDATE``."""
+
+    asset: str
+    wallet_balance: MonetaryValue
+    cross_wallet_balance: MonetaryValue
+    available_balance: MonetaryValue | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserPositionUpdate:
+    """One absolute position row from ``ACCOUNT_UPDATE``."""
+
+    symbol: InstrumentId
+    position_amount: Quantity
+    entry_price: Price
+    break_even_price: Price
+    unrealized_pnl: MonetaryValue
+    margin_type: str
+    position_side: str
+
+
+@dataclass(frozen=True, slots=True)
+class UserAccountUpdate:
+    """Normalized Binance account update.
+
+    Binance sends changed balance/position rows rather than a complete
+    account snapshot.  Completeness is therefore supplied only by an
+    explicit, independently verified replay baseline in the projector.
+    """
+
+    event: UserStreamEvent
+    reason: str
+    balances: tuple[UserBalanceUpdate, ...]
+    positions: tuple[UserPositionUpdate, ...]
+
+
 class ExchangeAdapter(ABC):
     """交易所适配器协议。
 
@@ -176,6 +278,19 @@ class TradingExchangePort(ABC):
 
     @abstractmethod
     async def cancel_order(self, command: Any) -> Result: ...
+
+
+class ConditionalOrderPort(ABC):
+    """BD-V3: Algo/conditional order lifecycle with explicit venue ACKs."""
+
+    @abstractmethod
+    async def get_open_algo_orders(self) -> Result: ...
+
+    @abstractmethod
+    async def create_algo_order(self, command: Any) -> Result: ...
+
+    @abstractmethod
+    async def cancel_algo_order(self, command: Any) -> Result: ...
 
 
 class UserStreamPort(ABC):

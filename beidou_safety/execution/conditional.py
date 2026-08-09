@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
-from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_shared.types import (
     AccountId,
     CorrelationId,
@@ -127,26 +127,32 @@ class PositionManager:
         except Exception:
             return {**flatten_plan, "executed": "false", "reason": "order_parse_error"}
 
-        executed = 0
+        enqueue = getattr(engine, "enqueue_reduce_only_market", None)
+        if not callable(enqueue):
+            return {**flatten_plan, "executed": "false", "reason": "governed_executor_unavailable"}
+
+        queued = 0
         failed = 0
         for order_spec in orders:
             try:
                 symbol = order_spec["instrument_id"]
                 side = order_spec["side"]
                 qty = order_spec["quantity"]
-                # Use engine's exchange API to place MARKET close order
-                params = {
-                    "symbol": symbol,
-                    "side": side,
-                    "type": "MARKET",
-                    "quantity": f"{qty:.3f}",
-                    "reduceOnly": "true",
-                }
-                result = await engine._api_async(
-                    Endpoint.ORDER, method="POST", signed=True, params=params
+                # The engine owns the only venue-write path.  It persists a
+                # reduce-only intent and lets the fenced executor/Adapter
+                # perform the actual submission; this module never creates a
+                # second direct REST order path.
+                result = await enqueue(
+                    symbol=symbol,
+                    side=side,
+                    quantity=float(qty),
+                    correlation_id=None,
+                    policy_id=policy.policy_id,
+                    policy_version=policy.version,
+                    policy_signature=policy.signature,
                 )
-                if "orderId" in result:
-                    executed += 1
+                if result:
+                    queued += 1
                 else:
                     failed += 1
             except Exception:
@@ -154,7 +160,7 @@ class PositionManager:
 
         return {
             **flatten_plan,
-            "executed": "true",
-            "executed_count": str(executed),
+            "executed": "true" if queued else "false",
+            "executed_count": str(queued),
             "failed_count": str(failed),
         }

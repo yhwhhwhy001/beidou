@@ -5,12 +5,14 @@ P0 (CRITICAL/LOCKDOWN) 永不抑制，立即发送。
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
+import os
 import threading
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from beidou_observability.telemetry import (
@@ -21,13 +23,25 @@ from beidou_observability.telemetry import (
 )
 from beidou_reporting.engine import ReportGenerator
 
+logger = logging.getLogger(__name__)
+
 
 class AlertDispatcher:
     """多渠道告警分发器。"""
 
-    def __init__(self, webhook_url: str = "", alerts_file: str = "/tmp/beidou_alerts.jsonl") -> None:
+    def __init__(
+        self,
+        webhook_url: str = "",
+        alerts_file: str = "/tmp/beidou_alerts.jsonl",
+        delivery_file: str | None = None,
+        max_delivery_attempts: int = 5,
+    ) -> None:
+        if max_delivery_attempts < 1:
+            raise ValueError("max_delivery_attempts must be positive")
         self._webhook_url = webhook_url
         self._alerts_file = alerts_file
+        self._delivery_file = Path(delivery_file or f"{alerts_file}.delivery.jsonl")
+        self._max_delivery_attempts = max_delivery_attempts
         self._suppressor = AlertSuppressor(window_seconds=300.0)
         self._report_generator = ReportGenerator()
         self._lock = threading.Lock()
@@ -36,6 +50,11 @@ class AlertDispatcher:
         self._tz = timezone(__import__("datetime").timedelta(hours=8))
         self._start_time = datetime.now(self._tz)
         self._portfolio_provider: Callable[[], str] | None = None
+        self._delivery_state: dict[str, dict[str, Any]] = {}
+        self._delivery_load_errors: list[str] = []
+        self._delivery_persistence_error = False
+        self._delivery_io_lock = threading.Lock()
+        self._load_delivery_state()
 
     def set_portfolio_provider(self, fn: Callable[[], str]) -> None:
         """注入持仓摘要提供器，webhook 推送时追加到描述末尾。"""
@@ -50,7 +69,7 @@ class AlertDispatcher:
         category: str = "runtime",
     ) -> Incident:
         """创建并分发事故告警。"""
-        incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S')}-{category}"
+        incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S%f')}-{category}"
 
         incident = Incident(
             incident_id=incident_id,
@@ -83,10 +102,13 @@ class AlertDispatcher:
 
         # Webhook
         if self._webhook_url:
+            # Queue before attempting network delivery.  A process crash
+            # between these two operations leaves a replayable PENDING fact.
+            self._record_delivery_event(incident, "PENDING", attempts=0)
             self._send_webhook(incident)
 
         # 生成事故报告
-        with contextlib.suppress(Exception):
+        try:
             self._report_generator.generate_incident_report(
                 incident_id=incident.incident_id,
                 title=incident.title,
@@ -95,6 +117,8 @@ class AlertDispatcher:
                 detected_at=incident.detected_at,
                 auto_action=incident.auto_action.value,
             )
+        except Exception as exc:
+            logger.error("incident report generation failed for %s: %s", incident.incident_id, type(exc).__name__)
 
     def _write_to_file(self, incident: Incident) -> None:
         record = {
@@ -109,9 +133,12 @@ class AlertDispatcher:
         with open(self._alerts_file, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def _send_webhook(self, incident: Incident) -> None:
+    def _send_webhook(self, incident: Incident) -> bool:
         """发送 webhook 告警。支持飞书/Server酱/PushPlus/企业微信/通用JSON。"""
         url = self._webhook_url
+        with self._lock:
+            previous = self._delivery_state.get(incident.incident_id, {})
+            attempts = int(previous.get("attempts", 0)) + 1
         ts = incident.detected_at.strftime("%m-%d %H:%M")
         title = f"[{incident.severity.value}] {incident.title}"
         # 正文：事件+操作+时间
@@ -119,8 +146,10 @@ class AlertDispatcher:
         # 追加持仓
         portfolio = ""
         if self._portfolio_provider:
-            with contextlib.suppress(Exception):
+            try:
                 portfolio = self._portfolio_provider()
+            except Exception as exc:
+                logger.warning("portfolio provider failed for alert %s: %s", incident.incident_id, type(exc).__name__)
 
         try:
             if "open.feishu.cn" in url or "open.larksuite.com" in url:
@@ -180,9 +209,155 @@ class AlertDispatcher:
                 ).encode()
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=5)
-        except Exception:
-            pass
+            with urllib.request.urlopen(req, timeout=5) as response:
+                status = int(getattr(response, "status", 200))
+                if status < 200 or status >= 300:
+                    raise RuntimeError(f"webhook HTTP status {status}")
+            self._record_delivery_event(incident, "DELIVERED", attempts=attempts)
+            return True
+        except Exception as exc:
+            logger.error("webhook delivery failed for alert %s: %s", incident.incident_id, type(exc).__name__)
+            status = "DEAD_LETTER" if attempts >= self._max_delivery_attempts else "FAILED"
+            backoff_seconds = min(300.0, float(2 ** min(attempts, 8)))
+            self._record_delivery_event(
+                incident,
+                status,
+                attempts=attempts,
+                error=type(exc).__name__,
+                next_retry_at=datetime.now(timezone.utc).timestamp() + backoff_seconds,
+            )
+            return False
+
+    def retry_pending(self, *, max_items: int = 10, now: float | None = None) -> int:
+        """Retry due webhook deliveries from the durable sidecar.
+
+        The supervisor may call this once per monitoring cycle.  Missing or
+        corrupt delivery evidence is never treated as delivered; it remains
+        visible through :meth:`get_delivery_health`.
+        """
+        if not self._webhook_url or max_items < 1:
+            return 0
+        current_time = datetime.now(timezone.utc).timestamp() if now is None else float(now)
+        with self._lock:
+            candidates = [
+                dict(record)
+                for record in self._delivery_state.values()
+                if record.get("status") in {"PENDING", "FAILED"}
+                and float(record.get("next_retry_at", 0.0)) <= current_time
+                and int(record.get("attempts", 0)) < self._max_delivery_attempts
+            ][:max_items]
+
+        retried = 0
+        for record in candidates:
+            incident = self._active_incidents.get(str(record.get("incident_id", "")))
+            if incident is None:
+                incident = self._incident_from_delivery(record)
+            if incident is None:
+                continue
+            self._send_webhook(incident)
+            retried += 1
+        return retried
+
+    def get_delivery_health(self) -> dict[str, Any]:
+        """Return durable webhook delivery health; UNKNOWN is explicit."""
+        with self._lock:
+            records = list(self._delivery_state.values())
+            statuses = [record.get("status") for record in records]
+            return {
+                "configured": bool(self._webhook_url),
+                "pending": sum(status in {"PENDING", "FAILED"} for status in statuses),
+                "failed": sum(status == "FAILED" for status in statuses),
+                "dead_letter": sum(status == "DEAD_LETTER" for status in statuses),
+                "delivered": sum(status == "DELIVERED" for status in statuses),
+                "critical_pending": sum(
+                    record.get("severity") in {AlertSeverity.CRITICAL.value, AlertSeverity.LOCKDOWN.value}
+                    and record.get("status") in {"PENDING", "FAILED"}
+                    for record in records
+                ),
+                "unknown": int(bool(self._delivery_load_errors or self._delivery_persistence_error)),
+                "load_errors": len(self._delivery_load_errors),
+                "persistence_error": int(self._delivery_persistence_error),
+            }
+
+    def _record_delivery_event(
+        self,
+        incident: Incident,
+        status: str,
+        *,
+        attempts: int,
+        error: str = "",
+        next_retry_at: float = 0.0,
+    ) -> None:
+        record: dict[str, Any] = {
+            "incident_id": incident.incident_id,
+            "severity": incident.severity.value,
+            "title": incident.title,
+            "description": incident.description,
+            "auto_action": incident.auto_action.value,
+            "detected_at": incident.detected_at.isoformat(),
+            "status": status,
+            "attempts": attempts,
+            "error": error,
+            "next_retry_at": next_retry_at,
+            "event_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            with self._delivery_io_lock:
+                self._delivery_file.parent.mkdir(parents=True, exist_ok=True)
+                with self._delivery_file.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        except OSError as exc:
+            # The incident itself is already persisted separately, but the
+            # delivery fact is now UNKNOWN.  Do not claim it was sent.
+            self._delivery_persistence_error = True
+            logger.critical("alert delivery state persistence failed: %s", type(exc).__name__)
+        with self._lock:
+            self._delivery_state[incident.incident_id] = record
+
+    def _load_delivery_state(self) -> None:
+        if not self._delivery_file.exists():
+            return
+        try:
+            with self._delivery_file.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                        incident_id = record.get("incident_id")
+                        status = record.get("status")
+                        if not isinstance(incident_id, str) or status not in {
+                            "PENDING",
+                            "FAILED",
+                            "DELIVERED",
+                            "DEAD_LETTER",
+                        }:
+                            raise ValueError("invalid delivery record")
+                        self._delivery_state[incident_id] = dict(record)
+                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                        self._delivery_load_errors.append(f"line {line_number}: {type(exc).__name__}")
+        except OSError as exc:
+            self._delivery_load_errors.append(f"file: {type(exc).__name__}")
+
+    @staticmethod
+    def _incident_from_delivery(record: dict[str, Any]) -> Incident | None:
+        try:
+            detected_at = datetime.fromisoformat(str(record["detected_at"]).replace("Z", "+00:00"))
+            if detected_at.tzinfo is None:
+                detected_at = detected_at.replace(tzinfo=timezone.utc)
+            return Incident(
+                incident_id=str(record["incident_id"]),
+                severity=AlertSeverity(str(record["severity"])),
+                title=str(record["title"]),
+                description=str(record["description"]),
+                auto_action=AutoAction(str(record["auto_action"])),
+                detected_at=detected_at.astimezone(timezone.utc),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.error("cannot reconstruct pending alert incident: %s", type(exc).__name__)
+            return None
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:
@@ -206,11 +381,22 @@ class AlertDispatcher:
 
     def get_alert_stats(self) -> dict[str, int]:
         with self._lock:
-            return {
+            stats = {
                 "total": sum(self._alert_count.values()),
                 "active": len(self._active_incidents),
                 **self._alert_count,
             }
+        delivery = self.get_delivery_health()
+        stats.update(
+            {
+                "webhook_pending": int(delivery["pending"]),
+                "webhook_failed": int(delivery["failed"]),
+                "webhook_dead_letter": int(delivery["dead_letter"]),
+                "webhook_unknown": int(delivery["unknown"]),
+                "webhook_critical_pending": int(delivery["critical_pending"]),
+            }
+        )
+        return stats
 
     def get_report_generator(self) -> ReportGenerator:
         return self._report_generator

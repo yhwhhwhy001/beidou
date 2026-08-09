@@ -142,7 +142,7 @@ class StartupWorkflow:
         "TRADING_READY",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._current_phase: str = self.PHASES[0]
         self._completed: set[str] = set()
 

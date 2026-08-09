@@ -61,7 +61,7 @@ class EvidenceBundle:
     cost_capacity_results: dict[str, Any] = field(default_factory=dict)
 
     # 结果
-    gate_decision: str = ""  # PASS / FAIL / CONDITIONAL_PASS
+    gate_decision: str = ""  # PASS / FAIL / CONDITIONAL_PASS / NOT_VERIFIABLE
     failure_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -91,8 +91,11 @@ class EvidenceBundle:
                 "raw_metrics": self.raw_metrics,
                 "adjusted_metrics": self.adjusted_metrics,
                 "multiple_testing_results": self.multiple_testing_results,
+                "stability_results": self.stability_results,
+                "cost_capacity_results": self.cost_capacity_results,
                 "gate_decision": self.gate_decision,
                 "failure_reasons": self.failure_reasons,
+                "warnings": self.warnings,
                 "evaluator_version": self.evaluator_version,
             },
             sort_keys=True,
@@ -137,18 +140,25 @@ class EvidenceBundle:
 
     def is_complete(self) -> bool:
         """检查证据包是否包含所有必要字段。"""
-        required = [
-            self.candidate_hash,
-            self.factor_code_hash or self.factor_expression_hash,
-            self.dataset_manifest_hash,
-            self.gate_decision,
-        ]
-        return all(v != "" for v in required if isinstance(v, str))
+        required = {
+            "candidate_hash": self.candidate_hash,
+            "factor_hash": self.factor_code_hash or self.factor_expression_hash,
+            "dataset_manifest_hash": self.dataset_manifest_hash,
+            "feature_manifest_hash": self.feature_manifest_hash,
+            "label_spec_hash": self.label_spec_hash,
+            "cost_model_version": self.cost_model_version,
+            "policy_version": self.policy_version,
+            "gate_decision": self.gate_decision,
+        }
+        return all(
+            isinstance(value, str) and bool(value.strip()) and value.strip().upper() != "UNKNOWN"
+            for value in required.values()
+        )
 
     def can_promote(self) -> tuple[bool, str]:
         """检查是否可以晋级。"""
         if not self.is_complete():
-            return False, "evidence_incomplete"
+            return False, "evidence_incomplete_or_unbound"
         if self.gate_decision != "PASS":
             return False, f"gate_not_passed: {self.gate_decision}"
         if self.failure_reasons:

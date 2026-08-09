@@ -9,10 +9,30 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+# Risk-increasing execution must not silently combine a signed subset with
+# unsigned YAML defaults.  Keep this contract at the policy boundary so every
+# caller (preflight and engine startup) applies the same completeness rule.
+REQUIRED_RISK_PARAMETERS: frozenset[str] = frozenset(
+    {
+        "max_leverage",
+        "max_concentration_pct",
+        "max_position_notional",
+        "max_total_leverage",
+        "max_instruments",
+        "drift_threshold",
+        "max_drawdown_pct",
+        "max_daily_loss_pct",
+        "max_consecutive_losses",
+        "risk_per_trade_pct",
+        "min_sharpe_rolling",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +54,50 @@ class PolicyEnvelope:
             return datetime.now(timezone.utc) > datetime.fromisoformat(self.expires_at)
         except ValueError:
             return True
+
+    def validate_risk_parameters(self) -> tuple[bool, str]:
+        """Validate the complete signed parameter contract used by writes.
+
+        A valid HMAC proves integrity, not that the envelope contains every
+        value the execution engine needs.  Missing, non-finite, or out-of-
+        bounds values therefore remain invalid instead of being filled from
+        an unsigned environment YAML file.
+        """
+
+        missing = sorted(REQUIRED_RISK_PARAMETERS.difference(self.parameters))
+        if missing:
+            return False, f"missing required risk parameters: {','.join(missing)}"
+
+        positive_float_keys = {
+            "max_leverage",
+            "max_position_notional",
+            "max_total_leverage",
+            "drift_threshold",
+        }
+        percentage_keys = {
+            "max_concentration_pct",
+            "max_drawdown_pct",
+            "max_daily_loss_pct",
+            "risk_per_trade_pct",
+        }
+        integer_keys = {"max_instruments", "max_consecutive_losses"}
+        for key in REQUIRED_RISK_PARAMETERS:
+            value = self.parameters.get(key)
+            if value is None or isinstance(value, bool):
+                return False, f"risk parameter {key} is not numeric"
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return False, f"risk parameter {key} is not numeric"
+            if not math.isfinite(numeric):
+                return False, f"risk parameter {key} is not finite"
+            if key in integer_keys and (not numeric.is_integer() or numeric <= 0):
+                return False, f"risk parameter {key} must be a positive integer"
+            if key in positive_float_keys and numeric <= 0:
+                return False, f"risk parameter {key} must be positive"
+            if key in percentage_keys and not 0 < numeric <= 100:
+                return False, f"risk parameter {key} must be in (0,100]"
+        return True, "complete risk parameter contract"
 
     def verify(self, signing_key: str) -> bool:
         if not self.signature or not signing_key:
@@ -79,10 +143,15 @@ class PolicyLoader:
         try:
             with open(path) as f:
                 data = json.load(f)
+            if not isinstance(data, dict) or data.get("policy_id") != policy_id:
+                return None
+            parameters = data.get("parameters")
+            if not isinstance(parameters, dict):
+                return None
             envelope = PolicyEnvelope(
                 policy_id=data["policy_id"],
                 version=data["version"],
-                parameters=data["parameters"],
+                parameters=parameters,
                 signature=data.get("signature", ""),
                 issued_at=data.get("issued_at", ""),
                 expires_at=data.get("expires_at"),

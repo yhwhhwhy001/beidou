@@ -75,6 +75,15 @@ class TestRiskApproval:
         with _pytest.raises(RuntimeError, match="SIGNING_UNAVAILABLE"):
             signer.sign(aid)
 
+    def test_issue_requires_approved_risk(self):
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-000-approved-boundary")
+        with pytest.raises(RuntimeError, match="RISK_NOT_APPROVED"):
+            signer.issue_for_approved_risk(aid, risk_approved=False)
+
+        signature = signer.issue_for_approved_risk(aid, risk_approved=True, nonce="nonce-approved-boundary")
+        assert signature
+
     def test_verify_denied_without_signature(self):
         """无签名时 verify() 必须返回 False（不再支持无签名旁路）。"""
         signer = self._make_signer()
@@ -102,6 +111,19 @@ class TestRiskApproval:
 
         assert not asyncio.run(signer.verify(aid, signature="bad-signature", nonce="nonce-003"))
 
+    def test_verify_rejects_exact_order_binding_tamper(self):
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-order-binding")
+        sig = signer.sign(aid, proposal_hash="proposal", intent_hash="order-a", nonce="nonce-order")
+        import asyncio
+
+        assert asyncio.run(
+            signer.verify(aid, signature=sig, proposal_hash="proposal", intent_hash="order-a", nonce="nonce-order")
+        )
+        assert not asyncio.run(
+            signer.verify(aid, signature=sig, proposal_hash="proposal", intent_hash="order-b", nonce="nonce-order-2")
+        )
+
     def test_verify_replay_rejected(self):
         """nonce 重放必须被拒绝。"""
         signer = self._make_signer()
@@ -112,6 +134,17 @@ class TestRiskApproval:
         assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004"))
         # 重放相同 nonce
         assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004"))
+
+    def test_preflight_verify_does_not_consume_nonce_before_final_send(self):
+        """审批预检可重复；nonce 只在最终发送边界消费。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-004-preflight")
+        sig = signer.sign(aid, nonce="nonce-004-preflight")
+        import asyncio
+
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight", consume_nonce=False))
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight"))
+        assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight"))
 
     def test_verify_tampered_payload_rejected(self):
         """篡改 payload 字段导致签名不匹配。"""
@@ -133,6 +166,26 @@ class TestRiskApproval:
         # 吊销签名
         signer.revoke(sig)
         assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-006"))
+
+    def test_restore_signature_metadata_after_restart(self):
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-006-restore")
+        expires_at = 4102444800.0
+        sig = signer.sign(aid, nonce="nonce-006-restore", expires_at=expires_at)
+
+        restarted = self._make_signer()
+        assert restarted.restore_signature(sig, expires_at)
+        import asyncio
+
+        assert asyncio.run(
+            restarted.verify(
+                aid,
+                signature=sig,
+                nonce="nonce-006-restore",
+                expires_at=expires_at,
+                consume_nonce=False,
+            )
+        )
 
     def test_signing_unavailable_verify_denied(self, monkeypatch):
         """密钥不可用时 verify() 一律返回 False。"""

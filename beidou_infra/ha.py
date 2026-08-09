@@ -62,6 +62,7 @@ class BackupVerification:
             self.restore_successful
             and self.ledger_balanced
             and self.intent_integrity
+            and self.reconciliation_passed
             and all(self.invariants_check.values())
         )
 

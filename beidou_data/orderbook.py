@@ -69,7 +69,6 @@ class OrderBookManager:
     def __init__(self, max_depth: int = 50):
         self._snapshot: OrderBookSnapshot | None = None
         self._last_sequence: int = 0
-        self._max_gap: int = 100  # 超过此 gap 触发全量回补
         self._max_depth = max_depth
 
     def apply_snapshot(self, snapshot: OrderBookSnapshot) -> None:
@@ -86,14 +85,12 @@ class OrderBookManager:
         if diff.sequence <= self._last_sequence:
             return True  # 跳过重复
 
-        # Gap detection
+        # Gap detection: every diff must be provably contiguous.  Applying a
+        # later event after a missing one would manufacture an order-book state
+        # that cannot be reconstructed from the durable event stream.
         expected = self._last_sequence + 1
-        if diff.sequence > expected + self._max_gap:
-            return False  # Gap too large → request snapshot
-
-        if diff.sequence != expected:
-            # Small gap → skip for now, will backfill
-            pass
+        if diff.prev_sequence != self._last_sequence or diff.sequence != expected:
+            return False  # sequence/prev_sequence mismatch -> request snapshot
 
         # Apply bid updates
         bids = list(self._snapshot.bids)

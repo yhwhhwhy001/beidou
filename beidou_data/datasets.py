@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
+from typing import Any
 
 from beidou_shared.types import InstrumentId, SchemaVersion
 
@@ -29,7 +30,7 @@ class DatasetManager:
     def __init__(self) -> None:
         self._datasets: dict[str, list[DatasetVersion]] = {}
 
-    def create_version(self, dataset_id: str, prev_version: SchemaVersion | None, **kwargs) -> DatasetVersion:
+    def create_version(self, dataset_id: str, prev_version: SchemaVersion | None, **kwargs: Any) -> DatasetVersion:
         v = DatasetVersion(
             dataset_id=dataset_id,
             version=SchemaVersion(f"{dataset_id}-{len(self._datasets.get(dataset_id, [])) + 1}"),

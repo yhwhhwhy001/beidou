@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import signal
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import StartupReport
+
+logger = logging.getLogger(__name__)
 
 
 class InstanceLock:
@@ -124,8 +127,8 @@ class EvidenceWriter:
                     trimmed = lines[-max_lines:]
                     with self.history_path.open("w", encoding="utf-8") as fh:
                         fh.write("\n".join(trimmed) + "\n")
-            except Exception:
-                pass
+            except (OSError, UnicodeError) as exc:
+                logger.warning("supervisor history rotation failed: %s: %s", type(exc).__name__, exc)
             with self.history_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
                 handle.flush()
@@ -227,52 +230,12 @@ def stop_running_instance(project_root: Path) -> tuple[bool, str]:
 
 
 def force_stop_existing(project_root: Path) -> tuple[bool, str]:
-    """启动前强制清理已有北斗实例（SIGTERM → 等待 → SIGKILL）。
+    """Compatibility alias for the governed, identity-checked stop path.
 
-    与 stop_running_instance 不同，此函数不要求监督证据新鲜或命令身份匹配，
-    仅基于 PID 文件进行进程终止，确保新启动不受旧实例阻碍。
+    The old implementation treated a PID file as authority and could signal
+    an unrelated process (including SIGKILL) after a stale or reused PID.
+    Startup must never trade identity safety for convenience, so callers now
+    receive the same fresh-state and command-identity checks as ``stop``.
     """
-    pid_path = project_root / ".beidou" / "beidou.pid"
-    if not pid_path.exists():
-        return True, "无旧实例需清理"
 
-    try:
-        pid = int(pid_path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        with suppress(OSError):
-            pid_path.unlink()
-        return True, "已清理无效 PID 文件"
-
-    if not InstanceLock._pid_alive(pid):
-        with suppress(OSError):
-            pid_path.unlink()
-        return True, f"已清理陈旧 PID 文件 (PID={pid} 已退出)"
-
-    # 进程存活 — 先尝试优雅终止
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
-        return False, f"无法向 PID={pid} 发送信号: {exc}"
-
-    deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline:
-        if not InstanceLock._pid_alive(pid):
-            with suppress(OSError):
-                pid_path.unlink()
-            return True, f"已停止旧实例 PID={pid} (SIGTERM)"
-
-        time.sleep(0.5)
-
-    # 优雅终止超时，强制杀死
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError as exc:
-        return False, f"SIGTERM 超时，SIGKILL 失败: {exc}"
-
-    time.sleep(1.0)
-    if not InstanceLock._pid_alive(pid):
-        with suppress(OSError):
-            pid_path.unlink()
-        return True, f"已强制停止旧实例 PID={pid} (SIGKILL)"
-
-    return False, f"无法停止旧实例 PID={pid}，进程仍存活"
+    return stop_running_instance(project_root)

@@ -65,16 +65,28 @@ class ProtectionSemanticResult:
 
 def verify_position_protection(position, protections, mode, slices=None):
     result = ProtectionSemanticResult(position_key=position.symbol, exchange_position=position, protections=protections)
-    sl_list = [p for p in protections if p.kind == "SL"]
+    # Only venue-acknowledged ACTIVE orders are protection facts.  A local
+    # CREATED/PENDING definition, or an ACTIVE object without a venue id, is
+    # an intent/UNKNOWN state and must fail closed as missing coverage.
+
+    def _status_value(value) -> str:
+        return str(getattr(value, "value", value) or "").upper()
+
+    venue_active = [
+        p
+        for p in protections
+        if _status_value(getattr(p, "status", "")) == "ACTIVE" and str(getattr(p, "order_id", "") or "").strip()
+    ]
+    sl_list = [p for p in venue_active if p.kind == "SL"]
     if not sl_list:
         result.missing_sl = True
         result.details.append({"issue": "MISSING_SL"})
-    tp_list = [p for p in protections if p.kind == "TP"]
+    tp_list = [p for p in venue_active if p.kind == "TP"]
     if not tp_list:
         result.missing_tp = True
         result.details.append({"issue": "MISSING_TP"})
     seen = {}
-    for p in protections:
+    for p in venue_active:
         lineage_key = f"{p.origin_trace_id}:{p.strategy_id}:{p.generation}"
         if lineage_key in seen:
             if p.supersedes_order_id and p.supersedes_order_id == seen[lineage_key].protection_id:

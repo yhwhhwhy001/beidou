@@ -23,12 +23,14 @@ from beidou_shared.types import (
     VenueId,
 )
 from beidou_strategy.alpha.contracts import (
+    DataQualityTier,
     EntryProposal,
     FilterDecision,
     FilterResult,
 )
 from beidou_strategy.alpha.typed_graph import (
     EntryNode,
+    FeatureNode,
     FilterNode,
     FusionNode,
     TypedAlphaGraph,
@@ -130,6 +132,37 @@ class TestFilterResultSemantics:
         assert proposal.side in (OrderSide.BUY, OrderSide.SELL)
 
 
+class TestFeatureNodeDataQuality:
+    """缺失或非有限特征必须阻断，而不是用零值伪造输入。"""
+
+    @pytest.mark.asyncio
+    async def test_missing_feature_is_blocked_without_zero_fill(self):
+        output = await FeatureNode("features", ["close", "atr_pct"]).execute({}, {"features": {"close": 50000.0}})
+
+        assert output.dq_tier is DataQualityTier.BLOCK
+        assert output.data == {}
+        assert output.metadata["missing_features"] == ["atr_pct"]
+        assert output.output_hash
+
+    @pytest.mark.asyncio
+    async def test_non_finite_feature_is_blocked(self):
+        output = await FeatureNode("features", ["close"]).execute({}, {"features": {"close": float("nan")}})
+
+        assert output.dq_tier is DataQualityTier.BLOCK
+        assert output.data == {}
+        assert output.metadata["invalid_features"] == ["close"]
+
+    @pytest.mark.asyncio
+    async def test_complete_features_are_passed_through_with_hash(self):
+        output = await FeatureNode("features", ["close", "atr_pct"]).execute(
+            {}, {"features": {"close": 50000.0, "atr_pct": 1.5}}
+        )
+
+        assert output.dq_tier is DataQualityTier.PASS
+        assert output.data == {"close": 50000.0, "atr_pct": 1.5}
+        assert output.output_hash
+
+
 # ================================================================
 # TypedAlphaGraph 核心测试
 # ================================================================
@@ -160,9 +193,7 @@ class TestTypedAlphaGraph:
             pass
         else:
             # 不应是 LONG 或 SHORT
-            assert result.side is None, (
-                f"Entry LONG + Filter VETO must be None (NO_ACTION), got {result.side}"
-            )
+            assert result.side is None, f"Entry LONG + Filter VETO must be None (NO_ACTION), got {result.side}"
 
     @pytest.mark.asyncio
     async def test_entry_long_filter_accept_preserves_direction(self, sample_context):

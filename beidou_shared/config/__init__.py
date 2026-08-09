@@ -11,6 +11,29 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
+
+
+def redact_database_url(url: str) -> str:
+    """Return a log/hash-safe database URL without embedded credentials."""
+
+    value = str(url or "")
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        parsed_port = parsed.port
+    except ValueError:
+        return "<invalid-database-url>"
+    if not parsed.username and not parsed.password:
+        return value
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{quote(parsed.username or '', safe='')}@{host}"
+    if parsed_port is not None:
+        netloc += f":{parsed_port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 class Environment(str, Enum):
@@ -27,7 +50,8 @@ class Environment(str, Enum):
     @property
     def can_write_trades(self) -> bool:
         """只有明确启用写交易的环境返回 True。"""
-        return self in (Environment.SHADOW, Environment.TESTNET, Environment.CANARY)
+        # Shadow 是零写观察环境；Canary/Production/Mainnet 继续被本阶段门禁阻断。
+        return self is Environment.TESTNET
 
     @property
     def is_live(self) -> bool:
@@ -81,7 +105,7 @@ class ProductionConfig:
 class InfrastructureConfig:
     """基础设施连接参数 — 从 YAML `infrastructure` 段加载。"""
 
-    health_host: str = "0.0.0.0"
+    health_host: str = "127.0.0.1"
     health_port: int = 9090
     control_host: str = "127.0.0.1"
     control_port: int = 9090
@@ -139,7 +163,7 @@ class TypedSettings:
         """计算配置内容的稳定 SHA-256。"""
         payload = (
             f"{self.environment.value}"
-            f"|{self.database.url}"
+            f"|{redact_database_url(self.database.url)}"
             f"|{self.exchange.rest_base_url}"
             f"|{self.risk.max_leverage}|{self.risk.max_concentration_pct}"
             f"|{self.infrastructure.health_port}"
@@ -171,7 +195,7 @@ class ConfigProvider:
         "version": "0.0.0",
         "database": {"url": "sqlite:///beidou_state.db", "pool_min": 1, "pool_max": 5},
         "exchange": {
-            "rest_base_url": "https://testnet.binancefuture.com",
+            "rest_base_url": "",
             "ws_base_url": "",
             "api_key_ref": "",
             "api_secret_ref": "",
@@ -191,7 +215,7 @@ class ConfigProvider:
             "drift_threshold": 0.1,
         },
         "infrastructure": {
-            "health_host": "0.0.0.0",
+            "health_host": "127.0.0.1",
             "health_port": 9090,
             "control_host": "127.0.0.1",
             "control_port": 9090,
@@ -291,12 +315,34 @@ class ConfigProvider:
             errors.append(f"Invalid environment: {env_name}")
             environment = Environment.SAFETY_ONLY
 
-        # Parse database
+        # Parse database.  Testnet/production files use the structured
+        # ``postgresql`` block while local examples use ``database.url``.
+        # A configured DATABASE_URL always wins and is kept out of the config
+        # hash in redact_database_url(); the runtime still receives the exact
+        # DSN through the typed settings object.
         db_raw = raw.get("database", {})
+        if not isinstance(db_raw, dict):
+            db_raw = {}
+        postgres_raw = raw.get("postgresql", {})
+        if not isinstance(postgres_raw, dict):
+            postgres_raw = {}
+        database_url = str(os.environ.get("DATABASE_URL", "") or db_raw.get("url", ""))
+        if not database_url and postgres_raw:
+            host = str(postgres_raw.get("host", "localhost"))
+            port = int(postgres_raw.get("port", 5432))
+            database_name = str(postgres_raw.get("database", ""))
+            user = str(postgres_raw.get("user", ""))
+            ssl_mode = str(postgres_raw.get("ssl_mode", "prefer"))
+            application_name = str(postgres_raw.get("application_name", "beidou"))
+            if database_name and user:
+                database_url = (
+                    f"postgresql://{quote(user, safe='')}@{host}:{port}/{quote(database_name, safe='')}"
+                    f"?sslmode={quote(ssl_mode, safe='')}&application_name={quote(application_name, safe='')}"
+                )
         database = DatabaseConfig(
-            url=str(db_raw.get("url", "")),
-            pool_min=int(db_raw.get("pool_min", 2)),
-            pool_max=int(db_raw.get("pool_max", 10)),
+            url=database_url,
+            pool_min=int(db_raw.get("pool_min", postgres_raw.get("pool_min", 2))),
+            pool_max=int(db_raw.get("pool_max", postgres_raw.get("pool_max", 10))),
         )
 
         # Parse exchange
@@ -361,7 +407,7 @@ class ConfigProvider:
         infra_s3 = infra_raw.get("s3", {})
         infra_alerts = infra_raw.get("alerts", {})
         infrastructure = InfrastructureConfig(
-            health_host=str(infra_health.get("host", "0.0.0.0")),
+            health_host=str(infra_health.get("host", "127.0.0.1")),
             health_port=int(infra_health.get("port", 9090)),
             control_host=str(infra_control.get("host", "127.0.0.1")),
             control_port=int(infra_control.get("port", 9090)),

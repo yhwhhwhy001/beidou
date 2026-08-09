@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 
 from beidou_observability.monitoring.contracts import (
@@ -45,6 +46,25 @@ class MonitoringRepository:
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
 
+    def close(self) -> None:
+        """Close this thread's monitoring connection during service shutdown."""
+
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+            self._local.conn = None
+
+    def __enter__(self) -> "MonitoringRepository":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            self.close()
+
     def _init_schema(self):
         self._get_conn().executescript("""
             CREATE TABLE IF NOT EXISTS monitor_frequency_state (id INTEGER PRIMARY KEY CHECK(id=1), level TEXT DEFAULT 'ALERT', interval_seconds INTEGER DEFAULT 600, promotion_clean_streak INTEGER DEFAULT 0, stable_since REAL DEFAULT 0, last_check_at REAL DEFAULT 0, next_due_at REAL DEFAULT 0, last_level_change_at REAL DEFAULT 0, last_reason TEXT DEFAULT '', policy_version TEXT DEFAULT '1.1');
@@ -65,7 +85,8 @@ class MonitoringRepository:
     def health_probe(self):
         try:
             self._get_conn().execute("SELECT 1 FROM monitor_frequency_state WHERE id=1").fetchone()
-            return ComponentHealth(component="repository", healthy=True, last_heartbeat=time.monotonic())
+            probe_ok = True
+            return ComponentHealth(component="repository", healthy=probe_ok, last_heartbeat=time.monotonic())
         except Exception as e:
             return ComponentHealth(
                 component="repository",

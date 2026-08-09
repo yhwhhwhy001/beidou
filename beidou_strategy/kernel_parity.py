@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from math import isfinite
 from typing import Any
 
 
@@ -52,17 +53,46 @@ class StrategyKernelContract:
 
     @staticmethod
     def compute_proposal_hash(proposal: Any) -> str:
-        """计算 StrategyProposal 的确定性哈希。"""
-        content = json.dumps(
-            {
-                "direction": getattr(proposal, "direction", ""),
-                "strength": getattr(proposal, "strength", 0),
-                "confidence": getattr(proposal, "confidence", 0),
-            },
-            sort_keys=True,
-            default=str,
-        )
+        """计算包含策略归因和风险相关字段的确定性哈希。"""
+        if proposal is None:
+            return ""
+        try:
+            canonical = StrategyKernelContract._canonicalize(proposal)
+            content = json.dumps(canonical, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError, OverflowError):
+            # A non-finite or otherwise non-serializable proposal cannot be
+            # used as an execution/parity identity.
+            return ""
         return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    @staticmethod
+    def _canonicalize(value: Any) -> Any:
+        """Convert proposals to stable JSON without wall-clock fields."""
+
+        if isinstance(value, Enum):
+            return value.value
+        if is_dataclass(value):
+            return {
+                item.name: StrategyKernelContract._canonicalize(getattr(value, item.name))
+                for item in fields(value)
+                if item.name not in {"timestamp", "ingest_time"}
+            }
+        if isinstance(value, dict):
+            return {
+                str(key): StrategyKernelContract._canonicalize(item)
+                for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [StrategyKernelContract._canonicalize(item) for item in value]
+        if isinstance(value, float):
+            if not isfinite(value):
+                raise ValueError("non-finite proposal value")
+            return value
+        if isinstance(value, (str, int, bool)) or value is None:
+            return value
+        if hasattr(value, "__dict__"):
+            return StrategyKernelContract._canonicalize(vars(value))
+        return str(value)
 
     @staticmethod
     def verify_parity(
@@ -82,15 +112,24 @@ class StrategyKernelContract:
         if testnet_result is not None:
             result.testnet_hash = StrategyKernelContract.compute_proposal_hash(testnet_result)
 
-        # 比较
-        if result.backtest_hash and result.paper_hash:
-            if result.backtest_hash == result.paper_hash:
-                result.status = ParityStatus.MATCH
-            else:
-                result.status = ParityStatus.DISCREPANCY
-                result.discrepancies.append(f"Backtest {result.backtest_hash} != Paper {result.paper_hash}")
-        else:
+        # A missing environment is not a pass.  If Testnet is supplied it must
+        # match the same frozen proposal as Backtest and Paper.
+        if not result.backtest_hash or not result.paper_hash:
             result.status = ParityStatus.NOT_RUN
+            result.discrepancies.append("BACKTEST_AND_PAPER_REQUIRED")
+            return result
+
+        hashes = [("Backtest", result.backtest_hash), ("Paper", result.paper_hash)]
+        if result.testnet_hash:
+            hashes.append(("Testnet", result.testnet_hash))
+        expected = hashes[0][1]
+        mismatches = [(name, value) for name, value in hashes[1:] if value != expected]
+        if mismatches:
+            result.status = ParityStatus.DISCREPANCY
+            for name, value in mismatches:
+                result.discrepancies.append(f"{hashes[0][0]} {expected} != {name} {value}")
+        else:
+            result.status = ParityStatus.MATCH
 
         return result
 
@@ -114,18 +153,25 @@ class StrategyKernel:
         self._typed_graph = graph
 
     async def evaluate(self, context: dict) -> dict | None:
-        """执行策略评估 — 新旧 DAG 均可。
+        """执行策略评估。
 
-        新 TypedGraph 优先；回退到旧 AlphaGraph。
+        TypedAlphaGraph 一旦接线就是唯一可执行边界。旧 AlphaGraph 只可
+        作为诊断/兼容对象保留，不能在 typed graph 返回 ``None``（例如
+        强制 VETO）时偷偷回退并产生另一份策略结果。
         """
         if self._typed_graph is not None:
             result = await self._typed_graph.execute(context)
-            if result is not None:
-                return {
-                    "proposal": result,
-                    "kernel": "typed_graph",
-                    "mode": self.mode,
-                }
+            graph_hash = ""
+            graph_hash_fn = getattr(self._typed_graph, "compute_graph_hash", None)
+            if callable(graph_hash_fn):
+                graph_hash = str(graph_hash_fn())
+            return {
+                "proposal": result,
+                "kernel": "typed_graph",
+                "mode": self.mode,
+                "graph_hash": graph_hash,
+                "blocked_by": "typed_graph_no_proposal" if result is None else "",
+            }
         if self._alpha_graph is not None:
             signals = await self._alpha_graph.generate(context)
             return {
@@ -135,14 +181,16 @@ class StrategyKernel:
             }
         return None
 
-    def proposal_hash(self, context: dict) -> str:
-        """BD-P0-04: 相同输入产生相同 hash。"""
-        import hashlib
-        payload = json.dumps({
-            "mode": self.mode,
-            "context_keys": sorted(context.keys()),
-        }, sort_keys=True, default=str)
-        return hashlib.sha256(payload.encode()).hexdigest()[:16]
+    @staticmethod
+    def compute_proposal_hash(proposal: Any) -> str:
+        """Return the canonical hash of the final proposal/no-action evidence."""
+
+        return StrategyKernelContract.compute_proposal_hash(proposal)
+
+    def proposal_hash(self, proposal: Any) -> str:
+        """BD-P0-04: hash the result, not merely the input key set."""
+
+        return self.compute_proposal_hash(proposal)
 
 
 def parity_check(
@@ -160,5 +208,5 @@ def parity_check(
         paper_proposal,
         testnet_proposal,
     )
-    passed = result.status == ParityStatus.MATCH or result.status == ParityStatus.NOT_RUN
+    passed = result.status == ParityStatus.MATCH
     return passed, result

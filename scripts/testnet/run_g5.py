@@ -4,7 +4,7 @@
     python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --confirm-testnet
 
 前置条件:
-    - BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET 已设置
+    - BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_SIGNING_KEY 已设置
     - 引擎已启动 (python -m beidou_launcher start --mode testnet)
     - 不可使用 Mainnet URL
 """
@@ -54,6 +54,19 @@ def main() -> int:
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
 
+    # Never start a certification probe from an unreproducible artifact.  The
+    # same preflight used by the launcher is a hard gate here, before any REST
+    # client is constructed or any exchange request is attempted.
+    from beidou_launcher.preflight import run_preflight
+
+    preflight_checks, _ = run_preflight(project_root, "testnet", 9090)
+    preflight_blockers = [
+        check for check in preflight_checks if check.status.value == "FAIL" and check.severity.value == "P0"
+    ]
+    if preflight_blockers:
+        details = "; ".join(f"{check.check_id}: {check.message}" for check in preflight_blockers)
+        fail_fast(f"preflight blocked before network access: {details}")
+
     # ================================================================
     # G5 Gate 1: 环境安全验证
     # ================================================================
@@ -61,57 +74,63 @@ def main() -> int:
     print("G5 TESTNET CERTIFICATION RUNNER")
     print("=" * 60)
 
-    # 1a: Mainnet URL 检测
+    # 1a: Load the plan before any network client is constructed.
+    with open(args.plan) as f:
+        plan = yaml.safe_load(f)
+    expected_scenarios = [str(s) for s in plan.get("scenarios", [])]
+    if not expected_scenarios or len(set(expected_scenarios)) != len(expected_scenarios):
+        fail_fast("G5 plan must define a non-empty unique scenario set")
+    plan_max_notional = float(plan.get("max_test_notional_usdt", 20.0))
+    if args.max_notional < 0 or args.max_notional > plan_max_notional:
+        fail_fast(f"Requested max notional {args.max_notional} exceeds plan limit {plan_max_notional}")
+    print(f"Plan: {args.plan} ({len(expected_scenarios)} scenarios)")
+
+    # 1b: Mainnet URL 检测
     rest_url = os.environ.get("BEIDOU_REST_URL", "")
     dangerous_urls = ["fapi.binance.com", "api.binance.com"]
     for url in dangerous_urls:
-        if url in rest_url:
+        if url in rest_url.lower():
             fail_fast(f"Mainnet URL detected: {rest_url}")
 
-    # 1b: Testnet URL 验证
+    # 1c: Testnet URL 验证
     testnet_url = rest_url or "https://demo-fapi.binance.com"
     print(f"Target: {testnet_url}")
-    assert "demo-fapi" in testnet_url or "testnet" in testnet_url, f"Not a testnet URL: {testnet_url}"
+    if "demo-fapi" not in testnet_url.lower() and "testnet" not in testnet_url.lower():
+        fail_fast(f"Not a Testnet URL: {testnet_url}")
 
-    # 1c: 凭证检查
+    # 1d: 凭证检查 — all are required before a network call is possible.
     api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
     if not api_key:
         fail_fast("BEIDOU_BINANCE_API_KEY not set")
+    api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
+    if not api_secret:
+        fail_fast("BEIDOU_BINANCE_API_SECRET not set")
+    signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
+    if not signing_key:
+        fail_fast("BEIDOU_SIGNING_KEY not set")
     print(f"API Key: {'*' * 8}{api_key[-4:] if len(api_key) > 4 else ''}")
 
-    # 1d: Commit hash
+    # 1e: Commit hash
     import subprocess
+
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Commit: {commit}")
-
-    # 1e: Load G5 plan
-    with open(args.plan) as f:
-        plan = yaml.safe_load(f)
-    print(f"Plan: {args.plan} ({len(plan['scenarios'])} scenarios)")
 
     # ================================================================
     # G5 Gate 2: 导入认证框架
     # ================================================================
-    from beidou_certification.engine import (
-        CertificationGate,
-        CertificationScenario,
-        G5TestnetCertification,
-        ScenarioResult,
-        ScenarioStatus,
-    )
-    from beidou_exchange.binance_usdm.endpoints import Endpoint
     from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
-
-    cert = G5TestnetCertification()
 
     # ================================================================
     # G5 Gate 3: 异步场景验证
     # ================================================================
+    started_at = datetime.now(timezone.utc)
+
     async def run_scenarios() -> dict:
         client = BinanceRESTClient(
             rest_url=testnet_url,
             api_key=api_key,
-            api_secret=os.environ.get("BEIDOU_BINANCE_API_SECRET", ""),
+            api_secret=api_secret,
         )
 
         results = {}
@@ -119,15 +138,17 @@ def main() -> int:
             "gate": "G5",
             "commit": commit,
             "testnet_url": testnet_url,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "max_notional": args.max_notional,
+            "environment": plan.get("environment", "BINANCE_USDM_TESTNET_ONLY"),
+            "mainnet_prohibited": bool(plan.get("mainnet_prohibited", True)),
+            "started_at": started_at.isoformat(),
+            "max_notional_usdt": args.max_notional,
         }
 
         # --- S1: Server Time (连通性) ---
         print("\n[S1] Server Time Check...")
         try:
             st = await client.get_server_time()
-            if hasattr(st, 'data') and st.data:
+            if hasattr(st, "data") and st.data:
                 server_time = st.data.get("serverTime", 0)
             elif isinstance(st, dict):
                 server_time = st.get("serverTime", 0)
@@ -137,7 +158,7 @@ def main() -> int:
                 print(f"  PASS: serverTime={server_time}")
                 results["server_time"] = {"status": "PASS", "server_time": server_time}
             else:
-                print(f"  FAIL: no serverTime in response")
+                print("  FAIL: no serverTime in response")
                 results["server_time"] = {"status": "FAIL"}
         except Exception as e:
             print(f"  FAIL: {e}")
@@ -147,22 +168,30 @@ def main() -> int:
         print("\n[S2] Account Access Check...")
         try:
             acct = await client.get_account()
-            if hasattr(acct, 'data'):
+            if hasattr(acct, "data"):
                 acct_data = acct.data
             elif isinstance(acct, dict):
                 acct_data = acct
             else:
                 acct_data = {}
 
-            can_trade = acct_data.get("canTrade", False)
-            can_withdraw = acct_data.get("canWithdraw", False)
+            can_trade = acct_data.get("canTrade")
+            can_withdraw = acct_data.get("canWithdraw")
             total_balance = acct_data.get("totalWalletBalance", "0")
 
-            # AC-04: 提款权限检查 (Testnet 提款权限为模拟，不阻断认证)
-            if can_withdraw:
-                print(f"  WARN: Testnet account has withdrawal permission (expected on Binance Testnet)")
-
-            can_trade_ok = can_trade
+            # AC-04: withdrawal permission is a hard production blocker even
+            # on Testnet. Missing/non-boolean facts are also fail-closed.
+            if not isinstance(can_trade, bool) or not isinstance(can_withdraw, bool):
+                print("  FAIL: account permission facts are missing or invalid")
+                can_trade_ok = False
+                permission_status = "ACCOUNT_PERMISSION_UNKNOWN"
+            elif can_withdraw:
+                print("  FAIL: venue withdrawal permission is enabled")
+                can_trade_ok = False
+                permission_status = "WITHDRAWAL_PERMISSION_ENABLED"
+            else:
+                can_trade_ok = can_trade
+                permission_status = "OK" if can_trade else "VENUE_TRADING_DISABLED"
             print(f"  canTrade={can_trade} canWithdraw={can_withdraw} balance={total_balance}")
             print(f"  {'PASS' if can_trade_ok else 'FAIL'}: account access verified")
 
@@ -174,6 +203,7 @@ def main() -> int:
                 "status": "PASS" if can_trade_ok else "FAIL",
                 "can_trade": can_trade,
                 "can_withdraw": can_withdraw,
+                "permission_status": permission_status,
                 "has_balance": float(total_balance) > 0,
             }
         except Exception as e:
@@ -184,7 +214,7 @@ def main() -> int:
         print("\n[S3] Exchange Info Check...")
         try:
             ei = await client.get_exchange_info("BTCUSDT")
-            if hasattr(ei, 'data'):
+            if hasattr(ei, "data"):
                 ei_data = ei.data
             elif isinstance(ei, dict):
                 ei_data = ei
@@ -210,7 +240,7 @@ def main() -> int:
         print("\n[S4] Position Mode Check...")
         try:
             pm = await client.get_position_mode()
-            if hasattr(pm, 'data'):
+            if hasattr(pm, "data"):
                 pm_data = pm.data
             elif isinstance(pm, dict):
                 pm_data = pm
@@ -228,7 +258,7 @@ def main() -> int:
         print("\n[S5] Open Orders Check...")
         try:
             oo = await client.get_open_orders()
-            if hasattr(oo, 'data'):
+            if hasattr(oo, "data"):
                 oo_data = oo.data
             elif isinstance(oo, list):
                 oo_data = oo
@@ -245,7 +275,7 @@ def main() -> int:
         try:
             positions = []
             acct_full = await client.get_account()
-            if hasattr(acct_full, 'data'):
+            if hasattr(acct_full, "data"):
                 acct_data = acct_full.data
             elif isinstance(acct_full, dict):
                 acct_data = acct_full
@@ -259,12 +289,12 @@ def main() -> int:
 
             balance = acct_data.get("totalWalletBalance", "0")
             print(f"  Balance: {balance}  Positions: {len(positions)}")
-            print(f"  PASS: reconciliation data available")
+            print("  PASS: reconciliation data available")
 
             evidence["account_snapshot"] = {
                 "balance": balance,
                 "positions": positions,
-                "open_orders_count": len(oo_data) if 'oo_data' in dir() else 0,
+                "open_orders_count": len(oo_data) if "oo_data" in dir() else 0,
             }
             results["reconciliation"] = {"status": "PASS", "positions": len(positions)}
         except Exception as e:
@@ -284,32 +314,75 @@ def main() -> int:
         except Exception as e:
             results["idempotency"] = {"status": "FAIL", "error": str(e)}
 
-        # --- Generate G5 Certificate ---
-        all_pass = all(
-            r.get("status") in ("PASS", "WARN")
-            for r in results.values()
+        # The seven legacy observations above are useful diagnostics, but
+        # they are not the sixteen plan scenarios.  Keep them as observations
+        # and explicitly mark every unimplemented protocol scenario as
+        # NOT_VERIFIABLE so a partial probe can never become a PASS certificate.
+        observations = dict(results)
+        observation_failures = sorted(
+            name for name, result in observations.items() if isinstance(result, dict) and result.get("status") == "FAIL"
         )
-        has_fail = any(r.get("status") == "FAIL" for r in results.values())
+        results = {
+            scenario: {
+                "status": "NOT_VERIFIABLE",
+                "reason": "scenario requires a complete protocol test and durable evidence",
+            }
+            for scenario in expected_scenarios
+        }
+        has_fail = bool(observation_failures) or any(r.get("status") == "FAIL" for r in results.values())
+        has_not_verifiable = any(r.get("status") == "NOT_VERIFIABLE" for r in results.values())
+        account_access = observations.get("account_access", {})
 
         # Compute evidence hash
+        ended_at = datetime.now(timezone.utc)
+        evidence["ended_at"] = ended_at.isoformat()
+        evidence["observations"] = observations
         evidence_json = json.dumps(evidence, sort_keys=True, default=str)
         evidence_hash = hashlib.sha256(evidence_json.encode()).hexdigest()
 
         certificate = {
             "gate": "G5",
-            "status": "FAIL" if has_fail else "PASS",
+            "status": "FAIL" if has_fail else ("NOT_VERIFIABLE" if has_not_verifiable else "PASS"),
             "commit": commit,
+            "environment": plan.get("environment", "BINANCE_USDM_TESTNET_ONLY"),
             "testnet_url": testnet_url,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mainnet_prohibited": bool(plan.get("mainnet_prohibited", True)),
+            "is_simulated": False,
+            "started_at": started_at.isoformat(),
+            "ended_at": ended_at.isoformat(),
             "evidence_hash": evidence_hash,
+            "max_notional_usdt": args.max_notional,
             "scenarios": results,
+            "observations": observations,
+            "account_access": {
+                "can_trade": account_access.get("can_trade", False),
+                "can_withdraw": account_access.get("can_withdraw"),
+                "has_balance": account_access.get("has_balance", False),
+            },
+            "blockers": (
+                [f"G5_OBSERVATION_FAILED:{name}" for name in observation_failures]
+                + (["G5_SCENARIO_NOT_VERIFIABLE"] if has_not_verifiable else [])
+            ),
             "summary": {
                 "total": len(results),
                 "pass": sum(1 for r in results.values() if r.get("status") == "PASS"),
                 "warn": sum(1 for r in results.values() if r.get("status") == "WARN"),
                 "fail": sum(1 for r in results.values() if r.get("status") == "FAIL"),
+                "not_verifiable": sum(1 for r in results.values() if r.get("status") == "NOT_VERIFIABLE"),
             },
         }
+
+        from beidou_certification.gate_verifier import verify_g5_certificate
+
+        verification = verify_g5_certificate(
+            certificate,
+            expected_commit=commit,
+            expected_scenarios=expected_scenarios,
+            max_notional_usdt=plan_max_notional,
+        )
+        certificate["semantic_verification"] = verification.to_dict()
+        if not verification.passed and certificate["status"] == "PASS":
+            certificate["status"] = "NOT_VERIFIABLE"
 
         evidence_dir = Path("artifacts/evidence/testnet")
         evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -326,8 +399,9 @@ def main() -> int:
         print(f"  PASS:  {certificate['summary']['pass']}")
         print(f"  WARN:  {certificate['summary']['warn']}")
         print(f"  FAIL:  {certificate['summary']['fail']}")
+        print(f"  N/V:   {certificate['summary']['not_verifiable']}")
         print(f"  Hash:  {evidence_hash[:16]}...")
-        print(f"  Saved: artifacts/evidence/testnet/g5-certificate.json")
+        print("  Saved: artifacts/evidence/testnet/g5-certificate.json")
         print("=" * 60)
 
         return certificate
@@ -335,8 +409,9 @@ def main() -> int:
     cert_result = asyncio.run(run_scenarios())
 
     # Gate 4: 最终判定
-    if cert_result["status"] == "FAIL":
-        fail_fast("One or more G5 scenarios FAILED — check evidence")
+    if cert_result["status"] != "PASS":
+        print("G5 remains blocked: complete every plan scenario and re-run the independent verifier.")
+        return 1
 
     return 0
 
