@@ -286,6 +286,36 @@ class RiskApprovalSignerImpl:
         self._signed_expiry[sig] = expires_at
         return sig
 
+    def issue_for_approved_risk(
+        self,
+        approval_id: RiskApprovalId,
+        *,
+        risk_approved: bool,
+        proposal_hash: str = "",
+        account_snapshot_hash: str = "",
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+        nonce: str = "",
+        expires_at: float | None = None,
+    ) -> str:
+        """Issue a signature only after the caller proves risk approval.
+
+        Keeping this boundary in the signer prevents callers from treating a
+        cryptographic signature as an approval by itself.
+        """
+
+        if not risk_approved:
+            raise RuntimeError("RISK_NOT_APPROVED: approval signature not issued")
+        return self.sign(
+            approval_id,
+            proposal_hash=proposal_hash,
+            account_snapshot_hash=account_snapshot_hash,
+            risk_snapshot_hash=risk_snapshot_hash,
+            policy_version=policy_version,
+            nonce=nonce,
+            expires_at=expires_at,
+        )
+
     async def verify(
         self,
         approval_id: RiskApprovalId,

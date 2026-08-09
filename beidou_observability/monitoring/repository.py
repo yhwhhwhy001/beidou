@@ -65,7 +65,8 @@ class MonitoringRepository:
     def health_probe(self):
         try:
             self._get_conn().execute("SELECT 1 FROM monitor_frequency_state WHERE id=1").fetchone()
-            return ComponentHealth(component="repository", healthy=True, last_heartbeat=time.monotonic())
+            probe_ok = True
+            return ComponentHealth(component="repository", healthy=probe_ok, last_heartbeat=time.monotonic())
         except Exception as e:
             return ComponentHealth(
                 component="repository",

@@ -26,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
+from beidou_data.trading_pool_lifecycle import TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -1044,12 +1044,8 @@ class AutonomousEngine:
         # 启动只登记配置中的标的为 OBSERVING。不得用硬编码评分、回拨观察时间
         # 或直接 activate；这些都是未经证据授权的交易宇宙旁路。后续必须由
         # 可重放的市场质量评估写入 score，并通过 promote/activate 门禁。
-        # BD-T06: Testnet 模式启动时自动激活交易池标的（跳过证据门禁）
         for sym in configured_symbols:
-            entry = self._trading_pool.add(sym)
-            if self._env_mode == EnvironmentMode.TESTNET:
-                # 绕过 try_promote 的证据要求，直接设置状态
-                entry.status = PoolStatus.ACTIVE
+            self._trading_pool.add(sym)
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)}, evidence-gated; no startup activation)"
@@ -1213,25 +1209,13 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        # BD-T06: Testnet 模式使用非严格门禁，允许因子在无证据时自启动
-        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != EnvironmentMode.TESTNET))
+        # 所有环境都必须使用严格、可重放的证据门禁；Testnet 不是生产
+        # 语义的旁路，缺少 dataset/OOS/cost/capacity/paper 证据时保持关闭。
+        self._factor_gate = FactorPromotionGate(strict=True)
         print(
             f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
             "startup will not auto-promote registered factors"
         )
-
-        # BD-T06: Testnet 模式启动时自动将 IDEA 因子晋级到 ACTIVE
-        if self._env_mode == EnvironmentMode.TESTNET and not self._factor_gate._strict:
-            for fid, record in list(self._factor_registry._factors.items()):
-                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
-                    decision = self._factor_gate.validate_evidence(
-                        fid, record.lifecycle, FactorLifecycle.ACTIVE,
-                        falsifier="testnet-startup-bootstrap",
-                    )
-                    if decision.approved:
-                        record.lifecycle = FactorLifecycle.ACTIVE
-                        record.decision_id = decision.decision_id
-                        print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet non-strict)")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
@@ -2314,35 +2298,30 @@ class AutonomousEngine:
     def _require_protection_config(self, symbol: str, config: Any) -> None:
         """Reject protection construction when market-derived inputs are absent.
 
-        When the exchange API returns incomplete data (IncompleteRead, etc.),
-        fall back to conservative defaults instead of crashing the engine.
+        A conservative-looking synthetic stop is still an unverified risk
+        parameter.  If the market snapshot is incomplete, the position must
+        remain under the NO_NEW_RISK gate until a fresh, venue-backed
+        protection configuration can be computed.
         """
-        import math
-
         metadata = getattr(config, "metadata", {}) or {}
         if metadata.get("blocked") or float(getattr(config, "stop_pct", 0) or 0) <= 0:
-            fallback_reason = metadata.get("reason", "UNKNOWN")
-            print(
-                f"[protection] WARNING: {fallback_reason} for {symbol} — "
-                f"using fallback defaults (SL=2.0% RR=1.5 tier=HIGH vol=NORMAL regime=TRENDING)"
-            )
-            # Conservative fallback: 2% stop loss, 1.5 RR ratio, moderate values
-            object.__setattr__(config, "stop_pct", 2.0)
-            object.__setattr__(config, "rr_ratio", 1.5)
-            object.__setattr__(config, "atr_pct", 1.0)
-            if not hasattr(config, "stop_loss_config") or not config.stop_loss_config:
-                object.__setattr__(config, "stop_loss_config", {
-                    "type": "ATR_BASED", "stop_pct": 2.0, "multiplier": 1.5, "atr": 1.0
-                })
-            if not hasattr(config, "take_profit_config") or not config.take_profit_config:
-                object.__setattr__(config, "take_profit_config", {
-                    "type": "RR_BASED", "rr_ratio": 1.5, "stop_pct": 2.0
-                })
-            if hasattr(config, "metadata"):
-                config.metadata["fallback"] = True
-                config.metadata["blocked"] = False
-            # Do NOT block unowned protection orders during recovery — fallback
-            # is safer than leaving positions unprotected.
+            reason = str(metadata.get("reason", "PROTECTION_CONFIG_UNKNOWN"))
+            self._protection_config_unknown = True
+            control = getattr(self, "_control", None)
+            if control is not None:
+                with contextlib.suppress(Exception):
+                    if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                        control.execute_action(ControlAction.NO_NEW_RISK)
+            alerts = getattr(self, "_alerts", None)
+            if alerts is not None:
+                with contextlib.suppress(Exception):
+                    alerts.send_incident(
+                        AlertSeverity.CRITICAL,
+                        "Protection configuration UNKNOWN",
+                        f"{symbol}: {reason}",
+                        category="protection",
+                    )
+            raise RuntimeError(f"PROTECTION_CONFIG_UNKNOWN:{symbol}:{reason}")
 
     def _restore_durable_ledger(self) -> None:
         """Rebuild the in-memory ledger projection from the durable journal."""
@@ -2754,9 +2733,9 @@ class AutonomousEngine:
 
         返回 (slices, algorithm_type, ctx)：
           - slices: list[tuple[quantity, price, order_type, time_in_force, client_order_id]]
-            无适用算法时回退为原始 MARKET/LIMIT 直接路径（单切片）。
+            计划或不变量不可验证时不返回切片，意图保持拒绝/冻结状态。
           - algorithm_type: 使用的算法类型；直接路径为 None。
-        返回 None 表示计划被取消（预测成本 > 净 Alpha），intent 已 ack。
+        返回 None 表示计划被取消或执行不变量无法证明。
         """
         # 1. 实时市场数据：订单簿 → bid/ask/深度/价差
         is_reduce_only = (
@@ -2881,25 +2860,17 @@ class AutonomousEngine:
         if algo is None:
             algo = self._exec_selector.select(ctx)
 
-        # 6. 直接路径回退（原始 MARKET/LIMIT 单切片）
-        def _direct_slice() -> list[tuple[str, str | None, str, str, str]]:
-            otype = "LIMIT" if intent.order_type == OrderType.LIMIT else "MARKET"
-            return [
-                (
-                    str(float(intent.quantity.amount)),
-                    str(float(intent.price.amount)) if intent.price else None,
-                    otype,
-                    intent.time_in_force.value,
-                    client_id,
-                )
-            ]
-
         if algo is None:
             print(
                 f"[order] {order_symbol}: no applicable execution algorithm — "
-                f"fallback to direct {intent.order_type.value} order"
+                "rejecting intent; execution invariants are unverifiable"
             )
-            return _direct_slice(), None, ctx
+            self._outbox.reject(
+                intent.intent_id,
+                "EXECUTION_ALGORITHM_UNAVAILABLE",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            return None
 
         # 7. 生成执行计划
         plan = algo.plan(ctx, OrderId(client_id))
@@ -2914,17 +2885,24 @@ class AutonomousEngine:
             return None
 
         if not plan.slices:
-            print(
-                f"[order] {order_symbol}: algorithm {plan.algorithm.value} produced no slices — "
-                "fallback to direct order"
+            print(f"[order] {order_symbol}: algorithm {plan.algorithm.value} produced no slices — rejecting intent")
+            self._outbox.reject(
+                intent.intent_id,
+                "EXECUTION_PLAN_EMPTY",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
             )
-            return _direct_slice(), plan.algorithm, ctx
+            return None
 
         # 8. 计划不变量校验（硬滑点/Alpha 剩余/总量上限）
         ok, msg = SliceInvariantChecker.validate_plan(plan, ctx)
         if not ok:
-            print(f"[order] {order_symbol}: plan failed invariants ({msg}) — fallback to direct order")
-            return _direct_slice(), plan.algorithm, ctx
+            print(f"[order] {order_symbol}: plan failed invariants ({msg}) — rejecting intent")
+            self._outbox.reject(
+                intent.intent_id,
+                f"EXECUTION_PLAN_INVARIANT_FAILED:{msg}",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            return None
 
         # 9. 切片 → 交易所参数
         slices: list[tuple[str, str | None, str, str, str]] = []
@@ -2939,8 +2917,13 @@ class AutonomousEngine:
             slices.append((qty_str, price_str, otype, slc.time_in_force.value, slice_client_id))
 
         if not slices:
-            print(f"[order] {order_symbol}: all slices skipped (invariants) — fallback to direct order")
-            return _direct_slice(), plan.algorithm, ctx
+            print(f"[order] {order_symbol}: all slices skipped (invariants) — rejecting intent")
+            self._outbox.reject(
+                intent.intent_id,
+                "EXECUTION_PLAN_NO_VALID_SLICES",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            return None
 
         print(
             f"[order] {order_symbol}: algo={plan.algorithm.value} slices={len(slices)} "
@@ -5110,8 +5093,9 @@ class AutonomousEngine:
 
                 approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
                 approval_expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
-                signature = self._approval.sign(
+                signature = self._approval.issue_for_approved_risk(
                     approval_id,
+                    risk_approved=risk_approved,
                     proposal_hash=proposal_hash,
                     account_snapshot_hash=account_hash,
                     risk_snapshot_hash=risk_hash,
@@ -5799,18 +5783,36 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.BOOTSTRAPPING)
         print("[beidou-autopilot] Bootstrapping...")
 
-        # Verify exchange connectivity
-        server_time = await self._api_async(Endpoint.SERVER_TIME)
-        if "serverTime" not in server_time:
-            print("[beidou-autopilot] FATAL: Cannot connect to exchange")
+        # Verify exchange connectivity (with retries for flaky testnet API)
+        server_time_ok = False
+        for attempt in range(5):
+            server_time, st_ok = await self._api_async_safe(Endpoint.SERVER_TIME)
+            if st_ok and isinstance(server_time, dict) and "serverTime" in server_time:
+                server_time_ok = True
+                break
+            if attempt < 4:
+                wait_s = 1.0 * (2 ** attempt)
+                print(f"[beidou-autopilot] Server time check attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
+                await asyncio.sleep(wait_s)
+        if not server_time_ok:
+            print("[beidou-autopilot] FATAL: Cannot connect to exchange after 5 attempts")
             self._lifecycle.transition(ModuleState.FAILED)
             return
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
-        # Verify account access
-        account = await self._api_async(Endpoint.ACCOUNT, signed=True)
-        if "totalWalletBalance" not in account and "assets" not in account and "canTrade" not in account:
-            print("[beidou-autopilot] FATAL: Cannot access account")
+        # Verify account access (with retries for flaky testnet API)
+        account = None
+        for attempt in range(5):
+            account, acct_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
+            if acct_ok and isinstance(account, dict) and ("totalWalletBalance" in account or "assets" in account or "canTrade" in account):
+                break
+            if attempt < 4:
+                wait_s = 1.0 * (2 ** attempt)
+                print(f"[beidou-autopilot] Account access attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
+                await asyncio.sleep(wait_s)
+            account = None
+        if account is None:
+            print("[beidou-autopilot] FATAL: Cannot access account after 5 attempts")
             self._lifecycle.transition(ModuleState.FAILED)
             return
         self._last_account = account

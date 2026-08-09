@@ -75,6 +75,15 @@ class TestRiskApproval:
         with _pytest.raises(RuntimeError, match="SIGNING_UNAVAILABLE"):
             signer.sign(aid)
 
+    def test_issue_requires_approved_risk(self):
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-000-approved-boundary")
+        with pytest.raises(RuntimeError, match="RISK_NOT_APPROVED"):
+            signer.issue_for_approved_risk(aid, risk_approved=False)
+
+        signature = signer.issue_for_approved_risk(aid, risk_approved=True, nonce="nonce-approved-boundary")
+        assert signature
+
     def test_verify_denied_without_signature(self):
         """无签名时 verify() 必须返回 False（不再支持无签名旁路）。"""
         signer = self._make_signer()

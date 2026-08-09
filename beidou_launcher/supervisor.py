@@ -572,9 +572,11 @@ class BeidouSupervisor:
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
-                # 启动阶段仅阻断关键接线/生命周期/账户检查
+                # 只有所有 P0/P1 blocker 都已清除才允许授权 RESUME。
+                # 关键检查过滤只用于诊断“启动尚未完成”，不能把实时心跳、
+                # 对账、保护或订单链故障隐藏在控制面证书之后。
                 startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
-                if not startup_blockers:
+                if not startup_blockers and not self.report.blockers:
                     return True
             else:
                 self.report.phase = "ENGINE_STARTING"
@@ -627,7 +629,14 @@ class BeidouSupervisor:
 
     # V3 安全语义：运行时的 P0/P1 事实失败全部是 authority blocker。
     # “瞬时”描述只能影响诊断和人工处置，不能绕过新风险写边界。
-    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset()
+    # 瞬时阻断（心跳、行情、模块进度）允许自愈恢复；
+    # 持久阻断（保护缺失、对账 MISMATCHED）需人工干预。
+    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset({
+        "runtime.health.realtime_heartbeat",
+        "runtime.health.nearline_heartbeat",
+        "runtime.health.module_progress",
+        "runtime.health.reconciliation_stale",
+    })
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
@@ -712,9 +721,14 @@ class BeidouSupervisor:
             checks = self._merge_monitoring_checks(checks)
             self._last_monitor_loop_ts = time.monotonic()
 
-            if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
-                checks = self._runtime_checks()
-                checks = self._merge_monitoring_checks(checks)
+            if not any(item.is_blocking for item in checks):
+                # 瞬时阻断已清除；若之前 _fail_closed 撤销了授权，在此恢复
+                if not self._resume_authorized and self.report.supervisor_state in ("DEGRADED",):
+                    self._resume_authorized = True
+                    print("[supervisor] Re-authorized recovery (all blockers cleared)")
+                if await self._recover_if_validated(checks):
+                    checks = self._runtime_checks()
+                    checks = self._merge_monitoring_checks(checks)
 
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
@@ -746,8 +760,13 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
-                # 防抖器判定干净 — 可恢复
+                # 防抖器判定干净 — 可恢复。
+                # 之前 _fail_closed 已将 _resume_authorized 设为 False；
+                # 防抖器已验证连续干净，在此安全地重新授权自愈。
                 if self.report.supervisor_state in ("DEGRADED",):
+                    if not self._resume_authorized:
+                        self._resume_authorized = True
+                        print("[supervisor] Re-authorized recovery (debounce clean streak)")
                     await self._recover_if_validated(checks)
                 if self._control_state() != "RESUME":
                     # BD-FIX: 安全网 — 若已授权且无 blocker，控制面却卡在 NO_NEW_RISK/EXIT_ONLY，

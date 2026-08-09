@@ -256,10 +256,18 @@ PROMOTION_EVIDENCE_REQUIREMENTS: dict[FactorLifecycle, dict] = {
         "description": "Challenger 阶段完成，实盘信号质量好，延迟在 SLO 内",
     },
     FactorLifecycle.ACTIVE: {
-        "required_evidence": [],  # ACTIVE 不需要晋级，但需要持续监控
-        "min_icir": 0.0,
-        "min_sample_count": 0,
-        "description": "活跃交易中，需持续监控 IC 衰减和共线性",
+        # ACTIVE is a production authorization, not a diagnostic label.  It
+        # therefore needs an explicit, independently replayable promotion
+        # envelope even when the source state is CHALLENGER.
+        "required_evidence": [
+            "sealed_oos_verified",
+            "cost_capacity_verified",
+            "paper_shadow_verified",
+            "active_approval",
+        ],
+        "min_icir": 0.1,
+        "min_sample_count": 500,
+        "description": "活跃交易中，必须绑定 sealed OOS、成本容量、Paper/Shadow 和具名批准",
     },
 }
 
@@ -267,11 +275,15 @@ PROMOTION_EVIDENCE_REQUIREMENTS: dict[FactorLifecycle, dict] = {
 class FactorPromotionGate:
     """BD-T06: 因子晋级门禁 — 验证每个阶段所需证据。
 
-    Production 模式强制证据门禁；Testnet/Paper 模式可选绕过。
+    所有环境都强制证据门禁；Testnet/Paper 不能绕过生产语义。
     """
 
     def __init__(self, strict: bool = True):
-        self._strict = strict  # Production=True, Testnet=False
+        # ``strict=False`` used to be an environment escape hatch.  Keeping
+        # the parameter for API compatibility but refusing the bypass makes a
+        # testnet startup unable to manufacture an ACTIVE factor.
+        self._strict = True
+        self._requested_strict = strict
 
     def validate_evidence(
         self,
@@ -295,15 +307,15 @@ class FactorPromotionGate:
 
         decision_id = f"promo-{factor_id}-{target_state.value}-{uuid.uuid4().hex[:8]}"
 
-        # 非严格模式直接通过
-        if not self._strict:
+        allowed_targets = FACTOR_LIFECYCLE_TRANSITIONS.get(current_state, set())
+        if target_state not in allowed_targets:
             return PromotionDecision(
                 decision_id=decision_id,
                 factor_id=factor_id,
                 from_state=current_state,
                 to_state=target_state,
-                approved=True,
-                reason=f"Non-strict mode: auto-promoted to {target_state.value}",
+                approved=False,
+                reason=f"Invalid lifecycle transition: {current_state.value} -> {target_state.value}",
                 factor_version=factor_version,
                 commit=commit,
                 dataset_hash=dataset_hash,

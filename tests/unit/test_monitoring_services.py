@@ -458,6 +458,7 @@ def repo():
 class TestRepo:
     def test_schema(self, repo):
         repo._init_schema()
+        assert repo.get_frequency_state().level == FrequencyLevel.ALERT
 
     def test_frequency(self, repo):
         assert repo.get_frequency_state().level == FrequencyLevel.ALERT
@@ -466,6 +467,7 @@ class TestRepo:
         repo.write_check_evidence(
             MonitoringCheckResult(check_id="t", status=CheckStatus.PASS, severity=CheckSeverity.P0, message="ok")
         )
+        assert repo._get_conn().execute("SELECT COUNT(*) FROM monitor_check_evidence").fetchone()[0] == 1
 
     def test_health(self, repo):
         assert repo.health_probe().healthy

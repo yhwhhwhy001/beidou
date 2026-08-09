@@ -1,8 +1,8 @@
 # 北斗全项目优化审查基线
 
-更新时间：2026-08-09（本地工作树，代码未提交/未部署）
+更新时间：2026-08-09 15:11（本地工作树，代码未提交/未部署）
 
-当前 HEAD：`8523ac9053c91018609816e262cc74ce3d7b37e6`；当前工作树包含未提交的本轮收敛切片。
+当前 HEAD：`b2a6bce587ea13253c2b2bd42141146727333f43`；当前工作树包含 9 个未提交的本轮收敛切片。
 
 ## 决策
 
@@ -16,8 +16,8 @@
 
 ## 当前事实
 
-- 分支 `codex/full-system-convergence-v3`，工作树 DIRTY；当前运行 PID 仍是旧 SHA，不能把 HEAD 或工作树视为已在线。
-- 2026-08-09T06:39:01Z 只读运行采样仍显示旧 SHA；监督器 `trading_ready=false/passed=false`、实时心跳约 229s 陈旧、BNBUSDT 保护覆盖 P0 `MISSING_SL/MISSING_TP`，但 `/health=HEALTHY`、`/ready=true`/`ACTIVE`/`RESUME`，`/trading-ready=503`。这是证书语义 P0，而不是优化空间。
+- 分支 `codex/full-system-convergence-v3`，工作树 DIRTY；当前没有 Beidou 服务进程，不能把 HEAD 或工作树视为已在线。
+- 2026-08-09T07:10:07Z 只读监督状态为 `PREFLIGHT/BLOCKED`、`trading_ready=false/passed=false`；P0 为未提交工作树和缺少 `BEIDOU_SIGNING_KEY`，9090 无服务。该状态是当前权威运行证据。
 - 新代码已将 UNKNOWN、未跟踪在途单、无交易所 ACK 的保护、缺失持仓事实、无闭合 bar、无研究 provenance 置为阻断。
 - 本轮尚未授权停机、重启、部署、交易所写入、真实资金或 Git 推送。
 
@@ -35,12 +35,12 @@
 
 | 门 | 结果 |
 |---|---|
-| 全量回归 | `.venv/bin/pytest -q`：1043 passed, 1 skipped（1044 collected） |
-| CI 覆盖率 | `.venv/bin/pytest tests/ -q --cov --cov-report=term-missing`：**FAIL，57.04% < 85%**；并有 ResourceWarning |
-| Ruff lint/format | PASS（274 files） |
+| 全量回归 | `.venv/bin/pytest -q`：1028 passed, 1 skipped（1029 collected） |
+| CI 覆盖率 | `.venv/bin/pytest tests/ -q --cov --cov-report=term --cov-fail-under=85`：**FAIL，56.50% < 85%**；并有 49 条 ResourceWarning |
+| Ruff lint/format | PASS（275 files） |
 | CI 包范围 mypy | PASS |
 | compileall | PASS |
 | `git diff --check` | PASS |
-| 测试质量/禁止模式扫描 | PASS；硬编码扫描 0 阻断、10 条非阻断告警 |
+| 测试质量/禁止模式/硬编码扫描 | PASS |
 
 以上是本地代码证据（E2），不替代真实交易所、Testnet、经过时间的 Paper/Shadow、PostgreSQL/PITR 或 G5/G7 证书；当前总决策仍为 `HOLD / NOT READY FOR UNATTENDED TRADING`。
