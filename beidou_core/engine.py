@@ -827,7 +827,7 @@ class AutonomousEngine:
             "research": EnvironmentMode.RESEARCH,
             "paper": EnvironmentMode.PAPER,
             "shadow": EnvironmentMode.SHADOW,
-            "testnet": "testnet",
+            "testnet": EnvironmentMode.TESTNET,
             "safety_only": EnvironmentMode.SAFETY_ONLY,
         }
         self._env_mode = _MODE_MAP.get(mode, EnvironmentMode.SAFETY_ONLY)
