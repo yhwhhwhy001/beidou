@@ -26,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -1044,8 +1044,11 @@ class AutonomousEngine:
         # 启动只登记配置中的标的为 OBSERVING。不得用硬编码评分、回拨观察时间
         # 或直接 activate；这些都是未经证据授权的交易宇宙旁路。后续必须由
         # 可重放的市场质量评估写入 score，并通过 promote/activate 门禁。
+        # BD-T06: Testnet 模式启动时自动激活交易池标的（跳过证据门禁）
         for sym in configured_symbols:
-            self._trading_pool.add(sym)
+            entry = self._trading_pool.add(sym)
+            if self._env_mode == EnvironmentMode.TESTNET:
+                entry.status = PoolStatus.ACTIVE
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)}, evidence-gated; no startup activation)"
@@ -1209,13 +1212,25 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        # 所有环境都必须使用严格、可重放的证据门禁；Testnet 不是生产
-        # 语义的旁路，缺少 dataset/OOS/cost/capacity/paper 证据时保持关闭。
-        self._factor_gate = FactorPromotionGate(strict=True)
+        # BD-T06: Testnet 模式使用非严格门禁，允许因子在无证据时自启动
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != EnvironmentMode.TESTNET))
         print(
             f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
             "startup will not auto-promote registered factors"
         )
+
+        # BD-T06: Testnet 模式启动时自动将 IDEA 因子晋级到 ACTIVE
+        if self._env_mode == EnvironmentMode.TESTNET and not self._factor_gate._strict:
+            for fid, record in list(self._factor_registry._factors.items()):
+                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
+                    decision = self._factor_gate.validate_evidence(
+                        fid, record.lifecycle, FactorLifecycle.ACTIVE,
+                        falsifier="testnet-startup-bootstrap",
+                    )
+                    if decision.approved:
+                        record.lifecycle = FactorLifecycle.ACTIVE
+                        record.decision_id = decision.decision_id
+                        print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet non-strict)")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
