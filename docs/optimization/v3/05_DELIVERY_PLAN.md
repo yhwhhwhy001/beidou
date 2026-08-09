@@ -20,7 +20,7 @@
 ### P1：唯一事实链
 
 - PostgreSQL schema + migration + WAL/PITR；Approval+Intent+Outbox 原子事务。
-- Fenced executor、唯一 Adapter、用户数据流与 REST gap-fill。
+- Fenced executor、唯一 Adapter、typed 用户数据流、显式 replay baseline 与 REST gap-fill。
 - OrderAggregate、FillStore、PositionProjection、保护 owner/generation、双式账本、三方只读对账。
 - 退出条件：崩溃前/后发送、ACK 丢失、重复 client ID、部分成交、撤单竞态、保护拒绝和双 worker 测试全部通过；未知状态不自动恢复。
 
@@ -49,4 +49,4 @@
 
 ## 本轮交付边界
 
-已完成的是 fail-closed、Adapter/Outbox/账本/保护状态、闭合 bar/研究门和可验证证书切片；未完成 PostgreSQL、独立对账、完整保护 owner/generation、真实 G5/G7、生产运维和 Alpha 证明。因此本轮的正确交付决策是 **PIVOT / HOLD**，而不是“已可 24×7 盈利运行”。
+已完成的是 fail-closed、Adapter/Outbox/账本/保护状态、三方对账骨架、typed 用户账户事件与显式 replay gate、闭合 bar/研究门和可验证证书切片；未完成 PostgreSQL、真实交易所 gap-fill、完整保护 owner/generation、真实 G5/G7、生产运维和 Alpha 证明。因此本轮的正确交付决策是 **PIVOT / HOLD**，而不是“已可 24×7 盈利运行”。

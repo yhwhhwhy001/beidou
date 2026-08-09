@@ -40,15 +40,17 @@
 
 Algo/条件单的库存、创建和撤销已统一经过 typed Adapter：必须有 `algoId/symbol/side/orderType/triggerPrice/algoStatus` 等 venue ACK 字段；缺字段的库存或 ACK 直接 UNKNOWN。用户流事件统一解析，缺少单调序列或出现 gap 时由 `UserStreamSequencer` 标记 `SEQUENCE_UNAVAILABLE/GAP`，要求独立 REST replay/对账后才能恢复信任。
 
-新增的本地切片：`UserOrderUpdate` 先经 Adapter 校验，再由 `UserStreamProjector` 以
-`user_stream_events PENDING → APPLIED` 和 `user_stream_projections` 持久化；重复事件幂等，
-同一事件 ID 对应不同原文直接冲突。重启恢复高水位后默认进入 `GAP`，必须有独立 replay
-授权才能继续接收；缺序列、断档或投影异常均不自动补洞。`ReconciliationEngine.compare_three_way`
-现在比较 system / exchange REST / event-stream 三方，且引擎只提供注入边界，不在本地伪造
-WebSocket 或用 REST 复制用户流事实。
+新增的本地切片：`UserOrderUpdate` 与 `UserAccountUpdate` 先经 Adapter 校验，再由
+`UserStreamProjector` 以 `user_stream_events PENDING → APPLIED` 和
+`user_stream_projections` 持久化；重复事件幂等，同一事件 ID 对应不同原文直接冲突。
+`ACCOUNT_UPDATE` 的余额/仓位是绝对值增量行，不被误当作完整快照；只有带完整事实、来源/版本、
+证据哈希和审批 ID 的显式 replay baseline，且至少收到一条 replay 后用户事件，才会标记第三方
+事实 `complete=true`。重启恢复高水位后默认进入 `GAP`，必须重新授权 replay；缺序列、断档或
+投影异常均不自动补洞。`ReconciliationEngine.compare_three_way` 现在比较 system / exchange
+REST / event-stream 三方，且引擎只提供注入边界，不在本地伪造 WebSocket 或用 REST 复制用户流事实。
 
-仍未完成：完整 Account/Balance user-stream 事实与独立 replay/gap-fill、手续费/资金费入账、
-完整 OrderAggregate、PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
+仍未完成：交易所真实 gap-fill/replay 取证、手续费/资金费入账、完整 OrderAggregate、
+PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
 
 ### 4. 独立对账与运行态语义
 
