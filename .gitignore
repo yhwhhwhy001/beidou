@@ -62,3 +62,5 @@ evidence/factors/
 evidence/mining-runs/
 artifacts/evidence/
 config/policies/
+config/g5-testnet-plan.yaml
+beidou_bootstrap/dev.py
