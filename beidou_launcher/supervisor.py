@@ -1058,8 +1058,8 @@ class BeidouSupervisor:
             self._install_resume_interlock()
             self._install_health_callbacks()
 
-            # DEV_BYPASS: Paper 模式下自动激活因子和交易池
-            if self.mode == "paper":
+            # DEV_BYPASS: Paper/Testnet 模式下自动激活因子和交易池
+            if self.mode in ("paper", "testnet", "research"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
                     patch_engine_for_dev(self.engine, self.mode)
