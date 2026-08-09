@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import suppress
 from datetime import datetime, timezone
 
 from beidou_observability.monitoring.contracts import (
@@ -44,6 +45,25 @@ class MonitoringRepository:
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
+
+    def close(self) -> None:
+        """Close this thread's monitoring connection during service shutdown."""
+
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
+            self._local.conn = None
+
+    def __enter__(self) -> "MonitoringRepository":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            self.close()
 
     def _init_schema(self):
         self._get_conn().executescript("""

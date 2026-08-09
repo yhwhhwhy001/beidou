@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1170,6 +1171,28 @@ class PersistentStore:
         return deleted
 
     def close(self) -> None:
-        if hasattr(self._local, "conn") and self._local.conn:
-            self._local.conn.close()
+        """Close the current thread's connection.
+
+        ``PersistentStore`` uses thread-local connections, so shutdown code
+        must call this method from every worker thread that touched the store.
+        The destructor below is only a last-resort leak guard; it is not a
+        substitute for an explicit service shutdown hook.
+        """
+
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
             self._local.conn = None
+
+    def __enter__(self) -> "PersistentStore":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Best-effort cleanup for short-lived test/diagnostic stores.  Runtime
+        # ownership remains explicit via ``close``/context-manager shutdown.
+        with suppress(Exception):
+            self.close()

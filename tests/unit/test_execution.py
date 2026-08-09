@@ -1,6 +1,7 @@
 """PKG-21~27: Execution Chain 测试。Intent、Executor、Ledger、Reconciliation。"""
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -129,7 +130,7 @@ class TestIntentOutbox:
         first.commit(intent)
         assert first.claim("worker-a") is not None
         second = IntentOutbox(db_path)
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             row = conn.execute("SELECT state FROM intent_outbox WHERE intent_id=?", (intent.intent_id,)).fetchone()
         assert row[0] == OutboxState.UNKNOWN.value
         assert second.claim("worker-b") is None

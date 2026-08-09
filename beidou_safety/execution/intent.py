@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from enum import Enum
 from hashlib import sha256
@@ -94,7 +95,7 @@ class IntentOutbox:
         return conn
 
     def _init_db(self) -> None:
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS intent_outbox (
@@ -202,7 +203,7 @@ class IntentOutbox:
         if not self._db_path:
             return
         now = datetime.now(timezone.utc).isoformat()
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 "UPDATE intent_outbox SET state=?, lease_owner=NULL, lease_until=NULL, updated_at=? "
                 "WHERE state IN (?, ?)",
@@ -214,7 +215,7 @@ class IntentOutbox:
             return []
         if len(states) != 3:
             raise ValueError("persistent outbox state query requires exactly three states")
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 "SELECT payload FROM intent_outbox WHERE state IN (?, ?, ?) ORDER BY created_at",
                 states,
@@ -232,7 +233,7 @@ class IntentOutbox:
     @property
     def stats(self) -> dict:
         if self._db_path:
-            with self._db_lock, self._connect() as conn:
+            with self._db_lock, closing(self._connect()) as conn, conn:
                 counts = conn.execute("SELECT state, COUNT(*) AS count FROM intent_outbox GROUP BY state").fetchall()
             state_counts = {str(row["state"]): int(row["count"]) for row in counts}
             return {
@@ -263,7 +264,7 @@ class IntentOutbox:
             now = datetime.now(timezone.utc).isoformat()
             payload = self._serialize_intent(intent, key)
             try:
-                with self._db_lock, self._connect() as conn:
+                with self._db_lock, closing(self._connect()) as conn, conn:
                     conn.execute(
                         "INSERT INTO intent_outbox "
                         "(idempotency_key,intent_id,payload,state,created_at,updated_at) VALUES (?,?,?,?,?,?)",
@@ -346,7 +347,7 @@ class IntentOutbox:
         确保已确认意图的幂等键继续被防重保护。"""
         if self._db_path:
             now = datetime.now(timezone.utc).isoformat()
-            with self._db_lock, self._connect() as conn:
+            with self._db_lock, closing(self._connect()) as conn, conn:
                 if idempotency_key:
                     conn.execute(
                         "UPDATE intent_outbox SET state=?, lease_owner=NULL, lease_until=NULL, updated_at=? "
@@ -376,7 +377,7 @@ class IntentOutbox:
 
         if self._db_path:
             now = datetime.now(timezone.utc).isoformat()
-            with self._db_lock, self._connect() as conn:
+            with self._db_lock, closing(self._connect()) as conn, conn:
                 conn.execute(
                     "UPDATE intent_outbox SET state=?, last_error=?, lease_owner=NULL, lease_until=NULL, updated_at=? "
                     "WHERE intent_id=? OR idempotency_key=?",
@@ -399,7 +400,7 @@ class IntentOutbox:
 
     def pending_count(self) -> int:
         if self._db_path:
-            with self._db_lock, self._connect() as conn:
+            with self._db_lock, closing(self._connect()) as conn, conn:
                 row = conn.execute(
                     "SELECT COUNT(*) AS count FROM intent_outbox WHERE state IN (?, ?, ?)",
                     (OutboxState.PENDING.value, OutboxState.SENDING.value, OutboxState.UNKNOWN.value),
@@ -415,7 +416,7 @@ class IntentOutbox:
             return pending
         now = datetime.now(timezone.utc).isoformat()
         lease_until = datetime.now(timezone.utc).timestamp() + lease_seconds
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             row = conn.execute(
                 "SELECT idempotency_key,payload FROM intent_outbox WHERE state=? ORDER BY created_at LIMIT 1",
                 (OutboxState.PENDING.value,),
@@ -442,7 +443,7 @@ class IntentOutbox:
         if not self._db_path:
             self._states[intent_id] = OutboxState.UNKNOWN
             return
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 "UPDATE intent_outbox SET state=?, last_error=?, lease_owner=NULL, lease_until=NULL, updated_at=? WHERE intent_id=?",
                 (OutboxState.UNKNOWN.value, reason, datetime.now(timezone.utc).isoformat(), intent_id),
@@ -455,7 +456,7 @@ class IntentOutbox:
         if not self._db_path:
             self._states[intent_id] = OutboxState(state)
             return
-        with self._db_lock, self._connect() as conn:
+        with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(
                 "UPDATE intent_outbox SET state=?, last_error=NULL, updated_at=? WHERE intent_id=? AND state=?",
                 (state, datetime.now(timezone.utc).isoformat(), intent_id, OutboxState.UNKNOWN.value),
