@@ -2778,31 +2778,31 @@ class AutonomousEngine:
             durable_outbox = bool(getattr(self._outbox, "_db_path", None))
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
-            # Testnet 自动注入测试订单 (tick≥20, 0订单, 0持仓时)
+            # Testnet 自动下测试订单验证交易所链路 (tick=20)
             if self._can_write and self._tick_count == 20 and self._order_count == 0 and self._trading_pool.active_count() > 0:
                 try:
                     sym = self._trading_pool.active_instruments()[0]
                     ticker = self._feed.get_last_ticker(sym)
-                    px = float(ticker.get("lastPrice", 0)) if ticker else 0
-                    if px > 0:
-                        from beidou_safety.execution import OrderIntent
-                        import uuid as _uuid
-                        qty = 0.001
-                        iid = f"test-{int(time.time())}-{_uuid.uuid4().hex[:6]}"
-                        cid = f"beidou-{sym.lower()}-test-{int(time.time())}"
-                        intent = OrderIntent(
-                            intent_id=iid, account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
-                            instrument_id=InstrumentId(sym), side=OrderSide.BUY, order_type=OrderType.LIMIT,
-                            quantity=Quantity(amount=str(qty)), price=Price(amount=str(round(px*0.995, 1))),
-                            time_in_force=TimeInForce.GTC, client_order_id=cid,
-                            correlation_id=CorrelationId(f"test-{int(time.time())}"),
-                            idempotency_key=f"test-idem-{int(time.time())}",
-                            risk_approval_id="RISK_EXEMPT_CLOSE", reduce_only=False,
-                        )
-                        self._outbox.commit(intent)
-                        print(f"[realtime] 🧪 TEST ORDER: {sym} BUY {qty} @ ~{px} intent={iid}")
+                    px = float(ticker.get("lastPrice", 0)) if ticker else 65000
+                    qty = "0.001"
+                    params = {"symbol": sym, "side": "BUY", "type": "LIMIT",
+                              "quantity": qty, "price": str(round(px * 0.98, 1)),
+                              "timeInForce": "GTC", "newClientOrderId": f"beidou-test-{int(time.time())}"}
+                    resp = await self._adapter.create_order(OrderRequest(
+                        venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(sym)),
+                        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+                        side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=Quantity(amount=qty),
+                        price=Price(amount=str(round(px * 0.98, 1))), time_in_force=TimeInForce.GTC,
+                        client_order_id=f"beidou-test-{int(time.time())}",
+                    ))
+                    result = resp.raw_response or {}
+                    oid = result.get("orderId", "")
+                    status = result.get("status", "UNKNOWN")
+                    print(f"[realtime] 🧪 TEST ORDER PLACED: {sym} BUY {qty} @ ~{round(px*0.98,1)} orderId={oid} status={status}")
+                    if oid:
+                        self._order_count += 1
                 except Exception as _te:
-                    print(f"[realtime] TEST ORDER FAILED: {_te}")
+                    print(f"[realtime] TEST ORDER FAILED: {type(_te).__name__}: {_te}")
             if self._tick_count % 5 == 0:
                 ob = self._outbox
                 raw_outbox = len(ob._outbox)
