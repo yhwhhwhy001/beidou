@@ -193,9 +193,6 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         print(f"[beidou-bootstrap] 已激活 {pool_activated}/{len(pool._pool)} 个交易标的")
         print(f"[beidou-bootstrap] 活跃标的: {pool.active_instruments()}")
 
-    # === 4. 同步账户开盘投影余额 ===
-    _sync_opening_balance(engine, commit)
-
     print("[beidou-bootstrap] DEV_BYPASS 完成")
 
 

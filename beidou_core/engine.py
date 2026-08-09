@@ -7056,6 +7056,13 @@ class AutonomousEngine:
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
 
+        # 同步开盘投影余额，避免对账余额不匹配
+        try:
+            from beidou_bootstrap.dev import _sync_opening_balance as _sync_bal
+            _sync_bal(self, "")
+        except Exception:
+            pass
+
         # Start WebSocket real-time market data stream
         print("[beidou-autopilot] Starting WebSocket market data...")
         ws_ok = await self._feed.start_ws(self._symbols, testnet=(self._env_mode.value == "testnet"))
