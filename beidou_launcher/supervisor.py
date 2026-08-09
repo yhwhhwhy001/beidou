@@ -1096,7 +1096,17 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            ready = await self._wait_for_startup()
+            # DEV_FAST_START: 跳过深度验证，直接 RESUME (仅开发/调试环境)
+            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
+                print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
+                self._resume_authorized = True
+                from beidou_control.plane import ControlAction as _CA
+                self.engine._control.execute_action(_CA.RESUME)
+                self.report.supervisor_state = "RUNNING"
+                self.report.trading_ready = True
+                ready = True
+            else:
+                ready = await self._wait_for_startup()
             if not ready:
                 if self._shutdown_requested:
                     self.report.supervisor_state = "STOPPED"
