@@ -255,6 +255,15 @@ def test_stop_requires_fresh_matching_process_identity(tmp_path: Path, monkeypat
     assert sent == [(321, signal.SIGTERM)]
 
 
+def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
+    import inspect
+
+    from beidou_launcher import cli
+
+    source = inspect.getsource(cli)
+    assert "force_stop_existing" not in source
+
+
 def test_stop_rejects_pid_state_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from beidou_launcher.state import stop_running_instance
 
