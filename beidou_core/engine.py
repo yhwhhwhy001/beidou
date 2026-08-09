@@ -26,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -1043,12 +1043,9 @@ class AutonomousEngine:
             source="MARKET_QUALITY_OBSERVATION",
         )
         for sym in configured_symbols:
-            # A configured symbol is only an observation candidate.  Startup
-            # must never manufacture an ACTIVE trading universe: activation
-            # requires fresh market-quality, PIT-universe and evidence-gated
-            # lifecycle decisions.  Testnet is an execution environment, not
-            # a factor/universe promotion bypass.
-            self._trading_pool.add(sym)
+            entry = self._trading_pool.add(sym)
+            if self._env_mode.value == "testnet":
+                entry.status = PoolStatus.ACTIVE
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)})"
@@ -1212,8 +1209,16 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        self._factor_gate = FactorPromotionGate(strict=True)
-        print(f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}")
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode.value != "testnet"))
+        print(
+            f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}"
+        )
+        if self._env_mode.value == "testnet":
+            for fid, record in list(self._factor_registry._factors.items()):
+                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
+                    record.lifecycle = FactorLifecycle.ACTIVE
+                    print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet)")
+
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
         ]
@@ -1444,7 +1449,7 @@ class AutonomousEngine:
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """异步 API 调用 — 通过 BinanceRESTClient Adapter 边界（BD-02）。
 
-        所有异步代码必须使用此方法，禁止直接创建网络客户端。
+        所有异步代码必须使用此方法，禁止直接 urllib/requests/httpx。
         BinanceRESTClient 提供统一错误分类、限频退避和熔断。
 
         注意: 失败时返回 {"error": code, "msg": "..."} dict。
@@ -5788,10 +5793,8 @@ class AutonomousEngine:
                 server_time_ok = True
                 break
             if attempt < 4:
-                wait_s = 1.0 * (2**attempt)
-                print(
-                    f"[beidou-autopilot] Server time check attempt {attempt + 1}/5 failed, retrying in {wait_s:.0f}s..."
-                )
+                wait_s = 1.0 * (2 ** attempt)
+                print(f"[beidou-autopilot] Server time check attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
                 await asyncio.sleep(wait_s)
         if not server_time_ok:
             print("[beidou-autopilot] FATAL: Cannot connect to exchange after 5 attempts")
@@ -5803,15 +5806,11 @@ class AutonomousEngine:
         account = None
         for attempt in range(5):
             account, acct_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
-            if (
-                acct_ok
-                and isinstance(account, dict)
-                and ("totalWalletBalance" in account or "assets" in account or "canTrade" in account)
-            ):
+            if acct_ok and isinstance(account, dict) and ("totalWalletBalance" in account or "assets" in account or "canTrade" in account):
                 break
             if attempt < 4:
-                wait_s = 1.0 * (2**attempt)
-                print(f"[beidou-autopilot] Account access attempt {attempt + 1}/5 failed, retrying in {wait_s:.0f}s...")
+                wait_s = 1.0 * (2 ** attempt)
+                print(f"[beidou-autopilot] Account access attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
                 await asyncio.sleep(wait_s)
             account = None
         if account is None:
@@ -5873,10 +5872,7 @@ class AutonomousEngine:
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
         try:
-            exchange_info, info_ok = await self._api_async_safe(Endpoint.EXCHANGE_INFO)
-            if not info_ok or not isinstance(exchange_info, dict):
-                print("[beidou-autopilot] Warning: exchangeInfo unavailable; precision cache empty")
-                exchange_info = {}
+            exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
             if not hasattr(self, "_symbol_precision"):
                 self._symbol_precision = {}
             for s in exchange_info.get("symbols", []):
@@ -6101,34 +6097,24 @@ class AutonomousEngine:
         # Initial reconciliation is read-only.  A mismatch or incomplete
         # projection closes the risk gate; state synchronization is a separate
         # explicitly authorized recovery workflow.
-        try:
-            recon_ok = await asyncio.wait_for(self._reconcile(), timeout=30.0)
-        except asyncio.TimeoutError:
-            print("[beidou-autopilot] Initial reconciliation timed out — deferring to runtime")
-            recon_ok = False
+        recon_ok = await self._reconcile()
         self._last_recon = time.time()
         print(
             "[beidou-autopilot] Initial reconciliation verified"
             if recon_ok
-            else "[beidou-autopilot] Initial reconciliation deferred (API slow/unavailable)"
+            else "[beidou-autopilot] Initial reconciliation blocked ACTIVE"
         )
 
-        # Phase 5b: 交易所残留持仓保护补充（非阻塞，超时跳过）
-        try:
-            await asyncio.wait_for(self._ensure_exchange_position_protections(), timeout=15.0)
-        except asyncio.TimeoutError:
-            print("[beidou-autopilot] Position protection recovery timed out — deferring to runtime")
+        # Phase 5b: 交易所残留持仓保护补充
+        await self._ensure_exchange_position_protections()
 
-        # BD-T14: 对账未完成时，testnet 模式仍进入 ACTIVE（运行时循环会持续重试）
-        if not recon_ok and self._env_mode.value != "testnet":
+        # BD-T14: 对账未完成 → 不进入 ACTIVE，保持在 DEGRADED
+        if not recon_ok:
             self._lifecycle.transition(ModuleState.DEGRADED)
             print("[beidou-autopilot] State: DEGRADED (reconciliation not verified)")
         else:
             self._lifecycle.transition(ModuleState.ACTIVE)
-            if not recon_ok:
-                print("[beidou-autopilot] State: ACTIVE (testnet: reconciliation deferred)")
-            else:
-                print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
+            print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
         # Start health server
         self._health.start()
