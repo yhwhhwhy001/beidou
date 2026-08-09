@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
 
-from beidou_exchange.core.protocol import UserOrderUpdate
+from beidou_exchange.core.protocol import UserAccountUpdate, UserOrderUpdate
 from beidou_exchange.core.user_stream import UserStreamObservation, UserStreamSequencer
 from beidou_safety.execution.reconciliation import AccountFactSnapshot
 from beidou_shared.types import AccountId, InstrumentId, MonetaryValue, Quantity, VenueId
@@ -59,11 +59,16 @@ class UserStreamProjector:
         self._venue_id = venue_id or VenueId("BINANCE")
         self._sequencer = UserStreamSequencer()
         self._positions: dict[InstrumentId, Decimal] = {}
+        self._balances: dict[str, MonetaryValue] = {}
         self._cumulative_by_order: dict[str, Decimal] = {}
         self._open_orders: set[str] = set()
         self._last_event_time_ms: int | None = None
         self._applied_event_ids: set[str] = set()
         self._frozen_reason: str | None = None
+        self._replay_baseline_verified = False
+        self._replay_evidence_hash = ""
+        self._replay_approval_id = ""
+        self._accepted_events_since_replay = 0
         if store is not None:
             self._restore_projection()
 
@@ -87,6 +92,14 @@ class UserStreamProjector:
             InstrumentId(str(symbol)): Decimal(str(amount))
             for symbol, amount in dict(row.get("positions", {})).items()
         }
+        balance_amount = row.get("balance_amount")
+        balance_currency = row.get("balance_currency")
+        if balance_amount not in (None, "") and balance_currency not in (None, ""):
+            self._balances[str(balance_currency)] = MonetaryValue(
+                amount=str(balance_amount),
+                currency=str(balance_currency),
+                decimals=int(row.get("balance_decimals", 8) or 8),
+            )
         self._open_orders = {str(order_id) for order_id in row.get("open_orders", [])}
         self._last_event_time_ms = row.get("last_event_time_ms")
         last_sequence = row.get("last_sequence")
@@ -119,6 +132,74 @@ class UserStreamProjector:
                 self._cumulative_by_order[order_id] = max(
                     self._cumulative_by_order.get(order_id, Decimal("0")), value
                 )
+
+    @property
+    def replay_baseline_verified(self) -> bool:
+        return self._replay_baseline_verified
+
+    def authorize_replay_baseline(
+        self,
+        facts: AccountFactSnapshot,
+        *,
+        evidence_hash: str,
+        approval_id: str,
+        last_sequence: int | None = None,
+        allow_unsequenced: bool = False,
+    ) -> UserProjectionResult:
+        """Authorize an independently captured replay baseline.
+
+        This is an explicit recovery boundary.  No REST call is made here;
+        the caller must supply complete facts with provenance, evidence hash,
+        and an operator/governance approval.  Binance account updates are
+        commonly unsequenced, so that mode must be opted into explicitly.
+        """
+
+        if self._frozen_reason:
+            return UserProjectionResult(UserProjectionStatus.BLOCKED, "REPLAY_BASELINE", reason=self._frozen_reason)
+        if (
+            facts.account_id != self._account_id
+            or facts.venue_id != self._venue_id
+            or not facts.complete
+            or not str(facts.source).strip()
+            or not str(facts.fact_version).strip()
+            or not str(evidence_hash).strip()
+            or not str(approval_id).strip()
+            or (last_sequence is None and not allow_unsequenced)
+        ):
+            return UserProjectionResult(
+                UserProjectionStatus.BLOCKED,
+                "REPLAY_BASELINE",
+                reason="complete replay baseline, provenance, approval, and continuity mode are required",
+            )
+        try:
+            self._positions = {
+                InstrumentId(str(symbol)): Decimal(str(quantity.amount))
+                for symbol, quantity in facts.positions.items()
+            }
+            if any(not quantity.is_finite() for quantity in self._positions.values()):
+                raise ValueError("replay baseline contains non-finite position")
+            self._open_orders = {str(order_id) for order_id in facts.open_orders}
+            self._balances = {
+                str(facts.balance.currency): facts.balance,
+            }
+            self._replay_baseline_verified = True
+            self._replay_evidence_hash = str(evidence_hash)
+            self._replay_approval_id = str(approval_id)
+            self._accepted_events_since_replay = 0
+            self._last_event_time_ms = int(facts.timestamp.timestamp() * 1000)
+            self._sequencer.mark_replayed(
+                last_sequence,
+                allow_unsequenced=allow_unsequenced,
+                last_event_time_ms=self._last_event_time_ms,
+            )
+            if self._store is not None:
+                self._store.save_user_stream_projection(
+                    self.fact_snapshot(),
+                    last_sequence=self._sequencer.last_sequence,
+                )
+        except (InvalidOperation, TypeError, ValueError, RuntimeError) as exc:
+            return self._freeze(f"replay baseline rejected: {type(exc).__name__}: {exc}")
+        return UserProjectionResult(UserProjectionStatus.ACCEPTED, "REPLAY_BASELINE")
 
     def ingest(self, update: UserOrderUpdate) -> UserProjectionResult:
         """Durably append, project, then mark one event applied."""
@@ -164,8 +245,67 @@ class UserStreamProjector:
                 )
                 self._store.mark_user_stream_event_applied(event_id)
             self._applied_event_ids.add(event_id)
+            self._accepted_events_since_replay += 1
         except (InvalidOperation, TypeError, ValueError, RuntimeError) as exc:
             return self._freeze(f"user-stream projection failed for {event_id}: {type(exc).__name__}: {exc}")
+        return UserProjectionResult(UserProjectionStatus.ACCEPTED, event_id, observation=observation)
+
+    def ingest_account_update(self, update: UserAccountUpdate) -> UserProjectionResult:
+        """Apply an ACCOUNT_UPDATE only after replay authorization."""
+
+        event_id = str(update.event.event_id)
+        if self._frozen_reason:
+            return UserProjectionResult(UserProjectionStatus.BLOCKED, event_id, reason=self._frozen_reason)
+        if not self._replay_baseline_verified:
+            return UserProjectionResult(
+                UserProjectionStatus.BLOCKED,
+                event_id,
+                reason="REPLAY_BASELINE_REQUIRED before applying account updates",
+            )
+        if event_id in self._applied_event_ids:
+            return UserProjectionResult(UserProjectionStatus.DUPLICATE, event_id, reason="event already applied")
+        observation = self._sequencer.observe(update.event)
+        if not observation.accepted:
+            return UserProjectionResult(
+                UserProjectionStatus.BLOCKED,
+                event_id,
+                observation=observation,
+                reason=observation.reason,
+            )
+        try:
+            if self._store is not None:
+                inserted = self._store.save_user_stream_event(
+                    update,
+                    continuity_status=observation.status.value,
+                )
+                if not inserted:
+                    row = self._store.get_user_stream_event(event_id)
+                    if row is not None and str(row.get("applied_state")) == "APPLIED":
+                        self._applied_event_ids.add(event_id)
+                        return UserProjectionResult(
+                            UserProjectionStatus.DUPLICATE,
+                            event_id,
+                            observation=observation,
+                            reason="event already durable and applied",
+                        )
+            for balance in update.balances:
+                self._balances[str(balance.asset)] = balance.wallet_balance
+            for position in update.positions:
+                amount = Decimal(str(position.position_amount.amount))
+                if not amount.is_finite():
+                    raise ValueError(f"non-finite account position: {position.symbol}")
+                self._positions[InstrumentId(str(position.symbol))] = amount
+            self._last_event_time_ms = max(self._last_event_time_ms or 0, int(update.event.event_time_ms))
+            if self._store is not None:
+                self._store.save_user_stream_projection(
+                    self.fact_snapshot(),
+                    last_sequence=self._sequencer.last_sequence,
+                )
+                self._store.mark_user_stream_event_applied(event_id)
+            self._applied_event_ids.add(event_id)
+            self._accepted_events_since_replay += 1
+        except (InvalidOperation, TypeError, ValueError, RuntimeError) as exc:
+            return self._freeze(f"account user-stream projection failed for {event_id}: {type(exc).__name__}: {exc}")
         return UserProjectionResult(UserProjectionStatus.ACCEPTED, event_id, observation=observation)
 
     def _apply_order_update(self, update: UserOrderUpdate) -> None:
@@ -191,18 +331,30 @@ class UserStreamProjector:
             if self._last_event_time_ms is not None
             else datetime.now(timezone.utc)
         )
+        balance = self._balances.get("USDT", MonetaryValue(amount="0", currency="USDT"))
+        complete = (
+            self._replay_baseline_verified
+            and self._accepted_events_since_replay > 0
+            and "USDT" in self._balances
+        )
+        source = (
+            "BINANCE_USER_STREAM_REPLAY_BASELINE+ACCOUNT_UPDATES"
+            if complete
+            else "BINANCE_USER_STREAM_ORDER_EVENTS_OR_UNVERIFIED"
+        )
         return AccountFactSnapshot(
             account_id=self._account_id,
             venue_id=self._venue_id,
-            # Order events do not prove wallet balance.  Zero is a placeholder
-            # with complete=False, never an account balance assertion.
-            balance=MonetaryValue(amount="0", currency="USDT"),
+            balance=balance,
             positions={symbol: Quantity(amount=_decimal_text(amount)) for symbol, amount in self._positions.items()},
             open_orders=sorted(self._open_orders),
             timestamp=timestamp,
-            source="BINANCE_USER_STREAM_ORDER_EVENTS",
-            fact_version=f"user-stream-v1/sequence:{self._sequencer.last_sequence}",
-            complete=False,
+            source=source,
+            fact_version=(
+                f"user-stream-v2/replay:{self._replay_evidence_hash}/approval:{self._replay_approval_id}/"
+                f"sequence:{self._sequencer.last_sequence}"
+            ),
+            complete=complete,
         )
 
 

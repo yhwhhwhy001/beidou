@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,7 +21,10 @@ from beidou_exchange.core.protocol import (
     ExchangeInfo,
     OrderRequest,
     OrderResponse,
+    UserAccountUpdate,
+    UserBalanceUpdate,
     UserOrderUpdate,
+    UserPositionUpdate,
     UserStreamEvent,
 )
 from beidou_shared.errors import ErrorCategory
@@ -622,11 +627,15 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_user_stream_adapter",
             )
         execution = raw.get("o") if isinstance(raw.get("o"), dict) else raw
-        event_id = (
-            f"{event_type}:{execution.get('i')}:{execution.get('I')}"
-            if execution.get("i") is not None and execution.get("I") is not None
-            else f"{event_type}:{event_time_ms}"
-        )
+        if execution.get("i") is not None and execution.get("I") is not None:
+            event_id = f"{event_type}:{execution.get('i')}:{execution.get('I')}"
+        else:
+            # Binance account events do not expose a unique id.  Event time
+            # alone can collide within one millisecond, so retain a stable
+            # content digest while keeping exact replay idempotent.
+            canonical = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+            event_id = f"{event_type}:{event_time_ms}:{digest}"
         return Result.success(
             UserStreamEvent(
                 event_type=event_type,
@@ -701,6 +710,106 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         except (TypeError, ValueError, InvalidOperation) as exc:
             return Result.failure(
                 f"User order update invalid: {exc}",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        return Result.success(update, source="binance_user_stream_adapter")
+
+    @staticmethod
+    def parse_user_account_update(raw: Any) -> Result[UserAccountUpdate]:
+        """Parse Binance ``ACCOUNT_UPDATE`` without inventing a full snapshot."""
+
+        event_result = BinanceUsdmAdapter.parse_user_stream_event(raw)
+        if not event_result.is_success() or event_result.data is None:
+            return Result.failure(
+                "User account update has no valid event envelope",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        if event_result.data.event_type != "ACCOUNT_UPDATE" or not isinstance(raw, dict):
+            return Result.failure(
+                "Expected ACCOUNT_UPDATE envelope",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        account = raw.get("a")
+        if not isinstance(account, dict) or not isinstance(account.get("B"), list) or not isinstance(account.get("P"), list):
+            return Result.failure(
+                "User account update missing balance or position arrays",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+
+        def _number(value: Any, field_name: str) -> str:
+            if value in (None, ""):
+                raise ValueError(f"missing {field_name}")
+            parsed = Decimal(str(value))
+            if not parsed.is_finite():
+                raise ValueError(f"{field_name} must be finite")
+            return str(value)
+
+        try:
+            balances: list[UserBalanceUpdate] = []
+            for row in account["B"]:
+                if not isinstance(row, dict):
+                    raise ValueError("malformed balance row")
+                asset = str(row.get("a") or "").strip()
+                if not asset:
+                    raise ValueError("balance row missing asset")
+                wallet_balance = _number(row.get("wb"), "wallet balance")
+                cross_wallet_balance = _number(row.get("cw"), "cross wallet balance")
+                available = (
+                    MonetaryValue(amount=_number(row["ab"], "available balance"), currency=asset)
+                    if row.get("ab") not in (None, "")
+                    else None
+                )
+                balances.append(
+                    UserBalanceUpdate(
+                        asset=asset,
+                        wallet_balance=MonetaryValue(amount=wallet_balance, currency=asset),
+                        cross_wallet_balance=MonetaryValue(amount=cross_wallet_balance, currency=asset),
+                        available_balance=available,
+                    )
+                )
+
+            positions: list[UserPositionUpdate] = []
+            for row in account["P"]:
+                if not isinstance(row, dict):
+                    raise ValueError("malformed position row")
+                symbol = str(row.get("s") or "").strip()
+                if not symbol:
+                    raise ValueError("position row missing symbol")
+                position_amount = _number(row.get("pa"), "position amount")
+                entry_price = _number(row.get("ep"), "entry price")
+                break_even_price = _number(row.get("bep"), "break-even price")
+                unrealized_pnl = _number(row.get("up"), "unrealized pnl")
+                positions.append(
+                    UserPositionUpdate(
+                        symbol=InstrumentId(symbol),
+                        position_amount=Quantity(amount=position_amount),
+                        entry_price=Price(amount=entry_price),
+                        break_even_price=Price(amount=break_even_price),
+                        unrealized_pnl=MonetaryValue(amount=unrealized_pnl, currency="USDT"),
+                        margin_type=str(row.get("mt") or "UNKNOWN"),
+                        position_side=str(row.get("ps") or "UNKNOWN"),
+                    )
+                )
+            reason = str(account.get("m") or "UNKNOWN")
+            if reason == "UNKNOWN":
+                raise ValueError("account update missing reason")
+            update = UserAccountUpdate(
+                event=event_result.data,
+                reason=reason,
+                balances=tuple(balances),
+                positions=tuple(positions),
+            )
+        except (TypeError, ValueError, InvalidOperation) as exc:
+            return Result.failure(
+                f"User account update invalid: {exc}",
                 category=ErrorCategory.UNKNOWN,
                 raw=raw,
                 source="binance_user_stream_adapter",

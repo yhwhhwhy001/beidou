@@ -38,6 +38,8 @@ class UserStreamSequencer:
     def __init__(self) -> None:
         self._last_sequence: int | None = None
         self._status = UserStreamStatus.UNKNOWN
+        self._unsequenced_allowed = False
+        self._last_event_time_ms: int | None = None
 
     @property
     def last_sequence(self) -> int | None:
@@ -60,6 +62,19 @@ class UserStreamSequencer:
                 "explicit independent replay is required before accepting more events",
             )
         if event.sequence is None:
+            if self._unsequenced_allowed:
+                if self._last_event_time_ms is not None and event.event_time_ms <= self._last_event_time_ms:
+                    self._status = UserStreamStatus.DUPLICATE
+                    return UserStreamObservation(
+                        False,
+                        self._status,
+                        previous,
+                        None,
+                        "unsequenced event time is not greater than the last accepted event",
+                    )
+                self._last_event_time_ms = event.event_time_ms
+                self._status = UserStreamStatus.HEALTHY
+                return UserStreamObservation(True, self._status, previous, None)
             self._status = UserStreamStatus.SEQUENCE_UNAVAILABLE
             return UserStreamObservation(
                 accepted=False,
@@ -70,6 +85,7 @@ class UserStreamSequencer:
             )
         if previous is None:
             self._last_sequence = event.sequence
+            self._last_event_time_ms = event.event_time_ms
             self._status = UserStreamStatus.HEALTHY
             return UserStreamObservation(True, self._status, None, event.sequence)
         if event.sequence <= previous:
@@ -91,15 +107,28 @@ class UserStreamSequencer:
                 "event sequence gap; REST replay/reconciliation required",
             )
         self._last_sequence = event.sequence
+        self._last_event_time_ms = event.event_time_ms
         self._status = UserStreamStatus.HEALTHY
         return UserStreamObservation(True, self._status, previous, event.sequence)
 
-    def mark_replayed(self, last_sequence: int) -> None:
+    def mark_replayed(
+        self,
+        last_sequence: int | None,
+        *,
+        allow_unsequenced: bool = False,
+        last_event_time_ms: int | None = None,
+    ) -> None:
         """Advance state only after an independently verified replay."""
 
-        if last_sequence < 0:
+        if last_sequence is None and not allow_unsequenced:
+            raise ValueError("unsequenced replay must explicitly allow unsequenced events")
+        if last_sequence is not None and last_sequence < 0:
             raise ValueError("last_sequence must be non-negative")
         self._last_sequence = last_sequence
+        self._unsequenced_allowed = allow_unsequenced
+        if last_event_time_ms is not None and last_event_time_ms < 0:
+            raise ValueError("last_event_time_ms must be non-negative")
+        self._last_event_time_ms = last_event_time_ms
         self._status = UserStreamStatus.HEALTHY
 
     def restore(self, last_sequence: int) -> None:
@@ -108,6 +137,8 @@ class UserStreamSequencer:
         if last_sequence < 0:
             raise ValueError("last_sequence must be non-negative")
         self._last_sequence = last_sequence
+        self._unsequenced_allowed = False
+        self._last_event_time_ms = None
         self._status = UserStreamStatus.GAP
 
 

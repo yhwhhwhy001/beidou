@@ -3481,6 +3481,52 @@ class AutonomousEngine:
         )
         return False
 
+    def authorize_user_stream_replay(
+        self,
+        facts: AccountFactSnapshot,
+        *,
+        evidence_hash: str,
+        approval_id: str,
+        last_sequence: int | None = None,
+        allow_unsequenced: bool = False,
+    ) -> bool:
+        """Authorize a supplied, independently verified account replay baseline."""
+
+        projector = getattr(self, "_user_stream_projector", None)
+        if projector is None:
+            projector = UserStreamProjector(store=self._store)
+            self._user_stream_projector = projector
+        result = projector.authorize_replay_baseline(
+            facts,
+            evidence_hash=evidence_hash,
+            approval_id=approval_id,
+            last_sequence=last_sequence,
+            allow_unsequenced=allow_unsequenced,
+        )
+        if result.status is UserProjectionStatus.ACCEPTED:
+            self._event_stream_facts = projector.fact_snapshot()
+            self._recon.update_event_facts(self._event_stream_facts)
+            return True
+        self._record_execution_fact_failure(f"user-stream replay baseline blocked: {result.reason}")
+        return False
+
+    def ingest_user_account_update(self, update: Any) -> bool:
+        """Apply one adapter-validated ACCOUNT_UPDATE through the replay gate."""
+
+        projector = getattr(self, "_user_stream_projector", None)
+        if projector is None:
+            projector = UserStreamProjector(store=self._store)
+            self._user_stream_projector = projector
+        result = projector.ingest_account_update(update)
+        if result.status in {UserProjectionStatus.ACCEPTED, UserProjectionStatus.DUPLICATE}:
+            self._event_stream_facts = projector.fact_snapshot()
+            self._recon.update_event_facts(self._event_stream_facts)
+            return True
+        self._record_execution_fact_failure(
+            f"account user-stream event {result.event_id or '<unknown>'} blocked: {result.reason}"
+        )
+        return False
+
     def _build_system_reconciliation_facts(self) -> AccountFactSnapshot:
         """Build facts only from durable local projections.
 

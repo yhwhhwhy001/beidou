@@ -163,6 +163,44 @@ class UserOrderUpdate:
     realized_pnl: MonetaryValue | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class UserBalanceUpdate:
+    """One absolute wallet-balance row from ``ACCOUNT_UPDATE``."""
+
+    asset: str
+    wallet_balance: MonetaryValue
+    cross_wallet_balance: MonetaryValue
+    available_balance: MonetaryValue | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserPositionUpdate:
+    """One absolute position row from ``ACCOUNT_UPDATE``."""
+
+    symbol: InstrumentId
+    position_amount: Quantity
+    entry_price: Price
+    break_even_price: Price
+    unrealized_pnl: MonetaryValue
+    margin_type: str
+    position_side: str
+
+
+@dataclass(frozen=True, slots=True)
+class UserAccountUpdate:
+    """Normalized Binance account update.
+
+    Binance sends changed balance/position rows rather than a complete
+    account snapshot.  Completeness is therefore supplied only by an
+    explicit, independently verified replay baseline in the projector.
+    """
+
+    event: UserStreamEvent
+    reason: str
+    balances: tuple[UserBalanceUpdate, ...]
+    positions: tuple[UserPositionUpdate, ...]
+
+
 class ExchangeAdapter(ABC):
     """交易所适配器协议。
 
