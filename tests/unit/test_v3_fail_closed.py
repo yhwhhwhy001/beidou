@@ -79,6 +79,65 @@ def test_supervisor_write_interlock_requires_live_resume_authority(tmp_path: Pat
     assert calls == [("POST", "/order")]
 
 
+def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: Path) -> None:
+    """Typed order/protection helpers must share the REST authority gate."""
+
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    calls: list[tuple[str, str]] = []
+
+    async def adapter_request(
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del signed, params
+        calls.append((method, path))
+        return {"ok": True}
+
+    supervisor = BeidouSupervisor(project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090)
+    control = SimpleNamespace(get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"))
+    adapter = SimpleNamespace(request=adapter_request)
+    supervisor.engine = SimpleNamespace(
+        _can_write=True,
+        _api_async=lambda *args, **kwargs: None,
+        _api=lambda *args, **kwargs: None,
+        _control=control,
+        _adapter=adapter,
+    )
+    supervisor._install_exchange_write_interlock()
+
+    blocked = asyncio.run(adapter.request("POST", "/order", True, {"symbol": "BTCUSDT"}))
+    assert blocked.is_success() is False
+    assert calls == []
+
+    blocked_false_string = asyncio.run(adapter.request("POST", "/order", True, {"reduceOnly": "false"}))
+    assert blocked_false_string.is_success() is False
+    assert calls == []
+
+    # Exits remain available while NO_NEW_RISK is active.
+    allowed = asyncio.run(adapter.request("POST", "/order", True, {"reduceOnly": "true"}))
+    assert allowed == {"ok": True}
+    assert calls == [("POST", "/order")]
+
+
+def test_supervisor_has_no_transient_authority_bypass() -> None:
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    assert frozenset() == BeidouSupervisor._TRANSIENT_CHECK_IDS
+
+
+def test_startup_report_does_not_claim_pass_before_live_readiness() -> None:
+    from beidou_launcher.models import StartupReport
+
+    report = StartupReport("testnet", ["BTCUSDT"], 19090, "commit")
+    assert report.passed is False
+    report.trading_ready = True
+    report.supervisor_state = "RUNNING"
+    assert report.passed is True
+
+
 def test_health_server_defaults_to_loopback() -> None:
     assert HealthServer()._bind_host == "127.0.0.1"
 

@@ -245,9 +245,7 @@ class ControlPlaneAPI:
         if rec is None:
             return {"success": False, "error": f"factor {factor_id} not found"}
         try:
-            from beidou_research.factors.factor import FactorLifecycle
-
-            from beidou_research.factors.factor import FactorPromotionGate
+            from beidou_research.factors.factor import FactorLifecycle, FactorPromotionGate
 
             target = FactorLifecycle(target_state)
             decision = FactorPromotionGate(strict=True).promote(

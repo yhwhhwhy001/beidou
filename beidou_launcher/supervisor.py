@@ -134,11 +134,27 @@ class BeidouSupervisor:
                 "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}; authority_not_active",
             }
 
-        def write_allowed() -> bool:
+        def write_allowed(method: str, params: dict[str, Any] | None = None) -> bool:
             # 环境变量 _can_write 只是能力上限，不是运行时授权。
             # 只有监督器确认无阻断、控制面 RESUME 且本轮授权仍有效时才允许
-            # 触碰交易所写边界。P0/陈旧事实会立即使该判断为 False。
-            return bool(engine._can_write and self._is_trading_ready())
+            # 新风险写入；NO_NEW_RISK/EXIT_ONLY 仍允许显式撤单和
+            # reduce-only/closePosition 退出，避免安全门禁反而阻断平仓。
+            if not bool(engine._can_write):
+                return False
+            if self._is_trading_ready():
+                return True
+            method_upper = method.upper()
+            params = params or {}
+
+            def enabled(value: Any) -> bool:
+                if isinstance(value, bool):
+                    return value
+                return str(value).strip().lower() in {"1", "true", "yes"}
+
+            reducing = enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
+            return self._control_state() in {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN"} and (
+                method_upper == "DELETE" or reducing
+            )
 
         async def guarded_async(
             path: str,
@@ -146,7 +162,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed():
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                 return record(path, method)
             return await original_async(path, method=method, signed=signed, params=params)
 
@@ -156,12 +172,39 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed():
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
         engine._api_async = guarded_async
         engine._api = guarded_sync
+
+        # Engine 的部分保护/订单路径直接调用 typed adapter
+        # (create_order/create_algo_order/cancel_algo_order)，不会经过
+        # ``_api_async``。把同一互锁下沉到 adapter.request，确保不存在
+        # “REST 包装已拦截、typed adapter 仍可写”的第二条交易所写路径。
+        adapter = getattr(engine, "_adapter", None)
+        adapter_request = getattr(adapter, "request", None)
+        if adapter is not None and callable(adapter_request):
+            from beidou_exchange.core.error_taxonomy import Result
+            from beidou_shared.errors import ErrorCategory
+
+            async def guarded_adapter_request(
+                method: str,
+                path: str,
+                signed: bool = False,
+                params: dict[str, Any] | None = None,
+            ) -> Any:
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+                    record(path, method)
+                    return Result.failure(
+                        "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
+                        category=ErrorCategory.UNKNOWN,
+                        source="beidou_supervisor_interlock",
+                    )
+                return await adapter_request(method, path, signed=signed, params=params)
+
+            adapter.request = guarded_adapter_request
 
     def _install_resume_interlock(self) -> None:
         """在深度启动门禁通过前阻止引擎内部自动 RESUME。"""
@@ -718,12 +761,15 @@ class BeidouSupervisor:
             checks = self._merge_monitoring_checks(checks)
             self._last_monitor_loop_ts = time.monotonic()
 
-            if not any(item.is_blocking for item in checks) and self._resume_authorized:
+            if (
+                not any(item.is_blocking for item in checks)
+                and self._resume_authorized
+                and await self._recover_if_validated(checks)
+            ):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
                 # _fail_closed 后 _resume_authorized=False，不能由清洁窗口重置。
-                if await self._recover_if_validated(checks):
-                    checks = self._runtime_checks()
-                    checks = self._merge_monitoring_checks(checks)
+                checks = self._runtime_checks()
+                checks = self._merge_monitoring_checks(checks)
 
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)

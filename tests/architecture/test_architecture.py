@@ -174,7 +174,7 @@ def test_no_hardcoded_secrets_or_production_defaults() -> None:
             continue
         try:
             content = pyfile.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeError):
             continue
 
         for pattern in forbidden_patterns:
@@ -286,7 +286,7 @@ def test_only_adapter_accesses_binance_api() -> None:
 
         try:
             content = pyfile.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeError):
             continue
 
         for pattern in BINANCE_API_PATTERNS:

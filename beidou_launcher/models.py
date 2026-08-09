@@ -65,7 +65,11 @@ class StartupReport:
 
     @property
     def passed(self) -> bool:
-        return not self.blockers
+        # An empty check list during PREFLIGHT/ENGINE_STARTING is not a
+        # successful run.  ``passed`` is a certificate field, so it requires
+        # the same live authority conditions as readiness rather than merely
+        # absence of currently collected blockers.
+        return self.trading_ready and self.supervisor_state == "RUNNING" and not self.blockers
 
     def replace_phase_checks(self, phase_prefix: str, checks: list[CheckResult]) -> None:
         self.checks = [item for item in self.checks if not item.check_id.startswith(phase_prefix)] + checks

@@ -633,8 +633,7 @@ class FactorRegistry:
         # FactorPromotionGate 生成并记录 approved PromotionDecision 后，
         # 这里才允许返回成功；兼容调用没有证据参数，必须 fail closed。
         if not any(
-            decision.approved and decision.to_state == FactorLifecycle.ACTIVE
-            for decision in record.promotion_history
+            decision.approved and decision.to_state == FactorLifecycle.ACTIVE for decision in record.promotion_history
         ):
             return False
         return record.lifecycle == FactorLifecycle.ACTIVE

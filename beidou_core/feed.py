@@ -1,6 +1,6 @@
-"""行情数据源 — BD-T03: 所有网络调用通过 BinanceRESTClient (Adapter 内部传输)。
+"""行情数据源 — BD-T03: 所有网络调用通过 BinanceRESTClient 适配器传输。
 
-禁止直接使用 urllib/httpx/aiohttp，禁止硬编码 /fapi/ 端点。
+禁止建立绕过适配器的底层 HTTP 连接，也禁止硬编码交易所端点。
 """
 
 from __future__ import annotations
@@ -211,10 +211,7 @@ class MarketDataFeed:
         return self._unwrap_result(result)
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """BD-T03: 异步 API 调用 — 直接通过 BinanceRESTClient.request()。
-
-        不再使用 urllib — 所有 HTTP 调用通过 Adapter 传输层。
-        """
+        """BD-T03: 异步 API 调用统一通过 BinanceRESTClient.request()。"""
         result = await self._client.request(method, path, signed=signed, params=params or {})
         return self._unwrap_result(result)
 
