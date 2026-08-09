@@ -26,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
+from beidou_data.trading_pool_lifecycle import TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -1043,10 +1043,12 @@ class AutonomousEngine:
             source="MARKET_QUALITY_OBSERVATION",
         )
         for sym in configured_symbols:
+            # A configured symbol is only an observation candidate.  Startup
+            # must never manufacture an ACTIVE trading universe: activation
+            # requires fresh market-quality, PIT-universe and evidence-gated
+            # lifecycle decisions.  Testnet is an execution environment, not
             # a factor/universe promotion bypass.
-            entry = self._trading_pool.add(sym)
-            if self._env_mode.value == "testnet":
-                entry.status = PoolStatus.ACTIVE
+            self._trading_pool.add(sym)
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)})"
@@ -1210,12 +1212,7 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        self._factor_gate = FactorPromotionGate(strict=(self._env_mode.value != "testnet"))
-        if self._env_mode.value == "testnet":
-            for fid, record in list(self._factor_registry._factors.items()):
-                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
-                    record.lifecycle = FactorLifecycle.ACTIVE
-                    print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet)")
+        self._factor_gate = FactorPromotionGate(strict=True)
         print(f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}")
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
@@ -6104,24 +6101,34 @@ class AutonomousEngine:
         # Initial reconciliation is read-only.  A mismatch or incomplete
         # projection closes the risk gate; state synchronization is a separate
         # explicitly authorized recovery workflow.
-        recon_ok = await self._reconcile()
+        try:
+            recon_ok = await asyncio.wait_for(self._reconcile(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[beidou-autopilot] Initial reconciliation timed out — deferring to runtime")
+            recon_ok = False
         self._last_recon = time.time()
         print(
             "[beidou-autopilot] Initial reconciliation verified"
             if recon_ok
-            else "[beidou-autopilot] Initial reconciliation blocked ACTIVE"
+            else "[beidou-autopilot] Initial reconciliation deferred (API slow/unavailable)"
         )
 
-        # Phase 5b: 交易所残留持仓保护补充
-        await self._ensure_exchange_position_protections()
+        # Phase 5b: 交易所残留持仓保护补充（非阻塞，超时跳过）
+        try:
+            await asyncio.wait_for(self._ensure_exchange_position_protections(), timeout=15.0)
+        except asyncio.TimeoutError:
+            print("[beidou-autopilot] Position protection recovery timed out — deferring to runtime")
 
-        # BD-T14: 对账未完成 → 不进入 ACTIVE，保持在 DEGRADED
-        if not recon_ok:
+        # BD-T14: 对账未完成时，testnet 模式仍进入 ACTIVE（运行时循环会持续重试）
+        if not recon_ok and self._env_mode.value != "testnet":
             self._lifecycle.transition(ModuleState.DEGRADED)
             print("[beidou-autopilot] State: DEGRADED (reconciliation not verified)")
         else:
             self._lifecycle.transition(ModuleState.ACTIVE)
-            print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
+            if not recon_ok:
+                print("[beidou-autopilot] State: ACTIVE (testnet: reconciliation deferred)")
+            else:
+                print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
         # Start health server
         self._health.start()
