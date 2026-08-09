@@ -16,6 +16,7 @@
 - 保持 Mainnet 禁止；Testnet HOLD。
 - 对当前实例先保存本地 DB/WAL、日志、supervisor state、Git SHA；需要交易所快照或停机时单独取得授权。
 - 任何 P0 都持久化 `NO_NEW_RISK`，不把 `/health`、`/ready` 或历史证书当作交易所事实。
+- 当前只读审计已确认旧实例仍在运行且存在陈旧心跳/卡死订单；在确认订单归属与保护前，不执行现有 stop/restart，也不让 KeepAlive 自动拉起新实例。
 
 ### P1：唯一事实链
 

@@ -57,7 +57,7 @@ beidou stop
 
 ## 健康与证据
 
-- `/ready`：引擎和监督器均处于 RUNNING。
+- `/ready`：监督器已授权、无当前 P0/P1 blocker、控制面与新鲜事实满足 readiness；进程 RUNNING 或 HTTP 200 本身不构成 ready。
 - `/trading-ready`：全部深度证据通过且控制面为 RESUME。
 - `/status`：包含监督器阶段、阻断项和检查结果。
 - `.beidou/supervisor-state.json`：当前原子状态。

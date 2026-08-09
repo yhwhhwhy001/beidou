@@ -45,7 +45,7 @@ blockers:
   - id: K01
     severity: P0
     status: OPEN
-    statement: "当前运行实例曾在 P0 blocker 下保持 RESUME/READY 语义；需重新采样并安全停机。"
+    statement: "2026-08-09T04:47Z 只读采样显示 PID 42213 仍运行旧 SHA 52cd555；监督状态 RUNNING 但 trading_ready=false/passed=false，实时心跳陈旧约 1316 秒，存在两个 INTENT_CREATED 卡死订单。不得把本地新提交视为已在线；需授权取证后安全停机。"
   - id: K02
     severity: P0
     status: OPEN
@@ -67,7 +67,7 @@ blockers:
     status: OPEN
     statement: "当前提交的项目级 Ruff lint/format、CI 包范围 mypy、compileall、全量回归均通过；远端 CI、数据库恢复、混沌门和实机运行态仍未验证。"
 residual_risks:
-  - "当前 Mac LaunchAgent 尚未按 V3 目标重构，运行实例仍未重启或安全停机；最新提交 5488e4c 尚未被证明已在线。"
+  - "当前 Mac LaunchAgent 仍通过 zsh/eval 注入用户 shell 环境并使用 KeepAlive=true；运行实例仍未安全停机，最新提交 5488e4c 尚未被证明已在线。"
   - "本地 SQLite 备份不是外部对象存储/PITR；备份密钥托管、异机恢复演练和 Python 3.12 固定运行时尚未提供。"
   - "未执行真实 Testnet 读快照或停机，本文不证明交易所账户状态；用户流 projector 仅有本地注入测试。"
 next_authorized_action: "先把 PostgreSQL schema 接入真实事务存储并完成异机加密备份/PITR 演练，补齐完整账户余额 user-stream 与独立 replay/gap-fill、Algo owner 治理恢复；再经单独授权获取交易所只读快照、处置当前实例并从零重跑真实 G5/G7；不得启动 Mainnet。"
