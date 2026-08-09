@@ -126,6 +126,30 @@ class KLineGenerator:
         self._current[key] = current
         return completed
 
+    def update(
+        self,
+        price: float,
+        volume: float,
+        timestamp: datetime,
+        symbol: str = "",
+        venue_id: str = "BINANCE_USDM",
+        is_taker_buy: bool = False,
+    ) -> OHLCV | None:
+        """Convenience wrapper — accept raw floats, delegate to process_tick."""
+        from beidou_shared.types import VenueId, InstrumentId
+
+        vi = VenueInstrument(
+            venue_id=VenueId(venue_id),
+            instrument_id=InstrumentId(symbol.upper() if symbol else "UNKNOWN"),
+        )
+        return self.process_tick(
+            venue_instrument=vi,
+            price=Price(amount=str(price)),
+            quantity=Quantity(amount=str(volume)),
+            timestamp=timestamp,
+            is_taker_buy=is_taker_buy,
+        )
+
     def get_klines(self, venue_instrument: VenueInstrument) -> list[OHLCV]:
         key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
         return self._klines.get(key, [])
