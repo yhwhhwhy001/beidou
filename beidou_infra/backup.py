@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,7 +87,7 @@ class SQLiteBackupManager:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
         try:
-            with sqlite3.connect(str(source)) as source_conn:
+            with closing(sqlite3.connect(str(source))) as source_conn, source_conn:
                 with tempfile.NamedTemporaryFile(
                     dir=str(destination.parent),
                     prefix=f".{destination.name}.",
@@ -94,7 +95,7 @@ class SQLiteBackupManager:
                     delete=False,
                 ) as temporary:
                     temporary_path = Path(temporary.name)
-                with sqlite3.connect(str(temporary_path)) as backup_conn:
+                with closing(sqlite3.connect(str(temporary_path))) as backup_conn, backup_conn:
                     source_conn.backup(backup_conn)
                     backup_conn.commit()
             os.replace(temporary_path, destination)
@@ -124,7 +125,7 @@ class SQLiteBackupManager:
         foreign_keys_ok = False
         try:
             uri = f"file:{quote(str(backup), safe='/')}?mode=ro"
-            with sqlite3.connect(uri, uri=True) as conn:
+            with closing(sqlite3.connect(uri, uri=True)) as conn, conn:
                 integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
                 integrity_ok = integrity == "ok"
                 if not integrity_ok:

@@ -138,6 +138,35 @@ def test_startup_report_does_not_claim_pass_before_live_readiness() -> None:
     assert report.passed is True
 
 
+def test_readiness_requires_running_supervisor_state() -> None:
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    supervisor = BeidouSupervisor(project_root=Path("."), mode="testnet", symbols=["BTCUSDT"], port=19090)
+    supervisor._resume_authorized = True
+    supervisor.engine = SimpleNamespace(_control=SimpleNamespace(get_status=lambda: SimpleNamespace(value="RESUME")))
+    supervisor.report.supervisor_state = "STARTING"
+    assert supervisor._is_trading_ready() is False
+    supervisor.report.supervisor_state = "RUNNING"
+    assert supervisor._is_trading_ready() is True
+
+
+def test_configured_trading_pool_entries_are_not_active_without_evidence() -> None:
+    import inspect
+
+    from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
+
+    pool = TradingPool()
+    entry = pool.add("BTCUSDT")
+    assert entry.status is PoolStatus.OBSERVING
+    assert pool.active_count() == 0
+    assert pool.is_tradable("BTCUSDT") is False
+    # Guard the startup seam as well: Testnet must not reintroduce the old
+    # direct ACTIVE/bootstrap assignment after the lifecycle unit test passes.
+    source = inspect.getsource(AutonomousEngine.__init__)
+    assert "entry.status = PoolStatus.ACTIVE" not in source
+    assert "Bootstrap:" not in source
+
+
 def test_health_server_defaults_to_loopback() -> None:
     assert HealthServer()._bind_host == "127.0.0.1"
 

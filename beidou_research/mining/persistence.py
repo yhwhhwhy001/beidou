@@ -234,7 +234,7 @@ class SQLiteFactorStore:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS factor_versions (
                     factor_id TEXT NOT NULL, version TEXT NOT NULL,
@@ -262,7 +262,7 @@ class SQLiteFactorStore:
         try:
             data_json = json.dumps(data, sort_keys=True, default=str)
             artifact_hash = hashlib.sha256(data_json.encode()).hexdigest()[:16]
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute(
                     """INSERT OR REPLACE INTO factor_versions
                        (factor_id, version, data_json, created_at, artifact_hash)
@@ -276,7 +276,7 @@ class SQLiteFactorStore:
 
     def get_factor_version(self, factor_id: str, version: str) -> dict | None:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
                 row = conn.execute(
                     "SELECT data_json FROM factor_versions WHERE factor_id=? AND version=?",
                     (factor_id, version),
@@ -289,7 +289,7 @@ class SQLiteFactorStore:
 
     def list_versions(self, factor_id: str) -> list[str]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
                 rows = conn.execute(
                     "SELECT version FROM factor_versions WHERE factor_id=? ORDER BY version",
                     (factor_id,),
@@ -300,7 +300,7 @@ class SQLiteFactorStore:
 
     def save_gate_decision(self, factor_id: str, decision: dict) -> bool:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
                 conn.execute(
                     """INSERT INTO gate_decisions
                        (factor_id, from_state, to_state, evidence_bundle_hash,
@@ -324,7 +324,7 @@ class SQLiteFactorStore:
 
     def get_gate_history(self, factor_id: str) -> list[dict]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn, conn:
                 rows = conn.execute(
                     """SELECT from_state, to_state, evidence_bundle_hash,
                               decision, reason, operator, decided_at

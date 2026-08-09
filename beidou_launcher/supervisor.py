@@ -237,7 +237,11 @@ class BeidouSupervisor:
             self._resume_authorized
             and not self.report.blockers
             and self._control_state() == "RESUME"
-            and self.report.supervisor_state not in {"FAILED", "LOCKED", "STOPPED"}
+            # Readiness is a runtime certificate, not merely a control-plane
+            # action.  A stale/partially-started report must not advertise
+            # trading while the supervisor is still STARTING, PAUSED or
+            # DEGRADED.
+            and self.report.supervisor_state == "RUNNING"
         )
 
     def _install_health_callbacks(self) -> None:
