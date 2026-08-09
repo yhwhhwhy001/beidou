@@ -22,9 +22,9 @@ BD-P1-12:
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -57,6 +57,8 @@ from .evaluation.stability import StabilityEvaluator
 from .evidence import EvidenceBundle
 from .label_builder import LabelBuilder, PricePoint
 from .persistence import JSONFileFactorStore
+
+logger = logging.getLogger(__name__)
 
 # ================================================================
 # 流水线配置
@@ -600,8 +602,8 @@ class MiningRunner:
                             "2.0.0",
                             bundle.to_dict(),
                         )
-                except Exception:
-                    pass  # 残差化失败不影响主流程
+                except Exception as exc:
+                    logger.warning("residual factor evaluation failed; candidate omitted: %s", type(exc).__name__)
 
         # ================================================================
         # Phase 5: 多因子汇总
@@ -769,8 +771,8 @@ class MiningRunner:
             with open("config/factor_mining_policy.yaml") as f:
                 policy = yaml.safe_load(f)
             gen_cfg = policy.get("generation", {})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("factor mining policy unavailable; using fail-safe defaults: %s", type(exc).__name__)
 
         template_cfg = gen_cfg.get("template_grid", {})
         primitives = template_cfg.get("primitives", ["close", "log_return", "volume", "rsi", "spread"])
@@ -831,12 +833,14 @@ class MiningRunner:
 
         try:
             expr = self._registry.parse(expr_str)
-        except Exception:
+        except Exception as exc:
+            logger.warning("factor expression parse failed; candidate rejected: %s", type(exc).__name__)
             return []
 
         try:
             values = expr.evaluate_series(self._feature_dict)
-        except Exception:
+        except Exception as exc:
+            logger.warning("factor expression evaluation failed; candidate rejected: %s", type(exc).__name__)
             return []
 
         return values
@@ -849,8 +853,10 @@ class MiningRunner:
         total: int,
     ) -> None:
         if callback:
-            with contextlib.suppress(Exception):
+            try:
                 callback(stage, current, total)
+            except Exception as exc:
+                logger.warning("mining progress callback failed: %s", type(exc).__name__)
 
 
 # ================================================================

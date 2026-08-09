@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
 from beidou_shared.types import GateResult
+
+logger = logging.getLogger(__name__)
 
 
 class LadderLevel(str, Enum):
@@ -30,8 +33,8 @@ def _load_capital_limits() -> dict[LadderLevel, float]:
         limits = settings.capital_ladder.capital_limits
         if limits:
             return {LadderLevel(k): float(v) for k, v in limits.items() if k in LadderLevel.__members__}
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("capital limits config unavailable; using fail-safe defaults: %s", type(exc).__name__)
     # 默认值（与 YAML production_ladder.capital_limits 保持一致）
     return {
         LadderLevel.L0_PAPER: 0.0,

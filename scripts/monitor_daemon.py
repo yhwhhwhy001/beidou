@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import signal
 import sys
@@ -34,6 +35,7 @@ PID_FILE = PROJECT_ROOT / ".beidou" / "monitor_daemon.pid"
 FREQ_FILE = PROJECT_ROOT / ".beidou" / "monitor_freq.json"
 DAEMON_LOG = PROJECT_ROOT / ".beidou" / "monitor_daemon.jsonl"
 HEALTH_URL = os.environ.get("BEIDOU_HEALTH_URL", "http://localhost:9090/health")
+logger = logging.getLogger("beidou.monitor_daemon")
 
 
 def load_supervisor_state() -> dict | None:
@@ -42,7 +44,8 @@ def load_supervisor_state() -> dict | None:
     try:
         with open(STATE_FILE) as f:
             return json.load(f)
-    except Exception:
+    except Exception as exc:
+        logger.warning("supervisor state could not be read: %s", type(exc).__name__)
         return None
 
 
@@ -54,8 +57,8 @@ def persist_result(result: dict) -> None:
             fh.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("monitor result persistence failed: %s", type(exc).__name__)
 
 
 def send_alert_if_critical(result: dict) -> None:
@@ -76,8 +79,8 @@ def send_alert_if_critical(result: dict) -> None:
             description=f"Failed checks: {failed_checks}",
             category="monitor_daemon",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("critical alert dispatch failed: %s", type(exc).__name__)
 
 
 def cross_validate_health(health_data: dict | None, state: dict | None) -> dict[str, str]:
@@ -119,8 +122,8 @@ def run_checks_v12() -> dict:
 
         resp = urllib.request.urlopen(HEALTH_URL, timeout=5)
         health_data = json.loads(resp.read())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("health endpoint unavailable: %s", type(exc).__name__)
 
     cross_issues = cross_validate_health(health_data, state)
 
@@ -128,7 +131,7 @@ def run_checks_v12() -> dict:
 
     if state and state.get("checks"):
         for c in state["checks"]:
-            with contextlib.suppress(Exception):
+            try:
                 results.append(
                     MonitoringCheckResult(
                         check_id=c.get("check_id", "unknown"),
@@ -136,6 +139,16 @@ def run_checks_v12() -> dict:
                         severity=CheckSeverity(c.get("severity", "P2")),
                         message=c.get("message", ""),
                         evidence_hash=c.get("evidence_hash", ""),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("invalid supervisor check evidence: %s", type(exc).__name__)
+                results.append(
+                    MonitoringCheckResult(
+                        check_id="monitor_daemon.state_parse",
+                        status=CheckStatus.FAIL,
+                        severity=CheckSeverity.P1,
+                        message=f"INVALID_SUPERVISOR_CHECK:{type(exc).__name__}",
                     )
                 )
 

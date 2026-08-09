@@ -270,8 +270,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         if float(bal) > 0:
                             balances[asset] = MonetaryValue(amount=bal)
                     return ResultStatus.SUCCESS, balances
-            except Exception:
-                pass
+            except Exception as exc:
+                self._health_monitor.record_error(Endpoint.BALANCE, type(exc).__name__)
+                logger.warning("balance query failed; returning UNKNOWN: %s", type(exc).__name__)
         return ResultStatus.UNKNOWN, {}
 
     async def get_positions(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, Quantity]]:
@@ -291,8 +292,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         if abs(amt) > 0:
                             positions[p["symbol"]] = Quantity(amount=str(abs(amt)))
                     return ResultStatus.SUCCESS, positions
-            except Exception:
-                pass
+            except Exception as exc:
+                self._health_monitor.record_error(Endpoint.ACCOUNT, type(exc).__name__)
+                logger.warning("position query failed; returning UNKNOWN: %s", type(exc).__name__)
         return ResultStatus.UNKNOWN, {}
 
     async def create_order(self, request: OrderRequest) -> OrderResponse:
@@ -374,8 +376,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         correlation_id=request.correlation_id,
                         raw_response=result,
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._health_monitor.record_error(Endpoint.ORDER, type(exc).__name__)
+                logger.warning("order submission failed; returning UNKNOWN: %s", type(exc).__name__)
         return OrderResponse(
             venue_instrument=request.venue_instrument,
             account_ref=request.account_ref,

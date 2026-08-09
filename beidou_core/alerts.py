@@ -5,8 +5,8 @@ P0 (CRITICAL/LOCKDOWN) 永不抑制，立即发送。
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 import threading
 import urllib.request
 from collections.abc import Callable
@@ -20,6 +20,8 @@ from beidou_observability.telemetry import (
     Incident,
 )
 from beidou_reporting.engine import ReportGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class AlertDispatcher:
@@ -86,7 +88,7 @@ class AlertDispatcher:
             self._send_webhook(incident)
 
         # 生成事故报告
-        with contextlib.suppress(Exception):
+        try:
             self._report_generator.generate_incident_report(
                 incident_id=incident.incident_id,
                 title=incident.title,
@@ -95,6 +97,8 @@ class AlertDispatcher:
                 detected_at=incident.detected_at,
                 auto_action=incident.auto_action.value,
             )
+        except Exception as exc:
+            logger.error("incident report generation failed for %s: %s", incident.incident_id, type(exc).__name__)
 
     def _write_to_file(self, incident: Incident) -> None:
         record = {
@@ -119,8 +123,10 @@ class AlertDispatcher:
         # 追加持仓
         portfolio = ""
         if self._portfolio_provider:
-            with contextlib.suppress(Exception):
+            try:
                 portfolio = self._portfolio_provider()
+            except Exception as exc:
+                logger.warning("portfolio provider failed for alert %s: %s", incident.incident_id, type(exc).__name__)
 
         try:
             if "open.feishu.cn" in url or "open.larksuite.com" in url:
@@ -181,8 +187,8 @@ class AlertDispatcher:
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("webhook delivery failed for alert %s: %s", incident.incident_id, type(exc).__name__)
 
     def resolve_incident(self, incident_id: str) -> None:
         with self._lock:
