@@ -42,19 +42,40 @@ def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None
         result["errors"].append("No .up.sql migration files found")
         return result
 
+    try:
+        import psycopg
+
+        with psycopg.connect(db_url) as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS schema_migrations (
+                   version VARCHAR(255) PRIMARY KEY,
+                   checksum VARCHAR(64) NOT NULL,
+                   applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                   description TEXT
+                )"""
+            )
+            conn.commit()
+    except Exception as exc:
+        result["errors"].append(f"schema_migrations bootstrap: {type(exc).__name__}: {exc}")
+        return result
+
     for sql_file in up_files:
         checksum = compute_checksum(str(sql_file))
 
         try:
-            import psycopg
-
             with psycopg.connect(db_url) as conn, conn.cursor() as cur:
                 # 检查是否已执行
                 cur.execute(
-                    "SELECT 1 FROM schema_migrations WHERE version = %s",
+                    "SELECT checksum FROM schema_migrations WHERE version = %s",
                     (sql_file.stem,),
                 )
-                if cur.fetchone():
+                existing = cur.fetchone()
+                if existing and str(existing[0]) != checksum:
+                    result["errors"].append(
+                        f"{sql_file.name}: checksum mismatch for applied migration {sql_file.stem}"
+                    )
+                    break
+                if existing:
                     result["skipped"].append(str(sql_file.name))
                     continue
 
