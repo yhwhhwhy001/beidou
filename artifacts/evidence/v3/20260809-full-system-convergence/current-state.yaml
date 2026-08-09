@@ -2,10 +2,10 @@ schema_version: "1.0"
 run_id: 2026-08-09-full-system-convergence
 project:
   path: /Users/maguannan/beidou
-  version: b6b6f526f90448a6bf063ad7283d36e52f93e5bf
+  version: a93c1cb3d84507b0a3f1f7fbf717fa3ed407a026
   branch: codex/full-system-convergence-v3
   environment: local
-  code_commit_message: "fix: harden execution facts and algo event contracts"
+  code_commit_message: "fix: fail closed on unsupported state backend"
 authority:
   code_changes: true
   git_remote: false
@@ -34,10 +34,10 @@ gates:
   G1: {progress: COMPLETE, decision: APPROVED, evidence: [00-context.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
   G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "旧事实链仍未收敛", updated_at: 2026-08-09T02:15:41Z}
   G3: {progress: COMPLETE, decision: READY, evidence: [docs/optimization/v3/01_FAIL_CLOSED.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
-  G4: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [docs/optimization/v3/03_EXECUTION_FACT_CHAIN.md, 06-implementation-log.md], reason: "本地对账/保护/成交状态机/typed Algo 库存事实链已验证；PostgreSQL/完整 user-stream 恢复合同未完成", updated_at: 2026-08-09T03:56:16Z}
+  G4: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [docs/optimization/v3/03_EXECUTION_FACT_CHAIN.md, 06-implementation-log.md], reason: "本地对账/保护/成交状态机/typed Algo 库存事实链已验证；PostgreSQL/完整 user-stream 恢复合同未完成", updated_at: 2026-08-09T03:59:16Z}
   G5: {progress: BLOCKED, decision: UNRESOLVED, evidence: [domain-trading-readiness.md], reason: "运行时 P0 与事实链缺陷未关闭", updated_at: 2026-08-09T02:15:41Z}
   G6: {progress: BLOCKED, decision: FAIL, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "独立红队 P0 未关闭", updated_at: 2026-08-09T02:15:41Z}
-  G7: {progress: IN_PROGRESS, decision: null, evidence: [docs/optimization/v3/04_RESEARCH_GATE.md, 06-implementation-log.md], reason: "本地回归通过；真实 G5/G7 未执行，旧窗口 NOT_VERIFIABLE", updated_at: 2026-08-09T03:56:16Z}
+  G7: {progress: IN_PROGRESS, decision: null, evidence: [docs/optimization/v3/04_RESEARCH_GATE.md, 06-implementation-log.md], reason: "本地回归通过；真实 G5/G7 未执行，旧窗口 NOT_VERIFIABLE", updated_at: 2026-08-09T03:59:16Z}
   G8: {progress: BLOCKED, decision: null, evidence: [], reason: "尚无完整验收", updated_at: 2026-08-09T02:15:41Z}
   G9: {progress: BLOCKED, decision: null, evidence: [], reason: "未达到发布条件", updated_at: 2026-08-09T02:15:41Z}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "未授权生产/无人值守运行", updated_at: 2026-08-09T02:15:41Z}
