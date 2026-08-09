@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 
 from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, VenueId
@@ -216,8 +217,22 @@ class ReconciliationEngine:
 
         # 余额比较：金额允许一个极小 Decimal→float 表示误差，但不允许
         # 通过大容差掩盖真实权益差异。
-        bal_diff = abs(float(system_facts.balance.amount) - float(exchange_facts.balance.amount))
-        if bal_diff > 0.5:
+        try:
+            system_balance = Decimal(str(system_facts.balance.amount))
+            exchange_balance = Decimal(str(exchange_facts.balance.amount))
+            if not system_balance.is_finite() or not exchange_balance.is_finite():
+                raise InvalidOperation("balance is not finite")
+            bal_diff = abs(system_balance - exchange_balance)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ERROR,
+                differences=[f"INVALID_BALANCE_FACT: {type(exc).__name__}"],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+        if bal_diff > Decimal("0.5"):
             diffs.append(
                 f"Balance mismatch: system={system_facts.balance.amount} "
                 f"exchange={exchange_facts.balance.amount}"
@@ -236,16 +251,32 @@ class ReconciliationEngine:
             if parts:
                 diffs.append("Open orders mismatch: " + "; ".join(parts))
 
-        def _position_map(facts: AccountFactSnapshot) -> dict[str, float]:
-            return {str(k): float(v.amount) for k, v in facts.positions.items()}
+        def _position_map(facts: AccountFactSnapshot) -> dict[str, Decimal]:
+            result: dict[str, Decimal] = {}
+            for key, value in facts.positions.items():
+                quantity = Decimal(str(value.amount))
+                if not quantity.is_finite():
+                    raise InvalidOperation(f"position {key} is not finite")
+                result[str(key)] = quantity
+            return result
 
-        sys_pos = _position_map(system_facts)
-        ex_pos = _position_map(exchange_facts)
+        try:
+            sys_pos = _position_map(system_facts)
+            ex_pos = _position_map(exchange_facts)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ERROR,
+                differences=[f"INVALID_POSITION_FACT: {type(exc).__name__}"],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
         symbols = sorted(set(sys_pos) | set(ex_pos))
         position_diffs = {
             symbol: (sys_pos.get(symbol, 0.0), ex_pos.get(symbol, 0.0))
             for symbol in symbols
-            if abs(sys_pos.get(symbol, 0.0) - ex_pos.get(symbol, 0.0)) > 1e-12
+            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > Decimal("1e-12")
         }
         if position_diffs:
             diffs.append(f"Position mismatch: {position_diffs}")

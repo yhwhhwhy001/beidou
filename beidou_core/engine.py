@@ -3536,8 +3536,14 @@ class AutonomousEngine:
             if not str(symbol):
                 opening_complete = False
                 continue
-            current = Decimal(str(positions.get(symbol, Quantity(amount="0")).amount))
-            delta = Decimal(str(fill.get("delta_qty", "0")))
+            try:
+                current = Decimal(str(positions.get(symbol, Quantity(amount="0")).amount))
+                delta = Decimal(str(fill.get("delta_qty", "0")))
+                if not current.is_finite() or not delta.is_finite() or delta < 0:
+                    raise InvalidOperation("fill quantity is not finite/non-negative")
+            except (InvalidOperation, TypeError, ValueError):
+                opening_complete = False
+                continue
             if str(fill.get("side", "")).upper() == "BUY":
                 current += delta
             elif str(fill.get("side", "")).upper() == "SELL":

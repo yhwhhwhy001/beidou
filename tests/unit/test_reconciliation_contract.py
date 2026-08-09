@@ -91,6 +91,20 @@ def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> Non
     assert stale.status is ReconciliationStatus.STALE
 
 
+def test_compare_rejects_non_finite_numeric_facts() -> None:
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    invalid_balance = _facts(timestamp=now, balance="NaN")
+    result = ReconciliationEngine.compare(invalid_balance, _facts(timestamp=now), now=now)
+    assert result.status is ReconciliationStatus.ERROR
+    assert "INVALID_BALANCE_FACT" in result.differences[0]
+
+    invalid_position = _facts(timestamp=now)
+    invalid_position.positions[InstrumentId("BTCUSDT")] = Quantity(amount="Infinity")
+    result = ReconciliationEngine.compare(invalid_position, _facts(timestamp=now), now=now)
+    assert result.status is ReconciliationStatus.ERROR
+    assert "INVALID_POSITION_FACT" in result.differences[0]
+
+
 def test_compare_does_not_collapse_long_and_short_positions() -> None:
     now = datetime.now(timezone.utc)
     long_facts = _facts(timestamp=now)
