@@ -466,7 +466,7 @@ class MarketDataFeed:
                 timestamp=datetime.now(timezone.utc),
             )
         except Exception as exc:
-            logger.warning("5m kline aggregation failed for %s: %s", symbol, type(exc).__name__)
+            logger.warning("5m kline aggregation failed for %s: %s: %s", symbol, type(exc).__name__, str(exc)[:120])
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
             self._last_error_time = time.monotonic()
 
