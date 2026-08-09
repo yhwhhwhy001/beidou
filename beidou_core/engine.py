@@ -924,14 +924,17 @@ class AutonomousEngine:
         database_url = self._settings.database.url
         if database_url.startswith("sqlite:///"):
             durable_db_path = database_url.removeprefix("sqlite:///")
+            self._state_backend_supported = bool(durable_db_path)
         else:
             # PostgreSQL is not yet wired into the transaction-outbox/store
-            # contract.  Keep a local durable path and leave the production
-            # gate blocked rather than silently falling back to memory.
+            # contract.  Keep a local diagnostic path, but explicitly mark the
+            # configured backend unsupported; readiness/trading gates must not
+            # mistake this local fallback for the configured production store.
             durable_db_path = ".beidou/state.db"
+            self._state_backend_supported = False
             print(
                 f"[state] WARNING: unsupported database URL {database_url!r}; "
-                f"using {durable_db_path!r} and keeping production gate blocked"
+                f"using {durable_db_path!r} for diagnostics; state backend is NOT READY"
             )
         self._store = PersistentStore.get_instance(durable_db_path)
         self._feed = MarketDataFeed(client=self._adapter)  # 行情也经过同一 Adapter 传输边界
@@ -1612,6 +1615,8 @@ class AutonomousEngine:
         return HealthState.HEALTHY
 
     def _check_ready(self) -> bool:
+        if not self._state_backend_supported:
+            return False
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
         if not self._feed.is_healthy():
@@ -1626,6 +1631,8 @@ class AutonomousEngine:
 
     def _check_trading_ready(self) -> tuple[bool, str]:
         if not self._check_ready():
+            if not self._state_backend_supported:
+                return False, "STATE_BACKEND_UNSUPPORTED"
             if self._control.get_status() != ControlAction.RESUME:
                 return False, f"CONTROL_{self._control.get_status().value}"
             if self._last_reconciliation_result is None:
@@ -1701,6 +1708,7 @@ class AutonomousEngine:
                 self._last_reconciliation_result is not None
                 and self._last_reconciliation_result.matched
             ),
+            "state_backend_supported": self._state_backend_supported,
             "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
             "active_orders": len(self._active_order_ids),
             "positions": self._protection.position_count(),
@@ -1718,6 +1726,7 @@ class AutonomousEngine:
             "control_action": self._control.get_status().value,
             "symbols": self._symbols,
             "mode": self._env_mode.value,
+            "state_backend_supported": self._state_backend_supported,
             "uptime_seconds": round(self._health.uptime_seconds(), 1),
             "last_realtime_tick": self._last_realtime,
             "last_nearline_tick": self._last_nearline,

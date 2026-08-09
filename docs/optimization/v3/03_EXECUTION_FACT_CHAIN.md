@@ -65,5 +65,6 @@ Algo/条件单的库存、创建和撤销已统一经过 typed Adapter：必须�
 
 1. 运行中的 Mac 实例曾出现心跳、卡死订单链和 READY 语义矛盾；本轮未重启、停机或读取交易所事实，不能把本地测试当作运行态修复。
 2. SQLite 只是本地 durable slice，不是 PostgreSQL/PITR 生产事实库；对账仍不是独立三方事实源。
+   配置为尚未接入的 PostgreSQL/其他后端时，运行时只保留诊断 SQLite，不再把它报告为 READY；`/ready` 和 `/trading-ready` 返回 `STATE_BACKEND_UNSUPPORTED`。
 3. owner/session/generation 字段、ACK 后 ACTIVE、typed Algo 字段回读和未归属条件单冻结已接入，但还没有完整 venue user-stream 事件应用、跨进程恢复和治理恢复验收。
 4. 真实 G5 16 场景和全新真实 30 日 G7 尚未执行；旧证书不可继承。

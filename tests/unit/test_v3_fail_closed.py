@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from beidou_core.engine import AutonomousEngine
 from beidou_core.health import HealthServer
 from beidou_launcher.g7_tracker import G7LiveTracker
 from beidou_launcher.models import CheckSeverity, CheckStatus
@@ -116,3 +117,10 @@ def test_config_safe_defaults_do_not_offer_network_write() -> None:
     assert settings.exchange.rest_base_url == ""
     assert settings.exchange.ws_base_url == ""
     assert Environment.SHADOW.can_write_trades is False
+
+
+def test_unsupported_state_backend_cannot_report_trading_ready() -> None:
+    engine = object.__new__(AutonomousEngine)
+    engine._state_backend_supported = False
+    assert engine._check_ready() is False
+    assert engine._check_trading_ready() == (False, "STATE_BACKEND_UNSUPPORTED")
