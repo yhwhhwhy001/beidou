@@ -11,6 +11,7 @@ from beidou_exchange.binance_usdm.adapter import InstrumentStatus
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import Result
 from beidou_exchange.core.protocol import Capability, OrderRequest
+from beidou_exchange.core.user_stream import UserStreamSequencer, UserStreamStatus
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -172,3 +173,68 @@ class TestBinanceAdapter:
         response = await adapter.create_order(request)
 
         assert response.status.value == "UNKNOWN"
+
+    def test_algo_snapshot_requires_complete_venue_fields(self):
+        account = AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test"))
+        parsed = BinanceUsdmAdapter.parse_algo_order_snapshot(
+            {
+                "algoId": 99,
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "orderType": "STOP_MARKET",
+                "quantity": "0.01",
+                "triggerPrice": "95000",
+                "algoStatus": "NEW",
+                "updateTime": 123,
+            },
+            account,
+        )
+        assert parsed.is_success()
+        assert parsed.data is not None and parsed.data.algo_id == "99"
+        assert parsed.data.status == "NEW"
+
+        incomplete = BinanceUsdmAdapter.parse_algo_order_snapshot(
+            {"algoId": 99, "symbol": "BTCUSDT"},
+            account,
+        )
+        assert not incomplete.is_success()
+
+    @pytest.mark.asyncio
+    async def test_open_algo_inventory_is_typed_and_uses_adapter_boundary(self):
+        transport = FakeRestClient(
+            [
+                {
+                    "algoId": 99,
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "orderType": "STOP_MARKET",
+                    "quantity": "0.01",
+                    "triggerPrice": "95000",
+                    "algoStatus": "NEW",
+                }
+            ]
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        result = await adapter.get_open_algo_orders()
+        assert result.is_success()
+        assert result.data and result.data[0].algo_id == "99"
+        assert transport.calls[-1][1] == Endpoint.OPEN_ALGO_ORDERS
+
+    @pytest.mark.asyncio
+    async def test_user_event_without_sequence_is_not_trusted(self):
+        parsed = BinanceUsdmAdapter.parse_user_stream_event({"e": "ACCOUNT_UPDATE", "E": 1000})
+        assert parsed.is_success() and parsed.data is not None
+        observation = UserStreamSequencer().observe(parsed.data)
+        assert observation.accepted is False
+        assert observation.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_user_sequence_gap_is_blocked(self):
+        sequencer = UserStreamSequencer()
+        first = BinanceUsdmAdapter.parse_user_stream_event({"e": "ORDER_TRADE_UPDATE", "E": 1000, "u": 10})
+        gap = BinanceUsdmAdapter.parse_user_stream_event({"e": "ORDER_TRADE_UPDATE", "E": 1001, "u": 12})
+        assert first.data is not None and gap.data is not None
+        assert sequencer.observe(first.data).accepted is True
+        observation = sequencer.observe(gap.data)
+        assert observation.accepted is False
+        assert observation.status is UserStreamStatus.GAP

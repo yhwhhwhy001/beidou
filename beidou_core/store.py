@@ -192,7 +192,9 @@ class PersistentStore:
                 delta_qty TEXT NOT NULL,
                 price TEXT NOT NULL,
                 status TEXT NOT NULL,
-                event_time TEXT NOT NULL
+                event_time TEXT NOT NULL,
+                processing_state TEXT NOT NULL DEFAULT 'PENDING',
+                committed_at TEXT
             );
             CREATE TABLE IF NOT EXISTS position_projection (
                 symbol TEXT PRIMARY KEY,
@@ -201,6 +203,24 @@ class PersistentStore:
                 position_generation INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 source_event_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS account_opening_projections (
+                projection_id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                balance_amount TEXT NOT NULL,
+                balance_currency TEXT NOT NULL,
+                balance_decimals INTEGER NOT NULL DEFAULT 8,
+                positions TEXT NOT NULL,
+                open_orders TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                fact_version TEXT NOT NULL,
+                evidence_hash TEXT NOT NULL,
+                approval_id TEXT NOT NULL,
+                complete INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(account_id, venue_id)
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_account ON ledger_entries(account_id, venue_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_correlation ON ledger_entries(correlation_id);
@@ -212,6 +232,7 @@ class PersistentStore:
             CREATE INDEX IF NOT EXISTS idx_recon_snapshots_key ON reconciliation_snapshots(account_id, venue_id, side, timestamp);
             CREATE INDEX IF NOT EXISTS idx_recon_results_checked ON reconciliation_results(account_id, venue_id, checked_at);
             CREATE INDEX IF NOT EXISTS idx_fill_events_order ON fill_events(order_id, event_time);
+            CREATE INDEX IF NOT EXISTS idx_opening_projection_key ON account_opening_projections(account_id, venue_id, captured_at);
         """)
         conn.commit()
 
@@ -222,6 +243,10 @@ class PersistentStore:
         self._ensure_column(conn, "protection_orders", "position_generation", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "protection_orders", "session_id", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "protection_orders", "exchange_order_id", "TEXT")
+        # Rows written by the previous fill implementation were already
+        # journaled and projected; only newly observed fills start PENDING.
+        self._ensure_column(conn, "fill_events", "processing_state", "TEXT NOT NULL DEFAULT 'COMMITTED'")
+        self._ensure_column(conn, "fill_events", "committed_at", "TEXT")
         conn.commit()
 
     @staticmethod
@@ -416,8 +441,8 @@ class PersistentStore:
         cursor = conn.execute(
             """INSERT OR IGNORE INTO fill_events
                (fill_event_id, order_id, symbol, side, cumulative_qty, delta_qty,
-                price, status, event_time)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                price, status, event_time, processing_state, committed_at)
+               VALUES (?,?,?,?,?,?,?,?,?,'PENDING',NULL)""",
             (
                 str(fill_event_id),
                 str(order_id),
@@ -433,10 +458,135 @@ class PersistentStore:
         conn.commit()
         return cursor.rowcount == 1
 
+    def get_fill_event(self, fill_event_id: str) -> dict[str, Any] | None:
+        """Return one fill fact and its commit state without mutating it."""
+
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM fill_events WHERE fill_event_id=?",
+            (str(fill_event_id),),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def mark_fill_event_committed(self, fill_event_id: str, committed_at: str | None = None) -> None:
+        """Close a pending fill only after ledger and position facts are durable."""
+
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """UPDATE fill_events
+               SET processing_state='COMMITTED', committed_at=?
+               WHERE fill_event_id=? AND processing_state='PENDING'""",
+            (committed_at or datetime.now(timezone.utc).isoformat(), str(fill_event_id)),
+        )
+        conn.commit()
+        if cursor.rowcount != 1:
+            row = self.get_fill_event(fill_event_id)
+            if row is None:
+                raise RuntimeError(f"fill event {fill_event_id} disappeared before commit")
+            if str(row.get("processing_state")) != "COMMITTED":
+                raise RuntimeError(f"fill event {fill_event_id} has unexpected state {row.get('processing_state')!r}")
+
     def restore_fill_events(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
         rows = conn.execute("SELECT * FROM fill_events ORDER BY event_time, fill_event_id").fetchall()
         return [dict(row) for row in rows]
+
+    # --- Explicit account opening projection ---
+
+    def save_account_opening_projection(
+        self,
+        projection_id: str,
+        account_id: str,
+        venue_id: str,
+        balance_amount: str,
+        balance_currency: str,
+        balance_decimals: int,
+        positions: dict[str, str],
+        open_orders: list[str],
+        captured_at: str,
+        source: str,
+        fact_version: str,
+        evidence_hash: str,
+        approval_id: str,
+        complete: bool = True,
+    ) -> None:
+        """Persist an operator-authorized opening fact; never auto-derived.
+
+        The unique account/venue key prevents two competing baselines from
+        existing in one local truth store.  Replacing it is an explicit
+        recovery operation and therefore must carry a new projection id,
+        evidence hash and approval id.
+        """
+
+        required = {
+            "projection_id": projection_id,
+            "account_id": account_id,
+            "venue_id": venue_id,
+            "source": source,
+            "fact_version": fact_version,
+            "evidence_hash": evidence_hash,
+            "approval_id": approval_id,
+        }
+        if not complete or any(not str(value).strip() for value in required.values()):
+            raise ValueError("complete opening projection requires durable provenance and approval")
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """INSERT INTO account_opening_projections
+                   (projection_id, account_id, venue_id, balance_amount,
+                    balance_currency, balance_decimals, positions, open_orders,
+                    captured_at, source, fact_version, evidence_hash,
+                    approval_id, complete, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(account_id, venue_id) DO UPDATE SET
+                    projection_id=excluded.projection_id,
+                    balance_amount=excluded.balance_amount,
+                    balance_currency=excluded.balance_currency,
+                    balance_decimals=excluded.balance_decimals,
+                    positions=excluded.positions,
+                    open_orders=excluded.open_orders,
+                    captured_at=excluded.captured_at,
+                    source=excluded.source,
+                    fact_version=excluded.fact_version,
+                    evidence_hash=excluded.evidence_hash,
+                    approval_id=excluded.approval_id,
+                    complete=excluded.complete,
+                    created_at=excluded.created_at""",
+                (
+                    str(projection_id),
+                    str(account_id),
+                    str(venue_id),
+                    str(balance_amount),
+                    str(balance_currency),
+                    int(balance_decimals),
+                    json.dumps({str(k): str(v) for k, v in positions.items()}, sort_keys=True),
+                    json.dumps([str(order_id) for order_id in open_orders], sort_keys=True),
+                    str(captured_at),
+                    str(source),
+                    str(fact_version),
+                    str(evidence_hash),
+                    str(approval_id),
+                    int(complete),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def restore_account_opening_projection(self, account_id: str, venue_id: str) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM account_opening_projections WHERE account_id=? AND venue_id=?",
+            (str(account_id), str(venue_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["positions"] = json.loads(str(data["positions"]))
+        data["open_orders"] = json.loads(str(data["open_orders"]))
+        return data
 
     def save_position_projection(
         self,

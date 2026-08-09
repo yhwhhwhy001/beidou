@@ -1363,6 +1363,23 @@ class AutonomousEngine:
             for row in self._store.restore_order_states()
             if row.get("filled_qty") is not None
         }
+        self._pending_fill_retry: set[str] = set()
+        self._pending_fill_previous_qty: dict[str, float] = {}
+        # A committed fill journal is authoritative for the high-water mark;
+        # PENDING rows are deliberately retriable after a crash/fault rather
+        # than being mistaken for a completed ledger fact.
+        for fill_row in self._store.restore_fill_events():
+            event_id = str(fill_row.get("fill_event_id", ""))
+            order_id = str(fill_row.get("order_id", ""))
+            if not event_id or not order_id:
+                continue
+            cumulative = float(fill_row.get("cumulative_qty") or 0)
+            if str(fill_row.get("processing_state", "COMMITTED")) == "COMMITTED":
+                self._filled_quantities_by_order[order_id] = max(
+                    self._filled_quantities_by_order.get(order_id, 0.0), cumulative
+                )
+            else:
+                self._pending_fill_retry.add(event_id)
         self._position_entry_times: dict[str, float] = {}  # position_id → entry timestamp
         self._close_order_ids: set[str] = set()  # 平仓订单 ID，FILLED 后不创建保护
 
@@ -1446,6 +1463,48 @@ class AutonomousEngine:
         err = result.error
         print(f"[api] {path} FAILED: {err.message if err else 'unknown'} — state NOT updated")
         return None, False
+
+    async def _get_open_algo_inventory(self) -> list[dict[str, Any]] | None:
+        """Read a fully typed conditional-order inventory through the Adapter.
+
+        The legacy raw REST path could treat any list-shaped response as
+        authoritative, including rows missing owner-critical fields.  The
+        adapter parser rejects those rows; callers then remain read-only and
+        fail closed instead of adopting or cancelling an ambiguous order.
+        """
+
+        try:
+            result = await self._adapter.get_open_algo_orders()
+        except Exception as exc:
+            print(f"[api] open Algo inventory failed: {type(exc).__name__}: {exc}")
+            return None
+        if not result.is_success() or result.data is None:
+            return None
+        return [dict(snapshot.raw_response) for snapshot in result.data]
+
+    async def _create_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Create one Algo order and expose only a typed ACK/raw failure."""
+
+        try:
+            result = await self._adapter.create_algo_order(params)
+        except Exception as exc:
+            return {"error": -1, "msg": f"Algo adapter error: {exc}"}
+        if result.is_success() and result.data is not None:
+            return dict(result.data.raw_response)
+        error = result.error
+        return {"error": -1, "msg": error.message if error else "Algo ACK UNKNOWN"}
+
+    async def _cancel_algo_order(self, symbol: str, algo_id: int) -> dict[str, Any]:
+        """Cancel one Algo id through the typed adapter boundary."""
+
+        try:
+            result = await self._adapter.cancel_algo_order(symbol, algo_id)
+        except Exception as exc:
+            return {"error": -1, "msg": f"Algo cancel adapter error: {exc}"}
+        if result.is_success() and isinstance(result.data, dict):
+            return dict(result.data)
+        error = result.error
+        return {"error": -1, "msg": error.message if error else "Algo cancel ACK UNKNOWN"}
 
     def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """同步兼容包装 — 委托给 BinanceRESTClient（BD-02 Adapter 边界）。
@@ -1886,12 +1945,7 @@ class AutonomousEngine:
             return
         for algo_id in list(algo_ids):
             try:
-                cancel_resp = await self._api_async(
-                    Endpoint.ALGO_ORDER,
-                    method="DELETE",
-                    signed=True,
-                    params={"symbol": symbol, "algoId": int(algo_id)},
-                )
+                cancel_resp = await self._cancel_algo_order(symbol, int(algo_id))
                 if "code" not in cancel_resp:
                     print(f"[protection] Canceled algo order {algo_id} for {symbol}")
                 else:
@@ -2028,11 +2082,57 @@ class AutonomousEngine:
                     f"Durable ledger reconstruction failed for {row.get('transaction_id', '<unknown>')}"
                 ) from exc
 
-    def _post_ledger_transaction(self, transaction: LedgerTransaction) -> None:
-        """Append a balanced transaction and its durable journal atomically enough for restart."""
+    def _record_execution_fact_failure(self, reason: str) -> None:
+        """Freeze execution truth after a durable fact write cannot be proven.
 
-        self._ledger.post(transaction)
-        self._store.save_ledger_transaction(transaction)
+        A fill is an exchange fact, not a best-effort application log.  If its
+        ledger journal or projection cannot be durably recorded, continuing in
+        ``RESUME`` would allow new exposure to be sized from incomplete state.
+        The only safe local action is to freeze the ledger, close the
+        risk-increase gate, and emit a non-suppressible incident.  This helper
+        is deliberately defensive so failure handling itself never hides the
+        original persistence error during startup or unit-level fault tests.
+        """
+
+        with contextlib.suppress(Exception):
+            self._ledger.freeze()
+        control = getattr(self, "_control", None)
+        if control is not None:
+            with contextlib.suppress(Exception):
+                if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                    control.execute_action(ControlAction.NO_NEW_RISK)
+        alerts = getattr(self, "_alerts", None)
+        if alerts is not None:
+            with contextlib.suppress(Exception):
+                alerts.send_incident(
+                    AlertSeverity.CRITICAL,
+                    "Execution fact persistence blocked",
+                    str(reason)[:500],
+                    category="execution_fact",
+                )
+
+    def _post_ledger_transaction(self, transaction: LedgerTransaction) -> None:
+        """Persist then append a balanced transaction, failing closed on drift.
+
+        The previous order (memory first, SQLite second) could leave an
+        in-memory fill that vanished on restart when the database write failed.
+        Validation is side-effect free, then the durable journal is committed,
+        and only after that is the process-local ledger appended.  Any failure
+        after the durable write freezes the ledger and closes new risk so a
+        governed restart/replay can inspect the durable fact instead of
+        silently continuing with divergent projections.
+        """
+
+        try:
+            self._ledger.validate(transaction)
+            self._store.save_ledger_transaction(transaction)
+            self._ledger.post(transaction)
+        except Exception as exc:
+            self._record_execution_fact_failure(
+                f"ledger transaction {transaction.transaction_id} persistence/post failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise
 
     async def _verify_intent_at_send(self, intent) -> bool:
         """最终写边界复核审批、nonce、策略版本和风险下降语义。"""
@@ -2661,6 +2761,8 @@ class AutonomousEngine:
     async def _monitor_orders(self, symbol: str) -> None:
         """查询活跃订单状态并更新状态机/账本。"""
         for order_id in list(self._active_order_ids):
+            fill_event_id_for_retry = ""
+            fill_committed = False
             # 使用订单自身的 symbol 而非批量循环的 symbol
             order_sym = self._order_symbols.get(order_id)
             if order_sym is not None and order_sym != symbol:
@@ -2728,6 +2830,7 @@ class AutonomousEngine:
                         result,
                         status="PARTIALLY_FILLED",
                     )
+                    fill_event_id_for_retry = fill_event_id
                     if delta_qty > 0 and partial_price > 0:
                         partial_notional = delta_qty * partial_price
                         side_desc = result.get("side", "")
@@ -2769,6 +2872,12 @@ class AutonomousEngine:
                             partial_price,
                             fill_event_id,
                         )
+                        self._mark_fill_committed(
+                            order_id,
+                            fill_event_id,
+                            float(result.get("executedQty", 0) or 0),
+                        )
+                        fill_committed = True
                         self._store.save_order_state(
                             order_id,
                             order_sym or symbol,
@@ -2787,6 +2896,15 @@ class AutonomousEngine:
 
             except Exception as e:
                 # Log error but do NOT silently swallow — maintain visibility
+                if fill_event_id_for_retry and not fill_committed:
+                    self._mark_fill_retryable(order_id, fill_event_id_for_retry)
+                    self._record_execution_fact_failure(
+                        f"partial fill {fill_event_id_for_retry} could not be committed: {type(e).__name__}: {e}"
+                    )
+                    tracker = self._order_trackers.get(order_id)
+                    if tracker is not None:
+                        tracker.apply(OrderEvent.UNKNOWN)
+                    self._active_order_ids.discard(order_id)
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
 
     def _consume_cumulative_fill(
@@ -2810,14 +2928,28 @@ class AutonomousEngine:
             return 0.0, avg_price, ""
         previous_qty = self._filled_quantities_by_order.get(order_id, 0.0)
         delta_qty = cumulative_qty - previous_qty
-        if delta_qty <= 1e-12:
-            return 0.0, avg_price, ""
         trade_id = result.get("tradeId") or result.get("lastTradeId")
         event_id = (
             f"trade:{order_id}:{trade_id}"
             if trade_id is not None
             else f"order:{order_id}:cum:{cumulative_qty:.16g}:avg:{avg_price:.16g}"
         )
+        existing = self._store.get_fill_event(event_id)
+        if existing is not None:
+            if str(existing.get("processing_state", "COMMITTED")) == "COMMITTED":
+                self._filled_quantities_by_order[order_id] = max(previous_qty, cumulative_qty)
+                return 0.0, avg_price, event_id
+            # PENDING is retried only after an explicit failure path marks the
+            # event.  Ordinary duplicate polls remain no-ops.
+            if event_id not in getattr(self, "_pending_fill_retry", set()):
+                return 0.0, avg_price, event_id
+            delta_qty = float(existing.get("delta_qty") or delta_qty)
+            avg_price = float(existing.get("price") or avg_price)
+            if delta_qty <= 1e-12 or avg_price <= 0:
+                return 0.0, avg_price, event_id
+            return delta_qty, avg_price, event_id
+        if delta_qty <= 1e-12:
+            return 0.0, avg_price, event_id
         inserted = self._store.save_fill_event(
             event_id,
             order_id,
@@ -2829,13 +2961,46 @@ class AutonomousEngine:
             status,
         )
         if not inserted:
-            # A duplicate durable event must not be posted twice.  Advance the
-            # in-memory high-water mark conservatively and let the caller keep
-            # its terminal order state handling.
+            # Another writer inserted the row between the read and insert.
+            # Re-read its state; never infer COMMITTED from rowcount alone.
+            existing = self._store.get_fill_event(event_id)
+            if existing is None or str(existing.get("processing_state", "PENDING")) != "COMMITTED":
+                return 0.0, avg_price, event_id
             self._filled_quantities_by_order[order_id] = max(previous_qty, cumulative_qty)
             return 0.0, avg_price, event_id
+        pending_previous = getattr(self, "_pending_fill_previous_qty", None)
+        if pending_previous is None:
+            pending_previous = {}
+            self._pending_fill_previous_qty = pending_previous
+        pending_previous[event_id] = previous_qty
+        # Reserve the cumulative high-water mark while the event is pending;
+        # a second poll cannot turn the same observation into a larger delta.
         self._filled_quantities_by_order[order_id] = cumulative_qty
         return delta_qty, avg_price, event_id
+
+    def _mark_fill_committed(self, order_id: str, fill_event_id: str, cumulative_qty: float) -> None:
+        """Close a pending fill after ledger and position facts commit."""
+
+        self._store.mark_fill_event_committed(fill_event_id)
+        getattr(self, "_pending_fill_previous_qty", {}).pop(fill_event_id, None)
+        getattr(self, "_pending_fill_retry", set()).discard(fill_event_id)
+        self._filled_quantities_by_order[order_id] = max(
+            self._filled_quantities_by_order.get(order_id, 0.0), cumulative_qty
+        )
+
+    def _mark_fill_retryable(self, order_id: str, fill_event_id: str) -> None:
+        """Expose one pending fill for governed recovery after a write failure."""
+
+        if not fill_event_id:
+            return
+        previous_qty = getattr(self, "_pending_fill_previous_qty", {}).get(fill_event_id)
+        if previous_qty is not None:
+            self._filled_quantities_by_order[order_id] = previous_qty
+        retry_ids = getattr(self, "_pending_fill_retry", None)
+        if retry_ids is None:
+            retry_ids = set()
+            self._pending_fill_retry = retry_ids
+        retry_ids.add(fill_event_id)
 
     def _update_position_projection(
         self,
@@ -2886,6 +3051,87 @@ class AutonomousEngine:
         )
         self._position_projection[symbol] = projection
 
+    def _commit_fill_facts(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        executed_qty: float,
+        avg_price: float,
+        fill_event_id: str,
+        result: dict,
+    ) -> None:
+        """Commit ledger, position and fill state in an auditable order."""
+
+        notional = executed_qty * avg_price
+        journal_amount = str(notional)
+        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
+        is_buy = side.upper() == "BUY"
+        tx = LedgerTransaction(
+            transaction_id=tx_id,
+            transaction_type=LedgerTransactionType.FILL,
+            source_event_id=fill_event_id,
+            postings=(
+                Posting(
+                    posting_id=f"{tx_id}-p1",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=journal_amount),
+                    side=PostingSide.DEBIT,
+                    description=f"{side} {executed_qty} {symbol} @ {avg_price}",
+                ),
+                Posting(
+                    posting_id=f"{tx_id}-p2",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=journal_amount),
+                    side=PostingSide.CREDIT,
+                    description=f"{side} {executed_qty} {symbol} @ {avg_price}",
+                ),
+            ),
+            correlation_id=CorrelationId(f"exec-{order_id}"),
+        )
+        self._post_ledger_transaction(tx)
+        self._update_position_projection(symbol, side, executed_qty, avg_price, fill_event_id)
+        # The fill is complete only after both authoritative projections exist.
+        self._mark_fill_committed(
+            order_id,
+            fill_event_id,
+            float(result.get("executedQty", executed_qty) or executed_qty),
+        )
+        try:
+            self._store.save_ledger_entry(
+                tx_id,
+                "default",
+                "BINANCE",
+                symbol,
+                journal_amount,
+                journal_amount,
+                tx.postings[0].description,
+                str(tx.correlation_id),
+                tx.timestamp.isoformat(),
+            )
+            self._store.save_order_state(
+                order_id,
+                symbol,
+                result.get("side", ""),
+                result.get("type", ""),
+                result.get("origQty", "0"),
+                result.get("price"),
+                "FILLED",
+                str(executed_qty),
+                str(avg_price),
+            )
+        except Exception as exc:
+            self._record_execution_fact_failure(
+                f"fill {fill_event_id} secondary index persistence failed: {type(exc).__name__}: {exc}"
+            )
+            raise
+
     async def _process_fill(self, order_id: str, symbol: str, result: dict) -> None:
         """处理订单成交：更新状态机、账本、持仓保护。
 
@@ -2907,70 +3153,33 @@ class AutonomousEngine:
             self._order_trackers.pop(order_id, None)
             self._order_symbols.pop(order_id, None)
             return
+
+        side_desc = result.get("side", "")
+        try:
+            self._commit_fill_facts(
+                order_id,
+                symbol,
+                side_desc,
+                executed_qty,
+                avg_price,
+                fill_event_id,
+                result,
+            )
+        except Exception as exc:
+            row = self._store.get_fill_event(fill_event_id) or {}
+            if str(row.get("processing_state", "PENDING")) != "COMMITTED":
+                self._mark_fill_retryable(order_id, fill_event_id)
+            tracker.apply(OrderEvent.UNKNOWN)
+            self._active_order_ids.discard(order_id)
+            self._record_execution_fact_failure(
+                f"fill {fill_event_id} commit failed: {type(exc).__name__}: {exc}"
+            )
+            raise
         tracker.apply(OrderEvent.FILLED)
         self._active_order_ids.discard(order_id)
         # BD-FIX: FILLED 后清理 tracker 和 symbol 映射，防止内存泄漏
         self._order_trackers.pop(order_id, None)
         self._order_symbols.pop(order_id, None)
-
-        notional = executed_qty * avg_price
-        # BD-T12: 复式记账 — LedgerTransaction + Posting (≥2)
-        journal_amount = str(notional)
-        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
-        side_desc = result.get("side", "")
-        is_buy = side_desc.upper() == "BUY"
-        tx = LedgerTransaction(
-            transaction_id=tx_id,
-            transaction_type=LedgerTransactionType.FILL,
-            source_event_id=fill_event_id,
-            postings=(
-                Posting(
-                    posting_id=f"{tx_id}-p1",
-                    account_id=AccountId("default"),
-                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
-                    venue_id=VenueId("BINANCE"),
-                    instrument_id=InstrumentId(symbol),
-                    amount=MonetaryValue(amount=journal_amount),
-                    side=PostingSide.DEBIT,
-                    description=f"{side_desc} {executed_qty} {symbol} @ {avg_price}",
-                ),
-                Posting(
-                    posting_id=f"{tx_id}-p2",
-                    account_id=AccountId("default"),
-                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
-                    venue_id=VenueId("BINANCE"),
-                    instrument_id=InstrumentId(symbol),
-                    amount=MonetaryValue(amount=journal_amount),
-                    side=PostingSide.CREDIT,
-                    description=f"{side_desc} {executed_qty} {symbol} @ {avg_price}",
-                ),
-            ),
-            correlation_id=CorrelationId(f"exec-{order_id}"),
-        )
-        self._post_ledger_transaction(tx)
-        self._update_position_projection(symbol, side_desc, executed_qty, avg_price, fill_event_id)
-        self._store.save_ledger_entry(
-            tx_id,
-            "default",
-            "BINANCE",
-            symbol,
-            journal_amount,
-            journal_amount,
-            tx.postings[0].description,
-            str(tx.correlation_id),
-            tx.timestamp.isoformat(),
-        )
-        self._store.save_order_state(
-            order_id,
-            symbol,
-            result.get("side", ""),
-            result.get("type", ""),
-            result.get("origQty", "0"),
-            result.get("price"),
-            "FILLED",
-            str(executed_qty),
-            str(avg_price),
-        )
 
         # 检查是否为平仓订单
         is_close_order = order_id in self._close_order_ids
@@ -3106,9 +3315,7 @@ class AutonomousEngine:
                 algo_resp = {}
                 max_algo_retries = 3
                 for algo_attempt in range(max_algo_retries):
-                    algo_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True, params=algo_params
-                    )
+                    algo_resp = await self._create_algo_order(algo_params)
                     if "algoId" in algo_resp:
                         break
                     err_code = algo_resp.get("code", 0)
@@ -3210,27 +3417,54 @@ class AutonomousEngine:
         """Build facts only from durable local projections.
 
         ``ProtectionManager`` memory is excluded: it cannot prove owner,
-        generation, or restart continuity. The opening-balance projection is
-        not yet established, so this snapshot remains INCOMPLETE rather than
-        manufacturing a match from the exchange response.
+        generation, or restart continuity.  An opening-account baseline is an
+        explicit operator-authorized fact; it is never copied from the
+        exchange response by this method.  Without that baseline the snapshot
+        remains INCOMPLETE rather than manufacturing a match from a zero
+        balance.
         """
 
+        opening = self._store.restore_account_opening_projection("default", "BINANCE")
         positions: dict[InstrumentId, Quantity] = {}
+        if opening is not None:
+            positions.update(
+                {
+                    InstrumentId(str(symbol)): Quantity(amount=str(amount))
+                    for symbol, amount in dict(opening.get("positions", {})).items()
+                }
+            )
         for symbol, row in self._position_projection.items():
             signed_qty = float(row.get("signed_quantity", 0) or 0)
-            if abs(signed_qty) > 0:
-                positions[InstrumentId(symbol)] = Quantity(amount=str(signed_qty))
+            # A durable current projection overrides the opening baseline;
+            # zero is meaningful because it proves a later flatten.
+            positions[InstrumentId(symbol)] = Quantity(amount=str(signed_qty))
         active_orders = self._store.get_active_orders()
+        opening_complete = bool(
+            opening
+            and int(opening.get("complete", 0)) == 1
+            and str(opening.get("source", "")).strip()
+            and str(opening.get("fact_version", "")).strip()
+            and str(opening.get("evidence_hash", "")).strip()
+            and str(opening.get("approval_id", "")).strip()
+        )
+        balance_amount = str(opening.get("balance_amount", "0")) if opening else "0"
+        balance_currency = str(opening.get("balance_currency", "USDT")) if opening else "USDT"
+        balance_decimals = int(opening.get("balance_decimals", 8)) if opening else 8
+        opening_version = str(opening.get("fact_version", "missing-opening-balance")) if opening else "missing-opening-balance"
         return AccountFactSnapshot(
             account_id=AccountId("default"),
             venue_id=VenueId("BINANCE"),
-            balance=MonetaryValue(amount="0"),
+            balance=MonetaryValue(
+                amount=balance_amount,
+                currency=balance_currency,
+                decimals=balance_decimals,
+            ),
             positions=positions,
             open_orders=[str(row["order_id"]) for row in active_orders],
             timestamp=datetime.now(timezone.utc),
-            source="LOCAL_DURABLE_PROJECTION",
-            fact_version="position-v1/order-state-v1/no-opening-balance",
-            complete=False,
+            source=("LOCAL_DURABLE_PROJECTION+AUTHORIZED_OPENING" if opening_complete else "LOCAL_DURABLE_PROJECTION"),
+            fact_version=f"position-v1/order-state-v1/opening:{opening_version}",
+            complete=opening_complete,
         )
 
     async def _reconcile(self) -> bool:
@@ -3358,7 +3592,7 @@ class AutonomousEngine:
                 return  # 所有持仓已由 Phase 1/2 处理完毕
 
             # 检查哪些已有保护单
-            algos_resp = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
+            algos_resp = await self._get_open_algo_inventory()
             protected_symbols: set[str] = set()
             if not isinstance(algos_resp, list):
                 self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
@@ -3422,11 +3656,8 @@ class AutonomousEngine:
                     tp_str = f"{tp_price:.{prec['price']}f}"
 
                     # 止损单
-                    sl_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER,
-                        method="POST",
-                        signed=True,
-                        params={
+                    sl_resp = await self._create_algo_order(
+                        {
                             "symbol": symbol,
                             "side": side,
                             "algoType": "CONDITIONAL",
@@ -3435,16 +3666,13 @@ class AutonomousEngine:
                             "triggerPrice": stop_str,
                             "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
-                        },
+                        }
                     )
                     sl_id = str(sl_resp.get("algoId", "")) if "algoId" in sl_resp else ""
 
                     # 止盈单
-                    tp_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER,
-                        method="POST",
-                        signed=True,
-                        params={
+                    tp_resp = await self._create_algo_order(
+                        {
                             "symbol": symbol,
                             "side": side,
                             "algoType": "CONDITIONAL",
@@ -3453,7 +3681,7 @@ class AutonomousEngine:
                             "triggerPrice": tp_str,
                             "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
-                        },
+                        }
                     )
                     tp_id = str(tp_resp.get("algoId", "")) if "algoId" in tp_resp else ""
 
@@ -3523,7 +3751,7 @@ class AutonomousEngine:
         解决多轮 nearline 重试累积重复订单的问题。
         """
         try:
-            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
+            existing_algos = await self._get_open_algo_inventory()
             if not isinstance(existing_algos, list):
                 return
             known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
@@ -3550,12 +3778,7 @@ class AutonomousEngine:
                 orders.sort(key=lambda a: a.get("createTime", 0))
                 for a in orders[:excess]:
                     try:
-                        await self._api_async(
-                            Endpoint.ALGO_ORDER,
-                            method="DELETE",
-                            signed=True,
-                            params={"symbol": symbol, "algoId": int(a["algoId"])},
-                        )
+                        await self._cancel_algo_order(symbol, int(a["algoId"]))
                         print(f"[nearline] 🧹 Cleaned up excess {a['orderType']} for {symbol} algoId={a['algoId']}")
                     except Exception:
                         logger.warning(
@@ -3580,7 +3803,7 @@ class AutonomousEngine:
             return
         try:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
-            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
+            existing_algos = await self._get_open_algo_inventory()
             api_ok = isinstance(existing_algos, list)
             if not api_ok:
                 self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
@@ -3674,11 +3897,8 @@ class AutonomousEngine:
                         else:
                             widened_sl = entry_ref * (1 + base_pct * widen_factor)
                     price_str = f"{widened_sl:.{prec['price']}f}"
-                    algo_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER,
-                        method="POST",
-                        signed=True,
-                        params={
+                    algo_resp = await self._create_algo_order(
+                        {
                             "symbol": symbol,
                             "side": side,
                             "algoType": "CONDITIONAL",
@@ -3687,7 +3907,7 @@ class AutonomousEngine:
                             "triggerPrice": price_str,
                             "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
-                        },
+                        }
                     )
                     if "algoId" in algo_resp:
                         algo_id = str(algo_resp["algoId"])
@@ -3726,11 +3946,8 @@ class AutonomousEngine:
                         else:
                             widened_tp = entry_ref * (1 - base_pct * widen_factor)
                     tp_price_str = f"{widened_tp:.{prec['price']}f}"
-                    tp_resp = await self._api_async(
-                        Endpoint.ALGO_ORDER,
-                        method="POST",
-                        signed=True,
-                        params={
+                    tp_resp = await self._create_algo_order(
+                        {
                             "symbol": symbol,
                             "side": side,
                             "algoType": "CONDITIONAL",
@@ -3739,7 +3956,7 @@ class AutonomousEngine:
                             "triggerPrice": tp_price_str,
                             "reduceOnly": "true",
                             "workingType": "CONTRACT_PRICE",
-                        },
+                        }
                     )
                     if "algoId" in tp_resp:
                         algo_id = str(tp_resp["algoId"])
@@ -5087,7 +5304,7 @@ class AutonomousEngine:
         # read-only here; only an explicitly owned, ACK-backed order may be
         # cancelled by a governed close/replacement path.
         try:
-            existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
+            existing_algos = await self._get_open_algo_inventory()
             if isinstance(existing_algos, list):
                 known_algo_ids = {
                     algo_id for ids in self._active_algo_ids.values() for algo_id in ids
@@ -5204,9 +5421,7 @@ class AutonomousEngine:
             if pending_submissions:
 
                 async def _submit_algo(sub: dict):
-                    sub["result"] = await self._api_async(
-                        Endpoint.ALGO_ORDER, method="POST", signed=True, params=sub["algo_params"]
-                    )
+                    sub["result"] = await self._create_algo_order(sub["algo_params"])
                     return sub
 
                 results: list = []

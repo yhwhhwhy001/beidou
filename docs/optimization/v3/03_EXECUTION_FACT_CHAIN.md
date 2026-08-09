@@ -33,9 +33,13 @@
 - 交易所精度、盘口深度、行情、成本或 Alpha 输入未知时，风险增加订单被拒绝；不再用固定报价、默认精度或默认最小数量补齐。
 - Paper 撮合异常、缺少双边盘口或未闭合 K 线时拒绝/不验证，不回退到即时成交。
 
-已补齐一段本地 durable slice：累计 `executedQty` 先转换为增量，`fill_events` 唯一键阻止重复记账；`position_projection` 保存 signed quantity、entry price 和 generation；重启恢复只使用 durable order/fill/projection 事实。该 slice 仍不是完整交易所事件流或 PostgreSQL 生产合同。
+已补齐一段本地 durable slice：累计 `executedQty` 先转换为增量，`fill_events` 唯一键阻止重复记账；`position_projection` 保存 signed quantity、entry price 和 generation；重启恢复只使用 durable order/fill/projection 事实。成交事件现在经历 `PENDING -> COMMITTED`：只有账本和持仓投影都成功落盘后才关闭事件；账本/投影/索引写失败会冻结账本、切 `NO_NEW_RISK`、发 CRITICAL，并将订单置为待治理 UNKNOWN，不会盲重试。
 
-仍未完成：手续费/资金费入账、完整 OrderAggregate/user-stream gap-fill、独立三方只读对账、opening-balance/account projection 和全量 owner/generation 条件单精确匹配。
+账户对账的 system side 不能再用零余额占位。新增 `account_opening_projections`，要求完整余额/基线、来源、版本、证据哈希和审批 ID；缺少授权 opening fact 时系统事实保持 `INCOMPLETE`。
+
+Algo/条件单的库存、创建和撤销已统一经过 typed Adapter：必须有 `algoId/symbol/side/orderType/triggerPrice/algoStatus` 等 venue ACK 字段；缺字段的库存或 ACK 直接 UNKNOWN。用户流事件统一解析，缺少单调序列或出现 gap 时由 `UserStreamSequencer` 标记 `SEQUENCE_UNAVAILABLE/GAP`，要求独立 REST replay/对账后才能恢复信任。
+
+仍未完成：手续费/资金费入账、完整 OrderAggregate 与 user-stream 事件应用/gap-fill、独立三方只读对账、PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
 
 ### 4. 独立对账与运行态语义
 
@@ -61,5 +65,5 @@
 
 1. 运行中的 Mac 实例曾出现心跳、卡死订单链和 READY 语义矛盾；本轮未重启、停机或读取交易所事实，不能把本地测试当作运行态修复。
 2. SQLite 只是本地 durable slice，不是 PostgreSQL/PITR 生产事实库；对账仍不是独立三方事实源。
-3. owner/session/generation 字段、ACK 后 ACTIVE 和未归属条件单冻结已接入，但还没有完整 venue Algo 字段回读与跨进程恢复验收。
+3. owner/session/generation 字段、ACK 后 ACTIVE、typed Algo 字段回读和未归属条件单冻结已接入，但还没有完整 venue user-stream 事件应用、跨进程恢复和治理恢复验收。
 4. 真实 G5 16 场景和全新真实 30 日 G7 尚未执行；旧证书不可继承。

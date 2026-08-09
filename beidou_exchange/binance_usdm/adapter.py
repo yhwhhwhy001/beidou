@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
 
@@ -12,11 +13,13 @@ from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import ErrorNormalizer, Result
 from beidou_exchange.core.protocol import (
     AccountInfo,
+    AlgoOrderSnapshot,
     Capability,
     ExchangeAdapter,
     ExchangeInfo,
     OrderRequest,
     OrderResponse,
+    UserStreamEvent,
 )
 from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
@@ -29,6 +32,7 @@ from beidou_shared.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    Price,
     Quantity,
     ResultStatus,
     VenueId,
@@ -462,6 +466,177 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             except (TypeError, ValueError, KeyError) as exc:
                 logger.warning("order status response could not be normalized: %s", exc)
         return OrderStatus.UNKNOWN
+
+    @staticmethod
+    def parse_algo_order_snapshot(raw: Any, account_ref: AccountRef) -> Result[AlgoOrderSnapshot]:
+        """Normalize one Binance Algo response; incomplete rows are UNKNOWN."""
+
+        if not isinstance(raw, dict):
+            return Result.failure(
+                "Algo order response is not an object",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_algo_adapter",
+            )
+        required = ("algoId", "symbol", "side", "orderType", "triggerPrice", "algoStatus")
+        missing = [key for key in required if raw.get(key) in (None, "")]
+        if missing:
+            return Result.failure(
+                f"Algo order response missing required fields: {','.join(missing)}",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_algo_adapter",
+            )
+        try:
+            trigger_price = Decimal(str(raw["triggerPrice"]))
+            quantity = Decimal(str(raw.get("quantity", "0")))
+            if trigger_price <= 0 or quantity < 0:
+                raise ValueError("triggerPrice must be positive and quantity non-negative")
+            update_time = raw.get("updateTime")
+            update_time_ms = int(update_time) if update_time is not None else None
+            snapshot = AlgoOrderSnapshot(
+                algo_id=str(raw["algoId"]),
+                venue_instrument=VenueInstrument(
+                    venue_id=account_ref.venue_id,
+                    instrument_id=InstrumentId(str(raw["symbol"])),
+                ),
+                account_ref=account_ref,
+                side=OrderSide(str(raw["side"])),
+                order_type=OrderType(str(raw["orderType"])),
+                quantity=Quantity(amount=str(raw.get("quantity", "0"))),
+                trigger_price=Price(amount=str(raw["triggerPrice"])),
+                status=str(raw["algoStatus"]),
+                client_algo_id=(str(raw["clientAlgoId"]) if raw.get("clientAlgoId") else None),
+                reduce_only=(bool(raw["reduceOnly"]) if "reduceOnly" in raw else None),
+                close_position=(bool(raw["closePosition"]) if "closePosition" in raw else None),
+                position_side=(str(raw["positionSide"]) if raw.get("positionSide") else None),
+                update_time_ms=update_time_ms,
+                raw_response=dict(raw),
+            )
+        except (TypeError, ValueError, InvalidOperation) as exc:
+            return Result.failure(
+                f"Algo order response invalid: {exc}",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_algo_adapter",
+            )
+        return Result.success(snapshot, source="binance_algo_adapter")
+
+    async def get_open_algo_orders(self) -> Result[list[AlgoOrderSnapshot]]:
+        """Read and type-check the complete open Algo inventory."""
+
+        if self._rest_client is None:
+            return Result.failure(
+                "Exchange transport is not configured",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_algo_adapter",
+            )
+        response = await self.request("GET", Endpoint.OPEN_ALGO_ORDERS, signed=True)
+        if not response.is_success() or not isinstance(response.data, list):
+            return Result.failure(
+                "Open Algo inventory is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=response.data,
+                source="binance_algo_adapter",
+            )
+        account_ref = AccountRef(venue_id=self._venue_id, account_id=self._account_id)
+        parsed: list[AlgoOrderSnapshot] = []
+        for row in response.data:
+            item = self.parse_algo_order_snapshot(row, account_ref)
+            if not item.is_success() or item.data is None:
+                return Result.failure(
+                    "Open Algo inventory contains an incomplete row",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=row,
+                    source="binance_algo_adapter",
+                )
+            parsed.append(item.data)
+        return Result.success(parsed, source="binance_algo_adapter")
+
+    async def create_algo_order(self, params: dict[str, Any]) -> Result[AlgoOrderSnapshot]:
+        """Submit one Algo order and require a typed venue acknowledgement."""
+
+        if self._rest_client is None:
+            return Result.failure(
+                "Exchange transport is not configured",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_algo_adapter",
+            )
+        response = await self.request("POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params))
+        if not response.is_success():
+            return Result.failure(
+                "Algo order acknowledgement is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=response.data,
+                source="binance_algo_adapter",
+            )
+        account_ref = AccountRef(venue_id=self._venue_id, account_id=self._account_id)
+        return self.parse_algo_order_snapshot(response.data, account_ref)
+
+    async def cancel_algo_order(self, symbol: str, algo_id: int) -> Result[dict[str, Any]]:
+        """Cancel one explicitly identified Algo order; no cancel-all fallback."""
+
+        if self._rest_client is None:
+            return Result.failure(
+                "Exchange transport is not configured",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_algo_adapter",
+            )
+        response = await self.request(
+            "DELETE",
+            Endpoint.ALGO_ORDER,
+            signed=True,
+            params={"symbol": symbol, "algoId": algo_id},
+        )
+        if not response.is_success() or not isinstance(response.data, dict) or not response.data.get("algoId"):
+            return Result.failure(
+                "Algo cancel acknowledgement is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=response.data,
+                source="binance_algo_adapter",
+            )
+        return Result.success(dict(response.data), source="binance_algo_adapter")
+
+    @staticmethod
+    def parse_user_stream_event(raw: Any) -> Result[UserStreamEvent]:
+        """Normalize a Binance user event without inventing sequence numbers."""
+
+        if not isinstance(raw, dict) or not raw.get("e") or raw.get("E") in (None, ""):
+            return Result.failure(
+                "User-stream event is missing type or event time",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        event_type = str(raw["e"])
+        try:
+            event_time_ms = int(raw["E"])
+            transaction_time_ms = int(raw["T"]) if raw.get("T") is not None else None
+            sequence = int(raw["u"]) if raw.get("u") is not None else None
+        except (TypeError, ValueError) as exc:
+            return Result.failure(
+                f"User-stream event has invalid time/sequence: {exc}",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        execution = raw.get("o") if isinstance(raw.get("o"), dict) else raw
+        event_id = (
+            f"{event_type}:{execution.get('i')}:{execution.get('I')}"
+            if execution.get("i") is not None and execution.get("I") is not None
+            else f"{event_type}:{event_time_ms}"
+        )
+        return Result.success(
+            UserStreamEvent(
+                event_type=event_type,
+                event_id=event_id,
+                event_time_ms=event_time_ms,
+                transaction_time_ms=transaction_time_ms,
+                sequence=sequence,
+                raw_event=dict(raw),
+            ),
+            source="binance_user_stream_adapter",
+        )
 
     def normalize_error(self, error_code: int, message: str, correlation_id: str | None = None) -> Any:
         return ErrorNormalizer.normalize(str(self._venue_id), error_code, message, correlation_id)

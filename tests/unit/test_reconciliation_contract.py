@@ -5,8 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from beidou_control.plane import ControlAction
 from beidou_core.engine import AutonomousEngine
 from beidou_core.store import PersistentStore
+from beidou_safety.execution.ledger import (
+    AccountType,
+    ImmutableLedger,
+    LedgerTransaction,
+    LedgerTransactionType,
+    Posting,
+    PostingSide,
+)
 from beidou_safety.execution.reconciliation import (
     AccountFactSnapshot,
     ReconciliationEngine,
@@ -93,6 +102,70 @@ def test_store_reconciliation_and_fill_projections_are_idempotent(tmp_path) -> N
     assert {"owner_id", "position_generation", "session_id", "exchange_order_id"} <= columns
 
 
+def test_opening_projection_is_consumed_without_exchange_self_heal(tmp_path) -> None:
+    store = PersistentStore(str(tmp_path / "opening-engine.db"))
+    store.save_account_opening_projection(
+        "opening-1",
+        "default",
+        "BINANCE",
+        "1000",
+        "USDT",
+        8,
+        {"BTCUSDT": "0.25"},
+        [],
+        "2026-08-09T00:00:00+00:00",
+        "AUTHORIZED_READ_SNAPSHOT",
+        "account-v1",
+        "sha256:evidence",
+        "approval-1",
+    )
+    engine = object.__new__(AutonomousEngine)
+    engine._store = store
+    engine._position_projection = {}
+    facts = engine._build_system_reconciliation_facts()
+    assert facts.complete is True
+    assert facts.balance.amount == "1000"
+    assert facts.positions[InstrumentId("BTCUSDT")].amount == "0.25"
+    assert facts.source.endswith("AUTHORIZED_OPENING")
+
+
+def test_ledger_persistence_failure_freezes_and_closes_gate() -> None:
+    tx = LedgerTransaction(
+        transaction_id="tx-failure",
+        transaction_type=LedgerTransactionType.FILL,
+        source_event_id="fill-failure",
+        postings=(
+            Posting(
+                "p1", AccountId("default"), AccountType.CASH, VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"), MonetaryValue(amount="10"), PostingSide.DEBIT,
+            ),
+            Posting(
+                "p2", AccountId("default"), AccountType.POSITION_COST, VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"), MonetaryValue(amount="10"), PostingSide.CREDIT,
+            ),
+        ),
+    )
+
+    class FailingStore:
+        def save_ledger_transaction(self, _tx):
+            raise OSError("disk full")
+
+    engine = object.__new__(AutonomousEngine)
+    engine._ledger = ImmutableLedger()
+    engine._store = FailingStore()
+    control = SimpleNamespace(action=ControlAction.RESUME)
+    control.get_status = lambda: control.action
+    control.execute_action = lambda action: setattr(control, "action", action)
+    engine._control = control
+    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: None)
+
+    with pytest.raises(OSError, match="disk full"):
+        engine._post_ledger_transaction(tx)
+    assert engine._ledger.is_frozen is True
+    assert control.action is ControlAction.NO_NEW_RISK
+    assert engine._ledger.transaction_count == 0
+
+
 def test_runtime_reconciliation_has_no_automatic_self_heal_call() -> None:
     import inspect
 
@@ -127,6 +200,15 @@ def test_cumulative_fill_observations_produce_one_delta_per_event(tmp_path) -> N
     assert second[0] == 0.1
     assert duplicate[0] == 0.0
     assert len(store.restore_fill_events()) == 2
+
+    engine._mark_fill_retryable("order-1", first[2])
+    retry = engine._consume_cumulative_fill(
+        "order-1",
+        "BTCUSDT",
+        {"executedQty": "0.1", "avgPrice": "100", "side": "BUY"},
+        status="PARTIALLY_FILLED",
+    )
+    assert retry[0] == 0.1
 
 
 @pytest.mark.asyncio

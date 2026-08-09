@@ -99,6 +99,43 @@ class OrderResponse:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass(frozen=True, slots=True)
+class AlgoOrderSnapshot:
+    """Typed venue acknowledgement for a conditional/Algo order.
+
+    ``ACTIVE`` is never inferred from local construction.  The adapter must
+    return a non-empty venue id, symbol, side, order type, trigger price and
+    venue status before an engine can bind ownership to this snapshot.
+    """
+
+    algo_id: str
+    venue_instrument: VenueInstrument
+    account_ref: AccountRef
+    side: OrderSide
+    order_type: OrderType
+    quantity: Quantity
+    trigger_price: Price
+    status: str
+    client_algo_id: str | None = None
+    reduce_only: bool | None = None
+    close_position: bool | None = None
+    position_side: str | None = None
+    update_time_ms: int | None = None
+    raw_response: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class UserStreamEvent:
+    """Normalized user-stream event; missing event identity stays UNKNOWN."""
+
+    event_type: str
+    event_id: str
+    event_time_ms: int
+    transaction_time_ms: int | None
+    sequence: int | None
+    raw_event: dict[str, Any]
+
+
 class ExchangeAdapter(ABC):
     """交易所适配器协议。
 
@@ -176,6 +213,19 @@ class TradingExchangePort(ABC):
 
     @abstractmethod
     async def cancel_order(self, command: Any) -> Result: ...
+
+
+class ConditionalOrderPort(ABC):
+    """BD-V3: Algo/conditional order lifecycle with explicit venue ACKs."""
+
+    @abstractmethod
+    async def get_open_algo_orders(self) -> Result: ...
+
+    @abstractmethod
+    async def create_algo_order(self, command: Any) -> Result: ...
+
+    @abstractmethod
+    async def cancel_algo_order(self, command: Any) -> Result: ...
 
 
 class UserStreamPort(ABC):

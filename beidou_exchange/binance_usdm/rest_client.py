@@ -181,6 +181,27 @@ class BinanceRESTClient:
             },
         )
 
+    async def get_open_algo_orders(self, symbol: str | None = None) -> Result[list]:
+        """查询当前条件单；返回非 list 时由 Adapter 判为 UNKNOWN。"""
+
+        params = {"symbol": symbol} if symbol else {}
+        return await self._request("GET", Endpoint.OPEN_ALGO_ORDERS, signed=True, params=params)
+
+    async def create_algo_order(self, params: dict[str, Any]) -> Result[dict]:
+        """创建 Algo 单；调用者必须提供已校验的完整参数。"""
+
+        return await self._request("POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params))
+
+    async def cancel_algo_order(self, symbol: str, algo_id: int) -> Result[dict]:
+        """撤销单个 Algo 单，不使用 cancel-all 旁路。"""
+
+        return await self._request(
+            "DELETE",
+            Endpoint.ALGO_ORDER,
+            signed=True,
+            params={"symbol": symbol, "algoId": algo_id},
+        )
+
     # === 用户数据流 ===
 
     async def create_listen_key(self) -> Result[dict]:
