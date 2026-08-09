@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import sys
 import time
@@ -44,7 +45,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
     parser.add_argument("--confirm-testnet", action="store_true", help="确认连接到 Testnet（非 Mainnet）")
-    parser.add_argument("--max-notional", type=float, default=20.0, help="最大测试名义金额 (USDT)")
+    parser.add_argument(
+        "--max-notional",
+        type=float,
+        default=None,
+        help="最大测试名义金额 (USDT)，默认读取 G5 plan；不得超过 plan 上限",
+    )
     args = parser.parse_args()
 
     if not args.confirm_testnet:
@@ -77,23 +83,51 @@ def main() -> int:
     # 1a: Load the plan before any network client is constructed.
     with open(args.plan) as f:
         plan = yaml.safe_load(f)
+    if not isinstance(plan, dict):
+        fail_fast("G5 plan must be a mapping")
     expected_scenarios = [str(s) for s in plan.get("scenarios", [])]
     if not expected_scenarios or len(set(expected_scenarios)) != len(expected_scenarios):
         fail_fast("G5 plan must define a non-empty unique scenario set")
-    plan_max_notional = float(plan.get("max_test_notional_usdt", 20.0))
-    if args.max_notional < 0 or args.max_notional > plan_max_notional:
-        fail_fast(f"Requested max notional {args.max_notional} exceeds plan limit {plan_max_notional}")
+    plan_environment = plan.get("environment")
+    if not isinstance(plan_environment, str) or not plan_environment.strip():
+        fail_fast("G5 plan must explicitly define environment")
+    plan_mainnet_prohibited = plan.get("mainnet_prohibited")
+    if plan_mainnet_prohibited is not True:
+        fail_fast("G5 plan must explicitly set mainnet_prohibited: true")
+    raw_plan_max_notional = plan.get("max_test_notional_usdt")
+    if raw_plan_max_notional in (None, ""):
+        fail_fast("G5 plan must explicitly define max_test_notional_usdt; no runtime default is allowed")
+    try:
+        plan_max_notional = float(raw_plan_max_notional)
+    except (TypeError, ValueError) as exc:
+        fail_fast(f"Invalid plan max_test_notional_usdt: {type(exc).__name__}")
+    if not math.isfinite(plan_max_notional) or plan_max_notional <= 0:
+        fail_fast("G5 plan max_test_notional_usdt must be a finite positive number")
+    requested_max_notional = plan_max_notional if args.max_notional is None else args.max_notional
+    if not math.isfinite(requested_max_notional) or requested_max_notional <= 0:
+        fail_fast("Requested max notional must be a finite positive number")
+    if requested_max_notional > plan_max_notional:
+        fail_fast(f"Requested max notional {requested_max_notional} exceeds plan limit {plan_max_notional}")
     print(f"Plan: {args.plan} ({len(expected_scenarios)} scenarios)")
 
     # 1b: Mainnet URL 检测
-    rest_url = os.environ.get("BEIDOU_REST_URL", "")
+    rest_url = os.environ.get("BEIDOU_REST_URL", "").strip()
+    if not rest_url:
+        try:
+            from beidou_shared.config import ConfigProvider
+
+            rest_url = str(ConfigProvider().load().exchange.rest_base_url or "").strip()
+        except Exception as exc:
+            fail_fast(f"Testnet REST URL is UNKNOWN: {type(exc).__name__}")
+    if not rest_url:
+        fail_fast("Testnet REST URL is not configured")
     dangerous_urls = ["fapi.binance.com", "api.binance.com"]
     for url in dangerous_urls:
         if url in rest_url.lower():
             fail_fast(f"Mainnet URL detected: {rest_url}")
 
     # 1c: Testnet URL 验证
-    testnet_url = rest_url or "https://demo-fapi.binance.com"
+    testnet_url = rest_url
     print(f"Target: {testnet_url}")
     if "demo-fapi" not in testnet_url.lower() and "testnet" not in testnet_url.lower():
         fail_fast(f"Not a Testnet URL: {testnet_url}")
@@ -119,6 +153,8 @@ def main() -> int:
     # ================================================================
     # G5 Gate 2: 导入认证框架
     # ================================================================
+    from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+    from beidou_exchange.binance_usdm.endpoints import Endpoint
     from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 
     # ================================================================
@@ -132,28 +168,43 @@ def main() -> int:
             api_key=api_key,
             api_secret=api_secret,
         )
+        adapter = BinanceUsdmAdapter(rest_client=client)
+
+        async def exchange(
+            method: str,
+            path: str,
+            *,
+            signed: bool = False,
+            params: dict | None = None,
+        ) -> object:
+            """Use the single exchange transport boundary for every probe."""
+
+            response = await adapter.request(method, path, signed=signed, params=params or {})
+            if not response.is_success():
+                error = getattr(response, "error", None)
+                raise RuntimeError(f"exchange response UNKNOWN: {error or 'request failed'}")
+            if response.data is None:
+                raise RuntimeError("exchange response UNKNOWN: empty data")
+            return response.data
 
         results = {}
         evidence = {
             "gate": "G5",
             "commit": commit,
             "testnet_url": testnet_url,
-            "environment": plan.get("environment", "BINANCE_USDM_TESTNET_ONLY"),
-            "mainnet_prohibited": bool(plan.get("mainnet_prohibited", True)),
+            "environment": plan_environment,
+            "mainnet_prohibited": plan_mainnet_prohibited,
             "started_at": started_at.isoformat(),
-            "max_notional_usdt": args.max_notional,
+            "max_notional_usdt": requested_max_notional,
         }
 
         # --- S1: Server Time (连通性) ---
         print("\n[S1] Server Time Check...")
         try:
-            st = await client.get_server_time()
-            if hasattr(st, "data") and st.data:
-                server_time = st.data.get("serverTime", 0)
-            elif isinstance(st, dict):
-                server_time = st.get("serverTime", 0)
-            else:
-                server_time = 0
+            st = await exchange("GET", Endpoint.SERVER_TIME)
+            if not isinstance(st, dict):
+                raise RuntimeError("server time response is not an object")
+            server_time = st.get("serverTime", 0)
             if server_time > 0:
                 print(f"  PASS: serverTime={server_time}")
                 results["server_time"] = {"status": "PASS", "server_time": server_time}
@@ -167,17 +218,21 @@ def main() -> int:
         # --- S2: Account Access (账户访问) ---
         print("\n[S2] Account Access Check...")
         try:
-            acct = await client.get_account()
-            if hasattr(acct, "data"):
-                acct_data = acct.data
-            elif isinstance(acct, dict):
-                acct_data = acct
-            else:
-                acct_data = {}
+            acct_data = await exchange("GET", Endpoint.ACCOUNT, signed=True)
+            if not isinstance(acct_data, dict):
+                raise RuntimeError("account response is not an object")
 
             can_trade = acct_data.get("canTrade")
             can_withdraw = acct_data.get("canWithdraw")
-            total_balance = acct_data.get("totalWalletBalance", "0")
+            if "totalWalletBalance" not in acct_data:
+                raise RuntimeError("account totalWalletBalance is UNKNOWN")
+            total_balance = acct_data["totalWalletBalance"]
+            try:
+                numeric_balance = float(total_balance)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("account totalWalletBalance is invalid") from exc
+            if not math.isfinite(numeric_balance):
+                raise RuntimeError("account totalWalletBalance is non-finite")
 
             # AC-04: withdrawal permission is a hard production blocker even
             # on Testnet. Missing/non-boolean facts are also fail-closed.
@@ -204,7 +259,7 @@ def main() -> int:
                 "can_trade": can_trade,
                 "can_withdraw": can_withdraw,
                 "permission_status": permission_status,
-                "has_balance": float(total_balance) > 0,
+                "has_balance": numeric_balance > 0,
             }
         except Exception as e:
             print(f"  FAIL: {e}")
@@ -213,14 +268,12 @@ def main() -> int:
         # --- S3: Exchange Info (交易对信息) ---
         print("\n[S3] Exchange Info Check...")
         try:
-            ei = await client.get_exchange_info("BTCUSDT")
-            if hasattr(ei, "data"):
-                ei_data = ei.data
-            elif isinstance(ei, dict):
-                ei_data = ei
-            else:
-                ei_data = {}
-            symbols = ei_data.get("symbols", [])
+            ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": "BTCUSDT"})
+            if not isinstance(ei_data, dict):
+                raise RuntimeError("exchange info response is not an object")
+            symbols = ei_data.get("symbols")
+            if not isinstance(symbols, list):
+                raise RuntimeError("exchange info symbols is UNKNOWN")
             btc_info = None
             for s in symbols:
                 if isinstance(s, dict) and s.get("symbol") == "BTCUSDT":
@@ -239,67 +292,69 @@ def main() -> int:
         # --- S4: Position Mode (仓位模式) ---
         print("\n[S4] Position Mode Check...")
         try:
-            pm = await client.get_position_mode()
-            if hasattr(pm, "data"):
-                pm_data = pm.data
-            elif isinstance(pm, dict):
-                pm_data = pm
-            else:
-                pm_data = {}
-            dual = pm_data.get("dualSidePosition", False)
-            print(f"  PASS: dualSidePosition={dual} (ONE_WAY mode)")
-            evidence["position_mode"] = "ONE_WAY" if not dual else "HEDGE"
+            pm_data = await exchange("GET", Endpoint.POSITION_SIDE_DUAL, signed=True)
+            if not isinstance(pm_data, dict):
+                raise RuntimeError("position mode response is not an object")
+            dual = pm_data.get("dualSidePosition")
+            if not isinstance(dual, bool):
+                raise RuntimeError("position mode dualSidePosition is UNKNOWN")
+            position_mode = "HEDGE" if dual else "ONE_WAY"
+            print(f"  PASS: dualSidePosition={dual} ({position_mode} mode)")
+            evidence["position_mode"] = position_mode
             results["position_mode"] = {"status": "PASS", "dual_side": dual}
         except Exception as e:
             print(f"  WARN: position mode query failed: {e}")
-            results["position_mode"] = {"status": "WARN", "error": str(e)}
+            results["position_mode"] = {"status": "NOT_VERIFIABLE", "error": str(e)}
 
         # --- S5: Open Orders (挂单检查) ---
         print("\n[S5] Open Orders Check...")
         try:
-            oo = await client.get_open_orders()
-            if hasattr(oo, "data"):
-                oo_data = oo.data
-            elif isinstance(oo, list):
-                oo_data = oo
-            else:
-                oo_data = []
+            oo_data = await exchange("GET", Endpoint.OPEN_ORDERS, signed=True)
+            if not isinstance(oo_data, list):
+                raise RuntimeError("open orders response is not a list")
             print(f"  PASS: {len(oo_data)} open orders")
             results["open_orders"] = {"status": "PASS", "count": len(oo_data)}
         except Exception as e:
             print(f"  WARN: open orders query failed: {e}")
-            results["open_orders"] = {"status": "WARN", "error": str(e)}
+            results["open_orders"] = {"status": "NOT_VERIFIABLE", "error": str(e)}
 
         # --- S6: Reconciliation Evidence (对账证据) ---
         print("\n[S6] Reconciliation Evidence...")
         try:
             positions = []
-            acct_full = await client.get_account()
-            if hasattr(acct_full, "data"):
-                acct_data = acct_full.data
-            elif isinstance(acct_full, dict):
-                acct_data = acct_full
-            else:
-                acct_data = {}
+            acct_data = await exchange("GET", Endpoint.ACCOUNT, signed=True)
+            if not isinstance(acct_data, dict):
+                raise RuntimeError("account response is not an object")
 
-            for p in acct_data.get("positions", []):
-                amt = float(p.get("positionAmt", 0))
+            positions_raw = acct_data.get("positions")
+            if not isinstance(positions_raw, list):
+                raise RuntimeError("account positions are UNKNOWN")
+            for p in positions_raw:
+                if not isinstance(p, dict) or "symbol" not in p or "positionAmt" not in p:
+                    raise RuntimeError("account position identity is UNKNOWN")
+                amt = float(p["positionAmt"])
+                if not math.isfinite(amt):
+                    raise RuntimeError("account position amount is non-finite")
                 if abs(amt) > 0:
                     positions.append({"symbol": p["symbol"], "amt": amt})
 
-            balance = acct_data.get("totalWalletBalance", "0")
+            balance = acct_data.get("totalWalletBalance")
+            if balance in (None, ""):
+                raise RuntimeError("account balance is UNKNOWN")
+            if not isinstance(oo_data, list):
+                raise RuntimeError("open orders snapshot is UNKNOWN")
             print(f"  Balance: {balance}  Positions: {len(positions)}")
             print("  PASS: reconciliation data available")
 
             evidence["account_snapshot"] = {
                 "balance": balance,
                 "positions": positions,
-                "open_orders_count": len(oo_data) if "oo_data" in dir() else 0,
+                "open_orders_count": len(oo_data),
             }
             results["reconciliation"] = {"status": "PASS", "positions": len(positions)}
         except Exception as e:
             print(f"  WARN: {e}")
-            results["reconciliation"] = {"status": "WARN", "error": str(e)}
+            results["reconciliation"] = {"status": "NOT_VERIFIABLE", "error": str(e)}
 
         # --- S7: Idempotency Key Test ---
         print("\n[S7] Client Order ID Idempotency...")
@@ -344,14 +399,14 @@ def main() -> int:
             "gate": "G5",
             "status": "FAIL" if has_fail else ("NOT_VERIFIABLE" if has_not_verifiable else "PASS"),
             "commit": commit,
-            "environment": plan.get("environment", "BINANCE_USDM_TESTNET_ONLY"),
+            "environment": plan_environment,
             "testnet_url": testnet_url,
-            "mainnet_prohibited": bool(plan.get("mainnet_prohibited", True)),
+            "mainnet_prohibited": plan_mainnet_prohibited,
             "is_simulated": False,
             "started_at": started_at.isoformat(),
             "ended_at": ended_at.isoformat(),
             "evidence_hash": evidence_hash,
-            "max_notional_usdt": args.max_notional,
+            "max_notional_usdt": requested_max_notional,
             "scenarios": results,
             "observations": observations,
             "account_access": {

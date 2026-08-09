@@ -46,27 +46,93 @@ class EvidenceBundle:
     manifest: dict = field(default_factory=dict)
     evidence_items: list[EvidenceItem] = field(default_factory=list)
     scenario_results: dict[str, ScenarioStatus] = field(default_factory=dict)
+    scenario_evidence_refs: dict[str, tuple[str, ...]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def add_evidence(self, item: EvidenceItem) -> None:
+        if any(
+            not str(value).strip()
+            for value in (item.name, item.source_uri, item.checksum, item.producer, item.commit, item.schema_version)
+        ):
+            raise ValueError("evidence item metadata must be complete")
         self.evidence_items.append(item)
 
     def record_scenario(self, scenario_id: str, status: ScenarioStatus, evidence_refs: list[str] | None = None) -> None:
+        if not str(scenario_id).strip():
+            raise ValueError("scenario_id is required")
         self.scenario_results[scenario_id] = status
+        refs = tuple(str(ref).strip() for ref in (evidence_refs or []) if str(ref).strip())
+        self.scenario_evidence_refs[scenario_id] = refs
+
+    def validate(self) -> tuple[bool, str]:
+        """Validate provenance before a PASS can become a certificate."""
+
+        if not self.bundle_id.strip() or not self.created_at.strip():
+            return False, "bundle_identity_missing"
+        if not isinstance(self.manifest, dict) or not self.manifest:
+            return False, "manifest_missing"
+        required_manifest = (
+            "repository",
+            "commit",
+            "dependency_lock_hash",
+            "container_digest",
+            "policy_version",
+            "dataset_manifest_hash",
+            "account_environment",
+        )
+        if any(not str(self.manifest.get(key, "")).strip() for key in required_manifest):
+            return False, "manifest_context_incomplete"
+        if not self.evidence_items or not self.scenario_results:
+            return False, "evidence_or_scenarios_missing"
+        names = {item.name for item in self.evidence_items}
+        for item in self.evidence_items:
+            if any(
+                not str(value).strip()
+                for value in (
+                    item.name,
+                    item.source_uri,
+                    item.checksum,
+                    item.producer,
+                    item.commit,
+                    item.schema_version,
+                )
+            ):
+                return False, "evidence_item_metadata_incomplete"
+        for scenario_id, status in self.scenario_results.items():
+            refs = self.scenario_evidence_refs.get(scenario_id, ())
+            if status == ScenarioStatus.PASS and (not refs or any(ref not in names for ref in refs)):
+                return False, f"scenario_evidence_unbound:{scenario_id}"
+        return True, "OK"
 
     def compute_bundle_hash(self) -> str:
+        evidence_items = [
+            {
+                "name": item.name,
+                "source_uri": item.source_uri,
+                "checksum": item.checksum,
+                "producer": item.producer,
+                "commit": item.commit,
+                "schema_version": item.schema_version,
+            }
+            for item in self.evidence_items
+        ]
         content = json.dumps(
             {
                 "bundle_id": self.bundle_id,
-                "evidence_checksums": [e.checksum for e in self.evidence_items],
+                "manifest": self.manifest,
+                "evidence_items": evidence_items,
                 "scenario_results": {k: v.value for k, v in self.scenario_results.items()},
+                "scenario_evidence_refs": {key: list(value) for key, value in self.scenario_evidence_refs.items()},
+                "created_at": self.created_at,
             },
             sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(content.encode()).hexdigest()
 
     def is_complete(self) -> bool:
-        return len(self.evidence_items) > 0 and len(self.scenario_results) > 0
+        valid, _reason = self.validate()
+        return valid
 
 
 @dataclass
@@ -92,6 +158,21 @@ class GateCertificate:
         if self.revoked:
             return False
         if self.result != GateResult.PASS:
+            return False
+        required_context = (
+            self.gate_id,
+            self.bundle_hash,
+            self.repository,
+            self.commit,
+            self.dependency_lock_hash,
+            self.container_digest,
+            self.policy_version,
+            self.dataset_manifest_hash,
+            self.account_environment,
+            self.valid_from,
+            self.signature,
+        )
+        if any(not str(value).strip() for value in required_context):
             return False
         if self.valid_until:
             try:
@@ -163,11 +244,20 @@ class GateRunner:
         self, gate_id: str, bundle: EvidenceBundle, commit: str, repo: str = "yhwhhwhy001/beidou"
     ) -> GateCertificate:
         result = self.run_gate(gate_id, bundle.scenario_results)
+        complete, _reason = bundle.validate()
+        if result == GateResult.PASS and not complete:
+            result = GateResult.NOT_VERIFIABLE
+        manifest = bundle.manifest if isinstance(bundle.manifest, dict) else {}
         return GateCertificate(
             gate_id=gate_id,
             result=result,
             bundle_hash=bundle.compute_bundle_hash(),
-            repository=repo,
-            commit=commit,
+            repository=str(manifest.get("repository") or repo),
+            commit=str(manifest.get("commit") or commit),
+            dependency_lock_hash=str(manifest.get("dependency_lock_hash", "")),
+            container_digest=str(manifest.get("container_digest", "")),
+            policy_version=str(manifest.get("policy_version", "")),
+            dataset_manifest_hash=str(manifest.get("dataset_manifest_hash", "")),
+            account_environment=str(manifest.get("account_environment", "")),
             valid_from=datetime.now(timezone.utc).isoformat(),
         )

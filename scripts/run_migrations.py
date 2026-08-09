@@ -24,12 +24,12 @@ def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None
 
     返回: {"applied": [...], "skipped": [...], "errors": [...]}
     """
-    db_url = db_url or os.environ.get(
-        "DATABASE_URL",
-        "postgresql://beidou_app@localhost:5432/beidou_testnet",
-    )
+    db_url = (db_url or os.environ.get("DATABASE_URL", "")).strip()
 
     result = {"applied": [], "skipped": [], "errors": []}
+    if not db_url:
+        result["errors"].append("DATABASE_URL_UNKNOWN: explicit PostgreSQL DSN is required")
+        return result
     migrations_path = Path(migrations_dir)
 
     if not migrations_path.exists():

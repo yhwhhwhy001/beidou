@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -22,31 +23,29 @@ class LadderLevel(str, Enum):
 
 
 LEVEL_CAPITAL_LIMITS: dict[LadderLevel, float] = {}
+CAPITAL_LIMITS_VERIFIED = False
 
 
-def _load_capital_limits() -> dict[LadderLevel, float]:
-    """从 ConfigProvider 加载资本限制，不可用时回退默认值。"""
+def _load_capital_limits() -> tuple[dict[LadderLevel, float], bool]:
+    """从唯一配置源加载资本限制；配置未知时只返回零上限并保持阻断。"""
     try:
         from beidou_shared.config import ConfigProvider
 
         settings = ConfigProvider().load()
         limits = settings.capital_ladder.capital_limits
-        if limits:
-            return {LadderLevel(k): float(v) for k, v in limits.items() if k in LadderLevel.__members__}
+        expected = {level.name for level in LadderLevel}
+        if not limits or set(limits) != expected or settings.source.startswith("safety_only"):
+            raise ValueError("capital limits are incomplete or safety-only")
+        parsed = {LadderLevel(k): float(v) for k, v in limits.items() if k in LadderLevel.__members__}
+        if len(parsed) != len(LadderLevel) or any(not math.isfinite(v) or v < 0 for v in parsed.values()):
+            raise ValueError("capital limits contain invalid values")
+        return parsed, True
     except Exception as exc:
-        logger.warning("capital limits config unavailable; using fail-safe defaults: %s", type(exc).__name__)
-    # 默认值（与 YAML production_ladder.capital_limits 保持一致）
-    return {
-        LadderLevel.L0_PAPER: 0.0,
-        LadderLevel.L1_SHADOW: 0.0,
-        LadderLevel.L2_CANARY: 100.0,
-        LadderLevel.L3_RAMP: 1000.0,
-        LadderLevel.L4_NORMAL: 10000.0,
-        LadderLevel.L5_CHAMPION: 50000.0,
-    }
+        logger.warning("capital limits config unavailable; ladder remains blocked: %s", type(exc).__name__)
+    return dict.fromkeys(LadderLevel, 0.0), False
 
 
-LEVEL_CAPITAL_LIMITS = _load_capital_limits()
+LEVEL_CAPITAL_LIMITS, CAPITAL_LIMITS_VERIFIED = _load_capital_limits()
 
 
 @dataclass
@@ -67,17 +66,58 @@ class GateCertificate:
 class ProductionLadder:
     """实盘阶梯管理器。Gate 独立发证，不可跳级。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        capital_limits: dict[LadderLevel, float] | None = None,
+        *,
+        max_drawdown_pct: float | None = None,
+        max_incidents: int | None = None,
+    ) -> None:
         self._certificates: dict[LadderLevel, GateCertificate] = {}
         self._current_level: LadderLevel = LadderLevel.L0_PAPER
+        if capital_limits is None:
+            self._capital_limits = dict(LEVEL_CAPITAL_LIMITS)
+            self._configuration_verified = CAPITAL_LIMITS_VERIFIED
+        else:
+            if set(capital_limits) != set(LadderLevel) or any(
+                not math.isfinite(float(value)) or float(value) < 0 for value in capital_limits.values()
+            ):
+                raise ValueError("capital_limits must explicitly define every ladder level")
+            self._capital_limits = {level: float(value) for level, value in capital_limits.items()}
+            self._configuration_verified = True
+        self._max_drawdown_pct = max_drawdown_pct
+        self._max_incidents = max_incidents
+        if max_drawdown_pct is None or max_incidents is None:
+            try:
+                from beidou_shared.config import ConfigProvider
+
+                settings = ConfigProvider().load()
+                if not settings.source.startswith("safety_only"):
+                    if self._max_drawdown_pct is None:
+                        self._max_drawdown_pct = float(settings.production.max_drawdown_pct)
+                    if self._max_incidents is None:
+                        self._max_incidents = int(settings.production.max_consecutive_losses)
+            except Exception as exc:
+                logger.warning("degradation policy unavailable; ladder remains fail-closed: %s", type(exc).__name__)
+        self._degradation_policy_verified = (
+            self._max_drawdown_pct is not None
+            and self._max_incidents is not None
+            and math.isfinite(float(self._max_drawdown_pct))
+            and float(self._max_drawdown_pct) >= 0
+            and int(self._max_incidents) >= 0
+        )
 
     def certify(self, level: LadderLevel, result: GateResult, evidence: list[str]) -> GateCertificate:
+        if result == GateResult.PASS and (
+            not self._configuration_verified or not evidence or any(not str(e).strip() for e in evidence)
+        ):
+            result = GateResult.UNVERIFIABLE
         cert = GateCertificate(
             gate=f"G{list(LadderLevel).index(level) + 4}",
             level=level,
             result=result,
             evidence_paths=evidence,
-            capital_limit=LEVEL_CAPITAL_LIMITS[level],
+            capital_limit=self._capital_limits.get(level, 0.0),
         )
         self._certificates[level] = cert
         if result == GateResult.PASS:
@@ -90,6 +130,8 @@ class ProductionLadder:
         target_idx = levels.index(target)
         if target_idx <= current_idx:
             return False
+        if not self._configuration_verified:
+            return False
         for i in range(current_idx + 1, target_idx):
             cert = self._certificates.get(levels[i])
             if cert is None or cert.result != GateResult.PASS:
@@ -97,10 +139,12 @@ class ProductionLadder:
         return True
 
     def current_capital_limit(self) -> float:
-        return LEVEL_CAPITAL_LIMITS[self._current_level]
+        return self._capital_limits.get(self._current_level, 0.0)
 
     def should_degrade(self, pnl_drawdown_pct: float, sharpe_rolling: float | None, incident_count: int) -> bool:
         """晋级不使用短期正 Sharpe 作为单一条件。"""
-        if incident_count > 3:
+        if not self._degradation_policy_verified or self._max_drawdown_pct is None or self._max_incidents is None:
             return True
-        return pnl_drawdown_pct > 20.0
+        if incident_count > int(self._max_incidents):
+            return True
+        return pnl_drawdown_pct > float(self._max_drawdown_pct)

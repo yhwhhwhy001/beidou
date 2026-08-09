@@ -7,29 +7,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-import hmac
-import json
 import os
 import sys
-import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 _proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _proj_root)
 
-import yaml
+from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_shared.config import ConfigProvider
 
-# === 配置加载 ===
-with open(os.path.join(_proj_root, "config", "env.testnet.yaml")) as f:
-    cfg = yaml.safe_load(f)
-
-REST_URL = cfg["exchange"]["binance_usdm"]["rest_base_url"]
-API_KEY = str(cfg["exchange"]["binance_usdm"].get("api_key", "")).strip()
-API_SECRET = str(cfg["exchange"]["binance_usdm"].get("api_secret", "")).strip()
+# === 配置与唯一传输边界 ===
+settings = ConfigProvider().load()
+REST_URL = str(settings.exchange.rest_base_url or "").strip()
+if not REST_URL:
+    raise RuntimeError("historical diagnostic REST URL is UNKNOWN")
+_transport = BinanceRESTClient(
+    rest_url=REST_URL,
+    api_key=os.environ.get("BEIDOU_BINANCE_API_KEY", ""),
+    api_secret=os.environ.get("BEIDOU_BINANCE_API_SECRET", ""),
+)
+_adapter = BinanceUsdmAdapter(rest_client=_transport)
 
 # === 测试框架 ===
 passed = 0
@@ -51,42 +54,18 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def section(title: str) -> None:
-    pass
+    print(f"\n=== {title} ===", flush=True)  # noqa: T201
 
 
 # === Binance API ===
 def api(path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-    url = REST_URL + path
-    headers = {"X-MBX-APIKEY": API_KEY}
-    if params is None:
-        params = {}
-    if signed:
-        params["timestamp"] = int(time.time() * 1000)
-        params["recvWindow"] = 60000
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        params["signature"] = hmac.new(API_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
-    qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    if method == "POST":
-        req = urllib.request.Request(url, data=qs.encode(), headers=headers)
-    elif method == "DELETE":
-        req = urllib.request.Request(url + "?" + qs, headers=headers)
-        req.method = method
-    else:
-        req = urllib.request.Request(url + "?" + qs, headers=headers)
-        req.method = method
-    for _attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            err = {"error": e.code, "msg": e.read().decode()}
-            if e.code == 429:
-                time.sleep(1)
-                continue
-            return err
-        except Exception:
-            time.sleep(0.5)
-    return {"error": -1, "msg": "retry exhausted"}
+    if method.upper() != "GET":
+        raise ValueError("historical diagnostic is read-only")
+    result = asyncio.run(_adapter.request("GET", path, signed=signed, params=params or {}))
+    if not result.is_success() or result.data is None:
+        error = getattr(result, "error", None)
+        raise RuntimeError(f"historical market data UNKNOWN: {error or 'request failed'}")
+    return result.data
 
 
 # ================================================================
@@ -106,7 +85,7 @@ for symbol in SYMBOLS:
         limits = {"5m": 1000, "15m": 500, "1h": 300, "4h": 200, "1d": 90}
         limit = limits.get(interval, 100)
         klines_raw = api(
-            "/fapi/v1/klines",
+            Endpoint.KLINES,
             params={
                 "symbol": symbol,
                 "interval": interval,
@@ -281,11 +260,11 @@ for symbol in SYMBOLS:
         vol_pct = 0
 
     # Spread from ticker
-    ticker_data = api("/fapi/v1/ticker/24hr", params={"symbol": symbol})
+    ticker_data = api(Endpoint.TICKER_24HR, params={"symbol": symbol})
     spread_bps = 0.0
     if "lastPrice" in ticker_data:
         # Use order book for spread
-        depth = api("/fapi/v1/depth", params={"symbol": symbol, "limit": 5})
+        depth = api(Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
         if isinstance(depth, dict) and "bids" in depth:
             best_bid = float(depth["bids"][0][0])
             best_ask = float(depth["asks"][0][0])
@@ -682,7 +661,8 @@ section("诊断总结")
 
 if klines_1h:
     duration_h = (klines_1h[-1]["open_time"] - klines_1h[0]["open_time"]).total_seconds() / 3600
-if klines_1h:
-    pass
+    check("Summary.1 历史样本跨度", duration_h > 0, f"duration_h={duration_h:.2f}")
+else:
+    check("Summary.1 历史样本跨度", False, "NO_CLOSED_KLINE_SAMPLE")
 
 sys.exit(0 if failed == 0 else 1)

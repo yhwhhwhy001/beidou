@@ -14,3 +14,14 @@
 | P0-10 | 同源对账和差异过滤 | P0 | 失真 | T13 | G1 |
 | P0-11 | 本地轮询保护、缺原生 ACK | P0 | 部分实现 | T11 | G4 |
 | P0-12 | 硬编码交易池/风险/策略参数 | P0 | 不可治理 | T02,T06,T07,T17 | G3 |
+
+## 2026-08-10 对照增量
+
+| 现状 | 结论 |
+|---|---|
+| G5 runner 与历史诊断已统一 Adapter；旧 live/e2e 工具已退役 | 交易所旁路的本地代码阻断已收敛；真实 Testnet 协议矩阵仍未验证 |
+| Feed 外部失败已转为 `MarketDataUnknownError`，WS 失败不再宣称健康 | 行情错误语义已收敛；真实 WS 连续性、gap-fill、closed-bar 仍是外部门 |
+| certification evidence/chaos/capital ladder 已 fail-closed | 证据自证、非零默认晋级风险已关闭；签名、PG/PITR、运行时证据仍缺 |
+| 引擎 legacy strategy/参数、内存兼容 outbox、双账本/状态投影仍存在 | P0-05/P0-07/P0-08/P0-09/P0-12 不能标记完成，必须继续迁移或隔离 |
+
+详细逐项证据与未关闭阻断见 `docs/optimization/16_REMAINING_GAPS.md`。

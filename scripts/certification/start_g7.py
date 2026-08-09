@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="G7 Unattended Certification Window Starter")
     parser.add_argument("--plan", default="config/g7-unattended-plan.yaml")
     parser.add_argument("--g5-plan", default="config/g5-testnet-plan.yaml", help="用于验证前置 G5 的场景计划")
-    parser.add_argument("--duration", type=int, default=30, help="认证天数 (default: 30)")
+    parser.add_argument("--duration", type=int, default=None, help="认证天数（不得低于 G7 plan）")
     parser.add_argument("--window-id", help="指定窗口 ID（自动生成）")
     parser.add_argument(
         "--preflight-port",
@@ -42,13 +43,41 @@ def main() -> int:
     # Load plan
     with open(args.plan) as f:
         plan = yaml.safe_load(f)
+    if not isinstance(plan, dict):
+        print("ERROR: G7 plan must be a mapping")
+        return 1
+    plan_duration = plan.get("duration_days")
+    if not isinstance(plan_duration, int) or plan_duration < 30:
+        print("ERROR: G7 plan must explicitly define duration_days >= 30")
+        return 1
+    duration_days = plan_duration if args.duration is None else args.duration
+    if duration_days < plan_duration:
+        print(f"ERROR: requested duration {duration_days} is below plan duration {plan_duration}")
+        return 1
+    if plan.get("requires_g5") is not True or plan.get("mainnet_prohibited") is not True:
+        print("ERROR: G7 plan must explicitly require G5 and prohibit Mainnet")
+        return 1
+    plan_version = plan.get("_version")
+    if not isinstance(plan_version, str) or not plan_version.strip():
+        print("ERROR: G7 plan must explicitly define _version")
+        return 1
+    reset_conditions = plan.get("reset_conditions")
+    required_sli = plan.get("required_sli")
+    if (
+        not isinstance(reset_conditions, list)
+        or not reset_conditions
+        or not isinstance(required_sli, list)
+        or not required_sli
+    ):
+        print("ERROR: G7 plan must define reset_conditions and required_sli")
+        return 1
 
     print(f"Plan: {args.plan}")
-    print(f"Duration: {args.duration} days")
-    print(f"Requires G5: {plan.get('requires_g5', True)}")
+    print(f"Duration: {duration_days} days")
+    print(f"Requires G5: {plan['requires_g5']}")
     print("Mainnet: PROHIBITED")
-    print(f"Reset conditions: {plan.get('reset_conditions', [])}")
-    print(f"Required SLI: {plan.get('required_sli', [])}")
+    print(f"Reset conditions: {reset_conditions}")
+    print(f"Required SLI: {required_sli}")
 
     # G7 must not create a durable window from an artifact that could not
     # start the same guarded Testnet runtime.  Port 0 keeps this read-only
@@ -77,10 +106,25 @@ def main() -> int:
         print(f"ERROR: G5 plan not found at {g5_plan_path}")
         return 1
     with open(g5_plan_path) as f:
-        g5_plan = yaml.safe_load(f) or {}
+        g5_plan = yaml.safe_load(f)
+    if not isinstance(g5_plan, dict):
+        print(f"ERROR: G5 plan must be a mapping: {g5_plan_path}")
+        return 1
     expected_g5_scenarios = [str(s) for s in g5_plan.get("scenarios", [])]
     if not expected_g5_scenarios:
         print(f"ERROR: G5 plan has no scenarios: {g5_plan_path}")
+        return 1
+    raw_max_notional = g5_plan.get("max_test_notional_usdt")
+    if raw_max_notional in (None, ""):
+        print(f"ERROR: G5 plan has no max_test_notional_usdt: {g5_plan_path}")
+        return 1
+    try:
+        max_notional = float(raw_max_notional)
+    except (TypeError, ValueError):
+        print(f"ERROR: G5 plan max_test_notional_usdt is invalid: {g5_plan_path}")
+        return 1
+    if not math.isfinite(max_notional) or max_notional <= 0:
+        print(f"ERROR: G5 plan max_test_notional_usdt must be positive: {g5_plan_path}")
         return 1
 
     # Bind G7 to the exact code and complete Testnet scenario set that
@@ -94,7 +138,7 @@ def main() -> int:
         g5_cert,
         expected_commit=commit,
         expected_scenarios=expected_g5_scenarios,
-        max_notional_usdt=float(g5_plan.get("max_test_notional_usdt", 20)),
+        max_notional_usdt=max_notional,
     )
     if not g5_verification.passed:
         print(f"ERROR: G5 certificate is not independently verifiable: {g5_verification.failures}")
@@ -110,8 +154,8 @@ def main() -> int:
     evidence_dir.mkdir(parents=True, exist_ok=True)
     engine = UnattendedCertification(str(evidence_dir))
     window = engine.create_window(
-        plan_version=plan.get("_version", "1.0"),
-        duration_days=args.duration,
+        plan_version=plan_version,
+        duration_days=duration_days,
         commit=commit,
         g5_hash=g5_hash,
         window_id=args.window_id,
@@ -127,13 +171,13 @@ def main() -> int:
     # Save window manifest
     manifest = {
         "window_id": window_id,
-        "plan_version": plan.get("_version", "1.0"),
-        "duration_days": args.duration,
+        "plan_version": plan_version,
+        "duration_days": duration_days,
         "started_at": window.started_at.isoformat(),
         "commit": commit,
         "g5_certificate_hash": g5_hash,
-        "reset_conditions": plan.get("reset_conditions", []),
-        "required_sli": plan.get("required_sli", []),
+        "reset_conditions": reset_conditions,
+        "required_sli": required_sli,
         "mainnet_prohibited": True,
         "auto_mainnet": False,
         "disclaimer": "G7 certification does NOT grant Mainnet access. G8 requires separate human approval.",
@@ -143,7 +187,7 @@ def main() -> int:
 
     print(f"\nWindow ID: {window_id}")
     print(f"Started: {window.started_at.isoformat()}")
-    print(f"Expected completion: {args.duration} days from now")
+    print(f"Expected completion: {duration_days} days from now")
     print(f"Evidence dir: {evidence_dir}")
     print("\nNext steps:")
     print("  1. System runs unattended in Testnet mode")

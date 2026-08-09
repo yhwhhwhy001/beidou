@@ -1,3 +1,4 @@
+_version: 1.0.0
 duration_days: 30
 requires_g5: true
 mainnet_prohibited: true

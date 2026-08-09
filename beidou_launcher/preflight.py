@@ -45,8 +45,13 @@ def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, d
         certificate = json.loads(certificate_path.read_text(encoding="utf-8"))
         plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
         expected_scenarios = plan.get("scenarios") if isinstance(plan, dict) else None
-        max_notional = plan.get("max_test_notional_usdt", 20) if isinstance(plan, dict) else 20
-        if not isinstance(certificate, dict) or not isinstance(expected_scenarios, list) or not expected_scenarios:
+        max_notional = plan.get("max_test_notional_usdt") if isinstance(plan, dict) else None
+        if (
+            not isinstance(certificate, dict)
+            or not isinstance(expected_scenarios, list)
+            or not expected_scenarios
+            or max_notional in (None, "")
+        ):
             return False, "G5 certificate or scenario plan is malformed", evidence
         from beidou_certification.gate_verifier import verify_g5_certificate
 

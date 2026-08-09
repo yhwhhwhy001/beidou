@@ -40,7 +40,10 @@ class HealthServer:
     def __init__(self, port: int = 9090, bind_host: str = "127.0.0.1") -> None:
         self._port = port
         self._bind_host = bind_host
-        self._start_time = time.time()
+        # Uptime is a process-liveness interval, not an audit timestamp.
+        # Monotonic time prevents NTP/manual wall-clock changes from making a
+        # healthy process appear to have negative or implausibly long uptime.
+        self._start_time = time.monotonic()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -85,7 +88,7 @@ class HealthServer:
         self._factor_provider = fn
 
     def uptime_seconds(self) -> float:
-        return time.time() - self._start_time
+        return time.monotonic() - self._start_time
 
     def start(self) -> None:
         server = self

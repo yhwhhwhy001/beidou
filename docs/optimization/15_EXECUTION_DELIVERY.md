@@ -114,3 +114,18 @@
 - 代码回滚只能回到 schema 兼容的已验证制品；数据库采用前向补偿，不做未经验证的逆向迁移。
 - 先前外部自动生成物清理提交删除了部分 tracked evidence artifacts；在恢复历史证据前必须先核对提交、哈希和来源，本轮不把缺失文件补造为新证据。
 - 要继续真实 Testnet，必须先取得具名授权：保存当前 DB/WAL/监督证据、取得交易所只读快照、确认活跃订单归属与保护覆盖，然后再按治理停机流程处置。
+
+## 2026-08-10 continuation
+
+与源提示词逐项对照后，本轮又完成了以下本地收敛：
+
+- `tools/` 的可执行直连交易/订单探针已退役；G5 与历史诊断统一使用 Adapter/Endpoint；
+- G5 URL、最大名义金额和 plan 关键字段不再使用运行时默认，交易所失败回包保持 UNKNOWN；
+- certification evidence hash 绑定完整 provenance 与场景证据引用，缺 required evidence 不得 PASS；
+- ChaosEngine 无独立 observer 时不再自证恢复；资本阶梯配置未知时不允许晋级；
+- MarketDataFeed 外部失败改为显式 `MarketDataUnknownError`，WS 失败进入 UNKNOWN，时长/新鲜度统一 monotonic；
+- CI compile/lint 覆盖脚本和工具，禁止模式扫描不再允许脚本交易旁路。
+- PostgreSQL 因子持久化不再猜测 localhost DSN 或运行时建表；DSN/schema 未验证时保持不可用并记录原因。
+- Health uptime 与 G7 诊断窗口的经过时间/样本淘汰改用 monotonic 时钟，墙钟只保留为审计显示。
+
+本轮新鲜本地证据：全量 `1273 passed, 1 skipped`（1274 collected）；ruff/format/compile/package/quality/forbidden scans 通过。覆盖率 **66.77%**，仍低于 85% 发布门；本地未安装 Bandit/pip-audit。没有执行 Testnet 写场景、重启、部署或 Git 交付。详见 `16_REMAINING_GAPS.md`。

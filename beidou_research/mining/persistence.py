@@ -54,64 +54,58 @@ class PostgreSQLFactorStore:
     """
 
     def __init__(self, conn_string: str = "", auto_connect: bool = True) -> None:
-        self.conn_string = conn_string or os.environ.get(
-            "BEIDOU_DATABASE_URL",
-            "postgresql://localhost:5432/beidou",
-        )
+        self.conn_string = (conn_string or os.environ.get("BEIDOU_DATABASE_URL", "")).strip()
         self._conn = None
         self._available = False
+        self._last_error = ""
         if auto_connect:
             self._try_connect()
 
     def _try_connect(self) -> bool:
         """尝试连接数据库。连接失败时 Fail-Closed。"""
+        if not self.conn_string:
+            self._last_error = "DATABASE_URL_UNKNOWN"
+            return False
         try:
             import psycopg
 
             self._conn = psycopg.connect(self.conn_string)
             self._available = True
-            self._init_schema()
+            self._verify_schema()
             return True
-        except Exception:
+        except Exception as exc:
             self._available = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return False
 
-    def _init_schema(self) -> None:
-        """初始化核心表（使用最小 schema，完整版见 schema_pg.sql）。"""
+    def _verify_schema(self) -> None:
+        """Verify migrations created the factor tables; never create them at runtime."""
         if not self._available or self._conn is None:
-            return
-        try:
-            with self._conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS factor_versions (
-                        factor_id TEXT NOT NULL,
-                        version TEXT NOT NULL,
-                        data_json JSONB NOT NULL,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        artifact_hash TEXT NOT NULL,
-                        PRIMARY KEY (factor_id, version)
-                    )
-                """)
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS gate_decisions (
-                        id SERIAL PRIMARY KEY,
-                        factor_id TEXT NOT NULL,
-                        from_state TEXT NOT NULL,
-                        to_state TEXT NOT NULL,
-                        evidence_bundle_hash TEXT NOT NULL,
-                        decision TEXT NOT NULL,
-                        reason TEXT DEFAULT '',
-                        operator_id TEXT DEFAULT 'system',
-                        decided_at TIMESTAMPTZ DEFAULT NOW()
-                    )
-                """)
-                self._conn.commit()
-        except Exception:
-            self._available = False
+            raise RuntimeError("factor store connection is unavailable")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name = ANY(%s)
+                """,
+                (["factor_versions", "gate_decisions"],),
+            )
+            tables = {str(row[0]) for row in cur.fetchall()}
+        required = {"factor_versions", "gate_decisions"}
+        if tables != required:
+            raise RuntimeError(f"factor store schema UNKNOWN: missing={sorted(required - tables)}")
 
     @property
     def is_available(self) -> bool:
         return self._available
+
+    @property
+    def last_error(self) -> str:
+        """Return an auditable reason when the store is unavailable."""
+
+        return self._last_error
 
     def save_factor_version(self, factor_id: str, version: str, data: dict) -> bool:
         if not self._available:
@@ -130,8 +124,9 @@ class PostgreSQLFactorStore:
                 )
                 self._conn.commit()
             return True
-        except Exception:
+        except Exception as exc:
             self._available = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return False
 
     def get_factor_version(self, factor_id: str, version: str) -> dict | None:
@@ -147,7 +142,8 @@ class PostgreSQLFactorStore:
             if row:
                 return json.loads(row[0])
             return None
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return None
 
     def list_versions(self, factor_id: str) -> list[str]:
@@ -160,7 +156,8 @@ class PostgreSQLFactorStore:
                     (factor_id,),
                 )
                 return [r[0] for r in cur.fetchall()]
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return []
 
     def save_gate_decision(self, factor_id: str, decision: dict) -> bool:
@@ -184,8 +181,9 @@ class PostgreSQLFactorStore:
                 )
                 self._conn.commit()
             return True
-        except Exception:
+        except Exception as exc:
             self._available = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return False
 
     def get_gate_history(self, factor_id: str) -> list[dict]:
@@ -210,13 +208,19 @@ class PostgreSQLFactorStore:
                     }
                     for r in cur.fetchall()
                 ]
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return []
 
     def close(self) -> None:
         if self._conn:
-            with contextlib.suppress(Exception):
+            try:
                 self._conn.close()
+            except Exception as exc:
+                self._last_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                self._conn = None
+                self._available = False
 
 
 # ================================================================

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,9 +61,26 @@ class ChaosEngine:
         self._experiments.append(exp)
         return exp
 
-    def verify_recovery(self, exp: ChaosExperiment, recovered: bool, time_s: float, invariants_ok: bool) -> None:
+    def verify_recovery(
+        self,
+        exp: ChaosExperiment,
+        recovered: bool,
+        time_s: float | None,
+        invariants_ok: bool,
+    ) -> None:
+        """Record an observation supplied by an independent verifier.
+
+        The chaos engine is an injector and evidence collector; it cannot
+        certify its own recovery.  ``run_chaos_cycle`` therefore leaves an
+        experiment ``UNKNOWN`` unless the caller supplies a real observer.
+        """
+
+        if not isinstance(recovered, bool) or not isinstance(invariants_ok, bool):
+            raise TypeError("chaos recovery observations must use strict booleans")
+        if time_s is not None and (not isinstance(time_s, (int, float)) or not math.isfinite(float(time_s))):
+            raise ValueError("chaos recovery time must be finite or None")
         exp.observed_recovery = recovered
-        exp.recovery_time_seconds = time_s
+        exp.recovery_time_seconds = float(time_s) if time_s is not None else None
         exp.invariants_preserved = invariants_ok
 
     def all_experiments_passed(self) -> bool:
@@ -154,7 +172,9 @@ class ChaosEngine:
     def run_chaos_cycle(self, engine: Any = None) -> list[ChaosExperiment]:
         """运行完整的混沌工程周期：注入 → 观测 → 验证 → 清理。
 
-        如果提供 engine 引用，会在 engine 的内置计数器上记录观测结果。
+        如果提供 engine 引用，必须实现
+        ``observe_chaos_recovery(exp) -> {recovered, time_s, invariants_ok}``
+        才能写入恢复证据；没有独立观测器时结果保持 UNKNOWN/失败。
         """
         scenarios: list[tuple[KillScenario, str]] = [
             (KillScenario.CPU_EXHAUSTION, "cpu_stress"),
@@ -163,7 +183,7 @@ class ChaosEngine:
         ]
         results: list[ChaosExperiment] = []
         for scenario, method_name in scenarios:
-            exp = self.inject(scenario)
+            exp: ChaosExperiment | None = None
             try:
                 if method_name == "cpu_stress":
                     exp = self.inject_cpu_stress(duration_seconds=3.0, num_threads=1)
@@ -171,11 +191,40 @@ class ChaosEngine:
                     exp = self.inject_memory_pressure(size_mb=50)
                 elif method_name == "latency_injection":
                     exp = self.inject_latency(latency_seconds=0.5)
-                # 验证恢复
-                self.verify_recovery(exp, recovered=True, time_s=0.5, invariants_ok=True)
+                if exp is None:
+                    raise RuntimeError(f"unsupported chaos method: {method_name}")
+
+                observer = getattr(engine, "observe_chaos_recovery", None) if engine is not None else None
+                if not callable(observer):
+                    exp.evidence.append("recovery_observation: UNKNOWN (independent observer required)")
+                    self.verify_recovery(exp, recovered=False, time_s=None, invariants_ok=False)
+                else:
+                    observation = observer(exp)
+                    if not isinstance(observation, dict):
+                        raise TypeError("chaos observer must return a mapping")
+                    recovered = observation.get("recovered")
+                    time_s = observation.get("time_s")
+                    invariants_ok = observation.get("invariants_ok")
+                    if not isinstance(recovered, bool) or not isinstance(invariants_ok, bool):
+                        raise TypeError("chaos observer must return strict booleans")
+                    if time_s is not None and not isinstance(time_s, (int, float)):
+                        raise TypeError("chaos observer time_s must be numeric or None")
+                    time_value = float(time_s) if time_s is not None else None
+                    self.verify_recovery(exp, recovered, time_value, invariants_ok)
+                    exp.evidence.append("recovery_observation: independent observer")
             except Exception as exc:
+                # A verifier error is evidence of an unverifiable recovery,
+                # never a reason to manufacture a PASS.
+                if exp is None:
+                    exp = self.inject(scenario)
+                assert exp is not None
                 exp.evidence.append(f"chaos_cycle_error: {exc}")
+                self.verify_recovery(exp, recovered=False, time_s=None, invariants_ok=False)
             finally:
+                if exp is None:
+                    exp = self.inject(scenario)
+                assert exp is not None
                 self.cleanup_experiment(exp)
+            assert exp is not None
             results.append(exp)
         return results

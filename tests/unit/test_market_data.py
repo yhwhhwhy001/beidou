@@ -91,10 +91,11 @@ async def test_market_data_feed_stop_ws_uses_client_close_contract():
 
 @pytest.mark.asyncio
 async def test_market_data_feed_rejects_unclosed_rest_bar():
-    from beidou_core.feed import MarketDataFeed
+    from beidou_core.feed import MarketDataFeed, MarketDataUnknownError
 
     feed = MarketDataFeed(client=_UnclosedBarClient())
-    assert await feed.async_fetch_klines("BTCUSDT", "1h") == []
+    with pytest.raises(MarketDataUnknownError):
+        await feed.async_fetch_klines("BTCUSDT", "1h")
 
 
 @pytest.mark.asyncio
@@ -107,6 +108,15 @@ async def test_market_data_feed_skips_malformed_rest_rows_without_zero_or_nan_fa
     assert len(rows) == 1
     assert rows[0]["open"] == 99.0
     assert rows[0]["close"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_sync_compatibility_wrapper_is_safe_inside_running_loop():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    ticker = feed.fetch_ticker("BTCUSDT")
+    assert ticker["lastPrice"] == "100"
 
 
 def test_kline_features_reject_non_finite_or_inconsistent_bars():

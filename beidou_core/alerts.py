@@ -32,7 +32,7 @@ class AlertDispatcher:
     def __init__(
         self,
         webhook_url: str = "",
-        alerts_file: str = "/tmp/beidou_alerts.jsonl",
+        alerts_file: str = "evidence/beidou_alerts.jsonl",
         delivery_file: str | None = None,
         max_delivery_attempts: int = 5,
     ) -> None:
@@ -130,7 +130,9 @@ class AlertDispatcher:
             "detected_at": incident.detected_at.isoformat(),
             "status": incident.status.value,
         }
-        with open(self._alerts_file, "a") as f:
+        alert_path = Path(self._alerts_file)
+        alert_path.parent.mkdir(parents=True, exist_ok=True)
+        with alert_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _send_webhook(self, incident: Incident) -> bool:

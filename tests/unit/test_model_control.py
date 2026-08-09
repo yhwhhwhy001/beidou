@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
 from beidou_chaos.engine import ChaosEngine, KillScenario
 from beidou_control.plane import AccountFactOverview, ControlAction, ControlPlane
 from beidou_production.ladder import GateResult, LadderLevel, ProductionLadder
@@ -112,6 +114,25 @@ class TestChaosEngine:
         exps = engine.combination_fault_test([KillScenario.DATABASE_FAILURE, KillScenario.KAFKA_OUTAGE])
         assert len(exps) == 2
 
+    def test_recovery_verification_requires_strict_observation(self):
+        engine = ChaosEngine()
+        exp = engine.inject(KillScenario.EXCHANGE_DISCONNECT)
+        with pytest.raises(TypeError):
+            engine.verify_recovery(exp, recovered=1, time_s=1.0, invariants_ok=True)  # type: ignore[arg-type]
+
+    def test_cycle_without_independent_observer_is_not_passed(self, monkeypatch):
+        engine = ChaosEngine()
+        # Avoid resource-heavy fault implementations; the contract under test
+        # is the absence of a self-authored recovery PASS.
+        monkeypatch.setattr(engine, "inject_cpu_stress", lambda **_: engine.inject(KillScenario.CPU_EXHAUSTION))
+        monkeypatch.setattr(engine, "inject_memory_pressure", lambda **_: engine.inject(KillScenario.MEMORY_PRESSURE))
+        monkeypatch.setattr(engine, "inject_latency", lambda **_: engine.inject(KillScenario.NETWORK_PARTITION))
+
+        results = engine.run_chaos_cycle()
+        assert results
+        assert all(not exp.observed_recovery for exp in results)
+        assert not engine.all_experiments_passed()
+
 
 class TestProductionLadder:
     def test_cannot_skip_levels(self):
@@ -119,17 +140,17 @@ class TestProductionLadder:
         assert not ladder.can_promote_to(LadderLevel.L5_CHAMPION)
 
     def test_promote_step_by_step(self):
-        ladder = ProductionLadder()
-        ladder.certify(LadderLevel.L1_SHADOW, GateResult.PASS, [])
-        ladder.certify(LadderLevel.L2_CANARY, GateResult.PASS, [])
+        ladder = ProductionLadder(capital_limits=dict.fromkeys(LadderLevel, 0.0))
+        ladder.certify(LadderLevel.L1_SHADOW, GateResult.PASS, ["shadow-evidence"])
+        ladder.certify(LadderLevel.L2_CANARY, GateResult.PASS, ["canary-evidence"])
         assert ladder.can_promote_to(LadderLevel.L3_RAMP)
 
     def test_degradation_on_drawdown(self):
-        ladder = ProductionLadder()
+        ladder = ProductionLadder(max_drawdown_pct=20.0, max_incidents=3)
         assert ladder.should_degrade(25.0, 1.5, 0)
 
     def test_no_degradation_normal(self):
-        ladder = ProductionLadder()
+        ladder = ProductionLadder(max_drawdown_pct=20.0, max_incidents=3)
         assert not ladder.should_degrade(5.0, 1.5, 0)
 
 
