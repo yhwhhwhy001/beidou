@@ -1058,6 +1058,14 @@ class BeidouSupervisor:
             self._install_resume_interlock()
             self._install_health_callbacks()
 
+            # DEV_BYPASS: Paper 模式下自动激活因子和交易池
+            if self.mode == "paper":
+                try:
+                    from beidou_bootstrap.dev import patch_engine_for_dev
+                    patch_engine_for_dev(self.engine, self.mode)
+                except Exception as _bootstrap_exc:
+                    print(f"[supervisor] 开发引导失败（非致命）: {_bootstrap_exc}")
+
             wiring = inspect_engine_wiring(self.engine, self.mode)
             self.report.phase = "CONSTRUCTION_VALIDATION"
             self.report.replace_phase_checks("runtime.", wiring)
