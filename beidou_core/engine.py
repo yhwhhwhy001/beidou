@@ -2802,13 +2802,15 @@ class AutonomousEngine:
         """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。
 
         BD-FIX (S4): 保护单下发前检查控制面状态，
-        LOCK/EMERGENCY_FLATTEN 时禁止创建新保护单。
+        LOCK/EMERGENCY_FLATTEN 时跳过交易所下单但仍注册本地保护，
+        避免监控假阳性 MISSING_SL/MISSING_TP → LOCK 死循环。
         """
-        # 控制面门禁: LOCK/EMERGENCY_FLATTEN 下禁止保护单操作
+        # BD-FIX: LOCK/EMERGENCY_FLATTEN 下仅跳过交易所下单，本地注册照常执行。
         ctrl_state = self._control.get_status()
-        if ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            print(f"[protection] SKIP: control plane is {ctrl_state.value} — no protection placement")
-            return
+        skip_exchange_orders = ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN)
+        if skip_exchange_orders:
+            print(f"[protection] Control plane is {ctrl_state.value} — skipping exchange order placement, "
+                  f"local registration will proceed")
         try:
             account = self._last_account
             if not account or "positions" not in account:
@@ -2844,9 +2846,14 @@ class AutonomousEngine:
             if not unprotected:
                 return
 
+            if skip_exchange_orders:
+                print(f"[startup] {len(unprotected)} positions without protection — skipping exchange orders (control={ctrl_state.value})")
+
             print(f"[startup] {len(unprotected)} positions without protection, placing orders...")
             for symbol, data in unprotected.items():
                 try:
+                    if skip_exchange_orders:
+                        continue
                     amt = data["amt"]
                     entry = data["entry"]
                     side = "SELL" if amt > 0 else "BUY"
@@ -3215,6 +3222,8 @@ class AutonomousEngine:
             return
 
         # === 幽灵仓位清理：交易所已无持仓但系统仍追踪的保护单 ===
+        # BD-FIX: 防抖清理 — 仅在连续 N 轮确认零持仓后才删除本地保护，
+        # 避免因 _last_account 瞬时快照缺失而误删正在使用的保护单。
         exchange_positions_raw = self._last_account.get("positions", [])
         exchange_symbols: set[str] = set()
         for ep in exchange_positions_raw:
@@ -3223,11 +3232,25 @@ class AutonomousEngine:
             if abs(amt) > 0 and sym:
                 exchange_symbols.add(sym)
 
+        _GHOST_DEBOUNCE_ROUNDS = 3
+        if not hasattr(self, '_ghost_absence_count'):
+            self._ghost_absence_count: dict[str, int] = {}
+
         for old_pid, old_pp in list(self._protection.all_positions().items()):
-            if str(old_pp.instrument_id) not in exchange_symbols:
-                self._remove_protection_with_cleanup(old_pid, str(old_pp.instrument_id))
-                await self._cancel_algo_orders(old_pid, str(old_pp.instrument_id))
-                print(f"[nearline] 🧹 Cleaned up ghost position: {old_pp.instrument_id} (pos={old_pid})")
+            symbol = str(old_pp.instrument_id)
+            if symbol not in exchange_symbols:
+                count = self._ghost_absence_count.get(symbol, 0) + 1
+                self._ghost_absence_count[symbol] = count
+                if count >= _GHOST_DEBOUNCE_ROUNDS:
+                    self._remove_protection_with_cleanup(old_pid, symbol)
+                    await self._cancel_algo_orders(old_pid, symbol)
+                    self._ghost_absence_count.pop(symbol, None)
+                    print(f"[nearline] 🧹 Cleaned up ghost position: {symbol} (absent {count} rounds, pos={old_pid})")
+                else:
+                    print(f"[nearline] ⏳ Ghost candidate {symbol}: absent {count}/{_GHOST_DEBOUNCE_ROUNDS} rounds, waiting")
+            else:
+                # Symbol reappeared — reset counter
+                self._ghost_absence_count.pop(symbol, None)
 
         # === 超量保护单清理：每个持仓最多保留 expected_count 个交易所订单 ===
         await self._cleanup_excess_orders()
@@ -4665,9 +4688,14 @@ class AutonomousEngine:
         )
 
         # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
-        # 引擎自身不再执行 RESUME（已被 Supervisor 的 resume interlock 拦截）。
-        self._control.execute_action(ControlAction.NO_NEW_RISK)
-        print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
+        # BD-FIX: 仅当 Supervisor 尚未 RESUME 时才设置 NO_NEW_RISK，消除启动竞态。
+        # 原代码无条件执行 NO_NEW_RISK，可能覆盖 Supervisor 在 _wait_for_startup 返回后
+        # 立即发出的 RESUME（supervisor.py:842），导致系统永久停在 NO_NEW_RISK/PAUSED。
+        if self._control.get_status() != ControlAction.RESUME:
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
+        else:
+            print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
         if self._exchange is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 

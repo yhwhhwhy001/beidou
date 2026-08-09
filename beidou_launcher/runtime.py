@@ -21,7 +21,14 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
         live_features = await feed.async_update_features(symbol)
         features = {**kline_features, **live_features}
         if not kline_features or not live_features or float(features.get("close", features.get("price", 0))) <= 0:
-            raise RuntimeError("真实 K 线、ticker 或 orderbook 不完整")
+            missing = []
+            if not kline_features:
+                missing.append("K线")
+            if not live_features:
+                missing.append("ticker/orderbook")
+            if float(features.get("close", features.get("price", 0))) <= 0:
+                missing.append("close/price=0")
+            raise RuntimeError(f"真实{'/'.join(missing)}不完整")
 
         from beidou_shared.types import InstrumentId, VenueId
 

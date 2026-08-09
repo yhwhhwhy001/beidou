@@ -277,16 +277,22 @@ class MarketDataFeed:
         try:
             ticker_result = await self._client.request("GET", Endpoint.TICKER_24HR, params={"symbol": symbol})
             orderbook_result = await self._client.request("GET", Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
-        except Exception:
+        except Exception as exc:
+            logger.warning("async_update_features request failed for %s: %s", symbol, exc)
             return {}
 
         if not ticker_result.is_success() or not orderbook_result.is_success():
+            logger.warning("async_update_features API error for %s: ticker=%s orderbook=%s",
+                           symbol, ticker_result.error if hasattr(ticker_result, 'error') else 'fail',
+                           orderbook_result.error if hasattr(orderbook_result, 'error') else 'fail')
             return {}
 
         ticker = ticker_result.data
         orderbook = orderbook_result.data
 
         if "lastPrice" not in ticker or "bids" not in orderbook:
+            logger.warning("async_update_features incomplete data for %s: has_lastPrice=%s has_bids=%s",
+                           symbol, "lastPrice" in ticker, "bids" in orderbook)
             return {}
 
         self._last_ticker[symbol] = ticker

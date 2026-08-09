@@ -650,9 +650,15 @@ class BeidouSupervisor:
             result = lifecycle.transition(target)
             if str(getattr(result, "value", result)) != "SUCCESS":
                 return False
-        if self._control_paused_by_supervisor:
+        # BD-FIX: 基于状态事实 + 授权标志补发 RESUME，而非仅依赖 _control_paused_by_supervisor 标志。
+        # 原逻辑：仅当 _control_paused_by_supervisor 为 True 时才 RESUME，
+        # 但该标志仅在 _fail_closed 的 previous_control=="RESUME" 时置位。
+        # 若控制面已在 NO_NEW_RISK（引擎默认、外部 API 下发等），触发 _fail_closed 后标志永不为 True，
+        # 再无任何路径发出 RESUME → 永久卡死在 NO_NEW_RISK/PAUSED。
+        if self._resume_authorized and self._control_state() not in ("RESUME", "LOCK", "EMERGENCY_FLATTEN"):
             self.engine._control.execute_action(ControlAction.RESUME)
-            self._control_paused_by_supervisor = False
+            print("[supervisor] Re-issued RESUME during recovery (autorized, control was not RESUME)")
+        self._control_paused_by_supervisor = False
         self._critical_streak = 0
         self._health_debounce.reset()  # Phase 3: 恢复成功后重置防抖窗口
         self._recovery_timestamps.append(time.monotonic())
@@ -717,6 +723,16 @@ class BeidouSupervisor:
                 if self.report.supervisor_state in ("DEGRADED",):
                     await self._recover_if_validated(checks)
                 if self._control_state() != "RESUME":
+                    # BD-FIX: 安全网 — 若已授权且无 blocker，控制面却卡在 NO_NEW_RISK/EXIT_ONLY，
+                    # 补发 RESUME（LOCK/EMERGENCY_FLATTEN 需人工解除，不自动恢复）。
+                    if (
+                        self._resume_authorized
+                        and self._control_state() in ("NO_NEW_RISK", "EXIT_ONLY")
+                        and not blockers
+                    ):
+                        from beidou_control.plane import ControlAction
+                        self.engine._control.execute_action(ControlAction.RESUME)
+                        print("[supervisor] Safety net: Re-issued RESUME (autorized, no blockers, control was paused)")
                     self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"

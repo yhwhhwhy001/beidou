@@ -46,7 +46,7 @@ class WSEndpoint:
 
     # 公开行情流 (wss://)
     WS_BASE: str = "wss://fstream.binance.com"
-    WS_BASE_TESTNET: str = "wss://stream.binancefuture.com"
+    WS_BASE_TESTNET: str = "wss://demo-fstream.binance.com"
 
     # 组合流前缀
     COMBINED_STREAM: str = "/stream?streams="

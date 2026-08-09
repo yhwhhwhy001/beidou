@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # === 常量 ===
 FSTREAM_PRODUCTION_URL = "wss://fstream.binance.com"
-FSTREAM_TESTNET_URL = "wss://stream.binancefuture.com"
+FSTREAM_TESTNET_URL = "wss://demo-fstream.binance.com"
 
 MAX_STREAMS_PER_CONNECTION = 200  # Binance 单连接流上限
 MAX_MESSAGE_SIZE = 8 * 1024 * 1024
