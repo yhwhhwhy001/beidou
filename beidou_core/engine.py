@@ -346,7 +346,9 @@ class MeanReversionEntry(AlphaComponent):
             component_id="meanrev_entry_v1",
             version=SchemaVersion("2.0.0"),
         )
-        self._engine = MeanReversionEngine(half_life_window=100, z_threshold=1.5)
+        # Lower z_threshold for testnet signal generation
+        _z = 0.5 if os.environ.get("BEIDOU_ENV") == "testnet" else 1.5
+        self._engine = MeanReversionEngine(half_life_window=100, z_threshold=_z)
 
     async def generate(self, context: dict) -> Any:
         features = context.get("features", {})
@@ -367,11 +369,13 @@ class MeanReversionEntry(AlphaComponent):
         # no-trade band + regime gate + cost gate + volatility scaling
         state = context.get("state", {}) or {}
         regime = state.get("direction", "RANGING")
+        # Testnet: 降低交易成本让信号更容易触发
+        _extra_cost = 1.0 if os.environ.get("BEIDOU_ENV") == "testnet" else 6.0
         result = self._engine.evaluate(
             price=close,
             prices=prices,
             volatility=values["ann_volatility"],
-            estimated_cost_bps=values["spread_bps"] + 6.0,  # spread + taker/maker fees
+            estimated_cost_bps=values["spread_bps"] + _extra_cost,
             market_regime=regime,
         )
 

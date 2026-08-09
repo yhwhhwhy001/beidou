@@ -100,7 +100,8 @@ class MeanReversionEngine:
 
         # Cost gate: expected return must exceed cost
         expected_return_bps = abs(z_score) * volatility * 100  # rough estimate
-        cost_viable = expected_return_bps > estimated_cost_bps * 2  # 2x safety margin
+        _margin = 0.5 if __import__('os').environ.get("BEIDOU_ENV") == "testnet" else 2.0
+        cost_viable = expected_return_bps > estimated_cost_bps * _margin
 
         # Direction
         if in_band or not regime_allowed or not cost_viable:
