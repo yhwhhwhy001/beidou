@@ -146,6 +146,26 @@ class PositionProtection:
             if self.lowest_price is None or current_price < self.lowest_price:
                 self.lowest_price = current_price
         self.last_updated = datetime.now(timezone.utc)
+        # 移动止损重算触发价
+        self._recalc_trailing_stop(current_price)
+
+    def _recalc_trailing_stop(self, current_price: float) -> None:
+        """移动止损：根据价格极值重新计算触发价。"""
+        if not self.stop_loss or not self.stop_loss.is_active():
+            return
+        if self.stop_loss.stop_type != StopLossType.TRAILING:
+            return
+        trail_pct = float(self.trailing_config.get("trail_pct", 2.0))
+        if self.is_long() and self.highest_price is not None:
+            new_trigger = self.highest_price * (1 - trail_pct / 100)
+            old_trigger = float(self.stop_loss.trigger_price.amount)
+            if new_trigger > old_trigger:
+                self.stop_loss.trigger_price = Price(amount=str(round(new_trigger, 8)))
+        elif not self.is_long() and self.lowest_price is not None:
+            new_trigger = self.lowest_price * (1 + trail_pct / 100)
+            old_trigger = float(self.stop_loss.trigger_price.amount)
+            if new_trigger < old_trigger:
+                self.stop_loss.trigger_price = Price(amount=str(round(new_trigger, 8)))
 
     def unrealized_pnl_pct(self, current_price: float) -> float:
         """未实现盈亏百分比。"""

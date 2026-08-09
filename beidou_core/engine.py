@@ -3432,6 +3432,8 @@ class AutonomousEngine:
         if self._risk_sm.get(RiskApprovalId(approval_id)) != RiskDecision.APPROVED:
             return False
         try:
+            # consume_nonce=False: 签名验证通过但不消费 nonce
+            # nonce 在交易所确认订单后才消费，确保发送失败可重试
             return await self._approval.verify(
                 RiskApprovalId(approval_id),
                 signature=str(intent.risk_approval_signature),
@@ -3442,6 +3444,7 @@ class AutonomousEngine:
                 policy_version=str(getattr(intent, "risk_policy_version", "")),
                 nonce=str(getattr(intent, "risk_nonce", "")),
                 expires_at=getattr(intent, "risk_expires_at", None),
+                consume_nonce=False,
             )
         except (RuntimeError, TypeError, ValueError):
             return False
@@ -4138,6 +4141,14 @@ class AutonomousEngine:
             if ack_outbox:
                 self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
+            # 订单成功后消费 nonce（确保发送失败可重试）
+            try:
+                nonce_val = str(getattr(intent, "risk_nonce", ""))
+                approval_id_val = str(getattr(intent, "risk_approval_id", ""))
+                if nonce_val and approval_id_val:
+                    await self._approval.consume_nonce(RiskApprovalId(approval_id_val), nonce_val)
+            except Exception:
+                pass
 
             actual_status = order.get("status", "NEW")
             self._last_order_placed_at = time.time()
