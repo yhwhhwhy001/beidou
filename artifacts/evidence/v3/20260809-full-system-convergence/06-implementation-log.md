@@ -22,6 +22,7 @@
 - `mypy beidou_* apps --no-error-summary` → FAIL，`beidou_state.db` 无法按 UTF-8 解码
 - `pytest -q` (commit `ed9630a`) → 989 passed, 1 skipped, 136 warnings
 - `pytest -q` (commit `b6b6f52`) → 997 passed, 1 skipped
+- `pytest -q` (after backend gate) → 998 passed, 1 skipped
 - `pytest -q tests/unit/test_binance_adapter.py tests/unit/test_reconciliation_contract.py tests/unit/test_store.py tests/architecture/test_architecture.py` → 45 passed
 - `ruff check` changed runtime/store/exchange/tests → PASS
 - `python -m compileall -q beidou_* apps scripts` → PASS
