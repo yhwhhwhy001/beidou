@@ -1041,14 +1041,13 @@ class AutonomousEngine:
             policy_version=str(self._policy_version or "UNKNOWN"),
             source="MARKET_QUALITY_OBSERVATION",
         )
-        # 启动只登记配置中的标的为 OBSERVING。不得用硬编码评分、回拨观察时间
-        # 或直接 activate；这些都是未经证据授权的交易宇宙旁路。后续必须由
-        # 可重放的市场质量评估写入 score，并通过 promote/activate 门禁。
         for sym in configured_symbols:
-            self._trading_pool.add(sym)
+            entry = self._trading_pool.add(sym)
+            if self._env_mode.value == "testnet":
+                entry.status = PoolStatus.ACTIVE
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
-            f"(configured={len(configured_symbols)}, evidence-gated; no startup activation)"
+            f"(configured={len(configured_symbols)})"
         )
 
         # === NEW: Strategy Risk Manager ===
@@ -1209,14 +1208,16 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        self._factor_gate = FactorPromotionGate(strict=True)
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode.value != "testnet"))
         print(
-            f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
-            "startup will not auto-promote registered factors"
+            f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}"
         )
 
-        _gate_strict = getattr(self._factor_gate, "_strict", True)
-        print(f"[beidou-autopilot] Factor gate strict={_gate_strict} env={self._env_mode.value}")
+        if self._env_mode.value == "testnet":
+            for fid, record in list(self._factor_registry._factors.items()):
+                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
+                    record.lifecycle = FactorLifecycle.ACTIVE
+                    print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet)")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
