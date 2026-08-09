@@ -627,22 +627,19 @@ class BeidouSupervisor:
                 lifecycle.transition(ModuleState.DEGRADED)
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
-    # V3 安全语义：运行时的 P0/P1 事实失败全部是 authority blocker。
-    # “瞬时”描述只能影响诊断和人工处置，不能绕过新风险写边界。
-    # 瞬时阻断（心跳、行情、模块进度）允许自愈恢复；
-    # 持久阻断（保护缺失、对账 MISMATCHED）需人工干预。
-    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset({
-        "runtime.health.realtime_heartbeat",
-        "runtime.health.nearline_heartbeat",
-        "runtime.health.module_progress",
-        "runtime.health.reconciliation_stale",
-    })
+    # V3 安全语义：运行时的每个 P0/P1 事实失败都是 authority blocker。
+    # “瞬时”只能影响诊断、告警和人工处置，绝不能绕过新风险写边界。
+    # 这里故意不维护可自动恢复的白名单：心跳、模块进度、对账、订单链、
+    # 保护覆盖等任一事实失真时，必须撤销当前授权并重新走启动/恢复门禁。
+    # 这条约束防止 supervisor 在 stale heartbeat 或卡死订单链期间继续声称
+    # RESUME/READY，也防止健康防抖器把安全故障误判成可自愈抖动。
+    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset()
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
-        """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
+        """在仍有有效授权时，经过 RECOVERING→VALIDATING→ACTIVE。
 
-        仅允许瞬时阻断（心跳、行情）自愈；持久阻断（对账 MISMATCHED、
-        保护缺失）需要人工干预或引擎自行修复后清除。
+        ``_fail_closed`` 会撤销授权；因此运行时事实故障不能靠“干净几轮”
+        自动回到 RESUME。重新授权必须由受治理的启动/人工恢复流程完成。
         """
         if self.engine is None:
             return False
@@ -721,11 +718,9 @@ class BeidouSupervisor:
             checks = self._merge_monitoring_checks(checks)
             self._last_monitor_loop_ts = time.monotonic()
 
-            if not any(item.is_blocking for item in checks):
-                # 瞬时阻断已清除；若之前 _fail_closed 撤销了授权，在此恢复
-                if not self._resume_authorized and self.report.supervisor_state in ("DEGRADED",):
-                    self._resume_authorized = True
-                    print("[supervisor] Re-authorized recovery (all blockers cleared)")
+            if not any(item.is_blocking for item in checks) and self._resume_authorized:
+                # 只有仍然有效的授权才可以执行已经授权的恢复路径；
+                # _fail_closed 后 _resume_authorized=False，不能由清洁窗口重置。
                 if await self._recover_if_validated(checks):
                     checks = self._runtime_checks()
                     checks = self._merge_monitoring_checks(checks)
@@ -734,8 +729,8 @@ class BeidouSupervisor:
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers
 
-            # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动
-            # 区分瞬时阻断（心跳/行情/对账/保护等可自愈）和持久阻断
+            # Phase 3: 健康防抖器 — 滑动窗口只决定 DEGRADED→LOCKED 的升级
+            # 速度；它不能让任何 P0/P1 事实失真继续持有 RESUME 授权。
             persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
             has_persistent = bool(persistent_blockers)
 
@@ -760,27 +755,10 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
-                # 防抖器判定干净 — 可恢复。
-                # 之前 _fail_closed 已将 _resume_authorized 设为 False；
-                # 防抖器已验证连续干净，在此安全地重新授权自愈。
-                if self.report.supervisor_state in ("DEGRADED",):
-                    if not self._resume_authorized:
-                        self._resume_authorized = True
-                        print("[supervisor] Re-authorized recovery (debounce clean streak)")
-                    await self._recover_if_validated(checks)
+                # 干净窗口只说明当前检查没有 blocker；它不是新的授权。
+                # 控制面若仍为 NO_NEW_RISK/EXIT_ONLY，保持 PAUSED，等待受治理
+                # 的恢复/启动动作显式发出 RESUME。
                 if self._control_state() != "RESUME":
-                    # BD-FIX: 安全网 — 若已授权且无 blocker，控制面却卡在 NO_NEW_RISK/EXIT_ONLY，
-                    # 补发 RESUME（LOCK/EMERGENCY_FLATTEN 需人工解除，不自动恢复）。
-                    if (
-                        self._resume_authorized
-                        and self._control_state() in ("NO_NEW_RISK", "EXIT_ONLY")
-                        and not blockers
-                    ):
-                        from beidou_control.plane import ControlAction
-
-                        if self.engine is not None:
-                            self.engine._control.execute_action(ControlAction.RESUME)
-                        print("[supervisor] Safety net: Re-issued RESUME (autorized, no blockers, control was paused)")
                     self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"

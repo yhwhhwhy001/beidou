@@ -1213,7 +1213,7 @@ class AutonomousEngine:
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
         # BD-T06: Testnet 模式使用非严格门禁，允许因子在无证据时自启动
-        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != "testnet"))
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode.value != "testnet"))
         print(
             f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
             "startup will not auto-promote registered factors"
