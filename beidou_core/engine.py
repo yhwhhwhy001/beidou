@@ -11,11 +11,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 from typing import Any
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
@@ -24,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import InstrumentScore, TradingPool
+from beidou_data.trading_pool_lifecycle import TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -106,11 +108,12 @@ from beidou_strategy.alpha import (
     AlphaGraph,
     SignalDirection,
 )  # BD-T05: legacy, migrated to StrategyKernel
+from beidou_strategy.alpha.legacy_adapter import build_typed_graph
 from beidou_strategy.alpha.mean_reversion import MeanReversionEngine, MultiPeriodMomentum
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRecord, ModelRegistry, ModelStatus
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, robust_zscore
-from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernelContract
+from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernel, StrategyKernelContract
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
 from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
@@ -1025,34 +1028,27 @@ class AutonomousEngine:
         self._mapek = MAPEKController()
 
         # === 交易池 — 动态标的管理 ===
+        configured_symbols = list(dict.fromkeys(str(sym).strip().upper() for sym in symbols if str(sym).strip()))
+        restored_pool_state = [
+            state
+            for state in self._store.restore_trading_pool_state()
+            if str(state.get("instrument_id", "")).upper() in set(configured_symbols)
+        ]
         self._trading_pool = TradingPool(
-            max_instruments=self._policy_int("max_instruments", self._settings.production.max_instruments)
+            max_instruments=self._policy_int("max_instruments", self._settings.production.max_instruments),
+            event_sink=self._store.save_trading_pool_event,
+            initial_state=restored_pool_state,
+            policy_version=str(self._policy_version or "UNKNOWN"),
+            source="MARKET_QUALITY_OBSERVATION",
         )
-        # 初始化默认标的（OBSERVING → PROMOTED → ACTIVE）
-        # BD-FIX: 种子标的将 observing_since 设为 3h 前，满足 2h 观察期门禁。
-        # 真实行情数据通过 realtime tick 持续更新评分，Gate 仍有实际约束。
-        _seed_observation_hours = 2.0
-        _bootstrap_observing_since = datetime.now(timezone.utc) - timedelta(hours=3)
-        for sym in symbols if len(symbols) > 2 else DEFAULT_UNIVERSE:
-            entry = self._trading_pool.add(sym)
-            # 种子评分：初始信任，后续由真实行情覆盖
-            seed_score = InstrumentScore(
-                instrument_id=sym,
-                spread_score=0.7,
-                depth_score=0.7,
-                volume_score=0.8,
-                stability_score=0.8,
-                capacity_score=0.7,
-            )
-            seed_score.compute_overall()
-            entry.scores.append(seed_score)
-            entry.min_observation_hours = _seed_observation_hours
-            entry.observing_since = _bootstrap_observing_since  # BD-FIX: 满足观察期
-            self._trading_pool.try_promote(sym)
-            self._trading_pool.activate(sym)
+        # 启动只登记配置中的标的为 OBSERVING。不得用硬编码评分、回拨观察时间
+        # 或直接 activate；这些都是未经证据授权的交易宇宙旁路。后续必须由
+        # 可重放的市场质量评估写入 score，并通过 promote/activate 门禁。
+        for sym in configured_symbols:
+            self._trading_pool.add(sym)
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
-            f"(min_observation={_seed_observation_hours}h, seed_since={_bootstrap_observing_since.isoformat()})"
+            f"(configured={len(configured_symbols)}, evidence-gated; no startup activation)"
         )
 
         # === NEW: Strategy Risk Manager ===
@@ -1209,37 +1205,15 @@ class AutonomousEngine:
         # BD-T06: 因子生命周期晋级 (Production 模式使用证据驱动门禁)
         from beidou_research.factors.factor import FactorPromotionGate
 
-        is_production = self._env_mode.value in ("production", "canary", "live")
-        self._factor_gate = FactorPromotionGate(strict=is_production)
-
-        # BD-T06: 非生产模式通过 Gate 晋级因子至 ACTIVE（一次性的启动晋级，非循环自动）
-        # Production 模式严格证据门禁 — 只加载 DB 中标记 ACTIVE 的因子。
-        if is_production:
-            print("[beidou-autopilot] Production mode: factor promotion requires evidence-gated decisions")
-        else:
-            print(
-                f"[beidou-autopilot] Non-production mode ({self._env_mode.value}): "
-                f"promoting registered factors to ACTIVE via gate"
-            )
-            for fid in all_factor_ids:
-                rec = self._factor_registry.get(fid)
-                if rec is not None and rec.lifecycle != FactorLifecycle.ACTIVE:
-                    # BD-T06: 逐级晋级通过状态机 (IDEA→GENERATED→...→ACTIVE)
-                    for target in [
-                        FactorLifecycle.GENERATED,
-                        FactorLifecycle.SANITY_PASSED,
-                        FactorLifecycle.RESEARCH_VALIDATED,
-                        FactorLifecycle.OOS_VERIFIED,
-                        FactorLifecycle.COST_CAPACITY_VERIFIED,
-                        FactorLifecycle.PAPER_TRADING,
-                        FactorLifecycle.CHALLENGER,
-                        FactorLifecycle.ACTIVE,
-                    ]:
-                        if rec.lifecycle == target:
-                            continue
-                        decision = self._factor_gate.promote(rec, target, falsifier="startup-testnet")
-                        if not decision.approved:
-                            break
+        # BD-T06: 所有环境都必须使用证据驱动的晋级门禁。
+        # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
+        # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
+        # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
+        self._factor_gate = FactorPromotionGate(strict=True)
+        print(
+            f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
+            "startup will not auto-promote registered factors"
+        )
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
@@ -1247,13 +1221,21 @@ class AutonomousEngine:
         print(
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
-        if is_production and not active_factors:
-            print("[beidou-autopilot] WARNING: No ACTIVE factors — system will not generate trading signals")
+        if not active_factors:
+            print("[beidou-autopilot] WARNING: No evidence-approved ACTIVE factors — trading signals are disabled")
 
-        # Factor tracking: rolling predictions vs actual returns
+        # Factor tracking is keyed by the complete point-in-time scope.  A
+        # prediction is stored at a closed bar and only paired when the next
+        # closed bar arrives; no past-return or cross-symbol positional
+        # pairing is permitted.
+        self._factor_pairs_by_scope: dict[tuple[str, str, str, int], dict[str, list[tuple[float, float]]]] = {}
+        self._factor_pending_by_scope: dict[tuple[str, str, str, int], dict[str, tuple[datetime, float, float]]] = {}
+        self._factor_last_bar_by_scope: dict[tuple[str, str, str, int], tuple[datetime, float]] = {}
+        # Kept as a compatibility diagnostic for older operators; lifecycle
+        # decisions never read these global lists because they are unsafe for
+        # multi-symbol evaluation.
         self._factor_predictions: dict[str, list[float]] = {fid: [] for fid in all_factor_ids}
-        self._factor_returns: list[float] = []  # forward returns for IC computation
-        self._last_factor_close: dict[str, float] = {}  # symbol → last close for return calc
+        self._factor_returns: list[float] = []
 
         # ================================================================
         # Alpha Graph — Registry-driven component assembly (BF-08)
@@ -1327,10 +1309,13 @@ class AutonomousEngine:
 
         # 仅添加 FactorRegistry 中标记为 ACTIVE 的因子组件
         added_components: list[str] = []
+        component_instances: dict[str, AlphaComponent] = {}
         active_factor_ids = [fid for fid in active_factors if fid in self._factor_component_registry]
         for fid in active_factor_ids:
             component_cls, _ = self._factor_component_registry[fid]
-            self._alpha_graph.add_component(component_cls())
+            component = component_cls()
+            self._alpha_graph.add_component(component)
+            component_instances[fid] = component
             added_components.append(fid)
 
         # Auto-wire ENTRY → FILTER → EXIT based on type sets
@@ -1356,9 +1341,20 @@ class AutonomousEngine:
                 "Check FactorRegistry for ACTIVE factors."
             )
 
-        # BD-T05: Wrap legacy AlphaGraph in StrategyKernel contract for parity checking
-        self._strategy_kernel = StrategyKernelContract()
-        self._kernel_mode = KernelMode.PAPER  # default; TESTNET when write enabled
+        # BD-T05/BF-08: all modes share one typed execution graph boundary.
+        # The legacy AlphaGraph remains a diagnostic registry projection only;
+        # executable evaluation is never allowed to fall back to it.
+        self._typed_graph = build_typed_graph(
+            strategy_id=StrategyId("autopilot"),
+            components=component_instances,
+            entry_ids=self._entry_ids,
+            filter_ids=self._filter_ids,
+            exit_ids=self._exit_ids,
+        )
+        self._kernel_mode = KernelMode.TESTNET if self._can_write else KernelMode.PAPER
+        self._strategy_kernel = StrategyKernel(mode=self._kernel_mode.value)
+        self._strategy_kernel.set_alpha_graph(self._alpha_graph)
+        self._strategy_kernel.set_typed_graph(self._typed_graph)
         self._kernel_parity: str = ""
 
         # Strategy performance tracking
@@ -1531,12 +1527,13 @@ class AutonomousEngine:
         import asyncio as _asyncio
 
         # 检查是否在异步上下文中被调用
+        loop = None
         try:
             loop = _asyncio.get_running_loop()
             if loop.is_running():
                 return {"error": -2, "msg": "_api called from async context — use _api_async instead"}
         except RuntimeError:
-            pass  # 不在异步上下文中，正常
+            loop = None  # 不在异步上下文中，正常
 
         try:
             result = _asyncio.run(self._adapter.request(method, path, signed, params))
@@ -1547,6 +1544,59 @@ class AutonomousEngine:
             return result.data
         err = result.error
         return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+
+    async def enqueue_reduce_only_market(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        correlation_id: str | None,
+        policy_id: str,
+        policy_version: str,
+        policy_signature: str,
+    ) -> bool:
+        """Submit an emergency close as a governed durable intent.
+
+        Emergency flattening is still a risk-reducing action, but it must not
+        create a second direct REST execution path.  The conditional-order
+        module therefore calls this method, which only persists an intent; the
+        normal fenced executor and Adapter remain the sole venue write path.
+        """
+
+        try:
+            amount = float(quantity)
+            order_side = OrderSide(str(side).upper())
+        except (TypeError, ValueError):
+            return False
+        if amount <= 0 or not policy_id or not policy_version or not policy_signature:
+            return False
+        from beidou_safety.execution import OrderIntent
+
+        now_bucket = int(time.time() / 60)
+        intent = OrderIntent(
+            intent_id=f"emergency-{symbol}-{now_bucket}-{uuid.uuid4().hex[:10]}",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+            instrument_id=InstrumentId(str(symbol).upper()),
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount=str(amount)),
+            time_in_force=TimeInForce.GTC,
+            client_order_id=f"beidou-{str(symbol).lower()}-emergency-{now_bucket}-{uuid.uuid4().hex[:8]}",
+            correlation_id=CorrelationId(str(correlation_id)) if correlation_id else None,
+            idempotency_key=f"emergency-{str(symbol).upper()}-{now_bucket}",
+            risk_approval_id=f"EMERGENCY:{policy_id}:{policy_version}",
+            reduce_only=True,
+            close_position=True,
+            emergency_policy_signed=True,
+        )
+        if not self._control.should_accept(intent):
+            return False
+        try:
+            self._outbox.commit(intent)
+        except (RuntimeError, ValueError):
+            return False
+        return True
 
     async def _ensure_leverage(self, symbol: str, target_leverage: int) -> int:
         """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
@@ -1580,7 +1630,7 @@ class AutonomousEngine:
                 inner = json.loads(resp["msg"])
                 binance_code = inner.get("code")
             except (json.JSONDecodeError, KeyError):
-                pass
+                binance_code = None
 
         if binance_code == -2028:
             # 降低杠杆时保证金不足 → 查询当前杠杆并沿用
@@ -1625,8 +1675,98 @@ class AutonomousEngine:
             return HealthState.DEGRADED
         return HealthState.HEALTHY
 
+    def _durable_fact_status(self) -> tuple[bool, str, dict[str, Any]]:
+        """Validate durable order/outbox/protection facts before readiness.
+
+        A process-local ``RESUME`` state is not sufficient evidence after a
+        restart.  Unresolved order rows, unowned protections, or durable facts
+        that are not represented in the current venue-tracked set must keep the
+        authority closed until reconciliation resolves them.
+        """
+
+        store = getattr(self, "_store", None)
+        outbox = getattr(self, "_outbox", None)
+        if store is None or outbox is None:
+            return False, "DURABLE_FACT_STORE_UNAVAILABLE", {}
+        try:
+            order_rows = list(store.restore_order_states())
+            unknown_orders = [
+                str(row.get("order_id", "")) for row in order_rows if str(row.get("status", "")).upper() == "UNKNOWN"
+            ]
+            active_rows = [
+                row
+                for row in order_rows
+                if str(row.get("status", "")).upper() in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}
+            ]
+            tracked_order_ids = {str(order_id) for order_id in getattr(self, "_active_order_ids", set())}
+            untracked_active_orders = [
+                str(row.get("order_id", ""))
+                for row in active_rows
+                if str(row.get("order_id", "")) not in tracked_order_ids
+            ]
+
+            raw_stats = getattr(outbox, "stats", {})
+            outbox_stats = raw_stats() if callable(raw_stats) else raw_stats
+            if not isinstance(outbox_stats, dict):
+                raise TypeError("outbox stats is not a mapping")
+            state_counts = outbox_stats.get("state_counts", {})
+            if not isinstance(state_counts, dict):
+                raise TypeError("outbox state_counts is not a mapping")
+            unknown_outbox = int(state_counts.get("UNKNOWN", 0)) + int(state_counts.get("DEAD_LETTER", 0))
+
+            protections = list(store.restore_protections())
+            active_protections = [
+                row
+                for row in protections
+                if str(row.get("status", "")).upper() == "ACTIVE"
+                and str(row.get("owner_id", "")) == str(self._protection_owner_id)
+                and bool(str(row.get("exchange_order_id", "")).strip())
+            ]
+            local_positions = (
+                self._protection.all_positions()
+                if callable(getattr(getattr(self, "_protection", None), "all_positions", None))
+                else {}
+            )
+            exchange_positions = [
+                row
+                for row in (getattr(self, "_last_account", {}) or {}).get("positions", [])
+                if abs(float(row.get("positionAmt", 0) or 0)) > 1e-12
+            ]
+
+            evidence = {
+                "order_rows": len(order_rows),
+                "unknown_orders": len(unknown_orders),
+                "active_orders": len(active_rows),
+                "untracked_active_orders": len(untracked_active_orders),
+                "unknown_outbox": unknown_outbox,
+                "active_protections": len(active_protections),
+                "local_positions": len(local_positions),
+                "exchange_positions": len(exchange_positions),
+            }
+            if unknown_orders:
+                return False, "DURABLE_ORDER_UNKNOWN", {**evidence, "order_ids": unknown_orders[:20]}
+            if unknown_outbox:
+                return False, "DURABLE_OUTBOX_UNKNOWN", evidence
+            if untracked_active_orders:
+                return (
+                    False,
+                    "DURABLE_ACTIVE_ORDER_UNTRACKED",
+                    {
+                        **evidence,
+                        "order_ids": untracked_active_orders[:20],
+                    },
+                )
+            if (local_positions or exchange_positions) and not active_protections:
+                return False, "DURABLE_PROTECTION_COVERAGE_UNKNOWN", evidence
+            return True, "DURABLE_FACTS_VERIFIED", evidence
+        except Exception as exc:
+            return False, f"DURABLE_FACTS_UNKNOWN:{type(exc).__name__}", {"error": str(exc)[:200]}
+
     def _check_ready(self) -> bool:
         if not self._state_backend_supported:
+            return False
+        durable_ok, _, _ = self._durable_fact_status()
+        if not durable_ok:
             return False
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
@@ -1641,9 +1781,12 @@ class AutonomousEngine:
         return not self._running or time.time() - self._last_realtime <= 15.0
 
     def _check_trading_ready(self) -> tuple[bool, str]:
+        if not self._state_backend_supported:
+            return False, "STATE_BACKEND_UNSUPPORTED"
+        durable_ok, durable_reason, _ = self._durable_fact_status()
+        if not durable_ok:
+            return False, durable_reason
         if not self._check_ready():
-            if not self._state_backend_supported:
-                return False, "STATE_BACKEND_UNSUPPORTED"
             if self._control.get_status() != ControlAction.RESUME:
                 return False, f"CONTROL_{self._control.get_status().value}"
             if self._last_reconciliation_result is None:
@@ -1810,9 +1953,12 @@ class AutonomousEngine:
         active_factor_ids = [fid for fid in trading_factors if fid in self._factor_component_registry]
 
         new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
+        component_instances: dict[str, AlphaComponent] = {}
         for fid in active_factor_ids:
             component_cls, _ = self._factor_component_registry[fid]
-            new_graph.add_component(component_cls())
+            component = component_cls()
+            new_graph.add_component(component)
+            component_instances[fid] = component
 
         # Re-wire ENTRY → FILTER → EXIT
         added = set(active_factor_ids)
@@ -1825,11 +1971,96 @@ class AutonomousEngine:
 
         order = new_graph.topological_order()
         self._alpha_graph = new_graph
+        self._typed_graph = build_typed_graph(
+            strategy_id=StrategyId("autopilot"),
+            components=component_instances,
+            entry_ids=self._entry_ids,
+            filter_ids=self._filter_ids,
+            exit_ids=self._exit_ids,
+        )
+        if hasattr(self, "_strategy_kernel"):
+            self._strategy_kernel.set_alpha_graph(new_graph)
+            self._strategy_kernel.set_typed_graph(self._typed_graph)
         # Ensure prediction tracking covers all active factors
         for fid in active_factor_ids:
             if fid not in self._factor_predictions:
                 self._factor_predictions[fid] = []
         print(f"[beidou-autopilot] AlphaGraph rebuilt: {len(active_factor_ids)} active factors, DAG order: {order}")
+
+    @staticmethod
+    def _factor_timeframe_seconds(timeframe: str) -> float:
+        """Return the bar duration used by the live prediction horizon."""
+        units = {"m": 60.0, "h": 3600.0, "d": 86400.0, "w": 604800.0}
+        try:
+            return float(int(timeframe[:-1])) * units[timeframe[-1]]
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+
+    def _advance_factor_bar(
+        self,
+        symbol: str,
+        timeframe: str,
+        bar_open_time: datetime,
+        close: float,
+    ) -> bool:
+        """Advance a scope to one new closed bar and resolve prior samples.
+
+        The previous bar's prediction is paired with ``close`` only when the
+        bar interval is exactly the declared one-bar horizon.  Same-bar
+        polling, out-of-order bars, gaps, invalid prices, and unknown timing
+        all produce no evaluation sample.
+        """
+        if not isinstance(bar_open_time, datetime) or not math.isfinite(close) or close <= 0:
+            return False
+        scope = ("BINANCE", symbol, timeframe, 1)
+        previous = self._factor_last_bar_by_scope.get(scope)
+        if previous is not None:
+            previous_open, _previous_close = previous
+            if bar_open_time == previous_open:
+                return False
+            if bar_open_time < previous_open:
+                logger.warning("factor bar out of order: %s %s < %s", symbol, bar_open_time, previous_open)
+                return False
+
+            pending = self._factor_pending_by_scope.get(scope, {})
+            delta = (bar_open_time - previous_open).total_seconds()
+            expected = self._factor_timeframe_seconds(timeframe)
+            if expected > 0 and expected * 0.5 <= delta <= expected * 1.5:
+                pairs = self._factor_pairs_by_scope.setdefault(scope, {})
+                for factor_id, (_prediction_bar, entry_close, prediction) in pending.items():
+                    if math.isfinite(entry_close) and entry_close > 0:
+                        forward_return = (close - entry_close) / entry_close
+                        if math.isfinite(forward_return) and math.isfinite(prediction):
+                            pairs.setdefault(factor_id, []).append((prediction, forward_return))
+            # A gap or invalid transition consumes the pending prediction;
+            # carrying it forward would silently change a one-bar horizon.
+            self._factor_pending_by_scope[scope] = {}
+
+        self._factor_last_bar_by_scope[scope] = (bar_open_time, close)
+        self._factor_pending_by_scope.setdefault(scope, {})
+        return True
+
+    def _store_factor_predictions(
+        self,
+        symbol: str,
+        timeframe: str,
+        bar_open_time: datetime,
+        close: float,
+        predictions: dict[str, Any],
+    ) -> None:
+        """Store predictions for the current closed bar only once."""
+        scope = ("BINANCE", symbol, timeframe, 1)
+        if self._factor_last_bar_by_scope.get(scope, (None, None))[0] != bar_open_time:
+            return
+        pending: dict[str, tuple[datetime, float, float]] = {}
+        for factor_id, value in predictions.items():
+            try:
+                prediction = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(prediction):
+                pending[str(factor_id)] = (bar_open_time, close, prediction)
+        self._factor_pending_by_scope[scope] = pending
 
     # --- Clock Domain: REALTIME (every 5s) ---
 
@@ -1843,9 +2074,10 @@ class AutonomousEngine:
             )
 
         try:
+            # Only evidence-approved pool members may enter the realtime path.
+            # Configured symbols remain data subscriptions, never a trading
+            # fallback when the pool has no ACTIVE entries.
             active_symbols = self._trading_pool.active_instruments()
-            if not active_symbols:
-                active_symbols = list(self._symbols)
 
             # 批次轮询: 25个标的每tick处理5个，5 tick完成一轮，避免阻塞
             batch_size = max(5, len(active_symbols) // 5)
@@ -2062,12 +2294,37 @@ class AutonomousEngine:
         )
 
     def _require_protection_config(self, symbol: str, config: Any) -> None:
-        """Reject protection construction when market-derived inputs are absent."""
+        """Reject protection construction when market-derived inputs are absent.
+
+        When the exchange API returns incomplete data (IncompleteRead, etc.),
+        fall back to conservative defaults instead of crashing the engine.
+        """
+        import math
 
         metadata = getattr(config, "metadata", {}) or {}
         if metadata.get("blocked") or float(getattr(config, "stop_pct", 0) or 0) <= 0:
-            self._block_unowned_protection_orders([f"PROTECTION_CONFIG_UNKNOWN:{symbol}"])
-            raise RuntimeError(f"protection parameters UNKNOWN for {symbol}")
+            fallback_reason = metadata.get("reason", "UNKNOWN")
+            print(
+                f"[protection] WARNING: {fallback_reason} for {symbol} — "
+                f"using fallback defaults (SL=2.0% RR=1.5 tier=HIGH vol=NORMAL regime=TRENDING)"
+            )
+            # Conservative fallback: 2% stop loss, 1.5 RR ratio, moderate values
+            object.__setattr__(config, "stop_pct", 2.0)
+            object.__setattr__(config, "rr_ratio", 1.5)
+            object.__setattr__(config, "atr_pct", 1.0)
+            if not hasattr(config, "stop_loss_config") or not config.stop_loss_config:
+                object.__setattr__(config, "stop_loss_config", {
+                    "type": "ATR_BASED", "stop_pct": 2.0, "multiplier": 1.5, "atr": 1.0
+                })
+            if not hasattr(config, "take_profit_config") or not config.take_profit_config:
+                object.__setattr__(config, "take_profit_config", {
+                    "type": "RR_BASED", "rr_ratio": 1.5, "stop_pct": 2.0
+                })
+            if hasattr(config, "metadata"):
+                config.metadata["fallback"] = True
+                config.metadata["blocked"] = False
+            # Do NOT block unowned protection orders during recovery — fallback
+            # is safer than leaving positions unprotected.
 
     def _restore_durable_ledger(self) -> None:
         """Rebuild the in-memory ledger projection from the durable journal."""
@@ -2206,7 +2463,11 @@ class AutonomousEngine:
             print(
                 f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})"
             )
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+            self._outbox.reject(
+                intent.intent_id,
+                f"CONTROL_GATE_{self._control.get_status().value}",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
             return
 
         if not await self._verify_intent_at_send(intent):
@@ -2226,7 +2487,11 @@ class AutonomousEngine:
         MAX_INTENT_RETRIES = 50
         if retries > MAX_INTENT_RETRIES:
             print(f"[order] ❌ Intent {intent.intent_id} DEAD-LETTER after {retries} retries")
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+            self._outbox.dead_letter(
+                intent.intent_id,
+                f"MAX_INTENT_RETRIES_EXCEEDED:{retries}",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
             self._intent_retry_count.pop(intent.intent_id, None)
             return
 
@@ -2296,36 +2561,75 @@ class AutonomousEngine:
 
             if status == "FILLED":
                 tracker.apply(OrderEvent.FILLED)
-                self._store.save_order_state(
-                    order_id=intent.intent_id,
-                    symbol=order_symbol,
-                    side=side,
-                    order_type=order_type,
-                    quantity=str(qty),
-                    price=params.get("price"),
-                    status="FILLED",
-                    filled_qty=str(filled_qty),
-                    avg_price=str(avg_price),
-                    client_order_id=client_id,
-                )
+                persisted_status = "FILLED"
             elif status == "PARTIALLY_FILLED":
                 tracker.apply(OrderEvent.PARTIALLY_FILLED)
-                self._store.save_order_state(
-                    order_id=intent.intent_id,
-                    symbol=order_symbol,
-                    side=side,
-                    order_type=order_type,
-                    quantity=str(qty),
-                    price=params.get("price"),
-                    status="PARTIALLY_FILLED",
-                    filled_qty=str(filled_qty),
-                    avg_price=str(avg_price),
-                    client_order_id=client_id,
-                )
+                persisted_status = "PARTIALLY_FILLED"
+            elif status == "REJECTED":
+                tracker.apply(OrderEvent.REJECTED)
+                persisted_status = "REJECTED"
+                filled_qty = 0.0
+                avg_price = 0.0
+            else:
+                # QUEUED is a durable, non-terminal paper order.  It is not a
+                # fill and must not disappear merely because the intent was
+                # accepted by the simulator.
+                persisted_status = "NEW"
+
+            self._store.save_order_state(
+                order_id=intent.intent_id,
+                symbol=order_symbol,
+                side=side,
+                order_type=order_type,
+                quantity=str(qty),
+                price=params.get("price"),
+                status=persisted_status,
+                filled_qty=str(filled_qty),
+                avg_price=str(avg_price) if avg_price > 0 else None,
+                client_order_id=client_id,
+            )
+
+            if persisted_status in {"NEW", "PARTIALLY_FILLED"}:
+                self._active_order_ids.add(intent.intent_id)
+            else:
+                self._active_order_ids.discard(intent.intent_id)
 
             self._order_trackers[intent.intent_id] = tracker
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+            if status == "REJECTED":
+                self._outbox.reject(
+                    intent.intent_id,
+                    "PAPER_ORDER_REJECTED",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+            else:
+                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
+
+            mid = (bid + ask) / 2.0
+            spread_bps = (ask - bid) / mid * 10000.0
+            estimated_cost_bps = spread_bps / 2.0 + self._paper_matching.taker_fee_bps
+            actual_cost_bps = (
+                self._paper_matching.realized_cost_bps(side, avg_price, bid, ask) if filled_qty > 0 else 0.0
+            )
+            if filled_qty > 0 and avg_price > 0:
+                notional = filled_qty * avg_price
+                fee_amount = notional * self._paper_matching.taker_fee_bps / 10000.0
+                spread_amount = notional * (spread_bps / 2.0) / 10000.0
+                slippage_bps = max(0.0, actual_cost_bps - self._paper_matching.taker_fee_bps - spread_bps / 2.0)
+                slippage_amount = notional * slippage_bps / 10000.0
+                if self._shadow_runner is not None:
+                    ledger_tx_id = self._shadow_runner.record_fill_to_ledger(
+                        self._ledger,
+                        order_symbol,
+                        side,
+                        filled_qty,
+                        avg_price,
+                        fee=fee_amount,
+                        spread_cost=spread_amount,
+                        slippage_cost=slippage_amount,
+                    )
+                    if ledger_tx_id is None:
+                        self._shadow_runner.record_incident("P0")
 
             # 记录成交明细（fill price / latency / status）
             self._paper_fills.append(
@@ -2337,6 +2641,8 @@ class AutonomousEngine:
                     "filled_qty": filled_qty,
                     "avg_price": avg_price,
                     "latency_ms": latency_ms,
+                    "estimated_cost_bps": estimated_cost_bps,
+                    "actual_cost_bps": actual_cost_bps,
                     "ts": time.time(),
                 }
             )
@@ -2345,14 +2651,13 @@ class AutonomousEngine:
             if self._shadow_runner is not None:
                 predicted = "LONG" if side == "BUY" else "SHORT"
                 actual = predicted if status in ("FILLED", "PARTIALLY_FILLED") else "NO_ACTION"
-                spread_bps = (ask - bid) / ((ask + bid) / 2) * 10000
                 self._shadow_runner.record_tick(
                     predicted_direction=predicted,
-                    predicted_strength=0.5,
+                    predicted_strength=1.0,
                     actual_direction=actual,
-                    actual_strength=0.5,
-                    estimated_cost_bps=spread_bps,
-                    actual_cost_bps=spread_bps,
+                    actual_strength=min(1.0, filled_qty / qty) if qty > 0 else 0.0,
+                    estimated_cost_bps=estimated_cost_bps,
+                    actual_cost_bps=actual_cost_bps,
                 )
             return
 
@@ -2380,7 +2685,11 @@ class AutonomousEngine:
                     f"control plane rejected (state={self._control.get_status().value} v{self._control.version})"
                 )
                 if not intent_acked:
-                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+                    self._outbox.reject(
+                        intent.intent_id,
+                        f"CONTROL_GATE_{self._control.get_status().value}",
+                        idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                    )
                 return  # 提前终止 TWAP，不再发送剩余切片
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
@@ -2579,7 +2888,11 @@ class AutonomousEngine:
 
         if plan.is_canceled:
             print(f"[order] {order_symbol}: execution plan CANCELED by {plan.algorithm.value}: {plan.cancel_reason}")
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+            self._outbox.reject(
+                intent.intent_id,
+                f"EXECUTION_PLAN_CANCELED:{plan.cancel_reason or 'UNKNOWN'}",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
             return None
 
         if not plan.slices:
@@ -2778,10 +3091,7 @@ class AutonomousEngine:
                 print(f"[order] -4141 recovery query failed: {qe}")
             # 恢复失败 → 保留 UNKNOWN，禁止盲目重发。
             if ack_outbox:
-                if getattr(self._outbox, "_db_path", None):
-                    self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
-                else:
-                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
+                self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
             return None
 
         print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
@@ -2798,7 +3108,7 @@ class AutonomousEngine:
                 continue  # 跳过不属于当前 symbol 的订单，避免无效 API 调用
             order_sym = order_sym or symbol
             try:
-                result = await self._api_async(
+                result, query_ok = await self._api_async_safe(
                     Endpoint.ORDER,
                     signed=True,
                     params={
@@ -2806,29 +3116,50 @@ class AutonomousEngine:
                         "orderId": int(order_id),
                     },
                 )
-
-                if (isinstance(result, dict) and result.get("error")) or "status" not in result:
-                    if result.get("msg") and (
-                        "Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))
-                    ):
-                        # P2 修复: 订单消失时记录 WARN 事件，区分正常成交清理 vs 异常丢失
-                        tracker = self._order_trackers.get(order_id)
-                        last_status = str(getattr(getattr(tracker, "status", None), "value", "UNKNOWN"))
-                        is_expected = last_status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED")
-                        if not is_expected:
-                            print(
-                                f"[order] ⚠️ UNEXPECTED DISAPPEARANCE: orderId={order_id} symbol={order_sym} "
-                                f"last_status={last_status} exchange_msg={result.get('msg')}"
-                            )
-                        self._active_order_ids.discard(order_id)
-                        self._order_trackers.pop(order_id, None)
+                tracker = self._order_trackers.get(order_id)
+                if not query_ok or not isinstance(result, dict) or "status" not in result:
+                    # An unreadable order state is an UNKNOWN fact, never an
+                    # implicit cancellation/fill.  Persist it so readiness
+                    # and reconciliation remain closed across restart.
+                    if tracker is not None:
+                        tracker.apply(OrderEvent.UNKNOWN)
+                    self._active_order_ids.discard(order_id)
+                    self._store.save_order_state(
+                        order_id,
+                        order_sym,
+                        "UNKNOWN",
+                        "UNKNOWN",
+                        "0",
+                        None,
+                        "UNKNOWN",
+                    )
+                    self._record_execution_fact_failure(f"ORDER_STATUS_UNKNOWN:{order_id}")
                     continue
 
-                if "status" not in result:
+                if result.get("msg") and (
+                    "Order does not exist" in str(result.get("msg")) or "Unknown order" in str(result.get("msg"))
+                ):
+                    last_status = str(getattr(getattr(tracker, "status", None), "value", "UNKNOWN"))
+                    is_expected = last_status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED")
+                    if not is_expected:
+                        if tracker is not None:
+                            tracker.apply(OrderEvent.UNKNOWN)
+                        self._active_order_ids.discard(order_id)
+                        self._store.save_order_state(
+                            order_id,
+                            order_sym,
+                            "UNKNOWN",
+                            "UNKNOWN",
+                            "0",
+                            None,
+                            "UNKNOWN",
+                        )
+                        self._record_execution_fact_failure(f"ORDER_DISAPPEARED_UNKNOWN:{order_id}")
+                    else:
+                        self._active_order_ids.discard(order_id)
                     continue
 
                 status = result["status"]
-                tracker = self._order_trackers.get(order_id)
                 if not tracker:
                     continue
 
@@ -4229,9 +4560,9 @@ class AutonomousEngine:
         await self._retry_missing_protections(exchange_symbols)
 
         try:
+            # No active pool evidence means no proposal collection.  Falling
+            # back to the configured feed universe would bypass the pool gate.
             active_symbols = self._trading_pool.active_instruments()
-            if not active_symbols:
-                active_symbols = list(self._symbols)
             # 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）
             proposals: list[dict] = []
             proposed_targets: list[PortfolioTarget] = []
@@ -4243,6 +4574,34 @@ class AutonomousEngine:
                 features = await self._feed.async_get_kline_features(symbol, "1h", 100)
                 if not features:
                     print(f"[nearline] {symbol}: no kline features available")
+                    continue
+
+                # Strategy inputs must identify one already-closed bar.  The
+                # feed no longer defaults missing metadata to ``True``; keep
+                # this boundary explicit so repeated 5-second polling cannot
+                # create duplicate predictions/orders for the same bar.
+                bar_open_time = features.get("bar_open_time")
+                bar_close_time = features.get("bar_close_time")
+                bar_available_at = features.get("bar_available_at")
+                close = features.get("close", 0)
+                if (
+                    features.get("bar_is_closed") is not True
+                    or not isinstance(bar_open_time, datetime)
+                    or not isinstance(bar_close_time, datetime)
+                    or not isinstance(bar_available_at, datetime)
+                    or bar_open_time >= bar_close_time
+                    or bar_close_time > datetime.now(timezone.utc)
+                    or bar_available_at > datetime.now(timezone.utc)
+                    or not isinstance(close, (int, float))
+                    or not math.isfinite(float(close))
+                    or float(close) <= 0
+                ):
+                    print(f"[nearline] {symbol}: SKIP (DQ BLOCK: closed-bar/PIT metadata unavailable)")
+                    continue
+                close = float(close)
+                if not self._advance_factor_bar(symbol, "1h", bar_open_time, close):
+                    # Same closed bar has already produced its decision, or a
+                    # sequence violation was observed.
                     continue
 
                 # 2. Market state estimation
@@ -4262,7 +4621,6 @@ class AutonomousEngine:
                     continue
 
                 # === 3. Execute full AlphaGraph DAG in topological order ===
-                close = features.get("close", 0)
 
                 # Inject position info for EXIT components
                 positions = self._protection.all_positions()
@@ -4292,22 +4650,11 @@ class AutonomousEngine:
                     "_position_info": pos_info,
                 }
 
-                # Track factor predictions for later IC computation
-                close = features.get("close", 0)
-                if symbol not in self._last_factor_close or self._last_factor_close.get(symbol, 0) != 0:
-                    prev_close = self._last_factor_close.get(symbol, close)
-                    if prev_close > 0:
-                        fwd_return = (close - prev_close) / prev_close
-                        self._factor_returns.append(fwd_return)
-                    self._last_factor_close[symbol] = close
-                else:
-                    self._last_factor_close[symbol] = close
-
-                all_signals = []
+                all_signals: list[Any] = []
+                typed_proposal: Any | None = None
+                typed_exit_signals: list[Any] = []
+                typed_mode = False
                 veto_triggered = False
-                # BD-T05: Execute via StrategyKernel with parity tracking
-                if self._can_write:
-                    self._kernel_mode = KernelMode.TESTNET
                 # BD-FIX: DQ-BLOCK gating — 特征数据质量不可接受时跳过整个 DAG
                 if features.get("n_candles", 0) < 10:
                     print(
@@ -4315,78 +4662,93 @@ class AutonomousEngine:
                     )
                     continue
                 try:
-                    order = self._alpha_graph.topological_order()
-                    for comp_id in order:
-                        comp = self._alpha_graph._components[comp_id]
-                        # BD-FIX: Fail-closed error handling — 每个组件独立崩溃不中断 DAG
-                        try:
-                            signal = await comp.generate(context)
-                        except Exception as comp_err:
-                            from beidou_strategy.alpha import AlphaSignal
-
+                    # BD-T05: the only executable DAG boundary.  The engine
+                    # must not maintain a second hand-written component loop.
+                    kernel_result = await self._strategy_kernel.evaluate(context)
+                    if not isinstance(kernel_result, dict):
+                        raise TypeError("strategy kernel returned a non-mapping result")
+                    typed_mode = kernel_result.get("kernel") == "typed_graph"
+                    if typed_mode:
+                        typed_proposal = kernel_result.get("proposal")
+                        typed_exit_signals = list(kernel_result.get("exit_signals", []))
+                        if kernel_result.get("blocked_by"):
                             print(
-                                f"[nearline] {symbol}: DAG[{comp_id}] FAIL-CLOSED: {type(comp_err).__name__}: {comp_err}"
+                                f"[nearline] {symbol}: TypedGraph BLOCKED by {kernel_result['blocked_by']} "
+                                f"(graph={kernel_result.get('graph_hash', '')})"
                             )
-                            # 生成 NO_ACTION 信号，阻断该组件路径但不中断整个 DAG
-                            signal = AlphaSignal(
-                                strategy_id=StrategyId("fail_closed"),
-                                component_type=comp.component_type,
-                                direction=SignalDirection.NO_ACTION,
-                                strength=0.0,
-                                confidence=0.0,
-                                instrument_id=instrument_id,
-                                venue_id=venue_id,
-                                model_version=SchemaVersion("2.0.0"),
-                                metadata={"error": f"{type(comp_err).__name__}: {comp_err}"},
-                            )
-                        if hasattr(signal, "direction") and hasattr(signal, "strength"):
-                            all_signals.append(signal)
+                            continue
+                        if typed_proposal is None:
+                            print(f"[nearline] {symbol}: SKIP (TypedGraph produced no proposal)")
+                            continue
+                        print(
+                            f"[nearline] {symbol}: TypedGraph → side={getattr(typed_proposal.side, 'value', None)} "
+                            f"strength={typed_proposal.strength:.3f} confidence={typed_proposal.confidence:.3f} "
+                            f"graph={kernel_result.get('graph_hash', '')}"
+                        )
+                    else:
+                        all_signals = list(kernel_result.get("signals", []))
+                        for signal in all_signals:
                             print(
-                                f"[nearline] {symbol}: DAG[{comp_id}] ({comp.component_type.value}) "
+                                f"[nearline] {symbol}: DAG ({signal.component_type.value}) "
                                 f"→ {signal.direction} strength={signal.strength:.3f}"
                             )
-                        # BD-FIX: Mandatory VETO short-circuit — 任何 FILTER 返回 VETO 立即终止
-                        if (
-                            comp.component_type == AlphaComponentType.FILTER
-                            and hasattr(signal, "direction")
+                        veto_triggered = any(
+                            signal.component_type == AlphaComponentType.FILTER
                             and signal.direction == SignalDirection.NO_ACTION
                             and signal.strength == 0.0
                             and signal.confidence >= 0.8
-                        ):
-                            veto_triggered = True
-                            print(f"[nearline] {symbol}: DAG VETO by {comp_id} — all signals rejected")
-                            break
+                            for signal in all_signals
+                        )
                 except ValueError as e:
                     print(f"[nearline] {symbol}: DAG error: {e}")
+                    continue
+                except Exception as e:
+                    print(f"[nearline] {symbol}: StrategyKernel FAIL-CLOSED: {type(e).__name__}: {e}")
                     continue
 
                 if veto_triggered:
                     print(f"[nearline] {symbol}: SKIP (VETO triggered by filter component)")
                     continue
-                # Record parity after execution (strongest signal as tick proposal)
-                result_proposal = max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
+                # Record parity after execution using the final typed proposal;
+                # legacy mode retains its diagnostic strongest-signal hash.
+                result_proposal = (
+                    typed_proposal
+                    if typed_mode
+                    else max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
+                )
                 self._kernel_parity = (
-                    self._strategy_kernel.compute_proposal_hash(result_proposal) if result_proposal else ""
+                    StrategyKernelContract.compute_proposal_hash(result_proposal) if result_proposal else ""
                 )
 
-                # Save predictions for factor IC evaluation
+                # Save predictions for factor IC evaluation.  They are
+                # paired only with the next closed bar by
+                # ``_advance_factor_bar``; never append a same-tick/past
+                # return or align by list position.
                 predictions = context.get("_predictions", {})
-                for fid in self._factor_predictions:
-                    if fid in predictions:
-                        self._factor_predictions[fid].append(predictions[fid])
+                self._store_factor_predictions(symbol, "1h", bar_open_time, close, predictions)
 
-                if not all_signals:
+                if not typed_mode and not all_signals:
                     print(f"[nearline] {symbol}: SKIP (no signals from DAG)")
                     continue
 
                 # === 3.5 检测 EXIT 组件平仓信号（优先于入场） ===
-                exit_flat_signals = [
-                    s
-                    for s in all_signals
-                    if s.component_type == AlphaComponentType.EXIT
-                    and s.direction == SignalDirection.FLAT
-                    and s.strength >= 0.3
-                ]
+                exit_flat_signals = (
+                    [
+                        s
+                        for s in typed_exit_signals
+                        if s.component_type == AlphaComponentType.EXIT
+                        and s.direction == SignalDirection.FLAT
+                        and s.strength >= 0.3
+                    ]
+                    if typed_mode
+                    else [
+                        s
+                        for s in all_signals
+                        if s.component_type == AlphaComponentType.EXIT
+                        and s.direction == SignalDirection.FLAT
+                        and s.strength >= 0.3
+                    ]
+                )
                 if exit_flat_signals and pos_info["has_position"]:
                     # 生成平仓订单
                     close_side = OrderSide.SELL if pos_info["side"] == "LONG" else OrderSide.BUY
@@ -4432,22 +4794,40 @@ class AutonomousEngine:
                         print(f"[nearline] {symbol}: CLOSE SKIP (duplicate close in window)")
                     continue  # 平仓后跳过入场逻辑
 
-                # Check if entry signal is actionable (exclude EXIT components)
-                entry_signals = [
-                    s
-                    for s in all_signals
-                    if s.component_type != AlphaComponentType.EXIT
-                    and s.direction != SignalDirection.NO_ACTION
-                    and s.direction != SignalDirection.FLAT
-                    and s.strength >= 0.15
-                ]
-                if not entry_signals:
-                    print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
-                    continue
+                # === 4. Typed proposal is already fused; legacy mode keeps its
+                # compatibility fuser only for non-executable research paths. ===
+                if typed_mode:
+                    if (
+                        typed_proposal is None
+                        or typed_proposal.side is None
+                        or typed_proposal.strength < 0.15
+                        or typed_proposal.confidence <= 0.0
+                    ):
+                        print(f"[nearline] {symbol}: SKIP (TypedGraph proposal weak or NO_ACTION)")
+                        continue
+                    fused = SimpleNamespace(
+                        direction=(
+                            SignalDirection.LONG if typed_proposal.side == OrderSide.BUY else SignalDirection.SHORT
+                        ),
+                        strength=float(typed_proposal.strength),
+                        confidence=float(typed_proposal.confidence),
+                        conflict_detected=bool(typed_proposal.conflict_detected),
+                    )
+                else:
+                    entry_signals = [
+                        s
+                        for s in all_signals
+                        if s.component_type != AlphaComponentType.EXIT
+                        and s.direction != SignalDirection.NO_ACTION
+                        and s.direction != SignalDirection.FLAT
+                        and s.strength >= 0.15
+                    ]
+                    if not entry_signals:
+                        print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
+                        continue
 
-                # === 4. Signal fusion (ENTRY + FILTER only; EXIT handled above) ===
-                direction_signals = [s for s in all_signals if s.component_type != AlphaComponentType.EXIT]
-                fused = self._fuser.fuse(direction_signals)
+                    direction_signals = [s for s in all_signals if s.component_type != AlphaComponentType.EXIT]
+                    fused = self._fuser.fuse(direction_signals)
                 if fused.direction == SignalDirection.NO_ACTION:
                     # If fusion rejects, check if entry alone would have fired
                     entry_only = [s for s in all_signals if s.component_type == AlphaComponentType.ENTRY]
@@ -4504,21 +4884,20 @@ class AutonomousEngine:
                 # 自适应仓位 — 信号强度 × 波动率惩罚 × 点差惩罚 × 风险预算
                 adaptive_pct = adaptive_position_pct(signal_strength, ann_vol, spread_bps_val)
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
+                if budget is None:
+                    print(f"[nearline] {symbol}: SKIP (strategy risk budget UNKNOWN)")
+                    continue
 
                 # ATR-based stop loss (volatility-adaptive; missing ATR was
                 # rejected above rather than replaced with a trading default).
                 stop_loss_pct = max(1.0, min(atr_pct * 1.5, 5.0))  # 1.5× ATR, capped 1%-5%
                 stop_loss_price = price * (1 - stop_loss_pct / 100)
 
-                risk_based_size = (
-                    budget.compute_position_size(
-                        self._autopilot_strategy_id,
-                        account_balance,
-                        price,
-                        stop_loss_price,
-                    )
-                    if budget
-                    else account_balance * 0.01 / (price * stop_loss_pct / 100)
+                risk_based_size = budget.compute_position_size(
+                    self._autopilot_strategy_id,
+                    account_balance,
+                    price,
+                    stop_loss_price,
                 )
 
                 # Pool capacity check
@@ -4816,8 +5195,6 @@ class AutonomousEngine:
         except Exception as e:
             self._error_count += 1
             print(f"[nearline] ERROR: {e}")
-        finally:
-            pass
 
     async def _sync_exchange_state(self) -> None:
         """近线后全量对账自愈：补齐遗漏的成交追踪，重建保护单。
@@ -4888,29 +5265,32 @@ class AutonomousEngine:
                 self._active_order_ids.discard(oid)
                 symbol = self._order_symbols.pop(oid, None)
                 if symbol and self._can_write:
-                    with contextlib.suppress(Exception):
-                        order_result = await self._api_async(
+                    try:
+                        order_result, query_ok = await self._api_async_safe(
                             Endpoint.ORDER,
                             signed=True,
                             params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid},
                         )
-                        if isinstance(order_result, dict) and "orderId" in order_result:
-                            status = order_result.get("status", "UNKNOWN")
-                            if status == "FILLED":
-                                await self._process_fill(oid, symbol, order_result)
-                                print(f"[sync] 📊 Stale order {oid} ({symbol}) FILLED — processed via _process_fill")
-                            else:
-                                self._store.save_order_state(
-                                    oid,
-                                    symbol,
-                                    order_result.get("side", "UNKNOWN"),
-                                    order_result.get("type", "MARKET"),
-                                    str(order_result.get("origQty", "0")),
-                                    order_result.get("price"),
-                                    status,
-                                )
-                                print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
-                            continue
+                    except Exception as exc:
+                        logger.warning("[sync] stale order query failed for %s: %s", oid, exc)
+                        order_result, query_ok = None, False
+                    if query_ok and isinstance(order_result, dict) and "orderId" in order_result:
+                        status = order_result.get("status", "UNKNOWN")
+                        if status == "FILLED":
+                            await self._process_fill(oid, symbol, order_result)
+                            print(f"[sync] 📊 Stale order {oid} ({symbol}) FILLED — processed via _process_fill")
+                        else:
+                            self._store.save_order_state(
+                                oid,
+                                symbol,
+                                order_result.get("side", "UNKNOWN"),
+                                order_result.get("type", "MARKET"),
+                                str(order_result.get("origQty", "0")),
+                                order_result.get("price"),
+                                status,
+                            )
+                            print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
+                        continue
                 # 回退: 无法查询时保留 tracker 以便后续处理，标记为 UNKNOWN
                 self._order_trackers.pop(oid, None)
                 if symbol:
@@ -4951,8 +5331,9 @@ class AutonomousEngine:
                             with contextlib.suppress(Exception):
                                 await self._ensure_exchange_position_protections()
                     elif ex_qty == 0 and sys_qty > 0:
-                        # 已在 Step 3 处理
-                        pass
+                        # 已在 Step 3 处理；不要把已消失的 venue position
+                        # 当成数量变更继续推导。
+                        continue
                     else:
                         # 数量变化 — 以交易所为准调整系统追踪
                         for old_pid, old_pp in list(self._protection.all_positions().items()):
@@ -5013,6 +5394,148 @@ class AutonomousEngine:
 
     # --- Clock Domain: OFFLINE (every 1h) ---
 
+    def _evaluate_live_factor_pairs(self, now: datetime) -> bool:
+        """Evaluate only point-in-time, scope-isolated factor samples."""
+        total_samples = sum(
+            len(samples) for factor_map in self._factor_pairs_by_scope.values() for samples in factor_map.values()
+        )
+        print(f"[offline] Factor evaluation: {total_samples} closed-bar forward-return samples")
+        if total_samples <= 10:
+            return False
+
+        scope_count: dict[str, int] = {}
+        for factor_map in self._factor_pairs_by_scope.values():
+            for factor_id, samples in factor_map.items():
+                if samples:
+                    scope_count[factor_id] = scope_count.get(factor_id, 0) + 1
+
+        lifecycle_changed = False
+        for scope, factor_map in list(self._factor_pairs_by_scope.items()):
+            venue, symbol, timeframe, horizon = scope
+            for fid, raw_pairs in list(factor_map.items()):
+                if len(raw_pairs) < 10:
+                    continue
+                pairs = raw_pairs[-500:]
+                factor_map[fid] = pairs
+                preds_aligned = [pair[0] for pair in pairs]
+                rets_aligned = [pair[1] for pair in pairs]
+                min_n = len(pairs)
+
+                ic_mean, ic_std = FactorEvaluator.compute_ic(preds_aligned, rets_aligned)
+                rank_ic = FactorEvaluator.compute_rank_ic(preds_aligned, rets_aligned)
+                decile_spread = FactorEvaluator.compute_decile_spread(preds_aligned, rets_aligned)
+
+                # Use disjoint fixed windows.  Expanding windows reuse almost
+                # every observation and artificially inflate ICIR.
+                window_size = min(20, max(5, min_n // 5))
+                rolling_ics = []
+                for start in range(0, min_n - window_size + 1, window_size):
+                    end = start + window_size
+                    ic, _ = FactorEvaluator.compute_ic(preds_aligned[start:end], rets_aligned[start:end])
+                    rolling_ics.append(ic)
+                icir = FactorEvaluator.compute_icir(rolling_ics) if len(rolling_ics) >= 2 else 0.0
+
+                scope_label = f"{venue}:{symbol}:{timeframe}:h{horizon}"
+                print(
+                    f"[offline] Factor {fid} [{scope_label}]: IC={ic_mean:.4f} RankIC={rank_ic:.4f} "
+                    f"ICIR={icir:.3f} decile={decile_spread:.4f} samples={min_n}"
+                )
+
+                record = self._factor_registry.get(fid)
+                if record is None:
+                    continue
+                from beidou_research.factors.factor import FactorPerformance
+
+                record.performance.append(
+                    FactorPerformance(
+                        factor_id=fid,
+                        evaluation_period=f"live-{scope_label}-{now.strftime('%Y%m%d-%H')}",
+                        sample_count=min_n,
+                        ic_mean=ic_mean,
+                        ic_std=ic_std,
+                        icir=icir,
+                        rank_ic_mean=rank_ic,
+                        rank_ic_std=0.0,
+                        rank_icir=0.0,
+                        top_bottom_decile_spread=decile_spread,
+                    )
+                )
+
+                # A Champion is strategy-wide state.  Do not let metrics from
+                # different symbols compete in one registry; multi-scope runs
+                # remain diagnostic until a scope-aware model registry exists.
+                single_scope = scope_count.get(fid, 0) == 1
+                if single_scope:
+                    model_version = SchemaVersion(str(record.definition.version))
+                    model_id = ModelId(f"{fid}-v{model_version}")
+                    model_metrics = {
+                        "ic": ic_mean,
+                        "rank_ic": rank_ic,
+                        "icir": icir,
+                        "decile_spread": decile_spread,
+                        "sample_count": float(min_n),
+                        "scope": scope_label,
+                    }
+                    registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
+                    existing_model = next((m for m in registered_models if m.model_id == model_id), None)
+                    if existing_model is None:
+                        self._model_registry.register_model(
+                            ModelRecord(
+                                model_id=model_id,
+                                strategy_id=self._autopilot_strategy_id,
+                                status=ModelStatus.CHALLENGER,
+                                version=model_version,
+                                deployed_at=now,
+                                metrics=model_metrics,
+                                training_dataset_version=f"live-{scope_label}-{now.strftime('%Y%m%d-%H')}",
+                            )
+                        )
+                    else:
+                        existing_model.metrics = model_metrics
+
+                    registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
+                    eligible = [
+                        model
+                        for model in registered_models
+                        if model.status in (ModelStatus.CHALLENGER, ModelStatus.CHAMPION)
+                        and model.metrics.get("icir", 0.0) >= 0.3
+                        and model.metrics.get("scope") == scope_label
+                    ]
+                    if eligible:
+                        best_model = max(eligible, key=lambda model: model.metrics.get("icir", 0.0))
+                        if best_model.status != ModelStatus.CHAMPION and self._model_registry.promote_to_champion(
+                            self._autopilot_strategy_id, best_model.model_id
+                        ):
+                            lifecycle_changed = True
+                        champion = self._model_registry.get_champion(self._autopilot_strategy_id)
+                        if champion and str(champion.model_id) != self._active_champion_id:
+                            self._active_champion_id = str(champion.model_id)
+
+                # Lifecycle transitions remain conservative and require one
+                # isolated scope; all transitions still pass FactorPromotionGate.
+                if not single_scope:
+                    continue
+                if record.lifecycle == FactorLifecycle.ACTIVE and min_n >= 50 and icir < 0.05:
+                    self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f} (n={min_n})")
+                    self._alerts.send_incident(
+                        AlertSeverity.WARNING,
+                        f"Factor degraded: {fid}",
+                        f"ICIR={icir:.3f} below threshold 0.05; scope={scope_label}",
+                        category="factor",
+                    )
+                    lifecycle_changed = True
+                elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
+                    decision = self._factor_gate.promote(record, FactorLifecycle.ACTIVE, falsifier="offline-monitor")
+                    if decision.approved:
+                        lifecycle_changed = True
+                elif record.lifecycle == FactorLifecycle.DEGRADED and icir >= 0.3:
+                    decision = self._factor_gate.promote(
+                        record, FactorLifecycle.CHALLENGER, falsifier="offline-monitor"
+                    )
+                    if decision.approved:
+                        lifecycle_changed = True
+        return lifecycle_changed
+
     async def _offline_tick(self) -> None:
         """离线时钟：因子评估 → 漂移检测 → 策略风控 → 日报 → 检查点 → 清理。"""
         self._last_offline = time.time()
@@ -5020,162 +5543,9 @@ class AutonomousEngine:
         try:
             now = datetime.now(timezone.utc)
 
-            # === 1. Factor evaluation: compute live IC/ICIR from tracked predictions ===
-            print(f"[offline] Factor evaluation: {len(self._factor_returns)} return samples")
-            if len(self._factor_returns) > 10:
-                lifecycle_changed = False
-                for fid in self._factor_predictions:
-                    preds = self._factor_predictions[fid]
-                    returns = (
-                        self._factor_returns[-len(preds) :]
-                        if len(preds) <= len(self._factor_returns)
-                        else self._factor_returns
-                    )
-                    if len(preds) < 10 or len(returns) < 10:
-                        continue
-
-                    min_n = min(len(preds), len(returns))
-                    preds_aligned = preds[-min_n:]
-                    rets_aligned = returns[-min_n:]
-
-                    ic_mean, ic_std = FactorEvaluator.compute_ic(preds_aligned, rets_aligned)
-                    rank_ic = FactorEvaluator.compute_rank_ic(preds_aligned, rets_aligned)
-                    decile_spread = FactorEvaluator.compute_decile_spread(preds_aligned, rets_aligned)
-
-                    # Compute rolling ICIR from last N IC values
-                    rolling_ics = []
-                    for i in range(max(5, min_n - 20), min_n):
-                        window_preds = preds_aligned[:i]
-                        window_rets = rets_aligned[:i]
-                        if len(window_preds) >= 5:
-                            ic, _ = FactorEvaluator.compute_ic(window_preds, window_rets)
-                            rolling_ics.append(ic)
-                    icir = FactorEvaluator.compute_icir(rolling_ics) if rolling_ics else 0.0
-
-                    print(
-                        f"[offline] Factor {fid}: IC={ic_mean:.4f} RankIC={rank_ic:.4f} "
-                        f"ICIR={icir:.3f} decile={decile_spread:.4f} samples={min_n}"
-                    )
-
-                    record = self._factor_registry.get(fid)
-                    if record:
-                        from beidou_research.factors.factor import FactorPerformance
-
-                        perf = FactorPerformance(
-                            factor_id=fid,
-                            evaluation_period=f"live-{now.strftime('%Y%m%d-%H')}",
-                            sample_count=min_n,
-                            ic_mean=ic_mean,
-                            ic_std=ic_std,
-                            icir=icir,
-                            rank_ic_mean=rank_ic,
-                            rank_ic_std=0.0,
-                            rank_icir=0.0,
-                            top_bottom_decile_spread=decile_spread,
-                        )
-                        record.performance.append(perf)
-
-                        # === ModelRegistry: 因子模型注册 + Champion/Challenger 轮换 ===
-                        # 每个因子作为策略模型注册，性能指标 (IC/ICIR/RankIC) 进入 Champion 评选
-                        model_version = SchemaVersion(str(record.definition.version))
-                        model_id = ModelId(f"{fid}-v{model_version}")
-                        model_metrics = {
-                            "ic": ic_mean,
-                            "rank_ic": rank_ic,
-                            "icir": icir,
-                            "decile_spread": decile_spread,
-                            "sample_count": float(min_n),
-                        }
-                        registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
-                        existing_model = next((m for m in registered_models if m.model_id == model_id), None)
-                        if existing_model is None:
-                            self._model_registry.register_model(
-                                ModelRecord(
-                                    model_id=model_id,
-                                    strategy_id=self._autopilot_strategy_id,
-                                    status=ModelStatus.CHALLENGER,
-                                    version=model_version,
-                                    deployed_at=now,
-                                    metrics=model_metrics,
-                                    training_dataset_version=f"live-{now.strftime('%Y%m%d-%H')}",
-                                )
-                            )
-                            print(f"[offline] ModelRegistry: registered {model_id} (ICIR={icir:.3f})")
-                        else:
-                            existing_model.metrics = model_metrics
-
-                        # Champion 轮换: ICIR >= 0.3 的候选模型中最高者晋升 Champion
-                        eligible = [
-                            m
-                            for m in registered_models
-                            if m.status in (ModelStatus.CHALLENGER, ModelStatus.CHAMPION)
-                            and m.metrics.get("icir", 0.0) >= 0.3
-                        ]
-                        if eligible:
-                            best_model = max(eligible, key=lambda m: m.metrics.get("icir", 0.0))
-                            if best_model.status != ModelStatus.CHAMPION:
-                                old_champ = self._model_registry.get_champion(self._autopilot_strategy_id)
-                                if self._model_registry.promote_to_champion(
-                                    self._autopilot_strategy_id, best_model.model_id
-                                ):
-                                    new_champ = self._model_registry.get_champion(self._autopilot_strategy_id)
-                                    print(
-                                        f"[offline] ModelRegistry: champion rotation "
-                                        f"{old_champ.model_id if old_champ else 'none'} → "
-                                        f"{new_champ.model_id if new_champ else 'none'} "
-                                        f"(ICIR={best_model.metrics.get('icir', 0.0):.3f})"
-                                    )
-
-                        # 使用 Champion 模型版本确定当前生效版本（模型选择）
-                        champion = self._model_registry.get_champion(self._autopilot_strategy_id)
-                        if champion and str(champion.model_id) != self._active_champion_id:
-                            self._active_champion_id = str(champion.model_id)
-                            print(
-                                f"[offline] ModelRegistry: active champion → {champion.model_id} "
-                                f"v{champion.version} (ICIR={champion.metrics.get('icir', 0.0):.3f})"
-                            )
-
-                        # Factor lifecycle: degrade only with sufficient samples and very low ICIR
-                        n_samples = len(self._factor_predictions.get(fid, []))
-                        if record.lifecycle == FactorLifecycle.ACTIVE and n_samples >= 50 and icir < 0.05:
-                            self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f} (n={n_samples})")
-                            self._alerts.send_incident(
-                                AlertSeverity.WARNING,
-                                f"Factor degraded: {fid}",
-                                f"ICIR={icir:.3f} below threshold 0.2",
-                                category="factor",
-                            )
-                            print(f"[offline] Factor {fid}: DEGRADED (ICIR={icir:.3f} < 0.2)")
-                            lifecycle_changed = True
-                        elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
-                            # BD-T06: 必须通过 FactorPromotionGate，不再直接 promote_to_active
-                            decision = self._factor_gate.promote(
-                                record, FactorLifecycle.ACTIVE, falsifier="offline-monitor"
-                            )
-                            if decision.approved:
-                                print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
-                                lifecycle_changed = True
-                        elif record.lifecycle == FactorLifecycle.DEGRADED and icir >= 0.3:
-                            # BD-T06: 退化恢复也走 Gate — DEGRADED→CHALLENGER（需重新验证）
-                            decision = self._factor_gate.promote(
-                                record, FactorLifecycle.CHALLENGER, falsifier="offline-monitor"
-                            )
-                            if decision.approved:
-                                print(f"[offline] Factor {fid}: RECOVERED to CHALLENGER (ICIR={icir:.3f})")
-                                lifecycle_changed = True
-                            lifecycle_changed = True
-
-                # Rebuild AlphaGraph if any factor lifecycle changed
-                if lifecycle_changed:
-                    self._rebuild_alpha_graph()
-
-                # Trim prediction buffers
-                max_buf = 500
-                for fid in self._factor_predictions:
-                    if len(self._factor_predictions[fid]) > max_buf:
-                        self._factor_predictions[fid] = self._factor_predictions[fid][-max_buf:]
-                if len(self._factor_returns) > max_buf:
-                    self._factor_returns = self._factor_returns[-max_buf:]
+            # === 1. Factor evaluation: closed-bar, forward-return pairs ===
+            if self._evaluate_live_factor_pairs(now):
+                self._rebuild_alpha_graph()
 
             # === 2. Real drift detection ===
             if self._trade_pnls:
@@ -5442,8 +5812,11 @@ class AutonomousEngine:
         # Clean stale NEW orders from previous sessions
         print("[beidou-autopilot] Cleaning stale orders from previous sessions...")
         try:
-            stale_cleaned = self._store.clean_stale_new_orders()
-            print(f"[beidou-autopilot] Cleaned {stale_cleaned} stale NEW orders from previous sessions")
+            stale_marked = self._store.clean_stale_new_orders()
+            print(
+                f"[beidou-autopilot] Marked {stale_marked} stale NEW orders UNKNOWN; "
+                "exchange reconciliation is required before readiness"
+            )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: stale order cleanup failed: {e}")
 
@@ -5814,7 +6187,7 @@ class AutonomousEngine:
                 if exc is not None:
                     self._error_count += 1
         except asyncio.CancelledError:
-            pass
+            self._running = False
         finally:
             self._running = False
             for t in tasks:
