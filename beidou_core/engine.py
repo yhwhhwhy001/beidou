@@ -1220,6 +1220,7 @@ class AutonomousEngine:
         )
 
         # BD-T06: Testnet 模式启动时自动将 IDEA 因子晋级到 ACTIVE
+        print(f"[beidou-autopilot] DEBUG: env_mode={self._env_mode} TESTNET={EnvironmentMode.TESTNET} strict={self._factor_gate._strict}")
         if self._env_mode == EnvironmentMode.TESTNET and not self._factor_gate._strict:
             for fid, record in list(self._factor_registry._factors.items()):
                 if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
