@@ -28,6 +28,7 @@
 ### 3. 订单—成交—账本持久化切片
 
 - 复式 `LedgerTransaction` 与全部 `Posting` 写入 `ledger_transactions/ledger_postings`，按交易 ID/Posting ID 幂等。
+- `source_event_id` 在 durable journal 上有唯一约束；同事务重放幂等，跨事务争用同一成交事实会显式冲突并触发 fail-closed。
 - 启动时从 durable journal 重建内存 ledger；只有旧聚合分录而没有新 journal 时拒绝启动，避免静默迁移。
 - 成交后的保护定义先持久为 `PENDING`；只有交易所返回 `algoId` 才持久为 `ACTIVE`。
 - 交易所精度、盘口深度、行情、成本或 Alpha 输入未知时，风险增加订单被拒绝；不再用固定报价、默认精度或默认最小数量补齐。
