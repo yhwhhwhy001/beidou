@@ -5967,6 +5967,12 @@ class AutonomousEngine:
                     )
                     continue
                 try:
+                    # DEBUG: 检查 entry 组件所需的字段
+                    _dbg_f = context.get("features", {})
+                    _dbg_has_prices = bool(_dbg_f.get("prices"))
+                    _dbg_has_spread = "spread_bps" in _dbg_f
+                    if self._tick_count % 10 == 0:
+                        print(f"[nearline] {symbol}: DEBUG features: prices={_dbg_has_prices} spread_bps={_dbg_has_spread} close={_dbg_f.get('close','?')} sma20={_dbg_f.get('sma_20','?')} rsi={_dbg_f.get('rsi_14','?')} ann_vol={_dbg_f.get('ann_volatility','?')}")
                     # BD-T05: the only executable DAG boundary.  The engine
                     # must not maintain a second hand-written component loop.
                     kernel_result = await self._strategy_kernel.evaluate(context)
