@@ -1097,6 +1097,14 @@ class BeidouSupervisor:
             # DEV_FAST_START: 跳过深度验证，直接 RESUME (仅开发/调试环境)
             if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
+                # 仍需要运行算法探针以消除启动阻断
+                try:
+                    from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
+                    self._algorithm_probe = await _probe(self.engine, self.symbols)
+                    print(f"[supervisor] Algorithm probe: {self._algorithm_probe.get('ok') and 'PASS' or 'FAIL'}")
+                except Exception as _exc:
+                    self._algorithm_probe = {"ok": False, "error": f"{type(_exc).__name__}: {_exc}"}
+                    print(f"[supervisor] Algorithm probe failed: {_exc}")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA
                 self.engine._control.execute_action(_CA.RESUME)
