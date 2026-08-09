@@ -665,7 +665,7 @@ class BeidouSupervisor:
             open_p1 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
-            self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)  # type: ignore[call-arg,no-untyped-call]
+            self._monitoring_scheduler.tick(scheduler_results, open_p0=open_p0, open_p1=open_p1)
         except Exception as exc:
             logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
