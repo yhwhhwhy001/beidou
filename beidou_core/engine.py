@@ -1694,7 +1694,7 @@ class AutonomousEngine:
         self._last_realtime_mono = 0.0
         self._last_nearline = 0.0  # 设为 0 使首次近线 tick 立即执行（而非等 300s）
         self._last_offline = time.time()
-        self._last_recon = time.time()
+        self._last_recon = 0.0  # 设为 0 使首次对账立即执行
         self._tick_count = 0
         self._order_count = 0
         self._error_count = 0
