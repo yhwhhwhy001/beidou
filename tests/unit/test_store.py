@@ -85,6 +85,36 @@ def test_ledger_transaction_round_trip_is_append_only(tmp_path):
     assert rows[0]["source_event_id"] == "fill-1"
 
 
+def test_ledger_source_event_conflict_is_not_silently_ignored(tmp_path):
+    store = PersistentStore(str(tmp_path / "ledger-conflict.db"))
+    tx = LedgerTransaction(
+        transaction_id="tx-1",
+        transaction_type=LedgerTransactionType.FILL,
+        source_event_id="fill-1",
+        postings=(
+            Posting(
+                "p1", AccountId("default"), AccountType.CASH, VenueId("BINANCE"),
+                None, MonetaryValue(amount="1"), PostingSide.DEBIT,
+            ),
+            Posting(
+                "p2", AccountId("default"), AccountType.POSITION_COST, VenueId("BINANCE"),
+                None, MonetaryValue(amount="1"), PostingSide.CREDIT,
+            ),
+        ),
+    )
+    store.save_ledger_transaction(tx)
+    conflicting = LedgerTransaction(
+        transaction_id="tx-2",
+        transaction_type=LedgerTransactionType.FILL,
+        source_event_id="fill-1",
+        postings=tx.postings,
+    )
+    import pytest
+
+    with pytest.raises(RuntimeError, match="source_event_id conflict"):
+        store.save_ledger_transaction(conflicting)
+
+
 def test_fill_event_is_pending_until_authoritative_facts_commit(tmp_path):
     store = PersistentStore(str(tmp_path / "fill-state.db"))
 

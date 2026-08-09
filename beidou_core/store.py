@@ -225,6 +225,9 @@ class PersistentStore:
             CREATE INDEX IF NOT EXISTS idx_ledger_account ON ledger_entries(account_id, venue_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_correlation ON ledger_entries(correlation_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_postings_tx ON ledger_postings(transaction_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_source_event
+                ON ledger_transactions(source_event_id)
+                WHERE source_event_id IS NOT NULL AND source_event_id <> '';
             CREATE INDEX IF NOT EXISTS idx_orders_status ON order_states(status);
             CREATE INDEX IF NOT EXISTS idx_protection_position ON protection_orders(position_id);
             CREATE INDEX IF NOT EXISTS idx_checkpoints_module ON checkpoints(module_name);
@@ -287,8 +290,60 @@ class PersistentStore:
         conn = self._get_conn()
         transaction_id = str(transaction.transaction_id)
         try:
+            existing = conn.execute(
+                """SELECT transaction_id, source_event_id, transaction_type
+                   FROM ledger_transactions
+                   WHERE transaction_id=?
+                      OR (source_event_id=? AND source_event_id <> '')
+                   LIMIT 1""",
+                (transaction_id, str(transaction.source_event_id or "")),
+            ).fetchone()
+            if existing is not None:
+                existing_id = str(existing["transaction_id"])
+                existing_source = str(existing["source_event_id"] or "")
+                if existing_id != transaction_id:
+                    raise RuntimeError(
+                        "ledger source_event_id conflict: "
+                        f"{transaction.source_event_id!r} already belongs to {existing_id}"
+                    )
+                if existing_source != str(transaction.source_event_id or ""):
+                    raise RuntimeError(
+                        f"ledger transaction id {transaction_id} has a different source_event_id"
+                    )
+                existing_postings = conn.execute(
+                    "SELECT COUNT(*) FROM ledger_postings WHERE transaction_id=?",
+                    (transaction_id,),
+                ).fetchone()[0]
+                if int(existing_postings) >= len(transaction.postings):
+                    # Exact transaction replay is idempotent.
+                    return
+                # A crash may have committed the header before all postings;
+                # complete that same transaction, never replace it.
+                for posting in transaction.postings:
+                    amount = posting.amount
+                    conn.execute(
+                        """INSERT OR IGNORE INTO ledger_postings
+                           (posting_id, transaction_id, account_id, account_type, venue_id,
+                            instrument_id, amount, currency, decimals, side, description)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            str(posting.posting_id),
+                            transaction_id,
+                            str(posting.account_id),
+                            str(getattr(posting.account_type, "value", posting.account_type)),
+                            str(posting.venue_id),
+                            str(posting.instrument_id) if posting.instrument_id is not None else None,
+                            str(amount.amount),
+                            str(amount.currency),
+                            int(amount.decimals),
+                            str(getattr(posting.side, "value", posting.side)),
+                            str(posting.description or ""),
+                        ),
+                    )
+                conn.commit()
+                return
             conn.execute(
-                """INSERT OR IGNORE INTO ledger_transactions
+                """INSERT INTO ledger_transactions
                    (transaction_id, transaction_type, source_event_id, correlation_id,
                     timestamp, is_correction, reverses_transaction_id, metadata)
                    VALUES (?,?,?,?,?,?,?,?)""",
