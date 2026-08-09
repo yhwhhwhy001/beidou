@@ -5354,7 +5354,12 @@ class AutonomousEngine:
         event_facts = getattr(self, "_event_stream_facts", None)
         if event_facts is not None:
             self._recon.update_event_facts(event_facts)
-        result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
+        # 启动时事件流可能尚未就绪 — 先使用两方对账建立基线，
+        # 三方对账在事件流可用后自动启用
+        if event_facts is not None:
+            result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
+        else:
+            result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
         self._last_reconciliation_result = result
         self._last_account = account
         if not result.matched:
