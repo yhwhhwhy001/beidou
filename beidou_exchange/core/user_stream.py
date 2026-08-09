@@ -51,6 +51,14 @@ class UserStreamSequencer:
         """Accept only the next exact sequence; reject gaps and duplicates."""
 
         previous = self._last_sequence
+        if self._status in {UserStreamStatus.GAP, UserStreamStatus.SEQUENCE_UNAVAILABLE}:
+            return UserStreamObservation(
+                False,
+                self._status,
+                previous,
+                event.sequence,
+                "explicit independent replay is required before accepting more events",
+            )
         if event.sequence is None:
             self._status = UserStreamStatus.SEQUENCE_UNAVAILABLE
             return UserStreamObservation(
@@ -93,6 +101,14 @@ class UserStreamSequencer:
             raise ValueError("last_sequence must be non-negative")
         self._last_sequence = last_sequence
         self._status = UserStreamStatus.HEALTHY
+
+    def restore(self, last_sequence: int) -> None:
+        """Restore a durable high-water mark, but require replay after restart."""
+
+        if last_sequence < 0:
+            raise ValueError("last_sequence must be non-negative")
+        self._last_sequence = last_sequence
+        self._status = UserStreamStatus.GAP
 
 
 __all__ = ["UserStreamObservation", "UserStreamSequencer", "UserStreamStatus"]

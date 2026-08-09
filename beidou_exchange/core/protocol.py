@@ -136,6 +136,33 @@ class UserStreamEvent:
     raw_event: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class UserOrderUpdate:
+    """Normalized Binance ``ORDER_TRADE_UPDATE`` payload.
+
+    Cumulative quantity is the venue high-water mark; ``last_quantity`` and
+    ``trade_id`` identify the incremental execution.  The raw event remains
+    attached so an independent replay can re-derive the projection.
+    """
+
+    event: UserStreamEvent
+    order_id: str
+    client_order_id: str
+    symbol: InstrumentId
+    side: OrderSide
+    order_type: OrderType
+    order_status: OrderStatus
+    execution_type: str
+    original_quantity: Quantity
+    cumulative_quantity: Quantity
+    last_quantity: Quantity
+    last_price: Price
+    average_price: Price
+    trade_id: str | None
+    commission: MonetaryValue
+    realized_pnl: MonetaryValue | None = None
+
+
 class ExchangeAdapter(ABC):
     """交易所适配器协议。
 

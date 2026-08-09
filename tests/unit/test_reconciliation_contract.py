@@ -67,6 +67,30 @@ def test_compare_treats_missing_side_as_unknown() -> None:
     assert result.is_unknown is True
 
 
+def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> None:
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now)
+    exchange = _facts(timestamp=now)
+    event = _facts(timestamp=now)
+
+    matched = ReconciliationEngine.compare_three_way(system, exchange, event, now=now)
+    assert matched.status is ReconciliationStatus.MATCHED
+    assert matched.event_facts is event
+
+    missing = ReconciliationEngine.compare_three_way(system, exchange, None, now=now)
+    assert missing.status is ReconciliationStatus.ONE_SIDE_MISSING
+    assert missing.should_block_new_risk is True
+
+    event.positions[InstrumentId("BTCUSDT")] = Quantity(amount="0.20")
+    mismatch = ReconciliationEngine.compare_three_way(system, exchange, event, now=now)
+    assert mismatch.status is ReconciliationStatus.MISMATCHED
+    assert any("event_stream" in difference for difference in mismatch.differences)
+
+    stale_event = _facts(timestamp=now - timedelta(seconds=31))
+    stale = ReconciliationEngine.compare_three_way(system, exchange, stale_event, now=now)
+    assert stale.status is ReconciliationStatus.STALE
+
+
 def test_compare_does_not_collapse_long_and_short_positions() -> None:
     now = datetime.now(timezone.utc)
     long_facts = _facts(timestamp=now)

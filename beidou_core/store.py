@@ -181,7 +181,8 @@ class PersistentStore:
                 differences TEXT NOT NULL,
                 checked_at TEXT NOT NULL,
                 system_snapshot_id TEXT,
-                exchange_snapshot_id TEXT
+                exchange_snapshot_id TEXT,
+                event_snapshot_id TEXT
             );
             CREATE TABLE IF NOT EXISTS fill_events (
                 fill_event_id TEXT PRIMARY KEY,
@@ -195,6 +196,50 @@ class PersistentStore:
                 event_time TEXT NOT NULL,
                 processing_state TEXT NOT NULL DEFAULT 'PENDING',
                 committed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS user_stream_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                sequence INTEGER,
+                event_time_ms INTEGER NOT NULL,
+                transaction_time_ms INTEGER,
+                order_id TEXT,
+                client_order_id TEXT,
+                symbol TEXT,
+                side TEXT,
+                order_type TEXT,
+                order_status TEXT,
+                execution_type TEXT,
+                original_quantity TEXT,
+                cumulative_quantity TEXT,
+                last_quantity TEXT,
+                last_price TEXT,
+                average_price TEXT,
+                trade_id TEXT,
+                commission_amount TEXT,
+                commission_currency TEXT,
+                realized_pnl_amount TEXT,
+                raw_event TEXT NOT NULL,
+                continuity_status TEXT NOT NULL,
+                applied_state TEXT NOT NULL DEFAULT 'PENDING',
+                received_at TEXT NOT NULL,
+                applied_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS user_stream_projections (
+                account_id TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                balance_amount TEXT NOT NULL,
+                balance_currency TEXT NOT NULL,
+                balance_decimals INTEGER NOT NULL DEFAULT 8,
+                positions TEXT NOT NULL,
+                open_orders TEXT NOT NULL,
+                last_event_time_ms INTEGER,
+                last_sequence INTEGER,
+                source TEXT NOT NULL,
+                fact_version TEXT NOT NULL,
+                complete INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, venue_id)
             );
             CREATE TABLE IF NOT EXISTS position_projection (
                 symbol TEXT PRIMARY KEY,
@@ -235,6 +280,8 @@ class PersistentStore:
             CREATE INDEX IF NOT EXISTS idx_recon_snapshots_key ON reconciliation_snapshots(account_id, venue_id, side, timestamp);
             CREATE INDEX IF NOT EXISTS idx_recon_results_checked ON reconciliation_results(account_id, venue_id, checked_at);
             CREATE INDEX IF NOT EXISTS idx_fill_events_order ON fill_events(order_id, event_time);
+            CREATE INDEX IF NOT EXISTS idx_user_stream_events_time ON user_stream_events(event_time_ms, event_id);
+            CREATE INDEX IF NOT EXISTS idx_user_stream_events_order ON user_stream_events(order_id, event_time_ms);
             CREATE INDEX IF NOT EXISTS idx_opening_projection_key ON account_opening_projections(account_id, venue_id, captured_at);
         """)
         conn.commit()
@@ -250,6 +297,7 @@ class PersistentStore:
         # journaled and projected; only newly observed fills start PENDING.
         self._ensure_column(conn, "fill_events", "processing_state", "TEXT NOT NULL DEFAULT 'COMMITTED'")
         self._ensure_column(conn, "fill_events", "committed_at", "TEXT")
+        self._ensure_column(conn, "reconciliation_results", "event_snapshot_id", "TEXT")
         conn.commit()
 
     @staticmethod
@@ -437,13 +485,21 @@ class PersistentStore:
         )
         conn.commit()
 
-    def save_reconciliation_result(self, result_id: str, result: Any, *, system_snapshot_id: str = "", exchange_snapshot_id: str = "") -> None:
+    def save_reconciliation_result(
+        self,
+        result_id: str,
+        result: Any,
+        *,
+        system_snapshot_id: str = "",
+        exchange_snapshot_id: str = "",
+        event_snapshot_id: str = "",
+    ) -> None:
         conn = self._get_conn()
         conn.execute(
             """INSERT OR REPLACE INTO reconciliation_results
                (result_id, account_id, venue_id, status, matched, differences,
-                checked_at, system_snapshot_id, exchange_snapshot_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                checked_at, system_snapshot_id, exchange_snapshot_id, event_snapshot_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 str(result_id),
                 str(result.system_facts.account_id if result.system_facts else "UNKNOWN"),
@@ -454,6 +510,7 @@ class PersistentStore:
                 result.checked_at.isoformat(),
                 str(system_snapshot_id or ""),
                 str(exchange_snapshot_id or ""),
+                str(event_snapshot_id or ""),
             ),
         )
         conn.commit()
@@ -463,6 +520,174 @@ class PersistentStore:
         row = conn.execute(
             "SELECT * FROM reconciliation_snapshots WHERE account_id=? AND venue_id=? AND side=? ORDER BY timestamp DESC, id DESC LIMIT 1",
             (account_id, venue_id, side),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["positions"] = json.loads(str(data["positions"]))
+        data["open_orders"] = json.loads(str(data["open_orders"]))
+        return data
+
+    # --- User-stream event journal ---
+
+    def save_user_stream_event(self, update: Any, *, continuity_status: str) -> bool:
+        """Append one normalized user event, rejecting identity conflicts.
+
+        Event identity is durable before projection.  Replaying the exact
+        event is idempotent; reusing its id with different raw bytes is a
+        truth-journal conflict and must freeze the caller.
+        """
+
+        event = update.event
+        event_id = str(event.event_id)
+        raw_event = json.dumps(event.raw_event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        conn = self._get_conn()
+        existing = conn.execute(
+            "SELECT raw_event, applied_state FROM user_stream_events WHERE event_id=?",
+            (event_id,),
+        ).fetchone()
+        if existing is not None:
+            existing_raw = str(existing[0])
+            if existing_raw != raw_event:
+                raise RuntimeError(f"user-stream event identity conflict: {event_id}")
+            return False
+        commission = getattr(update, "commission", None)
+        realized_pnl = getattr(update, "realized_pnl", None)
+        conn.execute(
+            """INSERT INTO user_stream_events
+               (event_id, event_type, sequence, event_time_ms, transaction_time_ms,
+                order_id, client_order_id, symbol, side, order_type, order_status,
+                execution_type, original_quantity, cumulative_quantity, last_quantity,
+                last_price, average_price, trade_id, commission_amount,
+                commission_currency, realized_pnl_amount, raw_event, continuity_status,
+                applied_state, received_at, applied_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                event_id,
+                str(event.event_type),
+                event.sequence,
+                int(event.event_time_ms),
+                event.transaction_time_ms,
+                str(getattr(update, "order_id", "")) or None,
+                str(getattr(update, "client_order_id", "")) or None,
+                str(getattr(update, "symbol", "")) or None,
+                str(getattr(getattr(update, "side", None), "value", getattr(update, "side", ""))) or None,
+                str(getattr(getattr(update, "order_type", None), "value", getattr(update, "order_type", ""))) or None,
+                str(getattr(getattr(update, "order_status", None), "value", getattr(update, "order_status", ""))) or None,
+                str(getattr(update, "execution_type", "")) or None,
+                str(getattr(getattr(update, "original_quantity", None), "amount", "")) or None,
+                str(getattr(getattr(update, "cumulative_quantity", None), "amount", "")) or None,
+                str(getattr(getattr(update, "last_quantity", None), "amount", "")) or None,
+                str(getattr(getattr(update, "last_price", None), "amount", "")) or None,
+                str(getattr(getattr(update, "average_price", None), "amount", "")) or None,
+                str(getattr(update, "trade_id", "")) or None,
+                str(getattr(commission, "amount", "")) or None,
+                str(getattr(commission, "currency", "")) or None,
+                str(getattr(realized_pnl, "amount", "")) or None,
+                raw_event,
+                str(continuity_status),
+                "PENDING",
+                datetime.now(timezone.utc).isoformat(),
+                None,
+            ),
+        )
+        conn.commit()
+        return True
+
+    def mark_user_stream_event_applied(self, event_id: str, applied_at: str | None = None) -> None:
+        """Mark an event applied only after its projection is durable."""
+
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """UPDATE user_stream_events
+               SET applied_state='APPLIED', applied_at=?
+               WHERE event_id=? AND applied_state='PENDING'""",
+            (applied_at or datetime.now(timezone.utc).isoformat(), str(event_id)),
+        )
+        conn.commit()
+        if cursor.rowcount == 1:
+            return
+        row = conn.execute(
+            "SELECT applied_state FROM user_stream_events WHERE event_id=?",
+            (str(event_id),),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"user-stream event {event_id} disappeared before apply")
+        if str(row[0]) != "APPLIED":
+            raise RuntimeError(f"user-stream event {event_id} has unexpected state {row[0]!r}")
+
+    def get_user_stream_event(self, event_id: str) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM user_stream_events WHERE event_id=?",
+            (str(event_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["raw_event"] = json.loads(str(data["raw_event"]))
+        return data
+
+    def restore_user_stream_events(self, *, applied_only: bool = False) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        query = "SELECT * FROM user_stream_events"
+        params: tuple[Any, ...] = ()
+        if applied_only:
+            query += " WHERE applied_state='APPLIED'"
+        query += " ORDER BY event_time_ms, event_id"
+        rows = conn.execute(query, params).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            data["raw_event"] = json.loads(str(data["raw_event"]))
+            result.append(data)
+        return result
+
+    def save_user_stream_projection(self, snapshot: Any, *, last_sequence: int | None) -> None:
+        """Persist the event-derived projection before marking its event applied."""
+
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT INTO user_stream_projections
+               (account_id, venue_id, balance_amount, balance_currency, balance_decimals,
+                positions, open_orders, last_event_time_ms, last_sequence, source,
+                fact_version, complete, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(account_id, venue_id) DO UPDATE SET
+                balance_amount=excluded.balance_amount,
+                balance_currency=excluded.balance_currency,
+                balance_decimals=excluded.balance_decimals,
+                positions=excluded.positions,
+                open_orders=excluded.open_orders,
+                last_event_time_ms=excluded.last_event_time_ms,
+                last_sequence=excluded.last_sequence,
+                source=excluded.source,
+                fact_version=excluded.fact_version,
+                complete=excluded.complete,
+                updated_at=excluded.updated_at""",
+            (
+                str(snapshot.account_id),
+                str(snapshot.venue_id),
+                str(snapshot.balance.amount),
+                str(snapshot.balance.currency),
+                int(snapshot.balance.decimals),
+                json.dumps({str(k): str(v.amount) for k, v in snapshot.positions.items()}, sort_keys=True),
+                json.dumps([str(order_id) for order_id in snapshot.open_orders], sort_keys=True),
+                int(snapshot.timestamp.timestamp() * 1000) if snapshot.timestamp else None,
+                last_sequence,
+                str(getattr(snapshot, "source", "USER_STREAM")),
+                str(getattr(snapshot, "fact_version", "")),
+                int(bool(getattr(snapshot, "complete", False))),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def restore_user_stream_projection(self, account_id: str, venue_id: str) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM user_stream_projections WHERE account_id=? AND venue_id=?",
+            (str(account_id), str(venue_id)),
         ).fetchone()
         if row is None:
             return None

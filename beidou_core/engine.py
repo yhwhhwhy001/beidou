@@ -59,6 +59,7 @@ from beidou_safety.execution.reconciliation import (
     ReconciliationEngine,
     ReconciliationStatus,
 )
+from beidou_safety.execution.user_events import UserProjectionStatus, UserStreamProjector
 from beidou_safety.protection.engine import ProtectionManager, ProtectionStatus
 from beidou_safety.risk.engine import (
     DEFAULT_APPROVAL_TTL_SECONDS,
@@ -985,6 +986,10 @@ class AutonomousEngine:
         self._ledger = ImmutableLedger()
         self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
+        self._user_stream_projector = UserStreamProjector(store=self._store)
+        self._event_stream_facts: AccountFactSnapshot | None = None
+        if self._user_stream_projector.sequencer.last_sequence is not None:
+            self._event_stream_facts = self._user_stream_projector.fact_snapshot()
         self._last_reconciliation_result: Any | None = None
         self._pre_risk = PreRiskCheckerImpl(
             max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
@@ -1708,6 +1713,16 @@ class AutonomousEngine:
                 self._last_reconciliation_result is not None
                 and self._last_reconciliation_result.matched
             ),
+            "event_stream_sequence": (
+                self._user_stream_projector.sequencer.last_sequence
+                if hasattr(self, "_user_stream_projector")
+                else None
+            ),
+            "event_stream_status": (
+                self._user_stream_projector.sequencer.status.value
+                if hasattr(self, "_user_stream_projector")
+                else "UNKNOWN"
+            ),
             "state_backend_supported": self._state_backend_supported,
             "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
             "active_orders": len(self._active_order_ids),
@@ -1738,6 +1753,23 @@ class AutonomousEngine:
             }
             if self._last_reconciliation_result is not None
             else {"status": "UNKNOWN", "matched": False},
+            "event_stream": {
+                "sequence": (
+                    self._user_stream_projector.sequencer.last_sequence
+                    if hasattr(self, "_user_stream_projector")
+                    else None
+                ),
+                "status": (
+                    self._user_stream_projector.sequencer.status.value
+                    if hasattr(self, "_user_stream_projector")
+                    else "UNKNOWN"
+                ),
+                "frozen_reason": (
+                    self._user_stream_projector.frozen_reason
+                    if hasattr(self, "_user_stream_projector")
+                    else None
+                ),
+            },
             "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
             "protection_owner_unknown": self._protection_owner_unknown,
             "active_incidents": self._alerts.get_active_incidents(),
@@ -3384,6 +3416,7 @@ class AutonomousEngine:
         *,
         system_facts: AccountFactSnapshot | None = None,
         exchange_facts: AccountFactSnapshot | None = None,
+        event_facts: AccountFactSnapshot | None = None,
     ) -> bool:
         """Persist an auditable failure and close the risk-increase gate.
 
@@ -3393,17 +3426,21 @@ class AutonomousEngine:
         """
 
         self._last_reconciliation_result = result
+        event_facts = event_facts or getattr(result, "event_facts", None)
         snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
         try:
             if system_facts is not None:
                 self._store.save_reconciliation_snapshot(f"{snapshot_base}-system", "SYSTEM", system_facts)
             if exchange_facts is not None:
                 self._store.save_reconciliation_snapshot(f"{snapshot_base}-exchange", "EXCHANGE", exchange_facts)
+            if event_facts is not None:
+                self._store.save_reconciliation_snapshot(f"{snapshot_base}-event", "EVENT_STREAM", event_facts)
             self._store.save_reconciliation_result(
                 snapshot_base,
                 result,
                 system_snapshot_id=f"{snapshot_base}-system" if system_facts is not None else "",
                 exchange_snapshot_id=f"{snapshot_base}-exchange" if exchange_facts is not None else "",
+                event_snapshot_id=f"{snapshot_base}-event" if event_facts is not None else "",
             )
         except Exception as exc:
             # A persistence failure is itself UNKNOWN; retain the gate closed
@@ -3422,6 +3459,28 @@ class AutonomousEngine:
         print(f"[recon] BLOCKED: {description}")
         return False
 
+    def ingest_user_order_update(self, update: Any) -> bool:
+        """Apply one normalized user event through the durable stream gate.
+
+        This method is intentionally an injection boundary for a future
+        websocket consumer.  It does not open a socket or replay REST data;
+        callers must provide an adapter-validated ``UserOrderUpdate``.
+        """
+
+        projector = getattr(self, "_user_stream_projector", None)
+        if projector is None:
+            projector = UserStreamProjector(store=self._store)
+            self._user_stream_projector = projector
+        result = projector.ingest(update)
+        if result.status in {UserProjectionStatus.ACCEPTED, UserProjectionStatus.DUPLICATE}:
+            self._event_stream_facts = projector.fact_snapshot()
+            self._recon.update_event_facts(self._event_stream_facts)
+            return True
+        self._record_execution_fact_failure(
+            f"user-stream event {result.event_id or '<unknown>'} blocked: {result.reason}"
+        )
+        return False
+
     def _build_system_reconciliation_facts(self) -> AccountFactSnapshot:
         """Build facts only from durable local projections.
 
@@ -3435,19 +3494,6 @@ class AutonomousEngine:
 
         opening = self._store.restore_account_opening_projection("default", "BINANCE")
         positions: dict[InstrumentId, Quantity] = {}
-        if opening is not None:
-            positions.update(
-                {
-                    InstrumentId(str(symbol)): Quantity(amount=str(amount))
-                    for symbol, amount in dict(opening.get("positions", {})).items()
-                }
-            )
-        for symbol, row in self._position_projection.items():
-            signed_qty = float(row.get("signed_quantity", 0) or 0)
-            # A durable current projection overrides the opening baseline;
-            # zero is meaningful because it proves a later flatten.
-            positions[InstrumentId(symbol)] = Quantity(amount=str(signed_qty))
-        active_orders = self._store.get_active_orders()
         opening_complete = bool(
             opening
             and int(opening.get("complete", 0)) == 1
@@ -3456,6 +3502,57 @@ class AutonomousEngine:
             and str(opening.get("evidence_hash", "")).strip()
             and str(opening.get("approval_id", "")).strip()
         )
+        if opening is not None:
+            positions.update(
+                {
+                    InstrumentId(str(symbol)): Quantity(amount=str(amount))
+                    for symbol, amount in dict(opening.get("positions", {})).items()
+                }
+            )
+        captured_at = None
+        if opening is not None:
+            try:
+                captured_at = datetime.fromisoformat(str(opening["captured_at"]))
+                if captured_at.tzinfo is None:
+                    captured_at = captured_at.replace(tzinfo=timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                opening_complete = False
+        post_opening_fill = False
+        for fill in self._store.restore_fill_events():
+            try:
+                fill_time = datetime.fromisoformat(str(fill.get("event_time", "")))
+                if fill_time.tzinfo is None:
+                    fill_time = fill_time.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                opening_complete = False
+                continue
+            if captured_at is None or fill_time <= captured_at:
+                continue
+            post_opening_fill = True
+            if str(fill.get("processing_state", "COMMITTED")) != "COMMITTED":
+                opening_complete = False
+                continue
+            symbol = InstrumentId(str(fill.get("symbol", "")))
+            if not str(symbol):
+                opening_complete = False
+                continue
+            current = Decimal(str(positions.get(symbol, Quantity(amount="0")).amount))
+            delta = Decimal(str(fill.get("delta_qty", "0")))
+            if str(fill.get("side", "")).upper() == "BUY":
+                current += delta
+            elif str(fill.get("side", "")).upper() == "SELL":
+                current -= delta
+            else:
+                opening_complete = False
+                continue
+            positions[symbol] = Quantity(amount=format(current.normalize(), "f"))
+        active_orders = self._store.get_active_orders()
+        # The opening balance is not a cash ledger.  Once a fill occurs, its
+        # fees/realized cash must be independently projected before this side
+        # can claim completeness; never pair a stale balance with replayed
+        # positions and call that a match.
+        if post_opening_fill:
+            opening_complete = False
         balance_amount = str(opening.get("balance_amount", "0")) if opening else "0"
         balance_currency = str(opening.get("balance_currency", "USDT")) if opening else "USDT"
         balance_decimals = int(opening.get("balance_decimals", 8)) if opening else 8
@@ -3531,7 +3628,10 @@ class AutonomousEngine:
         system_facts = self._build_system_reconciliation_facts()
         self._recon.update_system_facts(system_facts)
         self._recon.update_exchange_facts(exchange_facts)
-        result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
+        event_facts = getattr(self, "_event_stream_facts", None)
+        if event_facts is not None:
+            self._recon.update_event_facts(event_facts)
+        result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
         self._last_reconciliation_result = result
         self._last_account = account
         if not result.matched:
@@ -3539,17 +3639,21 @@ class AutonomousEngine:
                 result,
                 system_facts=system_facts,
                 exchange_facts=exchange_facts,
+                event_facts=event_facts,
             )
 
         try:
             snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
             self._store.save_reconciliation_snapshot(f"{snapshot_base}-system", "SYSTEM", system_facts)
             self._store.save_reconciliation_snapshot(f"{snapshot_base}-exchange", "EXCHANGE", exchange_facts)
+            if event_facts is not None:
+                self._store.save_reconciliation_snapshot(f"{snapshot_base}-event", "EVENT_STREAM", event_facts)
             self._store.save_reconciliation_result(
                 snapshot_base,
                 result,
                 system_snapshot_id=f"{snapshot_base}-system",
                 exchange_snapshot_id=f"{snapshot_base}-exchange",
+                event_snapshot_id=f"{snapshot_base}-event" if event_facts is not None else "",
             )
         except Exception as exc:
             result.matched = False
@@ -3559,6 +3663,7 @@ class AutonomousEngine:
                 result,
                 system_facts=system_facts,
                 exchange_facts=exchange_facts,
+                event_facts=event_facts,
             )
         print("[recon] MATCHED: independent durable facts verified")
         return True

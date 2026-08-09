@@ -40,12 +40,22 @@
 
 Algo/条件单的库存、创建和撤销已统一经过 typed Adapter：必须有 `algoId/symbol/side/orderType/triggerPrice/algoStatus` 等 venue ACK 字段；缺字段的库存或 ACK 直接 UNKNOWN。用户流事件统一解析，缺少单调序列或出现 gap 时由 `UserStreamSequencer` 标记 `SEQUENCE_UNAVAILABLE/GAP`，要求独立 REST replay/对账后才能恢复信任。
 
-仍未完成：手续费/资金费入账、完整 OrderAggregate 与 user-stream 事件应用/gap-fill、独立三方只读对账、PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
+新增的本地切片：`UserOrderUpdate` 先经 Adapter 校验，再由 `UserStreamProjector` 以
+`user_stream_events PENDING → APPLIED` 和 `user_stream_projections` 持久化；重复事件幂等，
+同一事件 ID 对应不同原文直接冲突。重启恢复高水位后默认进入 `GAP`，必须有独立 replay
+授权才能继续接收；缺序列、断档或投影异常均不自动补洞。`ReconciliationEngine.compare_three_way`
+现在比较 system / exchange REST / event-stream 三方，且引擎只提供注入边界，不在本地伪造
+WebSocket 或用 REST 复制用户流事实。
+
+仍未完成：完整 Account/Balance user-stream 事实与独立 replay/gap-fill、手续费/资金费入账、
+完整 OrderAggregate、PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
 
 ### 4. 独立对账与运行态语义
 
 - `ReconciliationEngine.compare` 是无副作用纯比较：缺少一侧、未来/过期、字段不完整、key 不一致都返回阻断状态。
 - 每轮账户与普通挂单快照分别持久到 `reconciliation_snapshots`，结果持久到 `reconciliation_results`；失败立即执行 `NO_NEW_RISK` 并产生 CRITICAL 事故。
+- 三方对账结果会分别保存 `SYSTEM`、`EXCHANGE`、`EVENT_STREAM` 快照；缺任一方、序列不连续、
+  投影不完整或三方任意差异都保持阻断，不能以两方匹配覆盖第三方缺失。
 - 活跃运行路径不再调用自愈/复制交易所状态；`/health`、`/ready`、`/trading-ready` 绑定心跳、控制面、对账结果和保护 owner 语义。
 - 本地账户 opening balance 尚未有独立可审计来源，因此当前 system fact 明确为 `INCOMPLETE`，不会伪造 MATCHED。
 
@@ -65,7 +75,10 @@ Algo/条件单的库存、创建和撤销已统一经过 typed Adapter：必须�
 ## 当前阻塞
 
 1. 运行中的 Mac 实例曾出现心跳、卡死订单链和 READY 语义矛盾；本轮未重启、停机或读取交易所事实，不能把本地测试当作运行态修复。
-2. SQLite 只是本地 durable slice，不是 PostgreSQL/PITR 生产事实库；对账仍不是独立三方事实源。
+2. SQLite 只是本地 durable slice，不是 PostgreSQL/PITR 生产事实库；三方比较骨架已接入，但
+   user-stream 仍缺完整账户余额事实与独立 replay/gap-fill，因此不能得到生产 MATCHED。
    配置为尚未接入的 PostgreSQL/其他后端时，运行时只保留诊断 SQLite，不再把它报告为 READY；`/ready` 和 `/trading-ready` 返回 `STATE_BACKEND_UNSUPPORTED`。
-3. owner/session/generation 字段、ACK 后 ACTIVE、typed Algo 字段回读和未归属条件单冻结已接入，但还没有完整 venue user-stream 事件应用、跨进程恢复和治理恢复验收。
+3. owner/session/generation 字段、ACK 后 ACTIVE、typed Algo 字段回读、事件 journal/projector
+   和重启后 replay gate 已接入，但完整 venue user-stream 账户事件、跨进程治理恢复和真实 ACK
+   验收仍未完成。
 4. 真实 G5 16 场景和全新真实 30 日 G7 尚未执行；旧证书不可继承。

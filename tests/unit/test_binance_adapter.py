@@ -238,3 +238,10 @@ class TestBinanceAdapter:
         observation = sequencer.observe(gap.data)
         assert observation.accepted is False
         assert observation.status is UserStreamStatus.GAP
+        after_gap = BinanceUsdmAdapter.parse_user_stream_event({"e": "ORDER_TRADE_UPDATE", "E": 1002, "u": 11})
+        assert after_gap.data is not None
+        assert sequencer.observe(after_gap.data).accepted is False
+        sequencer.mark_replayed(10)
+        replayed = BinanceUsdmAdapter.parse_user_stream_event({"e": "ORDER_TRADE_UPDATE", "E": 1003, "u": 11})
+        assert replayed.data is not None
+        assert sequencer.observe(replayed.data).accepted is True

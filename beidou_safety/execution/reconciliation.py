@@ -35,6 +35,7 @@ class ReconciliationResult:
     differences: list[str] = field(default_factory=list)
     system_facts: AccountFactSnapshot | None = None
     exchange_facts: AccountFactSnapshot | None = None
+    event_facts: AccountFactSnapshot | None = None
     checked_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -74,6 +75,7 @@ class ReconciliationEngine:
     def __init__(self, *, max_age_seconds: float = 30.0) -> None:
         self._system_facts: dict[str, AccountFactSnapshot] = {}
         self._exchange_facts: dict[str, AccountFactSnapshot] = {}
+        self._event_facts: dict[str, AccountFactSnapshot] = {}
         self._max_age = timedelta(seconds=max(0.0, max_age_seconds))
         self._last_result: ReconciliationResult | None = None
 
@@ -82,6 +84,11 @@ class ReconciliationEngine:
 
     def update_exchange_facts(self, facts: AccountFactSnapshot) -> None:
         self._exchange_facts[f"{facts.account_id}:{facts.venue_id}"] = facts
+
+    def update_event_facts(self, facts: AccountFactSnapshot) -> None:
+        """Record the independently projected user-stream fact source."""
+
+        self._event_facts[f"{facts.account_id}:{facts.venue_id}"] = facts
 
     def reconcile(self, account_id: AccountId, venue_id: VenueId) -> ReconciliationResult:
         """BD-P0-10: 对账 — 双方缺失 → UNKNOWN，从不匹配。
@@ -93,6 +100,19 @@ class ReconciliationEngine:
         result = self.compare(
             self._system_facts.get(key),
             self._exchange_facts.get(key),
+            max_age=self._max_age,
+        )
+        self._last_result = result
+        return result
+
+    def reconcile_three_way(self, account_id: AccountId, venue_id: VenueId) -> ReconciliationResult:
+        """Compare durable system, exchange, and user-stream facts."""
+
+        key = f"{account_id}:{venue_id}"
+        result = self.compare_three_way(
+            self._system_facts.get(key),
+            self._exchange_facts.get(key),
+            self._event_facts.get(key),
             max_age=self._max_age,
         )
         self._last_result = result
@@ -237,6 +257,119 @@ class ReconciliationEngine:
             differences=diffs,
             system_facts=system_facts,
             exchange_facts=exchange_facts,
+            checked_at=checked_at,
+        )
+
+    @staticmethod
+    def compare_three_way(
+        system_facts: AccountFactSnapshot | None,
+        exchange_facts: AccountFactSnapshot | None,
+        event_facts: AccountFactSnapshot | None,
+        *,
+        max_age: timedelta = timedelta(seconds=30),
+        now: datetime | None = None,
+    ) -> ReconciliationResult:
+        """Compare three independent fact sources without repairing any side.
+
+        The user stream is an event-derived source, not a copy of REST.  Its
+        absence, sequence gap, stale projection, or incomplete balance keeps
+        the result unsafe.  A three-way match is required before new risk can
+        be enabled.
+        """
+
+        checked_at = now or datetime.now(timezone.utc)
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        facts = (system_facts, exchange_facts, event_facts)
+        available = sum(item is not None for item in facts)
+        if available == 0:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.BOTH_SIDES_MISSING,
+                differences=["BOTH_SIDES_MISSING: all independent fact sources unavailable — UNKNOWN"],
+                checked_at=checked_at,
+            )
+        if available < 3:
+            present_incomplete = [item for item in facts if item is not None and not item.complete]
+            if present_incomplete:
+                return ReconciliationResult(
+                    matched=False,
+                    status=ReconciliationStatus.INCOMPLETE,
+                    differences=[
+                        "INCOMPLETE_FACT: an available source is incomplete before the missing-source gate"
+                    ],
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    event_facts=event_facts,
+                    checked_at=checked_at,
+                )
+            missing = [
+                name
+                for name, item in zip(("system", "exchange", "event_stream"), facts, strict=True)
+                if item is None
+            ]
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ONE_SIDE_MISSING,
+                differences=[
+                    "ONE_SIDE_MISSING: unavailable independent fact source(s) "
+                    + ", ".join(missing)
+                    + " — UNKNOWN"
+                ],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                event_facts=event_facts,
+                checked_at=checked_at,
+            )
+
+        assert system_facts is not None and exchange_facts is not None and event_facts is not None
+        pair_results = (
+            ("system/exchange", ReconciliationEngine.compare(system_facts, exchange_facts, max_age=max_age, now=checked_at)),
+            ("system/event_stream", ReconciliationEngine.compare(system_facts, event_facts, max_age=max_age, now=checked_at)),
+            ("exchange/event_stream", ReconciliationEngine.compare(exchange_facts, event_facts, max_age=max_age, now=checked_at)),
+        )
+        for pair_name, pair_result in pair_results:
+            if pair_result.status is ReconciliationStatus.ERROR:
+                return ReconciliationResult(
+                    matched=False,
+                    status=ReconciliationStatus.ERROR,
+                    differences=[f"{pair_name}: {diff}" for diff in pair_result.differences],
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    event_facts=event_facts,
+                    checked_at=checked_at,
+                )
+        for status in (ReconciliationStatus.INCOMPLETE, ReconciliationStatus.STALE):
+            failures = [
+                f"{pair_name}: {diff}"
+                for pair_name, pair_result in pair_results
+                if pair_result.status is status
+                for diff in pair_result.differences
+            ]
+            if failures:
+                return ReconciliationResult(
+                    matched=False,
+                    status=status,
+                    differences=failures,
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    event_facts=event_facts,
+                    checked_at=checked_at,
+                )
+
+        mismatches = [
+            f"{pair_name}: {diff}"
+            for pair_name, pair_result in pair_results
+            if pair_result.status is ReconciliationStatus.MISMATCHED
+            for diff in pair_result.differences
+        ]
+        return ReconciliationResult(
+            matched=not mismatches,
+            status=ReconciliationStatus.MATCHED if not mismatches else ReconciliationStatus.MISMATCHED,
+            differences=mismatches,
+            system_facts=system_facts,
+            exchange_facts=exchange_facts,
+            event_facts=event_facts,
             checked_at=checked_at,
         )
 

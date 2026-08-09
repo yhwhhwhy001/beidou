@@ -19,6 +19,7 @@ from beidou_exchange.core.protocol import (
     ExchangeInfo,
     OrderRequest,
     OrderResponse,
+    UserOrderUpdate,
     UserStreamEvent,
 )
 from beidou_shared.errors import ErrorCategory
@@ -637,6 +638,74 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             ),
             source="binance_user_stream_adapter",
         )
+
+    @staticmethod
+    def parse_user_order_update(raw: Any) -> Result[UserOrderUpdate]:
+        """Parse one order/trade update without converting missing fields to 0."""
+
+        event_result = BinanceUsdmAdapter.parse_user_stream_event(raw)
+        if not event_result.is_success() or event_result.data is None:
+            return Result.failure(
+                "User order update has no valid event envelope",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        if event_result.data.event_type != "ORDER_TRADE_UPDATE" or not isinstance(raw, dict):
+            return Result.failure(
+                "Expected ORDER_TRADE_UPDATE envelope",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        order = raw.get("o")
+        required = ("i", "c", "s", "S", "o", "X", "x", "q", "z", "l", "L", "ap")
+        if not isinstance(order, dict) or any(order.get(key) in (None, "") for key in required):
+            return Result.failure(
+                "User order update missing execution fields",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        try:
+            numeric_values = {
+                key: Decimal(str(order[key]))
+                for key in ("q", "z", "l", "L", "ap", "n", "rp")
+                if order.get(key) not in (None, "")
+            }
+            if any(value < 0 for key, value in numeric_values.items() if key != "rp"):
+                raise ValueError("quantity/price/commission fields must be non-negative")
+            commission_asset = str(order.get("N") or "USDT")
+            commission = MonetaryValue(amount=str(order.get("n", "0")), currency=commission_asset)
+            realized_pnl = None
+            if order.get("rp") not in (None, ""):
+                realized_pnl = MonetaryValue(amount=str(order["rp"]), currency="USDT")
+            update = UserOrderUpdate(
+                event=event_result.data,
+                order_id=str(order["i"]),
+                client_order_id=str(order["c"]),
+                symbol=InstrumentId(str(order["s"])),
+                side=OrderSide(str(order["S"])),
+                order_type=OrderType(str(order["o"])),
+                order_status=OrderStatus(str(order["X"])),
+                execution_type=str(order["x"]),
+                original_quantity=Quantity(amount=str(order["q"])),
+                cumulative_quantity=Quantity(amount=str(order["z"])),
+                last_quantity=Quantity(amount=str(order["l"])),
+                last_price=Price(amount=str(order["L"])),
+                average_price=Price(amount=str(order["ap"])),
+                trade_id=(str(order["t"]) if order.get("t") not in (None, "-1") else None),
+                commission=commission,
+                realized_pnl=realized_pnl,
+            )
+        except (TypeError, ValueError, InvalidOperation) as exc:
+            return Result.failure(
+                f"User order update invalid: {exc}",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_user_stream_adapter",
+            )
+        return Result.success(update, source="binance_user_stream_adapter")
 
     def normalize_error(self, error_code: int, message: str, correlation_id: str | None = None) -> Any:
         return ErrorNormalizer.normalize(str(self._venue_id), error_code, message, correlation_id)
