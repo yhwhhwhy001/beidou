@@ -1052,8 +1052,7 @@ class BeidouSupervisor:
 
             self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
             self.engine._health._port = self.port
-            self.engine._last_realtime = time.time()
-            self.engine._last_recon = time.time()
+            # _last_realtime 保持引擎默认值 (0.0)，确保首个 tick 立即执行
             self._install_exchange_write_interlock()
             self._install_resume_interlock()
             self._install_health_callbacks()

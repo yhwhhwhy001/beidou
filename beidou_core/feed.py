@@ -156,6 +156,21 @@ class MarketDataFeed:
                         "ask": data.get("a", "0"),
                     }
                     self._ws_last_update[symbol] = time.monotonic()
+                    # 用 WebSocket 实时 ticker 驱动 K 线生成
+                    try:
+                        last_price = float(data.get("c", 0))
+                        volume = float(data.get("v", 0))
+                        if last_price > 0:
+                            if symbol not in self._kline_generators:
+                                self._kline_generators[symbol] = KLineGenerator(interval="5m")
+                            self._kline_generators[symbol].update(
+                                price=last_price,
+                                volume=volume,
+                                timestamp=datetime.now(timezone.utc),
+                                symbol=symbol,
+                            )
+                    except Exception:
+                        pass  # 静默跳过，K 线生成失败不影响行情
 
             async def _on_depth(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
