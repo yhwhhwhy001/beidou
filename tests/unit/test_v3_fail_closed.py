@@ -124,3 +124,13 @@ def test_unsupported_state_backend_cannot_report_trading_ready() -> None:
     engine._state_backend_supported = False
     assert engine._check_ready() is False
     assert engine._check_trading_ready() == (False, "STATE_BACKEND_UNSUPPORTED")
+
+
+def test_persistent_blocker_cannot_leave_supervisor_running() -> None:
+    from beidou_launcher.supervisor import _state_after_persistent_block
+
+    assert _state_after_persistent_block("RUNNING", True) == "DEGRADED"
+    assert _state_after_persistent_block("STARTING", True) == "DEGRADED"
+    assert _state_after_persistent_block("DEGRADED", True) == "DEGRADED"
+    assert _state_after_persistent_block("LOCKED", True) == "LOCKED"
+    assert _state_after_persistent_block("RUNNING", False) == "RUNNING"

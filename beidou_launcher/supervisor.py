@@ -32,6 +32,20 @@ from .state import EvidenceWriter, InstanceLock
 logger = logging.getLogger(__name__)
 
 
+def _state_after_persistent_block(current_state: str, has_persistent_blocker: bool) -> str:
+    """Make a persistent runtime blocker visible in the supervisor state immediately.
+
+    Health debounce may delay the escalation to ``LOCKED`` but must never leave
+    the control-plane certificate looking ``RUNNING`` while a P0/P1 blocker is
+    already present.  Terminal states stay terminal until an explicit lifecycle
+    action handles them.
+    """
+
+    if has_persistent_blocker and current_state not in {"LOCKED", "FAILED", "STOPPED"}:
+        return "DEGRADED"
+    return current_state
+
+
 class BeidouSupervisor:
     def __init__(
         self,
@@ -752,14 +766,18 @@ class BeidouSupervisor:
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
-                # UNCHANGED: 防抖器计数中，保持当前状态
-                # 有持久阻断时仍调用 fail_closed 降低控制面（但不改变 supervisor_state）
+                # UNCHANGED: 防抖器计数中，控制面仍必须立即降级；
+                # 防抖只延迟 DEGRADED→LOCKED 的升级，不能让证书继续声称 RUNNING。
                 if has_persistent:
+                    previous_state = self.report.supervisor_state
                     await self._fail_closed(
                         "持久阻断检测（防抖计数中）: "
                         + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
                         fatal=False,
                     )
+                    self.report.supervisor_state = _state_after_persistent_block(previous_state, True)
+                    if self.report.supervisor_state == "DEGRADED" and previous_state != "DEGRADED":
+                        self._send_supervisor_alert("DEGRADED", persistent_blockers)
 
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新

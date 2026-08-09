@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import plistlib
 import signal
 import time
 import tomllib
@@ -262,6 +263,18 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
 
     source = inspect.getsource(cli)
     assert "force_stop_existing" not in source
+
+
+def test_launchagent_template_is_direct_and_fail_closed() -> None:
+    payload = plistlib.loads(Path("deploy/com.beidou.autopilot.plist").read_bytes())
+    arguments = payload["ProgramArguments"]
+
+    assert arguments[:2] == ["/opt/homebrew/bin/beidou", "start"]
+    assert "/bin/zsh" not in arguments
+    assert "-c" not in arguments
+    assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
+    assert payload["KeepAlive"] is False
+    assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}
 
 
 def test_stop_rejects_pid_state_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
