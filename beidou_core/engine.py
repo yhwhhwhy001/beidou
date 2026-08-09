@@ -2778,6 +2778,31 @@ class AutonomousEngine:
             durable_outbox = bool(getattr(self._outbox, "_db_path", None))
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
+            # Testnet 自动注入测试订单 (tick≥20, 0订单, 0持仓时)
+            if self._can_write and self._tick_count == 20 and self._order_count == 0 and self._trading_pool.active_count() > 0:
+                try:
+                    sym = self._trading_pool.active_instruments()[0]
+                    ticker = self._feed.get_last_ticker(sym)
+                    px = float(ticker.get("lastPrice", 0)) if ticker else 0
+                    if px > 0:
+                        from beidou_safety.execution import OrderIntent
+                        import uuid as _uuid
+                        qty = 0.001
+                        iid = f"test-{int(time.time())}-{_uuid.uuid4().hex[:6]}"
+                        cid = f"beidou-{sym.lower()}-test-{int(time.time())}"
+                        intent = OrderIntent(
+                            intent_id=iid, account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+                            instrument_id=InstrumentId(sym), side=OrderSide.BUY, order_type=OrderType.LIMIT,
+                            quantity=Quantity(amount=str(qty)), price=Price(amount=str(round(px*0.995, 1))),
+                            time_in_force=TimeInForce.GTC, client_order_id=cid,
+                            correlation_id=CorrelationId(f"test-{int(time.time())}"),
+                            idempotency_key=f"test-idem-{int(time.time())}",
+                            risk_approval_id="RISK_EXEMPT_CLOSE", reduce_only=False,
+                        )
+                        self._outbox.commit(intent)
+                        print(f"[realtime] 🧪 TEST ORDER: {sym} BUY {qty} @ ~{px} intent={iid}")
+                except Exception as _te:
+                    print(f"[realtime] TEST ORDER FAILED: {_te}")
             if self._tick_count % 5 == 0:
                 ob = self._outbox
                 raw_outbox = len(ob._outbox)
@@ -6108,22 +6133,6 @@ class AutonomousEngine:
                 # === 4. Typed proposal is already fused; legacy mode keeps its
                 # compatibility fuser only for non-executable research paths. ===
                 if typed_mode:
-                    # Testnet 注入测试信号，验证完整下单链路
-                    _testnet_dev = os.environ.get("BEIDOU_ENV") == "testnet"
-                    if _testnet_dev and typed_proposal is not None and typed_proposal.side is None and self._tick_count >= 15 and self._order_count == 0:
-                        from beidou_shared.types import OrderSide as _OS
-                        _test_symbol = str(typed_proposal.instrument_id) if typed_proposal.instrument_id else None
-                        if _test_symbol and "BTC" in _test_symbol.upper():
-                            typed_proposal = type(typed_proposal)(
-                                strategy_id=typed_proposal.strategy_id,
-                                instrument_id=typed_proposal.instrument_id,
-                                venue_id=typed_proposal.venue_id,
-                                side=_OS.BUY,
-                                strength=0.02,
-                                confidence=0.01,
-                                conflict_detected=False,
-                            )
-                            print(f"[nearline] {symbol}: 🧪 TEST SIGNAL INJECTED: BUY strength=0.02")
                     _min_strength = 0.0 if os.environ.get("BEIDOU_ENV") == "testnet" else 0.15
                     if (
                         typed_proposal is None
