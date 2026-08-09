@@ -24,6 +24,7 @@
   PostgreSQL 事务存储、外部加密备份/PITR、异机恢复演练和密钥托管，不能把本地副本当作灾备完成。
 - Fenced executor、唯一 Adapter、typed 用户数据流、显式 replay baseline 与 REST gap-fill。
 - OrderAggregate、FillStore、PositionProjection、保护 owner/generation、双式账本、三方只读对账。
+- 保护覆盖必须绑定交易所 ACK 的 `algoId/orderId`；监控器自身异常必须输出阻断事实，不能通过“没有结果”形成 PASS。
 - 退出条件：崩溃前/后发送、ACK 丢失、重复 client ID、部分成交、撤单竞态、保护拒绝和双 worker 测试全部通过；未知状态不自动恢复。
 
 ### P2：研究与环境一致性

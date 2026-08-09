@@ -52,6 +52,11 @@ REST / event-stream 三方，且引擎只提供注入边界，不在本地伪造
 仍未完成：交易所真实 gap-fill/replay 取证、手续费/资金费入账、完整 OrderAggregate、
 PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
 
+保护与监控语义已进一步收紧：`ProtectionFact` 只有在状态为 `ACTIVE` 且带交易所
+`exchange_order_id/algoId` 时才可计入覆盖；本地 `CREATED/PENDING` 只代表意图。成交后若任一
+保护未获得 venue ACK，系统立即冻结新风险并保留治理重试队列。监控采集器或语义校验异常不再
+静默省略，而是生成阻断性的 P0/P1 检查结果。控制面紧急动作只有实际执行成功才返回 `success=true`。
+
 本轮另外提供了本地灾备切片：SQLite 使用在线 `backup()` 生成一致性副本，恢复前校验
 `integrity_check`、`foreign_key_check`、必需事实表和行数；可选 AES-GCM 加密必须注入明确的
 32-byte 密钥。`migrations/002_v3_fact_chain.up.sql` 和 `scripts/run_migrations.py` 提供前向
