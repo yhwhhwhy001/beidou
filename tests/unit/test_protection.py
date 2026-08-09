@@ -129,7 +129,10 @@ class TestProtectionManager:
         pp = mgr.get_protection(pid)
         assert pp is not None
         assert pp.stop_loss is not None
-        assert pp.stop_loss.is_active()
+        # Local definitions are not venue facts until an exchange ACK binds
+        # an owner/order id.
+        assert pp.stop_loss.status == ProtectionStatus.CREATED
+        assert not pp.stop_loss.is_active()
         assert pp.stop_loss.stop_type == StopLossType.FIXED_PERCENT
         trigger = float(pp.stop_loss.trigger_price.amount)
         assert trigger == 95.0  # 100 * (1 - 5%)
@@ -138,7 +141,8 @@ class TestProtectionManager:
 
         assert len(pp.take_profits) == 1
         tp = pp.take_profits[0]
-        assert tp.is_active()
+        assert tp.status == ProtectionStatus.CREATED
+        assert not tp.is_active()
         assert tp.take_profit_type == TakeProfitType.FIXED_RR
         tp_price = float(tp.trigger_price.amount)
         assert tp_price == 110.0  # 100 + 5*2
@@ -210,6 +214,27 @@ class TestProtectionManager:
         assert pp.stop_loss.status == ProtectionStatus.CANCELLED
         for tp in pp.take_profits:
             assert tp.status == ProtectionStatus.CANCELLED
+
+    def test_venue_ack_is_required_for_active_status(self):
+        mgr = ProtectionManager()
+        pp = mgr.create_protection(
+            position_id="pos-owned",
+            instrument_id=InstrumentId("BTCUSDT"),
+            venue_id=VenueId("BINANCE"),
+            entry_price=100.0,
+            quantity=0.1,
+            side=OrderSide.BUY,
+            stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 5.0},
+            owner_id="beidou-autopilot",
+            position_generation=4,
+            session_id="session-1",
+        )
+        assert pp.stop_loss.status == ProtectionStatus.CREATED
+        assert pp.stop_loss.owner_id == "beidou-autopilot"
+        assert pp.stop_loss.position_generation == 4
+        pp.stop_loss.exchange_order_id = "algo-1"
+        pp.stop_loss.status = ProtectionStatus.ACTIVE
+        assert pp.stop_loss.is_active()
 
     def test_remove_position(self):
         mgr, pid = self._make_manager_with_position()

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -21,7 +22,7 @@ from beidou_autonomy.mapek import MAPEKController, RecoveryAction
 from beidou_control.plane import ControlAction, ControlPlane
 from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
-from beidou_core.health import HealthServer
+from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
 from beidou_data.trading_pool_lifecycle import InstrumentScore, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
@@ -53,7 +54,11 @@ from beidou_safety.execution.ledger import (
     PostingSide,
 )
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
-from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
+from beidou_safety.execution.reconciliation import (
+    AccountFactSnapshot,
+    ReconciliationEngine,
+    ReconciliationStatus,
+)
 from beidou_safety.protection.engine import ProtectionManager, ProtectionStatus
 from beidou_safety.risk.engine import (
     DEFAULT_APPROVAL_TTL_SECONDS,
@@ -952,6 +957,23 @@ class AutonomousEngine:
         self._protection_exchange_attempted: set[str] = set()
         self._active_algo_ids: dict[str, set[str]] = {}
         self._pending_protection_retry: set[str] = set()
+        self._protection_owner_unknown = False
+        self._protection_owner_id = self._service_identity.service_id
+        self._session_id = uuid.uuid4().hex
+        self._position_generation: dict[str, int] = {}
+        self._position_projection: dict[str, dict[str, Any]] = {
+            str(row["symbol"]): row for row in self._store.restore_position_projection()
+        }
+        for protection in self._store.restore_protections():
+            owner_id = str(protection.get("owner_id") or "UNKNOWN")
+            exchange_order_id = protection.get("exchange_order_id")
+            if owner_id != self._protection_owner_id or not exchange_order_id:
+                continue
+            position_id = str(protection["position_id"])
+            self._active_algo_ids.setdefault(position_id, set()).add(str(exchange_order_id))
+            symbol = str(protection.get("symbol", ""))
+            generation = int(protection.get("position_generation") or 0)
+            self._position_generation[symbol] = max(self._position_generation.get(symbol, 0), generation)
         self._last_order_placed_at: float = 0.0  # 最近一次下单时间戳（用于对账宽限期）
         # IntentOutbox uses the same database file as PersistentStore; its
         # schema is independent, but a single WAL gives restart recovery one
@@ -960,6 +982,7 @@ class AutonomousEngine:
         self._ledger = ImmutableLedger()
         self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
+        self._last_reconciliation_result: Any | None = None
         self._pre_risk = PreRiskCheckerImpl(
             max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
             max_concentration_pct=self._policy_float(
@@ -1335,6 +1358,11 @@ class AutonomousEngine:
         self._order_trackers: dict[str, OrderStateTracker] = {}
         self._active_order_ids: set[str] = set()
         self._order_symbols: dict[str, str] = {}  # orderId → symbol mapping
+        self._filled_quantities_by_order: dict[str, float] = {
+            str(row["order_id"]): float(row.get("filled_qty") or 0)
+            for row in self._store.restore_order_states()
+            if row.get("filled_qty") is not None
+        }
         self._position_entry_times: dict[str, float] = {}  # position_id → entry timestamp
         self._close_order_ids: set[str] = set()  # 平仓订单 ID，FILLED 后不创建保护
 
@@ -1363,7 +1391,9 @@ class AutonomousEngine:
         self._last_account: dict = {}
 
         # Health server callbacks
+        self._health.set_liveness_check(self._check_liveness)
         self._health.set_readiness_check(self._check_ready)
+        self._health.set_trading_readiness(self._check_trading_ready)
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
 
@@ -1509,10 +1539,42 @@ class AutonomousEngine:
 
     # --- Health & Metrics ---
 
+    def _check_liveness(self) -> HealthState:
+        """Expose stalled event-loop state instead of unconditional HEALTHY."""
+
+        if self._running and time.time() - self._last_realtime > 15.0:
+            return HealthState.UNHEALTHY
+        if (
+            self._control.get_status() != ControlAction.RESUME
+            or self._last_reconciliation_result is None
+            or not self._last_reconciliation_result.matched
+        ):
+            return HealthState.DEGRADED
+        return HealthState.HEALTHY
+
     def _check_ready(self) -> bool:
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
-        return self._feed.is_healthy()
+        if not self._feed.is_healthy():
+            return False
+        if self._control.get_status() != ControlAction.RESUME:
+            return False
+        if self._protection_owner_unknown:
+            return False
+        if self._last_reconciliation_result is None or not self._last_reconciliation_result.matched:
+            return False
+        return not self._running or time.time() - self._last_realtime <= 15.0
+
+    def _check_trading_ready(self) -> tuple[bool, str]:
+        if not self._check_ready():
+            if self._control.get_status() != ControlAction.RESUME:
+                return False, f"CONTROL_{self._control.get_status().value}"
+            if self._last_reconciliation_result is None:
+                return False, "RECONCILIATION_UNKNOWN"
+            return False, "RUNTIME_NOT_READY"
+        if not self._can_write:
+            return False, "TRADING_WRITE_DISABLED"
+        return True, "READY"
 
     async def run_parity_check(self) -> ParityResult:
         """BD-T05: 验证 Backtest/Paper/Testnet 策略一致性。"""
@@ -1571,6 +1633,16 @@ class AutonomousEngine:
             "tick_count": self._tick_count,
             "order_count": self._order_count,
             "error_count": self._error_count,
+            "reconciliation_status": (
+                self._last_reconciliation_result.status.value
+                if self._last_reconciliation_result is not None
+                else "UNKNOWN"
+            ),
+            "reconciliation_matched": bool(
+                self._last_reconciliation_result is not None
+                and self._last_reconciliation_result.matched
+            ),
+            "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
             "active_orders": len(self._active_order_ids),
             "positions": self._protection.position_count(),
             "alerts": self._alerts.get_alert_stats(),
@@ -1590,6 +1662,16 @@ class AutonomousEngine:
             "uptime_seconds": round(self._health.uptime_seconds(), 1),
             "last_realtime_tick": self._last_realtime,
             "last_nearline_tick": self._last_nearline,
+            "last_reconciliation": {
+                "status": self._last_reconciliation_result.status.value,
+                "matched": self._last_reconciliation_result.matched,
+                "differences": list(self._last_reconciliation_result.differences),
+                "checked_at": self._last_reconciliation_result.checked_at.isoformat(),
+            }
+            if self._last_reconciliation_result is not None
+            else {"status": "UNKNOWN", "matched": False},
+            "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
+            "protection_owner_unknown": self._protection_owner_unknown,
             "active_incidents": self._alerts.get_active_incidents(),
             "strategy_risk": {
                 "level": risk_state.risk_level.value if risk_state else "N/A",
@@ -1835,9 +1917,15 @@ class AutonomousEngine:
         a pending intent and must not be restored as ACTIVE after a restart.
         """
 
-        local_status = getattr(p_order, "status", ProtectionStatus.CREATED)
-        local_status_value = getattr(local_status, "value", str(local_status))
-        persisted_status = status or ("ACTIVE" if local_status_value == ProtectionStatus.ACTIVE.value else "PENDING")
+        exchange_order_id = getattr(p_order, "exchange_order_id", None)
+        # ACTIVE is a venue fact, never a local construction state.  A caller
+        # must provide an explicit status and an exchange algo id together.
+        persisted_status = (
+            "ACTIVE"
+            if status == "ACTIVE" and exchange_order_id
+            else ("CANCELLED" if status == "CANCELLED" else "PENDING")
+        )
+
         stop_type = getattr(getattr(p_order, "stop_type", None), "value", None)
         take_profit_type = getattr(getattr(p_order, "take_profit_type", None), "value", None)
         self._store.save_protection(
@@ -1852,7 +1940,39 @@ class AutonomousEngine:
             status=persisted_status,
             stop_type=stop_type,
             take_profit_type=take_profit_type,
+            owner_id=str(getattr(p_order, "owner_id", self._protection_owner_id) or "UNKNOWN"),
+            position_generation=int(getattr(p_order, "position_generation", 0)),
+            session_id=str(getattr(p_order, "session_id", self._session_id) or ""),
+            exchange_order_id=str(exchange_order_id) if exchange_order_id else None,
         )
+
+    def _next_position_generation(self, symbol: str) -> int:
+        """Advance a durable owner-generation counter for one symbol."""
+
+        generation = self._position_generation.get(symbol, 0) + 1
+        self._position_generation[symbol] = generation
+        return generation
+
+    def _block_unowned_protection_orders(self, order_ids: list[str]) -> None:
+        """Freeze new risk when venue protection ownership is unproven."""
+
+        self._protection_owner_unknown = True
+        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+        self._alerts.send_incident(
+            AlertSeverity.CRITICAL,
+            "Protection ownership unknown",
+            f"Conditional orders lack durable owner mapping: {sorted(order_ids)}",
+            category="protection",
+        )
+
+    def _require_protection_config(self, symbol: str, config: Any) -> None:
+        """Reject protection construction when market-derived inputs are absent."""
+
+        metadata = getattr(config, "metadata", {}) or {}
+        if metadata.get("blocked") or float(getattr(config, "stop_pct", 0) or 0) <= 0:
+            self._block_unowned_protection_orders([f"PROTECTION_CONFIG_UNKNOWN:{symbol}"])
+            raise RuntimeError(f"protection parameters UNKNOWN for {symbol}")
 
     def _restore_durable_ledger(self) -> None:
         """Rebuild the in-memory ledger projection from the durable journal."""
@@ -2582,7 +2702,6 @@ class AutonomousEngine:
                     continue
 
                 executed_qty = float(result.get("executedQty", 0))
-                avg_price = result.get("avgPrice", "0")
 
                 if status == "FILLED":
                     await self._process_fill(order_id, order_sym or symbol, result)
@@ -2603,15 +2722,21 @@ class AutonomousEngine:
                 elif status == "PARTIALLY_FILLED":
                     tracker.apply(OrderEvent.PARTIALLY_FILLED)
                     # P1修复: 部分成交入账 — 记录已执行数量到账本
-                    if executed_qty > 0 and float(avg_price or 0) > 0:
-                        partial_notional = executed_qty * float(avg_price)
+                    delta_qty, partial_price, fill_event_id = self._consume_cumulative_fill(
+                        order_id,
+                        order_sym or symbol,
+                        result,
+                        status="PARTIALLY_FILLED",
+                    )
+                    if delta_qty > 0 and partial_price > 0:
+                        partial_notional = delta_qty * partial_price
                         side_desc = result.get("side", "")
                         is_buy = side_desc.upper() == "BUY"
-                        tx_id = f"tx-{order_id}-partial-{int(time.time())}"
+                        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
                         tx = LedgerTransaction(
                             transaction_id=tx_id,
                             transaction_type=LedgerTransactionType.FILL,
-                            source_event_id=f"fill-{order_id}-partial",
+                            source_event_id=fill_event_id,
                             postings=(
                                 Posting(
                                     posting_id=f"{tx_id}-p1",
@@ -2621,7 +2746,7 @@ class AutonomousEngine:
                                     instrument_id=InstrumentId(order_sym or symbol),
                                     amount=MonetaryValue(amount=str(partial_notional)),
                                     side=PostingSide.DEBIT,
-                                    description=f"PARTIAL {side_desc} {executed_qty} {order_sym or symbol} @ {avg_price}",
+                                    description=f"PARTIAL {side_desc} {delta_qty} {order_sym or symbol} @ {partial_price}",
                                 ),
                                 Posting(
                                     posting_id=f"{tx_id}-p2",
@@ -2631,20 +2756,135 @@ class AutonomousEngine:
                                     instrument_id=InstrumentId(order_sym or symbol),
                                     amount=MonetaryValue(amount=str(partial_notional)),
                                     side=PostingSide.CREDIT,
-                                    description=f"PARTIAL {side_desc} {executed_qty} {order_sym or symbol} @ {avg_price}",
+                                    description=f"PARTIAL {side_desc} {delta_qty} {order_sym or symbol} @ {partial_price}",
                                 ),
                             ),
                             correlation_id=CorrelationId(f"exec-{order_id}"),
                         )
                         self._post_ledger_transaction(tx)
+                        self._update_position_projection(
+                            order_sym or symbol,
+                            side_desc,
+                            delta_qty,
+                            partial_price,
+                            fill_event_id,
+                        )
+                        self._store.save_order_state(
+                            order_id,
+                            order_sym or symbol,
+                            side_desc,
+                            result.get("type", "MARKET"),
+                            result.get("origQty", "0"),
+                            result.get("price"),
+                            "PARTIALLY_FILLED",
+                            str(executed_qty),
+                            str(partial_price),
+                        )
                         print(
                             f"[order] PARTIAL FILL recorded: {order_sym or symbol} {side_desc} "
-                            f"qty={executed_qty} @ {avg_price} notional={partial_notional:.2f}"
+                            f"qty={delta_qty} @ {partial_price} notional={partial_notional:.2f}"
                         )
 
             except Exception as e:
                 # Log error but do NOT silently swallow — maintain visibility
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
+
+    def _consume_cumulative_fill(
+        self,
+        order_id: str,
+        symbol: str,
+        result: dict,
+        *,
+        status: str,
+    ) -> tuple[float, float, str]:
+        """Convert a cumulative exchange observation into one durable delta.
+
+        Polling the same order is expected.  The unique fill-event journal is
+        written before ledger mutation; any persistence error remains UNKNOWN
+        and must stop risk increase instead of being retried blindly.
+        """
+
+        cumulative_qty = float(result.get("executedQty", 0) or 0)
+        avg_price = float(result.get("avgPrice", 0) or 0)
+        if cumulative_qty <= 0 or avg_price <= 0:
+            return 0.0, avg_price, ""
+        previous_qty = self._filled_quantities_by_order.get(order_id, 0.0)
+        delta_qty = cumulative_qty - previous_qty
+        if delta_qty <= 1e-12:
+            return 0.0, avg_price, ""
+        trade_id = result.get("tradeId") or result.get("lastTradeId")
+        event_id = (
+            f"trade:{order_id}:{trade_id}"
+            if trade_id is not None
+            else f"order:{order_id}:cum:{cumulative_qty:.16g}:avg:{avg_price:.16g}"
+        )
+        inserted = self._store.save_fill_event(
+            event_id,
+            order_id,
+            symbol,
+            str(result.get("side", "UNKNOWN")),
+            f"{cumulative_qty:.16g}",
+            f"{delta_qty:.16g}",
+            f"{avg_price:.16g}",
+            status,
+        )
+        if not inserted:
+            # A duplicate durable event must not be posted twice.  Advance the
+            # in-memory high-water mark conservatively and let the caller keep
+            # its terminal order state handling.
+            self._filled_quantities_by_order[order_id] = max(previous_qty, cumulative_qty)
+            return 0.0, avg_price, event_id
+        self._filled_quantities_by_order[order_id] = cumulative_qty
+        return delta_qty, avg_price, event_id
+
+    def _update_position_projection(
+        self,
+        symbol: str,
+        side: str,
+        delta_qty: float,
+        price: float,
+        source_event_id: str,
+    ) -> None:
+        """Apply one signed fill delta to the durable position projection."""
+
+        if delta_qty <= 0 or price <= 0:
+            return
+        row = self._position_projection.get(symbol, {})
+        current_qty = float(row.get("signed_quantity", 0) or 0)
+        current_entry = float(row.get("entry_price", 0) or 0)
+        signed_delta = delta_qty if side.upper() == "BUY" else -delta_qty
+        new_qty = current_qty + signed_delta
+        same_direction = current_qty == 0 or (current_qty > 0) == (signed_delta > 0)
+        if same_direction and abs(new_qty) > 1e-12:
+            entry_price = (
+                (abs(current_qty) * current_entry + abs(signed_delta) * price) / abs(new_qty)
+                if current_qty
+                else price
+            )
+        elif abs(new_qty) > 1e-12:
+            # A reversal leaves the residual quantity at the latest fill price.
+            entry_price = price
+        else:
+            entry_price = 0.0
+        generation = int(row.get("position_generation", self._position_generation.get(symbol, 0)) or 0)
+        if current_qty and new_qty and (current_qty > 0) != (new_qty > 0):
+            generation += 1
+        self._position_generation[symbol] = generation
+        projection = {
+            "symbol": symbol,
+            "signed_quantity": f"{new_qty:.16g}",
+            "entry_price": f"{entry_price:.16g}",
+            "position_generation": generation,
+            "source_event_id": source_event_id,
+        }
+        self._store.save_position_projection(
+            symbol,
+            projection["signed_quantity"],
+            projection["entry_price"],
+            generation,
+            source_event_id,
+        )
+        self._position_projection[symbol] = projection
 
     async def _process_fill(self, order_id: str, symbol: str, result: dict) -> None:
         """处理订单成交：更新状态机、账本、持仓保护。
@@ -2655,25 +2895,34 @@ class AutonomousEngine:
         tracker = self._order_trackers.get(order_id)
         if not tracker:
             return
+        executed_qty, avg_price, fill_event_id = self._consume_cumulative_fill(
+            order_id,
+            symbol,
+            result,
+            status="FILLED",
+        )
+        if executed_qty <= 0:
+            tracker.apply(OrderEvent.FILLED)
+            self._active_order_ids.discard(order_id)
+            self._order_trackers.pop(order_id, None)
+            self._order_symbols.pop(order_id, None)
+            return
         tracker.apply(OrderEvent.FILLED)
         self._active_order_ids.discard(order_id)
         # BD-FIX: FILLED 后清理 tracker 和 symbol 映射，防止内存泄漏
         self._order_trackers.pop(order_id, None)
         self._order_symbols.pop(order_id, None)
 
-        executed_qty = float(result.get("executedQty", 0))
-        avg_price = result.get("avgPrice", "0")
-
-        notional = executed_qty * float(avg_price)
+        notional = executed_qty * avg_price
         # BD-T12: 复式记账 — LedgerTransaction + Posting (≥2)
         journal_amount = str(notional)
-        tx_id = f"tx-{order_id}"
+        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
         side_desc = result.get("side", "")
         is_buy = side_desc.upper() == "BUY"
         tx = LedgerTransaction(
             transaction_id=tx_id,
             transaction_type=LedgerTransactionType.FILL,
-            source_event_id=f"fill-{order_id}",
+            source_event_id=fill_event_id,
             postings=(
                 Posting(
                     posting_id=f"{tx_id}-p1",
@@ -2699,6 +2948,7 @@ class AutonomousEngine:
             correlation_id=CorrelationId(f"exec-{order_id}"),
         )
         self._post_ledger_transaction(tx)
+        self._update_position_projection(symbol, side_desc, executed_qty, avg_price, fill_event_id)
         self._store.save_ledger_entry(
             tx_id,
             "default",
@@ -2762,9 +3012,11 @@ class AutonomousEngine:
             qty = executed_qty
             pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
             pos_id = f"pos-{order_id}"
+            position_generation = self._next_position_generation(symbol)
 
             kline_features = await self._feed.async_get_kline_features(symbol)
             adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
+            self._require_protection_config(symbol, adaptive_cfg)
             pp = self._protection.create_protection(
                 position_id=pos_id,
                 instrument_id=InstrumentId(symbol),
@@ -2774,6 +3026,9 @@ class AutonomousEngine:
                 side=pos_side,
                 stop_loss_config=adaptive_cfg.stop_loss_config,
                 take_profit_config=adaptive_cfg.take_profit_config,
+                owner_id=self._protection_owner_id,
+                position_generation=position_generation,
+                session_id=self._session_id,
             )
             self._position_entry_times[pos_id] = time.time()
             protect_orders = [pp.stop_loss] if pp.stop_loss else []
@@ -2859,8 +3114,8 @@ class AutonomousEngine:
                     err_code = algo_resp.get("code", 0)
                     # -4120: 已存在相同的条件单，不需要重试
                     if err_code == -4120:
-                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: already exists (-4120)")
-                        algo_resp = {"algoId": "existing", "algoStatus": "ACTIVE"}  # 视为成功
+                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: venue reports an existing order (-4120)")
+                        self._block_unowned_protection_orders([f"DUPLICATE_CONDITIONAL_ORDER:{symbol}"])
                         break
                     if algo_attempt < max_algo_retries - 1:
                         wait = 1.5 * (2**algo_attempt)  # 1.5s, 3s, 6s
@@ -2875,6 +3130,7 @@ class AutonomousEngine:
                     if not hasattr(self, "_active_algo_ids"):
                         self._active_algo_ids: dict[str, set[str]] = {}
                     self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                    p_order.exchange_order_id = algo_id
                     p_order.status = ProtectionStatus.ACTIVE
                     self._persist_protection_order(p_order, status="ACTIVE")
                     print(
@@ -2906,157 +3162,163 @@ class AutonomousEngine:
             if account_balance > self._peak_equity:
                 self._peak_equity = account_balance
 
-    async def _reconcile(self) -> None:
-        """对账：系统状态 vs 交易所状态。
+    def _record_reconciliation_failure(
+        self,
+        result: Any,
+        *,
+        system_facts: AccountFactSnapshot | None = None,
+        exchange_facts: AccountFactSnapshot | None = None,
+    ) -> bool:
+        """Persist an auditable failure and close the risk-increase gate.
 
-        熔断保护: API 失败时跳过本轮对账，保留上一次有效对账结果，
-        防止熔断返回的空数据覆盖真实状态引发假阳性 MISMATCH。
+        Reconciliation is observational. It never repairs itself by copying
+        exchange state into local state or by cancelling/placing an order.
+        Recovery is a separately authorized workflow.
         """
+
+        self._last_reconciliation_result = result
+        snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
         try:
-            # 对账优先使用完整 account 端点（含 positions），失败则回退 balance
-            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
-            if not ok or "totalWalletBalance" not in account:
-                # 回退：balance 端点无 positions，仅对账余额
-                account, ok = await self._api_async_safe(Endpoint.BALANCE, signed=True)
-                if not ok or "totalWalletBalance" not in account:
-                    print("[recon] SKIP: API unavailable (circuit breaker / rate limit) — keeping last known state")
-                    return
+            if system_facts is not None:
+                self._store.save_reconciliation_snapshot(f"{snapshot_base}-system", "SYSTEM", system_facts)
+            if exchange_facts is not None:
+                self._store.save_reconciliation_snapshot(f"{snapshot_base}-exchange", "EXCHANGE", exchange_facts)
+            self._store.save_reconciliation_result(
+                snapshot_base,
+                result,
+                system_snapshot_id=f"{snapshot_base}-system" if system_facts is not None else "",
+                exchange_snapshot_id=f"{snapshot_base}-exchange" if exchange_facts is not None else "",
+            )
+        except Exception as exc:
+            # A persistence failure is itself UNKNOWN; retain the gate closed
+            # and make the failure visible to the operator.
+            result.differences.append(f"RECON_PERSISTENCE_ERROR: {type(exc).__name__}")
 
-            balance = float(account.get("totalWalletBalance", 0))
-            positions_list = account.get("positions", [])
+        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+        description = "; ".join(result.differences) or str(getattr(result.status, "value", result.status))
+        self._alerts.send_incident(
+            AlertSeverity.CRITICAL,
+            "Reconciliation blocked",
+            description,
+            category="reconciliation",
+        )
+        print(f"[recon] BLOCKED: {description}")
+        return False
 
-            exchange_positions: dict[InstrumentId, Quantity] = {}
-            for p in positions_list:
-                amt = float(p.get("positionAmt", 0))
-                if amt != 0:
-                    exchange_positions[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
+    def _build_system_reconciliation_facts(self) -> AccountFactSnapshot:
+        """Build facts only from durable local projections.
 
-            exchange_open_order_ids: list[str] = []
-            try:
-                open_orders, orders_ok = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
-                if orders_ok and isinstance(open_orders, list):
-                    exchange_open_order_ids = [str(o["orderId"]) for o in open_orders]
-                elif not orders_ok:
-                    print("[recon] Open orders query skipped (API unavailable)")
-            except Exception as e:
-                print(f"[realtime] Open orders query failed: {e}")
+        ``ProtectionManager`` memory is excluded: it cannot prove owner,
+        generation, or restart continuity. The opening-balance projection is
+        not yet established, so this snapshot remains INCOMPLETE rather than
+        manufacturing a match from the exchange response.
+        """
 
-            exchange_facts = AccountFactSnapshot(
-                account_id=AccountId("default"),
-                venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount=str(balance)),
-                positions=exchange_positions,
-                open_orders=exchange_open_order_ids,
+        positions: dict[InstrumentId, Quantity] = {}
+        for symbol, row in self._position_projection.items():
+            signed_qty = float(row.get("signed_quantity", 0) or 0)
+            if abs(signed_qty) > 0:
+                positions[InstrumentId(symbol)] = Quantity(amount=str(signed_qty))
+        active_orders = self._store.get_active_orders()
+        return AccountFactSnapshot(
+            account_id=AccountId("default"),
+            venue_id=VenueId("BINANCE"),
+            balance=MonetaryValue(amount="0"),
+            positions=positions,
+            open_orders=[str(row["order_id"]) for row in active_orders],
+            timestamp=datetime.now(timezone.utc),
+            source="LOCAL_DURABLE_PROJECTION",
+            fact_version="position-v1/order-state-v1/no-opening-balance",
+            complete=False,
+        )
+
+    async def _reconcile(self) -> bool:
+        """Compare fresh independent facts; never self-heal in place."""
+
+        account, account_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
+        if not account_ok or not isinstance(account, dict) or "totalWalletBalance" not in account:
+            result = ReconciliationEngine.compare(None, None)
+            result.status = ReconciliationStatus.ONE_SIDE_MISSING
+            result.differences = ["ONE_SIDE_MISSING: complete ACCOUNT snapshot unavailable"]
+            return self._record_reconciliation_failure(result)
+        if "positions" not in account or not isinstance(account.get("positions"), list):
+            result = ReconciliationEngine.compare(None, None)
+            result.status = ReconciliationStatus.INCOMPLETE
+            result.differences = ["INCOMPLETE_FACT: ACCOUNT snapshot lacks positions"]
+            return self._record_reconciliation_failure(result)
+
+        open_orders, orders_ok = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
+        if not orders_ok or not isinstance(open_orders, list):
+            result = ReconciliationEngine.compare(None, None)
+            result.status = ReconciliationStatus.ONE_SIDE_MISSING
+            result.differences = ["ONE_SIDE_MISSING: OPEN_ORDERS snapshot unavailable"]
+            return self._record_reconciliation_failure(result)
+        if any(not isinstance(order, dict) or "orderId" not in order for order in open_orders):
+            result = ReconciliationEngine.compare(None, None)
+            result.status = ReconciliationStatus.INCOMPLETE
+            result.differences = ["INCOMPLETE_FACT: malformed exchange open-order row"]
+            return self._record_reconciliation_failure(result)
+
+        exchange_positions: dict[InstrumentId, Quantity] = {}
+        for position in account["positions"]:
+            if not isinstance(position, dict) or "symbol" not in position or "positionAmt" not in position:
+                result = ReconciliationEngine.compare(None, None)
+                result.status = ReconciliationStatus.INCOMPLETE
+                result.differences = ["INCOMPLETE_FACT: malformed exchange position row"]
+                return self._record_reconciliation_failure(result)
+            amount = float(position.get("positionAmt", 0) or 0)
+            if amount:
+                exchange_positions[InstrumentId(str(position["symbol"]))] = Quantity(amount=str(amount))
+
+        exchange_facts = AccountFactSnapshot(
+            account_id=AccountId("default"),
+            venue_id=VenueId("BINANCE"),
+            balance=MonetaryValue(amount=str(float(account["totalWalletBalance"]))),
+            positions=exchange_positions,
+            open_orders=[
+                str(order["orderId"])
+                for order in open_orders
+            ],
+            timestamp=datetime.now(timezone.utc),
+            source="BINANCE_ACCOUNT_AND_OPEN_ORDERS",
+            fact_version=str(account.get("updateTime", "")),
+            complete=True,
+        )
+        system_facts = self._build_system_reconciliation_facts()
+        self._recon.update_system_facts(system_facts)
+        self._recon.update_exchange_facts(exchange_facts)
+        result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
+        self._last_reconciliation_result = result
+        self._last_account = account
+        if not result.matched:
+            return self._record_reconciliation_failure(
+                result,
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
             )
 
-            system_positions: dict[InstrumentId, Quantity] = {}
-            for _pos_id, pos in self._protection.all_positions().items():
-                system_positions[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
-
-            # P0修复: 系统余额从 Cash 账户净额推导 (CREDIT流入 - DEBIT流出)
-            # 旧实现错误地将全部 DEBIT 分录求和(=累计成交额)，而非账户权益
-            system_balance = abs(sum(
-                float(p.amount.amount) * (1 if p.side == PostingSide.CREDIT else -1)
-                for tx in self._ledger._transactions
-                for p in tx.postings
-                if p.account_type == AccountType.CASH
-            ))
-            system_facts = AccountFactSnapshot(
-                account_id=AccountId("default"),
-                venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount=str(system_balance)),
-                positions=system_positions,
-                open_orders=list(self._active_order_ids),
+        try:
+            snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
+            self._store.save_reconciliation_snapshot(f"{snapshot_base}-system", "SYSTEM", system_facts)
+            self._store.save_reconciliation_snapshot(f"{snapshot_base}-exchange", "EXCHANGE", exchange_facts)
+            self._store.save_reconciliation_result(
+                snapshot_base,
+                result,
+                system_snapshot_id=f"{snapshot_base}-system",
+                exchange_snapshot_id=f"{snapshot_base}-exchange",
             )
-
-            self._recon.update_system_facts(system_facts)
-            self._recon.update_exchange_facts(exchange_facts)
-            result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
-
-            if not result.matched:
-                # BD-FIX: 对账不一致时，先尝试自愈同步（清理幽灵订单/持仓、补齐遗漏追踪），
-                # 再重新对账。只有自愈后仍不一致才触发事故，防止近线下单→成交的
-                # 时序窗口（订单已成交但 _monitor_orders 尚未处理）被误判为永久异常。
-                if result.differences:
-                    print(f"[recon] Mismatch detected, attempting self-heal: {result.differences}")
-                    heal_attempted = False
-                    try:
-                        await self._sync_exchange_state()
-                        heal_attempted = True  # 标记自愈已尝试，后续差异降级为 WARNING
-                        # 自愈后重新对账：用最新交易所状态更新 system_facts 并再次 reconcile
-                        account2, ok2 = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
-                        if ok2 and "positions" in account2:
-                            self._last_account = account2
-                            # 重建系统事实
-                            system_positions2: dict[InstrumentId, Quantity] = {}
-                            for _pos_id, pos in self._protection.all_positions().items():
-                                system_positions2[InstrumentId(pos.instrument_id)] = Quantity(amount=str(pos.quantity))
-                            system_facts2 = AccountFactSnapshot(
-                                account_id=AccountId("default"),
-                                venue_id=VenueId("BINANCE"),
-                                balance=MonetaryValue(amount=str(float(account2.get("totalWalletBalance", 0)))),
-                                positions=system_positions2,
-                                open_orders=list(self._active_order_ids),
-                            )
-                            exchange_positions2: dict[InstrumentId, Quantity] = {}
-                            for p in account2.get("positions", []):
-                                amt = float(p.get("positionAmt", 0))
-                                if amt != 0:
-                                    exchange_positions2[InstrumentId(p["symbol"])] = Quantity(amount=str(abs(amt)))
-                            exchange_open2: list[str] = []
-                            try:
-                                oo2, oo_ok2 = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
-                                if oo_ok2 and isinstance(oo2, list):
-                                    exchange_open2 = [str(o["orderId"]) for o in oo2]
-                            except Exception:
-                                logger.warning(
-                                    "[recon] Open orders query failed in reconciliation, proceeding with exchange positions only"
-                                )
-                            exchange_facts2 = AccountFactSnapshot(
-                                account_id=AccountId("default"),
-                                venue_id=VenueId("BINANCE"),
-                                balance=MonetaryValue(amount=str(float(account2.get("totalWalletBalance", 0)))),
-                                positions=exchange_positions2,
-                                open_orders=exchange_open2,
-                            )
-                            self._recon.update_system_facts(system_facts2)
-                            self._recon.update_exchange_facts(exchange_facts2)
-                            result2 = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
-                            if result2.matched:
-                                print("[recon] Self-heal SUCCESS — mismatch resolved, no incident raised")
-                                # 清除之前的对账事故，防止残留 CRITICAL 事故导致监督器 LOCKED
-                                for inc in self._alerts.get_active_incidents():
-                                    if inc.get("title") == "Reconciliation mismatch":
-                                        self._alerts.resolve_incident(inc["incident_id"])
-                                        print(f"[recon] Cleared stale incident: {inc['incident_id']}")
-                                self._last_account = account2
-                                return
-                            else:
-                                print(f"[recon] Self-heal incomplete, remaining diffs: {result2.differences}")
-                                result = result2  # 用自愈后的结果继续触发事故
-                    except Exception as heal_err:
-                        print(f"[recon] Self-heal attempt failed: {heal_err} — falling through to incident")
-
-                # BD-FIX: 自愈后仍不一致 → 触发事故。
-                # 对账差异不可静默掩盖：自愈失败说明存在系统无法自动修复的状态不一致，
-                # 必须上报监督器以触发受控降级（NO_NEW_RISK），防止在状态错乱时继续交易。
-                if result.differences:
-                    print(f"[recon] Mismatch (after self-heal): {result.differences}")
-                    if heal_attempted:
-                        severity = AlertSeverity.WARNING  # 自愈过 → 临时差异
-                        print("[recon] Self-heal was attempted — severity downgraded to WARNING")
-                    else:
-                        severity = AlertSeverity.CRITICAL if result.should_block_new_risk else AlertSeverity.WARNING
-                    self._alerts.send_incident(
-                        severity,
-                        "Reconciliation mismatch",
-                        "; ".join(result.differences),
-                        category="reconciliation",
-                    )
-
-            self._last_account = account
-        except Exception as e:
-            print(f"[realtime] Reconciliation error: {e}")
+        except Exception as exc:
+            result.matched = False
+            result.status = ReconciliationStatus.ERROR
+            result.differences.append(f"RECON_PERSISTENCE_ERROR: {type(exc).__name__}")
+            return self._record_reconciliation_failure(
+                result,
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+            )
+        print("[recon] MATCHED: independent durable facts verified")
+        return True
 
     async def _ensure_exchange_position_protections(self) -> None:
         """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。
@@ -3098,9 +3360,26 @@ class AutonomousEngine:
             # 检查哪些已有保护单
             algos_resp = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             protected_symbols: set[str] = set()
+            if not isinstance(algos_resp, list):
+                self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                print("[startup] Conditional-order inventory UNKNOWN; recovery remains read-only")
+                return
             if isinstance(algos_resp, list):
+                known_algo_ids = {
+                    algo_id for ids in self._active_algo_ids.values() for algo_id in ids
+                }
+                unowned_algo_ids = [
+                    str(item.get("algoId"))
+                    for item in algos_resp
+                    if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                ]
+                if unowned_algo_ids:
+                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
+                    return
                 for item in algos_resp:
-                    protected_symbols.add(str(item.get("symbol", "")))
+                    if str(item.get("algoId")) in known_algo_ids:
+                        protected_symbols.add(str(item.get("symbol", "")))
 
             unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
             if not unprotected:
@@ -3124,14 +3403,21 @@ class AutonomousEngine:
                         continue
                     qty_str = f"{qty:.{prec['quantity']}f}"
 
-                    # 使用默认止损（1% ATR 止损 + 1.6 RR 止盈）
-                    stop_pct = 0.01
+                    kline_features = await self._feed.async_get_kline_features(symbol)
+                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
+                    self._require_protection_config(symbol, adaptive_cfg)
+                    atr_value = float(adaptive_cfg.stop_loss_config.get("atr", 0) or 0)
+                    multiplier = float(adaptive_cfg.stop_loss_config.get("multiplier", 0) or 0)
+                    stop_distance = atr_value * multiplier
+                    if stop_distance <= 0:
+                        self._block_unowned_protection_orders([f"PROTECTION_DISTANCE_UNKNOWN:{symbol}"])
+                        raise RuntimeError(f"protection distance UNKNOWN for {symbol}")
                     if amt > 0:
-                        stop_price = entry * (1 - stop_pct)
-                        tp_price = entry * (1 + stop_pct * 1.6)
+                        stop_price = entry - stop_distance
+                        tp_price = entry + stop_distance * adaptive_cfg.rr_ratio
                     else:
-                        stop_price = entry * (1 + stop_pct)
-                        tp_price = entry * (1 - stop_pct * 1.6)
+                        stop_price = entry + stop_distance
+                        tp_price = entry - stop_distance * adaptive_cfg.rr_ratio
                     stop_str = f"{stop_price:.{prec['price']}f}"
                     tp_str = f"{tp_price:.{prec['price']}f}"
 
@@ -3177,28 +3463,6 @@ class AutonomousEngine:
                         sl_err = sl_resp.get("msg", "?")
                         tp_err = tp_resp.get("msg", "?")
                         print(f"[startup] ⚠️ Protection FAILED for {symbol}: SL={sl_err} TP={tp_err}")
-                        # 对 -2021 错误：加宽止损距重试一次
-                        if sl_resp.get("code") == -2021:
-                            wider_stop = stop_price * (0.98 if amt > 0 else 1.02)
-                            sl2 = await self._api_async(
-                                Endpoint.ALGO_ORDER,
-                                method="POST",
-                                signed=True,
-                                params={
-                                    "symbol": symbol,
-                                    "side": side,
-                                    "algoType": "CONDITIONAL",
-                                    "type": "STOP_MARKET",
-                                    "quantity": qty_str,
-                                    "triggerPrice": f"{wider_stop:.{prec['price']}f}",
-                                    "reduceOnly": "true",
-                                    "workingType": "CONTRACT_PRICE",
-                                },
-                            )
-                            if "algoId" in sl2:
-                                print(f"[startup] ✅ SL retry OK for {symbol}: algoId={sl2['algoId']}")
-                            else:
-                                print(f"[startup] ⚠️ SL retry FAILED for {symbol}: {sl2.get('msg', '?')}")
                 except Exception as e:
                     print(f"[startup] Protection placement error for {symbol}: {e}")
 
@@ -3221,11 +3485,13 @@ class AutonomousEngine:
                             continue
                     pos_id = f"pos-{symbol}"
                     pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
+                    position_generation = self._next_position_generation(symbol)
                     # BD-FIX: 使用自适应计算器生成保护参数，避免 stop_loss/take_profits
                     # 为 None/空导致保护覆盖检查 expected_orders=0 → FAIL。
                     # AdaptiveProtectionCalculator 在 kline 缺失时有内置保守默认值。
                     kline_features = await self._feed.async_get_kline_features(symbol)
                     adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
+                    self._require_protection_config(symbol, adaptive_cfg)
                     self._protection.create_protection(
                         position_id=pos_id,
                         instrument_id=InstrumentId(symbol),
@@ -3235,6 +3501,9 @@ class AutonomousEngine:
                         side=pos_side,
                         stop_loss_config=adaptive_cfg.stop_loss_config,
                         take_profit_config=adaptive_cfg.take_profit_config,
+                        owner_id=self._protection_owner_id,
+                        position_generation=position_generation,
+                        session_id=self._session_id,
                     )
                     registered += 1
                     print(
@@ -3256,6 +3525,16 @@ class AutonomousEngine:
         try:
             existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if not isinstance(existing_algos, list):
+                return
+            known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+            unowned_algo_ids = [
+                str(item.get("algoId"))
+                for item in existing_algos
+                if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+            ]
+            if unowned_algo_ids:
+                self._block_unowned_protection_orders(unowned_algo_ids)
+                print("[nearline] Excess-order cleanup blocked: conditional-order ownership UNKNOWN")
                 return
             # 按标的聚合
             by_symbol: dict[str, list[dict]] = {}
@@ -3303,8 +3582,22 @@ class AutonomousEngine:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
             existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             api_ok = isinstance(existing_algos, list)
+            if not api_ok:
+                self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
+                return
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
+                known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                unowned_algo_ids = [
+                    str(item.get("algoId"))
+                    for item in existing_algos
+                    if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                ]
+                if unowned_algo_ids:
+                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    print("[nearline] Protection retry blocked: conditional-order ownership UNKNOWN")
+                    return
                 for item in existing_algos:
                     sym = str(item.get("symbol", ""))
                     aid = str(item.get("algoId", ""))
@@ -3323,6 +3616,7 @@ class AutonomousEngine:
                 if api_ok and symbol not in exchange_symbols:
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
+                owned_ids = existing_ids & self._active_algo_ids.get(pos_id, set())
 
                 # 计算该仓位应有保护单数量
                 def _needs_exchange_protection(p_order: Any | None) -> bool:
@@ -3334,7 +3628,7 @@ class AutonomousEngine:
                 expected_count = (1 if _needs_exchange_protection(pp.stop_loss) else 0) + sum(
                     1 for tp in pp.take_profits if _needs_exchange_protection(tp)
                 )
-                server_count = len(existing_ids)
+                server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
                     continue
@@ -3396,7 +3690,9 @@ class AutonomousEngine:
                         },
                     )
                     if "algoId" in algo_resp:
-                        self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
+                        algo_id = str(algo_resp["algoId"])
+                        self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                        pp.stop_loss.exchange_order_id = algo_id
                         pp.stop_loss.status = ProtectionStatus.ACTIVE
                         self._persist_protection_order(pp.stop_loss, status="ACTIVE")
                         print(
@@ -3446,7 +3742,9 @@ class AutonomousEngine:
                         },
                     )
                     if "algoId" in tp_resp:
-                        self._active_algo_ids.setdefault(pos_id, set()).add(str(tp_resp["algoId"]))
+                        algo_id = str(tp_resp["algoId"])
+                        self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                        tp.exchange_order_id = algo_id
                         tp.status = ProtectionStatus.ACTIVE
                         self._persist_protection_order(tp, status="ACTIVE")
                         print(
@@ -4259,11 +4557,13 @@ class AutonomousEngine:
                                     real_entry = old_pp.entry_price
                                 side = OrderSide.BUY if ex_qty > 0 else OrderSide.SELL
                                 new_pos_id = f"pos-synced-{sym}-{int(time.time())}"
+                                position_generation = self._next_position_generation(sym)
                                 old_trailing = old_pp.trailing_config
                                 self._remove_protection_with_cleanup(old_pid, sym)
                                 # 用自适应计算器重新生成保护参数
                                 kf = await self._feed.async_get_kline_features(sym)
                                 ac = AdaptiveProtectionCalculator.calculate(sym, real_entry, kf)
+                                self._require_protection_config(sym, ac)
                                 self._protection.create_protection(
                                     position_id=new_pos_id,
                                     instrument_id=InstrumentId(sym),
@@ -4274,6 +4574,9 @@ class AutonomousEngine:
                                     stop_loss_config=ac.stop_loss_config,
                                     take_profit_config=ac.take_profit_config,
                                     trailing_config=old_trailing,
+                                    owner_id=self._protection_owner_id,
+                                    position_generation=position_generation,
+                                    session_id=self._session_id,
                                 )
                                 self._position_entry_times[new_pos_id] = time.time()
                                 print(
@@ -4786,9 +5089,19 @@ class AutonomousEngine:
         try:
             existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
             if isinstance(existing_algos, list):
+                known_algo_ids = {
+                    algo_id for ids in self._active_algo_ids.values() for algo_id in ids
+                }
+                unowned_algo_ids = [
+                    str(item.get("algoId"))
+                    for item in existing_algos
+                    if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                ]
+                if unowned_algo_ids:
+                    self._block_unowned_protection_orders(unowned_algo_ids)
                 print(
                     f"[beidou-autopilot] Observed {len(existing_algos)} open conditional orders; "
-                    "skipping unowned startup cancellation"
+                    "skipping unowned startup cancellation and unowned adoption"
                 )
         except Exception as exc:
             print(f"[beidou-autopilot] Conditional-order inventory UNKNOWN: {exc}")
@@ -4823,6 +5136,7 @@ class AutonomousEngine:
                 pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
                 qty = abs(amt)
                 pos_id = f"pos-recovered-{symbol}"
+                position_generation = self._next_position_generation(symbol)
 
                 already_protected = any(
                     str(pp.instrument_id) == symbol and abs(float(pp.quantity) - qty) < 1e-8
@@ -4833,6 +5147,7 @@ class AutonomousEngine:
 
                 kline_features = await self._feed.async_get_kline_features(symbol)
                 adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
+                self._require_protection_config(symbol, adaptive_cfg)
                 pp = self._protection.create_protection(
                     position_id=pos_id,
                     instrument_id=InstrumentId(symbol),
@@ -4842,6 +5157,9 @@ class AutonomousEngine:
                     side=pos_side,
                     stop_loss_config=adaptive_cfg.stop_loss_config,
                     take_profit_config=adaptive_cfg.take_profit_config,
+                    owner_id=self._protection_owner_id,
+                    position_generation=position_generation,
+                    session_id=self._session_id,
                 )
                 self._position_entry_times[pos_id] = time.time()
 
@@ -4852,6 +5170,8 @@ class AutonomousEngine:
                 for p_order in protect_orders:
                     if p_order is None:
                         continue
+                    p_order.status = ProtectionStatus.CREATED
+                    self._persist_protection_order(p_order, status="PENDING")
                     prec_map = self._symbol_precision.get(symbol)
                     if prec_map is None:
                         print(f"[startup] {symbol}: exchange precision UNKNOWN; recovery deferred")
@@ -4862,6 +5182,7 @@ class AutonomousEngine:
                         {
                             "symbol": symbol,
                             "pos_id": pos_id,
+                            "protection_id": p_order.protection_id,
                             "reason": p_order.reason,
                             "algo_params": {
                                 "symbol": symbol,
@@ -4877,6 +5198,9 @@ class AutonomousEngine:
                     )
 
             # Phase 2: 分批提交条件单到交易所（每批 5 个，间隔 2s，避免限流熔断）
+            if self._protection_owner_unknown:
+                pending_submissions.clear()
+                print("[startup] Protection placement blocked: existing conditional-order ownership is UNKNOWN")
             if pending_submissions:
 
                 async def _submit_algo(sub: dict):
@@ -4906,6 +5230,17 @@ class AutonomousEngine:
                         if not hasattr(self, "_active_algo_ids"):
                             self._active_algo_ids = {}
                         self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                        recovered_protection = self._protection.get_protection(pos_id)
+                        candidates = (
+                            ([recovered_protection.stop_loss] if recovered_protection and recovered_protection.stop_loss else [])
+                            + (recovered_protection.take_profits if recovered_protection else [])
+                        )
+                        for candidate in candidates:
+                            if candidate is not None and candidate.protection_id == sub["protection_id"]:
+                                candidate.exchange_order_id = algo_id
+                                candidate.status = ProtectionStatus.ACTIVE
+                                self._persist_protection_order(candidate, status="ACTIVE")
+                                break
                         rec = recovered_by_pos.setdefault(pos_id, {"symbol": symbol, "placed": 0, "total": 0})
                         rec["placed"] += 1
                         rec["total"] += 1
@@ -4946,22 +5281,16 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.WARMING)
         self._lifecycle.transition(ModuleState.VALIDATING)
 
-        # BD-FIX: 启动时全量对账自愈 — 在初始对账之前先同步交易所状态，
-        # 清理 DB 中残留的幽灵持仓和过期订单（Binance testnet 返回可能不一致），
-        # 防止对账 MISMATCH → FAIL-CLOSED → LOCKED 链式崩溃。
-        print("[beidou-autopilot] Startup sync: aligning with exchange state...")
-        await self._sync_exchange_state()
-
-        # BD-T14 Phase 5: 初始对账 — 在 ACTIVE 转换之前填充对账引擎事实，
-        # 避免监督器在引擎首次对账（30s）之前因 BOTH_SIDES_MISSING 误触发 LOCKED。
-        recon_ok = False
-        try:
-            await self._reconcile()
-            self._last_recon = time.time()
-            recon_ok = True
-            print("[beidou-autopilot] Initial reconciliation complete")
-        except Exception as e:
-            print(f"[beidou-autopilot] Initial reconciliation failed: {e} — blocking ACTIVE")
+        # Initial reconciliation is read-only.  A mismatch or incomplete
+        # projection closes the risk gate; state synchronization is a separate
+        # explicitly authorized recovery workflow.
+        recon_ok = await self._reconcile()
+        self._last_recon = time.time()
+        print(
+            "[beidou-autopilot] Initial reconciliation verified"
+            if recon_ok
+            else "[beidou-autopilot] Initial reconciliation blocked ACTIVE"
+        )
 
         # Phase 5b: 交易所残留持仓保护补充
         await self._ensure_exchange_position_protections()
@@ -5027,7 +5356,6 @@ class AutonomousEngine:
                 try:
                     if time.time() - self._last_nearline >= 300:
                         await self._nearline_tick()
-                        await self._sync_exchange_state()
                 except Exception as exc:
                     self._error_count += 1
                     import traceback as _tb

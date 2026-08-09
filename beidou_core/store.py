@@ -150,6 +150,58 @@ class PersistentStore:
                 volume_24h REAL,
                 timestamp TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS reconciliation_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id TEXT NOT NULL,
+                side TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                balance_amount TEXT NOT NULL,
+                balance_currency TEXT NOT NULL,
+                balance_decimals INTEGER NOT NULL DEFAULT 8,
+                positions TEXT NOT NULL,
+                open_orders TEXT NOT NULL,
+                margin_amount TEXT,
+                margin_currency TEXT,
+                margin_decimals INTEGER,
+                timestamp TEXT NOT NULL,
+                correlation_id TEXT,
+                source TEXT NOT NULL,
+                fact_version TEXT NOT NULL DEFAULT '',
+                complete INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(snapshot_id, side)
+            );
+            CREATE TABLE IF NOT EXISTS reconciliation_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id TEXT UNIQUE NOT NULL,
+                account_id TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                matched INTEGER NOT NULL,
+                differences TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                system_snapshot_id TEXT,
+                exchange_snapshot_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS fill_events (
+                fill_event_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                cumulative_qty TEXT NOT NULL,
+                delta_qty TEXT NOT NULL,
+                price TEXT NOT NULL,
+                status TEXT NOT NULL,
+                event_time TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS position_projection (
+                symbol TEXT PRIMARY KEY,
+                signed_quantity TEXT NOT NULL,
+                entry_price TEXT NOT NULL,
+                position_generation INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                source_event_id TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_ledger_account ON ledger_entries(account_id, venue_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_correlation ON ledger_entries(correlation_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_postings_tx ON ledger_postings(transaction_id);
@@ -157,8 +209,26 @@ class PersistentStore:
             CREATE INDEX IF NOT EXISTS idx_protection_position ON protection_orders(position_id);
             CREATE INDEX IF NOT EXISTS idx_checkpoints_module ON checkpoints(module_name);
             CREATE INDEX IF NOT EXISTS idx_market_snapshots_symbol ON market_snapshots(symbol, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_recon_snapshots_key ON reconciliation_snapshots(account_id, venue_id, side, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_recon_results_checked ON reconciliation_results(account_id, venue_id, checked_at);
+            CREATE INDEX IF NOT EXISTS idx_fill_events_order ON fill_events(order_id, event_time);
         """)
         conn.commit()
+
+        # Existing local databases predate the explicit reconciliation source
+        # columns.  Migrations are additive and fail closed if a future schema
+        # cannot be upgraded rather than silently dropping fact provenance.
+        self._ensure_column(conn, "protection_orders", "owner_id", "TEXT NOT NULL DEFAULT 'UNKNOWN'")
+        self._ensure_column(conn, "protection_orders", "position_generation", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column(conn, "protection_orders", "session_id", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "protection_orders", "exchange_order_id", "TEXT")
+        conn.commit()
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # --- Ledger ---
 
@@ -251,6 +321,154 @@ class PersistentStore:
             transaction["postings"] = by_transaction.get(str(transaction["transaction_id"]), [])
         return transactions
 
+    # --- Reconciliation facts ---
+
+    def save_reconciliation_snapshot(self, snapshot_id: str, side: str, facts: Any) -> None:
+        """Persist an immutable copy of one independently captured fact source."""
+
+        conn = self._get_conn()
+        margin = facts.margin_used
+        conn.execute(
+            """INSERT OR IGNORE INTO reconciliation_snapshots
+               (snapshot_id, side, account_id, venue_id, balance_amount,
+                balance_currency, balance_decimals, positions, open_orders,
+                margin_amount, margin_currency, margin_decimals, timestamp,
+                correlation_id, source, fact_version, complete)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                str(snapshot_id),
+                str(side),
+                str(facts.account_id),
+                str(facts.venue_id),
+                str(facts.balance.amount),
+                str(facts.balance.currency),
+                int(facts.balance.decimals),
+                json.dumps({str(k): str(v.amount) for k, v in facts.positions.items()}, sort_keys=True),
+                json.dumps([str(order_id) for order_id in facts.open_orders], sort_keys=True),
+                str(margin.amount) if margin is not None else None,
+                str(margin.currency) if margin is not None else None,
+                int(margin.decimals) if margin is not None else None,
+                facts.timestamp.isoformat(),
+                str(facts.correlation_id) if facts.correlation_id is not None else None,
+                str(getattr(facts, "source", "UNKNOWN")),
+                str(getattr(facts, "fact_version", "")),
+                int(bool(getattr(facts, "complete", False))),
+            ),
+        )
+        conn.commit()
+
+    def save_reconciliation_result(self, result_id: str, result: Any, *, system_snapshot_id: str = "", exchange_snapshot_id: str = "") -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO reconciliation_results
+               (result_id, account_id, venue_id, status, matched, differences,
+                checked_at, system_snapshot_id, exchange_snapshot_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                str(result_id),
+                str(result.system_facts.account_id if result.system_facts else "UNKNOWN"),
+                str(result.system_facts.venue_id if result.system_facts else "UNKNOWN"),
+                str(getattr(result.status, "value", result.status)),
+                int(bool(result.matched)),
+                json.dumps(list(result.differences), ensure_ascii=False, sort_keys=True),
+                result.checked_at.isoformat(),
+                str(system_snapshot_id or ""),
+                str(exchange_snapshot_id or ""),
+            ),
+        )
+        conn.commit()
+
+    def restore_latest_reconciliation_snapshot(self, account_id: str, venue_id: str, side: str) -> dict[str, Any] | None:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM reconciliation_snapshots WHERE account_id=? AND venue_id=? AND side=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+            (account_id, venue_id, side),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["positions"] = json.loads(str(data["positions"]))
+        data["open_orders"] = json.loads(str(data["open_orders"]))
+        return data
+
+    # --- Fill and position projections ---
+
+    def save_fill_event(
+        self,
+        fill_event_id: str,
+        order_id: str,
+        symbol: str,
+        side: str,
+        cumulative_qty: str,
+        delta_qty: str,
+        price: str,
+        status: str,
+        event_time: str | None = None,
+    ) -> bool:
+        """Append one idempotent fill observation.
+
+        The unique event key is checked before any ledger/position mutation.
+        A duplicate poll therefore becomes a harmless no-op instead of a
+        second cash/position posting.
+        """
+
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO fill_events
+               (fill_event_id, order_id, symbol, side, cumulative_qty, delta_qty,
+                price, status, event_time)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                str(fill_event_id),
+                str(order_id),
+                str(symbol),
+                str(side),
+                str(cumulative_qty),
+                str(delta_qty),
+                str(price),
+                str(status),
+                event_time or datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+    def restore_fill_events(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM fill_events ORDER BY event_time, fill_event_id").fetchall()
+        return [dict(row) for row in rows]
+
+    def save_position_projection(
+        self,
+        symbol: str,
+        signed_quantity: str,
+        entry_price: str,
+        position_generation: int,
+        source_event_id: str,
+        updated_at: str | None = None,
+    ) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO position_projection
+               (symbol, signed_quantity, entry_price, position_generation,
+                updated_at, source_event_id)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                str(symbol),
+                str(signed_quantity),
+                str(entry_price),
+                int(position_generation),
+                updated_at or datetime.now(timezone.utc).isoformat(),
+                str(source_event_id),
+            ),
+        )
+        conn.commit()
+
+    def restore_position_projection(self) -> list[dict[str, Any]]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM position_projection ORDER BY symbol").fetchall()
+        return [dict(row) for row in rows]
+
     def get_account_balance(self, account_id: str, venue_id: str) -> float:
         conn = self._get_conn()
         row = conn.execute(
@@ -323,11 +541,15 @@ class PersistentStore:
         status: str,
         stop_type: str | None = None,
         take_profit_type: str | None = None,
+        owner_id: str = "UNKNOWN",
+        position_generation: int = 0,
+        session_id: str = "",
+        exchange_order_id: str | None = None,
     ) -> None:
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT OR REPLACE INTO protection_orders (protection_id, position_id, symbol, side, trigger_price, order_price, quantity, order_type, status, stop_type, take_profit_type, created_at, triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM protection_orders WHERE protection_id=?),?),CASE WHEN ? IN ('TRIGGERED','EXECUTED') THEN ? ELSE (SELECT triggered_at FROM protection_orders WHERE protection_id=?) END)",
+            "INSERT OR REPLACE INTO protection_orders (protection_id, position_id, symbol, side, trigger_price, order_price, quantity, order_type, status, stop_type, take_profit_type, owner_id, position_generation, session_id, exchange_order_id, created_at, triggered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM protection_orders WHERE protection_id=?),?),CASE WHEN ? IN ('TRIGGERED','EXECUTED') THEN ? ELSE (SELECT triggered_at FROM protection_orders WHERE protection_id=?) END)",
             (
                 protection_id,
                 position_id,
@@ -340,6 +562,10 @@ class PersistentStore:
                 status,
                 stop_type,
                 take_profit_type,
+                str(owner_id or "UNKNOWN"),
+                int(position_generation),
+                str(session_id or ""),
+                str(exchange_order_id) if exchange_order_id is not None else None,
                 protection_id,
                 now,
                 status,

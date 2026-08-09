@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, VenueId
@@ -17,6 +17,7 @@ class ReconciliationStatus(str, Enum):
     ONE_SIDE_MISSING = "ONE_SIDE_MISSING"
     BOTH_SIDES_MISSING = "BOTH_SIDES_MISSING"  # → UNKNOWN, blocks new risk
     STALE = "STALE"  # BD-T13: 数据过期，阻断新风险
+    INCOMPLETE = "INCOMPLETE"  # 事实存在但字段/来源不完整
     ERROR = "ERROR"
 
     @property
@@ -34,10 +35,17 @@ class ReconciliationResult:
     differences: list[str] = field(default_factory=list)
     system_facts: AccountFactSnapshot | None = None
     exchange_facts: AccountFactSnapshot | None = None
+    checked_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def is_unknown(self) -> bool:
-        return self.status == ReconciliationStatus.BOTH_SIDES_MISSING
+        return self.status in {
+            ReconciliationStatus.ONE_SIDE_MISSING,
+            ReconciliationStatus.BOTH_SIDES_MISSING,
+            ReconciliationStatus.STALE,
+            ReconciliationStatus.INCOMPLETE,
+            ReconciliationStatus.ERROR,
+        }
 
     @property
     def should_block_new_risk(self) -> bool:
@@ -55,14 +63,19 @@ class AccountFactSnapshot:
     margin_used: MonetaryValue | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: CorrelationId | None = None
+    source: str = "UNKNOWN"
+    fact_version: str = ""
+    complete: bool = True
 
 
 class ReconciliationEngine:
     """对账引擎。比较系统事实与交易所事实，差异需修复。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_age_seconds: float = 30.0) -> None:
         self._system_facts: dict[str, AccountFactSnapshot] = {}
         self._exchange_facts: dict[str, AccountFactSnapshot] = {}
+        self._max_age = timedelta(seconds=max(0.0, max_age_seconds))
+        self._last_result: ReconciliationResult | None = None
 
     def update_system_facts(self, facts: AccountFactSnapshot) -> None:
         self._system_facts[f"{facts.account_id}:{facts.venue_id}"] = facts
@@ -77,33 +90,121 @@ class ReconciliationEngine:
         AC-10-02: differences never silently ignored.
         """
         key = f"{account_id}:{venue_id}"
-        sys_facts = self._system_facts.get(key)
-        ex_facts = self._exchange_facts.get(key)
-        if sys_facts is None and ex_facts is None:
-            # BD-P0-10: 双方缺失 → BOTH_SIDES_MISSING, blocks new risk
+        result = self.compare(
+            self._system_facts.get(key),
+            self._exchange_facts.get(key),
+            max_age=self._max_age,
+        )
+        self._last_result = result
+        return result
+
+    @property
+    def last_result(self) -> ReconciliationResult | None:
+        return self._last_result
+
+    @staticmethod
+    def compare(
+        system_facts: AccountFactSnapshot | None,
+        exchange_facts: AccountFactSnapshot | None,
+        *,
+        max_age: timedelta = timedelta(seconds=30),
+        now: datetime | None = None,
+    ) -> ReconciliationResult:
+        """Compare two independently captured snapshots without mutating state.
+
+        This is the only comparison primitive used by the engine's durable
+        reconciliation path.  Missing, incomplete, or stale facts are typed
+        failures; they are never treated as a match and never repaired by
+        copying one side over the other.
+        """
+
+        checked_at = now or datetime.now(timezone.utc)
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        if system_facts is None and exchange_facts is None:
             return ReconciliationResult(
                 matched=False,
                 status=ReconciliationStatus.BOTH_SIDES_MISSING,
                 differences=["BOTH_SIDES_MISSING: system and exchange facts unavailable — UNKNOWN"],
+                checked_at=checked_at,
             )
-        if sys_facts is None or ex_facts is None:
+        if system_facts is None or exchange_facts is None:
             return ReconciliationResult(
                 matched=False,
                 status=ReconciliationStatus.ONE_SIDE_MISSING,
-                differences=["One side missing"],
-                system_facts=sys_facts,
-                exchange_facts=ex_facts,
+                differences=["ONE_SIDE_MISSING: one independent fact source unavailable — UNKNOWN"],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
             )
+        if not system_facts.complete or not exchange_facts.complete:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.INCOMPLETE,
+                differences=[
+                    "INCOMPLETE_FACT: system/exchange snapshot is not complete",
+                ],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+
+        def _age(facts: AccountFactSnapshot) -> timedelta:
+            timestamp = facts.timestamp
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            return checked_at - timestamp
+
+        system_age = _age(system_facts)
+        exchange_age = _age(exchange_facts)
+        if system_age < timedelta(0) or exchange_age < timedelta(0):
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ERROR,
+                differences=[
+                    f"FUTURE_FACT: system_age={system_age.total_seconds():.3f}s "
+                    f"exchange_age={exchange_age.total_seconds():.3f}s",
+                ],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+        if system_age > max_age or exchange_age > max_age:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.STALE,
+                differences=[
+                    f"STALE_FACT: system_age={system_age.total_seconds():.3f}s "
+                    f"exchange_age={exchange_age.total_seconds():.3f}s",
+                ],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+
+        if system_facts.account_id != exchange_facts.account_id or system_facts.venue_id != exchange_facts.venue_id:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ERROR,
+                differences=["FACT_KEY_MISMATCH: account or venue differs between sources"],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+
         diffs: list[str] = []
 
-        # 余额比较
-        bal_diff = abs(float(sys_facts.balance.amount) - float(ex_facts.balance.amount))
-        if bal_diff > 0.5:  # 容忍 0.5 以内浮点误差
-            diffs.append(f"Balance mismatch: system={sys_facts.balance.amount} exchange={ex_facts.balance.amount}")
+        # 余额比较：金额允许一个极小 Decimal→float 表示误差，但不允许
+        # 通过大容差掩盖真实权益差异。
+        bal_diff = abs(float(system_facts.balance.amount) - float(exchange_facts.balance.amount))
+        if bal_diff > 0.5:
+            diffs.append(
+                f"Balance mismatch: system={system_facts.balance.amount} "
+                f"exchange={exchange_facts.balance.amount}"
+            )
 
-        # 活跃订单比较（集合比较，忽略顺序和时序差异）
-        sys_orders = set(sys_facts.open_orders)
-        ex_orders = set(ex_facts.open_orders)
+        sys_orders = set(system_facts.open_orders)
+        ex_orders = set(exchange_facts.open_orders)
         if sys_orders != ex_orders:
             missing_on_exchange = sys_orders - ex_orders
             extra_on_exchange = ex_orders - sys_orders
@@ -115,19 +216,28 @@ class ReconciliationEngine:
             if parts:
                 diffs.append("Open orders mismatch: " + "; ".join(parts))
 
-        # 持仓比较
-        sys_pos = {str(k): str(v.amount) for k, v in sys_facts.positions.items()}
-        ex_pos = {str(k): str(v.amount) for k, v in ex_facts.positions.items()}
-        if sys_pos != ex_pos:
-            diffs.append(f"Position mismatch: system={sys_pos} exchange={ex_pos}")
+        def _position_map(facts: AccountFactSnapshot) -> dict[str, float]:
+            return {str(k): float(v.amount) for k, v in facts.positions.items()}
 
-        status = ReconciliationStatus.MATCHED if len(diffs) == 0 else ReconciliationStatus.MISMATCHED
+        sys_pos = _position_map(system_facts)
+        ex_pos = _position_map(exchange_facts)
+        symbols = sorted(set(sys_pos) | set(ex_pos))
+        position_diffs = {
+            symbol: (sys_pos.get(symbol, 0.0), ex_pos.get(symbol, 0.0))
+            for symbol in symbols
+            if abs(sys_pos.get(symbol, 0.0) - ex_pos.get(symbol, 0.0)) > 1e-12
+        }
+        if position_diffs:
+            diffs.append(f"Position mismatch: {position_diffs}")
+
+        status = ReconciliationStatus.MATCHED if not diffs else ReconciliationStatus.MISMATCHED
         return ReconciliationResult(
-            matched=len(diffs) == 0,
+            matched=not diffs,
             status=status,
             differences=diffs,
-            system_facts=sys_facts,
-            exchange_facts=ex_facts,
+            system_facts=system_facts,
+            exchange_facts=exchange_facts,
+            checked_at=checked_at,
         )
 
     def repair_strategy(self, result: ReconciliationResult) -> str:

@@ -92,6 +92,13 @@ class ProtectionOrder:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     triggered_at: datetime | None = None
     correlation_id: CorrelationId | None = None
+    # Venue ownership is part of the durable fact, not inferred from a local
+    # object.  A local definition remains CREATED until a venue ACK supplies
+    # the exchange order id.
+    owner_id: str = "UNKNOWN"
+    position_generation: int = 0
+    session_id: str = ""
+    exchange_order_id: str | None = None
 
     def is_stop_loss(self) -> bool:
         return self.stop_type is not None
@@ -120,6 +127,9 @@ class PositionProtection:
     highest_price: float | None = None  # long仓用
     lowest_price: float | None = None  # short仓用
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    owner_id: str = "UNKNOWN"
+    position_generation: int = 0
+    session_id: str = ""
 
     def is_long(self) -> bool:
         return self.side == OrderSide.BUY
@@ -322,6 +332,9 @@ class ProtectionManager:
         stop_loss_config: dict[str, Any] | None = None,
         take_profit_config: dict[str, Any] | None = None,
         trailing_config: dict[str, float] | None = None,
+        owner_id: str = "UNKNOWN",
+        position_generation: int = 0,
+        session_id: str = "",
     ) -> PositionProtection:
         """为一笔新仓位创建完整的保护方案。"""
         pp = PositionProtection(
@@ -332,6 +345,9 @@ class ProtectionManager:
             quantity=quantity,
             side=side,
             trailing_config=trailing_config or {},
+            owner_id=owner_id or "UNKNOWN",
+            position_generation=int(position_generation),
+            session_id=session_id or "",
         )
         pp.update_price_extremes(entry_price)
 
@@ -370,9 +386,17 @@ class ProtectionManager:
                 quantity=Quantity(amount=str(quantity)),
                 order_type=order_type,
                 reduce_only=True,
-                status=ProtectionStatus.ACTIVE,
+                status=ProtectionStatus.CREATED,
                 stop_type=sl_type,
                 reason=f"Stop Loss: {sl_type.value}",
+                owner_id=owner_id or "UNKNOWN",
+                position_generation=int(position_generation),
+                session_id=session_id or "",
+                metadata={
+                    "owner_id": owner_id or "UNKNOWN",
+                    "position_generation": int(position_generation),
+                    "session_id": session_id or "",
+                },
             )
 
         # 止盈
@@ -407,11 +431,20 @@ class ProtectionManager:
                     quantity=Quantity(amount=str(round(qty, 4))),
                     order_type="TAKE_PROFIT_MARKET",
                     reduce_only=True,
-                    status=ProtectionStatus.ACTIVE,
+                    status=ProtectionStatus.CREATED,
                     take_profit_type=tp_type,
                     reason=f"Take Profit {i + 1}/{len(tp_targets)}: RR={target['rr_ratio']} "
                     f"close={target['close_pct']}%",
-                    metadata={"rr_ratio": target["rr_ratio"], "close_pct": target["close_pct"]},
+                    metadata={
+                        "rr_ratio": target["rr_ratio"],
+                        "close_pct": target["close_pct"],
+                        "owner_id": owner_id or "UNKNOWN",
+                        "position_generation": int(position_generation),
+                        "session_id": session_id or "",
+                    },
+                    owner_id=owner_id or "UNKNOWN",
+                    position_generation=int(position_generation),
+                    session_id=session_id or "",
                 )
                 pp.take_profits.append(tp_order)
 
@@ -426,12 +459,12 @@ class ProtectionManager:
         if pp is None:
             return []
         cancelled: list[ProtectionOrder] = []
-        if pp.stop_loss and pp.stop_loss.is_active():
+        if pp.stop_loss and pp.stop_loss.status in (ProtectionStatus.CREATED, ProtectionStatus.ACTIVE):
             pp.stop_loss.status = ProtectionStatus.CANCELLED
             cancelled.append(pp.stop_loss)
             self._history.append(pp.stop_loss)
         for tp in pp.take_profits:
-            if tp.is_active():
+            if tp.status in (ProtectionStatus.CREATED, ProtectionStatus.ACTIVE):
                 tp.status = ProtectionStatus.CANCELLED
                 cancelled.append(tp)
                 self._history.append(tp)

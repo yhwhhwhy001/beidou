@@ -33,9 +33,18 @@
 - 交易所精度、盘口深度、行情、成本或 Alpha 输入未知时，风险增加订单被拒绝；不再用固定报价、默认精度或默认最小数量补齐。
 - Paper 撮合异常、缺少双边盘口或未闭合 K 线时拒绝/不验证，不回退到即时成交。
 
-未完成：成交增量以 trade ID/事件序列幂等、手续费/资金费入账、权威 PositionProjection、重启后订单/保护回灌、三方只读对账和保护 owner/position generation。
+已补齐一段本地 durable slice：累计 `executedQty` 先转换为增量，`fill_events` 唯一键阻止重复记账；`position_projection` 保存 signed quantity、entry price 和 generation；重启恢复只使用 durable order/fill/projection 事实。该 slice 仍不是完整交易所事件流或 PostgreSQL 生产合同。
 
-### 4. 启动与保护安全
+仍未完成：手续费/资金费入账、完整 OrderAggregate/user-stream gap-fill、独立三方只读对账、opening-balance/account projection 和全量 owner/generation 条件单精确匹配。
+
+### 4. 独立对账与运行态语义
+
+- `ReconciliationEngine.compare` 是无副作用纯比较：缺少一侧、未来/过期、字段不完整、key 不一致都返回阻断状态。
+- 每轮账户与普通挂单快照分别持久到 `reconciliation_snapshots`，结果持久到 `reconciliation_results`；失败立即执行 `NO_NEW_RISK` 并产生 CRITICAL 事故。
+- 活跃运行路径不再调用自愈/复制交易所状态；`/health`、`/ready`、`/trading-ready` 绑定心跳、控制面、对账结果和保护 owner 语义。
+- 本地账户 opening balance 尚未有独立可审计来源，因此当前 system fact 明确为 `INCOMPLETE`，不会伪造 MATCHED。
+
+### 5. 启动与保护安全
 
 启动恢复只读盘点未归属的条件单，不再无条件取消交易所全部 Algo 单。任何取消或替换必须由持久 owner、position generation 和人工/治理状态机授权。
 
@@ -52,5 +61,5 @@
 
 1. 运行中的 Mac 实例曾出现心跳、卡死订单链和 READY 语义矛盾；本轮未重启、停机或读取交易所事实，不能把本地测试当作运行态修复。
 2. SQLite 只是本地 durable slice，不是 PostgreSQL/PITR 生产事实库；对账仍不是独立三方事实源。
-3. 保护路径仍缺 owner/generation/完整条件单 ACK 语义，部分恢复分支仍需改为只读分类后治理。
+3. owner/session/generation 字段、ACK 后 ACTIVE 和未归属条件单冻结已接入，但还没有完整 venue Algo 字段回读与跨进程恢复验收。
 4. 真实 G5 16 场景和全新真实 30 日 G7 尚未执行；旧证书不可继承。
