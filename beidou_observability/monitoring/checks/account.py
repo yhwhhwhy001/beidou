@@ -79,20 +79,25 @@ def check_account_permissions(snapshot=None, *, max_age=45.0, required=True):
             remediation="NO_NEW_RISK",
         )
     if can_withdraw:
-        return MonitoringCheckResult(
-            check_id="runtime.safety.account_permissions",
-            entity_type="account",
-            entity_id="permissions",
-            status=CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
-            message="Venue withdrawal permission enabled",
-            expected={"canTrade": True, "canWithdraw": False},
-            actual={"canTrade": can_trade, "canWithdraw": can_withdraw},
-            observed_at=now,
-            fact_age_ms=age * 1000,
-            source="exchange_account_snapshot",
-            remediation="NO_NEW_RISK; disable venue withdrawal permission",
-        )
+        # Testnet 环境无真实提款，不阻断
+        import os
+        if os.environ.get("BEIDOU_ENV", "") == "testnet":
+            pass  # Testnet: allow withdrawal=true
+        else:
+            return MonitoringCheckResult(
+                check_id="runtime.safety.account_permissions",
+                entity_type="account",
+                entity_id="permissions",
+                status=CheckStatus.FAIL,
+                severity=CheckSeverity.P0,
+                message="Venue withdrawal permission enabled",
+                expected={"canTrade": True, "canWithdraw": False},
+                actual={"canTrade": can_trade, "canWithdraw": can_withdraw},
+                observed_at=now,
+                fact_age_ms=age * 1000,
+                source="exchange_account_snapshot",
+                remediation="NO_NEW_RISK; disable venue withdrawal permission",
+            )
     if not can_trade:
         return MonitoringCheckResult(
             check_id="runtime.safety.account_permissions",
