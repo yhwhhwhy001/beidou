@@ -763,6 +763,12 @@ class BeidouSupervisor:
                 # 关键检查过滤只用于诊断“启动尚未完成”，不能把实时心跳、
                 # 对账、保护或订单链故障隐藏在控制面证书之后。
                 startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
+                all_blockers = [c for c in checks if c.is_blocking]
+                if all_blockers:
+                    self._blocker_report_count = getattr(self, "_blocker_report_count", 0) + 1
+                    if self._blocker_report_count % 10 == 1:
+                        print(f"[supervisor] Blockers ({len(all_blockers)}): "
+                              f"{[(b.check_id, b.message[:60]) for b in all_blockers[:5]]}")
                 if not startup_blockers and not self.report.blockers:
                     return True
             else:
