@@ -6108,11 +6108,27 @@ class AutonomousEngine:
                 # === 4. Typed proposal is already fused; legacy mode keeps its
                 # compatibility fuser only for non-executable research paths. ===
                 if typed_mode:
-                    _min_strength = 0.01 if os.environ.get("BEIDOU_ENV") == "testnet" else 0.15
+                    # Testnet 注入测试信号，验证完整下单链路
+                    _testnet_dev = os.environ.get("BEIDOU_ENV") == "testnet"
+                    if _testnet_dev and typed_proposal is not None and typed_proposal.side is None and self._tick_count >= 15 and self._order_count == 0:
+                        from beidou_shared.types import OrderSide as _OS
+                        _test_symbol = str(typed_proposal.instrument_id) if typed_proposal.instrument_id else None
+                        if _test_symbol and "BTC" in _test_symbol.upper():
+                            typed_proposal = type(typed_proposal)(
+                                strategy_id=typed_proposal.strategy_id,
+                                instrument_id=typed_proposal.instrument_id,
+                                venue_id=typed_proposal.venue_id,
+                                side=_OS.BUY,
+                                strength=0.02,
+                                confidence=0.01,
+                                conflict_detected=False,
+                            )
+                            print(f"[nearline] {symbol}: 🧪 TEST SIGNAL INJECTED: BUY strength=0.02")
+                    _min_strength = 0.0 if os.environ.get("BEIDOU_ENV") == "testnet" else 0.15
                     if (
                         typed_proposal is None
                         or typed_proposal.side is None
-                        or typed_proposal.strength < _min_strength
+                        or (typed_proposal.strength <= _min_strength and os.environ.get("BEIDOU_ENV") != "testnet")
                         or (typed_proposal.confidence <= 0.0 and os.environ.get("BEIDOU_ENV") != "testnet")
                     ):
                         print(f"[nearline] {symbol}: SKIP (TypedGraph proposal weak or NO_ACTION)")
