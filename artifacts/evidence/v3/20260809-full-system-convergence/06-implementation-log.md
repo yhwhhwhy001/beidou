@@ -9,6 +9,7 @@
 | 2026-08-09T03:59:16Z | BD-V3-02 state backend fail-closed | 配置声明未接入的 PostgreSQL/其他后端时，保留仅用于诊断的 SQLite，但设置 `state_backend_supported=false`；`/ready` 与 `/trading-ready` 明确返回 `STATE_BACKEND_UNSUPPORTED`，不再把错误数据库降级当作生产事实库；新增回归测试 | 旧行为只打印 warning 后继续使用 `.beidou/state.db`，存在错误 backend 仍可被误读为可运行 | `tests/unit/test_v3_fail_closed.py` → 7 passed；变更文件 Ruff PASS；代码 commit `a93c1cb3d84507b0a3f1f7fbf717fa3ed407a026`；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 | 2026-08-09T04:01:26Z | BD-V3-02 durable ledger conflict boundary | 为 `ledger_transactions.source_event_id` 增加唯一约束；同 transaction 重放保持幂等，不同 transaction 争用同一成交事实直接抛出冲突；可修复“头已提交、分录未齐”的同事务崩溃窗口，禁止 `INSERT OR IGNORE` 静默吞掉跨写者事实冲突 | 跨进程不同 transaction id 可指向同一 source event，持久层可能只保留一份而调用方误以为成功 | `tests/unit/test_store.py` → 5 passed；变更文件 Ruff PASS；代码 commit `a6fe71ec632b392691a93fa3f1e60c1dd79cd397`；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 | 2026-08-09T04:15:40Z | BD-V3-04/08 three-way reconciliation and user-stream journal | 新增 `UserOrderUpdate` typed 解析；`user_stream_events` 与 `user_stream_projections` durable journal；事件按 `PENDING → APPLIED` 提交，重复幂等、同 ID 原文冲突拒绝；重启高水位默认进入 `GAP`，必须显式 replay；`ReconciliationEngine.compare_three_way` 与引擎注入边界比较 system/REST/event-stream 三方；opening projection 改为基线 + durable fill replay，成交后余额未独立重建则保持 INCOMPLETE | 旧实现仅有事件序列观察，没有 durable 应用/恢复，system side 可用当前 projection 覆盖 opening 基线，双边 REST 匹配不能证明事件连续 | `pytest -q` → 1003 passed, 1 skipped；新增/变更 user-stream、reconciliation、store 定向测试 33 passed；变更文件 Ruff PASS；`python -m compileall -q beidou_* apps scripts` PASS；`git diff --check` PASS；代码 commit `4271a32b991e1a24e79a3de50e618f0270802cc1`；项目 Ruff → 161 errors（既有质量债）；mypy → SQLite 二进制 UTF-8 阻断；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
+| 2026-08-09T04:18:26Z | BD-V3-04 numeric fact hardening | 对账余额/仓位拒绝 `NaN`、`Infinity` 和非数字值并返回 typed `ERROR`；opening fill replay 对非法/负数量保持 `INCOMPLETE`，避免损坏 durable 行让比较器异常退出或错误匹配 | 浮点比较可能让非有限值绕过差异判断；损坏成交行可能中断对账循环而没有明确事实状态 | `pytest -q` → 1004 passed, 1 skipped；定向 reconciliation/user-stream/adapter → 34 passed；变更文件 Ruff PASS；`python -m compileall -q beidou_* apps scripts` PASS；`git diff --check` PASS；代码 commit `ef58bd005c8f0996c09cc2565af75a2ea5ed0a97`；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 
 ## Commands
 
@@ -27,6 +28,7 @@
 - `pytest -q` (after backend gate) → 998 passed, 1 skipped
 - `pytest -q` (after durable ledger conflict gate) → 999 passed, 1 skipped
 - `pytest -q` (commit `4271a32`) → 1003 passed, 1 skipped
+- `pytest -q` (commit `ef58bd0`) → 1004 passed, 1 skipped
 - `pytest -q tests/unit/test_binance_adapter.py tests/unit/test_reconciliation_contract.py tests/unit/test_store.py tests/architecture/test_architecture.py` → 45 passed
 - `.venv/bin/pytest -q tests/unit/test_user_events.py tests/unit/test_binance_adapter.py tests/unit/test_reconciliation_contract.py` → 33 passed
 - `ruff check` changed runtime/store/exchange/tests → PASS

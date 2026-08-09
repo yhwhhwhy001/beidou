@@ -2,10 +2,10 @@ schema_version: "1.0"
 run_id: 2026-08-09-full-system-convergence
 project:
   path: /Users/maguannan/beidou
-  version: 4271a32b991e1a24e79a3de50e618f0270802cc1
+  version: ef58bd005c8f0996c09cc2565af75a2ea5ed0a97
   branch: codex/full-system-convergence-v3
   environment: local
-  code_commit_message: "fix: enforce durable three-way event reconciliation"
+  code_commit_message: "fix: reject non-finite reconciliation facts"
 authority:
   code_changes: true
   git_remote: false
@@ -34,10 +34,10 @@ gates:
   G1: {progress: COMPLETE, decision: APPROVED, evidence: [00-context.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
   G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "旧事实链仍未收敛", updated_at: 2026-08-09T02:15:41Z}
   G3: {progress: COMPLETE, decision: READY, evidence: [docs/optimization/v3/01_FAIL_CLOSED.md], reason: null, updated_at: 2026-08-09T02:15:41Z}
-  G4: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [docs/optimization/v3/03_EXECUTION_FACT_CHAIN.md, 06-implementation-log.md], reason: "本地 durable journal、三方比较、用户流 projector/重启 replay gate、保护与成交事实链已验证；完整账户余额 user-stream、PostgreSQL/治理恢复合同未完成", updated_at: 2026-08-09T04:15:40Z}
+  G4: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: [docs/optimization/v3/03_EXECUTION_FACT_CHAIN.md, 06-implementation-log.md], reason: "本地 durable journal、三方比较、用户流 projector/重启 replay gate、非有限数值拒绝、保护与成交事实链已验证；完整账户余额 user-stream、PostgreSQL/治理恢复合同未完成", updated_at: 2026-08-09T04:18:26Z}
   G5: {progress: BLOCKED, decision: UNRESOLVED, evidence: [domain-trading-readiness.md], reason: "运行时 P0 与事实链缺陷未关闭", updated_at: 2026-08-09T02:15:41Z}
   G6: {progress: BLOCKED, decision: FAIL, evidence: [docs/optimization/v3/00_BASELINE.md], reason: "独立红队 P0 未关闭", updated_at: 2026-08-09T02:15:41Z}
-  G7: {progress: IN_PROGRESS, decision: null, evidence: [docs/optimization/v3/04_RESEARCH_GATE.md, 06-implementation-log.md], reason: "本地回归通过；真实 G5/G7 未执行，旧窗口 NOT_VERIFIABLE；事件流事实仍不完整", updated_at: 2026-08-09T04:15:40Z}
+  G7: {progress: IN_PROGRESS, decision: null, evidence: [docs/optimization/v3/04_RESEARCH_GATE.md, 06-implementation-log.md], reason: "本地回归通过；真实 G5/G7 未执行，旧窗口 NOT_VERIFIABLE；事件流事实仍不完整", updated_at: 2026-08-09T04:18:26Z}
   G8: {progress: BLOCKED, decision: null, evidence: [], reason: "尚无完整验收", updated_at: 2026-08-09T02:15:41Z}
   G9: {progress: BLOCKED, decision: null, evidence: [], reason: "未达到发布条件", updated_at: 2026-08-09T02:15:41Z}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "未授权生产/无人值守运行", updated_at: 2026-08-09T02:15:41Z}
@@ -67,7 +67,7 @@ blockers:
     status: OPEN
     statement: "变更文件质量门通过，但项目级 Ruff 有既有错误且 mypy 被仓库 SQLite 二进制输入阻断；CI/恢复/混沌门未验证。"
 residual_risks:
-  - "当前 Mac LaunchAgent 尚未按 V3 目标重构，运行实例仍未重启或安全停机；4271a32 尚未被证明已在线。"
+  - "当前 Mac LaunchAgent 尚未按 V3 目标重构，运行实例仍未重启或安全停机；ef58bd0 尚未被证明已在线。"
   - "Python 3.12 固定运行时和外部加密备份尚未提供。"
   - "未执行真实 Testnet 读快照或停机，本文不证明交易所账户状态；用户流 projector 仅有本地注入测试。"
 next_authorized_action: "先完成 PostgreSQL/备份、完整账户余额 user-stream 与独立 replay/gap-fill、Algo owner 治理恢复和全项目质量门，再经单独授权获取交易所只读快照、处置当前实例并从零重跑真实 G5/G7；不得启动 Mainnet。"
