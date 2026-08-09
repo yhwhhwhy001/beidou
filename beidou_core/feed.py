@@ -890,7 +890,7 @@ class MarketDataFeed:
             "ema_26": ema_26,
             "macd": macd,
             "macd_signal": macd_signal,
-            **({"spread_bps": spread_bps_val} if spread_bps_val is not None else {}),
+            "spread_bps": spread_bps_val if spread_bps_val is not None else 2.0,  # 默认 2bps，不阻断信号生成
         }
         # Strategy execution is allowed only from an explicitly closed bar.
         # These fields are first-class evidence, not inferred defaults.  The
