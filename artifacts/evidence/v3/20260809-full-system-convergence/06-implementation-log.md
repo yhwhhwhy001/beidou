@@ -14,6 +14,7 @@
 | 2026-08-09T04:34:13Z | BD-V3-02 backup and forward-only PostgreSQL migration slice | 新增 SQLite online backup 与 integrity/foreign-key/必需事实表行数校验；加密仅接受显式 32-byte AES-GCM key；新增 `002_v3_fact_chain.up.sql` 前向 schema 与 checksum-checked migration runner；Compose 移除硬编码 PostgreSQL/MinIO 凭据；`BackupVerification` 缺 reconciliation 事实时不可恢复交易 | 旧灾备类型只校验 restore/ledger/intent，无法证明 reconciliation；迁移目录无 V3 事实链；Compose 存在默认密码风险 | `pytest -q` → 1011 passed, 1 skipped；infra/migration 定向 → 21 passed；变更文件 Ruff PASS；`python -m compileall -q beidou_* apps scripts` PASS；`docker compose config` 使用一次性非生产环境变量 PASS；项目 Ruff 仍有 161 个既有错误；mypy 仍被 `beidou_state.db` 二进制 UTF-8 阻断；代码 commit `159cd1eb049f4a2b71850398eddb074578596fb4`；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 | 2026-08-09T04:46:14Z | BD-V3-04/07 venue-backed protection and project quality gates | 监控保护事实仅接受 `ACTIVE + exchange_order_id`，本地 CREATED/PENDING 不再构成覆盖；成交后保护 ACK 不完整立即设置 owner-unknown/`NO_NEW_RISK`；监控收集器异常转为 P0/P1 阻断结果；紧急控制面执行失败不再返回 success；补齐 Ruff/mypy/类型注解与 CI 格式门禁 | 旧监控以本地保护对象自报覆盖，保护提交失败仍可留在 RESUME；监控异常被 `except: pass` 省略；控制面未接线时紧急动作仍报告成功；项目 lint/format/type 门禁不完整 | `pytest -q` → 1014 passed, 1 skipped；`.venv/bin/ruff check beidou_* apps tests scripts` PASS；`.venv/bin/ruff format --check --force-exclude beidou_* apps tests scripts` PASS（271 files）；CI 包范围 `mypy ... --no-error-summary` PASS；`python -m compileall -q beidou_* apps scripts` PASS；`git diff --check` PASS；代码 commit `5488e4c2ed74180c831850100b66f64d19762a09`；未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 | 2026-08-09T04:47:23Z | BD-V3-00 read-only runtime audit | 读取 `.beidou/supervisor-state.json`、进程命令行和 LaunchAgent plist；不调用交易所、不停止/重启、不读取凭据 | 当前 PID 42213 运行旧 SHA `52cd5558fe0336e1553df5bb63f9dadcb1f0cecc`；监督状态 `RUNNING` 但 `trading_ready=false`、`passed=false`；实时心跳陈旧约 1316 秒；发现两个 `INTENT_CREATED` P0 卡死订单；plist 使用 `zsh -c`/`eval ~/.zshrc`/`KeepAlive=true` | 证据确认最新提交未在线，当前实例不得作为 G5/G7 或生产证据；因可能有活跃订单未执行 stop/restart/撤单/平仓 | HOLD |
+| 2026-08-09T04:53:04Z | BD-V3-01 / runtime certificate and launch boundary | 持久 P0/P1 阻断在防抖计数期间立即把监督状态置为 `DEGRADED`，防止 `RUNNING` 证书与 `trading_ready=false` 并存；新增回归测试；仓库 LaunchAgent 改为未安装安全模板（直接参数、无 shell/eval/凭据、`KeepAlive=false`） | 旧逻辑可在首个阻断周期保留 `RUNNING`；已安装 plist 仍从 `.zshrc` 注入凭据并自动 KeepAlive 重启 | 定向 21 passed；全量 `pytest -q` → 1017 passed, 1 skipped；Ruff lint/format PASS；CI 包范围 mypy PASS；compileall PASS；`plutil -lint deploy/com.beidou.autopilot.plist` PASS；代码 commit `1cfc948d81c99100aa1510b2ba6d518d76d6a552`，模板文档 commit `25079166a1eedc6c88f76f774bc2c368a6a00a4a`；未安装 plist、未重启、未连接交易所、未执行写操作 | PASS_WITH_CONDITIONS |
 
 ## Commands
 
@@ -34,6 +35,12 @@
 - `pytest -q` (commit `4271a32`) → 1003 passed, 1 skipped
 - `pytest -q` (commit `ef58bd0`) → 1004 passed, 1 skipped
 - `pytest -q` (commit `d1696b6`) → 1006 passed, 1 skipped
+- `.venv/bin/pytest -q` (commits `1cfc948`/`2507916`) → 1017 passed, 1 skipped
+- `.venv/bin/ruff check beidou_* apps tests scripts` → PASS
+- `.venv/bin/ruff format --check --force-exclude beidou_* apps tests scripts` → PASS（271 files）
+- `mypy beidou_shared ... beidou_core --no-error-summary`（CI 包范围）→ PASS
+- `python -m compileall -q beidou_* apps scripts` → PASS
+- `plutil -lint deploy/com.beidou.autopilot.plist` → PASS
 - `pytest -q tests/unit/test_binance_adapter.py tests/unit/test_reconciliation_contract.py tests/unit/test_store.py tests/architecture/test_architecture.py` → 45 passed
 - `.venv/bin/pytest -q tests/unit/test_user_events.py tests/unit/test_binance_adapter.py tests/unit/test_reconciliation_contract.py` → 33 passed
 - `ruff check` changed runtime/store/exchange/tests → PASS
