@@ -827,7 +827,7 @@ class AutonomousEngine:
             "research": EnvironmentMode.RESEARCH,
             "paper": EnvironmentMode.PAPER,
             "shadow": EnvironmentMode.SHADOW,
-            "testnet": EnvironmentMode.TESTNET,
+            "testnet": "testnet",
             "safety_only": EnvironmentMode.SAFETY_ONLY,
         }
         self._env_mode = _MODE_MAP.get(mode, EnvironmentMode.SAFETY_ONLY)
@@ -1047,7 +1047,7 @@ class AutonomousEngine:
         # BD-T06: Testnet 模式启动时自动激活交易池标的（跳过证据门禁）
         for sym in configured_symbols:
             entry = self._trading_pool.add(sym)
-            if self._env_mode == EnvironmentMode.TESTNET:
+            if self._env_mode.value == "testnet":
                 entry.status = PoolStatus.ACTIVE
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
@@ -1213,15 +1213,14 @@ class AutonomousEngine:
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
         # BD-T06: Testnet 模式使用非严格门禁，允许因子在无证据时自启动
-        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != EnvironmentMode.TESTNET))
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != "testnet"))
         print(
             f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
             "startup will not auto-promote registered factors"
         )
 
         # BD-T06: Testnet 模式启动时自动将 IDEA 因子晋级到 ACTIVE
-        print(f"[beidou-autopilot] DEBUG: env_mode={self._env_mode} TESTNET={EnvironmentMode.TESTNET} strict={self._factor_gate._strict}")
-        if self._env_mode == EnvironmentMode.TESTNET and not self._factor_gate._strict:
+        if self._env_mode.value == "testnet" and not self._factor_gate._strict:
             for fid, record in list(self._factor_registry._factors.items()):
                 if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
                     decision = self._factor_gate.validate_evidence(
