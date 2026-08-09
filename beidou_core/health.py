@@ -37,7 +37,7 @@ class HealthServer:
     每层有独立回调，可独立查询。
     """
 
-    def __init__(self, port: int = 9090, bind_host: str = "0.0.0.0") -> None:
+    def __init__(self, port: int = 9090, bind_host: str = "127.0.0.1") -> None:
         self._port = port
         self._bind_host = bind_host
         self._start_time = time.time()

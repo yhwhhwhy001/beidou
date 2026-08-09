@@ -79,14 +79,14 @@ class SLIState:
     @property
     def window_pass_rate(self) -> float:
         if not self.samples:
-            return 1.0
+            return 0.0
         passed = sum(1 for s in self.samples if s.passed)
         return passed / len(self.samples)
 
     @property
     def lifetime_pass_rate(self) -> float:
         if self.total_samples == 0:
-            return 1.0
+            return 0.0
         return self.total_passed / self.total_samples
 
     @property
@@ -114,7 +114,12 @@ class G7LiveTracker:
     当前 7 个 SLI 的实时状态，集成到 /status 端点。
     """
 
-    def __init__(self, window_seconds: float = 86400.0) -> None:
+    def __init__(
+        self,
+        window_seconds: float = 86400.0,
+        minimum_elapsed_seconds: float = 30 * 86400.0,
+        minimum_cycles: int = 200,
+    ) -> None:
         self._slis: dict[str, SLIState] = {
             name: SLIState(name=name, threshold=SLI_THRESHOLDS[name], window_seconds=window_seconds)
             for name in SLI_NAMES
@@ -122,11 +127,18 @@ class G7LiveTracker:
         self._cycle_count: int = 0
         self._started_at: float = time.time()
         self._last_feed_at: float = 0.0
+        self._minimum_elapsed_seconds = minimum_elapsed_seconds
+        self._minimum_cycles = minimum_cycles
+        self._invalidated = False
+        self._invalidated_reason = ""
 
     def feed(self, checks: list[CheckResult]) -> None:
         """从当前监控检查结果中提取 SLI 样本。"""
         self._cycle_count += 1
         self._last_feed_at = time.time()
+        if any(item.is_blocking and item.severity.value == "P0" for item in checks):
+            self._invalidated = True
+            self._invalidated_reason = "P0_BLOCKER"
         check_map = {c.check_id: c for c in checks}
 
         # 1. data_quality: market_data + algorithm_probe 状态
@@ -139,7 +151,7 @@ class G7LiveTracker:
 
         # 2. order_duplicates: order_trace 检查中是否有重复订单
         order_results = [c for c in checks if c.check_id == "runtime.execution.order_trace"]
-        dup_free = all("DUP" not in c.message for c in order_results)
+        dup_free = bool(order_results) and all("DUP" not in c.message for c in order_results)
         self._slis["order_duplicates"].record(1.0 if dup_free else 0.0)
 
         # 3. protection_slo: protection_coverage 覆盖率
@@ -148,7 +160,7 @@ class G7LiveTracker:
             covered = sum(1 for c in protection_results if c.status == CheckStatus.PASS)
             rate = covered / len(protection_results)
         else:
-            rate = 1.0  # 无持仓 = 默认满足
+            rate = 0.0  # 零样本不得证明保护 SLO
         self._slis["protection_slo"].record(rate)
 
         # 4. reconciliation: reconciliation 状态
@@ -173,11 +185,11 @@ class G7LiveTracker:
 
     def feed_recovery_context(self, recovery_count: int, max_restarts: int) -> None:
         """补充 recovery_bounded SLI 上下文（由 supervisor 传入）。"""
-        if max_restarts > 0:
-            bounded = recovery_count <= max_restarts
-        else:
-            bounded = recovery_count == 0
+        bounded = recovery_count <= max_restarts if max_restarts > 0 else recovery_count == 0
         self._slis["recovery_bounded"].record(1.0 if bounded else 0.0)
+        if not bounded:
+            self._invalidated = True
+            self._invalidated_reason = "RECOVERY_BUDGET_EXCEEDED"
 
     @property
     def overall_pass_rate(self) -> float:
@@ -188,19 +200,27 @@ class G7LiveTracker:
     @property
     def all_slis_passing(self) -> bool:
         """G7 认证要求: 所有 SLI >= 各自的 threshold。"""
-        return all(
-            s.window_pass_rate >= s.threshold or s.total_samples == 0
-            for s in self._slis.values()
+        return not self._invalidated and all(
+            s.total_samples > 0 and s.window_pass_rate >= s.threshold for s in self._slis.values()
         )
 
     def summary(self) -> dict[str, Any]:
         """返回完整 SLI 摘要，供 /status 端点使用。"""
         sli_details = {name: self._slis[name].summary() for name in SLI_NAMES}
+        elapsed = time.time() - self._started_at
         return {
             "overall_pass_rate": round(self.overall_pass_rate, 4),
             "all_slis_passing": self.all_slis_passing,
             "cycles": self._cycle_count,
-            "uptime_seconds": round(time.time() - self._started_at, 1),
-            "g7_eligible": self.all_slis_passing and self._cycle_count > 0,
+            "uptime_seconds": round(elapsed, 1),
+            "minimum_elapsed_seconds": self._minimum_elapsed_seconds,
+            "minimum_cycles": self._minimum_cycles,
+            "invalidated": self._invalidated,
+            "invalidated_reason": self._invalidated_reason,
+            "g7_eligible": (
+                self.all_slis_passing
+                and elapsed >= self._minimum_elapsed_seconds
+                and self._cycle_count >= self._minimum_cycles
+            ),
             "slis": sli_details,
         }

@@ -268,19 +268,19 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 warn=(not account_credentials_ok and mode != WRITE_MODE),
             )
         )
-        # 签名密钥仅 canary/live 强制要求；testnet 及以下使用 mock 密钥。
-        # 引擎层已在 RiskApprovalSignerImpl 中处理，预检不再重复拦截。
+        # BD-V3/T01: Testnet 风险增加必须有真实批准签名密钥。
+        # 缺少密钥不得由引擎回退到 mock/default key；预检直接阻断启动。
         if mode == WRITE_MODE:
             checks.append(
                 _result(
                     "preflight.signing_key",
                     "风险批准签名密钥",
                     len(signing_key) >= 16,
-                    CheckSeverity.P2,
+                    CheckSeverity.P0,
                     "BEIDOU_SIGNING_KEY 已提供",
-                    "Testnet 模式未设置 BEIDOU_SIGNING_KEY，引擎将使用内置 mock 签名密钥",
+                    "Testnet 模式缺少 BEIDOU_SIGNING_KEY，风险增加路径被阻断",
                     evidence={"present": bool(signing_key), "length": len(signing_key)},
-                    warn=(len(signing_key) < 16),
+                    warn=False,
                 )
             )
     except Exception as exc:

@@ -100,13 +100,25 @@ class BeidouSupervisor:
         engine._supervisor_blocked_writes = []
 
         def record(path: str, method: str) -> dict[str, Any]:
-            event = {"path": path, "method": method.upper(), "mode": mode, "timestamp": time.time()}
+            event = {
+                "path": path,
+                "method": method.upper(),
+                "mode": mode,
+                "timestamp": time.time(),
+                "reason": "authority_not_active",
+            }
             engine._supervisor_blocked_writes.append(event)
             return {
                 "code": -3,
                 "error": -3,
-                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}",
+                "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}; authority_not_active",
             }
+
+        def write_allowed() -> bool:
+            # 环境变量 _can_write 只是能力上限，不是运行时授权。
+            # 只有监督器确认无阻断、控制面 RESUME 且本轮授权仍有效时才允许
+            # 触碰交易所写边界。P0/陈旧事实会立即使该判断为 False。
+            return bool(engine._can_write and self._is_trading_ready())
 
         async def guarded_async(
             path: str,
@@ -114,7 +126,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed():
                 return record(path, method)
             return await original_async(path, method=method, signed=signed, params=params)
 
@@ -124,7 +136,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not engine._can_write:
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed():
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
@@ -171,7 +183,9 @@ class BeidouSupervisor:
         engine = self.engine  # mypy 类型收窄
 
         def readiness() -> bool:
-            return bool(engine._check_ready()) and self.report.supervisor_state == "RUNNING"
+            # /ready 不能在 P0 blocker 存在时继续返回 true。进程存活由 /health
+            # 单独表示；服务 readiness 必须与当前 authority/监督状态一致。
+            return self._is_trading_ready()
 
         def trading_readiness() -> tuple[bool, str]:
             ready = self._is_trading_ready()
@@ -570,6 +584,9 @@ class BeidouSupervisor:
         from beidou_lifecycle.lifecycle import ModuleState
 
         previous_control = self._control_state()
+        # 一旦监督器因运行时事实降级，之前的启动授权失效；恢复必须重新
+        # 经过新鲜事实、对账和具名人工授权，不能由健康防抖器自动 RESUME。
+        self._resume_authorized = False
         with suppress(Exception):
             self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
         if previous_control == "RESUME":
@@ -584,29 +601,9 @@ class BeidouSupervisor:
                 lifecycle.transition(ModuleState.DEGRADED)
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
-    # 可在运行时自愈的瞬时阻断项（心跳、行情延迟等）；
-    # 对账 MISMATCHED 在活跃交易中是瞬时状态 — 引擎有 _sync_exchange_state()
-    # 和 _reconcile() 自愈逻辑，可在数秒内修复。只有连续多轮无法自愈时才需人工干预。
-    _TRANSIENT_CHECK_IDS = frozenset(
-        {
-            "runtime.health.realtime_heartbeat",
-            "runtime.health.nearline_heartbeat",
-            "runtime.health.market_data",
-            "runtime.health.http_server",
-            "runtime.health.errors",
-            # Phase 1 去重: account_snapshot → monitoring (runtime.safety.account + runtime.safety.balance_sanity 已在下方)
-            "runtime.safety.reconciliation",  # 引擎自愈可在数秒内修复
-            "runtime.safety.protection_coverage",  # _ensure_exchange_position_protections 可自动补齐
-            "runtime.safety.position_mode",  # 交易所断路器/临时 API 故障可自愈
-            # 监控子系统检查 — 与上列同源的瞬时状态（API 故障/引擎自愈可恢复）
-            "runtime.safety.account",  # INV-002: API 故障 ≠ 空账户，可自愈
-            "runtime.safety.balance_sanity",  # 账户事实缺失可自愈
-            "runtime.execution.order_trace",  # _sync_exchange_state 可自愈在途订单
-            "runtime.health.algorithm_probe",  # 探针重试可自愈
-            "runtime.health.module_progress",  # 心跳类瞬时状态
-            "runtime.health.monitor_self",  # 监督循环自身可恢复
-        }
-    )
+    # V3 安全语义：运行时的 P0/P1 事实失败全部是 authority blocker。
+    # “瞬时”描述只能影响诊断和人工处置，不能绕过新风险写边界。
+    _TRANSIENT_CHECK_IDS = frozenset()
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
@@ -615,6 +612,9 @@ class BeidouSupervisor:
         保护缺失）需要人工干预或引擎自行修复后清除。
         """
         if self.engine is None:
+            return False
+        if not self._resume_authorized:
+            # _fail_closed() 已撤销原授权；无具名新授权时禁止自动恢复。
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
@@ -682,12 +682,15 @@ class BeidouSupervisor:
                 self._refresh_position_mode(),
                 self._refresh_exchange_algo_snapshot(),
             )
+            # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
+            # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
             checks = self._runtime_checks()
-            if await self._recover_if_validated(checks):
-                checks = self._runtime_checks()
-            # 运行监控子系统深度检查并合并（账户/保护/对账/执行/模块/探针/自身健康）
             checks = self._merge_monitoring_checks(checks)
-            self._last_monitor_loop_ts = time.time()
+            self._last_monitor_loop_ts = time.monotonic()
+
+            if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
+                checks = self._runtime_checks()
+                checks = self._merge_monitoring_checks(checks)
 
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)

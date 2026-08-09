@@ -27,7 +27,8 @@ class Environment(str, Enum):
     @property
     def can_write_trades(self) -> bool:
         """只有明确启用写交易的环境返回 True。"""
-        return self in (Environment.SHADOW, Environment.TESTNET, Environment.CANARY)
+        # Shadow 是零写观察环境；Canary/Production/Mainnet 继续被本阶段门禁阻断。
+        return self is Environment.TESTNET
 
     @property
     def is_live(self) -> bool:
@@ -81,7 +82,7 @@ class ProductionConfig:
 class InfrastructureConfig:
     """基础设施连接参数 — 从 YAML `infrastructure` 段加载。"""
 
-    health_host: str = "0.0.0.0"
+    health_host: str = "127.0.0.1"
     health_port: int = 9090
     control_host: str = "127.0.0.1"
     control_port: int = 9090
@@ -171,7 +172,7 @@ class ConfigProvider:
         "version": "0.0.0",
         "database": {"url": "sqlite:///beidou_state.db", "pool_min": 1, "pool_max": 5},
         "exchange": {
-            "rest_base_url": "https://testnet.binancefuture.com",
+            "rest_base_url": "",
             "ws_base_url": "",
             "api_key_ref": "",
             "api_secret_ref": "",
@@ -191,7 +192,7 @@ class ConfigProvider:
             "drift_threshold": 0.1,
         },
         "infrastructure": {
-            "health_host": "0.0.0.0",
+            "health_host": "127.0.0.1",
             "health_port": 9090,
             "control_host": "127.0.0.1",
             "control_port": 9090,
@@ -361,7 +362,7 @@ class ConfigProvider:
         infra_s3 = infra_raw.get("s3", {})
         infra_alerts = infra_raw.get("alerts", {})
         infrastructure = InfrastructureConfig(
-            health_host=str(infra_health.get("host", "0.0.0.0")),
+            health_host=str(infra_health.get("host", "127.0.0.1")),
             health_port=int(infra_health.get("port", 9090)),
             control_host=str(infra_control.get("host", "127.0.0.1")),
             control_port=int(infra_control.get("port", 9090)),
