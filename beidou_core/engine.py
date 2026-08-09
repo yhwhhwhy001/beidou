@@ -7434,7 +7434,8 @@ class AutonomousEngine:
         async def _realtime_loop() -> None:
             while self._running:
                 try:
-                    if self._realtime_age_seconds() >= 5:
+                    tick_interval = 2.0  # 实时 tick 间隔 (秒)，平衡延迟与 API 调用频率
+                    if self._realtime_age_seconds() >= tick_interval:
                         await self._realtime_tick()
                 except Exception as exc:
                     self._error_count += 1
