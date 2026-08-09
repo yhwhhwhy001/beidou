@@ -6925,9 +6925,10 @@ class AutonomousEngine:
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
             else:
                 health["level"] = "OK"
-            # R9: venue 提款权限必须明确为 False。不要把真实的 True
-            # 改写成 False，否则状态/证据会出现安全假阳性。
-            if self._can_withdraw:
+            # R9: venue 提款权限必须明确为 False（Testnet 除外，无真实提款）。
+            # 不要把真实的 True 改写成 False，否则状态/证据会出现安全假阳性。
+            is_testnet_health = getattr(self, "_env_mode", None) is not None and str(self._env_mode.value) == "testnet"
+            if self._can_withdraw and not is_testnet_health:
                 health["level"] = "CRITICAL"
                 health["r9_violation"] = "WITHDRAW_ENABLED"
                 self._alerts.send_incident(
@@ -6970,7 +6971,9 @@ class AutonomousEngine:
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
-        if venue_can_withdraw:
+        # Testnet 环境无真实提款能力，允许提款权限为 True
+        is_testnet = getattr(self, "_env_mode", None) is not None and str(self._env_mode.value) == "testnet"
+        if venue_can_withdraw and not is_testnet:
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
