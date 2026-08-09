@@ -52,6 +52,12 @@ REST / event-stream 三方，且引擎只提供注入边界，不在本地伪造
 仍未完成：交易所真实 gap-fill/replay 取证、手续费/资金费入账、完整 OrderAggregate、
 PostgreSQL/PITR、以及全量 owner/generation 条件单精确匹配与治理恢复。
 
+本轮另外提供了本地灾备切片：SQLite 使用在线 `backup()` 生成一致性副本，恢复前校验
+`integrity_check`、`foreign_key_check`、必需事实表和行数；可选 AES-GCM 加密必须注入明确的
+32-byte 密钥。`migrations/002_v3_fact_chain.up.sql` 和 `scripts/run_migrations.py` 提供前向
+PostgreSQL schema/checksum 约束，Compose 不再内置数据库或对象存储密码。它们不等同于外部
+对象存储、异机恢复、密钥托管或 PITR，也没有授权把当前 SQLite runtime 切换到 PostgreSQL。
+
 ### 4. 独立对账与运行态语义
 
 - `ReconciliationEngine.compare` 是无副作用纯比较：缺少一侧、未来/过期、字段不完整、key 不一致都返回阻断状态。
