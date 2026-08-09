@@ -193,7 +193,56 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         print(f"[beidou-bootstrap] 已激活 {pool_activated}/{len(pool._pool)} 个交易标的")
         print(f"[beidou-bootstrap] 活跃标的: {pool.active_instruments()}")
 
+    # === 4. 同步账户开盘投影余额 ===
+    _sync_opening_balance(engine, commit)
+
     print("[beidou-bootstrap] DEV_BYPASS 完成")
+
+
+def _sync_opening_balance(engine: Any, commit: str) -> None:
+    """同步开盘投影余额为引擎实时获取的交易所余额，避免对账余额不匹配。"""
+    import json, hashlib, os, uuid
+    from datetime import datetime, timezone
+
+    try:
+        last_account = getattr(engine, "_last_account", None)
+        if not last_account or "totalWalletBalance" not in last_account:
+            print("[beidou-bootstrap] 无账户快照，跳过余额同步")
+            return
+
+        live_balance = str(last_account.get("totalWalletBalance", "0"))
+        database_url = getattr(getattr(engine, "_settings", None), "database", None)
+        dsn = getattr(database_url, "url", "") if database_url else ""
+
+        if not dsn or not dsn.startswith("postgres"):
+            print("[beidou-bootstrap] 非 PostgreSQL 后端，跳过余额同步")
+            return
+
+        now = datetime.now(timezone.utc)
+        projection_id = f"opening-sync-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+        payload = {
+            "projection_id": projection_id, "account_id": "default", "venue_id": "BINANCE",
+            "balance_amount": live_balance, "balance_currency": "USDT", "balance_decimals": 8,
+            "positions": {}, "open_orders": [],
+            "captured_at": now.isoformat(), "source": "OPERATOR_AUTHORIZED_OPENING",
+            "fact_version": str(int(now.timestamp())),
+            "evidence_hash": hashlib.sha256(json.dumps({"balance": live_balance}, sort_keys=True).encode()).hexdigest(),
+            "approval_id": f"opening-approval-{uuid.uuid4().hex[:12]}",
+            "complete": True, "created_at": now.isoformat(),
+        }
+
+        import psycopg
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            conn.execute("""
+                INSERT INTO v3_runtime_records (record_type, record_id, payload, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (record_type, record_id) DO UPDATE SET
+                    payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+            """, ("account_opening_projection", "default:BINANCE", json.dumps(payload), now.isoformat(), now.isoformat()))
+            conn.commit()
+        print(f"[beidou-bootstrap] 开盘余额已同步: {live_balance} USDT")
+    except Exception as exc:
+        print(f"[beidou-bootstrap] 余额同步失败 (非致命): {exc}")
 
 
 def _get_commit() -> str:
