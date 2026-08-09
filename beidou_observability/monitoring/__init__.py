@@ -304,7 +304,7 @@ def collect_monitoring_checks(
                 except (TypeError, ValueError):
                     continue
         ledger = getattr(engine, "_ledger", None)
-        local_ledger = getattr(ledger, "_entries", None) if ledger is not None else None
+        local_ledger = getattr(ledger, "_transactions", None) if ledger is not None else None
         # Run the semantic comparison for known-flat accounts as well as open
         # positions.  If either independent side is missing, emit UNKNOWN
         # instead of omitting the check (omission used to look like PASS).

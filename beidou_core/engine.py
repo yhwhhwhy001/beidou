@@ -2335,12 +2335,13 @@ class AutonomousEngine:
         projector_status = str(getattr(raw_projector_status, "value", raw_projector_status)).upper()
         event_facts = getattr(self, "_event_stream_facts", None)
         projection_complete = bool(getattr(event_facts, "complete", False))
+        # CONNECTED is an acceptable startup state before the first event arrives
+        transport_ok = status in ("HEALTHY", "CONNECTED")
         ready = (
-            status == "HEALTHY"
-            and event_age is not None
-            and event_age <= max_event_age
+            transport_ok
+            and (event_age is None or event_age <= max_event_age)
             and projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE", "UNKNOWN"}
-            and projection_complete
+            and (projection_complete or event_facts is None)
         )
         return ready, {
             "status": status,
