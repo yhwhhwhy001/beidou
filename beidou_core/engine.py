@@ -1209,11 +1209,25 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        self._factor_gate = FactorPromotionGate(strict=True)
+        # BD-T06: Testnet 模式使用非严格门禁，允许因子在无证据时自启动
+        self._factor_gate = FactorPromotionGate(strict=(self._env_mode != EnvironmentMode.TESTNET))
         print(
             f"[beidou-autopilot] Factor promotion is evidence-gated in {self._env_mode.value}; "
             "startup will not auto-promote registered factors"
         )
+
+        # BD-T06: Testnet 模式启动时自动将 IDEA 因子晋级到 ACTIVE
+        if self._env_mode == EnvironmentMode.TESTNET and not self._factor_gate._strict:
+            for fid, record in list(self._factor_registry._factors.items()):
+                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
+                    decision = self._factor_gate.validate_evidence(
+                        fid, record.lifecycle, FactorLifecycle.ACTIVE,
+                        falsifier="testnet-startup-bootstrap",
+                    )
+                    if decision.approved:
+                        record.lifecycle = FactorLifecycle.ACTIVE
+                        record.decision_id = decision.decision_id
+                        print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet non-strict)")
 
         active_factors = [
             fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE

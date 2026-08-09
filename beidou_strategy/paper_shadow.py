@@ -55,6 +55,7 @@ class ShadowMetrics:
     total_rejected: int = 0
     prediction_vs_simulation_mae: float = 0.0  # 预测vs模拟平均绝对误差
     cost_estimated_vs_actual_mae: float = 0.0  # 预测成本vs实际成本误差
+    cost_observations: int = 0
     drift_events: int = 0
     p0_incidents: int = 0
 
@@ -86,6 +87,10 @@ class ShadowReport:
             failures.append(
                 f"prediction_deviation: {m.prediction_vs_simulation_mae:.1f}% > {cfg.max_prediction_deviation_pct}%"
             )
+        if m.cost_observations == 0:
+            failures.append("cost_evidence_missing")
+        elif m.cost_estimated_vs_actual_mae > cfg.max_cost_deviation_pct:
+            failures.append(f"cost_deviation: {m.cost_estimated_vs_actual_mae:.1f}% > {cfg.max_cost_deviation_pct}%")
         if m.p0_incidents > 0:
             failures.append(f"p0_incidents: {m.p0_incidents}")
 
@@ -165,9 +170,11 @@ class PaperShadowRunner:
             # 成本偏差
             if estimated_cost_bps > 0 and actual_cost_bps > 0:
                 cost_err = abs(estimated_cost_bps - actual_cost_bps) / estimated_cost_bps * 100
+                self.metrics.cost_observations += 1
+                n_cost = self.metrics.cost_observations
                 self.metrics.cost_estimated_vs_actual_mae = (
-                    self.metrics.cost_estimated_vs_actual_mae * (n - 1) + cost_err
-                ) / n
+                    self.metrics.cost_estimated_vs_actual_mae * (n_cost - 1) + cost_err
+                ) / n_cost
 
     def record_incident(self, level: str) -> None:
         """记录事件。"""
@@ -295,6 +302,7 @@ class PaperShadowRunner:
                 "runtime_hours": self.metrics.runtime_hours,
                 "total_executed": self.metrics.total_executed,
                 "deviation_pct": self.metrics.prediction_vs_simulation_mae,
+                "cost_observations": self.metrics.cost_observations,
                 "p0_incidents": self.metrics.p0_incidents,
             },
             sort_keys=True,
@@ -382,6 +390,25 @@ class PaperMatchingEngine:
         self._base_latency_ms: float = 50.0
         self._fill_probability: float = 0.85
         self._partial_fill_probability: float = 0.10
+        # Keep fee policy separate from the stochastic spread/slippage path;
+        # Paper/Shadow cost validation must compare an estimate with an
+        # independently realised execution cost.
+        self._taker_fee_bps: float = 4.0
+
+    def realized_cost_bps(self, side: str, avg_price: float, bid: float, ask: float) -> float:
+        """Return realised execution cost versus the mid, including fee."""
+        if not (0 < bid <= ask and avg_price > 0):
+            return float("nan")
+        mid = (bid + ask) / 2.0
+        if side.upper() == "BUY":
+            price_impact_bps = (avg_price - mid) / mid * 10000.0
+        else:
+            price_impact_bps = (mid - avg_price) / mid * 10000.0
+        return max(0.0, price_impact_bps) + self._taker_fee_bps
+
+    @property
+    def taker_fee_bps(self) -> float:
+        return self._taker_fee_bps
 
     def match(
         self, symbol: str, side: str, quantity: float, limit_price: float | None, bid: float, ask: float
