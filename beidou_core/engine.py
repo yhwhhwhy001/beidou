@@ -916,6 +916,7 @@ class AutonomousEngine:
             rest_url=self._rest_url,
             api_key=self._api_key,
             api_secret=self._api_secret,
+            recv_window=getattr(self._settings.exchange, "recv_window_ms", 5000) or 5000,
         )
         # BD-T18: 创建 adapter 并注入 REST client 作为唯一网络传输
         from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
