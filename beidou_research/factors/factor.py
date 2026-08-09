@@ -619,7 +619,9 @@ class FactorRegistry:
             return False
         if record.lifecycle not in (FactorLifecycle.PAPER_TRADING, FactorLifecycle.SUSPENDED):
             return False
-        return record.transition(FactorLifecycle.CHALLENGER)
+        # 不能通过这个兼容方法绕过 CHALLENGER 阶段证据；生产路径使用
+        # FactorPromotionGate.promote(...) 并持久化 PromotionDecision。
+        return False
 
     def promote_to_active(self, factor_id: str) -> bool:
         record = self._factors.get(factor_id)
@@ -627,13 +629,15 @@ class FactorRegistry:
             return False
         if record.lifecycle != FactorLifecycle.CHALLENGER:
             return False
-        # 必须经过完整评估
-        if not record.performance:
+        # ACTIVE 是生产授权，不是“最近 ICIR 足够高”的诊断标签。只有
+        # FactorPromotionGate 生成并记录 approved PromotionDecision 后，
+        # 这里才允许返回成功；兼容调用没有证据参数，必须 fail closed。
+        if not any(
+            decision.approved and decision.to_state == FactorLifecycle.ACTIVE
+            for decision in record.promotion_history
+        ):
             return False
-        last_perf = record.performance[-1]
-        if last_perf.icir < 0.3:
-            return False
-        return record.transition(FactorLifecycle.ACTIVE)
+        return record.lifecycle == FactorLifecycle.ACTIVE
 
     def degrade(self, factor_id: str, reason: str) -> bool:
         record = self._factors.get(factor_id)

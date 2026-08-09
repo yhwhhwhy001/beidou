@@ -219,8 +219,26 @@ class ControlPlaneAPI:
             )
         return result
 
-    def promote_factor(self, factor_id: str, target_state: str) -> dict:
-        """手动晋级因子到目标状态。Testnet 模式下绕过证据门禁。"""
+    def promote_factor(
+        self,
+        factor_id: str,
+        target_state: str,
+        *,
+        performance=None,
+        evidence_ids: list[str] | None = None,
+        factor_version: str = "",
+        commit: str = "",
+        dataset_hash: str = "",
+        policy_version: str = "",
+        falsifier: str = "control-api",
+    ) -> dict:
+        """按统一 FactorPromotionGate 晋级；控制面不提供证据旁路。
+
+        旧实现直接调用 ``record.transition``，任何本地/测试网调用都能把
+        IDEA 因子写成 ACTIVE。现在所有晋级都生成不可变
+        ``PromotionDecision``，缺少 dataset/OOS/cost/paper/批准证据时明确
+        拒绝。API 的 query-only 入口因此默认是 fail-closed。
+        """
         if not self._factor_registry:
             return {"success": False, "error": "factor_registry not wired"}
         rec = self._factor_registry.get(factor_id)
@@ -229,38 +247,41 @@ class ControlPlaneAPI:
         try:
             from beidou_research.factors.factor import FactorLifecycle
 
+            from beidou_research.factors.factor import FactorPromotionGate
+
             target = FactorLifecycle(target_state)
-            ok = rec.transition(target)
-            return {"success": ok, "factor_id": factor_id, "new_state": rec.lifecycle.value, "target": target_state}
+            decision = FactorPromotionGate(strict=True).promote(
+                rec,
+                target,
+                performance=performance,
+                evidence_ids=evidence_ids,
+                factor_version=factor_version,
+                commit=commit,
+                dataset_hash=dataset_hash,
+                policy_version=policy_version,
+                falsifier=falsifier,
+            )
+            return {
+                "success": decision.approved,
+                "factor_id": factor_id,
+                "new_state": rec.lifecycle.value,
+                "target": target_state,
+                "decision_id": decision.decision_id,
+                "reason": decision.reason,
+            }
         except (ValueError, KeyError) as e:
             return {"success": False, "error": str(e)}
 
     def promote_all_to_active(self) -> dict:
-        """一键晋级所有因子到 ACTIVE (testnet 专用)。"""
+        """拒绝批量晋级；ACTIVE 必须逐因子绑定证据和具名批准。"""
         if not self._factor_registry:
             return {"success": False, "error": "factor_registry not wired"}
-        from beidou_research.factors.factor import FactorLifecycle
-
-        results = {}
-        for fid, rec in self._factor_registry._factors.items():
-            # 按生命周期链逐步晋级
-            chain = [
-                FactorLifecycle.GENERATED,
-                FactorLifecycle.SANITY_PASSED,
-                FactorLifecycle.RESEARCH_VALIDATED,
-                FactorLifecycle.OOS_VERIFIED,
-                FactorLifecycle.COST_CAPACITY_VERIFIED,
-                FactorLifecycle.PAPER_TRADING,
-                FactorLifecycle.CHALLENGER,
-                FactorLifecycle.ACTIVE,
-            ]
-            for target in chain:
-                if rec.lifecycle == target:
-                    continue
-                if not rec.transition(target):
-                    break
-            results[fid] = rec.lifecycle.value
-        return {"success": True, "factors": results}
+        return {
+            "success": False,
+            "error": "BULK_FACTOR_PROMOTION_FORBIDDEN",
+            "reason": "ACTIVE requires per-factor sealed evidence, cost/capacity, paper/shadow, and approval",
+            "factors": {fid: rec.lifecycle.value for fid, rec in self._factor_registry._factors.items()},
+        }
 
 
 def create_app(api: ControlPlaneAPI):
