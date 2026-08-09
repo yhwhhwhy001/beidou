@@ -4007,25 +4007,25 @@ class AutonomousEngine:
             if total > approved_qty:
                 return False, "TOTAL_QUANTITY_EXCEEDS_APPROVAL"
             if str(order_type).upper() != str(expected_type).upper():
-            # 执行算法可将 MARKET intent 降级为 LIMIT 切片（更保守），但不允许反向
-            if not (str(expected_type).upper() == "MARKET" and str(order_type).upper() == "LIMIT"):
-                return False, "ORDER_TYPE_MISMATCH"
-        if str(tif or expected_tif).upper() != str(expected_tif).upper():
-            # 紧急平仓使用 IOC，允许偏离 GTC；算法可选择更严格 TIF
-            if not (str(expected_tif).upper() == "GTC" and str(tif or expected_tif).upper() == "IOC"):
-                return False, "TIME_IN_FORCE_MISMATCH"
-        is_limit_slice = str(order_type).upper() == "LIMIT"
-        if str(expected_type).upper() == OrderType.LIMIT.value:
-            if approved_price is None or price_text is None:
-                return False, "LIMIT_PRICE_UNKNOWN"
-            try:
-                if Decimal(str(price_text)) != Decimal(str(approved_price)):
-                    return False, "LIMIT_PRICE_MISMATCH"
-            except (InvalidOperation, TypeError, ValueError):
-                return False, "LIMIT_PRICE_UNKNOWN"
-        elif price_text is not None and not is_limit_slice:
-            # LIMIT 切片可以有价格（从 MARKET intent 降级），非 LIMIT 不应有价格
-            return False, "MARKET_PRICE_UNEXPECTED"
+                # 执行算法可将 MARKET intent 降级为 LIMIT 切片（更保守），但不允许反向
+                if not (str(expected_type).upper() == "MARKET" and str(order_type).upper() == "LIMIT"):
+                    return False, "ORDER_TYPE_MISMATCH"
+            if str(tif or expected_tif).upper() != str(expected_tif).upper():
+                # 紧急平仓使用 IOC，允许偏离 GTC；算法可选择更严格 TIF
+                if not (str(expected_tif).upper() == "GTC" and str(tif or expected_tif).upper() == "IOC"):
+                    return False, "TIME_IN_FORCE_MISMATCH"
+            is_limit_slice = str(order_type).upper() == "LIMIT"
+            if str(expected_type).upper() == OrderType.LIMIT.value:
+                if approved_price is None or price_text is None:
+                    return False, "LIMIT_PRICE_UNKNOWN"
+                try:
+                    if Decimal(str(price_text)) != Decimal(str(approved_price)):
+                        return False, "LIMIT_PRICE_MISMATCH"
+                except (InvalidOperation, TypeError, ValueError):
+                    return False, "LIMIT_PRICE_UNKNOWN"
+            elif price_text is not None and not is_limit_slice:
+                # LIMIT 切片可以有价格（从 MARKET intent 降级），非 LIMIT 不应有价格
+                return False, "MARKET_PRICE_UNEXPECTED"
 
             slice_id = str(slice_client_id)
             if not multi_slice:
