@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -41,45 +42,67 @@ def main() -> int:
     print(f"Reports: {state['report_count']}")
     print(f"Resets: {state['reset_count']}")
 
-    from beidou_certification.unattended import UnattendedCertification
-
-    engine = UnattendedCertification(str(evidence_dir))
-
-    # Load window into engine
-    window = engine.create_window("v1.0")
-    window.window_id = args.window_id
-    window.duration_days = 30
-    engine._windows[args.window_id] = window
-    engine._active_window = window
-
-    # Fast-forward or evaluate
     if args.fast_forward:
+        # Fast-forward remains a framework-only exercise.  It may create a
+        # clearly simulated artifact, but it can never produce a certifying
+        # PASS or satisfy the production evaluator.
+        from beidou_certification.unattended import UnattendedCertification
+
+        engine = UnattendedCertification(str(evidence_dir))
+        window = engine.create_window("v1.0", duration_days=30)
+        window.window_id = args.window_id
+        engine._windows[args.window_id] = window
+        engine._active_window = window
         print("\n⏩ FAST-FORWARD MODE: Simulating 30-day window with historical data...")
         result = engine.fast_forward(args.window_id, duration_days=30)
+        if result.get("status") == "PASS":
+            result["status"] = "NOT_VERIFIABLE"
+        print(f"\nEvaluation: {result.get('status', 'NOT_VERIFIABLE')}")
+        print("Reason: fast-forward evidence is simulation-only and cannot certify G7")
+        return 1
+
+    # Normal evaluation is intentionally read-only.  A new process must not
+    # create an empty in-memory window and accidentally evaluate that instead
+    # of the persisted run.  The producer must have persisted a certificate;
+    # this verifier then checks its semantic binding independently.
+    manifest_path = evidence_dir / f"{args.window_id}-manifest.json"
+    certificate_path = evidence_dir / f"{args.window_id}-g7-certificate.json"
+    if not manifest_path.exists() or not certificate_path.exists():
+        print("\nEvaluation: NOT_VERIFIABLE")
+        print("Reason: persisted G7 manifest and certificate are both required")
+        return 1
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    with open(certificate_path) as f:
+        certificate = json.load(f)
+
+    from beidou_certification.gate_verifier import verify_g7_certificate
+
+    expected_commit = manifest.get("commit", "")
+    expected_g5_hash = manifest.get("g5_certificate_hash", "")
+    verification = verify_g7_certificate(
+        certificate,
+        expected_commit=expected_commit,
+        expected_g5_hash=expected_g5_hash,
+        now=datetime.now(timezone.utc),
+        minimum_days=float(manifest.get("duration_days", 30)),
+    )
+
+    print(f"\nEvaluation: {verification.status}")
+    if verification.failures:
+        print(f"Failures: {', '.join(verification.failures)}")
+
+    if verification.passed:
+        print("\nG7 CERTIFICATE VERIFIED")
+        print(f"  Evidence hash: {certificate.get('evidence_hash', 'N/A')}")
+        print(f"  SLI pass rate: {certificate.get('summary', {}).get('sli_pass_rate', 'N/A')}")
+        print("  Mainnet: PROHIBITED")
     else:
-        result = engine.evaluate(args.window_id)
+        print("\nG7 CERTIFICATION NOT_VERIFIABLE")
+        print("  Persisted evidence must be repaired or the window restarted.")
 
-    print(f"\nEvaluation: {result['status']}")
-    if 'reason' in result:
-        print(f"Reason: {result['reason']}")
-
-    if result['status'] == 'PASS':
-        print(f"\nG7 CERTIFICATE ISSUED")
-        print(f"  Evidence hash: {result.get('evidence_hash', 'N/A')}")
-        print(f"  SLI pass rate: {result.get('summary', {}).get('sli_pass_rate', 'N/A')}")
-        print(f"  Total incidents: {result.get('summary', {}).get('total_incidents', 0)}")
-        print(f"\n  DISCLAIMER: This certificate does NOT grant Mainnet access.")
-        print(f"  G8 requires separate human approval and capital ladder plan.")
-    elif result['status'] == 'FAIL':
-        print(f"\nG7 CERTIFICATION FAILED")
-        print(f"  Reason: {result['reason']}")
-        print(f"  Window must be restarted after fixing root cause.")
-    else:
-        print(f"\nG7 CERTIFICATION NOT_VERIFIABLE")
-        print(f"  Reason: {result['reason']}")
-        print(f"  Continue running unattended until 30 days complete.")
-
-    return 0 if result['status'] == 'PASS' else 1
+    return 0 if verification.passed else 1
 
 
 if __name__ == "__main__":

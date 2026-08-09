@@ -19,6 +19,7 @@ from .engine import (
     create_l4_normal_certification,
     create_l5_champion_certification,
 )
+from .gate_verifier import GateVerification, verify_g5_certificate, verify_g7_certificate
 
 __all__ = [
     "CertificationFramework",
@@ -30,10 +31,13 @@ __all__ = [
     "G7LiveCertification",
     "G8UnattendedCertification",
     "GateCertificate",
+    "GateVerification",
     "ScenarioResult",
     "ScenarioStatus",
     "create_l2_canary_certification",
     "create_l3_ramp_certification",
     "create_l4_normal_certification",
     "create_l5_champion_certification",
+    "verify_g5_certificate",
+    "verify_g7_certificate",
 ]

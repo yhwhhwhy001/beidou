@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -57,16 +56,25 @@ def main() -> int:
     with open(g5_path) as f:
         g5_cert = json.load(f)
 
-    if g5_cert.get("status") != "PASS":
-        print(f"ERROR: G5 certificate status is {g5_cert.get('status')}, expected PASS")
+    # Bind G7 to the exact code and complete Testnet scenario set that
+    # produced G5.  A legacy/demo certificate is not a valid predecessor.
+    import subprocess
+
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    g5_verification = verify_g5_certificate(
+        g5_cert,
+        expected_commit=commit,
+        expected_scenarios=plan.get("scenarios", []),
+        max_notional_usdt=float(plan.get("max_test_notional_usdt", 20)),
+    )
+    if not g5_verification.passed:
+        print(f"ERROR: G5 certificate is not independently verifiable: {g5_verification.failures}")
         return 1
 
     g5_hash = g5_cert.get("evidence_hash", "")
     print(f"G5 Certificate: PASS (hash={g5_hash[:16]}...)")
-
-    # Get commit hash
-    import subprocess
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
     # Create G7 window
     from beidou_certification.unattended import UnattendedCertification

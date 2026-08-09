@@ -297,21 +297,25 @@ class UnattendedCertification:
 
         # PASS — Generate G7 certificate
         evidence_hash = self._compute_evidence_hash(window)
+        ended_at = datetime.now(timezone.utc)
         certificate = {
             "gate": "G7",
             "status": "PASS",
             "window_id": window_id,
             "duration_days": window.duration_days,
             "started_at": window.started_at.isoformat(),
-            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": ended_at.isoformat(),
             "commit": window.commit,
             "g5_certificate_hash": window.g5_certificate_hash,
             "evidence_hash": evidence_hash,
+            "mainnet_prohibited": True,
+            "is_simulated": False,
             "summary": {
                 "total_sli_samples": len(window.sli_samples),
                 "sli_pass_rate": f"{pass_rate:.1%}" if window.sli_samples else "N/A",
                 "total_incidents": len(window.incidents),
                 "p0_incidents": len(p0_incidents),
+                "active_incidents": sum(1 for i in window.incidents if not i.resolved),
                 "total_recoveries": window.total_recovery_count,
                 "daily_reports": len(window.daily_reports),
                 "resets": window.reset_count,
@@ -321,7 +325,7 @@ class UnattendedCertification:
         }
 
         window.status = WindowStatus.COMPLETED
-        window.ended_at = datetime.now(timezone.utc)
+        window.ended_at = ended_at
         self._save_certificate(window_id, certificate)
         return certificate
 
