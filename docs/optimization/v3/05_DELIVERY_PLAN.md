@@ -18,6 +18,7 @@
 - 任何 P0 都持久化 `NO_NEW_RISK`，不把 `/health`、`/ready` 或历史证书当作交易所事实。
 - 当前只读审计已确认旧实例仍在运行且存在陈旧心跳/卡死订单；在确认订单归属与保护前，不执行现有 stop/restart，也不让 KeepAlive 自动拉起新实例。
 - 启动入口已移除基于 PID 的强制 SIGTERM/SIGKILL；重复启动改为锁冲突拒绝，停止动作必须经过新鲜监督证据与进程身份校验。
+- LaunchAgent 已改为未安装的安全模板：直接 `ProgramArguments`、无 `eval`/shell/凭据、`KeepAlive=false`；待受控密钥提供器和独立 watchdog 完成后才可单独授权加载。
 
 ### P1：唯一事实链
 

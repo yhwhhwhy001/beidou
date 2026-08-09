@@ -5,29 +5,48 @@
     <key>Label</key>
     <string>com.beidou.autopilot</string>
 
+    <!--
+      Safety template only.  It is not installed or loaded automatically.
+      Credentials must come from an approved provider; no shell/eval or
+      secret values are embedded in this file.  Missing credentials fail the
+      preflight gate and therefore cannot enable trading.
+    -->
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/zsh</string>
-        <string>-c</string>
-        <string>eval "$(grep '^export BEIDOU_' /Users/maguannan/.zshrc)" &amp;&amp; export BEIDOU_ENV=testnet PYTHONUNBUFFERED=1 &amp;&amp; /opt/homebrew/bin/beidou start</string>
+        <string>/opt/homebrew/bin/beidou</string>
+        <string>start</string>
+        <string>--mode</string>
+        <string>testnet</string>
+        <string>--symbols</string>
+        <string>DEFAULT</string>
+        <string>--no-self-heal</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>/Users/maguannan/beidou</string>
 
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BEIDOU_ENV</key>
+        <string>testnet</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- Never restart a failed/LOCKED process without a governed watchdog. -->
     <key>KeepAlive</key>
-    <true/>
-
+    <false/>
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>30</integer>
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
 
     <key>StandardOutPath</key>
-    <string>/tmp/beidou_launchd.log</string>
-
+    <string>/Users/maguannan/beidou/.beidou/launchd.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/beidou_launchd_err.log</string>
+    <string>/Users/maguannan/beidou/.beidou/launchd.stderr.log</string>
 </dict>
 </plist>

@@ -56,6 +56,10 @@ beidou stop
 重复启动会直接拒绝并保留现有实例；如需停止，必须先由人工确认订单/保护事实，再使用 `beidou stop`。
 `beidou stop` 只有在 PID、最新监督器证据和进程命令身份一致时才发送 `SIGTERM`，避免 PID 复用误杀其他进程。
 
+仓库中的 `deploy/com.beidou.autopilot.plist` 是未安装的安全模板：直接执行固定入口，不经过
+shell/eval，不携带凭据，且 `KeepAlive=false`。在受控密钥提供器、版本化制品、独立 watchdog
+和恢复演练完成前，不得把它加载为无人值守生产服务。
+
 ## 健康与证据
 
 - `/ready`：监督器已授权、无当前 P0/P1 blocker、控制面与新鲜事实满足 readiness；进程 RUNNING 或 HTTP 200 本身不构成 ready。
