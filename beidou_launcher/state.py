@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import signal
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import StartupReport
+
+logger = logging.getLogger(__name__)
 
 
 class InstanceLock:
@@ -124,8 +127,8 @@ class EvidenceWriter:
                     trimmed = lines[-max_lines:]
                     with self.history_path.open("w", encoding="utf-8") as fh:
                         fh.write("\n".join(trimmed) + "\n")
-            except Exception:
-                pass
+            except (OSError, UnicodeError) as exc:
+                logger.warning("supervisor history rotation failed: %s: %s", type(exc).__name__, exc)
             with self.history_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
                 handle.flush()

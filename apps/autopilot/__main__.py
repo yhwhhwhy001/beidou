@@ -184,7 +184,7 @@ def main() -> None:
     # 信号处理
     loop = asyncio.new_event_loop()
 
-    def shutdown():
+    def shutdown() -> None:
         print("\n[autopilot] Received shutdown signal...")
         engine._running = False
 

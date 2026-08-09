@@ -315,7 +315,7 @@ def test_engine_transport_calls_cross_binance_adapter() -> None:
     assert "self._exchange.request" not in source
     assert "self._exchange.reset_circuit_breaker" not in source
     assert "self._adapter.request" in source
-    assert "_api_async(Endpoint.ORDER, method=\"POST\"" not in source
+    assert '_api_async(Endpoint.ORDER, method="POST"' not in source
     assert "self._adapter.create_order" in source
 
 

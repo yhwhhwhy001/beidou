@@ -196,10 +196,26 @@ class TestImmutableLedger:
             transaction_type=LedgerTransactionType.FILL,
             source_event_id=event_id,
             postings=(
-                Posting("p1", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
-                        InstrumentId("BTCUSDT"), MonetaryValue(amount=amount), PostingSide.DEBIT, "buy BTC"),
-                Posting("p2", AccountId("main"), AccountType.POSITION_COST, VenueId("BINANCE"),
-                        InstrumentId("BTCUSDT"), MonetaryValue(amount=amount), PostingSide.CREDIT, "cost basis"),
+                Posting(
+                    "p1",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount=amount),
+                    PostingSide.DEBIT,
+                    "buy BTC",
+                ),
+                Posting(
+                    "p2",
+                    AccountId("main"),
+                    AccountType.POSITION_COST,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount=amount),
+                    PostingSide.CREDIT,
+                    "cost basis",
+                ),
             ),
             correlation_id=CorrelationId(f"corr-{tx_id}"),
         )
@@ -219,13 +235,30 @@ class TestImmutableLedger:
             transaction_id="tx-ub",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
-                        None, MonetaryValue(amount="1000"), PostingSide.DEBIT, ""),
-                Posting("p2", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
-                        None, MonetaryValue(amount="500"), PostingSide.CREDIT, ""),
+                Posting(
+                    "p1",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="1000"),
+                    PostingSide.DEBIT,
+                    "",
+                ),
+                Posting(
+                    "p2",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="500"),
+                    PostingSide.CREDIT,
+                    "",
+                ),
             ),
         )
         import pytest as _pytest
+
         with _pytest.raises(RuntimeError, match="unbalanced"):
             ImmutableLedger().post(unbalanced)
 
@@ -236,6 +269,7 @@ class TestImmutableLedger:
         ledger.post(tx)
         tx2 = self._make_fill_tx("tx-002", "fill-001")  # 相同 event_id
         import pytest as _pytest
+
         with _pytest.raises(RuntimeError, match="duplicate source_event_id"):
             ledger.post(tx2)
 
@@ -276,10 +310,26 @@ class TestImmutableLedger:
             transaction_type=LedgerTransactionType.FEE,
             source_event_id="fee-001",
             postings=(
-                Posting("p1", AccountId("main"), AccountType.FEES, VenueId("BINANCE"),
-                        None, MonetaryValue(amount="10"), PostingSide.DEBIT, "trading fee"),
-                Posting("p2", AccountId("main"), AccountType.CASH, VenueId("BINANCE"),
-                        None, MonetaryValue(amount="10"), PostingSide.CREDIT, "fee deduction"),
+                Posting(
+                    "p1",
+                    AccountId("main"),
+                    AccountType.FEES,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="10"),
+                    PostingSide.DEBIT,
+                    "trading fee",
+                ),
+                Posting(
+                    "p2",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="10"),
+                    PostingSide.CREDIT,
+                    "fee deduction",
+                ),
             ),
         )
         ledger = ImmutableLedger()

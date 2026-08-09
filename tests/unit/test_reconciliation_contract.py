@@ -174,12 +174,22 @@ def test_ledger_persistence_failure_freezes_and_closes_gate() -> None:
         source_event_id="fill-failure",
         postings=(
             Posting(
-                "p1", AccountId("default"), AccountType.CASH, VenueId("BINANCE"),
-                InstrumentId("BTCUSDT"), MonetaryValue(amount="10"), PostingSide.DEBIT,
+                "p1",
+                AccountId("default"),
+                AccountType.CASH,
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                MonetaryValue(amount="10"),
+                PostingSide.DEBIT,
             ),
             Posting(
-                "p2", AccountId("default"), AccountType.POSITION_COST, VenueId("BINANCE"),
-                InstrumentId("BTCUSDT"), MonetaryValue(amount="10"), PostingSide.CREDIT,
+                "p2",
+                AccountId("default"),
+                AccountType.POSITION_COST,
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                MonetaryValue(amount="10"),
+                PostingSide.CREDIT,
             ),
         ),
     )

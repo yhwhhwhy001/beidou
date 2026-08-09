@@ -33,10 +33,7 @@ class PersistentStore:
             # A singleton silently serving another database would split the
             # execution truth across files.  Refuse the ambiguity instead of
             # allowing a second engine to start on stale state.
-            raise RuntimeError(
-                f"PersistentStore already bound to {cls._instance._db_path!r}; "
-                f"requested {db_path!r}"
-            )
+            raise RuntimeError(f"PersistentStore already bound to {cls._instance._db_path!r}; requested {db_path!r}")
         return cls._instance
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -355,9 +352,7 @@ class PersistentStore:
                         f"{transaction.source_event_id!r} already belongs to {existing_id}"
                     )
                 if existing_source != str(transaction.source_event_id or ""):
-                    raise RuntimeError(
-                        f"ledger transaction id {transaction_id} has a different source_event_id"
-                    )
+                    raise RuntimeError(f"ledger transaction id {transaction_id} has a different source_event_id")
                 existing_postings = conn.execute(
                     "SELECT COUNT(*) FROM ledger_postings WHERE transaction_id=?",
                     (transaction_id,),
@@ -436,12 +431,14 @@ class PersistentStore:
         """Return durable journal rows for reconstruction by the domain ledger."""
 
         conn = self._get_conn()
-        transactions = [dict(row) for row in conn.execute(
-            "SELECT * FROM ledger_transactions ORDER BY timestamp, transaction_id"
-        ).fetchall()]
-        postings = [dict(row) for row in conn.execute(
-            "SELECT * FROM ledger_postings ORDER BY transaction_id, posting_id"
-        ).fetchall()]
+        transactions = [
+            dict(row)
+            for row in conn.execute("SELECT * FROM ledger_transactions ORDER BY timestamp, transaction_id").fetchall()
+        ]
+        postings = [
+            dict(row)
+            for row in conn.execute("SELECT * FROM ledger_postings ORDER BY transaction_id, posting_id").fetchall()
+        ]
         by_transaction: dict[str, list[dict[str, Any]]] = {}
         for posting in postings:
             by_transaction.setdefault(str(posting["transaction_id"]), []).append(posting)
@@ -515,7 +512,9 @@ class PersistentStore:
         )
         conn.commit()
 
-    def restore_latest_reconciliation_snapshot(self, account_id: str, venue_id: str, side: str) -> dict[str, Any] | None:
+    def restore_latest_reconciliation_snapshot(
+        self, account_id: str, venue_id: str, side: str
+    ) -> dict[str, Any] | None:
         conn = self._get_conn()
         row = conn.execute(
             "SELECT * FROM reconciliation_snapshots WHERE account_id=? AND venue_id=? AND side=? ORDER BY timestamp DESC, id DESC LIMIT 1",
@@ -573,7 +572,8 @@ class PersistentStore:
                 str(getattr(update, "symbol", "")) or None,
                 str(getattr(getattr(update, "side", None), "value", getattr(update, "side", ""))) or None,
                 str(getattr(getattr(update, "order_type", None), "value", getattr(update, "order_type", ""))) or None,
-                str(getattr(getattr(update, "order_status", None), "value", getattr(update, "order_status", ""))) or None,
+                str(getattr(getattr(update, "order_status", None), "value", getattr(update, "order_status", "")))
+                or None,
                 str(getattr(update, "execution_type", "")) or None,
                 str(getattr(getattr(update, "original_quantity", None), "amount", "")) or None,
                 str(getattr(getattr(update, "cumulative_quantity", None), "amount", "")) or None,

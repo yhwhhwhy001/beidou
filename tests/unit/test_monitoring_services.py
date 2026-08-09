@@ -100,6 +100,8 @@ class TestProtection:
                     protection_id="p1",
                     position_key="BTC",
                     kind="SL",
+                    order_id="algo-1",
+                    status="ACTIVE",
                     origin_trace_id="t1",
                     strategy_id="s1",
                     generation=1,
@@ -112,10 +114,24 @@ class TestProtection:
     def test_duplicate(self):
         ps = [
             ProtectionFact(
-                protection_id="p1", position_key="BTC", kind="SL", origin_trace_id="t1", strategy_id="s1", generation=1
+                protection_id="p1",
+                position_key="BTC",
+                kind="SL",
+                order_id="algo-1",
+                status="ACTIVE",
+                origin_trace_id="t1",
+                strategy_id="s1",
+                generation=1,
             ),
             ProtectionFact(
-                protection_id="p2", position_key="BTC", kind="SL", origin_trace_id="t1", strategy_id="s1", generation=1
+                protection_id="p2",
+                position_key="BTC",
+                kind="SL",
+                order_id="algo-2",
+                status="ACTIVE",
+                origin_trace_id="t1",
+                strategy_id="s1",
+                generation=1,
             ),
         ]
         r = verify_position_protection(
@@ -130,6 +146,21 @@ class TestProtection:
             AccountPositionMode.ONE_WAY,
         )
         assert r.ghost_detected
+
+    def test_local_pending_definition_is_not_venue_coverage(self):
+        r = verify_position_protection(
+            ExchangeEconomicPosition(symbol="BTC", position_amt="1"),
+            [
+                ProtectionFact(
+                    protection_id="local-sl",
+                    position_key="BTC",
+                    kind="SL",
+                    status="CREATED",
+                )
+            ],
+            AccountPositionMode.ONE_WAY,
+        )
+        assert r.missing_sl
 
     def test_build_fail(self):
         r = ProtectionSemanticResult(position_key="BTC")

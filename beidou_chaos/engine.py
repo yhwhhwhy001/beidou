@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 class KillScenario(str, Enum):
@@ -50,7 +51,7 @@ class ChaosExperiment:
 class ChaosEngine:
     """混沌工程引擎。故障注入、自动恢复验证、证据收集。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._register = KillRegister()
         self._experiments: list[ChaosExperiment] = []
 

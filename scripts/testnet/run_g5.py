@@ -99,6 +99,7 @@ def main() -> int:
 
     # 1e: Commit hash
     import subprocess
+
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Commit: {commit}")
 
@@ -134,7 +135,7 @@ def main() -> int:
         print("\n[S1] Server Time Check...")
         try:
             st = await client.get_server_time()
-            if hasattr(st, 'data') and st.data:
+            if hasattr(st, "data") and st.data:
                 server_time = st.data.get("serverTime", 0)
             elif isinstance(st, dict):
                 server_time = st.get("serverTime", 0)
@@ -144,7 +145,7 @@ def main() -> int:
                 print(f"  PASS: serverTime={server_time}")
                 results["server_time"] = {"status": "PASS", "server_time": server_time}
             else:
-                print(f"  FAIL: no serverTime in response")
+                print("  FAIL: no serverTime in response")
                 results["server_time"] = {"status": "FAIL"}
         except Exception as e:
             print(f"  FAIL: {e}")
@@ -154,7 +155,7 @@ def main() -> int:
         print("\n[S2] Account Access Check...")
         try:
             acct = await client.get_account()
-            if hasattr(acct, 'data'):
+            if hasattr(acct, "data"):
                 acct_data = acct.data
             elif isinstance(acct, dict):
                 acct_data = acct
@@ -167,7 +168,7 @@ def main() -> int:
 
             # AC-04: 提款权限检查 (Testnet 提款权限为模拟，不阻断认证)
             if can_withdraw:
-                print(f"  WARN: Testnet account has withdrawal permission (expected on Binance Testnet)")
+                print("  WARN: Testnet account has withdrawal permission (expected on Binance Testnet)")
 
             can_trade_ok = can_trade
             print(f"  canTrade={can_trade} canWithdraw={can_withdraw} balance={total_balance}")
@@ -191,7 +192,7 @@ def main() -> int:
         print("\n[S3] Exchange Info Check...")
         try:
             ei = await client.get_exchange_info("BTCUSDT")
-            if hasattr(ei, 'data'):
+            if hasattr(ei, "data"):
                 ei_data = ei.data
             elif isinstance(ei, dict):
                 ei_data = ei
@@ -217,7 +218,7 @@ def main() -> int:
         print("\n[S4] Position Mode Check...")
         try:
             pm = await client.get_position_mode()
-            if hasattr(pm, 'data'):
+            if hasattr(pm, "data"):
                 pm_data = pm.data
             elif isinstance(pm, dict):
                 pm_data = pm
@@ -235,7 +236,7 @@ def main() -> int:
         print("\n[S5] Open Orders Check...")
         try:
             oo = await client.get_open_orders()
-            if hasattr(oo, 'data'):
+            if hasattr(oo, "data"):
                 oo_data = oo.data
             elif isinstance(oo, list):
                 oo_data = oo
@@ -252,7 +253,7 @@ def main() -> int:
         try:
             positions = []
             acct_full = await client.get_account()
-            if hasattr(acct_full, 'data'):
+            if hasattr(acct_full, "data"):
                 acct_data = acct_full.data
             elif isinstance(acct_full, dict):
                 acct_data = acct_full
@@ -266,12 +267,12 @@ def main() -> int:
 
             balance = acct_data.get("totalWalletBalance", "0")
             print(f"  Balance: {balance}  Positions: {len(positions)}")
-            print(f"  PASS: reconciliation data available")
+            print("  PASS: reconciliation data available")
 
             evidence["account_snapshot"] = {
                 "balance": balance,
                 "positions": positions,
-                "open_orders_count": len(oo_data) if 'oo_data' in dir() else 0,
+                "open_orders_count": len(oo_data) if "oo_data" in dir() else 0,
             }
             results["reconciliation"] = {"status": "PASS", "positions": len(positions)}
         except Exception as e:
@@ -372,7 +373,7 @@ def main() -> int:
         print(f"  FAIL:  {certificate['summary']['fail']}")
         print(f"  N/V:   {certificate['summary']['not_verifiable']}")
         print(f"  Hash:  {evidence_hash[:16]}...")
-        print(f"  Saved: artifacts/evidence/testnet/g5-certificate.json")
+        print("  Saved: artifacts/evidence/testnet/g5-certificate.json")
         print("=" * 60)
 
         return certificate

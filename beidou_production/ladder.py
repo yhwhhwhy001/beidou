@@ -64,7 +64,7 @@ class GateCertificate:
 class ProductionLadder:
     """实盘阶梯管理器。Gate 独立发证，不可跳级。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._certificates: dict[LadderLevel, GateCertificate] = {}
         self._current_level: LadderLevel = LadderLevel.L0_PAPER
 

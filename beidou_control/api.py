@@ -146,11 +146,22 @@ class ControlPlaneAPI:
             )
         # 执行控制面操作
         from beidou_control.plane import ControlAction
+
         try:
             ctrl_action = ControlAction(action)
+            if self._control_plane is None:
+                raise RuntimeError("control_plane not wired")
             self._control_plane.execute_action(ctrl_action)
-        except Exception:
-            pass  # 控制面不可用时报错
+        except Exception as exc:
+            ea = EmergencyAction(
+                action=action,
+                operator=operator,
+                correlation_id=correlation_id,
+                success=False,
+                reason=f"control action failed: {type(exc).__name__}: {exc}",
+            )
+            self._emergency_actions.append(ea)
+            return ea
         ea = EmergencyAction(action=action, operator=operator, correlation_id=correlation_id, success=True)
         self._emergency_actions.append(ea)
         return ea

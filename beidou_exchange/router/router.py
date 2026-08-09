@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from beidou_shared.types import InstrumentId, ResultStatus, VenueId
+from beidou_shared.types import InstrumentId, ResultStatus, VenueId, VenueInstrument
 
-from ..core.protocol import Capability, ExchangeAdapter, VenueInstrument
+from ..core.protocol import Capability, ExchangeAdapter
 
 
 @dataclass

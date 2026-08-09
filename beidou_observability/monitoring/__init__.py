@@ -1,7 +1,10 @@
 """北斗运营保障面 — 监控模块 V1.1。"""
 
+import time
+
 from beidou_observability.monitoring.clock_integrity import ClockIntegrity
 from beidou_observability.monitoring.contracts import *
+from beidou_observability.monitoring.contracts import TraceStage
 from beidou_observability.monitoring.evidence import (
     EvidenceBundle,
     EvidenceRecord,
@@ -46,7 +49,10 @@ def _protection_order_fact(order, *, kind: str, symbol: str):
         protection_id=protection_id,
         position_key=symbol,
         kind=kind,
-        order_id="",
+        # A local ProtectionOrder is only a desired definition until the
+        # venue returns an algo/order id.  Monitoring must never treat a
+        # CREATED/PENDING object as exchange coverage.
+        order_id=str(getattr(order, "exchange_order_id", "") or ""),
         side=str(getattr(getattr(order, "side", None), "value", "") or ""),
         position_side="BOTH",
         quantity=str(getattr(order, "quantity", "") or ""),
@@ -58,9 +64,7 @@ def _protection_order_fact(order, *, kind: str, symbol: str):
     )
 
 
-def _map_trace_stage(order_status: str) -> "TraceStage":
-    from beidou_observability.monitoring.contracts import TraceStage
-
+def _map_trace_stage(order_status: str) -> TraceStage:
     mapping = {
         "NEW": TraceStage.INTENT_CREATED,
         "PARTIALLY_FILLED": TraceStage.EXCHANGE_ACKED,
@@ -93,11 +97,8 @@ def collect_monitoring_checks(
     engine: AutonomousEngine 引用；supervisor: BeidouSupervisor 引用（可为 None）。
     返回 list[beidou_launcher.models.CheckResult]，与监督器检查流直接兼容。
     """
-    import time
-
     # 延迟导入避免初始化期循环依赖（beidou_launcher 已导入本包）
     from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
-
     from beidou_observability.monitoring.checks.account import check_account_unknown, check_balance_sanity
     from beidou_observability.monitoring.checks.execution import OrderTraceState, check_order_trace
     from beidou_observability.monitoring.checks.modules import check_algorithm_probe, check_module_progress
@@ -111,11 +112,9 @@ def collect_monitoring_checks(
         build_reconciliation_check,
         perform_reconciliation,
     )
-    from beidou_observability.monitoring.contracts import (
-        AccountPositionMode as MonAccountPositionMode,
-        CheckSeverity as MonCheckSeverity,
-        ModuleProgressContract,
-    )
+    from beidou_observability.monitoring.contracts import AccountPositionMode as MonAccountPositionMode
+    from beidou_observability.monitoring.contracts import CheckSeverity as MonCheckSeverity
+    from beidou_observability.monitoring.contracts import ModuleProgressContract
 
     def convert(result, *, name: str) -> CheckResult:
         """MonitoringCheckResult → 监督器 CheckResult。"""
@@ -138,6 +137,23 @@ def collect_monitoring_checks(
         )
 
     results: list[CheckResult] = []
+
+    def failure(check_id: str, name: str, severity: CheckSeverity, exc: Exception) -> CheckResult:
+        """Convert a monitoring implementation failure into a blocking fact.
+
+        A missing monitoring result is not a PASS.  Returning an explicit
+        failure keeps the supervisor fail-closed when a collector or semantic
+        verifier cannot execute.
+        """
+
+        return CheckResult(
+            check_id=check_id,
+            name=name,
+            status=CheckStatus.FAIL,
+            severity=severity,
+            message=f"MONITORING_CHECK_ERROR:{type(exc).__name__}:{exc}"[:500],
+            evidence={"error_type": type(exc).__name__},
+        )
 
     # === 1. 账户健康 (MON03/INV-002) ===
     snapshot = exchange_account_snapshot if isinstance(exchange_account_snapshot, dict) else None
@@ -186,8 +202,8 @@ def collect_monitoring_checks(
         ]
         for item in check_module_progress(contracts):
             results.append(convert(item, name="模块进度健康 (INV-004)"))
-    except Exception:
-        pass
+    except Exception as exc:
+        results.append(failure("runtime.monitoring.module_progress", "模块进度健康 (INV-004)", CheckSeverity.P1, exc))
 
     # === 4. 保护覆盖 (PKG-MON-04) ===
     try:
@@ -228,13 +244,15 @@ def collect_monitoring_checks(
                         facts.append(_protection_order_fact(sl, kind="SL", symbol=symbol))
                     for tp in getattr(pp, "take_profits", []) or []:
                         facts.append(_protection_order_fact(tp, kind="TP", symbol=symbol))
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError("local protection projection unavailable") from exc
         for ep in exchange_positions:
             semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
             results.append(convert(build_protection_check(semantic), name="持仓保护覆盖 (PKG-MON-04)"))
-    except Exception:
-        pass
+    except Exception as exc:
+        results.append(
+            failure("runtime.safety.protection_coverage", "持仓保护覆盖 (PKG-MON-04)", CheckSeverity.P0, exc)
+        )
 
     # === 5. 深度对账 (MON03 R1~R6) ===
     try:
@@ -271,8 +289,8 @@ def collect_monitoring_checks(
             local_ledger = getattr(ledger, "_entries", None) if ledger is not None else None
             recon = perform_reconciliation(ex_positions, local_positions, None, None, local_ledger)
             results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
-    except Exception:
-        pass
+    except Exception as exc:
+        results.append(failure("runtime.safety.reconciliation", "深度对账 (MON03 R1~R6)", CheckSeverity.P1, exc))
 
     # === 6. 执行质量 — 订单轨迹 (PKG-MON-05) ===
     try:
@@ -280,7 +298,6 @@ def collect_monitoring_checks(
         if isinstance(order_trackers, dict) and order_trackers:
             active_order_ids = getattr(engine, "_active_order_ids", None) or set()
             order_symbols = getattr(engine, "_order_symbols", None) or {}
-            now_ts = time.time()
             traces = []
             for order_id, tracker in order_trackers.items():
                 if order_id not in active_order_ids:
@@ -305,8 +322,8 @@ def collect_monitoring_checks(
                 )
             for item in check_order_trace(traces):
                 results.append(convert(item, name="订单执行轨迹 (PKG-MON-05)"))
-    except Exception:
-        pass
+    except Exception as exc:
+        results.append(failure("runtime.execution.order_trace", "订单执行轨迹 (PKG-MON-05)", CheckSeverity.P1, exc))
 
     # === 7. 监控自身健康 (PKG-MON-10) ===
     try:
@@ -322,7 +339,7 @@ def collect_monitoring_checks(
             if component_health:
                 for item in check_component_health(component_health):
                     results.append(convert(item, name="监控组件健康 (PKG-MON-10)"))
-    except Exception:
-        pass
+    except Exception as exc:
+        results.append(failure("runtime.monitoring.self_health", "监控组件健康 (PKG-MON-10)", CheckSeverity.P1, exc))
 
     return results

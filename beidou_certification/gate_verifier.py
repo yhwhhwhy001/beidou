@@ -204,11 +204,7 @@ def verify_g7_certificate(
     check("ended_at", ended is not None)
     check("time_order", started is not None and ended is not None and started <= ended)
     check("ended_at_not_future", ended is not None and ended <= reference_now)
-    elapsed_days = (
-        (ended - started).total_seconds() / 86400.0
-        if started is not None and ended is not None
-        else 0.0
-    )
+    elapsed_days = (ended - started).total_seconds() / 86400.0 if started is not None and ended is not None else 0.0
     check("minimum_duration", elapsed_days >= minimum_days)
 
     summary = certificate.get("summary")

@@ -42,7 +42,7 @@ def main() -> int:
     print(f"Plan: {args.plan}")
     print(f"Duration: {args.duration} days")
     print(f"Requires G5: {plan.get('requires_g5', True)}")
-    print(f"Mainnet: PROHIBITED")
+    print("Mainnet: PROHIBITED")
     print(f"Reset conditions: {plan.get('reset_conditions', [])}")
     print(f"Required SLI: {plan.get('required_sli', [])}")
 
@@ -95,12 +95,11 @@ def main() -> int:
     now = datetime.now(timezone.utc)
 
     initial_slis = [
-        SLISample(SLICategory.DATA_QUALITY, 1.0, 0.9, True, now,
-                  {"note": "Initial DQ check — system connected to Testnet"}),
-        SLISample(SLICategory.RECONCILIATION, 1.0, 0.9, True, now,
-                  {"note": "Initial reconciliation — G5 verified"}),
-        SLISample(SLICategory.INCIDENT_CLOSURE, 1.0, 0.8, True, now,
-                  {"note": "No open incidents at window start"}),
+        SLISample(
+            SLICategory.DATA_QUALITY, 1.0, 0.9, True, now, {"note": "Initial DQ check — system connected to Testnet"}
+        ),
+        SLISample(SLICategory.RECONCILIATION, 1.0, 0.9, True, now, {"note": "Initial reconciliation — G5 verified"}),
+        SLISample(SLICategory.INCIDENT_CLOSURE, 1.0, 0.8, True, now, {"note": "No open incidents at window start"}),
     ]
     engine.record_batch_sli(window_id, initial_slis)
 
@@ -125,10 +124,10 @@ def main() -> int:
     print(f"Started: {window.started_at.isoformat()}")
     print(f"Expected completion: {args.duration} days from now")
     print(f"Evidence dir: {evidence_dir}")
-    print(f"\nNext steps:")
-    print(f"  1. System runs unattended in Testnet mode")
-    print(f"  2. SLI samples collected continuously")
-    print(f"  3. Daily reports auto-generated")
+    print("\nNext steps:")
+    print("  1. System runs unattended in Testnet mode")
+    print("  2. SLI samples collected continuously")
+    print("  3. Daily reports auto-generated")
     print(f"  4. After {args.duration} days: python scripts/certification/evaluate_g7.py --window-id {window_id}")
     print(f"\nG7 WINDOW ACTIVE: {window_id}")
     return 0

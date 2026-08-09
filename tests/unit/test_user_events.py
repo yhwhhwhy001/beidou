@@ -182,8 +182,6 @@ def test_account_updates_require_explicit_replay_and_restore_fail_closed(tmp_pat
     )
     assert reauthorized.status is UserProjectionStatus.ACCEPTED
     assert (
-        restored.ingest_account_update(
-            _account_update(event_time=3_000, wallet="1020", position="0.30")
-        ).status
+        restored.ingest_account_update(_account_update(event_time=3_000, wallet="1020", position="0.30")).status
         is UserProjectionStatus.ACCEPTED
     )

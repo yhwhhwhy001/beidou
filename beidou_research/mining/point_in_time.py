@@ -456,8 +456,16 @@ class IsolationValidator:
         # 但如果有重叠且双方都含有 label，则需要检验 label 独立性
         overlap = times_1h & times_5m
         if overlap:
-            labels_1h = {p.label_value for p in group_1h if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()}
-            labels_5m = {p.label_value for p in group_5m if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()}
+            labels_1h = {
+                p.label_value
+                for p in group_1h
+                if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()
+            }
+            labels_5m = {
+                p.label_value
+                for p in group_5m
+                if p.prediction_key.prediction_time in overlap and p.is_valid_for_evaluation()
+            }
             # 如果两个 timeframe 对同一时刻给出不同方向标签，需要确认不是交叉污染
             # 允许不同方向（不同 timeframe 自然有不同信号），但记录告警
             if labels_1h and labels_5m:

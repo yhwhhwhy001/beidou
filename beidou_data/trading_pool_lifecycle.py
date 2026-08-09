@@ -148,9 +148,7 @@ class TradingPool:
         if entry is None or entry.status != PoolStatus.ACTIVE:
             return False
         # BD-FIX: 容量门禁 — capacity_used_pct >= 100% 不可交易
-        if entry.capacity_used_pct >= 100.0:
-            return False
-        return True
+        return not entry.capacity_used_pct >= 100.0
 
     def update_capacity(self, instrument_id: str, notional: float) -> None:
         """BD-FIX: 更新容量使用率。下单时增加，平仓后减少。"""

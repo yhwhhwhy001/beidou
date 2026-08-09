@@ -17,7 +17,6 @@ from typing import Any
 
 from .models import CheckResult, CheckStatus
 
-
 # 7 个 SLI 类别（与 unattended.py SLICategory 对齐）
 SLI_NAMES = [
     "data_quality",
@@ -44,8 +43,9 @@ SLI_THRESHOLDS: dict[str, float] = {
 @dataclass
 class SLISample:
     """单个 SLI 样本。"""
+
     sli_name: str
-    value: float          # 1.0 = PASS, 0.0 = FAIL
+    value: float  # 1.0 = PASS, 0.0 = FAIL
     threshold: float
     observed_at: float = field(default_factory=time.time)
 
@@ -57,6 +57,7 @@ class SLISample:
 @dataclass
 class SLIState:
     """单个 SLI 的滑动窗口状态。"""
+
     name: str
     threshold: float
     samples: deque[SLISample] = field(default_factory=deque)
@@ -144,9 +145,7 @@ class G7LiveTracker:
         # 1. data_quality: market_data + algorithm_probe 状态
         market = check_map.get("runtime.health.market_data")
         probe = check_map.get("runtime.health.algorithm_probe")
-        dq_ok = (market and market.status == CheckStatus.PASS) and (
-            not probe or probe.status != CheckStatus.FAIL
-        )
+        dq_ok = (market and market.status == CheckStatus.PASS) and (not probe or probe.status != CheckStatus.FAIL)
         self._slis["data_quality"].record(1.0 if dq_ok else 0.0)
 
         # 2. order_duplicates: order_trace 检查中是否有重复订单

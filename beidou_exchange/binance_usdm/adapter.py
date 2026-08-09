@@ -321,7 +321,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 order_params: dict[str, Any] = {
                     "symbol": str(request.venue_instrument.instrument_id),
                     "side": request.side.value if hasattr(request.side, "value") else str(request.side),
-                    "type": request.order_type.value if hasattr(request.order_type, "value") else str(request.order_type),
+                    "type": request.order_type.value
+                    if hasattr(request.order_type, "value")
+                    else str(request.order_type),
                     "quantity": str(float(request.quantity.amount)),
                     "timeInForce": (
                         request.time_in_force.value
@@ -365,7 +367,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         order_type=request.order_type,
                         original_quantity=request.quantity,
                         executed_quantity=Quantity(amount=str(result.get("executedQty", "0"))),
-                        average_price=_Price(amount=str(result.get("avgPrice", "0"))) if result.get("avgPrice") else None,
+                        average_price=_Price(amount=str(result.get("avgPrice", "0")))
+                        if result.get("avgPrice")
+                        else None,
                         commission=None,
                         correlation_id=request.correlation_id,
                         raw_response=result,
@@ -736,7 +740,11 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_user_stream_adapter",
             )
         account = raw.get("a")
-        if not isinstance(account, dict) or not isinstance(account.get("B"), list) or not isinstance(account.get("P"), list):
+        if (
+            not isinstance(account, dict)
+            or not isinstance(account.get("B"), list)
+            or not isinstance(account.get("P"), list)
+        ):
             return Result.failure(
                 "User account update missing balance or position arrays",
                 category=ErrorCategory.UNKNOWN,

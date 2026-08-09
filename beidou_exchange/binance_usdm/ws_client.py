@@ -47,8 +47,8 @@ FSTREAM_TESTNET_URL = "wss://demo-fstream.binance.com"
 MAX_STREAMS_PER_CONNECTION = 200  # Binance 单连接流上限
 MAX_MESSAGE_SIZE = 8 * 1024 * 1024
 CONNECT_TIMEOUT = 10.0
-PING_INTERVAL = 60.0            # 客户端主动 ping 周期
-PONG_TIMEOUT = 10.0             # ping 后等待 pong 超时，超时视为死链
+PING_INTERVAL = 60.0  # 客户端主动 ping 周期
+PONG_TIMEOUT = 10.0  # ping 后等待 pong 超时，超时视为死链
 INITIAL_RECONNECT_BACKOFF = 1.0
 MAX_RECONNECT_BACKOFF = 30.0
 
@@ -161,9 +161,7 @@ class WebSocketConnection:
 
         status = await self._read_line()
         if not status.startswith(b"HTTP/1.1 101"):
-            raise WebSocketError(
-                f"handshake rejected: {status.decode('utf-8', 'replace').strip()}"
-            )
+            raise WebSocketError(f"handshake rejected: {status.decode('utf-8', 'replace').strip()}")
         accept: str | None = None
         while True:
             line = await self._read_line()
@@ -314,7 +312,9 @@ class _StreamGroup:
             self._backoff = min(self._backoff * 2, MAX_RECONNECT_BACKOFF)
             logger.info(
                 "ws group %d reconnecting in %.1fs (streams=%d)",
-                self.group_id, wait, len(self._streams),
+                self.group_id,
+                wait,
+                len(self._streams),
             )
             await asyncio.sleep(wait)
         self._set_state(ConnectionState.DISCONNECTED)
@@ -340,7 +340,7 @@ class _StreamGroup:
         while True:
             opcode, payload = await ws.recv_message()
             if opcode == OP_PING:
-                await ws.send_pong(payload)          # 响应服务端 ping
+                await ws.send_pong(payload)  # 响应服务端 ping
             elif opcode == OP_PONG:
                 self._ping_pending = False
             elif opcode == OP_CLOSE:
@@ -506,7 +506,6 @@ class BinanceUsdmWebSocketClient:
         if group.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
             await group._abort_ws()  # 组合流变更需重连生效（突发订阅会在下次连接一并生效）
 
-
     async def unsubscribe(self, stream: str, callback: Callback | None = None) -> bool:
         """取消订阅。callback 为 None 时移除该流全部回调；组空则关闭连接。"""
         group = next((g for g in self._groups if stream in g._streams), None)
@@ -613,9 +612,7 @@ class BinanceUsdmWebSocketClient:
         except Exception:
             logger.exception("ws callback error for stream %s", stream)
 
-    def _on_group_state_changed(
-        self, group: _StreamGroup, old: ConnectionState, new: ConnectionState
-    ) -> None:
+    def _on_group_state_changed(self, group: _StreamGroup, old: ConnectionState, new: ConnectionState) -> None:
         with self._hooks_lock:
             cbs = list(self._state_change_callbacks)
         for cb in cbs:

@@ -118,7 +118,7 @@ _REJECTION_LOG = "evidence/BD-01/rejections.jsonl"
 class ControlPlane:
     """P0 控制面。风险状态、Intent 门禁、版本化持久化。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._action = ControlAction.NO_NEW_RISK
         self._version: int = 0
         self._rejections: list[RejectionRecord] = []

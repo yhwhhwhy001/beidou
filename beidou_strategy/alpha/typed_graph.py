@@ -24,7 +24,6 @@ from typing import Any
 
 from beidou_shared.types import (
     InstrumentId,
-    OrderSide,
     StrategyId,
     VenueId,
 )

@@ -165,8 +165,12 @@ def test_protection_coverage_moved_to_monitoring(algo_ids: list[str], expected_s
 
     # 1. 架构验证：runtime 检查不再包含 protection_coverage
     checks, _ = collect_runtime_checks(
-        engine=engine, mode="testnet", port=9090, resume_authorized=True,
-        algorithm_probe={"ok": True}, last_error_count=0,
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
         exchange_algo_snapshot={"ok": True, "by_symbol": {"BTCUSDT": algo_ids}, "observed_at": time.time()},
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
     )
@@ -177,28 +181,49 @@ def test_protection_coverage_moved_to_monitoring(algo_ids: list[str], expected_s
 
     # 2. 集成验证：monitoring 正确生成 protection_coverage 检查
     mock_sl = SimpleNamespace(
-        protection_id="sl-btc-001", side=SimpleNamespace(value="SELL"),
-        quantity="1.0", trigger_price="50000", status=SimpleNamespace(value="ACTIVE"),
-    )
-    mock_tps = [SimpleNamespace(
-        protection_id=f"tp-btc-{i:03d}", side=SimpleNamespace(value="SELL"),
-        quantity="1.0", trigger_price=f"{60000 + i * 1000}",
+        protection_id="sl-btc-001",
+        side=SimpleNamespace(value="SELL"),
+        quantity="1.0",
+        trigger_price="50000",
         status=SimpleNamespace(value="ACTIVE"),
-    ) for i in range(len(algo_ids))]
-    engine._protection = SimpleNamespace(all_positions=lambda: {
-        "pos-BTCUSDT": SimpleNamespace(
-            instrument_id="BTCUSDT", stop_loss=mock_sl, take_profits=mock_tps,
-            quantity=1.0, side=SimpleNamespace(value="BUY"),
+        exchange_order_id="algo-sl-1",
+    )
+    mock_tps = [
+        SimpleNamespace(
+            protection_id=f"tp-btc-{i:03d}",
+            side=SimpleNamespace(value="SELL"),
+            quantity="1.0",
+            trigger_price=f"{60000 + i * 1000}",
+            status=SimpleNamespace(value="ACTIVE"),
+            exchange_order_id=f"algo-tp-{i}",
         )
-    })
+        for i in range(len(algo_ids))
+    ]
+    engine._protection = SimpleNamespace(
+        all_positions=lambda: {
+            "pos-BTCUSDT": SimpleNamespace(
+                instrument_id="BTCUSDT",
+                stop_loss=mock_sl,
+                take_profits=mock_tps,
+                quantity=1.0,
+                side=SimpleNamespace(value="BUY"),
+            )
+        }
+    )
     pos_evidence = PositionModeEvidence(
-        account_id="test", venue="BINANCE_USDM", mode=AccountPositionMode.ONE_WAY,
-        source="EXCHANGE_USER_DATA", source_timestamp=time.time(), observed_at=time.time(),
+        account_id="test",
+        venue="BINANCE_USDM",
+        mode=AccountPositionMode.ONE_WAY,
+        source="EXCHANGE_USER_DATA",
+        source_timestamp=time.time(),
+        observed_at=time.time(),
     )
     mon_checks = collect_monitoring_checks(
-        engine=engine, supervisor=None,
+        engine=engine,
+        supervisor=None,
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
-        algorithm_probe={"ok": True}, position_mode_evidence=pos_evidence,
+        algorithm_probe={"ok": True},
+        position_mode_evidence=pos_evidence,
     )
     protection_results = [c for c in mon_checks if c.check_id == "runtime.safety.protection_coverage"]
     assert len(protection_results) > 0, "monitoring 子系统应生成 protection_coverage 检查"
@@ -291,8 +316,12 @@ def test_reconciliation_moved_to_monitoring() -> None:
 
     # 1. 架构验证：runtime 检查不再包含 reconciliation
     checks, _ = collect_runtime_checks(
-        engine=engine, mode="testnet", port=9090, resume_authorized=True,
-        algorithm_probe={"ok": True}, last_error_count=0,
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
         exchange_algo_snapshot={"ok": True, "by_symbol": {"BTCUSDT": ["algo-1", "algo-2"]}, "observed_at": time.time()},
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
     )
@@ -303,8 +332,11 @@ def test_reconciliation_moved_to_monitoring() -> None:
 
     # 2. 集成验证：monitoring 正确生成 reconciliation 检查
     mock_protected = SimpleNamespace(
-        instrument_id="BTCUSDT", stop_loss=object(), take_profits=[object()],
-        quantity=1.0, side=SimpleNamespace(value="BUY"),
+        instrument_id="BTCUSDT",
+        stop_loss=object(),
+        take_profits=[object()],
+        quantity=1.0,
+        side=SimpleNamespace(value="BUY"),
     )
     engine._protection = SimpleNamespace(all_positions=lambda: {"pos-BTCUSDT": mock_protected})
     engine._ledger = SimpleNamespace(_entries=[])
@@ -313,7 +345,8 @@ def test_reconciliation_moved_to_monitoring() -> None:
         "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}],
     }
     mon_checks = collect_monitoring_checks(
-        engine=engine, supervisor=None,
+        engine=engine,
+        supervisor=None,
         exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
         algorithm_probe={"ok": True},
     )

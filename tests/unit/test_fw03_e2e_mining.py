@@ -121,9 +121,9 @@ class TestEndToEndMining:
 
     def test_evidence_records_real_validation_gates_and_unbound_manifest_blocks(self):
         """A completed local run must still be blocked without provenance."""
-        result = MiningRunner(
-            PipelineConfig(run_id="gate-evidence", evidence_dir="/tmp/beidou-e2e-gates")
-        ).run(generate_synthetic_ohlcv(n=500, seed=7))
+        result = MiningRunner(PipelineConfig(run_id="gate-evidence", evidence_dir="/tmp/beidou-e2e-gates")).run(
+            generate_synthetic_ohlcv(n=500, seed=7)
+        )
 
         assert result.evidence_bundles
         bundle = result.evidence_bundles[0]

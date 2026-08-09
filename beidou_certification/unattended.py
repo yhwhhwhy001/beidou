@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -49,6 +48,7 @@ class SLICategory(str, Enum):
 @dataclass
 class SLISample:
     """单次 SLI 采样点。"""
+
     category: SLICategory
     value: float
     threshold: float
@@ -60,6 +60,7 @@ class SLISample:
 @dataclass
 class IncidentRecord:
     """事故记录。"""
+
     incident_id: str
     severity: IncidentSeverity
     title: str
@@ -73,6 +74,7 @@ class IncidentRecord:
 @dataclass
 class DailyReport:
     """日报 — 签名绑定 evidence。"""
+
     date: str
     window_id: str
     sli_samples: list[SLISample] = field(default_factory=list)
@@ -85,12 +87,15 @@ class DailyReport:
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def compute_hash(self) -> str:
-        payload = json.dumps({
-            "date": self.date,
-            "sli": [(s.category.value, s.value, s.passed) for s in self.sli_samples],
-            "incidents": (self.incidents_opened, self.incidents_closed),
-            "recoveries": self.total_recovery_count,
-        }, sort_keys=True)
+        payload = json.dumps(
+            {
+                "date": self.date,
+                "sli": [(s.category.value, s.value, s.passed) for s in self.sli_samples],
+                "incidents": (self.incidents_opened, self.incidents_closed),
+                "recoveries": self.total_recovery_count,
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def sign(self) -> str:
@@ -101,6 +106,7 @@ class DailyReport:
 @dataclass
 class CertificationWindow:
     """G7 认证窗口。"""
+
     window_id: str
     plan_version: str
     duration_days: int = 30
@@ -147,8 +153,9 @@ class UnattendedCertification:
 
     # ---- Window Management ----
 
-    def create_window(self, plan_version: str, duration_days: int = 30,
-                      commit: str = "", g5_hash: str = "") -> CertificationWindow:
+    def create_window(
+        self, plan_version: str, duration_days: int = 30, commit: str = "", g5_hash: str = ""
+    ) -> CertificationWindow:
         window_id = f"g7-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         window = CertificationWindow(
             window_id=window_id,
@@ -227,17 +234,16 @@ class UnattendedCertification:
             return None
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        today_samples = [s for s in window.sli_samples
-                         if s.timestamp.strftime("%Y-%m-%d") == today]
+        today_samples = [s for s in window.sli_samples if s.timestamp.strftime("%Y-%m-%d") == today]
 
         report = DailyReport(
             date=today,
             window_id=window_id,
             sli_samples=today_samples,
-            incidents_opened=sum(1 for i in window.incidents
-                                 if i.opened_at.strftime("%Y-%m-%d") == today),
-            incidents_closed=sum(1 for i in window.incidents
-                                 if i.closed_at and i.closed_at.strftime("%Y-%m-%d") == today),
+            incidents_opened=sum(1 for i in window.incidents if i.opened_at.strftime("%Y-%m-%d") == today),
+            incidents_closed=sum(
+                1 for i in window.incidents if i.closed_at and i.closed_at.strftime("%Y-%m-%d") == today
+            ),
             active_incidents=sum(1 for i in window.incidents if not i.resolved),
             total_recovery_count=window.total_recovery_count,
         )
@@ -321,7 +327,7 @@ class UnattendedCertification:
                 "resets": window.reset_count,
             },
             "disclaimer": "G7 Unattended certificate does NOT grant Mainnet access. "
-                          "G8 requires separate human approval and capital ladder plan.",
+            "G8 requires separate human approval and capital ladder plan.",
         }
 
         window.status = WindowStatus.COMPLETED
@@ -394,15 +400,18 @@ class UnattendedCertification:
     # ---- Helpers ----
 
     def _compute_evidence_hash(self, window: CertificationWindow) -> str:
-        payload = json.dumps({
-            "window_id": window.window_id,
-            "duration_days": window.duration_days,
-            "sli_count": len(window.sli_samples),
-            "incident_count": len(window.incidents),
-            "report_count": len(window.daily_reports),
-            "reset_count": window.reset_count,
-            "commit": window.commit,
-        }, sort_keys=True)
+        payload = json.dumps(
+            {
+                "window_id": window.window_id,
+                "duration_days": window.duration_days,
+                "sli_count": len(window.sli_samples),
+                "incident_count": len(window.incidents),
+                "report_count": len(window.daily_reports),
+                "reset_count": window.reset_count,
+                "commit": window.commit,
+            },
+            sort_keys=True,
+        )
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def _save_state(self, window: CertificationWindow) -> None:
@@ -424,16 +433,21 @@ class UnattendedCertification:
     def _save_report(self, window_id: str, report: DailyReport) -> None:
         path = self.evidence_dir / f"{window_id}-report-{report.date}.json"
         with open(path, "w") as f:
-            json.dump({
-                "date": report.date,
-                "window_id": window_id,
-                "sli_count": len(report.sli_samples),
-                "incidents_opened": report.incidents_opened,
-                "incidents_closed": report.incidents_closed,
-                "active_incidents": report.active_incidents,
-                "recoveries": report.total_recovery_count,
-                "report_hash": report.report_hash,
-            }, f, indent=2, default=str)
+            json.dump(
+                {
+                    "date": report.date,
+                    "window_id": window_id,
+                    "sli_count": len(report.sli_samples),
+                    "incidents_opened": report.incidents_opened,
+                    "incidents_closed": report.incidents_closed,
+                    "active_incidents": report.active_incidents,
+                    "recoveries": report.total_recovery_count,
+                    "report_hash": report.report_hash,
+                },
+                f,
+                indent=2,
+                default=str,
+            )
 
     def _save_certificate(self, window_id: str, certificate: dict) -> None:
         path = self.evidence_dir / f"{window_id}-g7-certificate.json"
@@ -444,28 +458,34 @@ class UnattendedCertification:
         return self._windows.get(window_id)
 
     def list_windows(self) -> list[dict]:
-        return [{
-            "window_id": w.window_id,
-            "status": w.status.value,
-            "elapsed_days": w.elapsed_days(),
-            "duration_days": w.duration_days,
-        } for w in self._windows.values()]
+        return [
+            {
+                "window_id": w.window_id,
+                "status": w.status.value,
+                "elapsed_days": w.elapsed_days(),
+                "duration_days": w.duration_days,
+            }
+            for w in self._windows.values()
+        ]
 
     # ---- G7 重置条件检查 ----
 
-    def check_reset_conditions(self, window_id: str,
-                                duplicate_orders: int = 0,
-                                unprotected_duration_seconds: float = 0.0,
-                                ledger_mismatch: bool = False,
-                                evidence_gap: bool = False) -> list[str]:
+    def check_reset_conditions(
+        self,
+        window_id: str,
+        duplicate_orders: int = 0,
+        unprotected_duration_seconds: float = 0.0,
+        ledger_mismatch: bool = False,
+        evidence_gap: bool = False,
+    ) -> list[str]:
         """检查 G7 重置条件 — 任一触发则返回触发原因列表。"""
         triggers: list[str] = []
-        PROTECTION_SLO = 300  # 5 分钟保护 SLO
+        protection_slo = 300  # 5 分钟保护 SLO
 
         if duplicate_orders > 0:
             triggers.append(f"duplicate_orders: {duplicate_orders}")
-        if unprotected_duration_seconds > PROTECTION_SLO:
-            triggers.append(f"unprotected_position: {unprotected_duration_seconds:.0f}s > {PROTECTION_SLO}s SLO")
+        if unprotected_duration_seconds > protection_slo:
+            triggers.append(f"unprotected_position: {unprotected_duration_seconds:.0f}s > {protection_slo}s SLO")
         if ledger_mismatch:
             triggers.append("ledger_mismatch")
         if evidence_gap:

@@ -382,9 +382,7 @@ class MiningRunner:
             # Fold-level train Sharpe is recorded in metrics when available;
             # keep the explicit arrays for the later multi-test report.
             wfo_train_sharpes = [
-                float(r.metrics.get("train_sharpe", 0.0))
-                for r in wfo_result.fold_results
-                if not r.failure_reason
+                float(r.metrics.get("train_sharpe", 0.0)) for r in wfo_result.fold_results if not r.failure_reason
             ]
             wfo_test_sharpes = [r.sharpe for r in wfo_result.fold_results if not r.failure_reason]
             p_value = _correlation_p_value(ic, len(valid_returns))

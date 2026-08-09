@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
-from beidou_observability.monitoring import DeepAuditScheduler, collect_monitoring_checks  # type: ignore[attr-defined]  # re-exported without __all__
-from beidou_safety.execution.recovery import RecoveryEngine
+from beidou_observability.monitoring import (  # type: ignore[attr-defined]  # re-exported without __all__
+    DeepAuditScheduler,
+    collect_monitoring_checks,
+)
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionModeEvidence,
 )
+from beidou_safety.execution.recovery import RecoveryEngine
 
 from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
@@ -24,6 +28,8 @@ from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
 from .state import EvidenceWriter, InstanceLock
+
+logger = logging.getLogger(__name__)
 
 
 class BeidouSupervisor:
@@ -255,19 +261,22 @@ class BeidouSupervisor:
             return result
 
         # P2: 监控指标注入 Prometheus /metrics
-        engine_metrics_fn = getattr(self.engine._health, "_metrics_collector", lambda: {})
+        engine_metrics_fn: Callable[[], dict[str, Any]] = getattr(self.engine._health, "_metrics_collector", lambda: {})
 
         def metrics_with_monitoring() -> dict[str, Any]:
             base = engine_metrics_fn()
             # 监控检查状态指标: 按 check_id 分组
             for item in self.report.checks:
                 safe_id = item.check_id.replace(".", "_").replace("-", "_")
-                base[f"check_{safe_id}"] = {
-                    "PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3
-                }.get(item.status.value, 3)
+                base[f"check_{safe_id}"] = {"PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3}.get(item.status.value, 3)
             # 监督器状态
             base["supervisor_state"] = {
-                "RUNNING": 0, "PAUSED": 1, "DEGRADED": 2, "LOCKED": 3, "FAILED": 4, "STOPPED": 5
+                "RUNNING": 0,
+                "PAUSED": 1,
+                "DEGRADED": 2,
+                "LOCKED": 3,
+                "FAILED": 4,
+                "STOPPED": 5,
             }.get(self.report.supervisor_state, -1)
             # 防抖窗口状态
             base["debounce_window_size"] = len(self._health_debounce.window)
@@ -440,13 +449,14 @@ class BeidouSupervisor:
         # MON08 频率策略：监控结果 → 深度审计调度状态
         from beidou_observability.monitoring.contracts import (
             CheckSeverity as MonCheckSeverity,
+        )
+        from beidou_observability.monitoring.contracts import (
             CheckStatus as MonCheckStatus,
         )
 
         try:
             scheduler_results = [
-                (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value))
-                for item in monitoring_checks
+                (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value)) for item in monitoring_checks
             ]
             open_p0 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P0 for item in monitoring_checks
@@ -455,8 +465,8 @@ class BeidouSupervisor:
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
             self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)  # type: ignore[call-arg,no-untyped-call]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
             "level": self._monitoring_scheduler.level.value,
             "interval_seconds": self._monitoring_scheduler.current_interval,
@@ -603,7 +613,7 @@ class BeidouSupervisor:
 
     # V3 安全语义：运行时的 P0/P1 事实失败全部是 authority blocker。
     # “瞬时”描述只能影响诊断和人工处置，不能绕过新风险写边界。
-    _TRANSIENT_CHECK_IDS = frozenset()
+    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset()
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """底层异常消失后，严格经过 RECOVERING→VALIDATING→ACTIVE。
@@ -734,7 +744,9 @@ class BeidouSupervisor:
                         and not blockers
                     ):
                         from beidou_control.plane import ControlAction
-                        self.engine._control.execute_action(ControlAction.RESUME)
+
+                        if self.engine is not None:
+                            self.engine._control.execute_action(ControlAction.RESUME)
                         print("[supervisor] Safety net: Re-issued RESUME (autorized, no blockers, control was paused)")
                     self.report.supervisor_state = "PAUSED"
                 else:

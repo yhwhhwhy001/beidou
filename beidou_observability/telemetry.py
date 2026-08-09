@@ -152,10 +152,12 @@ class AlertSuppressor:
     def _fingerprint(self, category: str, title: str) -> str:
         """生成稳定指纹: 同category+同根因title(去除时间戳/ID等变化部分)。"""
         import hashlib
+
         # 去除标题中的动态部分 (orderId, 时间戳, 数字)
         import re
-        stable = re.sub(r'\d+', 'N', f"{category}:{title}")
-        return hashlib.md5(stable.encode()).hexdigest()[:12]
+
+        stable = re.sub(r"\d+", "N", f"{category}:{title}")
+        return hashlib.sha256(stable.encode()).hexdigest()[:12]
 
     def should_suppress(self, severity: AlertSeverity, alert_key: str, category: str = "", title: str = "") -> bool:
         if severity in (AlertSeverity.CRITICAL, AlertSeverity.LOCKDOWN):

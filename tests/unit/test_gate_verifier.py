@@ -105,9 +105,7 @@ def test_legacy_g5_certificate_is_not_verifiable() -> None:
 
     assert result.status == "NOT_VERIFIABLE"
     assert not result.passed
-    assert {"commit", "started_at", "ended_at", "scenario_set", "withdraw_permission"}.issubset(
-        set(result.failures)
-    )
+    assert {"commit", "started_at", "ended_at", "scenario_set", "withdraw_permission"}.issubset(set(result.failures))
 
 
 def test_g5_warn_withdraw_and_missing_scenario_block_pass() -> None:
@@ -123,9 +121,7 @@ def test_g5_warn_withdraw_and_missing_scenario_block_pass() -> None:
     result = verify_g5_certificate(certificate, expected_commit="abc123", expected_scenarios=EXPECTED_SCENARIOS)
 
     assert result.status == "NOT_VERIFIABLE"
-    assert {"scenario_set", "scenario_status:rate_limit", "withdraw_permission"}.issubset(
-        set(result.failures)
-    )
+    assert {"scenario_set", "scenario_status:rate_limit", "withdraw_permission"}.issubset(set(result.failures))
 
 
 def test_simulated_g7_certificate_is_not_verifiable() -> None:

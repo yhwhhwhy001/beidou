@@ -234,8 +234,7 @@ class ReconciliationEngine:
             )
         if bal_diff > Decimal("0.5"):
             diffs.append(
-                f"Balance mismatch: system={system_facts.balance.amount} "
-                f"exchange={exchange_facts.balance.amount}"
+                f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount}"
             )
 
         sys_orders = set(system_facts.open_orders)
@@ -326,26 +325,20 @@ class ReconciliationEngine:
                 return ReconciliationResult(
                     matched=False,
                     status=ReconciliationStatus.INCOMPLETE,
-                    differences=[
-                        "INCOMPLETE_FACT: an available source is incomplete before the missing-source gate"
-                    ],
+                    differences=["INCOMPLETE_FACT: an available source is incomplete before the missing-source gate"],
                     system_facts=system_facts,
                     exchange_facts=exchange_facts,
                     event_facts=event_facts,
                     checked_at=checked_at,
                 )
             missing = [
-                name
-                for name, item in zip(("system", "exchange", "event_stream"), facts, strict=True)
-                if item is None
+                name for name, item in zip(("system", "exchange", "event_stream"), facts, strict=True) if item is None
             ]
             return ReconciliationResult(
                 matched=False,
                 status=ReconciliationStatus.ONE_SIDE_MISSING,
                 differences=[
-                    "ONE_SIDE_MISSING: unavailable independent fact source(s) "
-                    + ", ".join(missing)
-                    + " — UNKNOWN"
+                    "ONE_SIDE_MISSING: unavailable independent fact source(s) " + ", ".join(missing) + " — UNKNOWN"
                 ],
                 system_facts=system_facts,
                 exchange_facts=exchange_facts,
@@ -355,9 +348,18 @@ class ReconciliationEngine:
 
         assert system_facts is not None and exchange_facts is not None and event_facts is not None
         pair_results = (
-            ("system/exchange", ReconciliationEngine.compare(system_facts, exchange_facts, max_age=max_age, now=checked_at)),
-            ("system/event_stream", ReconciliationEngine.compare(system_facts, event_facts, max_age=max_age, now=checked_at)),
-            ("exchange/event_stream", ReconciliationEngine.compare(exchange_facts, event_facts, max_age=max_age, now=checked_at)),
+            (
+                "system/exchange",
+                ReconciliationEngine.compare(system_facts, exchange_facts, max_age=max_age, now=checked_at),
+            ),
+            (
+                "system/event_stream",
+                ReconciliationEngine.compare(system_facts, event_facts, max_age=max_age, now=checked_at),
+            ),
+            (
+                "exchange/event_stream",
+                ReconciliationEngine.compare(exchange_facts, event_facts, max_age=max_age, now=checked_at),
+            ),
         )
         for pair_name, pair_result in pair_results:
             if pair_result.status is ReconciliationStatus.ERROR:

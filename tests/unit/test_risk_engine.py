@@ -120,15 +120,9 @@ class TestRiskApproval:
         sig = signer.sign(aid, nonce="nonce-004-preflight")
         import asyncio
 
-        assert asyncio.run(
-            signer.verify(aid, signature=sig, nonce="nonce-004-preflight", consume_nonce=False)
-        )
-        assert asyncio.run(
-            signer.verify(aid, signature=sig, nonce="nonce-004-preflight")
-        )
-        assert not asyncio.run(
-            signer.verify(aid, signature=sig, nonce="nonce-004-preflight")
-        )
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight", consume_nonce=False))
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight"))
+        assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004-preflight"))
 
     def test_verify_tampered_payload_rejected(self):
         """篡改 payload 字段导致签名不匹配。"""

@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from beidou_data.feature_store import FeatureVector
-from beidou_data.klines import KLineGenerator, OHLCV
+from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_data.market import ClosedBarNormalizer, ClosedBarResult
 from beidou_data.quality import DataQualityGate
 from beidou_shared.types import (
@@ -96,7 +96,7 @@ def main() -> int:
     print(f"Loaded {len(raw_klines)} raw kline events")
 
     results1, features1, rh1, fh1 = replay(raw_klines, "BTCUSDT")
-    results2, features2, rh2, fh2 = replay(raw_klines, "BTCUSDT")
+    _, _, rh2, fh2 = replay(raw_klines, "BTCUSDT")
 
     assert rh1 == rh2, f"RESULTS HASH MISMATCH: {rh1} != {rh2}"
     assert fh1 == fh2, f"FEATURES HASH MISMATCH: {fh1} != {fh2}"

@@ -84,9 +84,7 @@ class MarketDataFeed:
             self._kline_generators[key] = gen
         return gen
 
-    def get_generated_klines(
-        self, symbol: str, interval: str = "1h", *, include_current: bool = False
-    ) -> list[OHLCV]:
+    def get_generated_klines(self, symbol: str, interval: str = "1h", *, include_current: bool = False) -> list[OHLCV]:
         """Return generated bars; research features use closed bars by default."""
         gen = self._get_kline_generator(symbol, interval)
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol))
@@ -169,6 +167,7 @@ class MarketDataFeed:
 
             # 启动连接（后台任务）BD-FIX: 保存任务引用以便停止追踪
             import asyncio as _asyncio
+
             self._ws_task = _asyncio.create_task(self._ws_client.run())
             self._ws_active = True
             logger.info("WebSocket started: %s streams for %s symbols", len(symbols) * 3, len(symbols))
@@ -208,9 +207,7 @@ class MarketDataFeed:
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(
-            self._client.request(method, path, signed=signed, params=params or {})
-        )
+        result = loop.run_until_complete(self._client.request(method, path, signed=signed, params=params or {}))
         return self._unwrap_result(result)
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
@@ -304,8 +301,12 @@ class MarketDataFeed:
         orderbook = orderbook_result
 
         if "lastPrice" not in ticker or "bids" not in orderbook:
-            logger.warning("async_update_features incomplete data for %s: has_lastPrice=%s has_bids=%s",
-                           symbol, "lastPrice" in ticker, "bids" in orderbook)
+            logger.warning(
+                "async_update_features incomplete data for %s: has_lastPrice=%s has_bids=%s",
+                symbol,
+                "lastPrice" in ticker,
+                "bids" in orderbook,
+            )
             return {}
 
         self._last_ticker[symbol] = ticker
@@ -415,17 +416,19 @@ class MarketDataFeed:
             close_time = datetime.fromtimestamp(k[6] / 1000, tz=timezone.utc)
             if close_time > now:
                 continue
-            klines.append({
-                "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5]),
-                "close_time": close_time,
-                "quote_volume": float(k[7]),
-                "trades": k[8],
-            })
+            klines.append(
+                {
+                    "open_time": datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                    "close_time": close_time,
+                    "quote_volume": float(k[7]),
+                    "trades": k[8],
+                }
+            )
 
         # 合并 KLineGenerator 实时聚合的 K 线
         gen_klines = self.get_generated_klines(symbol, interval)

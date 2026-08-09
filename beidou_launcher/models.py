@@ -141,15 +141,15 @@ class HealthDebounce:
             return None
 
         # LOCKED: 连续 lock_after 次全部持久阻断
-        if len(recent) >= self.lock_after and all(recent[-self.lock_after:]):
+        if len(recent) >= self.lock_after and all(recent[-self.lock_after :]):
             return "LOCKED"
 
         # DEGRADED: 连续 degrade_after 次全部持久阻断
-        if all(recent[-self.degrade_after:]):
+        if all(recent[-self.degrade_after :]):
             return "DEGRADED"
 
         # 恢复: 连续 recover_after 次全部干净
-        if len(recent) >= self.recover_after and not any(recent[-self.recover_after:]):
+        if len(recent) >= self.recover_after and not any(recent[-self.recover_after :]):
             return "RUNNING"
 
         return None  # 保持当前状态

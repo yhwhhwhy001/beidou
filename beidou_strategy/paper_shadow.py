@@ -175,16 +175,26 @@ class PaperShadowRunner:
             self.metrics.p0_incidents += 1
 
     def record_fill_to_ledger(
-        self, ledger, symbol: str, side: str, qty: float, price: float,
-        fee: float = 0.0, spread_cost: float = 0.0, slippage_cost: float = 0.0
+        self,
+        ledger,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        fee: float = 0.0,
+        spread_cost: float = 0.0,
+        slippage_cost: float = 0.0,
     ) -> str | None:
         """BD-T16: 将 Paper 成交写入复式账本。
 
         包含手续费、价差和滑点成本的分录。
         """
         from beidou_safety.execution.ledger import (
-            AccountType, LedgerTransaction, LedgerTransactionType,
-            Posting, PostingSide,
+            AccountType,
+            LedgerTransaction,
+            LedgerTransactionType,
+            Posting,
+            PostingSide,
         )
         from beidou_shared.types import AccountId, CorrelationId, InstrumentId, MonetaryValue, VenueId
 
@@ -193,25 +203,49 @@ class PaperShadowRunner:
         is_buy = side.upper() == "BUY"
         postings = [
             Posting(
-                f"{tx_id}-1", AccountId("paper"), AccountType.POSITION_COST if is_buy else AccountType.CASH,
-                VenueId("BINANCE"), InstrumentId(symbol),
+                f"{tx_id}-1",
+                AccountId("paper"),
+                AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                VenueId("BINANCE"),
+                InstrumentId(symbol),
                 MonetaryValue(amount=notional),
-                PostingSide.DEBIT, f"Paper {side} {qty} {symbol} @ {price}"
+                PostingSide.DEBIT,
+                f"Paper {side} {qty} {symbol} @ {price}",
             ),
             Posting(
-                f"{tx_id}-2", AccountId("paper"), AccountType.CASH if is_buy else AccountType.POSITION_COST,
-                VenueId("BINANCE"), InstrumentId(symbol),
+                f"{tx_id}-2",
+                AccountId("paper"),
+                AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                VenueId("BINANCE"),
+                InstrumentId(symbol),
                 MonetaryValue(amount=notional),
-                PostingSide.CREDIT, f"Paper {side} {qty} {symbol} @ {price}"
+                PostingSide.CREDIT,
+                f"Paper {side} {qty} {symbol} @ {price}",
             ),
         ]
         # 手续费
         if fee > 0:
             postings += (
-                Posting(f"{tx_id}-fee1", AccountId("paper"), AccountType.FEES, VenueId("BINANCE"),
-                        None, MonetaryValue(amount=str(fee)), PostingSide.DEBIT, "Paper trading fee"),
-                Posting(f"{tx_id}-fee2", AccountId("paper"), AccountType.CASH, VenueId("BINANCE"),
-                        None, MonetaryValue(amount=str(fee)), PostingSide.CREDIT, "Paper fee deduction"),
+                Posting(
+                    f"{tx_id}-fee1",
+                    AccountId("paper"),
+                    AccountType.FEES,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount=str(fee)),
+                    PostingSide.DEBIT,
+                    "Paper trading fee",
+                ),
+                Posting(
+                    f"{tx_id}-fee2",
+                    AccountId("paper"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount=str(fee)),
+                    PostingSide.CREDIT,
+                    "Paper fee deduction",
+                ),
             )
         tx = LedgerTransaction(
             transaction_id=tx_id,

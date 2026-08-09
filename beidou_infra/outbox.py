@@ -132,6 +132,7 @@ class TransactionalOutbox:
 # 当前为内存实现，PG worker 在 docker-compose PostgreSQL 可用时激活。
 # 引擎运行时路径切换：engine.py 中 self._outbox 替换为 OutboxWorker 实例。
 
+
 class OutboxWorker:
     """BD-T08: PG 事务性 Outbox Worker。
 

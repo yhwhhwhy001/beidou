@@ -159,7 +159,11 @@ class IntentOutbox:
         created_at = datetime.fromisoformat(data["created_at"])
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        price = Price(amount=str(data["price"]), decimals=int(data.get("price_decimals", 8))) if data.get("price") is not None else None
+        price = (
+            Price(amount=str(data["price"]), decimals=int(data.get("price_decimals", 8)))
+            if data.get("price") is not None
+            else None
+        )
         correlation_id = data.get("correlation_id")
         return OrderIntent(
             intent_id=str(data["intent_id"]),
@@ -229,9 +233,7 @@ class IntentOutbox:
     def stats(self) -> dict:
         if self._db_path:
             with self._db_lock, self._connect() as conn:
-                counts = conn.execute(
-                    "SELECT state, COUNT(*) AS count FROM intent_outbox GROUP BY state"
-                ).fetchall()
+                counts = conn.execute("SELECT state, COUNT(*) AS count FROM intent_outbox GROUP BY state").fetchall()
             state_counts = {str(row["state"]): int(row["count"]) for row in counts}
             return {
                 "outbox_size": sum(state_counts.values()),
@@ -292,6 +294,7 @@ class IntentOutbox:
             self._dead_letter_count += len(removed)
             self._dead_letter_ids = (self._dead_letter_ids + dropped_ids)[-20:]
             import logging
+
             logger = logging.getLogger("beidou.outbox")
             logger.warning(
                 f"IntentOutbox GROOM: dropped {len(removed)} intents (total dead={self._dead_letter_count}), "
@@ -307,6 +310,7 @@ class IntentOutbox:
                 import os
                 import time
                 from pathlib import Path
+
                 evt = {
                     "event": "outbox_groom_drop",
                     "dropped_count": len(removed),
@@ -327,7 +331,7 @@ class IntentOutbox:
             active_ids = {i.intent_id for i in self._outbox}
             stale = [pid for pid in self._processed if pid not in active_ids]
             excess = len(self._processed) - self._MAX_PROCESSED_RETENTION
-            for pid in stale[:max(0, excess)]:
+            for pid in stale[: max(0, excess)]:
                 self._processed.discard(pid)
 
     def _hash(self, intent: OrderIntent) -> str:
@@ -387,9 +391,7 @@ class IntentOutbox:
 
     def unacked(self) -> list[OrderIntent]:
         if self._db_path:
-            return self._db_intents(
-                (OutboxState.PENDING.value, OutboxState.SENDING.value, OutboxState.UNKNOWN.value)
-            )
+            return self._db_intents((OutboxState.PENDING.value, OutboxState.SENDING.value, OutboxState.UNKNOWN.value))
         # Check both _inbox and _outbox for unprocessed intents
         inbox_unacked = [v for k, v in self._inbox.items() if k not in self._processed]
         outbox_unacked = [i for i in self._memory_outbox if i.intent_id not in self._processed]

@@ -160,9 +160,7 @@ class TestTypedAlphaGraph:
             pass
         else:
             # 不应是 LONG 或 SHORT
-            assert result.side is None, (
-                f"Entry LONG + Filter VETO must be None (NO_ACTION), got {result.side}"
-            )
+            assert result.side is None, f"Entry LONG + Filter VETO must be None (NO_ACTION), got {result.side}"
 
     @pytest.mark.asyncio
     async def test_entry_long_filter_accept_preserves_direction(self, sample_context):

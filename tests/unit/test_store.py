@@ -93,12 +93,22 @@ def test_ledger_source_event_conflict_is_not_silently_ignored(tmp_path):
         source_event_id="fill-1",
         postings=(
             Posting(
-                "p1", AccountId("default"), AccountType.CASH, VenueId("BINANCE"),
-                None, MonetaryValue(amount="1"), PostingSide.DEBIT,
+                "p1",
+                AccountId("default"),
+                AccountType.CASH,
+                VenueId("BINANCE"),
+                None,
+                MonetaryValue(amount="1"),
+                PostingSide.DEBIT,
             ),
             Posting(
-                "p2", AccountId("default"), AccountType.POSITION_COST, VenueId("BINANCE"),
-                None, MonetaryValue(amount="1"), PostingSide.CREDIT,
+                "p2",
+                AccountId("default"),
+                AccountType.POSITION_COST,
+                VenueId("BINANCE"),
+                None,
+                MonetaryValue(amount="1"),
+                PostingSide.CREDIT,
             ),
         ),
     )

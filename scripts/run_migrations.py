@@ -71,9 +71,7 @@ def run_migrations(migrations_dir: str = "migrations", db_url: str | None = None
                 )
                 existing = cur.fetchone()
                 if existing and str(existing[0]) != checksum:
-                    result["errors"].append(
-                        f"{sql_file.name}: checksum mismatch for applied migration {sql_file.stem}"
-                    )
+                    result["errors"].append(f"{sql_file.name}: checksum mismatch for applied migration {sql_file.stem}")
                     break
                 if existing:
                     result["skipped"].append(str(sql_file.name))

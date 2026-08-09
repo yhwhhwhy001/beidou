@@ -64,8 +64,8 @@ def send_alert_if_critical(result: dict) -> None:
     if p0_fails == 0:
         return
     try:
-        from beidou_observability.telemetry import AlertSeverity
         from beidou_core.alerts import AlertDispatcher
+        from beidou_observability.telemetry import AlertSeverity
 
         dispatcher = AlertDispatcher()
         severity = AlertSeverity.CRITICAL if p0_fails >= 3 else AlertSeverity.HIGH
@@ -207,9 +207,11 @@ def run_foreground() -> None:
             result = run_checks_v12()
             p0 = result["p0_fails"]
             health = result["health"]
-            print(f"[monitor_daemon] {datetime.now(timezone.utc).strftime('%H:%M:%S')} "
-                  f"health={health} p0_fails={p0} checks={result['total_checks']} "
-                  f"incidents={result['open_incidents']}")
+            print(
+                f"[monitor_daemon] {datetime.now(timezone.utc).strftime('%H:%M:%S')} "
+                f"health={health} p0_fails={p0} checks={result['total_checks']} "
+                f"incidents={result['open_incidents']}"
+            )
             if result.get("cross_validation"):
                 print(f"[monitor_daemon] ⚠️ 交叉验证失败: {result['cross_validation']}")
             time.sleep(30)

@@ -159,7 +159,7 @@ class ClosedBar:
 
     def audit_key(self) -> str:
         """审计键: venue|symbol|interval|open_time|revision"""
-        return f"{self.venue_instrument.venue_id.value}|{self.venue_instrument.instrument_id.value}|{self.interval}|{self.open_time.isoformat()}|r{self.revision}"
+        return f"{self.venue_instrument.venue_id}|{self.venue_instrument.instrument_id}|{self.interval}|{self.open_time.isoformat()}|r{self.revision}"
 
 
 class BarIntegrity(str, Enum):
@@ -207,7 +207,7 @@ class ClosedBarNormalizer:
         """将原始 KLine 数据规范化为 ClosedBar。"""
         import hashlib
 
-        cid = CorrelationId(f"bar-{venue_instrument.instrument_id.value}-{raw.get('open_time', 'unknown')}")
+        cid = CorrelationId(f"bar-{venue_instrument.instrument_id}-{raw.get('open_time', 'unknown')}")
         try:
             open_time_val = raw.get("open_time")
             close_time_val = raw.get("close_time")
@@ -336,7 +336,7 @@ class BarSequenceValidator:
         Returns:
             BarIntegrity.OK / OUT_OF_ORDER / GAP_DETECTED / STALE
         """
-        symbol = bar.venue_instrument.instrument_id.value
+        symbol = str(bar.venue_instrument.instrument_id)
         last = self._last_open_times.get(symbol)
 
         # Check staleness
@@ -361,7 +361,7 @@ class BarSequenceValidator:
         return BarIntegrity.OK
 
     def _update(self, bar: ClosedBar) -> None:
-        symbol = bar.venue_instrument.instrument_id.value
+        symbol = str(bar.venue_instrument.instrument_id)
         self._last_open_times[symbol] = bar.open_time
         if bar.interval == "1m":
             self._expected_intervals[symbol] = 60.0

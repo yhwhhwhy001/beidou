@@ -857,11 +857,13 @@ class AutonomousEngine:
         )
         # 记录凭证审计日志（sanitized: key 内容不写入日志）
         sanitized_key = "<redacted>" if self._api_key else "<missing>"
-        print(f"[beidou-autopilot] ServiceIdentity: {self._service_identity.service_id} "
-              f"env={self._env_mode.value} "
-              f"credential={self._credential.credential_id} "
-              f"key={sanitized_key} "
-              f"can_withdraw={self._credential.can_withdraw}")
+        print(
+            f"[beidou-autopilot] ServiceIdentity: {self._service_identity.service_id} "
+            f"env={self._env_mode.value} "
+            f"credential={self._credential.credential_id} "
+            f"key={sanitized_key} "
+            f"can_withdraw={self._credential.can_withdraw}"
+        )
 
         # === 凭据生命周期追踪层：轮换登记 + 到期预警 + R9 账户能力 ===
         # 只读叠加层 — 不修改密钥读取/签名流程。
@@ -1048,8 +1050,10 @@ class AutonomousEngine:
             entry.observing_since = _bootstrap_observing_since  # BD-FIX: 满足观察期
             self._trading_pool.try_promote(sym)
             self._trading_pool.activate(sym)
-        print(f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
-              f"(min_observation={_seed_observation_hours}h, seed_since={_bootstrap_observing_since.isoformat()})")
+        print(
+            f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
+            f"(min_observation={_seed_observation_hours}h, seed_since={_bootstrap_observing_since.isoformat()})"
+        )
 
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
@@ -1213,8 +1217,10 @@ class AutonomousEngine:
         if is_production:
             print("[beidou-autopilot] Production mode: factor promotion requires evidence-gated decisions")
         else:
-            print(f"[beidou-autopilot] Non-production mode ({self._env_mode.value}): "
-                  f"promoting registered factors to ACTIVE via gate")
+            print(
+                f"[beidou-autopilot] Non-production mode ({self._env_mode.value}): "
+                f"promoting registered factors to ACTIVE via gate"
+            )
             for fid in all_factor_ids:
                 rec = self._factor_registry.get(fid)
                 if rec is not None and rec.lifecycle != FactorLifecycle.ACTIVE:
@@ -1710,13 +1716,10 @@ class AutonomousEngine:
                 else "UNKNOWN"
             ),
             "reconciliation_matched": bool(
-                self._last_reconciliation_result is not None
-                and self._last_reconciliation_result.matched
+                self._last_reconciliation_result is not None and self._last_reconciliation_result.matched
             ),
             "event_stream_sequence": (
-                self._user_stream_projector.sequencer.last_sequence
-                if hasattr(self, "_user_stream_projector")
-                else None
+                self._user_stream_projector.sequencer.last_sequence if hasattr(self, "_user_stream_projector") else None
             ),
             "event_stream_status": (
                 self._user_stream_projector.sequencer.status.value
@@ -1765,9 +1768,7 @@ class AutonomousEngine:
                     else "UNKNOWN"
                 ),
                 "frozen_reason": (
-                    self._user_stream_projector.frozen_reason
-                    if hasattr(self, "_user_stream_projector")
-                    else None
+                    self._user_stream_projector.frozen_reason if hasattr(self, "_user_stream_projector") else None
                 ),
             },
             "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
@@ -1806,9 +1807,7 @@ class AutonomousEngine:
         trading_factors = set(self._factor_registry.get_active())
         if self._env_mode.value not in ("production", "canary", "live"):
             trading_factors.update(self._factor_registry.get_challengers())
-        active_factor_ids = [
-            fid for fid in trading_factors if fid in self._factor_component_registry
-        ]
+        active_factor_ids = [fid for fid in trading_factors if fid in self._factor_component_registry]
 
         new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
         for fid in active_factor_ids:
@@ -1870,7 +1869,8 @@ class AutonomousEngine:
                         features["ask"] = float(ticker.get("ask", features.get("close", 0)))
                         features["spread_bps"] = (
                             (features["ask"] - features["bid"]) / features["ask"] * 10000
-                            if features["ask"] > 0 else features.get("spread_bps", 1.0)
+                            if features["ask"] > 0
+                            else features.get("spread_bps", 1.0)
                         )
                     else:
                         features = await self._feed.async_update_features(symbol)
@@ -2107,11 +2107,7 @@ class AutonomousEngine:
                     transaction_type=LedgerTransactionType(str(row["transaction_type"])),
                     postings=postings,
                     source_event_id=str(row["source_event_id"] or ""),
-                    correlation_id=(
-                        CorrelationId(str(row["correlation_id"]))
-                        if row["correlation_id"]
-                        else None
-                    ),
+                    correlation_id=(CorrelationId(str(row["correlation_id"])) if row["correlation_id"] else None),
                     timestamp=datetime.fromisoformat(str(row["timestamp"])),
                     is_correction=bool(row["is_correction"]),
                     reverses_transaction_id=str(row["reverses_transaction_id"] or ""),
@@ -2170,8 +2166,7 @@ class AutonomousEngine:
             self._ledger.post(transaction)
         except Exception as exc:
             self._record_execution_fact_failure(
-                f"ledger transaction {transaction.transaction_id} persistence/post failed: "
-                f"{type(exc).__name__}: {exc}"
+                f"ledger transaction {transaction.transaction_id} persistence/post failed: {type(exc).__name__}: {exc}"
             )
             raise
 
@@ -2211,7 +2206,7 @@ class AutonomousEngine:
             print(
                 f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})"
             )
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             return
 
         if not await self._verify_intent_at_send(intent):
@@ -2231,7 +2226,7 @@ class AutonomousEngine:
         MAX_INTENT_RETRIES = 50
         if retries > MAX_INTENT_RETRIES:
             print(f"[order] ❌ Intent {intent.intent_id} DEAD-LETTER after {retries} retries")
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._intent_retry_count.pop(intent.intent_id, None)
             return
 
@@ -2329,7 +2324,7 @@ class AutonomousEngine:
                 )
 
             self._order_trackers[intent.intent_id] = tracker
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
 
             # 记录成交明细（fill price / latency / status）
@@ -2385,7 +2380,7 @@ class AutonomousEngine:
                     f"control plane rejected (state={self._control.get_status().value} v{self._control.version})"
                 )
                 if not intent_acked:
-                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
                 return  # 提前终止 TWAP，不再发送剩余切片
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
@@ -2488,11 +2483,7 @@ class AutonomousEngine:
             return None
         if spread_bps is None:
             spread_bps = 0.0 if is_reduce_only else float("inf")
-        price = (
-            (bid + ask) / 2
-            if bid and ask
-            else float(intent.price.amount) if intent.price else 0.0
-        )
+        price = (bid + ask) / 2 if bid and ask else float(intent.price.amount) if intent.price else 0.0
 
         # 2. 紧急减仓（reduce-only）→ 最高紧急度，强制 EMERGENCY_REDUCE_ONLY
         urgency = 0.9 if is_reduce_only else 0.3
@@ -2587,10 +2578,8 @@ class AutonomousEngine:
         plan = algo.plan(ctx, OrderId(client_id))
 
         if plan.is_canceled:
-            print(
-                f"[order] {order_symbol}: execution plan CANCELED by {plan.algorithm.value}: {plan.cancel_reason}"
-            )
-            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            print(f"[order] {order_symbol}: execution plan CANCELED by {plan.algorithm.value}: {plan.cancel_reason}")
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             return None
 
         if not plan.slices:
@@ -2603,9 +2592,7 @@ class AutonomousEngine:
         # 8. 计划不变量校验（硬滑点/Alpha 剩余/总量上限）
         ok, msg = SliceInvariantChecker.validate_plan(plan, ctx)
         if not ok:
-            print(
-                f"[order] {order_symbol}: plan failed invariants ({msg}) — fallback to direct order"
-            )
+            print(f"[order] {order_symbol}: plan failed invariants ({msg}) — fallback to direct order")
             return _direct_slice(), plan.algorithm, ctx
 
         # 9. 切片 → 交易所参数
@@ -2726,7 +2713,7 @@ class AutonomousEngine:
             self._order_trackers[oid_str] = tracker
             self._order_symbols[oid_str] = order_symbol
             if ack_outbox:
-                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
 
             actual_status = order.get("status", "NEW")
@@ -2763,7 +2750,8 @@ class AutonomousEngine:
             print(f"[order] -4141 DUPLICATE clientOrderId={client_id} — querying existing order")
             try:
                 query_resp = await self._api_async(
-                    Endpoint.ALL_ORDERS, signed=True,
+                    Endpoint.ALL_ORDERS,
+                    signed=True,
                     params={"symbol": order_symbol, "origClientOrderId": client_id},
                 )
                 if isinstance(query_resp, list) and query_resp:
@@ -2778,7 +2766,7 @@ class AutonomousEngine:
                         self._order_trackers[oid_str] = tracker
                         self._order_symbols[oid_str] = order_symbol
                         if ack_outbox:
-                            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
                         self._order_count += 1
                         self._last_order_placed_at = time.time()
                         if actual_status == "FILLED":
@@ -2793,7 +2781,7 @@ class AutonomousEngine:
                 if getattr(self._outbox, "_db_path", None):
                     self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
                 else:
-                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             return None
 
         print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
@@ -3063,9 +3051,7 @@ class AutonomousEngine:
         same_direction = current_qty == 0 or (current_qty > 0) == (signed_delta > 0)
         if same_direction and abs(new_qty) > 1e-12:
             entry_price = (
-                (abs(current_qty) * current_entry + abs(signed_delta) * price) / abs(new_qty)
-                if current_qty
-                else price
+                (abs(current_qty) * current_entry + abs(signed_delta) * price) / abs(new_qty) if current_qty else price
             )
         elif abs(new_qty) > 1e-12:
             # A reversal leaves the residual quantity at the latest fill price.
@@ -3212,9 +3198,7 @@ class AutonomousEngine:
                 self._mark_fill_retryable(order_id, fill_event_id)
             tracker.apply(OrderEvent.UNKNOWN)
             self._active_order_ids.discard(order_id)
-            self._record_execution_fact_failure(
-                f"fill {fill_event_id} commit failed: {type(exc).__name__}: {exc}"
-            )
+            self._record_execution_fact_failure(f"fill {fill_event_id} commit failed: {type(exc).__name__}: {exc}")
             raise
         tracker.apply(OrderEvent.FILLED)
         self._active_order_ids.discard(order_id)
@@ -3402,6 +3386,32 @@ class AutonomousEngine:
                 if not hasattr(self, "_pending_protection_retry"):
                     self._pending_protection_retry: set[str] = set()
                 self._pending_protection_retry.add(pos_id)
+
+            # A filled entry without complete venue-backed protection is not
+            # safe to leave in RESUME.  The retry queue is for governed
+            # recovery only; it is not evidence that the position is covered.
+            active_protection_count = sum(
+                1
+                for p_order in protect_orders
+                if p_order is not None
+                and getattr(getattr(p_order, "status", None), "value", "") == ProtectionStatus.ACTIVE.value
+                and str(getattr(p_order, "exchange_order_id", "") or "")
+            )
+            if active_protection_count < len([p for p in protect_orders if p is not None]):
+                self._block_unowned_protection_orders(
+                    [
+                        f"{pos_id}:PROTECTION_ACK_INCOMPLETE",
+                        *[
+                            str(getattr(p, "protection_id", ""))
+                            for p in protect_orders
+                            if p is not None
+                            and not (
+                                getattr(getattr(p, "status", None), "value", "") == ProtectionStatus.ACTIVE.value
+                                and str(getattr(p, "exchange_order_id", "") or "")
+                            )
+                        ],
+                    ]
+                )
 
         # Update strategy risk on any fill
         account_balance = float(self._last_account.get("totalWalletBalance", 0))
@@ -3608,7 +3618,9 @@ class AutonomousEngine:
         balance_amount = str(opening.get("balance_amount", "0")) if opening else "0"
         balance_currency = str(opening.get("balance_currency", "USDT")) if opening else "USDT"
         balance_decimals = int(opening.get("balance_decimals", 8)) if opening else 8
-        opening_version = str(opening.get("fact_version", "missing-opening-balance")) if opening else "missing-opening-balance"
+        opening_version = (
+            str(opening.get("fact_version", "missing-opening-balance")) if opening else "missing-opening-balance"
+        )
         return AccountFactSnapshot(
             account_id=AccountId("default"),
             venue_id=VenueId("BINANCE"),
@@ -3668,10 +3680,7 @@ class AutonomousEngine:
             venue_id=VenueId("BINANCE"),
             balance=MonetaryValue(amount=str(float(account["totalWalletBalance"]))),
             positions=exchange_positions,
-            open_orders=[
-                str(order["orderId"])
-                for order in open_orders
-            ],
+            open_orders=[str(order["orderId"]) for order in open_orders],
             timestamp=datetime.now(timezone.utc),
             source="BINANCE_ACCOUNT_AND_OPEN_ORDERS",
             fact_version=str(account.get("updateTime", "")),
@@ -3731,8 +3740,10 @@ class AutonomousEngine:
         ctrl_state = self._control.get_status()
         skip_exchange_orders = ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN)
         if skip_exchange_orders:
-            print(f"[protection] Control plane is {ctrl_state.value} — skipping exchange order placement, "
-                  f"local registration will proceed")
+            print(
+                f"[protection] Control plane is {ctrl_state.value} — skipping exchange order placement, "
+                f"local registration will proceed"
+            )
         try:
             account = self._last_account
             if not account or "positions" not in account:
@@ -3765,9 +3776,7 @@ class AutonomousEngine:
                 print("[startup] Conditional-order inventory UNKNOWN; recovery remains read-only")
                 return
             if isinstance(algos_resp, list):
-                known_algo_ids = {
-                    algo_id for ids in self._active_algo_ids.values() for algo_id in ids
-                }
+                known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
                 unowned_algo_ids = [
                     str(item.get("algoId"))
                     for item in algos_resp
@@ -3786,7 +3795,9 @@ class AutonomousEngine:
                 return
 
             if skip_exchange_orders:
-                print(f"[startup] {len(unprotected)} positions without protection — skipping exchange orders (control={ctrl_state.value})")
+                print(
+                    f"[startup] {len(unprotected)} positions without protection — skipping exchange orders (control={ctrl_state.value})"
+                )
 
             print(f"[startup] {len(unprotected)} positions without protection, placing orders...")
             for symbol, data in unprotected.items():
@@ -4190,7 +4201,7 @@ class AutonomousEngine:
                 exchange_symbols.add(sym)
 
         _GHOST_DEBOUNCE_ROUNDS = 3
-        if not hasattr(self, '_ghost_absence_count'):
+        if not hasattr(self, "_ghost_absence_count"):
             self._ghost_absence_count: dict[str, int] = {}
 
         for old_pid, old_pp in list(self._protection.all_positions().items()):
@@ -4204,7 +4215,9 @@ class AutonomousEngine:
                     self._ghost_absence_count.pop(symbol, None)
                     print(f"[nearline] 🧹 Cleaned up ghost position: {symbol} (absent {count} rounds, pos={old_pid})")
                 else:
-                    print(f"[nearline] ⏳ Ghost candidate {symbol}: absent {count}/{_GHOST_DEBOUNCE_ROUNDS} rounds, waiting")
+                    print(
+                        f"[nearline] ⏳ Ghost candidate {symbol}: absent {count}/{_GHOST_DEBOUNCE_ROUNDS} rounds, waiting"
+                    )
             else:
                 # Symbol reappeared — reset counter
                 self._ghost_absence_count.pop(symbol, None)
@@ -4297,7 +4310,9 @@ class AutonomousEngine:
                     self._kernel_mode = KernelMode.TESTNET
                 # BD-FIX: DQ-BLOCK gating — 特征数据质量不可接受时跳过整个 DAG
                 if features.get("n_candles", 0) < 10:
-                    print(f"[nearline] {symbol}: SKIP (DQ BLOCK: insufficient candle data n={features.get('n_candles', 0)})")
+                    print(
+                        f"[nearline] {symbol}: SKIP (DQ BLOCK: insufficient candle data n={features.get('n_candles', 0)})"
+                    )
                     continue
                 try:
                     order = self._alpha_graph.topological_order()
@@ -4308,7 +4323,10 @@ class AutonomousEngine:
                             signal = await comp.generate(context)
                         except Exception as comp_err:
                             from beidou_strategy.alpha import AlphaSignal
-                            print(f"[nearline] {symbol}: DAG[{comp_id}] FAIL-CLOSED: {type(comp_err).__name__}: {comp_err}")
+
+                            print(
+                                f"[nearline] {symbol}: DAG[{comp_id}] FAIL-CLOSED: {type(comp_err).__name__}: {comp_err}"
+                            )
                             # 生成 NO_ACTION 信号，阻断该组件路径但不中断整个 DAG
                             signal = AlphaSignal(
                                 strategy_id=StrategyId("fail_closed"),
@@ -4390,7 +4408,7 @@ class AutonomousEngine:
                         quantity=Quantity(amount=str(close_qty)),
                         price=Price(amount=str(close)),
                         time_in_force=TimeInForce.GTC,
-                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time()*1_000_000)}",
+                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time() * 1_000_000)}",
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
                         idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
                         # P1修复: 平仓不经过 R0-R10 审批（风险降低方向），
@@ -4578,9 +4596,7 @@ class AutonomousEngine:
                     amount=str(float(self._last_account.get("totalWalletBalance", 0)) or 0),
                     currency="USDT",
                 )
-                capital_allocated = self._optimizer.allocate_capital(
-                    [self._autopilot_strategy_id], total_capital
-                )
+                capital_allocated = self._optimizer.allocate_capital([self._autopilot_strategy_id], total_capital)
                 for t in resolved_targets:
                     resolved_qty[f"{t.venue_id}:{t.instrument_id}"] = float(t.target_quantity.amount)
                 cap_str = ", ".join(f"{k}={float(v.amount):.0f}" for k, v in capital_allocated.items())
@@ -4633,7 +4649,9 @@ class AutonomousEngine:
                     if self._strategy_risk.get_state(self._autopilot_strategy_id)
                     else 0.0,
                     "max_drawdown_pct": 20.0,
-                    "daily_loss_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).daily_pnl / max(account_balance, 1) * -100
+                    "daily_loss_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).daily_pnl
+                    / max(account_balance, 1)
+                    * -100
                     if self._strategy_risk.get_state(self._autopilot_strategy_id) and account_balance > 0
                     else 0.0,
                     "max_daily_loss_pct": 5.0,
@@ -4643,7 +4661,9 @@ class AutonomousEngine:
                     if self._drift_detector.is_calibrated()
                     else 0.0,  # P0修复: 未校准时使用中性基线(0.0 >= min_sharpe=0.0)，避免新账户R5 UNKNOWN死锁
                     "min_sharpe_rolling": 0.0,
-                    "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1) if account_balance > 0 else 1.0,
+                    "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1)
+                    if account_balance > 0
+                    else 1.0,
                     "liquidation_price": 0,  # Updated below if available
                     "current_price": price,
                     "protected_positions": sum(
@@ -4672,9 +4692,7 @@ class AutonomousEngine:
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
-                    print(
-                        f"[nearline] {symbol}: SKIP (risk rules failed: {failed_rules})"
-                    )
+                    print(f"[nearline] {symbol}: SKIP (risk rules failed: {failed_rules})")
                     continue
 
                 # === 8. Approval with proper signing ===
@@ -4683,11 +4701,14 @@ class AutonomousEngine:
                 # Compute proper hashes for approval binding
                 proposal_payload = f"{prop['direction'].value}|{prop['fused_strength']}|{prop['fused_confidence']}|{symbol}|{position_size}"
                 proposal_hash = hashlib.sha256(proposal_payload.encode()).hexdigest()[:16]
-                account_hash = hashlib.sha256(f"{account_balance}|{self._protection.position_count()}".encode()).hexdigest()[:16]
+                account_hash = hashlib.sha256(
+                    f"{account_balance}|{self._protection.position_count()}".encode()
+                ).hexdigest()[:16]
                 risk_hash = hashlib.sha256(
                     f"{dyn_leverage}|{risk_context['concentration_pct']}|{risk_context['drawdown_pct']}".encode()
                 ).hexdigest()[:16]
                 import secrets
+
                 nonce = secrets.token_hex(8)
 
                 approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
@@ -4717,11 +4738,14 @@ class AutonomousEngine:
                     print(f"[nearline] {symbol}: SKIP (approval verification failed)")
                     continue
 
-                if self._risk_sm.approve_if_verified(
-                    approval_id,
-                    signature_valid=True,
-                    risk_check_passed=risk_approved,
-                ) != RiskDecision.APPROVED:
+                if (
+                    self._risk_sm.approve_if_verified(
+                        approval_id,
+                        signature_valid=True,
+                        risk_check_passed=risk_approved,
+                    )
+                    != RiskDecision.APPROVED
+                ):
                     print(f"[nearline] {symbol}: SKIP (risk not approved)")
                     continue
 
@@ -4866,8 +4890,9 @@ class AutonomousEngine:
                 if symbol and self._can_write:
                     with contextlib.suppress(Exception):
                         order_result = await self._api_async(
-                            Endpoint.ORDER, signed=True,
-                            params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid}
+                            Endpoint.ORDER,
+                            signed=True,
+                            params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid},
                         )
                         if isinstance(order_result, dict) and "orderId" in order_result:
                             status = order_result.get("status", "UNKNOWN")
@@ -4875,9 +4900,15 @@ class AutonomousEngine:
                                 await self._process_fill(oid, symbol, order_result)
                                 print(f"[sync] 📊 Stale order {oid} ({symbol}) FILLED — processed via _process_fill")
                             else:
-                                self._store.save_order_state(oid, symbol, order_result.get("side", "UNKNOWN"),
-                                    order_result.get("type", "MARKET"), str(order_result.get("origQty", "0")),
-                                    order_result.get("price"), status)
+                                self._store.save_order_state(
+                                    oid,
+                                    symbol,
+                                    order_result.get("side", "UNKNOWN"),
+                                    order_result.get("type", "MARKET"),
+                                    str(order_result.get("origQty", "0")),
+                                    order_result.get("price"),
+                                    status,
+                                )
                                 print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
                             continue
                 # 回退: 无法查询时保留 tracker 以便后续处理，标记为 UNKNOWN
@@ -5118,13 +5149,17 @@ class AutonomousEngine:
                             lifecycle_changed = True
                         elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
                             # BD-T06: 必须通过 FactorPromotionGate，不再直接 promote_to_active
-                            decision = self._factor_gate.promote(record, FactorLifecycle.ACTIVE, falsifier="offline-monitor")
+                            decision = self._factor_gate.promote(
+                                record, FactorLifecycle.ACTIVE, falsifier="offline-monitor"
+                            )
                             if decision.approved:
                                 print(f"[offline] Factor {fid}: PROMOTED TO ACTIVE (ICIR={icir:.3f})")
                                 lifecycle_changed = True
                         elif record.lifecycle == FactorLifecycle.DEGRADED and icir >= 0.3:
                             # BD-T06: 退化恢复也走 Gate — DEGRADED→CHALLENGER（需重新验证）
-                            decision = self._factor_gate.promote(record, FactorLifecycle.CHALLENGER, falsifier="offline-monitor")
+                            decision = self._factor_gate.promote(
+                                record, FactorLifecycle.CHALLENGER, falsifier="offline-monitor"
+                            )
                             if decision.approved:
                                 print(f"[offline] Factor {fid}: RECOVERED to CHALLENGER (ICIR={icir:.3f})")
                                 lifecycle_changed = True
@@ -5216,7 +5251,8 @@ class AutonomousEngine:
                 "order_count": self._order_count,
                 "error_count": self._error_count,
                 "position_count": self._protection.position_count(),
-                "active_factors": len(self._factor_registry.get_active()) + len(self._factor_registry.get_challengers()),
+                "active_factors": len(self._factor_registry.get_active())
+                + len(self._factor_registry.get_challengers()),
                 "ledger_balanced": self._ledger.is_balanced(),
                 "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
                 "lifecycle": str(getattr(self._lifecycle.state, "value", self._lifecycle.state)),
@@ -5324,7 +5360,9 @@ class AutonomousEngine:
                     f"status={cred.status.value}, trading capability revoked (R9)",
                     category="credential",
                 )
-                print(f"[beidou-security] ❌ Credential {cred.credential_id} expired/revoked — trading capability revoked")
+                print(
+                    f"[beidou-security] ❌ Credential {cred.credential_id} expired/revoked — trading capability revoked"
+                )
             elif days_left <= 30.0:
                 health["level"] = "WARNING"
                 health["remediation"] = "rotate_key"
@@ -5472,9 +5510,7 @@ class AutonomousEngine:
         try:
             existing_algos = await self._get_open_algo_inventory()
             if isinstance(existing_algos, list):
-                known_algo_ids = {
-                    algo_id for ids in self._active_algo_ids.values() for algo_id in ids
-                }
+                known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
                 unowned_algo_ids = [
                     str(item.get("algoId"))
                     for item in existing_algos
@@ -5613,9 +5649,10 @@ class AutonomousEngine:
                         self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
                         recovered_protection = self._protection.get_protection(pos_id)
                         candidates = (
-                            ([recovered_protection.stop_loss] if recovered_protection and recovered_protection.stop_loss else [])
-                            + (recovered_protection.take_profits if recovered_protection else [])
-                        )
+                            [recovered_protection.stop_loss]
+                            if recovered_protection and recovered_protection.stop_loss
+                            else []
+                        ) + (recovered_protection.take_profits if recovered_protection else [])
                         for candidate in candidates:
                             if candidate is not None and candidate.protection_id == sub["protection_id"]:
                                 candidate.exchange_order_id = algo_id
@@ -5728,6 +5765,7 @@ class AutonomousEngine:
                 except Exception as exc:
                     self._error_count += 1
                     import traceback as _tb
+
                     print(f"[realtime] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
                     _tb.print_exc()
                 await asyncio.sleep(1)
@@ -5740,6 +5778,7 @@ class AutonomousEngine:
                 except Exception as exc:
                     self._error_count += 1
                     import traceback as _tb
+
                     print(f"[nearline] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
                     _tb.print_exc()
                 await asyncio.sleep(10)
@@ -5752,6 +5791,7 @@ class AutonomousEngine:
                 except Exception as exc:
                     self._error_count += 1
                     import traceback as _tb
+
                     print(f"[offline] LOOP ERROR: {type(exc).__name__}: {exc}", flush=True)
                     _tb.print_exc()
                 await asyncio.sleep(60)

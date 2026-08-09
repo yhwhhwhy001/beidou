@@ -89,8 +89,7 @@ class UserStreamProjector:
         if row is None:
             return
         self._positions = {
-            InstrumentId(str(symbol)): Decimal(str(amount))
-            for symbol, amount in dict(row.get("positions", {})).items()
+            InstrumentId(str(symbol)): Decimal(str(amount)) for symbol, amount in dict(row.get("positions", {})).items()
         }
         balance_amount = row.get("balance_amount")
         balance_currency = row.get("balance_currency")
@@ -129,9 +128,7 @@ class UserStreamProjector:
             cumulative = event.get("cumulative_quantity")
             if order_id and cumulative not in (None, ""):
                 value = Decimal(str(cumulative))
-                self._cumulative_by_order[order_id] = max(
-                    self._cumulative_by_order.get(order_id, Decimal("0")), value
-                )
+                self._cumulative_by_order[order_id] = max(self._cumulative_by_order.get(order_id, Decimal("0")), value)
 
     @property
     def replay_baseline_verified(self) -> bool:
@@ -173,8 +170,7 @@ class UserStreamProjector:
             )
         try:
             self._positions = {
-                InstrumentId(str(symbol)): Decimal(str(quantity.amount))
-                for symbol, quantity in facts.positions.items()
+                InstrumentId(str(symbol)): Decimal(str(quantity.amount)) for symbol, quantity in facts.positions.items()
             }
             if any(not quantity.is_finite() for quantity in self._positions.values()):
                 raise ValueError("replay baseline contains non-finite position")
@@ -333,9 +329,7 @@ class UserStreamProjector:
         )
         balance = self._balances.get("USDT", MonetaryValue(amount="0", currency="USDT"))
         complete = (
-            self._replay_baseline_verified
-            and self._accepted_events_since_replay > 0
-            and "USDT" in self._balances
+            self._replay_baseline_verified and self._accepted_events_since_replay > 0 and "USDT" in self._balances
         )
         source = (
             "BINANCE_USER_STREAM_REPLAY_BASELINE+ACCOUNT_UPDATES"

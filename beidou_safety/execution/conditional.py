@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_shared.types import (
@@ -142,9 +143,7 @@ class PositionManager:
                     "quantity": f"{qty:.3f}",
                     "reduceOnly": "true",
                 }
-                result = await engine._api_async(
-                    Endpoint.ORDER, method="POST", signed=True, params=params
-                )
+                result = await engine._api_async(Endpoint.ORDER, method="POST", signed=True, params=params)
                 if "orderId" in result:
                     executed += 1
                 else:

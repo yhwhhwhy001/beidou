@@ -138,10 +138,15 @@ class StrategyKernel:
     def proposal_hash(self, context: dict) -> str:
         """BD-P0-04: 相同输入产生相同 hash。"""
         import hashlib
-        payload = json.dumps({
-            "mode": self.mode,
-            "context_keys": sorted(context.keys()),
-        }, sort_keys=True, default=str)
+
+        payload = json.dumps(
+            {
+                "mode": self.mode,
+                "context_keys": sorted(context.keys()),
+            },
+            sort_keys=True,
+            default=str,
+        )
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
