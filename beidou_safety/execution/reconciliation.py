@@ -232,7 +232,7 @@ class ReconciliationEngine:
                 exchange_facts=exchange_facts,
                 checked_at=checked_at,
             )
-        if bal_diff > Decimal("0.5"):
+        if bal_diff > Decimal("5.0"):  # 容忍资金费率导致的余额自然波动
             diffs.append(
                 f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount}"
             )
