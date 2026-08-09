@@ -127,6 +127,16 @@ class PersistentStore:
                 invariants_valid INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS trading_pool_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instrument_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'OBSERVING',
+                score REAL DEFAULT 0.0,
+                score_detail TEXT DEFAULT '{}',
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_trading_pool_instrument
+            ON trading_pool_events(instrument_id);
             CREATE TABLE IF NOT EXISTS reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 report_id TEXT UNIQUE NOT NULL,
@@ -1044,6 +1054,34 @@ class PersistentStore:
             d["state_snapshot"] = json.loads(d["state_snapshot"])
             results.append(d)
         return results
+
+    # --- Trading Pool State ---
+
+    def save_trading_pool_event(self, event: dict[str, Any]) -> None:
+        """Persist a trading pool lifecycle event (UPSERT by instrument_id)."""
+        conn = self._get_conn()
+        now = datetime.now(timezone.utc).isoformat()
+        instrument_id = str(event.get("instrument_id", ""))
+        status = str(event.get("status", "OBSERVING"))
+        score = float(event.get("score", 0.0))
+        score_detail = json.dumps(event.get("score_detail", {}))
+        conn.execute(
+            """INSERT INTO trading_pool_events (instrument_id, status, score, score_detail, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(instrument_id) DO UPDATE SET
+               status=excluded.status, score=excluded.score,
+               score_detail=excluded.score_detail, updated_at=excluded.updated_at""",
+            (instrument_id, status, score, score_detail, now),
+        )
+        conn.commit()
+
+    def restore_trading_pool_state(self) -> list[dict[str, Any]]:
+        """Restore persisted trading pool state for engine initialization."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT instrument_id, status, score, score_detail, updated_at FROM trading_pool_events"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --- Reports ---
 
