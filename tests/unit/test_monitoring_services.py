@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from beidou_observability.monitoring.checks.account import check_account_unknown, check_balance_sanity
+from beidou_observability.monitoring.checks.account import (
+    check_account_permissions,
+    check_account_unknown,
+    check_balance_sanity,
+)
 from beidou_observability.monitoring.checks.execution import OrderTraceState, check_order_trace
 from beidou_observability.monitoring.checks.execution import TraceStage as TS
 from beidou_observability.monitoring.checks.factors import FactorState, check_factors
@@ -62,6 +66,33 @@ class TestAccount:
     def test_balance_ok(self):
         assert check_balance_sanity({"totalWalletBalance": "1000"}).status == CheckStatus.PASS
 
+    def test_withdrawal_permission_fails_closed(self):
+        result = check_account_permissions(
+            {
+                "ok": True,
+                "observed_at": time.time(),
+                "account": {"canTrade": True, "canWithdraw": True},
+            }
+        )
+        assert result.status == CheckStatus.FAIL
+        assert result.severity == CheckSeverity.P0
+        assert "withdrawal" in result.message.lower()
+
+    def test_missing_permission_fact_fails_closed(self):
+        result = check_account_permissions({"ok": True, "observed_at": time.time(), "account": {"canTrade": True}})
+        assert result.status == CheckStatus.FAIL
+        assert result.severity == CheckSeverity.P0
+
+    def test_valid_permissions_pass(self):
+        result = check_account_permissions(
+            {
+                "ok": True,
+                "observed_at": time.time(),
+                "account": {"canTrade": True, "canWithdraw": False},
+            }
+        )
+        assert result.status == CheckStatus.PASS
+
 
 # PKG-MON-03 Reconciliation
 class TestReconciliation:
@@ -82,6 +113,16 @@ class TestReconciliation:
 
     def test_build_pass(self):
         assert build_reconciliation_check(ReconciliationResult(matched=5)).status == CheckStatus.PASS
+
+    def test_unsupported_fact_source_fails_closed(self):
+        result = build_reconciliation_check(ReconciliationResult(matched=5, unsupported=1))
+        assert result.status == CheckStatus.FAIL
+        assert result.severity == CheckSeverity.P0
+
+    def test_unknown_fact_fails_closed(self):
+        result = build_reconciliation_check(ReconciliationResult(matched=1, unknown=1))
+        assert result.status == CheckStatus.FAIL
+        assert result.severity == CheckSeverity.P0
 
 
 # PKG-MON-04 Protection
@@ -180,6 +221,17 @@ class TestOrderTrace:
     def test_healthy(self):
         t = OrderTraceState(correlation_id="c1", client_order_id="o1", current_stage=TS.TERMINAL)
         assert all(c.status != CheckStatus.FAIL for c in check_order_trace([t]))
+
+    def test_duplicate_identity_fails_closed(self):
+        t = OrderTraceState(
+            correlation_id="c1",
+            client_order_id="o1",
+            current_stage=TS.EXCHANGE_ACKED,
+            duplicate_count=1,
+        )
+        checks = check_order_trace([t])
+        assert checks and checks[0].status == CheckStatus.FAIL
+        assert checks[0].severity == CheckSeverity.P0
 
 
 # PKG-MON-06 Module Progress

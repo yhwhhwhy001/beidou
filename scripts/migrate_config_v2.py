@@ -19,10 +19,14 @@ def main():
             cfg = yaml.safe_load(f) or {}
         # Validate no plaintext keys
         ex = cfg.get("exchange", {}).get("binance_usdm", {})
+        plaintext_fields = []
         if "api_key" in ex and ex["api_key"] and len(str(ex["api_key"])) > 10:
-            pass
+            plaintext_fields.append("api_key")
         if "api_secret" in ex and ex["api_secret"] and len(str(ex["api_secret"])) > 10:
-            pass
+            plaintext_fields.append("api_secret")
+        if plaintext_fields:
+            print(f"拒绝配置：发现明文凭据字段 {', '.join(plaintext_fields)}", file=sys.stderr)
+            return 1
         return 0
     return 0
 

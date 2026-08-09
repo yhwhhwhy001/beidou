@@ -11,8 +11,10 @@ import hashlib
 import hmac
 import json
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import (
@@ -208,9 +210,21 @@ class BinanceRESTClient:
         """创建用户数据流 listenKey。"""
         return await self._request("POST", Endpoint.LISTEN_KEY, signed=True)
 
-    async def keepalive_listen_key(self) -> Result[dict]:
-        """续期 listenKey。"""
-        return await self._request("PUT", Endpoint.LISTEN_KEY, signed=True)
+    async def keepalive_listen_key(self, listen_key: str | None = None) -> Result[dict]:
+        """续期 listenKey；缺少 key 时显式 UNKNOWN，不发送无效请求。"""
+
+        if not str(listen_key or "").strip():
+            return Result.failure(
+                "listenKey is required for keepalive",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_user_stream",
+            )
+        return await self._request(
+            "PUT",
+            Endpoint.LISTEN_KEY,
+            signed=True,
+            params={"listenKey": str(listen_key)},
+        )
 
     # === 通用请求（兼容遗留 _api 调用） ===
 
@@ -229,12 +243,13 @@ class BinanceRESTClient:
         验证: 读余额、读仓位、读挂单、交易权限、无提款权限、IP白名单、时钟偏差。
         任一失败返回 FAIL。
         """
-        capabilities = {
+        capabilities: dict[str, Any] = {
             "can_read_balance": False,
             "can_read_positions": False,
             "can_read_orders": False,
             "can_trade": False,
-            "can_withdraw": False,  # Futures API key should never have withdraw — assume False
+            "can_withdraw": None,
+            "exchange_info_available": False,
             "ip_whitelisted": False,
             "clock_skew_ms": 0,
         }
@@ -249,25 +264,33 @@ class BinanceRESTClient:
         # 2. 账户信息
         account = await self.get_account()
         if account.is_success():
-            capabilities["can_read_balance"] = "totalWalletBalance" in account.data
-            capabilities["can_read_positions"] = "positions" in account.data
+            account_data = account.data if isinstance(account.data, dict) else {}
+            capabilities["can_read_balance"] = "totalWalletBalance" in account_data or "assets" in account_data
+            capabilities["can_read_positions"] = "positions" in account_data
+            venue_can_trade = account_data.get("canTrade")
+            if isinstance(venue_can_trade, bool):
+                capabilities["can_trade"] = venue_can_trade
+            venue_can_withdraw = account_data.get("canWithdraw")
+            # Missing/non-boolean permission facts are UNKNOWN, never safe.
+            capabilities["can_withdraw"] = venue_can_withdraw if isinstance(venue_can_withdraw, bool) else None
 
         # 3. 挂单查询
         orders = await self.get_open_orders()
         capabilities["can_read_orders"] = isinstance(orders.data, list)
 
-        # 4. 交易权限（通过 exchangeInfo 验证）
+        # 4. 交易规则可用性（账户 canTrade 仍是权威权限事实）
         exchange_info = await self.get_exchange_info()
         if exchange_info.is_success():
-            capabilities["can_trade"] = True
+            capabilities["exchange_info_available"] = True
 
         all_ok = all(
             [
                 capabilities["can_read_balance"],
                 capabilities["can_read_positions"],
                 capabilities["can_read_orders"],
-                capabilities["can_trade"],
-                not capabilities["can_withdraw"],
+                capabilities["can_trade"] is True,
+                capabilities["can_withdraw"] is False,
+                capabilities.get("exchange_info_available") is True,
                 abs(capabilities["clock_skew_ms"]) < 5000,
             ]
         )
@@ -275,9 +298,11 @@ class BinanceRESTClient:
         return (
             Result.ok(capabilities)
             if all_ok
-            else Result.fail(
-                ErrorCategory.UNKNOWN,
+            else Result.failure(
                 f"Account capability check failed: {capabilities}",
+                category=ErrorCategory.UNKNOWN,
+                raw=capabilities,
+                source="binance_account_capability",
             )
         )
 
@@ -340,7 +365,13 @@ class BinanceRESTClient:
 
             except urllib.error.HTTPError as e:
                 http_status = e.code
-                error_body = e.read().decode() if e.fp else ""
+                try:
+                    error_body = e.read().decode() if e.fp else ""
+                finally:
+                    # HTTPError owns the temporary response file.  Close it
+                    # on every retry/failure path so a long-running worker
+                    # cannot accumulate unclosed 4xx/5xx response handles.
+                    e.close()
 
                 binance_code = 0
                 try:
@@ -352,9 +383,22 @@ class BinanceRESTClient:
                 category, retryable = classify_http_error(http_status, "", binance_code)
 
                 if category == ErrorCategory.RATE_LIMIT:
-                    retry_after = int(e.headers.get("Retry-After", 1 * (attempt + 1)))
-                    await asyncio.sleep(retry_after)
-                    continue
+                    # Retry-After is advisory; malformed values must not turn
+                    # a venue rate-limit response into a generic NETWORK
+                    # result after the retry budget is exhausted.
+                    retry_after_raw = e.headers.get("Retry-After", attempt + 1)
+                    try:
+                        retry_after = max(0.0, float(retry_after_raw))
+                    except (TypeError, ValueError):
+                        retry_after = float(attempt + 1)
+                    if attempt < self._max_retries - 1:
+                        await asyncio.sleep(retry_after)
+                        continue
+                    self._rate_state.consecutive_failures += 1
+                    if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                        self._rate_state.circuit_open = True
+                        self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
+                    return Result.fail(category, error_body[:200] or "Rate limit response", code=http_status)
 
                 if retryable and attempt < self._max_retries - 1:
                     wait = 0.5 * (2**attempt)
@@ -379,8 +423,32 @@ class BinanceRESTClient:
 
 
 def _sync_urlopen(req: urllib.request.Request, timeout: int) -> bytes:
-    """同步 HTTP 请求 — 供 asyncio.to_thread 在线程池中调用。"""
-    import urllib.request
+    """同步 HTTP 请求 — 供 asyncio.to_thread 在线程池中调用。
 
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    Binance Testnet may return large ``exchangeInfo``/account payloads through
+    an HTTP/1.1 intermediary whose advertised ``Content-Length`` is not fully
+    delivered to ``urllib``.  ``httpx`` handles the compressed/chunked response
+    framing and preserves the same request boundary; convert HTTP failures back
+    to ``urllib.error.HTTPError`` so the existing error taxonomy remains the
+    single classifier.
+    """
+
+    import httpx
+
+    headers = dict(req.header_items())
+    method = req.get_method().upper()
+    body = req.data
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, http2=False) as client:
+            response = client.request(method, req.full_url, headers=headers, content=body)
+    except httpx.HTTPError:
+        raise
+    if response.status_code >= 400:
+        raise urllib.error.HTTPError(
+            req.full_url,
+            response.status_code,
+            response.reason_phrase,
+            dict(response.headers),
+            BytesIO(response.content),
+        )
+    return response.content

@@ -31,9 +31,6 @@ class FactorEnsemble:
     首期禁止直接将不可解释深度模型输出作为 Live 方向信号。
     """
 
-    def __init__(self) -> None:
-        pass
-
     def equal_risk_contribution(
         self,
         factor_returns: dict[str, list[float]],

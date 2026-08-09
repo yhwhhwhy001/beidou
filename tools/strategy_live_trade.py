@@ -35,11 +35,17 @@ with open(os.path.join(os.path.dirname(__file__), "..", "config", "env.testnet.y
 
 REST_URL = cfg["exchange"]["binance_usdm"]["rest_base_url"]
 RECV_WINDOW = cfg["exchange"]["binance_usdm"]["recv_window_ms"]
-API_KEY = os.environ.get("BEIDOU_BINANCE_API_KEY", "").strip() or str(cfg["exchange"]["binance_usdm"].get("api_key_ref", "")).strip()
-API_SECRET = os.environ.get("BEIDOU_BINANCE_API_SECRET", "").strip() or str(cfg["exchange"]["binance_usdm"].get("api_secret_ref", "")).strip()
+API_KEY = (
+    os.environ.get("BEIDOU_BINANCE_API_KEY", "").strip()
+    or str(cfg["exchange"]["binance_usdm"].get("api_key_ref", "")).strip()
+)
+API_SECRET = (
+    os.environ.get("BEIDOU_BINANCE_API_SECRET", "").strip()
+    or str(cfg["exchange"]["binance_usdm"].get("api_secret_ref", "")).strip()
+)
 
 if len(API_KEY) < 10:
-    print("❌ 缺少 API Key，请设置环境变量 BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET")
+    print("❌ 缺少 API Key，请设置环境变量 BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET")  # noqa: T201
     sys.exit(1)
 
 
@@ -91,7 +97,7 @@ def check(name, ok, detail=""):
     line = f"  {icon} [{tag}] S{step_no:02d} {name}"
     if detail:
         line += f"  |  {detail}"
-    print(line, flush=True)
+    print(line, flush=True)  # noqa: T201
     if ok:
         passed += 1
     else:

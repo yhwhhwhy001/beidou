@@ -222,9 +222,10 @@ def main() -> int:
     errors = [f for f in findings if f.category in _BLOCKING_CATEGORIES]
 
     if findings:
-        for _cat, cat_findings in sorted(categories.items()):
+        for cat, cat_findings in sorted(categories.items()):
             for f in sorted(cat_findings, key=lambda x: (x.file, x.line)):
-                pass
+                severity = "ERROR" if f in errors else "WARN"
+                print(f"{severity} [{cat}] {f.file}:{f.line}: {f.message}")
     else:
         return 0
 

@@ -8,11 +8,13 @@ from beidou_research.mining.evaluation.cost_capacity import (
     CapacityEvaluator,
     CostModel,
 )
+from beidou_research.mining.evaluation.cpcv import CPCVConfig, CPCVEvaluator
 from beidou_research.mining.evaluation.fast_screen import FastScreen
 from beidou_research.mining.evaluation.multiple_testing import (
     benjamini_hochberg,
     compute_pbo,
     deflated_sharpe_ratio,
+    evaluate_multiple_testing,
     holm_correction,
 )
 from beidou_research.mining.evaluation.purged_walk_forward import (
@@ -172,6 +174,34 @@ class TestPBO:
         assert pbo.rank_correlation < 0
 
 
+class TestMultipleTestingGate:
+    def test_incomplete_pbo_evidence_cannot_pass(self):
+        result = evaluate_multiple_testing(
+            pvalues=[0.001] * 8,
+            observed_sharpe=3.0,
+            n_trials=8,
+            in_sample_sharpes=[1.0] * 8,
+            out_of_sample_sharpes=[1.0] * 8,
+            candidate_index=0,
+        )
+
+        assert result.verdict == "NOT_VERIFIABLE"
+        assert any("pbo_comparisons_insufficient" in reason for reason in result.failure_reasons)
+
+    def test_complete_multiple_testing_evidence_can_pass(self):
+        result = evaluate_multiple_testing(
+            pvalues=[0.0001, 0.0002, 0.0003],
+            observed_sharpe=3.0,
+            n_trials=3,
+            in_sample_sharpes=list(range(1, 17)),
+            out_of_sample_sharpes=list(range(1, 17)),
+            candidate_index=0,
+        )
+
+        assert result.verdict == "PASS"
+        assert not result.failure_reasons
+
+
 # ================================================================
 # Purged Walk-Forward
 # ================================================================
@@ -227,6 +257,83 @@ class TestPurgedWalkForward:
         for fold in folds:
             assert fold.train_start < fold.train_end
             assert fold.test_start < fold.test_end
+
+    def test_nonzero_label_horizon_keeps_oos_samples(self):
+        config = FoldConfig(
+            n_folds=5,
+            min_train_samples=20,
+            min_test_samples=10,
+            min_folds_for_verdict=5,
+        )
+        pfo = PurgedWalkForward(config)
+        times = [datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i) for i in range(600)]
+        end_times = [t + timedelta(hours=4) for t in times]
+
+        fold_counter = [0]
+
+        def evaluator(train_indices, test_indices):
+            from beidou_research.mining.evaluation.purged_walk_forward import FoldResult
+
+            fold_counter[0] += 1
+            return FoldResult(
+                fold_id=0,
+                train_samples=len(train_indices),
+                test_samples=len(test_indices),
+                ic_mean=0.2 + fold_counter[0] * 0.01,
+                sharpe=1.0,
+            )
+
+        result = pfo.run(
+            times,
+            end_times,
+            total_duration_days=25.0,
+            evaluator=evaluator,
+            label_horizon_days=4 / 24,
+        )
+
+        assert result.n_folds_completed == 5
+        assert all(f.test_sample_count > 0 for f in result.folds)
+        assert result.gate_result.value == "PASS"
+
+
+class TestCPCV:
+    def test_all_test_blocks_are_purged_and_path_count_is_explicit(self):
+        evaluator = CPCVEvaluator(
+            CPCVConfig(
+                n_groups=8,
+                n_test_groups=2,
+                purge_bars=2,
+                embargo_bars=2,
+                min_train_samples=20,
+                min_paths_for_verdict=20,
+            )
+        )
+        n = 800
+        labels = [i // 100 for i in range(n)]
+        paths = evaluator.generate_paths(n, labels)
+
+        assert len(paths) >= 20
+        for path in paths:
+            for test_index in path.test_indices:
+                assert all(abs(train_index - test_index) > 2 for train_index in path.train_indices)
+
+    def test_fewer_than_required_paths_is_unverifiable(self):
+        evaluator = CPCVEvaluator(
+            CPCVConfig(
+                n_groups=4,
+                n_test_groups=2,
+                min_train_samples=10,
+                min_paths_for_verdict=20,
+            )
+        )
+        predictions = [float(i % 7) for i in range(200)]
+        returns = [float(i % 7) for i in range(200)]
+        labels = [i // 50 for i in range(200)]
+
+        result = evaluator.evaluate(predictions, returns, group_labels=labels)
+
+        assert result.gate_result.value == "UNVERIFIABLE"
+        assert result.n_paths < 20
 
 
 # ================================================================

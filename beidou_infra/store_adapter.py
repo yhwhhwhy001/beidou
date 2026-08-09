@@ -128,32 +128,35 @@ class SQLiteBackend(StorageBackend):
 class PostgresBackend(StorageBackend):
     """PostgreSQL 后端 — Testnet/Production。
 
-    使用连接池，事务支持，advisory lock。
+    使用单个显式连接；事务支持由调用边界控制。
+
+    ``psycopg`` 与 ``psycopg_pool`` 是不同发行包，运行时不能假设
+    ``psycopg.ConnectionPool`` 存在。正式引擎使用
+    ``PostgresPersistentStore``；这个兼容接口也必须保持可用且 fail-closed。
     """
 
     def __init__(self, dsn: str = ""):
         self._dsn = dsn
-        self._pool = None
+        self._conn = None
 
     def connect(self, connection_string: str = "") -> bool:
         try:
             import psycopg
 
             self._dsn = connection_string or self._dsn
-            self._pool = psycopg.ConnectionPool(
-                self._dsn,
-                min_size=2,
-                max_size=10,
-            )
+            if not self._dsn:
+                return False
+            self._conn = psycopg.connect(self._dsn, autocommit=True)
+            self._conn.execute("SELECT 1")
             return True
         except Exception:
+            self.close()
             return False
 
     def execute(self, sql: str, params: tuple | None = None) -> Any:
-        if not self._pool:
+        if not self._conn:
             raise RuntimeError("PostgresBackend not connected")
-        with self._pool.connection() as conn:
-            return conn.execute(sql, params or ())
+        return self._conn.execute(sql, params or ())
 
     def append_event(
         self,
@@ -172,14 +175,15 @@ class PostgresBackend(StorageBackend):
         checksum = hashlib.sha256(content.encode()).hexdigest()
         meta = json.dumps(metadata or {})
         try:
-            with self._pool.connection() as conn:
-                conn.execute(
+            if not self._conn:
+                return False
+            with self._conn.transaction():
+                self._conn.execute(
                     "INSERT INTO event_store (stream_id, aggregate_type, sequence, "
                     "event_type, payload, metadata, correlation_id, checksum) "
                     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (stream_id, aggregate_type, sequence, event_type, content, meta, correlation_id, checksum),
                 )
-                conn.commit()
             return True
         except Exception:
             return False
@@ -187,25 +191,27 @@ class PostgresBackend(StorageBackend):
     def get_events(self, stream_id: str) -> list[dict]:
         import json
 
-        with self._pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT stream_id, sequence, event_type, payload FROM event_store WHERE stream_id=%s ORDER BY sequence",
-                (stream_id,),
-            ).fetchall()
+        if not self._conn:
+            raise RuntimeError("PostgresBackend not connected")
+        rows = self._conn.execute(
+            "SELECT stream_id, sequence, event_type, payload FROM event_store WHERE stream_id=%s ORDER BY sequence",
+            (stream_id,),
+        ).fetchall()
         return [{"stream_id": r[0], "sequence": r[1], "event_type": r[2], "payload": json.loads(r[3])} for r in rows]
 
     def health_check(self) -> bool:
+        if not self._conn:
+            return False
         try:
-            with self._pool.connection() as conn:
-                conn.execute("SELECT 1")
+            self._conn.execute("SELECT 1")
             return True
         except Exception:
             return False
 
     def close(self) -> None:
-        if self._pool:
-            self._pool.close()
-            self._pool = None
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
 
 def create_backend(mode: str = "paper") -> StorageBackend:

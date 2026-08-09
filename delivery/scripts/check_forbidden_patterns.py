@@ -19,6 +19,9 @@ ALLOWED_NETWORK = (
     # Alert webhooks and local backup URI quoting are not exchange order paths.
     "beidou_core/alerts.py",
     "beidou_infra/backup.py",
+    # Database URL redaction/normalization parses strings only; it never opens
+    # a network connection or bypasses the exchange adapter.
+    "beidou_shared/config/__init__.py",
 )
 SELF_SCAN_FILES = {
     "delivery/scripts/check_forbidden_patterns.py",

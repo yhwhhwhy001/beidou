@@ -30,6 +30,7 @@ def _ctx(**overrides):
         "margin_ratio": 0.25,
         "liquidation_price": 45000.0,
         "current_price": 50000.0,
+        "position_qty": 1.0,
         "is_long": True,
         "protected_positions": 2,
         "total_positions": 2,
@@ -117,7 +118,18 @@ class TestR5R6R7:
         )
 
     def test_r7_no_liq_price(self):
-        assert _r7_liquidation_distance(_ctx(current_price=50000.0, is_long=True)) == RuleDecision.PASS
+        assert (
+            _r7_liquidation_distance(_ctx(current_price=50000.0, position_qty=0.0, liquidation_price=None))
+            == RuleDecision.PASS
+        )
+
+    def test_r7_active_position_without_liq_price_is_unknown(self):
+        assert _r7_liquidation_distance(_ctx(current_price=50000.0, liquidation_price=None)) == RuleDecision.UNKNOWN
+
+    def test_r7_missing_position_fact_is_unknown(self):
+        context = _ctx()
+        context.pop("position_qty")
+        assert _r7_liquidation_distance(context) == RuleDecision.UNKNOWN
 
 
 class TestR8R9R10:
@@ -126,6 +138,11 @@ class TestR8R9R10:
 
     def test_r8_reject(self):
         assert _r8_protection_coverage(_ctx(protected_positions=0, total_positions=2)) == RuleDecision.REJECT
+
+    def test_r8_missing_counts_are_unknown(self):
+        context = _ctx()
+        context.pop("protected_positions")
+        assert _r8_protection_coverage(context) == RuleDecision.UNKNOWN
 
     def test_r9_pass(self):
         assert _r9_account_capability(_ctx(can_trade=True, can_deposit=True, can_withdraw=False)) == RuleDecision.PASS

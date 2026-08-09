@@ -69,7 +69,7 @@ walk_forward:
   embargo_fraction: 0.02
   min_train_samples: 100
   min_test_samples: 20
-  min_folds_for_verdict: 3
+  min_folds_for_verdict: 5
 
 # ----------------------------------------------------------
 # 多重检验

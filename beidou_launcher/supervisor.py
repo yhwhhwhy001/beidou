@@ -93,7 +93,11 @@ class BeidouSupervisor:
         self._monitoring_scheduler = DeepAuditScheduler()
         self._recovery_engine = RecoveryEngine()  # BD-T14: 恢复引擎接线
         self._monitoring_state: dict[str, Any] = {}
-        self._last_monitor_loop_ts = 0.0  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
+        # Use the monotonic clock for the supervisor-loop heartbeat.  The
+        # monitoring check and the HTTP liveness callback must share this
+        # clock domain; wall-clock timestamps can make a healthy loop appear
+        # permanently stalled (or hide a stall after an NTP adjustment).
+        self._last_monitor_loop_ts = time.monotonic()  # 上一轮监督循环完成时刻（PKG-MON-10 自身健康）
         self._monitoring_check_states: dict[str, str] = {}  # check_id → 最近状态（阻断转变事件）
         # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
         from .models import HealthDebounce
@@ -103,6 +107,14 @@ class BeidouSupervisor:
         from .g7_tracker import G7LiveTracker
 
         self._g7_tracker = G7LiveTracker()
+        # The live tracker is informational; the certification producer is
+        # the durable source used by the real G7 window.  It never creates or
+        # starts a window automatically, so a missing/legacy window remains
+        # NOT_VERIFIABLE rather than silently starting certification.
+        from beidou_certification.unattended import UnattendedCertification
+
+        self._g7_certification = UnattendedCertification(str(project_root / "artifacts" / "evidence" / "g7"))
+        self._g7_observed_incident_ids: set[str] = set()
 
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
@@ -304,6 +316,7 @@ class BeidouSupervisor:
                 "checks": {item.check_id: item.status.value for item in self.report.checks},
                 "monitoring": self._monitoring_state,
                 "g7_sli": self._g7_tracker.summary(),
+                "g7_certification": self._g7_certification_summary(),
             }
             return base
 
@@ -480,6 +493,110 @@ class BeidouSupervisor:
         self._last_error_count = error_count
         return checks
 
+    def _g7_certification_summary(self) -> dict[str, Any]:
+        """Expose durable G7 producer state without certifying it."""
+        try:
+            windows = self._g7_certification.list_windows()
+            active = [item for item in windows if item.get("status") in {"CREATED", "RUNNING", "PAUSED"}]
+            return {
+                "active_windows": active,
+                "state_load_errors": list(self._g7_certification.state_load_errors),
+            }
+        except Exception as exc:
+            return {"active_windows": [], "state_load_errors": [type(exc).__name__]}
+
+    def _record_g7_certification_evidence(self, checks: list[CheckResult]) -> None:
+        """Persist one real monitoring cycle into an explicitly started G7 window.
+
+        This is intentionally producer-only: it records facts and daily
+        reports, but never evaluates or signs a certificate.  Any missing
+        check is recorded as a failed SLI; a P0 blocker also opens a durable
+        P0 incident and resets the window through the certification engine.
+        """
+        from datetime import datetime, timezone
+
+        from beidou_certification.unattended import (
+            IncidentRecord,
+            IncidentSeverity,
+            SLICategory,
+            SLISample,
+            WindowStatus,
+        )
+
+        active_windows = [
+            item for item in self._g7_certification.list_windows() if item.get("status") == WindowStatus.RUNNING.value
+        ]
+        if not active_windows:
+            return
+        # A single producer window is the governed contract.  If operators
+        # accidentally leave multiple RUNNING windows, record into the newest
+        # one and surface the ambiguity in status rather than fan out writes.
+        active_windows.sort(key=lambda item: str(item.get("window_id", "")))
+        window_id = str(active_windows[-1]["window_id"])
+        window = self._g7_certification.get_window(window_id)
+        if window is None or not window.evidence_state_complete:
+            return
+
+        by_id: dict[str, list[CheckResult]] = {}
+        for item in checks:
+            by_id.setdefault(item.check_id, []).append(item)
+
+        def all_pass(check_id: str) -> bool:
+            results = by_id.get(check_id, [])
+            return bool(results) and all(item.status.value == "PASS" for item in results)
+
+        order_results = by_id.get("runtime.execution.order_trace", [])
+        order_ok = bool(order_results) and all(
+            item.status.value == "PASS" and "DUP" not in item.message for item in order_results
+        )
+        samples = [
+            (SLICategory.DATA_QUALITY, all_pass("runtime.health.market_data")),
+            (SLICategory.ORDER_DUPLICATES, order_ok),
+            (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage")),
+            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation")),
+            (SLICategory.RECOVERY_BOUNDED, self._recovery_count <= self.max_restarts),
+            (SLICategory.INCIDENT_CLOSURE, all_pass("runtime.health.incidents")),
+            (SLICategory.COST_PNL_REPORTING, all_pass("runtime.safety.cost_and_pnl_reporting")),
+        ]
+        cycle = int(self._g7_tracker.summary().get("cycles", 0))
+        observed_at = datetime.now(timezone.utc)
+        self._g7_certification.record_batch_sli(
+            window_id,
+            [
+                SLISample(
+                    category=category,
+                    value=1.0 if passed else 0.0,
+                    threshold=1.0,
+                    passed=passed,
+                    timestamp=observed_at,
+                    metadata={"source": "supervisor_checks", "cycle": cycle},
+                )
+                for category, passed in samples
+            ],
+        )
+        window.total_recovery_count = self._recovery_count
+
+        for item in checks:
+            if not (item.is_blocking and item.severity.value == "P0"):
+                continue
+            incident_id = f"g7-{window_id}-{item.check_id}"
+            if incident_id in self._g7_observed_incident_ids:
+                continue
+            self._g7_observed_incident_ids.add(incident_id)
+            self._g7_certification.open_incident(
+                window_id,
+                IncidentRecord(
+                    incident_id=incident_id,
+                    severity=IncidentSeverity.P0,
+                    title=item.check_id,
+                    description=item.message,
+                    evidence={"cycle": cycle, "check": item.to_dict()},
+                ),
+            )
+        # Idempotent by date; repeated monitoring cycles do not create fake
+        # duplicate daily reports.
+        self._g7_certification.generate_daily_report(window_id)
+
     def _merge_monitoring_checks(self, runtime_checks: list[CheckResult]) -> list[CheckResult]:
         """运行监控子系统深度检查并合并进监督器检查流。
 
@@ -490,6 +607,15 @@ class BeidouSupervisor:
         - 阻断检查以状态转变事件写入证据目录。
         """
         assert self.engine is not None
+        # Webhook delivery is a durable side effect, not a best-effort log.
+        # Retry at most one due item per monitoring cycle so a dead channel is
+        # visible in delivery health without starving safety checks.
+        try:
+            retry_pending = getattr(getattr(self.engine, "_alerts", None), "retry_pending", None)
+            if callable(retry_pending):
+                retry_pending(max_items=1)
+        except Exception as exc:
+            logger.warning("alert delivery retry failed: %s: %s", type(exc).__name__, str(exc)[:160])
         monitoring_checks: list[CheckResult] = []
         try:
             monitoring_checks = collect_monitoring_checks(  # type: ignore[no-untyped-call] # beidou_observability.monitoring 遗留豁免
@@ -506,6 +632,20 @@ class BeidouSupervisor:
             import traceback
 
             traceback.print_exc()
+            # Monitoring is part of the execution safety certificate.  If it
+            # cannot run, an empty result set must never be interpreted as a
+            # clean runtime.  Emit a durable P0 blocker so the monitor loop
+            # revokes authority and readiness stays false.
+            monitoring_checks = [
+                CheckResult(
+                    check_id="runtime.monitoring.execution",
+                    name="监控执行链",
+                    status=CheckStatus.FAIL,
+                    severity=CheckSeverity.P0,
+                    message=f"监控检查执行失败: {type(exc).__name__}",
+                    evidence={"error": f"{type(exc).__name__}: {str(exc)[:240]}"},
+                )
+            ]
 
         # MON08 频率策略：监控结果 → 深度审计调度状态
         from beidou_observability.monitoring.contracts import (
@@ -763,6 +903,22 @@ class BeidouSupervisor:
             # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
             checks = self._runtime_checks()
             checks = self._merge_monitoring_checks(checks)
+            try:
+                self._record_g7_certification_evidence(checks)
+            except Exception as exc:
+                # A started G7 window is itself an evidence contract.  If the
+                # producer cannot persist a cycle, do not keep RESUME under a
+                # false certification narrative; surface a P0 blocker.
+                checks.append(
+                    CheckResult(
+                        check_id="runtime.g7.certification.persistence",
+                        name="G7 证据持久化",
+                        status=CheckStatus.FAIL,
+                        severity=CheckSeverity.P0,
+                        message=f"G7 证据写入失败: {type(exc).__name__}",
+                        evidence={"error": type(exc).__name__},
+                    )
+                )
             self._last_monitor_loop_ts = time.monotonic()
 
             if (
@@ -828,6 +984,17 @@ class BeidouSupervisor:
 
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新
+            try:
+                active_windows = [
+                    item
+                    for item in self._g7_certification.list_windows()
+                    if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
+                ]
+                set_window_state = getattr(self._g7_tracker, "set_durable_window_state", None)
+                if callable(set_window_state):
+                    set_window_state(running=len(active_windows) == 1, evidence_state_complete=len(active_windows) == 1)
+            except Exception as exc:
+                logger.warning("G7 durable window state unavailable: %s: %s", type(exc).__name__, str(exc)[:160])
             self._g7_tracker.feed(checks)
             self._g7_tracker.feed_recovery_context(self._recovery_count, self.max_restarts)
             self.writer.write(self.report)

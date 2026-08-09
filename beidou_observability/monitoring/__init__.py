@@ -99,7 +99,11 @@ def collect_monitoring_checks(
     """
     # 延迟导入避免初始化期循环依赖（beidou_launcher 已导入本包）
     from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
-    from beidou_observability.monitoring.checks.account import check_account_unknown, check_balance_sanity
+    from beidou_observability.monitoring.checks.account import (
+        check_account_permissions,
+        check_account_unknown,
+        check_balance_sanity,
+    )
     from beidou_observability.monitoring.checks.execution import OrderTraceState, check_order_trace
     from beidou_observability.monitoring.checks.modules import check_algorithm_probe, check_module_progress
     from beidou_observability.monitoring.checks.monitor_self import check_component_health, check_monitor_loop_health
@@ -160,6 +164,12 @@ def collect_monitoring_checks(
     results.append(convert(check_account_unknown(snapshot), name="账户事实健康 (MON03)"))
     account_data = (snapshot or {}).get("account") if (snapshot or {}).get("ok") else None
     results.append(convert(check_balance_sanity(account_data), name="账户余额合理性"))
+    results.append(
+        convert(
+            check_account_permissions(snapshot, required=bool(getattr(engine, "_can_write", False))),
+            name="账户权限事实 (R9)",
+        )
+    )
 
     # === 2. 算法探针 ===
     probe = algorithm_probe if isinstance(algorithm_probe, dict) else None
@@ -256,18 +266,28 @@ def collect_monitoring_checks(
 
     # === 5. 深度对账 (MON03 R1~R6) ===
     try:
-        last_account = getattr(engine, "_last_account", None) or {}
-        ex_positions_raw = last_account.get("positions", []) if isinstance(last_account, dict) else []
+        # Prefer the supervisor's fresh independent account snapshot.  A
+        # process-local ``_last_account`` cache must not be the only source
+        # that makes a reconciliation check appear complete.
+        snapshot_account = snapshot.get("account") if isinstance(snapshot, dict) and snapshot.get("ok") else None
+        ex_positions_raw = (
+            snapshot_account.get("positions")
+            if isinstance(snapshot_account, dict) and isinstance(snapshot_account.get("positions"), list)
+            else None
+        )
         # 过滤零仓位：Binance API 返回全部合约仓位（含零余额），
         # 不过滤会导致 hundreds 个零仓位与本地保护单对比产生大量 UNKNOWN
-        ex_positions: list[dict] = []
-        for p in ex_positions_raw:
+        ex_positions: list[dict] | None = [] if ex_positions_raw is not None else None
+        for p in ex_positions_raw or []:
             try:
                 if abs(float(p.get("positionAmt", 0) or 0)) <= 1e-6:
                     continue
+                assert ex_positions is not None
                 ex_positions.append(p)
             except (TypeError, ValueError):
-                continue
+                if ex_positions is not None:
+                    ex_positions = None
+                break
         local_positions = []
         protection = getattr(engine, "_protection", None)
         if protection is not None and callable(getattr(protection, "all_positions", None)):
@@ -283,11 +303,65 @@ def collect_monitoring_checks(
                     )
                 except (TypeError, ValueError):
                     continue
-        # 双方均有持仓事实时才运行深度对账，避免无数据时的假 PASS
-        if ex_positions and local_positions:
-            ledger = getattr(engine, "_ledger", None)
-            local_ledger = getattr(ledger, "_entries", None) if ledger is not None else None
-            recon = perform_reconciliation(ex_positions, local_positions, None, None, local_ledger)
+        ledger = getattr(engine, "_ledger", None)
+        local_ledger = getattr(ledger, "_entries", None) if ledger is not None else None
+        # Run the semantic comparison for known-flat accounts as well as open
+        # positions.  If either independent side is missing, emit UNKNOWN
+        # instead of omitting the check (omission used to look like PASS).
+        recon = perform_reconciliation(ex_positions, local_positions, None, None, local_ledger)
+
+        # A writable engine has a stronger authority contract than this
+        # projection check: the venue snapshot must be joined with the
+        # durable local projection and the authorized user-stream facts by
+        # ``engine._reconcile``.  A matching REST/local position comparison
+        # alone must never advertise PASS for a write-capable process.
+        if bool(getattr(engine, "_can_write", False)):
+            authority = getattr(engine, "_last_reconciliation_result", None)
+            authority_status = str(
+                getattr(getattr(authority, "status", None), "value", getattr(authority, "status", "UNKNOWN"))
+            ).upper()
+            checked_at = getattr(authority, "checked_at", None)
+            authority_age: float | None = None
+            if checked_at is not None:
+                try:
+                    if getattr(checked_at, "tzinfo", None) is None:
+                        from datetime import timezone
+
+                        checked_at = checked_at.replace(tzinfo=timezone.utc)
+                    authority_age = max(0.0, time.time() - float(checked_at.timestamp()))
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    authority_age = None
+            authority_ok = (
+                authority is not None
+                and bool(getattr(authority, "matched", False))
+                and authority_status == "MATCHED"
+                and authority_age is not None
+                and authority_age <= 60.0
+            )
+            if not authority_ok:
+                results.append(
+                    CheckResult(
+                        check_id="runtime.safety.reconciliation",
+                        name="深度对账 (MON03 R1~R6)",
+                        status=CheckStatus.FAIL,
+                        severity=CheckSeverity.P0,
+                        message=(
+                            "Writable reconciliation authority unavailable: "
+                            f"status={authority_status},age="
+                            f"{authority_age if authority_age is not None else 'UNKNOWN'}s"
+                        ),
+                        evidence={
+                            "source": "engine._last_reconciliation_result",
+                            "status": authority_status,
+                            "age_seconds": authority_age,
+                            "threshold_seconds": 60.0,
+                            "matched": bool(getattr(authority, "matched", False)) if authority else False,
+                        },
+                    )
+                )
+            else:
+                results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
+        else:
             results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
     except Exception as exc:
         results.append(failure("runtime.safety.reconciliation", "深度对账 (MON03 R1~R6)", CheckSeverity.P1, exc))

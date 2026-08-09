@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 
 import pytest
 
@@ -39,6 +40,7 @@ from beidou_shared.types import (
     OrderSide,
     OrderStatus,
     OrderType,
+    Price,
     Quantity,
     ResultStatus,
     VenueId,
@@ -77,6 +79,25 @@ class TestIntentOutbox:
         with pytest.raises(ValueError, match="Duplicate"):
             ob.commit(intent)
 
+    def test_memory_unknown_intent_is_not_blindly_reclaimed(self):
+        ob = IntentOutbox()
+        intent = OrderIntent(
+            intent_id="int-memory-unknown",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            idempotency_key="idem-memory-unknown",
+        )
+        ob.commit(intent)
+        assert ob.claim("worker-a") is not None
+        ob.mark_unknown(intent.intent_id, "TRANSPORT_UNKNOWN")
+
+        assert ob.claim("worker-a") is None
+        assert ob.unacked() == []
+        assert ob.stats["state_counts"][OutboxState.UNKNOWN.value] == 1
+
     def test_sqlite_outbox_survives_restart_and_preserves_unknown(self, tmp_path):
         db_path = str(tmp_path / "intent-outbox.db")
         intent = OrderIntent(
@@ -100,6 +121,7 @@ class TestIntentOutbox:
         assert claimed.intent_id == intent.intent_id
         assert claimed.net_alpha_bps == pytest.approx(12.5)
         assert claimed.predicted_cost_bps == pytest.approx(4.25)
+        assert first.stats["state_counts"][OutboxState.SENDING.value] == 1
 
         # A new process must not blindly retry an ambiguous in-flight send.
         second = IntentOutbox(db_path)
@@ -107,6 +129,7 @@ class TestIntentOutbox:
         assert second.claim("worker-b") is None
         second.resolve_unknown(intent.intent_id, exchange_order_found=False)
         assert second.claim("worker-b") is not None
+        assert second.stats["state_counts"][OutboxState.SENDING.value] == 1
 
         second.ack(intent.intent_id, idempotency_key=intent.idempotency_key or "")
         third = IntentOutbox(db_path)
@@ -134,6 +157,80 @@ class TestIntentOutbox:
             row = conn.execute("SELECT state FROM intent_outbox WHERE intent_id=?", (intent.intent_id,)).fetchone()
         assert row[0] == OutboxState.UNKNOWN.value
         assert second.claim("worker-b") is None
+
+    def test_sqlite_outbox_commits_approval_and_intent_together(self, tmp_path):
+        db_path = str(tmp_path / "intent-approval.db")
+        intent = OrderIntent(
+            intent_id="int-approved-001",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            idempotency_key="idem-approved-001",
+            risk_approval_id="approval-001",
+            risk_approval_signature="signature-001",
+            risk_proposal_hash="proposal-hash",
+            risk_intent_hash="intent-hash",
+            risk_account_snapshot_hash="account-hash",
+            risk_snapshot_hash="risk-hash",
+            risk_policy_version="policy-v1",
+            risk_nonce="nonce-001",
+            risk_expires_at=4102444800.0,
+        )
+
+        first = IntentOutbox(db_path)
+        first.commit(intent)
+        restored = first.restore_pending_approvals()
+
+        assert len(restored) == 1
+        assert restored[0]["approval_id"] == "approval-001"
+        assert restored[0]["signature"] == "signature-001"
+        assert restored[0]["decision"] == "APPROVED"
+
+        first.ack(intent.intent_id, intent.idempotency_key or "")
+        second = IntentOutbox(db_path)
+        assert second.restore_pending_approvals() == []
+
+        duplicate = replace(intent, intent_id="int-approved-duplicate", idempotency_key="idem-approved-duplicate")
+        with pytest.raises(ValueError, match="Duplicate intent"):
+            second.commit(duplicate)
+
+    def test_persistent_duplicate_identity_probe_is_fail_closed_and_counts_reuse(self, tmp_path):
+        db_path = str(tmp_path / "intent-duplicate-probe.db")
+        first_intent = OrderIntent(
+            intent_id="int-duplicate-001",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            client_order_id="cid-reused",
+            idempotency_key="idem-duplicate-001",
+        )
+        second_intent = replace(
+            first_intent,
+            intent_id="int-duplicate-002",
+            idempotency_key="idem-duplicate-002",
+        )
+
+        outbox = IntentOutbox(db_path)
+        outbox.commit(first_intent)
+        assert outbox.duplicate_order_count_24h() == 0
+        outbox.commit(second_intent)
+        assert outbox.duplicate_order_count_24h() == 1
+
+        # A row without a stable client identity cannot certify zero
+        # duplicates; it must remain UNKNOWN.
+        with closing(sqlite3.connect(db_path)) as conn, conn:
+            conn.execute(
+                "UPDATE intent_outbox SET payload=? WHERE intent_id=?",
+                ('{"idempotency_key":"idem-malformed"}', first_intent.intent_id),
+            )
+        assert IntentOutbox(db_path).duplicate_order_count_24h() is None
+
+    def test_memory_duplicate_identity_probe_is_unknown(self):
+        assert IntentOutbox().duplicate_order_count_24h() is None
 
 
 class TestLeaseManager:
@@ -386,3 +483,34 @@ class TestEmergencyFlatten:
         pm = PositionManager()
         new_size = pm.funding_rate_aware_position_size(1.0, -0.002, 0.0005)
         assert new_size < 1.0  # Should reduce, not increase
+
+    @pytest.mark.asyncio
+    async def test_flatten_uses_governed_executor_not_direct_rest(self):
+        class _GovernedExecutor:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def enqueue_reduce_only_market(self, **kwargs):
+                self.calls.append(kwargs)
+                return True
+
+            async def _api_async(self, *_args, **_kwargs):
+                raise AssertionError("emergency flatten must not call direct REST")
+
+        pm = PositionManager()
+        pm.update_position(
+            AccountId("test"),
+            InstrumentId("BTCUSDT"),
+            Quantity(amount="0.1"),
+            Price(amount="100"),
+        )
+        executor = _GovernedExecutor()
+        result = await pm.execute_flatten(
+            EmergencyFlattenPolicy(policy_id="ef-001", version="2.0.0", signature="sig_abc"),
+            engine=executor,
+        )
+
+        assert result["executed"] == "true"
+        assert result["executed_count"] == "1"
+        assert executor.calls[0]["side"] == "SELL"
+        assert executor.calls[0]["policy_signature"] == "sig_abc"

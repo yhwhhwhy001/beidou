@@ -54,6 +54,19 @@ def main() -> int:
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
 
+    # Never start a certification probe from an unreproducible artifact.  The
+    # same preflight used by the launcher is a hard gate here, before any REST
+    # client is constructed or any exchange request is attempted.
+    from beidou_launcher.preflight import run_preflight
+
+    preflight_checks, _ = run_preflight(project_root, "testnet", 9090)
+    preflight_blockers = [
+        check for check in preflight_checks if check.status.value == "FAIL" and check.severity.value == "P0"
+    ]
+    if preflight_blockers:
+        details = "; ".join(f"{check.check_id}: {check.message}" for check in preflight_blockers)
+        fail_fast(f"preflight blocked before network access: {details}")
+
     # ================================================================
     # G5 Gate 1: 环境安全验证
     # ================================================================
@@ -162,15 +175,23 @@ def main() -> int:
             else:
                 acct_data = {}
 
-            can_trade = acct_data.get("canTrade", False)
-            can_withdraw = acct_data.get("canWithdraw", False)
+            can_trade = acct_data.get("canTrade")
+            can_withdraw = acct_data.get("canWithdraw")
             total_balance = acct_data.get("totalWalletBalance", "0")
 
-            # AC-04: 提款权限检查 (Testnet 提款权限为模拟，不阻断认证)
-            if can_withdraw:
-                print("  WARN: Testnet account has withdrawal permission (expected on Binance Testnet)")
-
-            can_trade_ok = can_trade
+            # AC-04: withdrawal permission is a hard production blocker even
+            # on Testnet. Missing/non-boolean facts are also fail-closed.
+            if not isinstance(can_trade, bool) or not isinstance(can_withdraw, bool):
+                print("  FAIL: account permission facts are missing or invalid")
+                can_trade_ok = False
+                permission_status = "ACCOUNT_PERMISSION_UNKNOWN"
+            elif can_withdraw:
+                print("  FAIL: venue withdrawal permission is enabled")
+                can_trade_ok = False
+                permission_status = "WITHDRAWAL_PERMISSION_ENABLED"
+            else:
+                can_trade_ok = can_trade
+                permission_status = "OK" if can_trade else "VENUE_TRADING_DISABLED"
             print(f"  canTrade={can_trade} canWithdraw={can_withdraw} balance={total_balance}")
             print(f"  {'PASS' if can_trade_ok else 'FAIL'}: account access verified")
 
@@ -182,6 +203,7 @@ def main() -> int:
                 "status": "PASS" if can_trade_ok else "FAIL",
                 "can_trade": can_trade,
                 "can_withdraw": can_withdraw,
+                "permission_status": permission_status,
                 "has_balance": float(total_balance) > 0,
             }
         except Exception as e:
@@ -297,6 +319,9 @@ def main() -> int:
         # and explicitly mark every unimplemented protocol scenario as
         # NOT_VERIFIABLE so a partial probe can never become a PASS certificate.
         observations = dict(results)
+        observation_failures = sorted(
+            name for name, result in observations.items() if isinstance(result, dict) and result.get("status") == "FAIL"
+        )
         results = {
             scenario: {
                 "status": "NOT_VERIFIABLE",
@@ -304,7 +329,7 @@ def main() -> int:
             }
             for scenario in expected_scenarios
         }
-        has_fail = any(r.get("status") == "FAIL" for r in results.values())
+        has_fail = bool(observation_failures) or any(r.get("status") == "FAIL" for r in results.values())
         has_not_verifiable = any(r.get("status") == "NOT_VERIFIABLE" for r in results.values())
         account_access = observations.get("account_access", {})
 
@@ -334,7 +359,10 @@ def main() -> int:
                 "can_withdraw": account_access.get("can_withdraw"),
                 "has_balance": account_access.get("has_balance", False),
             },
-            "blockers": ["G5_SCENARIO_NOT_VERIFIABLE"] if has_not_verifiable else [],
+            "blockers": (
+                [f"G5_OBSERVATION_FAILED:{name}" for name in observation_failures]
+                + (["G5_SCENARIO_NOT_VERIFIABLE"] if has_not_verifiable else [])
+            ),
             "summary": {
                 "total": len(results),
                 "pass": sum(1 for r in results.values() if r.get("status") == "PASS"),

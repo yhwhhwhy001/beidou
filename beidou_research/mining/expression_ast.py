@@ -303,7 +303,16 @@ class Constant(Expression):
         return self.dtype
 
     def validate_types(self) -> None:
-        pass  # 已在 __post_init__ 验证
+        if not isinstance(self.dtype, ExprType):
+            raise ExpressionTypeError(f"非法 dtype: {self.dtype!r}")
+        if isinstance(self.value, bool):
+            if self.dtype is not ExprType.BOOLEAN:
+                raise ExpressionTypeError("布尔常量 dtype 必须为 BOOLEAN")
+            return
+        if self.dtype is ExprType.BOOLEAN:
+            raise ExpressionTypeError("数值常量不能是 BOOLEAN 类型")
+        if not math.isfinite(float(self.value)):
+            raise ExpressionError(f"常量必须为有限数: {self.value!r}")
 
     def canonicalize(self) -> Expression:
         return self
@@ -343,7 +352,10 @@ class Feature(Expression):
         return self.type
 
     def validate_types(self) -> None:
-        pass  # 已在 __post_init__ 验证
+        if not isinstance(self.name, str) or not self.name:
+            raise ExpressionError("特征名必须为非空字符串")
+        if not isinstance(self.type, ExprType):
+            raise ExpressionTypeError(f"非法特征类型: {self.type!r}")
 
     def canonicalize(self) -> Expression:
         return self
@@ -1235,11 +1247,11 @@ class Clip(Expression):
 class Residualize(Expression):
     OP_NAME = "Residualize"
     COMPLEXITY_WEIGHT = 5  # 算子复杂度权重
-    """对控制变量回归取残差（标记节点）。
+    """对控制变量做逐步 OLS 残差化。
 
-    完整实现依赖 BF-02 的统计评估器（OLS/分位数回归）；
-    当前仅完成类型检查、复杂度评分与序列化，求值抛出
-    NotImplementedError。
+    该算子在表达式级别提供确定性的逐控制变量近似；生产晋级仍须
+    通过研究评估器的样本外、成本后和容量门禁，不能仅凭表达式可求值
+    视为可交易 Alpha 证据。
     """
     expr: Expression
     controls: tuple[Expression, ...] = ()

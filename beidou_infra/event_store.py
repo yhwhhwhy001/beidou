@@ -112,10 +112,10 @@ class EventStore:
 class ConcurrencyConflictError(Exception):
     """乐观并发冲突 — 同一 stream 的 sequence 已被占用。"""
 
-    pass
+    __slots__ = ()
 
 
 class ChecksumMismatchError(Exception):
     """事件 checksum 不匹配 — 数据可能被篡改。"""
 
-    pass
+    __slots__ = ()

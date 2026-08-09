@@ -168,6 +168,26 @@ class FactorRecord:
         self.retirement_evidence["restarted_at"] = datetime.now(timezone.utc).isoformat()
         return True
 
+    def has_authorized_active_evidence(self) -> bool:
+        """Return whether ACTIVE is backed by a sealed promotion artifact.
+
+        ``lifecycle`` is intentionally mutable for compatibility with older
+        research tooling.  Execution paths must therefore consult this
+        predicate instead of treating a local ACTIVE enum as authorization.
+        """
+
+        if self.lifecycle != FactorLifecycle.ACTIVE:
+            return False
+        return any(
+            decision.approved
+            and decision.to_state == FactorLifecycle.ACTIVE
+            and bool(decision.evidence_artifact_hash.strip())
+            and bool(decision.commit.strip())
+            and bool(decision.dataset_hash.strip())
+            and bool(decision.policy_version.strip())
+            for decision in self.promotion_history
+        )
+
 
 # ================================================================
 # BD-T06: 证据驱动的因子晋级系统 (Production 模式)
@@ -194,6 +214,7 @@ class PromotionDecision:
     evidence_ids: list[str] = field(default_factory=list)
     policy_version: str = ""
     falsifier: str = ""  # 谁执行了此决策
+    evidence_artifact_hash: str = ""  # sealed EvidenceBundle.artifact_hash
     # 性能指标
     ic: float = 0.0
     rank_ic: float = 0.0
@@ -297,6 +318,7 @@ class FactorPromotionGate:
         dataset_hash: str = "",
         policy_version: str = "",
         falsifier: str = "system",
+        evidence_bundle: Any | None = None,
     ) -> PromotionDecision:
         """验证晋级证据是否满足目标阶段要求。
 
@@ -338,6 +360,61 @@ class FactorPromotionGate:
 
         failures: list[str] = []
 
+        # All research-to-runtime transitions need reproducible provenance;
+        # an arbitrary list of evidence labels is not a substitute for the
+        # sealed artifact that produced them.  ACTIVE is a production
+        # authorization and therefore additionally requires a complete,
+        # promotable EvidenceBundle bound to this exact factor/data/policy.
+        evidence_bound_states = {
+            FactorLifecycle.RESEARCH_VALIDATED,
+            FactorLifecycle.OOS_VERIFIED,
+            FactorLifecycle.COST_CAPACITY_VERIFIED,
+            FactorLifecycle.PAPER_TRADING,
+            FactorLifecycle.CHALLENGER,
+            FactorLifecycle.ACTIVE,
+        }
+        if target_state in evidence_bound_states:
+            bindings = {
+                "commit": commit,
+                "dataset_hash": dataset_hash,
+                "policy_version": policy_version,
+                "falsifier": falsifier,
+            }
+            missing_bindings = [
+                name
+                for name, value in bindings.items()
+                if not isinstance(value, str) or not value.strip() or value.strip().upper() == "UNKNOWN"
+            ]
+            if missing_bindings:
+                failures.append(f"Missing provenance bindings: {missing_bindings}")
+
+        if target_state == FactorLifecycle.ACTIVE:
+            if evidence_bundle is None:
+                failures.append("ACTIVE requires a sealed EvidenceBundle")
+            else:
+                try:
+                    promotable, bundle_reason = evidence_bundle.can_promote()
+                except Exception as exc:
+                    promotable = False
+                    bundle_reason = f"bundle_contract_error:{type(exc).__name__}"
+                if not promotable:
+                    failures.append(f"EvidenceBundle not promotable: {bundle_reason}")
+                else:
+                    bundle_factor_id = str(getattr(evidence_bundle, "factor_id", ""))
+                    bundle_factor_version = str(getattr(evidence_bundle, "factor_version", ""))
+                    bundle_dataset_hash = str(getattr(evidence_bundle, "dataset_manifest_hash", ""))
+                    bundle_policy_version = str(getattr(evidence_bundle, "policy_version", ""))
+                    if bundle_factor_id != factor_id:
+                        failures.append("EvidenceBundle factor_id mismatch")
+                    if factor_version and bundle_factor_version != factor_version:
+                        failures.append("EvidenceBundle factor_version mismatch")
+                    if dataset_hash and bundle_dataset_hash != dataset_hash:
+                        failures.append("EvidenceBundle dataset_manifest_hash mismatch")
+                    if policy_version and bundle_policy_version != policy_version:
+                        failures.append("EvidenceBundle policy_version mismatch")
+
+        evidence_artifact_hash = str(getattr(evidence_bundle, "artifact_hash", "") or "")
+
         # 检查必需证据
         required = requirements.get("required_evidence", [])
         provided = set(evidence_ids or [])
@@ -369,6 +446,7 @@ class FactorPromotionGate:
                 evidence_ids=evidence_ids or [],
                 policy_version=policy_version,
                 falsifier=falsifier,
+                evidence_artifact_hash=evidence_artifact_hash,
                 ic=performance.ic_mean if performance else 0.0,
                 icir=performance.icir if performance else 0.0,
                 sample_count=performance.sample_count if performance else 0,
@@ -388,6 +466,7 @@ class FactorPromotionGate:
             evidence_ids=evidence_ids or [],
             policy_version=policy_version,
             falsifier=falsifier,
+            evidence_artifact_hash=evidence_artifact_hash,
             ic=performance.ic_mean if performance else 0.0,
             icir=performance.icir if performance else 0.0,
             sample_count=performance.sample_count if performance else 0,

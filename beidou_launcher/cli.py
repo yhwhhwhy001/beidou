@@ -27,16 +27,19 @@ from .supervisor import BeidouSupervisor
 def _parse_symbols(value: str) -> list[str]:
     values = [item.strip().upper() for item in value.split(",") if item.strip()]
     if values in (["ALL"], ["DEFAULT"]):
-        from beidou_core.engine import DEFAULT_UNIVERSE
-
-        return list(DEFAULT_UNIVERSE)
-    return values or list(DEFAULT_SYMBOLS)
+        return []
+    return values
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("action", required=False, default="start", type=click.Choice(["start", "doctor", "status", "stop"]))
 @click.option("--mode", type=click.Choice(SUPPORTED_MODES), default=DEFAULT_MODE, show_default=True)
-@click.option("--symbols", default=",".join(DEFAULT_SYMBOLS), show_default=True)
+@click.option(
+    "--symbols",
+    default=",".join(DEFAULT_SYMBOLS),
+    show_default=False,
+    help="显式指定交易品种，逗号分隔；不允许 DEFAULT/ALL 固定交易池回退。",
+)
 @click.option("--port", type=click.IntRange(1024, 65535), default=HEALTH_PORT, show_default=True)
 @click.option("--startup-timeout", type=click.FloatRange(30.0, 900.0), default=STARTUP_TIMEOUT, show_default=True)
 @click.option(
@@ -92,6 +95,8 @@ def main(
         raise SystemExit(0 if ok else 1)
 
     parsed_symbols = _parse_symbols(symbols)
+    if not parsed_symbols:
+        raise click.ClickException("必须显式提供 --symbols；固定 DEFAULT/ALL 交易池已禁用")
     supervisor = BeidouSupervisor(
         project_root=root,
         mode=mode,

@@ -31,7 +31,7 @@ def cli() -> None:
 @click.option("--config", default=None, help="研究数据集配置 YAML 路径")
 @click.option("--output-dir", default="evidence/factors", help="证据输出目录")
 @click.option("--symbol", default=None, help="单个交易品种（优先于 --symbols）")
-@click.option("--symbols", default=None, help="逗号分隔多品种，默认 BTCUSDT,ETHUSDT")
+@click.option("--symbols", default=None, help="逗号分隔多品种；必须显式提供")
 @click.option(
     "--interval",
     default="1h",
@@ -83,9 +83,9 @@ def run(
     elif symbols:
         symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
-        from beidou_core.engine import DEFAULT_UNIVERSE
-
-        symbols_list = list(DEFAULT_UNIVERSE[:4])
+        raise click.ClickException("必须通过 --symbol 或 --symbols 显式指定研究品种")
+    if not symbols_list or any(item in {"ALL", "DEFAULT"} for item in symbols_list):
+        raise click.ClickException("固定 DEFAULT/ALL 交易池已禁用，请指定实际品种")
 
     # 离线研究工具默认连 testnet
     os.environ.setdefault("BEIDOU_ENV", "testnet")
@@ -115,6 +115,7 @@ def run(
                     "high": k["high"],
                     "low": k["low"],
                     "volume": k["volume"],
+                    "is_closed": k.get("is_closed") is True,
                 }
                 for k in klines
             ]

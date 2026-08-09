@@ -416,8 +416,8 @@ class JSONFileFactorStore:
                 try:
                     with open(os.path.join(audit_dir, fname)) as f:
                         history.append(json.load(f))
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"CORRUPT_GATE_AUDIT:{fname}") from exc
         return history
 
 

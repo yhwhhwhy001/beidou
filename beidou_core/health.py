@@ -92,7 +92,7 @@ class HealthServer:
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                pass  # Suppress access logs
+                return None  # Suppress access logs
 
             def do_GET(self):
                 if self.path == "/health":
@@ -215,6 +215,13 @@ class HealthServer:
         self._thread.start()
 
     def stop(self) -> None:
-        if self._server:
-            self._server.shutdown()
-            self._server = None
+        server = self._server
+        if server is None:
+            return
+        server.shutdown()
+        server.server_close()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._thread = None
+        self._server = None

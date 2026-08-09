@@ -48,6 +48,21 @@ from beidou_shared.types import (
 logger = logging.getLogger(__name__)
 
 
+def _strict_bool(value: Any, *, field_name: str) -> bool:
+    """Parse venue booleans without Python's truthy-string trap."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"{field_name} is not a valid boolean")
+
+
 class InstrumentStatus(str, Enum):
     TRADING = "TRADING"
     HALT = "HALT"
@@ -213,7 +228,28 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 category=ErrorCategory.UNKNOWN,
                 source="binance_usdm_adapter",
             )
-        if method.upper() in {"POST", "PUT", "DELETE"} and not self._health_monitor.is_safe_for_new_risk():
+        method_upper = method.upper()
+        params = params or {}
+
+        def enabled(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes"}
+
+        # A venue-health UNKNOWN must block risk-increasing writes, but it
+        # must not remove the only governed path for reducing an already
+        # exposed position.  DELETE and explicit reduceOnly/closePosition
+        # requests are exit-only; the transport may still return UNKNOWN, but
+        # the adapter must not reject them solely because its health probe is
+        # stale.  This mirrors the supervisor NO_NEW_RISK/EXIT_ONLY contract.
+        exit_only = (
+            method_upper == "DELETE" or enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
+        )
+        if (
+            method_upper in {"POST", "PUT", "DELETE"}
+            and not self._health_monitor.is_safe_for_new_risk()
+            and not exit_only
+        ):
             return Result.failure(
                 "Venue health is not verified for a write",
                 category=ErrorCategory.EXCHANGE_UNAVAILABLE,
@@ -230,6 +266,49 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         if self._rest_client is not None:
             self._rest_client.reset_circuit_breaker()
 
+    async def create_user_listen_key(self) -> Result[dict[str, Any]]:
+        """Create a user-data listen key through the adapter-owned transport.
+
+        Listen-key lifecycle is a control-plane operation rather than an
+        order write.  It still must return a typed, non-empty venue fact and
+        must never be replaced by a fabricated key or a REST-only fallback.
+        """
+
+        if self._rest_client is None:
+            return Result.failure(
+                "Exchange transport is not configured",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_user_stream_adapter",
+            )
+        result = await self._rest_client.create_listen_key()
+        if not result.is_success() or not isinstance(result.data, dict) or not str(result.data.get("listenKey") or ""):
+            return Result.failure(
+                "User listenKey creation is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_user_stream_adapter",
+            )
+        return Result.success(dict(result.data), source="binance_user_stream_adapter")
+
+    async def keepalive_user_listen_key(self, listen_key: str) -> Result[dict[str, Any]]:
+        """Renew one exact listen key; missing identity fails closed."""
+
+        if self._rest_client is None or not str(listen_key or "").strip():
+            return Result.failure(
+                "User listenKey identity is unavailable",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_user_stream_adapter",
+            )
+        result = await self._rest_client.keepalive_listen_key(str(listen_key))
+        if not result.is_success() or not isinstance(result.data, dict):
+            return Result.failure(
+                "User listenKey keepalive is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_user_stream_adapter",
+            )
+        return Result.success(dict(result.data or {}), source="binance_user_stream_adapter")
+
     async def get_exchange_info(self) -> ExchangeInfo:
         return ExchangeInfo(
             venue_id=self._venue_id,
@@ -243,13 +322,41 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         return self._health_monitor.venue_health
 
     async def get_account_info(self, account_ref: AccountRef) -> AccountInfo:
-        # BD-T03 修复: can_trade 基于健康检查 + 凭据能力验证，不硬编码 True
-        can_trade = self._health_monitor.is_safe_for_new_risk()
+        """Read venue permission facts; never infer them from local health.
+
+        ``AccountInfo`` has no ``UNKNOWN`` enum, so a missing/invalid venue
+        response is represented conservatively as ``can_trade=False`` and
+        ``can_withdraw=True``.  The latter intentionally fails the R9
+        no-withdrawal rule instead of manufacturing a safe-looking ``False``.
+        """
+
+        can_trade = False
+        can_withdraw = True
+        can_deposit = False
+        if self._rest_client is not None:
+            try:
+                result = await self.request("GET", Endpoint.ACCOUNT, signed=True)
+                account = result.data if result.is_success() else None
+                if isinstance(account, dict):
+                    venue_can_trade = account.get("canTrade")
+                    venue_can_withdraw = account.get("canWithdraw")
+                    venue_can_deposit = account.get("canDeposit")
+                    if isinstance(venue_can_trade, bool) and isinstance(venue_can_withdraw, bool):
+                        can_trade = venue_can_trade and self._health_monitor.is_safe_for_new_risk()
+                        can_withdraw = venue_can_withdraw
+                        can_deposit = venue_can_deposit if isinstance(venue_can_deposit, bool) else False
+            except Exception as exc:
+                # Preserve the fail-closed defaults on transport/parser errors,
+                # but retain an auditable reason instead of swallowing the
+                # exception with a no-op handler.
+                logger.warning(
+                    "account capability query failed; returning fail-closed defaults: %s", type(exc).__name__
+                )
         return AccountInfo(
             account_ref=account_ref,
             can_trade=can_trade,
-            can_deposit=False,
-            can_withdraw=False,
+            can_deposit=can_deposit,
+            can_withdraw=can_withdraw,
         )
 
     async def get_balances(self, account_ref: AccountRef) -> tuple[ResultStatus, dict[str, MonetaryValue]]:
@@ -265,10 +372,19 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 if isinstance(result, list):
                     balances: dict[str, MonetaryValue] = {}
                     for b in result:
-                        asset = b.get("asset", "")
-                        bal = b.get("balance", "0")
-                        if float(bal) > 0:
-                            balances[asset] = MonetaryValue(amount=bal)
+                        if not isinstance(b, dict) or not b.get("asset") or b.get("balance") in (None, ""):
+                            return ResultStatus.UNKNOWN, {}
+                        try:
+                            balance = Decimal(str(b["balance"]))
+                        except (InvalidOperation, TypeError, ValueError):
+                            return ResultStatus.UNKNOWN, {}
+                        if not balance.is_finite():
+                            return ResultStatus.UNKNOWN, {}
+                        if balance != 0:
+                            # Preserve a verified signed balance instead of
+                            # silently dropping negative or malformed rows and
+                            # turning a partial account response into EMPTY.
+                            balances[str(b["asset"])] = MonetaryValue(amount=str(balance))
                     return ResultStatus.SUCCESS, balances
             except Exception as exc:
                 self._health_monitor.record_error(Endpoint.BALANCE, type(exc).__name__)
@@ -288,18 +404,84 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 if isinstance(result, dict) and "positions" in result:
                     positions: dict[str, Quantity] = {}
                     for p in result["positions"]:
-                        amt = float(p.get("positionAmt", 0))
-                        if abs(amt) > 0:
-                            positions[p["symbol"]] = Quantity(amount=str(abs(amt)))
+                        if not isinstance(p, dict) or not p.get("symbol") or "positionAmt" not in p:
+                            return ResultStatus.UNKNOWN, {}
+                        amt = Decimal(str(p["positionAmt"]))
+                        if not amt.is_finite():
+                            return ResultStatus.UNKNOWN, {}
+                        if amt != 0:
+                            # Preserve Binance's signed position amount; the
+                            # sign is the only authoritative direction fact
+                            # for ONE_WAY mode and must not be erased at the
+                            # Adapter boundary.
+                            positions[str(p["symbol"])] = Quantity(amount=str(amt))
                     return ResultStatus.SUCCESS, positions
             except Exception as exc:
                 self._health_monitor.record_error(Endpoint.ACCOUNT, type(exc).__name__)
                 logger.warning("position query failed; returning UNKNOWN: %s", type(exc).__name__)
         return ResultStatus.UNKNOWN, {}
 
+    @staticmethod
+    def _validate_order_ack(request: OrderRequest, response: Any) -> tuple[bool, str]:
+        """Validate that a venue ACK is the exact order that was requested.
+
+        An ``orderId`` alone is not proof of acknowledgement: a malformed or
+        mismatched response must remain UNKNOWN rather than being projected as
+        a local order.  This is especially important after an ambiguous POST,
+        where retrying with a different client id could duplicate exposure.
+        """
+
+        if not isinstance(response, dict):
+            return False, "ACK_NOT_OBJECT"
+        required = ("orderId", "status", "symbol", "side", "type", "origQty")
+        if any(response.get(field) in (None, "") for field in required):
+            return False, "ACK_IDENTITY_MISSING"
+
+        if str(response["symbol"]).upper() != str(request.venue_instrument.instrument_id).upper():
+            return False, "ACK_SYMBOL_MISMATCH"
+        expected_side = request.side.value if hasattr(request.side, "value") else str(request.side)
+        if str(response["side"]).upper() != expected_side.upper():
+            return False, "ACK_SIDE_MISMATCH"
+        expected_type = request.order_type.value if hasattr(request.order_type, "value") else str(request.order_type)
+        if str(response["type"]).upper() != expected_type.upper():
+            return False, "ACK_ORDER_TYPE_MISMATCH"
+        try:
+            OrderStatus(str(response["status"]))
+        except ValueError:
+            return False, "ACK_STATUS_UNKNOWN"
+
+        if request.client_order_id:
+            if response.get("clientOrderId") in (None, ""):
+                return False, "ACK_CLIENT_ORDER_ID_MISSING"
+            if str(response["clientOrderId"]) != str(request.client_order_id):
+                return False, "ACK_CLIENT_ORDER_ID_MISMATCH"
+
+        try:
+            requested_quantity = Decimal(str(request.quantity.amount))
+            venue_quantity = Decimal(str(response["origQty"]))
+            executed_quantity = Decimal(str(response.get("executedQty", "0")))
+        except (InvalidOperation, TypeError, ValueError):
+            return False, "ACK_QUANTITY_INVALID"
+        if (
+            not requested_quantity.is_finite()
+            or requested_quantity <= 0
+            or venue_quantity != requested_quantity
+            or not executed_quantity.is_finite()
+            or executed_quantity < 0
+            or executed_quantity > venue_quantity
+        ):
+            return False, "ACK_QUANTITY_MISMATCH"
+
+        if request.reduce_only:
+            reduce_only = response.get("reduceOnly")
+            enabled = reduce_only is True or str(reduce_only).strip().lower() in {"1", "true", "yes"}
+            if not enabled:
+                return False, "ACK_REDUCE_ONLY_UNPROVEN"
+        return True, "OK"
+
     async def create_order(self, request: OrderRequest) -> OrderResponse:
         # BD-T03 修复: 不构造 NEW/FILLED — 无真实传输时返回 UNKNOWN
-        if not self._health_monitor.is_safe_for_new_risk():
+        if not self._health_monitor.is_safe_for_new_risk() and not request.reduce_only:
             return OrderResponse(
                 venue_instrument=request.venue_instrument,
                 account_ref=request.account_ref,
@@ -359,11 +541,31 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     )
                 result = transport_result.data
                 if isinstance(result, dict) and "orderId" in result:
+                    ack_valid, ack_reason = self._validate_order_ack(request, result)
+                    if not ack_valid:
+                        logger.error("order acknowledgement rejected at adapter boundary: %s", ack_reason)
+                        return OrderResponse(
+                            venue_instrument=request.venue_instrument,
+                            account_ref=request.account_ref,
+                            order_id="",
+                            client_order_id=request.client_order_id,
+                            status=OrderStatus.UNKNOWN,
+                            side=request.side,
+                            order_type=request.order_type,
+                            original_quantity=request.quantity,
+                            executed_quantity=Quantity(amount="0"),
+                            average_price=None,
+                            commission=None,
+                            correlation_id=request.correlation_id,
+                            raw_response={"reason": ack_reason, "venue_response": result},
+                        )
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
                         order_id=str(result.get("orderId", "")),
-                        client_order_id=request.client_order_id,
+                        client_order_id=(
+                            str(result.get("clientOrderId")) if result.get("clientOrderId") else request.client_order_id
+                        ),
                         status=OrderStatus(str(result.get("status", OrderStatus.NEW.value))),
                         side=request.side,
                         order_type=request.order_type,
@@ -426,13 +628,18 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         raw_response={"reason": "api_call_failed"},
                     )
                 result = transport_result.data
-                if isinstance(result, dict) and result.get("orderId"):
+                valid, reason = self._validate_cancel_ack(order_id, venue_instrument, result)
+                if valid and isinstance(result, dict):
+                    status = OrderStatus(str(result["status"]))
                     return OrderResponse(
                         venue_instrument=venue_instrument,
                         account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
                         order_id=str(result["orderId"]),
                         client_order_id=result.get("clientOrderId"),
-                        status=OrderStatus.CANCELED,
+                        # A cancel response may race with a fill.  Preserve
+                        # the venue's terminal state instead of claiming
+                        # CANCELED merely because the DELETE request returned.
+                        status=status,
                         side=OrderSide(result.get("side", OrderSide.BUY.value)),
                         order_type=OrderType(result.get("type", OrderType.MARKET.value)),
                         original_quantity=Quantity(amount=str(result.get("origQty", "0"))),
@@ -442,6 +649,22 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         correlation_id=None,
                         raw_response=result,
                     )
+                logger.error("cancel acknowledgement rejected at adapter boundary: %s", reason)
+                return OrderResponse(
+                    venue_instrument=venue_instrument,
+                    account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
+                    order_id=order_id,
+                    client_order_id=None,
+                    status=OrderStatus.UNKNOWN,
+                    side=OrderSide.BUY,
+                    order_type=OrderType.MARKET,
+                    original_quantity=Quantity(amount="0"),
+                    executed_quantity=Quantity(amount="0"),
+                    average_price=None,
+                    commission=None,
+                    correlation_id=None,
+                    raw_response={"reason": reason, "venue_response": result},
+                )
             except (TypeError, ValueError, KeyError) as exc:
                 logger.warning("cancel order response could not be normalized: %s", exc)
         return OrderResponse(
@@ -459,6 +682,51 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             raw_response={"reason": "real_transport_pending_BD-T18"},
         )
 
+    @staticmethod
+    def _validate_cancel_ack(
+        order_id: str,
+        venue_instrument: VenueInstrument,
+        response: Any,
+    ) -> tuple[bool, str]:
+        """Require an identity-bound, terminal cancel response.
+
+        DELETE success is not itself a cancellation fact: the order may have
+        filled concurrently, or the venue may return an unrelated/malformed
+        row.  The caller must preserve the exact venue terminal status and
+        keep UNKNOWN on any ambiguity.
+        """
+
+        if not isinstance(response, dict):
+            return False, "CANCEL_ACK_NOT_OBJECT"
+        required = ("orderId", "symbol", "side", "type", "origQty", "executedQty", "status")
+        if any(response.get(field) in (None, "") for field in required):
+            return False, "CANCEL_ACK_IDENTITY_MISSING"
+        if str(response["orderId"]) != str(order_id):
+            return False, "CANCEL_ACK_ORDER_ID_MISMATCH"
+        if str(response["symbol"]).upper() != str(venue_instrument.instrument_id).upper():
+            return False, "CANCEL_ACK_SYMBOL_MISMATCH"
+        try:
+            status = OrderStatus(str(response["status"]))
+        except ValueError:
+            return False, "CANCEL_ACK_STATUS_UNKNOWN"
+        if status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.FILLED}:
+            return False, "CANCEL_ACK_NOT_TERMINAL"
+        try:
+            original = Decimal(str(response["origQty"]))
+            executed = Decimal(str(response["executedQty"]))
+        except (InvalidOperation, TypeError, ValueError):
+            return False, "CANCEL_ACK_QUANTITY_INVALID"
+        if not original.is_finite() or original <= 0 or not executed.is_finite() or executed < 0:
+            return False, "CANCEL_ACK_QUANTITY_INVALID"
+        if executed > original:
+            return False, "CANCEL_ACK_EXECUTED_QTY_INVALID"
+        try:
+            OrderSide(str(response["side"]))
+            OrderType(str(response["type"]))
+        except ValueError:
+            return False, "CANCEL_ACK_ORDER_SEMANTICS_UNKNOWN"
+        return True, "OK"
+
     async def get_order_status(self, order_id: str, venue_instrument: VenueInstrument) -> OrderStatus:
         if self._rest_client is not None:
             try:
@@ -475,10 +743,73 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     return OrderStatus.UNKNOWN
                 result = transport_result.data
                 if isinstance(result, dict):
+                    if str(result.get("orderId", "")) != str(order_id):
+                        return OrderStatus.UNKNOWN
+                    if str(result.get("symbol", "")).upper() != str(venue_instrument.instrument_id).upper():
+                        return OrderStatus.UNKNOWN
                     return OrderStatus(str(result.get("status", OrderStatus.UNKNOWN.value)))
             except (TypeError, ValueError, KeyError) as exc:
                 logger.warning("order status response could not be normalized: %s", exc)
         return OrderStatus.UNKNOWN
+
+    async def query_order_by_client_id(self, symbol: str, client_id: str) -> Result[dict[str, Any]]:
+        """Query one order by durable client id and bind the identity."""
+
+        symbol_value = str(symbol).strip().upper()
+        client_value = str(client_id).strip()
+        if not symbol_value or not client_value or self._rest_client is None:
+            return Result.failure(
+                "Client-order lookup requires transport, symbol and client id",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_order_recovery",
+            )
+        try:
+            response = await self.request(
+                "GET",
+                Endpoint.ORDER,
+                signed=True,
+                params={"symbol": symbol_value, "origClientOrderId": client_value},
+            )
+        except Exception as exc:
+            self._health_monitor.record_error(Endpoint.ORDER, type(exc).__name__)
+            return Result.failure(
+                f"Client-order lookup failed: {type(exc).__name__}",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_order_recovery",
+            )
+        if not response.is_success() or not isinstance(response.data, dict):
+            return Result.failure(
+                "Client-order lookup is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=response.data,
+                source="binance_order_recovery",
+            )
+        raw = response.data
+        required = ("orderId", "clientOrderId", "symbol", "status")
+        if any(raw.get(field) in (None, "") for field in required):
+            return Result.failure(
+                "Client-order lookup response is incomplete",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_order_recovery",
+            )
+        if str(raw["clientOrderId"]) != client_value or str(raw["symbol"]).upper() != symbol_value:
+            return Result.failure(
+                "Client-order lookup identity mismatch",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_order_recovery",
+            )
+        try:
+            OrderStatus(str(raw["status"]))
+        except ValueError:
+            return Result.failure(
+                "Client-order lookup status is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_order_recovery",
+            )
+        return Result.success(dict(raw), source="binance_order_recovery")
 
     @staticmethod
     def parse_algo_order_snapshot(raw: Any, account_ref: AccountRef) -> Result[AlgoOrderSnapshot]:
@@ -520,8 +851,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 trigger_price=Price(amount=str(raw["triggerPrice"])),
                 status=str(raw["algoStatus"]),
                 client_algo_id=(str(raw["clientAlgoId"]) if raw.get("clientAlgoId") else None),
-                reduce_only=(bool(raw["reduceOnly"]) if "reduceOnly" in raw else None),
-                close_position=(bool(raw["closePosition"]) if "closePosition" in raw else None),
+                reduce_only=(_strict_bool(raw["reduceOnly"], field_name="reduceOnly") if "reduceOnly" in raw else None),
+                close_position=(
+                    _strict_bool(raw["closePosition"], field_name="closePosition") if "closePosition" in raw else None
+                ),
                 position_side=(str(raw["positionSide"]) if raw.get("positionSide") else None),
                 update_time_ms=update_time_ms,
                 raw_response=dict(raw),
@@ -584,7 +917,56 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_algo_adapter",
             )
         account_ref = AccountRef(venue_id=self._venue_id, account_id=self._account_id)
-        return self.parse_algo_order_snapshot(response.data, account_ref)
+        parsed = self.parse_algo_order_snapshot(response.data, account_ref)
+        if not parsed.is_success() or parsed.data is None:
+            return parsed
+
+        # A venue id alone is not proof that the requested protection was
+        # installed.  Bind the typed acknowledgement to the exact command at
+        # this boundary so callers cannot mark a mismatched/ non-reduce-only
+        # conditional order ACTIVE from a partial response.
+        raw = parsed.data.raw_response
+        expected_symbol = str(params.get("symbol", "")).strip().upper()
+        expected_side = str(params.get("side", "")).strip().upper()
+        expected_type = str(params.get("type", "")).strip().upper()
+        actual_symbol = str(raw.get("symbol", "")).strip().upper()
+        actual_side = str(raw.get("side", "")).strip().upper()
+        actual_type = str(raw.get("orderType", "")).strip().upper()
+        mismatches: list[str] = []
+        if not expected_symbol or actual_symbol != expected_symbol:
+            mismatches.append("symbol")
+        if not expected_side or actual_side != expected_side:
+            mismatches.append("side")
+        if not expected_type or actual_type != expected_type:
+            mismatches.append("orderType")
+
+        def _enabled(value: Any) -> bool:
+            return value is True or str(value).strip().lower() in {"1", "true", "yes"}
+
+        if _enabled(params.get("reduceOnly")) and not _enabled(raw.get("reduceOnly")):
+            mismatches.append("reduceOnly")
+        if _enabled(params.get("closePosition")) and not _enabled(raw.get("closePosition")):
+            mismatches.append("closePosition")
+
+        requested_quantity = params.get("quantity")
+        response_quantity = raw.get("quantity")
+        if requested_quantity not in (None, "") and not _enabled(params.get("closePosition")):
+            try:
+                if Decimal(str(requested_quantity)) <= 0 or Decimal(str(response_quantity)) != Decimal(
+                    str(requested_quantity)
+                ):
+                    mismatches.append("quantity")
+            except (InvalidOperation, TypeError, ValueError):
+                mismatches.append("quantity")
+
+        if mismatches:
+            return Result.failure(
+                "Algo acknowledgement does not match request: " + ",".join(mismatches),
+                category=ErrorCategory.UNKNOWN,
+                raw=response.data,
+                source="binance_algo_adapter",
+            )
+        return parsed
 
     async def cancel_algo_order(self, symbol: str, algo_id: int) -> Result[dict[str, Any]]:
         """Cancel one explicitly identified Algo order; no cancel-all fallback."""

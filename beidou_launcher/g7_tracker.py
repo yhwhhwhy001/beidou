@@ -25,7 +25,7 @@ SLI_NAMES = [
     "reconciliation",
     "recovery_bounded",
     "incident_closure",
-    "error_rate",
+    "cost_and_pnl_reporting",
 ]
 
 # 每个 SLI 的阈值（PASS 需要 >= threshold）
@@ -36,7 +36,7 @@ SLI_THRESHOLDS: dict[str, float] = {
     "reconciliation": 0.99,
     "recovery_bounded": 1.0,
     "incident_closure": 0.90,
-    "error_rate": 0.99,
+    "cost_and_pnl_reporting": 0.99,
 }
 
 
@@ -132,6 +132,18 @@ class G7LiveTracker:
         self._minimum_cycles = minimum_cycles
         self._invalidated = False
         self._invalidated_reason = ""
+        self._recovery_context_seen = False
+        self._recovery_bounded = False
+        # This tracker is diagnostic only.  Eligibility additionally requires
+        # the durable certification producer to expose exactly one explicitly
+        # started, schema-complete RUNNING window; in-process counters alone
+        # can never certify an unattended period.
+        self._durable_window_running = False
+
+    def set_durable_window_state(self, *, running: bool, evidence_state_complete: bool) -> None:
+        """Bind diagnostic eligibility to the durable G7 producer state."""
+
+        self._durable_window_running = bool(running and evidence_state_complete)
 
     def feed(self, checks: list[CheckResult]) -> None:
         """从当前监控检查结果中提取 SLI 样本。"""
@@ -167,24 +179,29 @@ class G7LiveTracker:
         recon_ok = recon is not None and recon.status == CheckStatus.PASS
         self._slis["reconciliation"].record(1.0 if recon_ok else 0.0)
 
-        # 5. recovery_bounded: recovery 受限时记录
-        # （由 supervisor._recovery_timestamps 长度 + max_restarts 判定，
-        #  此处默认 PASS，由 supervisor 传入额外上下文）
-        self._slis["recovery_bounded"].record(1.0)
+        # 5. recovery_bounded: no context is not a PASS.  The supervisor
+        # must provide the restart budget result explicitly; otherwise G7
+        # would certify a window whose recovery behavior was never observed.
+        self._slis["recovery_bounded"].record(1.0 if self._recovery_context_seen and self._recovery_bounded else 0.0)
 
         # 6. incident_closure: 活动事故计数
         incidents = check_map.get("runtime.health.incidents")
         inc_ok = incidents is not None and incidents.status == CheckStatus.PASS
         self._slis["incident_closure"].record(1.0 if inc_ok else 0.0)
 
-        # 7. error_rate: 错误计数
-        errors = check_map.get("runtime.health.errors")
-        err_ok = errors is not None and errors.status == CheckStatus.PASS
-        self._slis["error_rate"].record(1.0 if err_ok else 0.0)
+        # 7. cost_and_pnl_reporting: this is deliberately independent from
+        # runtime error rate.  Until an authoritative cost/PnL evidence check
+        # is produced by the ledger/reporting chain, the SLI is zero rather
+        # than treating "no runtime errors" as financial evidence.
+        cost_pnl = check_map.get("runtime.safety.cost_and_pnl_reporting")
+        cost_pnl_ok = cost_pnl is not None and cost_pnl.status == CheckStatus.PASS
+        self._slis["cost_and_pnl_reporting"].record(1.0 if cost_pnl_ok else 0.0)
 
     def feed_recovery_context(self, recovery_count: int, max_restarts: int) -> None:
         """补充 recovery_bounded SLI 上下文（由 supervisor 传入）。"""
         bounded = recovery_count <= max_restarts if max_restarts > 0 else recovery_count == 0
+        self._recovery_context_seen = True
+        self._recovery_bounded = bounded
         self._slis["recovery_bounded"].record(1.0 if bounded else 0.0)
         if not bounded:
             self._invalidated = True
@@ -218,8 +235,10 @@ class G7LiveTracker:
             "invalidated_reason": self._invalidated_reason,
             "g7_eligible": (
                 self.all_slis_passing
+                and self._durable_window_running
                 and elapsed >= self._minimum_elapsed_seconds
                 and self._cycle_count >= self._minimum_cycles
             ),
+            "durable_window_running": self._durable_window_running,
             "slis": sli_details,
         }

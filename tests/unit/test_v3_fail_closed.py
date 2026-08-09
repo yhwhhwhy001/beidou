@@ -7,6 +7,9 @@ exchange calls.  They are the first proof slice for BD-V3-01/BD-V3-03.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import sys
+import time
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,9 +24,123 @@ from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
 from beidou_launcher.preflight import run_preflight
 
 
+class _PreflightCursor:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+
+class _PreflightConnection:
+    def __init__(self, migration_rows: list[tuple[str, str]], missing_table: str | None = None) -> None:
+        self._migration_rows = migration_rows
+        self._missing_table = missing_table
+
+    def __enter__(self) -> "_PreflightConnection":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...]) -> _PreflightCursor:
+        if "to_regclass" in sql:
+            table = str(params[0]).removeprefix("public.")
+            if table == self._missing_table:
+                return _PreflightCursor([(None,)])
+            return _PreflightCursor([(table,)])
+        return _PreflightCursor(self._migration_rows)
+
+
+def _migration_rows(repo: Path) -> list[tuple[str, str]]:
+    from beidou_infra.postgres_store import PostgresPersistentStore
+
+    return [
+        (
+            version,
+            hashlib.sha256((repo / "migrations" / f"{version}.sql").read_bytes()).hexdigest(),
+        )
+        for version in PostgresPersistentStore._required_migration_versions
+    ]
+
+
+def test_postgres_preflight_requires_real_authority_and_migration_head(monkeypatch) -> None:
+    from beidou_launcher.preflight import _postgres_authority_probe
+
+    repo = Path(__file__).parents[2]
+    fake_psycopg = SimpleNamespace(
+        connect=lambda *_args, **_kwargs: _PreflightConnection(_migration_rows(repo)),
+    )
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+
+    ok, message, evidence = _postgres_authority_probe(repo, "postgresql://user:secret@db/beidou")
+
+    assert ok is True
+    assert "verified" in message
+    assert evidence["missing_tables"] == []
+    assert evidence["missing_migrations"] == []
+    assert evidence["checksum_mismatch"] == []
+    assert "secret" not in message
+
+
+def test_postgres_preflight_does_not_leak_dsn_on_connection_failure(monkeypatch) -> None:
+    from beidou_launcher.preflight import _postgres_authority_probe
+
+    class BrokenPsycopg:
+        @staticmethod
+        def connect(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("password is required for db secret")
+
+    monkeypatch.setitem(sys.modules, "psycopg", BrokenPsycopg)
+
+    repo = Path(__file__).parents[2]
+    ok, message, evidence = _postgres_authority_probe(repo, "postgresql://user:secret@db/beidou")
+
+    assert ok is False
+    assert message == "PostgreSQL authority connection failed"
+    assert evidence["error_type"] == "RuntimeError"
+    assert "secret" not in message
+
+
+def test_postgres_preflight_rejects_schema_and_checksum_drift(monkeypatch) -> None:
+    from beidou_launcher.preflight import _postgres_authority_probe
+
+    repo = Path(__file__).parents[2]
+    rows = _migration_rows(repo)
+    rows[0] = (rows[0][0], "drifted-checksum")
+    fake_psycopg = SimpleNamespace(
+        connect=lambda *_args, **_kwargs: _PreflightConnection(rows, missing_table="v3_transactional_outbox"),
+    )
+    monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+
+    ok, message, evidence = _postgres_authority_probe(repo, "postgresql://user:secret@db/beidou")
+
+    assert ok is False
+    assert message == "PostgreSQL required tables are missing"
+    assert evidence["missing_tables"] == ["v3_transactional_outbox"]
+    assert evidence["checksum_mismatch"] == ["001_initial_schema.up"]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: _PreflightConnection(rows)),
+    )
+    ok, message, evidence = _postgres_authority_probe(repo, "postgresql://user:secret@db/beidou")
+    assert ok is False
+    assert message == "PostgreSQL migration checksum drift detected"
+    assert evidence["checksum_mismatch"] == ["001_initial_schema.up"]
+
+
 def test_testnet_without_signing_key_is_a_p0_startup_blocker(monkeypatch, tmp_path: Path) -> None:
     """A writable environment must never fall back to a built-in signing key."""
 
+    monkeypatch.setattr(
+        "beidou_launcher.preflight._postgres_authority_probe",
+        lambda *_args: (True, "PostgreSQL authority and migration head verified", {}),
+    )
     monkeypatch.delenv("BEIDOU_SIGNING_KEY", raising=False)
     monkeypatch.setenv("BEIDOU_BINANCE_API_KEY", "testnet-api-key-value")
     monkeypatch.setenv("BEIDOU_BINANCE_API_SECRET", "testnet-api-secret-value")
@@ -34,6 +151,22 @@ def test_testnet_without_signing_key_is_a_p0_startup_blocker(monkeypatch, tmp_pa
     assert signing.status == CheckStatus.FAIL
     assert signing.severity == CheckSeverity.P0
     assert "mock" not in signing.message.lower()
+
+
+def test_testnet_without_signed_policy_is_a_p0_startup_blocker(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "beidou_launcher.preflight._postgres_authority_probe",
+        lambda *_args: (True, "PostgreSQL authority and migration head verified", {}),
+    )
+    monkeypatch.setenv("BEIDOU_BINANCE_API_KEY", "testnet-api-key-value")
+    monkeypatch.setenv("BEIDOU_BINANCE_API_SECRET", "testnet-api-secret-value")
+    monkeypatch.setenv("BEIDOU_SIGNING_KEY", "testnet-signing-key-value")
+
+    checks, _settings = run_preflight(tmp_path, "testnet", 19091)
+
+    policy = next(item for item in checks if item.check_id == "preflight.signed_policy")
+    assert policy.status == CheckStatus.FAIL
+    assert policy.severity == CheckSeverity.P0
 
 
 def test_supervisor_write_interlock_requires_live_resume_authority(tmp_path: Path) -> None:
@@ -128,6 +261,15 @@ def test_supervisor_has_no_transient_authority_bypass() -> None:
     assert frozenset() == BeidouSupervisor._TRANSIENT_CHECK_IDS
 
 
+def test_monitor_loop_health_uses_monotonic_clock() -> None:
+    from beidou_observability.monitoring.checks.monitor_self import check_monitor_loop_health
+    from beidou_observability.monitoring.contracts import CheckStatus
+
+    now = time.monotonic()
+    assert check_monitor_loop_health(now - 1.0, max_stall=30.0).status is CheckStatus.PASS
+    assert check_monitor_loop_health(now - 31.0, max_stall=30.0).status is CheckStatus.FAIL
+
+
 def test_startup_report_does_not_claim_pass_before_live_readiness() -> None:
     from beidou_launcher.models import StartupReport
 
@@ -167,6 +309,15 @@ def test_configured_trading_pool_entries_are_not_active_without_evidence() -> No
     assert "Bootstrap:" not in source
 
 
+def test_testnet_reconciliation_failure_cannot_enter_active() -> None:
+    import inspect
+
+    source = inspect.getsource(AutonomousEngine.run)
+    assert "testnet: reconciliation deferred" not in source
+    assert 'self._env_mode.value != "testnet"' not in source
+    assert "if not recon_ok:" in source
+
+
 def test_health_server_defaults_to_loopback() -> None:
     assert HealthServer()._bind_host == "127.0.0.1"
 
@@ -176,6 +327,17 @@ def test_g7_is_not_eligible_without_real_elapsed_window_or_samples() -> None:
     summary = tracker.summary()
     assert summary["g7_eligible"] is False
     assert summary["all_slis_passing"] is False
+    assert summary["durable_window_running"] is False
+
+
+def test_g7_diagnostic_eligibility_requires_durable_window_binding() -> None:
+    tracker = G7LiveTracker(minimum_elapsed_seconds=0.0, minimum_cycles=1)
+    tracker.set_durable_window_state(running=False, evidence_state_complete=True)
+    assert tracker.summary()["g7_eligible"] is False
+    tracker.set_durable_window_state(running=True, evidence_state_complete=True)
+    # Other SLI samples are intentionally absent, so binding alone never
+    # certifies the window.
+    assert tracker.summary()["g7_eligible"] is False
 
 
 def test_g7_p0_invalidates_the_window() -> None:
@@ -198,6 +360,34 @@ def test_g7_p0_invalidates_the_window() -> None:
     assert summary["invalidated"] is True
 
 
+def test_g7_recovery_sli_requires_explicit_supervisor_context() -> None:
+    tracker = G7LiveTracker()
+    assert tracker._slis["recovery_bounded"].window_pass_rate == 0.0
+    tracker.feed_recovery_context(recovery_count=0, max_restarts=3)
+    assert tracker._slis["recovery_bounded"].window_pass_rate == 1.0
+
+
+def test_g7_cost_pnl_sli_does_not_alias_runtime_error_rate() -> None:
+    tracker = G7LiveTracker()
+    from beidou_launcher.models import CheckResult
+
+    tracker.feed(
+        [
+            CheckResult(
+                "runtime.health.errors",
+                "errors",
+                CheckStatus.PASS,
+                CheckSeverity.P2,
+                "no errors",
+            )
+        ]
+    )
+    summary = tracker.summary()
+    assert "cost_and_pnl_reporting" in summary["slis"]
+    assert "error_rate" not in summary["slis"]
+    assert summary["slis"]["cost_and_pnl_reporting"]["latest_value"] == 0.0
+
+
 def test_config_safe_defaults_do_not_offer_network_write() -> None:
     from beidou_shared.config import ConfigProvider, Environment
 
@@ -215,6 +405,113 @@ def test_unsupported_state_backend_cannot_report_trading_ready() -> None:
     engine._state_backend_supported = False
     assert engine._check_ready() is False
     assert engine._check_trading_ready() == (False, "STATE_BACKEND_UNSUPPORTED")
+
+
+def test_unsupported_state_backend_rejects_live_risk_increase_at_executor() -> None:
+    rejected: list[tuple[str, str, str]] = []
+    engine = object.__new__(AutonomousEngine)
+    engine._can_write = True
+    engine._state_backend_supported = False
+    engine._outbox = SimpleNamespace(
+        reject=lambda intent_id, reason, idempotency_key="": rejected.append((intent_id, reason, idempotency_key))
+    )
+    intent = SimpleNamespace(intent_id="intent-backend-block", idempotency_key="idem-backend-block")
+
+    asyncio.run(engine._place_order(intent))
+
+    assert rejected == [("intent-backend-block", "STATE_BACKEND_UNSUPPORTED", "idem-backend-block")]
+
+
+def test_durable_protection_coverage_is_per_position_side_quantity_and_generation() -> None:
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"BTCUSDT": 7}
+    engine._position_projection = {"BTCUSDT": {"position_generation": 7}}
+    positions = [{"symbol": "BTCUSDT", "positionAmt": "1.0"}]
+    protections = [
+        {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "quantity": "1.0",
+            "order_type": "STOP_MARKET",
+            "stop_type": "FIXED_PERCENT",
+            "position_generation": 7,
+            "exchange_order_id": "algo-sl-7",
+        },
+        {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "quantity": "0.5",
+            "order_type": "TAKE_PROFIT_MARKET",
+            "take_profit_type": "FIXED_RR",
+            "position_generation": 7,
+            "exchange_order_id": "algo-tp-7",
+        },
+    ]
+
+    covered, evidence = engine._assess_protection_coverage(positions, protections)
+    assert covered is True
+    assert evidence["unprotected_symbols"] == []
+
+    # A stale generation and a wrong-side order must not satisfy coverage.
+    stale_or_wrong_side = [
+        {**protections[0], "side": "BUY"},
+        {**protections[1], "position_generation": 6},
+    ]
+    covered, evidence = engine._assess_protection_coverage(positions, stale_or_wrong_side)
+    assert covered is False
+    assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
+
+
+def test_durable_protection_coverage_rejects_partial_stop_even_when_total_quantity_matches() -> None:
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"ETHUSDT": 2}
+    engine._position_projection = {"ETHUSDT": {"position_generation": 2}}
+    positions = [{"symbol": "ETHUSDT", "positionAmt": "2"}]
+    protections = [
+        {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "quantity": "1",
+            "order_type": "STOP_MARKET",
+            "stop_type": "FIXED_PERCENT",
+            "position_generation": 2,
+            "exchange_order_id": "algo-sl-2",
+        },
+        {
+            "symbol": "ETHUSDT",
+            "side": "SELL",
+            "quantity": "1",
+            "order_type": "TAKE_PROFIT_MARKET",
+            "take_profit_type": "FIXED_RR",
+            "position_generation": 2,
+            "exchange_order_id": "algo-tp-2",
+        },
+    ]
+
+    covered, evidence = engine._assess_protection_coverage(positions, protections)
+    assert covered is False
+    assert evidence["unprotected_symbols"][0]["stop_quantity"] == "1"
+
+
+def test_durable_protection_coverage_rejects_orphan_exchange_ack() -> None:
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {}
+    engine._position_projection = {}
+    orphan = {
+        "symbol": "SOLUSDT",
+        "side": "SELL",
+        "quantity": "3",
+        "order_type": "STOP_MARKET",
+        "stop_type": "FIXED_PERCENT",
+        "position_generation": 1,
+        "exchange_order_id": "algo-orphan",
+    }
+
+    covered, evidence = engine._assess_protection_coverage([], [orphan])
+    assert covered is False
+    assert evidence["unprotected_symbols"] == [
+        {"symbol": "SOLUSDT", "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
+    ]
 
 
 def test_unknown_protection_config_freezes_new_risk_without_synthetic_defaults() -> None:
@@ -239,6 +536,20 @@ def test_unknown_protection_config_freezes_new_risk_without_synthetic_defaults()
     assert incidents
 
 
+def test_protection_retry_cannot_widen_approved_trigger_at_runtime() -> None:
+    """A rejected venue protection must stay UNKNOWN, not become a new policy."""
+
+    source = (Path(__file__).parents[2] / "beidou_core/engine.py").read_text(encoding="utf-8")
+    retry_section = source[
+        source.index("async def _retry_missing_protections") : source.index("async def _nearline_tick")
+    ]
+    assert "widen_factor" not in retry_section
+    assert "base_pct" not in retry_section
+    assert "widened_sl" not in retry_section
+    assert "widened_tp" not in retry_section
+    assert "approved trigger" in retry_section
+
+
 def test_factor_promotion_gate_never_allows_unverified_active() -> None:
     from beidou_research.factors.factor import FactorLifecycle, FactorPromotionGate
 
@@ -251,6 +562,70 @@ def test_factor_promotion_gate_never_allows_unverified_active() -> None:
     )
     assert decision.approved is False
     assert "Missing required evidence" in decision.reason
+
+
+def test_factor_promotion_gate_binds_active_to_sealed_bundle() -> None:
+    from beidou_research.factors.factor import FactorLifecycle, FactorPromotionGate
+    from beidou_research.mining.evidence import EvidenceBundle
+
+    gate = FactorPromotionGate()
+    bundle = EvidenceBundle(
+        bundle_id="bundle-1",
+        candidate_id="candidate-1",
+        factor_id="factor-1",
+        factor_version="1.0.0",
+        candidate_hash="c" * 64,
+        factor_code_hash="f" * 64,
+        dataset_manifest_hash="d" * 64,
+        feature_manifest_hash="e" * 64,
+        label_spec_hash="label-1",
+        cost_model_version="cost-1",
+        policy_version="policy-1",
+        gate_decision="PASS",
+    )
+    bundle.seal()
+    performance = SimpleNamespace(icir=0.2, sample_count=500, ic_mean=0.1)
+    decision = gate.validate_evidence(
+        "factor-1",
+        FactorLifecycle.CHALLENGER,
+        FactorLifecycle.ACTIVE,
+        performance=performance,
+        evidence_ids=[
+            "sealed_oos_verified",
+            "cost_capacity_verified",
+            "paper_shadow_verified",
+            "active_approval",
+        ],
+        factor_version="1.0.0",
+        commit="a" * 40,
+        dataset_hash="d" * 64,
+        policy_version="policy-1",
+        falsifier="operator@example.invalid",
+        evidence_bundle=bundle,
+    )
+
+    assert decision.approved is True
+
+    mismatch = gate.validate_evidence(
+        "factor-1",
+        FactorLifecycle.CHALLENGER,
+        FactorLifecycle.ACTIVE,
+        performance=performance,
+        evidence_ids=[
+            "sealed_oos_verified",
+            "cost_capacity_verified",
+            "paper_shadow_verified",
+            "active_approval",
+        ],
+        factor_version="1.0.0",
+        commit="a" * 40,
+        dataset_hash="x" * 64,
+        policy_version="policy-1",
+        falsifier="operator@example.invalid",
+        evidence_bundle=bundle,
+    )
+    assert mismatch.approved is False
+    assert "dataset_manifest_hash mismatch" in mismatch.reason
 
 
 def test_startup_wait_does_not_authorize_resume_with_runtime_blocker(tmp_path: Path) -> None:

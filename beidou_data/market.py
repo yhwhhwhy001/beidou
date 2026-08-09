@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -147,7 +148,10 @@ class ClosedBar:
     quote_volume: Quantity | None = None
     trade_count: int = 0
     taker_buy_volume: Quantity | None = None
-    is_closed: bool = True
+    # Missing close evidence must never be interpreted as a closed bar.  A
+    # caller must explicitly provide the venue close flag (or ``x``) before a
+    # bar can enter a strategy feature set.
+    is_closed: bool = False
     schema_version: SchemaVersion = field(default_factory=lambda: SchemaVersion("2.0.0"))
     data_quality_tier: str = "UNKNOWN"
     revision: int = 0
@@ -166,6 +170,7 @@ class BarIntegrity(str, Enum):
     """Bar 完整性状态。"""
 
     OK = "OK"
+    INVALID = "INVALID"
     DUPLICATE = "DUPLICATE"
     OUT_OF_ORDER = "OUT_OF_ORDER"
     GAP_DETECTED = "GAP_DETECTED"
@@ -212,7 +217,7 @@ class ClosedBarNormalizer:
             open_time_val = raw.get("open_time")
             close_time_val = raw.get("close_time")
             if open_time_val is None or close_time_val is None:
-                return ClosedBarResult(None, BarIntegrity.NOT_CLOSED, "Missing open_time or close_time", cid)
+                return ClosedBarResult(None, BarIntegrity.INVALID, "Missing open_time or close_time", cid)
 
             if isinstance(open_time_val, (int, float)):
                 open_time = datetime.fromtimestamp(open_time_val / 1000, tz=timezone.utc)
@@ -224,9 +229,54 @@ class ClosedBarNormalizer:
             else:
                 close_time = datetime.fromisoformat(str(close_time_val))
 
-            is_closed = raw.get("is_closed", raw.get("x", True))
+            # Binance websocket payloads use ``x``; REST/normalized payloads
+            # use ``is_closed``.  If neither is present, the state is UNKNOWN
+            # and therefore unsafe for strategy input.
+            is_closed = raw.get("is_closed", raw.get("x", False))
             if isinstance(is_closed, str):
                 is_closed = is_closed.lower() in ("true", "1", "yes")
+
+            # OHLCV is a strategy input, not an optional display field.  Do
+            # not turn absent, non-finite, or nonsensical values into zeroes:
+            # doing so can create a synthetic price/volume regime that passes
+            # the rest of the pipeline.  Volume may legitimately be zero for
+            # a closed no-trade candle, while prices must be strictly positive.
+            required_fields = ("open", "high", "low", "close", "volume")
+            missing_fields = [
+                name
+                for name in required_fields
+                if name not in raw or raw[name] is None or (isinstance(raw[name], str) and not raw[name].strip())
+            ]
+            if missing_fields:
+                return ClosedBarResult(
+                    None,
+                    BarIntegrity.INVALID,
+                    f"Missing required OHLCV fields: {','.join(missing_fields)}",
+                    cid,
+                )
+
+            numeric_values: dict[str, float] = {}
+            for name in required_fields:
+                value = raw[name]
+                if isinstance(value, bool):
+                    return ClosedBarResult(None, BarIntegrity.INVALID, f"Invalid OHLCV field: {name}", cid)
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    return ClosedBarResult(None, BarIntegrity.INVALID, f"Invalid OHLCV field: {name}", cid)
+                if not math.isfinite(numeric):
+                    return ClosedBarResult(None, BarIntegrity.INVALID, f"Non-finite OHLCV field: {name}", cid)
+                if name == "volume":
+                    if numeric < 0:
+                        return ClosedBarResult(None, BarIntegrity.INVALID, "Negative volume", cid)
+                elif numeric <= 0:
+                    return ClosedBarResult(None, BarIntegrity.INVALID, f"Non-positive price field: {name}", cid)
+                numeric_values[name] = numeric
+
+            if numeric_values["high"] < max(numeric_values["open"], numeric_values["close"], numeric_values["low"]):
+                return ClosedBarResult(None, BarIntegrity.INVALID, "High is below an OHLC value", cid)
+            if numeric_values["low"] > min(numeric_values["open"], numeric_values["close"], numeric_values["high"]):
+                return ClosedBarResult(None, BarIntegrity.INVALID, "Low is above an OHLC value", cid)
 
             self._seq_counter += 1
             bar = ClosedBar(
@@ -234,11 +284,11 @@ class ClosedBarNormalizer:
                 open_time=open_time,
                 close_time=close_time,
                 interval=interval,
-                open=Price(amount=str(raw.get("open", 0))),
-                high=Price(amount=str(raw.get("high", 0))),
-                low=Price(amount=str(raw.get("low", 0))),
-                close=Price(amount=str(raw.get("close", 0))),
-                volume=Quantity(amount=str(raw.get("volume", 0))),
+                open=Price(amount=str(raw["open"])),
+                high=Price(amount=str(raw["high"])),
+                low=Price(amount=str(raw["low"])),
+                close=Price(amount=str(raw["close"])),
+                volume=Quantity(amount=str(raw["volume"])),
                 quote_volume=Quantity(amount=str(raw.get("quote_volume", 0))) if raw.get("quote_volume") else None,
                 trade_count=int(raw.get("trade_count", raw.get("n", 0))),
                 taker_buy_volume=Quantity(amount=str(raw.get("taker_buy_volume", 0)))
@@ -289,7 +339,7 @@ class ClosedBarNormalizer:
             return ClosedBarResult(bar, BarIntegrity.OK, f"Normalized: {audit_key}", cid)
 
         except Exception as e:
-            return ClosedBarResult(None, BarIntegrity.NOT_CLOSED, f"Normalization failed: {e}", cid)
+            return ClosedBarResult(None, BarIntegrity.INVALID, f"Normalization failed: {e}", cid)
 
     def revise(self, bar: ClosedBar, updated_raw: dict) -> ClosedBarResult:
         """修订 bar — 不可覆盖原始版本，revision+1。"""

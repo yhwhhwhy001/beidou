@@ -1,5 +1,7 @@
 # BF-01 点时数据与标签合同 — 完成报告
 
+> 历史任务快照：本文件保留 BF-01 当时的测试记录（560 passed、2 failed），不代表当前全仓库状态；当前回归与发布判定以 `docs/optimization/15_EXECUTION_DELIVERY.md` 为准。
+
 - **任务**: BF-01
 - **优先级**: P0
 - **前置**: BF-00 ✅
@@ -37,10 +39,15 @@
 
 ```python
 PredictionKey(
-    venue, symbol, timeframe,           # 品种/周期隔离
-    prediction_time, data_available_time,  # 点时约束
-    horizon, horizon_unit,              # 持有期
-    factor_id, factor_version,          # 版本追溯
+    venue,
+    symbol,
+    timeframe,  # 品种/周期隔离
+    prediction_time,
+    data_available_time,  # 点时约束
+    horizon,
+    horizon_unit,  # 持有期
+    factor_id,
+    factor_version,  # 版本追溯
 )
 ```
 
@@ -50,13 +57,16 @@ PredictionKey(
 
 ```python
 LabelRecord(
-    label_id, prediction_key,           # 唯一标识 + 关联预测
-    label_start_time, label_end_time,   # 标签时间区间
-    label_available_time,               # 标签变为可知的时间
-    label_value, gross_return,          # 标签值与原始收益
-    expected_cost_bps,                  # 预期成本
-    quality_status,                     # VALID/FUTURE_LEAK/OVERLAPPING/...
-    revision,                           # 修订版本号
+    label_id,
+    prediction_key,  # 唯一标识 + 关联预测
+    label_start_time,
+    label_end_time,  # 标签时间区间
+    label_available_time,  # 标签变为可知的时间
+    label_value,
+    gross_return,  # 标签值与原始收益
+    expected_cost_bps,  # 预期成本
+    quality_status,  # VALID/FUTURE_LEAK/OVERLAPPING/...
+    revision,  # 修订版本号
 )
 ```
 

@@ -49,10 +49,11 @@ def main() -> int:
         from beidou_certification.unattended import UnattendedCertification
 
         engine = UnattendedCertification(str(evidence_dir))
-        window = engine.create_window("v1.0", duration_days=30)
-        window.window_id = args.window_id
-        engine._windows[args.window_id] = window
-        engine._active_window = window
+        # Bind the simulation to the operator-supplied ID through the public
+        # API.  Do not create an orphan random window and then mutate private
+        # state: that can leave misleading state artifacts beside the target
+        # evidence and bypass the path/duplicate checks in create_window().
+        engine.create_window("v1.0", duration_days=30, window_id=args.window_id)
         print("\n⏩ FAST-FORWARD MODE: Simulating 30-day window with historical data...")
         result = engine.fast_forward(args.window_id, duration_days=30)
         if result.get("status") == "PASS":

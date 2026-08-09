@@ -8,7 +8,7 @@ import plistlib
 import signal
 import time
 import tomllib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -28,12 +28,14 @@ def test_registry_is_complete() -> None:
 
 def test_blocking_semantics() -> None:
     failure = CheckResult("x", "x", CheckStatus.FAIL, CheckSeverity.P0, "blocked")
+    unknown = CheckResult("u", "u", CheckStatus.UNKNOWN, CheckSeverity.P1, "fact unavailable")
     warning = CheckResult("y", "y", CheckStatus.WARN, CheckSeverity.P1, "warn")
-    report = StartupReport("paper", ["BTCUSDT"], 9090, "abc", checks=[failure, warning])
+    report = StartupReport("paper", ["BTCUSDT"], 9090, "abc", checks=[failure, unknown, warning])
     assert failure.is_blocking is True
+    assert unknown.is_blocking is True
     assert warning.is_blocking is False
     assert report.passed is False
-    assert report.blockers == [failure]
+    assert report.blockers == [failure, unknown]
 
 
 def test_instance_lock_removes_stale_pid(tmp_path: Path) -> None:
@@ -56,6 +58,23 @@ def test_console_script_aliases() -> None:
         "北斗": "beidou_launcher.cli:main",
         "bd": "beidou_launcher.cli:main",
     }
+
+
+def test_launcher_requires_explicit_symbol_universe() -> None:
+    from beidou_launcher.cli import _parse_symbols
+
+    assert _parse_symbols("BTCUSDT, ethusdt") == ["BTCUSDT", "ETHUSDT"]
+    assert _parse_symbols("DEFAULT") == []
+    assert _parse_symbols("ALL") == []
+
+
+def test_engine_rejects_missing_or_fixed_symbol_universe() -> None:
+    from beidou_core.engine import AutonomousEngine
+
+    with pytest.raises(ValueError, match="EXPLICIT_SYMBOL_UNIVERSE_REQUIRED"):
+        AutonomousEngine([], mode="paper")
+    with pytest.raises(ValueError, match="EXPLICIT_SYMBOL_UNIVERSE_REQUIRED"):
+        AutonomousEngine(["DEFAULT"], mode="paper")
 
 
 def _runtime_engine() -> Any:
@@ -131,6 +150,12 @@ def _runtime_engine() -> Any:
     engine._last_realtime = time.time()
     engine._last_nearline = time.time()
     engine._last_recon = time.time()
+    engine._last_reconciliation_result = SimpleNamespace(
+        matched=True,
+        status=SimpleNamespace(value="MATCHED"),
+        checked_at=datetime.now(timezone.utc),
+        differences=[],
+    )
     engine._error_count = 0
     engine._last_account = {
         "totalWalletBalance": "1000",
@@ -141,6 +166,141 @@ def _runtime_engine() -> Any:
     engine._recon = Reconciliation()
     engine._alerts = SimpleNamespace(get_active_incidents=lambda: [])
     return engine
+
+
+def test_critical_alert_delivery_is_a_runtime_p0_blocker() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._alerts = SimpleNamespace(
+        get_active_incidents=lambda: [],
+        get_delivery_health=lambda: {
+            "configured": True,
+            "pending": 1,
+            "failed": 1,
+            "dead_letter": 0,
+            "critical_pending": 1,
+            "unknown": 0,
+        },
+    )
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    delivery = next(item for item in checks if item.check_id == "runtime.health.alert_delivery")
+    assert delivery.status is CheckStatus.FAIL
+    assert delivery.severity.value == "P0"
+    assert delivery.is_blocking is True
+
+
+def test_stopped_engine_loop_is_runtime_p0_after_resume_authorization() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._running = False
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    loop = next(item for item in checks if item.check_id == "runtime.health.engine_loop")
+    assert loop.status is CheckStatus.FAIL
+    assert loop.severity is CheckSeverity.P0
+    assert loop.is_blocking is True
+
+
+def test_runtime_heartbeat_evidence_declares_monotonic_clock() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._running = True
+    engine._last_realtime_mono = time.monotonic()
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    heartbeat = next(item for item in checks if item.check_id == "runtime.health.realtime_heartbeat")
+    assert heartbeat.evidence["clock"] == "monotonic"
+
+
+def test_authority_reconciliation_fact_is_required_and_fresh() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=False,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
+    assert authority.status is CheckStatus.PASS
+    assert authority.severity is CheckSeverity.P0
+
+    engine._last_reconciliation_result = None
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=False,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
+    assert authority.status is CheckStatus.FAIL
+    assert authority.is_blocking is True
+
+    engine._last_reconciliation_result = SimpleNamespace(
+        matched=True,
+        status=SimpleNamespace(value="MATCHED"),
+        checked_at=datetime.now(timezone.utc) - timedelta(seconds=61),
+        differences=[],
+    )
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
+    assert authority.status is CheckStatus.FAIL
+
+
+def test_writable_runtime_requires_user_stream_fact_boundary() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._can_write = True
+    engine._user_stream_runtime = {"status": "NOT_STARTED", "listen_key_active": False}
+
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=False,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+
+    user_stream = next(item for item in checks if item.check_id == "runtime.safety.user_stream")
+    assert user_stream.status is CheckStatus.FAIL
+    assert user_stream.severity is CheckSeverity.P0
+    assert user_stream.is_blocking is True
 
 
 @pytest.mark.parametrize(
@@ -296,6 +456,56 @@ def test_stop_rejects_pid_state_mismatch(tmp_path: Path, monkeypatch: pytest.Mon
     assert "不一致" in message
 
 
+def test_force_stop_existing_never_signals_unverified_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from beidou_launcher.state import force_stop_existing
+
+    runtime_dir = tmp_path / ".beidou"
+    runtime_dir.mkdir()
+    (runtime_dir / "beidou.pid").write_text("321", encoding="utf-8")
+    (runtime_dir / "supervisor-state.json").write_text(
+        json.dumps({"pid": 321, "updated_at": datetime.now(timezone.utc).isoformat()}),
+        encoding="utf-8",
+    )
+    sent: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "beidou_launcher.state.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="python unrelated_service.py"),
+    )
+    monkeypatch.setattr("beidou_launcher.state.os.kill", lambda pid, sig: sent.append((pid, sig)))
+
+    ok, message = force_stop_existing(tmp_path)
+
+    assert ok is False
+    assert "不是北斗进程" in message
+    assert sent == []
+
+
+def test_monitoring_execution_failure_is_a_p0_blocker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from beidou_launcher import supervisor as supervisor_module
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    supervisor = BeidouSupervisor(
+        project_root=tmp_path,
+        mode="paper",
+        symbols=["BTCUSDT"],
+        port=19093,
+        self_heal=False,
+    )
+    supervisor.engine = SimpleNamespace()
+
+    def fail_monitoring(**_kwargs: object) -> list[object]:
+        raise RuntimeError("monitoring unavailable")
+
+    monkeypatch.setattr(supervisor_module, "collect_monitoring_checks", fail_monitoring)
+
+    checks = supervisor._merge_monitoring_checks([])
+
+    blocker = next(item for item in checks if item.check_id == "runtime.monitoring.execution")
+    assert blocker.status == CheckStatus.FAIL
+    assert blocker.severity == CheckSeverity.P0
+    assert blocker.is_blocking is True
+
+
 def test_nonwrite_exchange_interlock_blocks_mutations(tmp_path: Path) -> None:
     from beidou_launcher.supervisor import BeidouSupervisor
 
@@ -378,3 +588,25 @@ def test_reconciliation_moved_to_monitoring() -> None:
     assert recon_result.status == CheckStatus.PASS, (
         f"positions 一致的 reconciliation 应返回 PASS，实际: {recon_result.status.value} — {recon_result.message}"
     )
+
+
+def test_writable_monitoring_reconciliation_requires_authoritative_three_way_fact() -> None:
+    from beidou_observability.monitoring import collect_monitoring_checks
+
+    engine = _runtime_engine()
+    engine._can_write = True
+    engine._last_reconciliation_result = None
+    engine._ledger = SimpleNamespace(_entries=[])
+    engine._protection = SimpleNamespace(all_positions=lambda: {})
+
+    mon_checks = collect_monitoring_checks(
+        engine=engine,
+        supervisor=None,
+        exchange_account_snapshot={"ok": True, "account": engine._last_account, "observed_at": time.time()},
+        algorithm_probe={"ok": True},
+    )
+
+    recon_result = next(c for c in mon_checks if c.check_id == "runtime.safety.reconciliation")
+    assert recon_result.status is CheckStatus.FAIL
+    assert recon_result.severity is CheckSeverity.P0
+    assert "authority unavailable" in recon_result.message

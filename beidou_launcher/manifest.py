@@ -6,7 +6,9 @@ from .registry import EXPECTED_ALPHA_COMPONENTS, EXPECTED_FACTORS, REQUIRED_ENGI
 
 SUPPORTED_MODES = ("research", "paper", "shadow", "testnet", "safety_only")
 DEFAULT_MODE = "testnet"
-DEFAULT_SYMBOLS = ("DEFAULT",)
+# A writable runtime must receive an explicit, versioned universe.  There is
+# intentionally no fixed-symbol fallback in the launcher.
+DEFAULT_SYMBOLS: tuple[str, ...] = ()
 HEALTH_PORT = 9090
 STARTUP_TIMEOUT = 300.0
 MONITOR_INTERVAL = 5.0

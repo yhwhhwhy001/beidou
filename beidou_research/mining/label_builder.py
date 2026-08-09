@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from beidou_shared.types import (
     DataQualityTier,
@@ -48,6 +50,12 @@ class PricePoint:
     mark: float | None = None
     mid: float | None = None
     vwap: float | None = None
+    # Feature columns must be supplied by the dataset; the mining runner must
+    # not manufacture OHLCV values from close/zero when they are absent.
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    volume: float | None = None
     # Missing close-state metadata must not silently become usable market data.
     # Callers that cannot prove a bar is closed are rejected by LabelBuilder.
     is_closed: bool = False
@@ -61,9 +69,9 @@ class PricePoint:
             PriceType.VWAP: self.vwap,
         }
         val = mapping.get(price_type)
-        if val is None:
-            # 回退到 close
-            return self.close
+        # A requested venue price type is an independent fact.  Falling back
+        # to close would silently turn a missing mark/mid/VWAP into a valid
+        # label and can introduce an unobservable execution assumption.
         return val
 
 
@@ -128,8 +136,45 @@ class LabelBuilder:
         )
     """
 
-    def __init__(self, cost_model: CostEstimate | None = None) -> None:
+    def __init__(self, cost_model: CostEstimate | Any | None = None) -> None:
+        self._custom_cost_model = cost_model is not None
         self._cost_model = cost_model or CostEstimate.default_perpetual()
+
+    def _cost_for_hold(self, hold_hours: float) -> CostEstimate:
+        """Return the configured cost model without silently replacing it."""
+
+        if self._custom_cost_model:
+            if isinstance(self._cost_model, CostEstimate):
+                return self._cost_model
+            # PipelineConfig uses evaluation.cost_capacity.CostModel.  Adapt
+            # its explicit fee/spread/slippage/funding inputs into the label
+            # contract instead of passing an incompatible object through.
+            try:
+                fee_bps = float(self._cost_model.taker_fee_bps)
+                spread_bps = float(self._cost_model.avg_spread_bps)
+                slippage_bps = float(self._cost_model.slippage_bps)
+                funding_bps = float(self._cost_model.funding_rate_8h_pct) * (hold_hours / 8.0) * 100.0
+                total_bps = fee_bps + spread_bps + slippage_bps + funding_bps
+            except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                raise TypeError("unsupported_cost_model_contract") from exc
+            if not all(math.isfinite(v) for v in (fee_bps, spread_bps, slippage_bps, funding_bps, total_bps)):
+                raise ValueError("non_finite_cost_model")
+            return CostEstimate(
+                fee_bps=fee_bps,
+                spread_bps=spread_bps,
+                slippage_bps=slippage_bps,
+                funding_bps=funding_bps,
+                total_bps=total_bps,
+            )
+        return CostEstimate.default_perpetual(hold_hours)
+
+    @property
+    def cost_model_version(self) -> str:
+        """Return the configured cost model version for evidence binding."""
+
+        if not self._custom_cost_model:
+            return "bf01-default-perpetual"
+        return str(getattr(self._cost_model, "model_version", "custom-unversioned"))
 
     def build_labels(
         self,
@@ -180,7 +225,12 @@ class LabelBuilder:
             entry_price = entry_point.get_price(label_spec.price_type)
             exit_price = exit_point.get_price(label_spec.price_type)
 
-            if entry_price is None or exit_price is None or entry_price <= 0 or exit_price <= 0:
+            if (
+                entry_price is None
+                or exit_price is None
+                or not _is_valid_price(entry_price)
+                or not _is_valid_price(exit_price)
+            ):
                 # 创建质量标记为 MISSING_PRICE 的标签
                 pk = PredictionKey(
                     venue=venue,
@@ -202,7 +252,7 @@ class LabelBuilder:
                         label_available_time=exit_point.timestamp,
                         entry_price_type=label_spec.price_type,
                         exit_price_type=label_spec.price_type,
-                        cost_model_version="bf01-v1",
+                        cost_model_version=self.cost_model_version,
                         label_value=0.0,
                         gross_return=0.0,
                         quality_status=LabelQuality.MISSING_PRICE,
@@ -213,10 +263,12 @@ class LabelBuilder:
 
             # 计算原始收益
             gross_return = _compute_return(entry_price, exit_price, label_spec.return_type)
+            if not math.isfinite(gross_return):
+                continue
 
             # 估算持有期成本
             hold_hours = horizon * _timeframe_to_hours(timeframe)
-            cost_est = CostEstimate.default_perpetual(hold_hours)
+            cost_est = self._cost_for_hold(hold_hours)
             expected_cost = cost_est.total_bps / 10000.0  # bps → decimal
 
             # 标签值 = 原始收益 - 预期成本
@@ -251,7 +303,7 @@ class LabelBuilder:
                 label_available_time=available_time,
                 entry_price_type=label_spec.price_type,
                 exit_price_type=label_spec.price_type,
-                cost_model_version="bf01-v1",
+                cost_model_version=self.cost_model_version,
                 label_value=round(label_value, 10),
                 gross_return=round(gross_return, 10),
                 expected_cost_bps=cost_est.total_bps,
@@ -345,7 +397,7 @@ class LabelBuilder:
                     exit_idx = min(t + max_hold_bars, len(price_series) - 1)
 
             hold_hours = (exit_idx - t) * _timeframe_to_hours(timeframe)
-            cost_est = CostEstimate.default_perpetual(hold_hours)
+            cost_est = self._cost_for_hold(hold_hours)
             expected_cost = cost_est.total_bps / 10000.0
 
             net_return = actual_return - expected_cost if label_spec.cost_adjusted else actual_return
@@ -374,7 +426,7 @@ class LabelBuilder:
                     label_available_time=exit_time,
                     entry_price_type=label_spec.price_type,
                     exit_price_type=label_spec.price_type,
-                    cost_model_version="bf01-v1",
+                    cost_model_version=self.cost_model_version,
                     label_value=round(final_label, 10),
                     gross_return=round(actual_return, 10),
                     expected_cost_bps=cost_est.total_bps,
@@ -406,8 +458,6 @@ def _compute_return(
 ) -> float:
     """计算指定类型的收益。"""
     if return_type == ReturnType.LOG:
-        import math
-
         return math.log(exit_price / entry_price)
     elif return_type == ReturnType.SIMPLE:
         return (exit_price - entry_price) / entry_price
@@ -416,6 +466,15 @@ def _compute_return(
         return (exit_price - entry_price) / entry_price
     else:
         return (exit_price - entry_price) / entry_price
+
+
+def _is_valid_price(value: float | None) -> bool:
+    """Return true only for finite, strictly positive venue prices."""
+
+    try:
+        return value is not None and math.isfinite(float(value)) and float(value) > 0
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _timeframe_to_hours(tf: str) -> float:

@@ -269,7 +269,10 @@ def compute_pbo(
         # 全集的 OOS 排名中位数
         median_oos_rank = sorted(oos_ranked)[n // 2]
 
-        if avg_oos_rank_is_best > median_oos_rank:
+        # Ranks are ascending (1 = worst, n = best).  Overfitting occurs
+        # when the IS-selected subset falls below the OOS median, not when it
+        # remains the best subset as the old comparison incorrectly implied.
+        if avg_oos_rank_is_best < median_oos_rank:
             pbo_count += 1
         total_comparisons += 1
 
@@ -368,6 +371,8 @@ class MultipleTestingReport:
     dsr: dict[str, float] = field(default_factory=dict)
     pbo: PBOResult | None = None
     verdict: str = ""  # "PASS" / "FAIL" / "NOT_VERIFIABLE"
+    failure_reasons: list[str] = field(default_factory=list)
+    candidate_index: int | None = None
 
 
 def evaluate_multiple_testing(
@@ -377,6 +382,8 @@ def evaluate_multiple_testing(
     in_sample_sharpes: list[float] | None = None,
     out_of_sample_sharpes: list[float] | None = None,
     sample_length: int = 252,
+    candidate_index: int | None = None,
+    min_pbo_comparisons: int = 8,
 ) -> MultipleTestingReport:
     """执行所有多重检验并生成报告。
 
@@ -385,6 +392,7 @@ def evaluate_multiple_testing(
     report = MultipleTestingReport(
         n_total_trials=n_trials,
         n_evaluated=len(pvalues),
+        candidate_index=candidate_index,
     )
 
     # BH-FDR
@@ -404,19 +412,36 @@ def evaluate_multiple_testing(
     if in_sample_sharpes and out_of_sample_sharpes and len(in_sample_sharpes) >= 4:
         report.pbo = compute_pbo(in_sample_sharpes, out_of_sample_sharpes)
 
-    # Verdict
-    failures = []
+    # Verdict.  Missing denominator coverage or missing PBO evidence is an
+    # evidence gap, never a pass.  Statistical failures remain FAIL.
+    failures: list[str] = []
+    evidence_gaps: list[str] = []
+    if n_trials <= 0:
+        evidence_gaps.append("zero_trials_recorded")
+    if len(pvalues) != n_trials:
+        evidence_gaps.append("trials_not_fully_evaluated")
+    if candidate_index is not None and not 0 <= candidate_index < len(pvalues):
+        evidence_gaps.append("candidate_index_out_of_range")
+
     if report.dsr.get("p_value", 1.0) > 0.05:
         failures.append("DSR not significant")
-    if report.pbo and report.pbo.pbo > 0.3:
-        failures.append(f"PBO={report.pbo.pbo:.2f} > 0.3")
-    if report.n_total_trials <= 0:
-        failures.append("zero trials recorded")
+    if report.pbo is None:
+        evidence_gaps.append("pbo_missing")
+    elif report.pbo.n_combinations < min_pbo_comparisons:
+        evidence_gaps.append(f"pbo_comparisons_insufficient:{report.pbo.n_combinations}<{min_pbo_comparisons}")
+    elif report.pbo.pbo > 0.20:
+        failures.append(f"PBO={report.pbo.pbo:.2f} > 0.20")
 
-    if not failures:
-        report.verdict = "PASS"
-    elif len(failures) <= 1:
+    if report.bh_result is None or not report.bh_result.significant_at_05:
+        failures.append("BH-FDR not significant")
+    elif candidate_index is not None and not report.bh_result.significant_at_05[candidate_index]:
+        failures.append("candidate_not_BH_significant")
+
+    report.failure_reasons = evidence_gaps + failures
+    if evidence_gaps:
         report.verdict = "NOT_VERIFIABLE"
+    elif not failures:
+        report.verdict = "PASS"
     else:
         report.verdict = "FAIL"
 

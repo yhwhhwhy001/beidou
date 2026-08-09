@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
@@ -129,23 +130,65 @@ def _r6_margin(context: dict) -> RuleDecision:
 
 
 def _r7_liquidation_distance(context: dict) -> RuleDecision:
-    """R7: 清算距离。无清算价或无持仓时放行（开仓无清算价是正常状态）。"""
-    liq_price = context.get("liquidation_price", 0)
-    current_price = context.get("current_price", 0)
+    """R7: 清算距离。
+
+    ``liquidation_price`` 缺失只有在已明确证明没有持仓时才是正常的。
+    否则把缺失的交易所事实当成“无清算风险”会错误放行加仓。
+    """
+    position_qty = context.get("position_qty")
+    if position_qty is None:
+        return RuleDecision.UNKNOWN
+    try:
+        position_qty = float(position_qty)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(position_qty) or position_qty < 0:
+        return RuleDecision.UNKNOWN
+
+    liq_price = context.get("liquidation_price")
+    current_price = context.get("current_price")
+    if position_qty == 0:
+        # A non-zero liquidation price with a proven-flat position is an
+        # inconsistent snapshot, not a reason to pass the rule.
+        if liq_price not in (None, 0, 0.0, "0", "0.0"):
+            return RuleDecision.UNKNOWN
+        return RuleDecision.PASS
+    if liq_price is None or current_price is None:
+        return RuleDecision.UNKNOWN
+    try:
+        liq_price = float(liq_price)
+        current_price = float(current_price)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(liq_price) or not math.isfinite(current_price):
+        return RuleDecision.UNKNOWN
     if liq_price <= 0 or current_price <= 0:
-        return RuleDecision.PASS  # 无持仓时无清算价，允许开仓
+        return RuleDecision.UNKNOWN
     distance_pct = abs(current_price - liq_price) / current_price * 100
     return RuleDecision.PASS if distance_pct > 5.0 else RuleDecision.REJECT
 
 
 def _r8_protection_coverage(context: dict) -> RuleDecision:
-    """R8: 保护覆盖率。"""
-    protected = context.get("protected_positions", 0)
-    total = context.get("total_positions", 0)
+    """R8: 保护覆盖率，要求计数来自同一份已验证快照。"""
+    protected = context.get("protected_positions")
+    total = context.get("total_positions")
+    if protected is None or total is None:
+        return RuleDecision.UNKNOWN
+    try:
+        protected_float = float(protected)
+        total_float = float(total)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(protected_float) or not math.isfinite(total_float):
+        return RuleDecision.UNKNOWN
+    if protected_float < 0 or total_float < 0 or not protected_float.is_integer() or not total_float.is_integer():
+        return RuleDecision.UNKNOWN
+    protected = int(protected_float)
+    total = int(total_float)
+    if protected > total:
+        return RuleDecision.UNKNOWN
     if total == 0:
         return RuleDecision.PASS
-    if protected < 0 or total < 0:
-        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if protected == total else RuleDecision.REJECT
 
 
@@ -159,7 +202,7 @@ def _r9_account_capability(context: dict) -> RuleDecision:
 
 
 def _r10_duplicate_order(context: dict) -> RuleDecision:
-    """R10: 重复订单检查。使用 outbox 中未 ack 的重复意图计数。"""
+    """R10: 重复订单检查。计数必须来自 durable 幂等身份事实。"""
     duplicate_count = context.get("duplicate_orders_24h")
     if duplicate_count is None:
         return RuleDecision.UNKNOWN

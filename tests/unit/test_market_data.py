@@ -5,7 +5,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from beidou_data.klines import KLineGenerator
-from beidou_data.market import BookLevel, MarketEvent, MarketEventType, OrderBookSnapshot, RawLayer
+from beidou_data.market import (
+    BarIntegrity,
+    BookLevel,
+    ClosedBarNormalizer,
+    MarketEvent,
+    MarketEventType,
+    OrderBookSnapshot,
+    RawLayer,
+)
 from beidou_data.quality import AutoRepair, DataQualityGate, DQCheckResult, DQCheckType
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import Result
@@ -31,6 +39,29 @@ class _UnclosedBarClient(_AdapterResultClient):
         return await super().request(method, path, signed=signed, params=params)
 
 
+class _MalformedKlineClient(_AdapterResultClient):
+    async def request(self, method, path, signed=False, params=None):
+        if path == Endpoint.KLINES:
+            return Result.success(
+                [
+                    [0, "99", "101", "98", "100", "10", 3600000, "1000", 3],
+                    [1, "99", "101", "98"],
+                    [2, "nan", "101", "98", "100", "10", 3600000, "1000", 3],
+                    [3, "99", "98", "98", "100", "10", 3600000, "1000", 3],
+                    [4, "0", "101", "98", "100", "10", 3600000, "1000", 3],
+                ]
+            )
+        return await super().request(method, path, signed=signed, params=params)
+
+
+class _ClosableWebSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_market_data_feed_unwraps_adapter_results():
     from beidou_core.feed import MarketDataFeed
@@ -44,11 +75,65 @@ async def test_market_data_feed_unwraps_adapter_results():
 
 
 @pytest.mark.asyncio
+async def test_market_data_feed_stop_ws_uses_client_close_contract():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    client = _ClosableWebSocket()
+    feed._ws_client = client
+
+    await feed.stop_ws()
+
+    assert client.closed is True
+    assert feed._ws_client is None
+    assert feed._ws_active is False
+
+
+@pytest.mark.asyncio
 async def test_market_data_feed_rejects_unclosed_rest_bar():
     from beidou_core.feed import MarketDataFeed
 
     feed = MarketDataFeed(client=_UnclosedBarClient())
     assert await feed.async_fetch_klines("BTCUSDT", "1h") == []
+
+
+@pytest.mark.asyncio
+async def test_market_data_feed_skips_malformed_rest_rows_without_zero_or_nan_fallback():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_MalformedKlineClient())
+    rows = await feed.async_fetch_klines("BTCUSDT", "1h")
+
+    assert len(rows) == 1
+    assert rows[0]["open"] == 99.0
+    assert rows[0]["close"] == 100.0
+
+
+def test_kline_features_reject_non_finite_or_inconsistent_bars():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    now = datetime.now(timezone.utc)
+    klines = [
+        {
+            "open_time": now - timedelta(hours=20 - index),
+            "close_time": now - timedelta(hours=19 - index),
+            "open": 100.0 + index,
+            "high": 101.0 + index,
+            "low": 99.0 + index,
+            "close": 100.5 + index,
+            "volume": 10.0,
+            "is_closed": True,
+        }
+        for index in range(20)
+    ]
+
+    klines[4]["close"] = float("nan")
+    assert feed._compute_kline_features("BTCUSDT", "1h", klines) == {}
+
+    klines[4]["close"] = 100.5 + 4
+    klines[4]["low"] = 200.0
+    assert feed._compute_kline_features("BTCUSDT", "1h", klines) == {}
 
 
 def test_generated_market_features_exclude_unclosed_bar_by_default():
@@ -65,6 +150,114 @@ def test_generated_market_features_exclude_unclosed_bar_by_default():
     )
 
     assert feed.get_generated_klines("BTCUSDT", "1h") == []
+
+
+def test_default_market_data_transport_is_exchange_adapter():
+    """Standalone research feed must not bypass the exchange protocol boundary."""
+
+    from beidou_core.feed import MarketDataFeed
+    from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+
+    feed = MarketDataFeed()
+    assert isinstance(feed._client, BinanceUsdmAdapter)
+
+
+def test_kline_features_carry_explicit_closed_bar_evidence():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    now = datetime.now(timezone.utc)
+    klines = [
+        {
+            "open_time": now - timedelta(hours=20 - index),
+            "close_time": now - timedelta(hours=19 - index),
+            "open": 100.0 + index,
+            "high": 101.0 + index,
+            "low": 99.0 + index,
+            "close": 100.5 + index,
+            "volume": 10.0,
+            "is_closed": True,
+        }
+        for index in range(20)
+    ]
+
+    features = feed._compute_kline_features("BTCUSDT", "1h", klines)
+
+    assert features["bar_is_closed"] is True
+    assert features["bar_open_time"] == klines[-1]["open_time"]
+    assert features["bar_close_time"] == klines[-1]["close_time"]
+    assert isinstance(features["bar_available_at"], datetime)
+
+
+def test_closed_bar_normalizer_missing_close_flag_is_not_closed():
+    normalizer = ClosedBarNormalizer()
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    now = datetime.now(timezone.utc)
+    result = normalizer.normalize(
+        {
+            "open_time": now - timedelta(minutes=2),
+            "close_time": now - timedelta(minutes=1),
+            "open": "100",
+            "high": "101",
+            "low": "99",
+            "close": "100",
+            "volume": "1",
+        },
+        vi,
+        interval="1m",
+    )
+
+    assert result.status is BarIntegrity.NOT_CLOSED
+    assert result.bar is not None
+    assert result.bar.is_closed is False
+
+
+def test_closed_bar_normalizer_missing_ohlcv_is_invalid_not_zero_filled():
+    normalizer = ClosedBarNormalizer()
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    now = datetime.now(timezone.utc)
+
+    result = normalizer.normalize(
+        {
+            "open_time": now - timedelta(minutes=2),
+            "close_time": now - timedelta(minutes=1),
+            "open": "100",
+            "high": "101",
+            "low": "99",
+            "close": "100",
+            "is_closed": True,
+        },
+        vi,
+        interval="1m",
+    )
+
+    assert result.status is BarIntegrity.INVALID
+    assert result.bar is None
+    assert "volume" in result.detail
+
+
+def test_closed_bar_normalizer_rejects_non_positive_price():
+    normalizer = ClosedBarNormalizer()
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    now = datetime.now(timezone.utc)
+
+    result = normalizer.normalize(
+        {
+            "open_time": now - timedelta(minutes=2),
+            "close_time": now - timedelta(minutes=1),
+            "open": "0",
+            "high": "101",
+            "low": "99",
+            "close": "100",
+            "volume": "1",
+            "is_closed": True,
+        },
+        vi,
+        interval="1m",
+    )
+
+    assert result.status is BarIntegrity.INVALID
+    assert result.bar is None
 
 
 class TestOrderBook:

@@ -11,6 +11,29 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
+
+
+def redact_database_url(url: str) -> str:
+    """Return a log/hash-safe database URL without embedded credentials."""
+
+    value = str(url or "")
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        parsed_port = parsed.port
+    except ValueError:
+        return "<invalid-database-url>"
+    if not parsed.username and not parsed.password:
+        return value
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{quote(parsed.username or '', safe='')}@{host}"
+    if parsed_port is not None:
+        netloc += f":{parsed_port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 class Environment(str, Enum):
@@ -140,7 +163,7 @@ class TypedSettings:
         """计算配置内容的稳定 SHA-256。"""
         payload = (
             f"{self.environment.value}"
-            f"|{self.database.url}"
+            f"|{redact_database_url(self.database.url)}"
             f"|{self.exchange.rest_base_url}"
             f"|{self.risk.max_leverage}|{self.risk.max_concentration_pct}"
             f"|{self.infrastructure.health_port}"
@@ -292,12 +315,34 @@ class ConfigProvider:
             errors.append(f"Invalid environment: {env_name}")
             environment = Environment.SAFETY_ONLY
 
-        # Parse database
+        # Parse database.  Testnet/production files use the structured
+        # ``postgresql`` block while local examples use ``database.url``.
+        # A configured DATABASE_URL always wins and is kept out of the config
+        # hash in redact_database_url(); the runtime still receives the exact
+        # DSN through the typed settings object.
         db_raw = raw.get("database", {})
+        if not isinstance(db_raw, dict):
+            db_raw = {}
+        postgres_raw = raw.get("postgresql", {})
+        if not isinstance(postgres_raw, dict):
+            postgres_raw = {}
+        database_url = str(os.environ.get("DATABASE_URL", "") or db_raw.get("url", ""))
+        if not database_url and postgres_raw:
+            host = str(postgres_raw.get("host", "localhost"))
+            port = int(postgres_raw.get("port", 5432))
+            database_name = str(postgres_raw.get("database", ""))
+            user = str(postgres_raw.get("user", ""))
+            ssl_mode = str(postgres_raw.get("ssl_mode", "prefer"))
+            application_name = str(postgres_raw.get("application_name", "beidou"))
+            if database_name and user:
+                database_url = (
+                    f"postgresql://{quote(user, safe='')}@{host}:{port}/{quote(database_name, safe='')}"
+                    f"?sslmode={quote(ssl_mode, safe='')}&application_name={quote(application_name, safe='')}"
+                )
         database = DatabaseConfig(
-            url=str(db_raw.get("url", "")),
-            pool_min=int(db_raw.get("pool_min", 2)),
-            pool_max=int(db_raw.get("pool_max", 10)),
+            url=database_url,
+            pool_min=int(db_raw.get("pool_min", postgres_raw.get("pool_min", 2))),
+            pool_max=int(db_raw.get("pool_max", postgres_raw.get("pool_max", 10))),
         )
 
         # Parse exchange

@@ -15,8 +15,11 @@ from beidou_research.mining.evaluation.multiple_testing import (
     benjamini_hochberg,
     deflated_sharpe_ratio,
 )
+from beidou_research.mining.evidence import EvidenceBundle
+from beidou_research.mining.label_builder import PricePoint
 from beidou_research.mining.persistence import JSONFileFactorStore
 from beidou_research.mining.runner import MiningRunner, PipelineConfig
+from beidou_shared.types import InstrumentId, VenueId
 
 # ================================================================
 # 合成数据生成
@@ -54,6 +57,10 @@ def generate_synthetic_ohlcv(
         {
             "timestamp": base_time + timedelta(hours=i),
             "close": p,
+            "open": p,
+            "high": p * 1.001,
+            "low": p * 0.999,
+            "volume": 1_000.0,
             "mark": p,
             "mid": p,
             "vwap": p,
@@ -70,6 +77,94 @@ def generate_synthetic_ohlcv(
 
 class TestEndToEndMining:
     """端到端挖掘流水线验收测试。"""
+
+    def test_dataset_manifest_requires_sha256_format(self):
+        assert MiningRunner._validated_manifest_hash("a" * 64) == "a" * 64
+        assert MiningRunner._validated_manifest_hash("payload-hash") == "UNKNOWN"
+        assert MiningRunner._validated_manifest_hash("") == "UNKNOWN"
+
+    def test_policy_yaml_binds_all_cost_inputs_and_version(self):
+        config = PipelineConfig.from_yaml("config/factor_mining_policy.yaml")
+
+        assert config.strict_policy is True
+        assert config.policy_version == "2.0.0"
+        assert config.cost_model is not None
+        assert config.cost_model.model_version == "2.0.0:cost"
+        assert config.cost_model.avg_spread_bps == 1.0
+        assert config.cost_model.slippage_bps == 1.0
+        assert config.cost_model.funding_rate_8h_pct == 0.01
+        assert config.cost_model.impact_bps_per_10k == 0.1
+
+    def test_strict_policy_run_does_not_fall_back_to_default_grid(self, tmp_path):
+        config = PipelineConfig(
+            run_id="missing-policy",
+            policy_path=str(tmp_path / "missing-policy.yaml"),
+            strict_policy=True,
+            evidence_dir=str(tmp_path / "evidence"),
+        )
+
+        result = MiningRunner(config).run(generate_synthetic_ohlcv(n=200))
+
+        assert result.status == "NOT_VERIFIABLE"
+        assert result.candidates_generated == 0
+        assert result.failure_taxonomy["generation_policy"] == 1
+
+    def test_evidence_bundle_requires_independent_feature_and_cost_binding(self):
+        bundle = EvidenceBundle(
+            bundle_id="b",
+            candidate_id="c",
+            factor_id="f",
+            factor_version="1",
+            candidate_hash="c-hash",
+            factor_expression_hash="expr-hash",
+            dataset_manifest_hash="a" * 64,
+            label_spec_hash="label-hash",
+            cost_model_version="cost-v1",
+            policy_version="policy-v1",
+            gate_decision="PASS",
+        )
+
+        assert not bundle.is_complete()
+        assert bundle.can_promote() == (False, "evidence_incomplete_or_unbound")
+
+    def test_evidence_bundle_hash_binds_stability_and_capacity(self):
+        bundle = EvidenceBundle(
+            bundle_id="b-hash",
+            candidate_id="c-hash",
+            factor_id="f-hash",
+            factor_version="1",
+            candidate_hash="c" * 64,
+            factor_code_hash="f" * 64,
+            dataset_manifest_hash="d" * 64,
+            feature_manifest_hash="e" * 64,
+            label_spec_hash="label-hash",
+            cost_model_version="cost-v1",
+            policy_version="policy-v1",
+            stability_results=[{"dimension": "time", "is_stable": True}],
+            cost_capacity_results={"recommended_max_aum": 1000},
+            gate_decision="PASS",
+        )
+        sealed = bundle.seal()
+        bundle.cost_capacity_results["recommended_max_aum"] = 1
+
+        assert bundle.compute_bundle_hash() != sealed
+
+    def test_missing_ohlcv_columns_are_not_inferred_from_close(self):
+        point = PricePoint(
+            venue=VenueId("BINANCE"),
+            symbol=InstrumentId("BTCUSDT"),
+            timeframe="1h",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            close=100.0,
+            is_closed=True,
+        )
+
+        features = MiningRunner(PipelineConfig())._build_feature_dict([point])
+
+        assert math.isnan(features["open"][0])
+        assert math.isnan(features["high"][0])
+        assert math.isnan(features["low"][0])
+        assert math.isnan(features["volume"][0])
 
     def test_full_pipeline_synthetic_data(self):
         """合成数据上运行完整的因子挖掘周期。"""

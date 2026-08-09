@@ -121,23 +121,18 @@ class PurgedWalkForward:
         self._results: list[WalkForwardResult] = []
 
     def run(self, dataset_manifest: DatasetManifest, param_grid: list[dict]) -> list[WalkForwardResult]:
-        """执行 purged walk-forward。"""
-        # Placeholder — full implementation requires backtest engine
+        """Reject the retired compatibility path instead of fabricating folds.
+
+        The production research pipeline is
+        ``beidou_research.mining.runner.MiningRunner``.  This older API has no
+        evaluator, label intervals, or provenance store; returning zero-valued
+        folds would create false OOS evidence.  Fail closed until callers are
+        migrated to the real pipeline.
+        """
+
+        del dataset_manifest, param_grid
         self._results = []
-        for i in range(self._n_folds):
-            fold = WalkForwardResult(
-                fold_id=i,
-                train_start="",
-                train_end="",
-                test_start="",
-                test_end="",
-                embargo_days=self._embargo_days,
-                train_sharpe=0.0,
-                test_sharpe=0.0,
-                parameters=param_grid[0] if param_grid else {},
-            )
-            self._results.append(fold)
-        return self._results
+        raise RuntimeError("LEGACY_RESEARCH_KERNEL_DISABLED_USE_MINING_RUNNER")
 
     def best_fold(self) -> WalkForwardResult | None:
         if not self._results:

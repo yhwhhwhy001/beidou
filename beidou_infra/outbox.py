@@ -7,11 +7,15 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Callable, Iterator
 
 
 class OutboxStatus(str, Enum):
@@ -129,8 +133,45 @@ class TransactionalOutbox:
 
 
 # BD-T08: PostgreSQL Transactional Outbox Worker
-# 当前为内存实现，PG worker 在 docker-compose PostgreSQL 可用时激活。
-# 引擎运行时路径切换：engine.py 中 self._outbox 替换为 OutboxWorker 实例。
+#
+# The legacy ``TransactionalOutbox`` above remains a deliberately isolated
+# in-memory helper for Paper/unit tests.  The classes below are the production
+# PostgreSQL contract.  They never silently fall back to the in-memory helper:
+# a missing connection is an explicit unavailable state and all write methods
+# fail closed.
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxClaim:
+    """One fenced message claimed by exactly one worker generation."""
+
+    message_id: str
+    intent_id: str
+    client_order_id: str | None
+    payload: dict[str, Any]
+    lease_owner: str
+    fencing_token: int
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    """Read a psycopg mapping row or a DB-API tuple row."""
+
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return row[index]
+
+
+def _json_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("outbox payload is not a JSON object")
 
 
 class OutboxWorker:
@@ -140,31 +181,997 @@ class OutboxWorker:
     fencing token 实现崩溃安全的发送。
     """
 
-    def __init__(self, db_conn=None) -> None:
-        self._conn = db_conn  # PG connection (None = memory mode)
-        self._lease_owner: str = ""
-        self._lease_until: float = 0.0
+    def __init__(
+        self,
+        db_conn: Any | None = None,
+        *,
+        connection_factory: Callable[[], Any] | None = None,
+        lease_owner: str = "",
+        fencing_token: int = 0,
+        lease_seconds: int = 30,
+        sender: Callable[[OutboxClaim], Any] | None = None,
+    ) -> None:
+        if db_conn is not None and connection_factory is not None:
+            raise ValueError("provide db_conn or connection_factory, not both")
+        self._conn = db_conn
+        self._connection_factory = connection_factory
+        self._lease_owner = lease_owner or f"worker-{uuid.uuid4().hex[:12]}"
+        self._fencing_token = int(fencing_token)
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        self._lease_seconds = int(lease_seconds)
+        self._sender = sender
 
-    async def claim(self, batch_size: int = 10) -> list[dict]:
-        """认领一批 PENDING 消息 (SKIP LOCKED)。"""
-        if self._conn is None:
-            return []  # Memory mode: no PG worker
-        # PG path: SELECT ... FOR UPDATE SKIP LOCKED
-        return []
+    @contextmanager
+    def _connection_scope(self) -> Iterator[Any]:
+        if self._conn is not None:
+            yield self._conn
+            return
+        if self._connection_factory is None:
+            raise RuntimeError("POSTGRES_OUTBOX_UNAVAILABLE: connection is not configured")
+        conn = self._connection_factory()
+        try:
+            yield conn
+        finally:
+            close = getattr(conn, "close", None)
+            if callable(close):
+                close()
 
-    async def send(self, message: dict) -> bool:
-        """发送单条消息到交易所。"""
-        return False  # Stub — 真实传输层由 adapter 处理
+    @staticmethod
+    @contextmanager
+    def _transaction(conn: Any) -> Iterator[None]:
+        transaction = getattr(conn, "transaction", None)
+        if callable(transaction):
+            with transaction():
+                yield
+            return
+        try:
+            yield
+        except Exception:
+            rollback = getattr(conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+            raise
+        else:
+            commit = getattr(conn, "commit", None)
+            if callable(commit):
+                commit()
 
-    async def resolve_unknown(self, client_order_id: str) -> str:
-        """UNKNOWN 恢复 — 按 clientOrderId 查询（绝不盲重发）。"""
-        return "UNKNOWN"
+    @staticmethod
+    @contextmanager
+    def _cursor_scope(conn: Any) -> Iterator[Any]:
+        cursor = conn.cursor()
+        enter = getattr(cursor, "__enter__", None)
+        if callable(enter):
+            with cursor as managed:
+                yield managed
+            return
+        try:
+            yield cursor
+        finally:
+            close = getattr(cursor, "close", None)
+            if callable(close):
+                close()
 
-    async def process_batch(self) -> int:
-        """认领 + 发送一批消息，返回成功数。"""
-        messages = await self.claim()
+    @staticmethod
+    def _append_transition(
+        cursor: Any,
+        *,
+        message_id: str,
+        intent_id: str,
+        from_status: str | None,
+        to_status: str,
+        event_type: str,
+        payload: dict[str, Any] | None,
+        lease_owner: str,
+        fencing_token: int,
+    ) -> None:
+        cursor.execute(
+            "INSERT INTO v3_outbox_events "
+            "(event_id,message_id,intent_id,from_status,to_status,event_type,payload,lease_owner,fencing_token) "
+            "VALUES (%s,%s,%s,%s,%s,%s,CAST(%s AS jsonb),%s,%s)",
+            (
+                f"evt-{uuid.uuid4().hex}",
+                message_id,
+                intent_id,
+                from_status,
+                to_status,
+                event_type,
+                json.dumps(payload or {}, sort_keys=True, default=str),
+                lease_owner,
+                fencing_token,
+            ),
+        )
+
+    @staticmethod
+    def _sync_intent_state(cursor: Any, *, intent_id: str, state: str) -> None:
+        """Keep the durable intent projection aligned with the outbox state."""
+
+        cursor.execute(
+            "UPDATE v3_order_intents SET state=%s,updated_at=CURRENT_TIMESTAMP WHERE intent_id=%s",
+            (state, intent_id),
+        )
+
+    @staticmethod
+    def _claim_from_row(row: Any, owner: str, fencing_token: int) -> OutboxClaim:
+        return OutboxClaim(
+            message_id=str(_row_value(row, "message_id", 0)),
+            intent_id=str(_row_value(row, "intent_id", 1)),
+            client_order_id=(
+                str(_row_value(row, "client_order_id", 2))
+                if _row_value(row, "client_order_id", 2) is not None
+                else None
+            ),
+            payload=_json_payload(_row_value(row, "payload", 3)),
+            lease_owner=owner,
+            fencing_token=fencing_token,
+        )
+
+    async def claim(self, batch_size: int = 10) -> list[OutboxClaim]:
+        """Atomically claim PENDING messages with ``SKIP LOCKED`` + fencing."""
+
+        if batch_size <= 0:
+            return []
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        if self._conn is None and self._connection_factory is None:
+            return []
+
+        claims: list[OutboxClaim] = []
+        with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
+            cursor.execute(
+                "SELECT message_id,intent_id,client_order_id,payload "
+                "FROM v3_transactional_outbox "
+                "WHERE status='PENDING' "
+                "AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP) "
+                "AND (lease_until IS NULL OR lease_until < CURRENT_TIMESTAMP) "
+                "ORDER BY created_at,message_id "
+                "FOR UPDATE SKIP LOCKED LIMIT %s",
+                (batch_size,),
+            )
+            rows = cursor.fetchall() or []
+            for row in rows:
+                message_id = str(_row_value(row, "message_id", 0))
+                intent_id = str(_row_value(row, "intent_id", 1))
+                cursor.execute(
+                    "UPDATE v3_transactional_outbox SET status='SENDING',lease_owner=%s, "
+                    "lease_until=CURRENT_TIMESTAMP+(%s * INTERVAL '1 second'),fencing_token=%s, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE message_id=%s AND status='PENDING' "
+                    "RETURNING message_id,intent_id,client_order_id,payload",
+                    (self._lease_owner, self._lease_seconds, self._fencing_token, message_id),
+                )
+                updated = cursor.fetchone()
+                if updated is None:
+                    continue
+                self._sync_intent_state(cursor, intent_id=intent_id, state="SENDING")
+                self._append_transition(
+                    cursor,
+                    message_id=message_id,
+                    intent_id=intent_id,
+                    from_status="PENDING",
+                    to_status="SENDING",
+                    event_type="CLAIMED",
+                    payload={"batch_size": batch_size},
+                    lease_owner=self._lease_owner,
+                    fencing_token=self._fencing_token,
+                )
+                claims.append(self._claim_from_row(updated, self._lease_owner, self._fencing_token))
+        return claims
+
+    async def mark_sent(self, message_id: str) -> bool:
+        """Record transport submission without treating it as an exchange ACK."""
+
+        return await self._transition_owned(
+            message_id,
+            from_states=("SENDING",),
+            to_status="SENT",
+            event_type="SUBMITTED",
+            fields="sent_at=CURRENT_TIMESTAMP",
+        )
+
+    async def ack(self, message_id: str, *, exchange_order_id: str | None = None) -> bool:
+        """Record a typed venue ACK only for the current owner/generation."""
+
+        return await self._transition_owned(
+            message_id,
+            from_states=("SENDING", "SENT"),
+            to_status="ACKED",
+            event_type="ACKED",
+            fields="acked_at=CURRENT_TIMESTAMP",
+            payload={"exchange_order_id": exchange_order_id} if exchange_order_id else {},
+        )
+
+    async def mark_unknown(self, message_id: str, reason: str) -> bool:
+        """Persist ambiguity; an UNKNOWN message is never directly resent."""
+
+        return await self._transition_owned(
+            message_id,
+            from_states=("SENDING", "SENT"),
+            to_status="UNKNOWN",
+            event_type="UNKNOWN",
+            fields="last_error=%s,lease_owner=NULL,lease_until=NULL",
+            extra_params=(reason,),
+            payload={"reason": reason},
+        )
+
+    async def resolve_unknown(self, message_id: str, *, exchange_order_found: bool) -> str:
+        """Resolve UNKNOWN only after an independent client-order query.
+
+        ``exchange_order_found=True`` closes the intent as ACKED.  A confirmed
+        absence returns it to PENDING for a new fenced claim.  No method here
+        performs a blind resend.
+        """
+
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        if self._conn is None and self._connection_factory is None:
+            return "UNKNOWN"
+        target = "ACKED" if exchange_order_found else "PENDING"
+        event_type = "UNKNOWN_RESOLVED_FOUND" if exchange_order_found else "UNKNOWN_RESOLVED_ABSENT"
+        with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
+            cursor.execute(
+                "UPDATE v3_transactional_outbox SET status=%s,lease_owner=NULL,lease_until=NULL, "
+                "last_error=NULL,updated_at=CURRENT_TIMESTAMP "
+                "WHERE message_id=%s AND status='UNKNOWN' AND fencing_token<=%s "
+                "RETURNING intent_id",
+                (target, message_id, self._fencing_token),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return "UNKNOWN"
+            intent_id = str(_row_value(row, "intent_id", 0))
+            self._sync_intent_state(cursor, intent_id=intent_id, state=target)
+            self._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=intent_id,
+                from_status="UNKNOWN",
+                to_status=target,
+                event_type=event_type,
+                payload={"exchange_order_found": exchange_order_found},
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
+        return target
+
+    async def recover_inflight(self) -> int:
+        """Fence prior generations/expired leases and convert sends to UNKNOWN.
+
+        A process crash can leave a row in ``SENDING`` or ``SENT`` even when
+        the venue may have accepted the order.  Neither a higher fencing
+        generation, a different lease owner, or an expired lease does not
+        prove that the order was absent, so recovery records an ambiguous fact
+        and requires an independent venue query before any resend.
+        """
+
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        if self._conn is None and self._connection_factory is None:
+            return 0
+        recovered = 0
+        with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
+            cursor.execute(
+                "SELECT message_id,intent_id,status FROM v3_transactional_outbox "
+                "WHERE status IN ('SENDING','SENT') AND ("
+                "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
+                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                ") FOR UPDATE SKIP LOCKED",
+                (self._lease_owner, self._fencing_token),
+            )
+            rows = cursor.fetchall() or []
+            for row in rows:
+                message_id = str(_row_value(row, "message_id", 0))
+                intent_id = str(_row_value(row, "intent_id", 1))
+                previous = str(_row_value(row, "status", 2))
+                cursor.execute(
+                    "UPDATE v3_transactional_outbox SET status='UNKNOWN',lease_owner=NULL,lease_until=NULL, "
+                    "last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
+                    "AND status IN ('SENDING','SENT') AND ("
+                    "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
+                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                    ")",
+                    ("FENCED_OR_LEASE_EXPIRED", message_id, self._lease_owner, self._fencing_token),
+                )
+                if getattr(cursor, "rowcount", 1) != 1:
+                    continue
+                self._sync_intent_state(cursor, intent_id=intent_id, state="UNKNOWN")
+                self._append_transition(
+                    cursor,
+                    message_id=message_id,
+                    intent_id=intent_id,
+                    from_status=previous,
+                    to_status="UNKNOWN",
+                    # Keep the historical event prefix so existing operators
+                    # and dashboards continue to classify fenced recovery;
+                    # the payload carries the stricter lease-expiry reason.
+                    event_type="FENCED_RECOVERY_UNKNOWN",
+                    payload={"reason": "FENCED_OR_LEASE_EXPIRED"},
+                    lease_owner=self._lease_owner,
+                    fencing_token=self._fencing_token,
+                )
+                recovered += 1
+        return recovered
+
+    async def mark_failed(self, message_id: str, reason: str) -> str:
+        """Retry with a bounded backoff or move to DEAD_LETTER."""
+
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        if self._conn is None and self._connection_factory is None:
+            return "UNKNOWN"
+        with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
+            cursor.execute(
+                "SELECT intent_id,status,retry_count,max_retries FROM v3_transactional_outbox "
+                "WHERE message_id=%s AND status IN ('SENDING','SENT') AND lease_owner=%s AND fencing_token=%s "
+                "FOR UPDATE",
+                (message_id, self._lease_owner, self._fencing_token),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return "UNKNOWN"
+            intent_id = str(_row_value(row, "intent_id", 0))
+            previous = str(_row_value(row, "status", 1))
+            retry_count = int(_row_value(row, "retry_count", 2) or 0) + 1
+            max_retries = int(_row_value(row, "max_retries", 3) or 0)
+            target = "DEAD_LETTER" if retry_count >= max_retries else "PENDING"
+            delay = min(300, 2**retry_count)
+            cursor.execute(
+                "UPDATE v3_transactional_outbox SET status=%s,retry_count=%s,last_error=%s, "
+                "dead_letter_reason=%s,lease_owner=NULL,lease_until=NULL, "
+                "next_attempt_at=CURRENT_TIMESTAMP+(%s * INTERVAL '1 second'),updated_at=CURRENT_TIMESTAMP "
+                "WHERE message_id=%s AND status IN ('SENDING','SENT') AND lease_owner=%s AND fencing_token=%s",
+                (
+                    target,
+                    retry_count,
+                    reason,
+                    reason if target == "DEAD_LETTER" else None,
+                    delay,
+                    message_id,
+                    self._lease_owner,
+                    self._fencing_token,
+                ),
+            )
+            if getattr(cursor, "rowcount", 1) != 1:
+                return "UNKNOWN"
+            self._sync_intent_state(cursor, intent_id=intent_id, state=target)
+            self._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=intent_id,
+                from_status=previous,
+                to_status=target,
+                event_type="DEAD_LETTER" if target == "DEAD_LETTER" else "RETRY",
+                payload={"reason": reason, "retry_count": retry_count},
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
+        return target
+
+    async def _transition_owned(
+        self,
+        message_id: str,
+        *,
+        from_states: tuple[str, ...],
+        to_status: str,
+        event_type: str,
+        fields: str,
+        extra_params: tuple[Any, ...] = (),
+        payload: dict[str, Any] | None = None,
+    ) -> bool:
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        if self._conn is None and self._connection_factory is None:
+            return False
+        placeholders = ",".join("%s" for _ in from_states)
+        with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
+            cursor.execute(
+                "SELECT intent_id,status FROM v3_transactional_outbox "  # noqa: S608 - placeholders are generated only from the fixed from_states tuple
+                f"WHERE message_id=%s AND status IN ({placeholders}) AND lease_owner=%s AND fencing_token=%s "
+                "FOR UPDATE",
+                (message_id, *from_states, self._lease_owner, self._fencing_token),
+            )
+            current = cursor.fetchone()
+            if current is None:
+                return False
+            intent_id = str(_row_value(current, "intent_id", 0))
+            previous = str(_row_value(current, "status", 1))
+            cursor.execute(
+                f"UPDATE v3_transactional_outbox SET status=%s,{fields},updated_at=CURRENT_TIMESTAMP "  # noqa: S608
+                f"WHERE message_id=%s AND status IN ({placeholders}) AND lease_owner=%s AND fencing_token=%s "
+                "RETURNING intent_id",
+                (to_status, *extra_params, message_id, *from_states, self._lease_owner, self._fencing_token),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return False
+            self._sync_intent_state(cursor, intent_id=intent_id, state=to_status)
+            self._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=intent_id,
+                from_status=previous,
+                to_status=to_status,
+                event_type=event_type,
+                payload=payload,
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
+        return True
+
+    async def send(self, message: OutboxClaim) -> bool:
+        """Invoke an explicitly injected transport; no transport means fail closed."""
+
+        if self._sender is None:
+            return False
+        try:
+            result = self._sender(message)
+            if inspect.isawaitable(result):
+                result = await result
+            return bool(result)
+        except Exception:
+            return False
+
+    async def process_batch(self, batch_size: int = 10) -> int:
+        """Claim and invoke the injected sender; state transitions stay explicit."""
+
+        claims = await self.claim(batch_size=batch_size)
         sent = 0
-        for msg in messages:
-            if await self.send(msg):
-                sent += 1
+        for claim in claims:
+            if await self.send(claim):
+                if await self.mark_sent(claim.message_id):
+                    sent += 1
+            else:
+                await self.mark_unknown(claim.message_id, "TRANSPORT_RESULT_UNKNOWN")
         return sent
+
+    async def stats(self) -> dict[str, int]:
+        if self._conn is None and self._connection_factory is None:
+            return {"UNKNOWN": 1}
+        with self._connection_scope() as conn, self._cursor_scope(conn) as cursor:
+            cursor.execute("SELECT status,COUNT(*) FROM v3_transactional_outbox GROUP BY status")
+            rows = cursor.fetchall() or []
+        return {str(_row_value(row, "status", 0)): int(_row_value(row, "count", 1)) for row in rows}
+
+
+class PostgresIntentOutbox:
+    """Atomic PostgreSQL Approval + Intent + Outbox writer.
+
+    This class provides the production transaction contract and is
+    fail-closed when no connection is configured. The engine selects it only
+    when the configured PostgreSQL schema and fencing token are available.
+    """
+
+    def __init__(
+        self,
+        dsn: str = "",
+        *,
+        connection_factory: Callable[[], Any] | None = None,
+        lease_owner: str = "",
+        fencing_token: int = 0,
+        lease_seconds: int = 30,
+    ) -> None:
+        if connection_factory is not None and dsn:
+            raise ValueError("provide dsn or connection_factory, not both")
+        if connection_factory is None:
+            if not dsn:
+                raise ValueError("PostgreSQL DSN is required")
+            import psycopg
+
+            def connection_factory() -> Any:
+                return psycopg.connect(dsn)
+
+        self._connection_factory = connection_factory
+        self._db_path = dsn or "postgresql://injected"
+        self._lease_owner = lease_owner or f"engine-{uuid.uuid4().hex[:12]}"
+        self._fencing_token = int(fencing_token)
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        self._lease_seconds = int(lease_seconds)
+        # Compatibility diagnostics used by the engine.  The collections are
+        # intentionally empty: PostgreSQL is the authority, not process-local
+        # inbox state.
+        self._processed: set[str] = set()
+        self._inbox: dict[str, Any] = {}
+
+    @staticmethod
+    def _intent_key(intent: Any) -> str:
+        key = str(getattr(intent, "idempotency_key", "") or "")
+        if key:
+            return key
+        material = ":".join(
+            str(getattr(intent, name, "")) for name in ("intent_id", "instrument_id", "side", "quantity")
+        )
+        return hashlib.sha256(material.encode()).hexdigest()[:32]
+
+    @staticmethod
+    def _intent_payload(intent: Any, key: str) -> dict[str, Any]:
+        from beidou_safety.execution.intent import IntentOutbox
+
+        return json.loads(IntentOutbox._serialize_intent(intent, key))
+
+    def commit(self, intent: Any) -> str:
+        """Atomically persist one approved intent and its send command."""
+
+        key = self._intent_key(intent)
+        payload = self._intent_payload(intent, key)
+        reducing = bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
+        approval_id = str(getattr(intent, "risk_approval_id", "") or "")
+        signature = str(getattr(intent, "risk_approval_signature", "") or "")
+        expires_at = getattr(intent, "risk_expires_at", None)
+        if bool(approval_id) != bool(signature):
+            raise ValueError("RISK_APPROVAL_ENVELOPE_INCOMPLETE")
+        if not reducing and (not approval_id or not signature or expires_at is None):
+            raise ValueError("RISK_APPROVAL_REQUIRED_FOR_POSTGRES_INTENT")
+        approval_expiry: datetime | None = None
+        if approval_id and signature:
+            required_approval_fields = {
+                "risk_proposal_hash": getattr(intent, "risk_proposal_hash", ""),
+                "risk_intent_hash": getattr(intent, "risk_intent_hash", ""),
+                "risk_account_snapshot_hash": getattr(intent, "risk_account_snapshot_hash", ""),
+                "risk_snapshot_hash": getattr(intent, "risk_snapshot_hash", ""),
+                "risk_policy_version": getattr(intent, "risk_policy_version", ""),
+                "risk_nonce": getattr(intent, "risk_nonce", ""),
+            }
+            missing = [name for name, value in required_approval_fields.items() if not str(value or "")]
+            if missing:
+                raise ValueError(f"RISK_APPROVAL_FIELDS_REQUIRED: {','.join(missing)}")
+            if expires_at is None:
+                raise ValueError("RISK_APPROVAL_EXPIRY_REQUIRED")
+            if isinstance(expires_at, datetime):
+                approval_expiry = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+            else:
+                approval_expiry = datetime.fromtimestamp(float(expires_at), tz=timezone.utc)
+            if approval_expiry <= datetime.now(timezone.utc):
+                raise ValueError("RISK_APPROVAL_EXPIRED")
+        created_at = getattr(intent, "created_at", datetime.now(timezone.utc))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        message_id = f"msg-{uuid.uuid4().hex}"
+
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT intent_id,payload::text FROM v3_order_intents WHERE idempotency_key=%s",
+                (key,),
+            )
+            existing = cursor.fetchone()
+            if existing is not None:
+                existing_payload = _json_payload(_row_value(existing, "payload", 1))
+                if existing_payload != payload:
+                    raise ValueError("IDEMPOTENCY_KEY_PAYLOAD_CONFLICT")
+                return key
+            cursor.execute(
+                "INSERT INTO v3_order_intents "
+                "(intent_id,idempotency_key,client_order_id,account_venue_id,account_id,instrument_id,side,"
+                "order_type,quantity,price,time_in_force,payload,state,created_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CAST(%s AS jsonb),'PENDING',%s,%s)",
+                (
+                    str(intent.intent_id),
+                    key,
+                    getattr(intent, "client_order_id", None),
+                    str(intent.account_ref.venue_id),
+                    str(intent.account_ref.account_id),
+                    str(intent.instrument_id),
+                    str(getattr(intent.side, "value", intent.side)),
+                    str(getattr(intent.order_type, "value", intent.order_type)),
+                    str(intent.quantity.amount),
+                    str(intent.price.amount) if getattr(intent, "price", None) else None,
+                    str(getattr(intent.time_in_force, "value", intent.time_in_force)),
+                    json.dumps(payload, sort_keys=True, default=str),
+                    created_at,
+                    created_at,
+                ),
+            )
+            if approval_id and signature:
+                cursor.execute(
+                    "INSERT INTO v3_risk_approvals "
+                    "(approval_id,intent_id,decision,signature,proposal_hash,account_snapshot_hash,"
+                    "risk_snapshot_hash,intent_hash,policy_version,nonce,expires_at) "
+                    "VALUES (%s,%s,'APPROVED',%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (
+                        approval_id,
+                        str(intent.intent_id),
+                        signature,
+                        str(getattr(intent, "risk_proposal_hash", "")),
+                        str(getattr(intent, "risk_account_snapshot_hash", "")),
+                        str(getattr(intent, "risk_snapshot_hash", "")),
+                        str(getattr(intent, "risk_intent_hash", "")),
+                        str(getattr(intent, "risk_policy_version", "")),
+                        str(getattr(intent, "risk_nonce", "")),
+                        approval_expiry,
+                    ),
+                )
+            cursor.execute(
+                "INSERT INTO v3_transactional_outbox "
+                "(message_id,intent_id,idempotency_key,client_order_id,payload,status) "
+                "VALUES (%s,%s,%s,%s,CAST(%s AS jsonb),'PENDING')",
+                (
+                    message_id,
+                    str(intent.intent_id),
+                    key,
+                    getattr(intent, "client_order_id", None),
+                    json.dumps(payload, sort_keys=True, default=str),
+                ),
+            )
+            OutboxWorker._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=str(intent.intent_id),
+                from_status=None,
+                to_status="PENDING",
+                event_type="CREATED",
+                payload={"idempotency_key": key},
+                lease_owner="",
+                fencing_token=0,
+            )
+        return key
+
+    @property
+    def _outbox(self) -> list[Any]:
+        """Compatibility view for diagnostics; never a writable local queue."""
+
+        return self.unacked()
+
+    @staticmethod
+    def _deserialize_intent_payload(payload: Any) -> Any:
+        from beidou_safety.execution.intent import IntentOutbox
+
+        return IntentOutbox._deserialize_intent(str(payload))
+
+    def restore_pending_approvals(self) -> list[dict[str, Any]]:
+        if self._connection_factory is None:
+            return []
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT r.approval_id,r.intent_id,r.decision,r.signature,r.proposal_hash,"
+                "r.account_snapshot_hash,r.risk_snapshot_hash,r.intent_hash,r.policy_version,r.nonce,"
+                "EXTRACT(EPOCH FROM r.expires_at) AS expires_at "
+                "FROM v3_risk_approvals r JOIN v3_transactional_outbox o ON o.intent_id=r.intent_id "
+                "WHERE o.status IN ('PENDING','SENDING','UNKNOWN') AND r.decision='APPROVED' "
+                "ORDER BY r.created_at"
+            )
+            rows = cursor.fetchall() or []
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            result.append(
+                {
+                    "approval_id": _row_value(row, "approval_id", 0),
+                    "intent_id": _row_value(row, "intent_id", 1),
+                    "decision": _row_value(row, "decision", 2),
+                    "signature": _row_value(row, "signature", 3),
+                    "proposal_hash": _row_value(row, "proposal_hash", 4),
+                    "account_snapshot_hash": _row_value(row, "account_snapshot_hash", 5),
+                    "risk_snapshot_hash": _row_value(row, "risk_snapshot_hash", 6),
+                    "intent_hash": _row_value(row, "intent_hash", 7),
+                    "policy_version": _row_value(row, "policy_version", 8),
+                    "nonce": _row_value(row, "nonce", 9),
+                    "expires_at": _row_value(row, "expires_at", 10),
+                }
+            )
+        return result
+
+    def _query_intents(self, states: tuple[str, ...]) -> list[Any]:
+        if self._connection_factory is None:
+            return []
+        placeholders = ",".join("%s" for _ in states)
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                f"SELECT payload::text FROM v3_transactional_outbox WHERE status IN ({placeholders}) "  # noqa: S608
+                "ORDER BY created_at,message_id",
+                states,
+            )
+            rows = cursor.fetchall() or []
+        return [self._deserialize_intent_payload(_row_value(row, "payload", 0)) for row in rows]
+
+    def unacked(self) -> list[Any]:
+        return self._query_intents(("PENDING", "SENDING", "UNKNOWN"))
+
+    def pending_count(self) -> int:
+        if self._connection_factory is None:
+            return 0
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT COUNT(*) FROM v3_transactional_outbox WHERE status IN ('PENDING','SENDING','UNKNOWN')"
+            )
+            row = cursor.fetchone()
+        return int(_row_value(row, "count", 0) or 0) if row is not None else 0
+
+    def recover_inflight(self) -> int:
+        """Convert prior-generation/stale in-flight intents to ``UNKNOWN``.
+
+        The engine uses a synchronous claim boundary, so startup recovery is
+        exposed on the same adapter instead of relying on an uncalled async
+        helper.  A different lease owner fences an old process generation;
+        an expired or missing lease is ambiguous even when the token is
+        unchanged.  Both cases are recorded as UNKNOWN and require an
+        independent client-order query.
+        """
+
+        if self._connection_factory is None:
+            return 0
+        if self._fencing_token <= 0:
+            raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        recovered = 0
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT message_id,intent_id,status FROM v3_transactional_outbox "
+                "WHERE status IN ('SENDING','SENT') AND ("
+                "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
+                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                ") FOR UPDATE SKIP LOCKED",
+                (self._lease_owner, self._fencing_token),
+            )
+            rows = cursor.fetchall() or []
+            for row in rows:
+                message_id = str(_row_value(row, "message_id", 0))
+                intent_id = str(_row_value(row, "intent_id", 1))
+                previous = str(_row_value(row, "status", 2))
+                cursor.execute(
+                    "UPDATE v3_transactional_outbox SET status='UNKNOWN',lease_owner=NULL,lease_until=NULL,"
+                    "last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
+                    "AND status IN ('SENDING','SENT') AND ("
+                    "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
+                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                    ")",
+                    ("FENCED_OR_LEASE_EXPIRED", message_id, self._lease_owner, self._fencing_token),
+                )
+                if getattr(cursor, "rowcount", 1) != 1:
+                    continue
+                OutboxWorker._sync_intent_state(cursor, intent_id=intent_id, state="UNKNOWN")
+                OutboxWorker._append_transition(
+                    cursor,
+                    message_id=message_id,
+                    intent_id=intent_id,
+                    from_status=previous,
+                    to_status="UNKNOWN",
+                    event_type="FENCED_RECOVERY_UNKNOWN",
+                    payload={"reason": "FENCED_OR_LEASE_EXPIRED"},
+                    lease_owner=self._lease_owner,
+                    fencing_token=self._fencing_token,
+                )
+                recovered += 1
+        return recovered
+
+    def duplicate_order_count_24h(self) -> int | None:
+        """Read duplicate identity facts from the durable intent table.
+
+        A missing client ID, schema/query failure, or absent fencing token is
+        not proof of zero duplicates and therefore returns ``None`` so the
+        caller's R10 rule remains UNKNOWN/fail-closed.
+        """
+
+        if self._connection_factory is None or self._fencing_token <= 0:
+            return None
+        try:
+            with (
+                OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+                OutboxWorker._cursor_scope(conn) as cursor,
+            ):
+                cursor.execute(
+                    "SELECT COUNT(*) AS total, COUNT(client_order_id) AS identified, "
+                    "COUNT(DISTINCT client_order_id) AS distinct_client_ids, "
+                    "COUNT(DISTINCT idempotency_key) AS distinct_idempotency_keys "
+                    "FROM v3_order_intents "
+                    "WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'"
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            total = int(_row_value(row, "total", 0) or 0)
+            identified = int(_row_value(row, "identified", 1) or 0)
+            distinct_client_ids = int(_row_value(row, "distinct_client_ids", 2) or 0)
+            distinct_idempotency_keys = int(_row_value(row, "distinct_idempotency_keys", 3) or 0)
+            if total != identified:
+                return None
+            return max(total - distinct_client_ids, total - distinct_idempotency_keys)
+        except Exception:
+            return None
+
+    @property
+    def stats(self) -> dict[str, Any]:
+        if self._connection_factory is None:
+            return {"state_counts": {"UNKNOWN": 1}, "pending_count": 0, "outbox_size": 0}
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute("SELECT status,COUNT(*) FROM v3_transactional_outbox GROUP BY status")
+            rows = cursor.fetchall() or []
+        state_counts = {str(_row_value(row, "status", 0)): int(_row_value(row, "count", 1)) for row in rows}
+        return {
+            "state_counts": state_counts,
+            "pending_count": sum(state_counts.get(status, 0) for status in ("PENDING", "SENDING", "UNKNOWN")),
+            "outbox_size": sum(state_counts.values()),
+            "unknown_count": state_counts.get("UNKNOWN", 0),
+            "dead_letter_count": state_counts.get("DEAD_LETTER", 0),
+        }
+
+    def claim(self, owner: str, lease_seconds: float = 30.0) -> Any | None:
+        """Synchronously claim one PENDING intent for the engine loop."""
+
+        if self._connection_factory is None or self._fencing_token <= 0:
+            return None
+        if owner and owner != self._lease_owner:
+            # The owner is part of the durable fencing identity. Allowing an
+            # arbitrary per-call owner would make later ACK/FAIL transitions
+            # unverifiable and strand the intent in SENDING.
+            raise ValueError("OUTBOX_LEASE_OWNER_MISMATCH")
+        claim_owner = self._lease_owner
+        lease = max(1, int(lease_seconds or self._lease_seconds))
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT message_id,intent_id,payload::text FROM v3_transactional_outbox "
+                "WHERE status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=CURRENT_TIMESTAMP) "
+                "ORDER BY created_at,message_id FOR UPDATE SKIP LOCKED LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            message_id = str(_row_value(row, "message_id", 0))
+            intent_id = str(_row_value(row, "intent_id", 1))
+            cursor.execute(
+                "UPDATE v3_transactional_outbox SET status='SENDING',lease_owner=%s,"
+                "lease_until=CURRENT_TIMESTAMP+(%s * INTERVAL '1 second'),fencing_token=%s,"
+                "updated_at=CURRENT_TIMESTAMP WHERE message_id=%s AND status='PENDING' RETURNING payload::text",
+                (claim_owner, lease, self._fencing_token, message_id),
+            )
+            updated = cursor.fetchone()
+            if updated is None:
+                return None
+            OutboxWorker._sync_intent_state(cursor, intent_id=intent_id, state="SENDING")
+            OutboxWorker._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=intent_id,
+                from_status="PENDING",
+                to_status="SENDING",
+                event_type="CLAIMED",
+                payload={"owner": claim_owner},
+                lease_owner=claim_owner,
+                fencing_token=self._fencing_token,
+            )
+            return self._deserialize_intent_payload(_row_value(updated, "payload", 0))
+
+    def _transition_intent(
+        self,
+        intent_id: str,
+        *,
+        target: str,
+        reason: str = "",
+        event_type: str,
+        from_states: tuple[str, ...],
+        owner_required: bool | None,
+    ) -> bool:
+        if self._connection_factory is None or self._fencing_token <= 0:
+            return False
+        if not from_states:
+            raise ValueError("from_states must not be empty")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT message_id,status,intent_id FROM v3_transactional_outbox WHERE intent_id=%s FOR UPDATE",
+                (str(intent_id),),
+            )
+            current = cursor.fetchone()
+            if current is None:
+                return False
+            message_id = str(_row_value(current, "message_id", 0))
+            previous = str(_row_value(current, "status", 1))
+            if previous in {"ACKED", "FAILED", "DEAD_LETTER"}:
+                return previous == target
+
+            placeholders = ",".join("%s" for _ in from_states)
+            if owner_required is True:
+                ownership_clause = "lease_owner=%s AND fencing_token=%s"
+                ownership_params: tuple[Any, ...] = (self._lease_owner, self._fencing_token)
+            elif owner_required is False:
+                # UNKNOWN can only be resolved by a new fenced generation
+                # after an independent venue query.  It must not be claimed by
+                # an arbitrary owner or by an older fencing token.
+                ownership_clause = "lease_owner IS NULL AND fencing_token<=%s"
+                ownership_params = (self._fencing_token,)
+            else:
+                # Deterministic local rejection is allowed while still PENDING;
+                # once a worker has claimed the intent, only that owner may
+                # transition it.  This prevents a stale worker from ACKing or
+                # failing another worker's in-flight command.
+                ownership_clause = (
+                    "((status='PENDING' AND lease_owner IS NULL AND fencing_token=0) "
+                    "OR (status<>'PENDING' AND lease_owner=%s AND fencing_token=%s))"
+                )
+                ownership_params = (self._lease_owner, self._fencing_token)
+            cursor.execute(
+                "UPDATE v3_transactional_outbox SET status=%s,last_error=%s,"  # noqa: S608
+                "lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP "
+                f"WHERE message_id=%s AND status IN ({placeholders}) AND {ownership_clause} "
+                "RETURNING intent_id",
+                (target, reason or None, message_id, *from_states, *ownership_params),
+            )
+            updated = cursor.fetchone()
+            if updated is None:
+                return False
+            OutboxWorker._sync_intent_state(cursor, intent_id=str(intent_id), state=target)
+            OutboxWorker._append_transition(
+                cursor,
+                message_id=message_id,
+                intent_id=str(intent_id),
+                from_status=previous,
+                to_status=target,
+                event_type=event_type,
+                payload={"reason": reason} if reason else {},
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
+            return True
+
+    def ack(self, intent_id: str, idempotency_key: str = "") -> None:
+        self._transition_intent(
+            str(intent_id),
+            target="ACKED",
+            event_type="ENGINE_ACK",
+            from_states=("SENDING", "SENT"),
+            owner_required=True,
+        )
+
+    def reject(self, intent_id: str, reason: str, idempotency_key: str = "") -> None:
+        self._transition_intent(
+            str(intent_id),
+            target="FAILED",
+            reason=reason,
+            event_type="REJECTED",
+            from_states=("PENDING", "SENDING", "SENT"),
+            owner_required=None,
+        )
+
+    def dead_letter(self, intent_id: str, reason: str, idempotency_key: str = "") -> None:
+        self._transition_intent(
+            str(intent_id),
+            target="DEAD_LETTER",
+            reason=reason,
+            event_type="DEAD_LETTER",
+            from_states=("SENDING", "SENT"),
+            owner_required=True,
+        )
+
+    def mark_unknown(self, intent_id: str, reason: str) -> None:
+        self._transition_intent(
+            str(intent_id),
+            target="UNKNOWN",
+            reason=reason,
+            event_type="UNKNOWN",
+            from_states=("SENDING", "SENT"),
+            owner_required=True,
+        )
+
+    def resolve_unknown(self, intent_id: str, *, exchange_order_found: bool) -> None:
+        target = "ACKED" if exchange_order_found else "PENDING"
+        self._transition_intent(
+            str(intent_id),
+            target=target,
+            event_type="UNKNOWN_RESOLVED_FOUND" if exchange_order_found else "UNKNOWN_RESOLVED_ABSENT",
+            from_states=("UNKNOWN",),
+            owner_required=False,
+        )

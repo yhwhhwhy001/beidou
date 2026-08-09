@@ -220,6 +220,15 @@ def test_runtime_reconciliation_has_no_automatic_self_heal_call() -> None:
     assert "_sync_exchange_state" not in inspect.getsource(AutonomousEngine._reconcile)
 
 
+def test_legacy_exchange_state_self_heal_is_fail_closed() -> None:
+    import asyncio
+
+    engine = object.__new__(AutonomousEngine)
+
+    with pytest.raises(RuntimeError, match="EXCHANGE_STATE_MUTATION_RECOVERY_DISABLED"):
+        asyncio.run(engine._sync_exchange_state())
+
+
 def test_cumulative_fill_observations_produce_one_delta_per_event(tmp_path) -> None:
     store = PersistentStore(str(tmp_path / "fills.db"))
     engine = object.__new__(AutonomousEngine)

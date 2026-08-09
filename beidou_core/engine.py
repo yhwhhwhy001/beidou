@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -26,7 +27,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
+from beidou_data.trading_pool_lifecycle import TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -39,6 +40,7 @@ from beidou_research.factors.factor import (
     FactorLifecycle,
     FactorRegistry,
 )
+from beidou_safety.execution import order_intent_binding_hash
 from beidou_safety.execution.algorithms import (
     BaseExecutionAlgorithm,
     ExecutionAlgorithmSelector,
@@ -62,7 +64,14 @@ from beidou_safety.execution.reconciliation import (
     ReconciliationStatus,
 )
 from beidou_safety.execution.user_events import UserProjectionStatus, UserStreamProjector
-from beidou_safety.protection.engine import ProtectionManager, ProtectionStatus
+from beidou_safety.protection.engine import (
+    PositionProtection,
+    ProtectionManager,
+    ProtectionOrder,
+    ProtectionStatus,
+    StopLossType,
+    TakeProfitType,
+)
 from beidou_safety.risk.engine import (
     DEFAULT_APPROVAL_TTL_SECONDS,
     PostRiskMonitor,
@@ -106,6 +115,7 @@ from beidou_strategy.alpha import (
     AlphaComponent,
     AlphaComponentType,
     AlphaGraph,
+    AlphaSignal,
     SignalDirection,
 )  # BD-T05: legacy, migrated to StrategyKernel
 from beidou_strategy.alpha.legacy_adapter import build_typed_graph
@@ -140,34 +150,149 @@ logger.setLevel(logging.INFO)
 # 避免重复日志
 logger.propagate = False
 
-# Binance USDⓈ-M 永续合约交易池 — 主流 + 活跃altcoin
-DEFAULT_UNIVERSE = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "BNBUSDT",
-    "SOLUSDT",
-    "XRPUSDT",
-    "DOGEUSDT",
-    "ADAUSDT",
-    "AVAXUSDT",
-    "DOTUSDT",
-    "LINKUSDT",
-    "POLUSDT",
-    "UNIUSDT",
-    "ATOMUSDT",
-    "LTCUSDT",
-    "ETCUSDT",
-    "FILUSDT",
-    "APTUSDT",
-    "ARBUSDT",
-    "OPUSDT",
-    "NEARUSDT",
-    "INJUSDT",
-    "SUIUSDT",
-    "RUNEUSDT",
-    "SEIUSDT",
-    "TIAUSDT",
-]
+
+def _validated_features(features: Any, required: tuple[str, ...]) -> dict[str, float] | None:
+    """Validate a feature snapshot without inventing trading inputs."""
+
+    if not isinstance(features, dict) or any(name not in features for name in required):
+        return None
+    values: dict[str, float] = {}
+    try:
+        for name in required:
+            value = features[name]
+            if isinstance(value, bool):
+                return None
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                return None
+            values[name] = parsed
+    except (TypeError, ValueError, KeyError):
+        return None
+    return values
+
+
+def _validated_prices(features: Any) -> list[float] | None:
+    """Validate the closed-price series used by research components."""
+
+    if not isinstance(features, dict):
+        return None
+    raw_prices = features.get("prices")
+    if not isinstance(raw_prices, (list, tuple)) or not raw_prices:
+        return None
+    try:
+        prices = [float(value) for value in raw_prices]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(value) or value <= 0 for value in prices):
+        return None
+    return prices
+
+
+def _validated_ws_quote(ticker: Any) -> tuple[float, float, float] | None:
+    """Validate a websocket last/bid/ask snapshot without quote fallbacks."""
+
+    if not isinstance(ticker, dict):
+        return None
+    try:
+        price = float(ticker["lastPrice"])
+        bid = float(ticker["bid"])
+        ask = float(ticker["ask"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (price, bid, ask)):
+        return None
+    if price <= 0 or not (0 < bid <= ask):
+        return None
+    return price, bid, ask
+
+
+def _validate_duplicate_order_response(
+    response: Any,
+    *,
+    client_order_id: str,
+    symbol: str,
+    side: str,
+    order_type: str,
+    quantity: str,
+    reduce_only: bool = False,
+) -> tuple[bool, str]:
+    """Prove a duplicate-client-id lookup identifies the exact intent.
+
+    A query made after an ambiguous submit is not an acknowledgement by
+    itself.  Adopt exactly one venue row only when its identity and requested
+    order semantics match the durable intent; otherwise keep the intent
+    UNKNOWN and require governed reconciliation.
+    """
+
+    if not isinstance(response, dict):
+        return False, "RESPONSE_NOT_OBJECT"
+    required = ("orderId", "clientOrderId", "symbol", "side", "type", "status", "origQty")
+    if any(response.get(field) in (None, "") for field in required):
+        return False, "IDENTITY_FIELD_MISSING"
+    if str(response["clientOrderId"]) != str(client_order_id):
+        return False, "CLIENT_ORDER_ID_MISMATCH"
+    if str(response["symbol"]).upper() != str(symbol).upper():
+        return False, "SYMBOL_MISMATCH"
+    if str(response["side"]).upper() != str(side).upper():
+        return False, "SIDE_MISMATCH"
+    if str(response["type"]).upper() != str(order_type).upper():
+        return False, "ORDER_TYPE_MISMATCH"
+    if str(response["status"]).upper() not in {
+        status.value for status in OrderStatus if status is not OrderStatus.UNKNOWN
+    }:
+        return False, "ORDER_STATUS_UNKNOWN"
+    try:
+        expected_quantity = Decimal(str(quantity))
+        venue_quantity = Decimal(str(response["origQty"]))
+    except (InvalidOperation, TypeError, ValueError):
+        return False, "QUANTITY_INVALID"
+    if not expected_quantity.is_finite() or expected_quantity <= 0 or venue_quantity != expected_quantity:
+        return False, "QUANTITY_MISMATCH"
+
+    if reduce_only:
+        value = response.get("reduceOnly")
+        enabled = value is True or str(value).strip().lower() in {"1", "true", "yes"}
+        if not enabled:
+            return False, "REDUCE_ONLY_UNPROVEN"
+    return True, "OK"
+
+
+def _signal_identity(context: dict[str, Any]) -> tuple[InstrumentId, VenueId]:
+    """Resolve an explicit identity; never default a missing symbol to BTCUSDT."""
+
+    instrument = context.get("instrument_id")
+    venue = context.get("venue_id")
+    return (
+        InstrumentId(str(instrument)) if isinstance(instrument, str) and instrument else InstrumentId("UNKNOWN"),
+        VenueId(str(venue)) if isinstance(venue, str) and venue else VenueId("UNKNOWN"),
+    )
+
+
+def _blocked_signal(
+    context: dict[str, Any],
+    *,
+    strategy_id: str,
+    component_type: AlphaComponentType,
+    reason: str,
+) -> AlphaSignal:
+    """Produce an auditable non-trading signal for missing/invalid features."""
+
+    instrument_id, venue_id = _signal_identity(context)
+    metadata: dict[str, Any] = {"reason": reason, "data_quality": "BLOCK"}
+    if component_type == AlphaComponentType.FILTER:
+        metadata["filter_decision"] = "VETO"
+    return AlphaSignal(
+        strategy_id=StrategyId(strategy_id),
+        component_type=component_type,
+        direction=SignalDirection.NO_ACTION,
+        strength=0.0,
+        confidence=0.95 if component_type == AlphaComponentType.FILTER else 0.0,
+        instrument_id=instrument_id,
+        venue_id=venue_id,
+        model_version=SchemaVersion("2.0.0"),
+        metadata=metadata,
+    )
+
 
 # ================================================================
 # 自适应杠杆 — 基于波动率分级
@@ -176,8 +301,8 @@ DEFAULT_UNIVERSE = [
 
 def adaptive_leverage(ann_volatility: float) -> float:
     """波动率越高杠杆越低，控制风险暴露。"""
-    if ann_volatility <= 0.0:
-        return 2.0  # 数据缺失时保守
+    if not math.isfinite(ann_volatility) or ann_volatility <= 0.0:
+        return 0.0  # UNKNOWN → no new risk
     if ann_volatility < 0.2:
         return 3.0  # 低波动：可以放大
     if ann_volatility < 0.4:
@@ -189,6 +314,13 @@ def adaptive_leverage(ann_volatility: float) -> float:
 
 def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: float) -> float:
     """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。"""
+    if (
+        not all(math.isfinite(value) for value in (strength, ann_volatility, spread_bps))
+        or strength <= 0.0
+        or ann_volatility <= 0.0
+        or spread_bps < 0.0
+    ):
+        return 0.0
     vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
     base = strength * 0.02  # 基础: 2% of signal strength
@@ -217,13 +349,19 @@ class MeanReversionEntry(AlphaComponent):
         self._engine = MeanReversionEngine(half_life_window=100, z_threshold=1.5)
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        close = features.get("close", 0)
-        prices = features.get("prices", []) or []
-        sma_20 = features.get("sma_20", close)
-        rsi = features.get("rsi_14", 50)
+        values = _validated_features(features, ("close", "sma_20", "rsi_14", "ann_volatility", "spread_bps"))
+        prices = _validated_prices(features)
+        if values is None or prices is None:
+            return _blocked_signal(
+                context,
+                strategy_id="meanrev_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        close = values["close"]
+        sma_20 = values["sma_20"]
+        rsi = values["rsi_14"]
 
         # BD-05: 稳健均值回归引擎 — median/MAD z-score + OLS half-life +
         # no-trade band + regime gate + cost gate + volatility scaling
@@ -232,8 +370,8 @@ class MeanReversionEntry(AlphaComponent):
         result = self._engine.evaluate(
             price=close,
             prices=prices,
-            volatility=features.get("ann_volatility", 0.3),
-            estimated_cost_bps=features.get("spread_bps", 1.0) + 6.0,  # spread + taker/maker fees
+            volatility=values["ann_volatility"],
+            estimated_cost_bps=values["spread_bps"] + 6.0,  # spread + taker/maker fees
             market_regime=regime,
         )
 
@@ -262,8 +400,8 @@ class MeanReversionEntry(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=confidence,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={
                 "z_score": result.z_score,
@@ -317,20 +455,21 @@ class MomentumFilter(AlphaComponent):
         self._momentum = MultiPeriodMomentum(periods=[5, 10, 20, 50])
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        prices = features.get("prices", []) or []
-        ann_vol = features.get("ann_volatility", 0.3)
+        values = _validated_features(features, ("ann_volatility",))
+        prices = _validated_prices(features)
+        if values is None or prices is None:
+            return _blocked_signal(
+                context,
+                strategy_id="momentum_filter_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        ann_vol = values["ann_volatility"]
 
         # BD-05: 多周期动量评估（趋势方向/强度/持久性/波动率否决）
         result = self._momentum.evaluate(prices, ann_vol)
 
-        _direction_map = {
-            "UP": SignalDirection.LONG,
-            "DOWN": SignalDirection.SHORT,
-            "FLAT": SignalDirection.NO_ACTION,
-        }
         if result.filter_decision == "VETO":
             # 否决（高波动 override 或数据不足）→ NO_ACTION, confidence>=0.8 触发 DAG veto
             direction = SignalDirection.NO_ACTION
@@ -338,12 +477,12 @@ class MomentumFilter(AlphaComponent):
             confidence = 0.9
             reason = "momentum_veto"
         elif result.filter_decision == "DEGRADE":
-            direction = _direction_map.get(result.trend_direction, SignalDirection.NO_ACTION)
+            direction = SignalDirection.NO_ACTION
             strength = result.trend_strength * 0.5
             confidence = 0.4
             reason = "momentum_degrade"
         else:
-            direction = _direction_map.get(result.trend_direction, SignalDirection.NO_ACTION)
+            direction = SignalDirection.NO_ACTION
             strength = max(0.15, result.trend_strength)
             confidence = 0.55
             reason = "momentum_accept"
@@ -354,8 +493,8 @@ class MomentumFilter(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=confidence,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={
                 "reason": reason,
@@ -398,13 +537,19 @@ class TrendFollowingEntry(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        sma_5 = features.get("sma_5", 0)
-        sma_20 = features.get("sma_20", 0)
-        trend_20 = features.get("trend_20_pct", 0)
-        rsi = features.get("rsi_14", 50)
+        values = _validated_features(features, ("sma_5", "sma_20", "trend_20_pct", "rsi_14"))
+        if values is None or values["sma_5"] <= 0 or values["sma_20"] <= 0 or not 0 <= values["rsi_14"] <= 100:
+            return _blocked_signal(
+                context,
+                strategy_id="trend_following_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        sma_5 = values["sma_5"]
+        sma_20 = values["sma_20"]
+        trend_20 = values["trend_20_pct"]
+        rsi = values["rsi_14"]
 
         # SMA crossover signal
         crossover = sma_5 - sma_20
@@ -430,8 +575,8 @@ class TrendFollowingEntry(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=0.5 + strength * 0.4,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={"crossover": crossover, "trend_20": trend_20, "rsi": rsi},
         )
@@ -454,15 +599,24 @@ class BreakoutEntry(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        close = features.get("close", 0)
-        highest_20 = features.get("highest_20", close)
-        lowest_20 = features.get("lowest_20", close)
-        ann_vol = features.get("ann_volatility", 0.3)
-        vol_ratio = features.get("vol_ratio", 1.0)
-        atr_pct = features.get("atr_pct", 1.0)
+        values = _validated_features(
+            features,
+            ("close", "highest_20", "lowest_20", "ann_volatility", "vol_ratio", "atr_pct"),
+        )
+        if values is None or values["close"] <= 0 or values["highest_20"] <= 0 or values["lowest_20"] <= 0:
+            return _blocked_signal(
+                context,
+                strategy_id="breakout_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        close = values["close"]
+        highest_20 = values["highest_20"]
+        lowest_20 = values["lowest_20"]
+        ann_vol = values["ann_volatility"]
+        vol_ratio = values["vol_ratio"]
+        atr_pct = values["atr_pct"]
 
         breakout_up = close > highest_20 * 1.001  # 0.1% tolerance
         breakout_down = close < lowest_20 * 0.999
@@ -486,8 +640,8 @@ class BreakoutEntry(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=0.45 + strength * 0.35,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={"breakout_up": breakout_up, "breakout_down": breakout_down, "vol_expanding": vol_expanding},
         )
@@ -510,12 +664,23 @@ class VolatilityFilter(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        ann_vol = features.get("ann_volatility", 0.3)
-        atr_pct = features.get("atr_pct", 1.0)
-        rsi = features.get("rsi_14", 50)
+        values = _validated_features(features, ("ann_volatility", "atr_pct", "rsi_14"))
+        if (
+            values is None
+            or values["ann_volatility"] <= 0
+            or values["atr_pct"] <= 0
+            or not 0 <= values["rsi_14"] <= 100
+        ):
+            return _blocked_signal(
+                context,
+                strategy_id="volatility_filter_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        ann_vol = values["ann_volatility"]
+        atr_pct = values["atr_pct"]
+        rsi = values["rsi_14"]
 
         if ann_vol > 0.6 or atr_pct > 5.0:
             # Extreme volatility — veto everything
@@ -525,14 +690,14 @@ class VolatilityFilter(AlphaComponent):
             reason = "extreme_volatility"
         elif ann_vol > 0.4:
             # Elevated — reduce conviction
-            direction = SignalDirection.LONG  # pass-through with reduced weight
+            direction = SignalDirection.NO_ACTION
             strength = 0.15
             confidence = 0.5
             reason = "elevated_volatility"
         else:
             # Normal — confirm direction via RSI
             # rsi > 70 → overbought bias SHORT; rsi < 30 → oversold bias LONG
-            direction = SignalDirection.SHORT if rsi > 70 else SignalDirection.LONG
+            direction = SignalDirection.NO_ACTION
             strength = 0.2
             confidence = 0.6
             reason = "normal"
@@ -543,10 +708,10 @@ class VolatilityFilter(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=confidence,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
-            metadata={"ann_vol": ann_vol, "atr_pct": atr_pct, "reason": reason},
+            metadata={"ann_vol": ann_vol, "atr_pct": atr_pct, "rsi": rsi, "reason": reason},
         )
         context["_predictions"] = context.get("_predictions", {})
         context["_predictions"]["volatility_filter_v1"] = -1.0 if reason == "extreme_volatility" else ann_vol
@@ -567,12 +732,18 @@ class VolumeFilter(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        vol_ratio = features.get("vol_ratio", 1.0)
-        trend_20 = features.get("trend_20_pct", 0)
-        ann_vol = features.get("ann_volatility", 0.2)
+        values = _validated_features(features, ("vol_ratio", "trend_20_pct", "ann_volatility"))
+        if values is None or values["vol_ratio"] < 0 or values["ann_volatility"] <= 0:
+            return _blocked_signal(
+                context,
+                strategy_id="volume_filter_v1",
+                component_type=self.component_type,
+                reason="MARKET_FEATURES_UNKNOWN",
+            )
+        vol_ratio = values["vol_ratio"]
+        trend_20 = values["trend_20_pct"]
+        ann_vol = values["ann_volatility"]
 
         if vol_ratio < 0.25:
             # Dead volume — veto
@@ -582,19 +753,19 @@ class VolumeFilter(AlphaComponent):
             reason = "dead_volume"
         elif vol_ratio < 0.5:
             # Low volume — degrade signal
-            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            direction = SignalDirection.NO_ACTION
             strength = 0.08
             confidence = 0.45
             reason = "low_volume"
         elif vol_ratio > 1.5 and ann_vol > 0.15:
             # Surge volume — strong confirmation
-            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            direction = SignalDirection.NO_ACTION
             strength = min(0.25, vol_ratio / 10)
             confidence = 0.65
             reason = "volume_surge"
         else:
             # Normal volume — neutral pass-through
-            direction = SignalDirection.LONG if trend_20 >= 0 else SignalDirection.SHORT
+            direction = SignalDirection.NO_ACTION
             strength = 0.12
             confidence = 0.5
             reason = "normal"
@@ -605,10 +776,10 @@ class VolumeFilter(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=confidence,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
-            metadata={"vol_ratio": vol_ratio, "reason": reason},
+            metadata={"vol_ratio": vol_ratio, "trend_20": trend_20, "reason": reason},
         )
         context["_predictions"] = context.get("_predictions", {})
         context["_predictions"]["volume_filter_v1"] = -1.0 if reason == "dead_volume" else vol_ratio
@@ -629,19 +800,13 @@ class TrailingExit(AlphaComponent):
         )
 
     async def generate(self, context: dict) -> Any:
-        from beidou_strategy.alpha import AlphaSignal
-
         features = context.get("features", {})
-        close = features.get("close", 0)
-        atr_pct = features.get("atr_pct", 1.0)
-        sma_20 = features.get("sma_20", close)
-        rsi = features.get("rsi_14", 50)
-
         # Check if there's a position to manage
         position_info = context.get("_position_info", {})
         has_position = position_info.get("has_position", False)
         entry_price = position_info.get("entry_price", 0)
         position_side = position_info.get("side", "")
+        atr_pct: float | None = None
 
         if not has_position or entry_price <= 0:
             # No position — return neutral
@@ -649,6 +814,18 @@ class TrailingExit(AlphaComponent):
             strength = 0.0
             reason = "no_position"
         else:
+            values = _validated_features(features, ("close", "atr_pct", "sma_20", "rsi_14"))
+            if values is None or values["close"] <= 0 or values["atr_pct"] <= 0 or not 0 <= values["rsi_14"] <= 100:
+                return _blocked_signal(
+                    context,
+                    strategy_id="trailing_exit_v1",
+                    component_type=self.component_type,
+                    reason="MARKET_FEATURES_UNKNOWN",
+                )
+            close = values["close"]
+            atr_pct = values["atr_pct"]
+            sma_20 = values["sma_20"]
+            rsi = values["rsi_14"]
             # Compute drawdown from entry
             if position_side == "LONG":
                 pnl_pct = (close - entry_price) / entry_price * 100
@@ -687,8 +864,8 @@ class TrailingExit(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=0.7,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={"reason": reason, "atr_pct": atr_pct},
         )
@@ -714,9 +891,6 @@ class TimeExit(AlphaComponent):
         import time as _time
 
         from beidou_strategy.alpha import AlphaSignal
-
-        features = context.get("features", {})
-        features.get("close", 0)
 
         position_info = context.get("_position_info", {})
         has_position = position_info.get("has_position", False)
@@ -755,8 +929,8 @@ class TimeExit(AlphaComponent):
             direction=direction,
             strength=strength,
             confidence=0.75,
-            instrument_id=context.get("instrument_id", InstrumentId("BTCUSDT")),
-            venue_id=context.get("venue_id", VenueId("BINANCE")),
+            instrument_id=_signal_identity(context)[0],
+            venue_id=_signal_identity(context)[1],
             model_version=SchemaVersion("2.0.0"),
             metadata={"reason": reason},
         )
@@ -778,10 +952,13 @@ class RealMarketStateEstimator:
 
     @staticmethod
     def estimate(features: dict[str, float]) -> dict[str, str]:
-        ann_vol = features.get("ann_volatility", 0.3)
+        values = _validated_features(features, ("close", "sma_5", "sma_20", "ann_volatility"))
+        if values is None or values["close"] <= 0 or values["sma_5"] <= 0 or values["sma_20"] <= 0:
+            return {"direction": "UNKNOWN", "stress": "UNKNOWN", "quality": "UNKNOWN"}
 
-        sma_5 = features.get("sma_5", 0)
-        sma_20 = features.get("sma_20", 0)
+        ann_vol = values["ann_volatility"]
+        sma_5 = values["sma_5"]
+        sma_20 = values["sma_20"]
         if sma_5 > sma_20 * 1.01:
             direction = "TRENDING_UP"
         elif sma_5 < sma_20 * 0.99:
@@ -796,10 +973,7 @@ class RealMarketStateEstimator:
         else:
             stress = "LOW"
 
-        has_sufficient_data = (
-            features.get("close", 0) > 0 and features.get("sma_5", 0) > 0 and features.get("sma_20", 0) > 0
-        )
-        quality = "RELIABLE" if has_sufficient_data and ann_vol > 0 else "UNKNOWN"
+        quality = "RELIABLE" if ann_vol > 0 else "UNKNOWN"
 
         return {
             "direction": direction,
@@ -817,7 +991,12 @@ class AutonomousEngine:
     """北斗自主运行引擎。三个时钟域的 asyncio 事件循环。"""
 
     def __init__(self, symbols: list[str], mode: str = "paper") -> None:
-        self._symbols = symbols
+        normalized_symbols = list(
+            dict.fromkeys(str(symbol).strip().upper() for symbol in symbols if str(symbol).strip())
+        )
+        if not normalized_symbols or any(symbol in {"ALL", "DEFAULT"} for symbol in normalized_symbols):
+            raise ValueError("EXPLICIT_SYMBOL_UNIVERSE_REQUIRED")
+        self._symbols = normalized_symbols
         self._cli_mode = mode  # CLI 参数: research/paper/shadow/testnet/safety_only
 
         # 封闭运行模式枚举 — 决定写能力
@@ -852,11 +1031,17 @@ class AutonomousEngine:
             service_id="beidou-autopilot",
             roles=frozenset({"trader"}),
         )
+        # Every process generation gets a unique durable lease owner.  A
+        # stable service name alone cannot distinguish a crashed worker from
+        # its restart while the old PostgreSQL lease is still valid; that
+        # ambiguity must be fenced into UNKNOWN before any retry.
+        self._session_id = uuid.uuid4().hex
+        self._lease_owner = f"{self._service_identity.service_id}:{self._session_id}"
         self._credential = Credential(
             credential_id="binance-usdm-testnet",
             credential_type=CredentialType.TRADING,
             key_reference="BEIDOU_BINANCE_API_KEY",
-            can_withdraw=False,  # 交易密钥必须禁用提款
+            can_withdraw=False,  # policy expectation; venue permission is read separately at startup
         )
         # 记录凭证审计日志（sanitized: key 内容不写入日志）
         sanitized_key = "<redacted>" if self._api_key else "<missing>"
@@ -872,10 +1057,12 @@ class AutonomousEngine:
         # 只读叠加层 — 不修改密钥读取/签名流程。
         self._key_rotator = KeyRotator()
         self._key_rotator.register(self._credential)
-        # R9 账户能力：can_trade/can_withdraw 由凭据权限推导（提款无条件禁止）。
-        # 交易所写边界（_can_write + supervisor write interlock）仍是最终约束。
+        # R9 账户能力在启动后必须由交易所账户事实确认；本地凭据元数据
+        # 不能证明 venue 权限。未知权限先按最保守状态阻断写入。
         self._can_trade = Permission.can_create_order(self._credential.credential_type)
-        self._can_withdraw = False  # R9: 提款权限必须关闭
+        self._can_withdraw = True  # UNKNOWN/true both fail closed; venue false is applied after account read
+        self._venue_can_trade: bool | None = None
+        self._venue_can_withdraw: bool | None = None
         # 凭据到期预警（30 天内提醒轮换）
         _days_to_expiry = (self._credential.expires_at - datetime.now(timezone.utc)).total_seconds() / 86400.0
         if _days_to_expiry <= 30.0:
@@ -885,23 +1072,31 @@ class AutonomousEngine:
             )
         self._credential_health: dict[str, Any] = {}
 
-        # === BD-05: Signed policy loading — policy 参数优先于 YAML 默认值 ===
-        # 从 config/policies/ 加载已签名 Policy（版本/签名/过期校验由 PolicyLoader 完成）；
-        # 无可用 Policy 时回退 YAML 默认值（带警告），保持当前行为。
+        # === BD-05: Signed policy loading — risk-increasing writes require a
+        # complete signed parameter contract.  Simulation modes may still use
+        # environment defaults for diagnostics; writable modes remain blocked
+        # if any signed parameter is absent or invalid.
         self._policy_loader = PolicyLoader(policy_dir="config/policies")
         self._policy_params: dict[str, Any] = {}
         self._policy_id_active: str | None = None
         self._policy_version: str | None = None
+        self._policy_error: str | None = None
         try:
             for policy_id in ("risk_parameters", "autopilot_risk"):
                 envelope = self._policy_loader.load(policy_id)
                 if envelope is not None:
+                    complete, completeness_message = envelope.validate_risk_parameters()
+                    if not complete:
+                        self._policy_error = f"SIGNED_POLICY_INCOMPLETE:{completeness_message}"
+                        continue
                     self._policy_params = dict(envelope.parameters)
                     self._policy_id_active = envelope.policy_id
                     self._policy_version = envelope.version
+                    self._policy_error = None
                     break
         except Exception as exc:
-            print(f"[policy] WARNING: policy load raised {exc} — falling back to YAML defaults")
+            self._policy_error = f"SIGNED_POLICY_LOAD_ERROR:{type(exc).__name__}"
+            print(f"[policy] ERROR: policy load raised {exc} — risk-increasing writes remain blocked")
 
         if self._policy_id_active and self._policy_version:
             print(
@@ -909,7 +1104,8 @@ class AutonomousEngine:
                 f"params={sorted(self._policy_params.keys())} — overriding YAML risk defaults"
             )
         else:
-            print("[policy] WARNING: No signed policy in config/policies/ — falling back to YAML defaults")
+            self._policy_error = self._policy_error or "SIGNED_POLICY_UNAVAILABLE"
+            print("[policy] ERROR: No valid signed policy in config/policies/ — risk-increasing writes remain blocked")
 
         # Adapter REST client (BD-02: single adapter boundary)
         self._exchange = BinanceRESTClient(
@@ -929,21 +1125,72 @@ class AutonomousEngine:
         # file would make a restart appear healthy while losing the ledger
         # and intent truth used by the safety gates.
         database_url = self._settings.database.url
+        self._state_backend_error: str | None = None
         if database_url.startswith("sqlite:///"):
             durable_db_path = database_url.removeprefix("sqlite:///")
             self._state_backend_supported = bool(durable_db_path)
+            self._store = PersistentStore.get_instance(durable_db_path)
+            self._outbox = IntentOutbox(db_path=durable_db_path)
+        elif database_url.lower().startswith(("postgresql://", "postgres://")):
+            # Testnet/production must use one configured PostgreSQL authority.
+            # A diagnostic SQLite fallback is allowed only as an explicitly
+            # blocked read-only bootstrap path; it can never satisfy readiness.
+            durable_db_path = database_url
+            token_text = os.environ.get("BEIDOU_FENCING_TOKEN", "").strip()
+            try:
+                fencing_token = int(token_text)
+            except (TypeError, ValueError):
+                fencing_token = 0
+            try:
+                from beidou_infra.outbox import PostgresIntentOutbox
+                from beidou_infra.postgres_store import PostgresPersistentStore
+
+                self._store = PostgresPersistentStore.get_instance(database_url)
+                self._outbox = PostgresIntentOutbox(
+                    dsn=database_url,
+                    lease_owner=self._lease_owner,
+                    fencing_token=fencing_token,
+                )
+                self._state_backend_supported = fencing_token > 0
+                if not self._state_backend_supported:
+                    self._state_backend_error = "FENCING_TOKEN_UNKNOWN"
+                    print("[state] ERROR: PostgreSQL is reachable but BEIDOU_FENCING_TOKEN is missing/invalid")
+                else:
+                    # A restart must never reinterpret an old SENDING/SENT row
+                    # as safe to resend.  Fence stale/expired leases into
+                    # durable UNKNOWN before restoring approvals or entering
+                    # the lifecycle; venue query/reconciliation is required.
+                    recovered_inflight = self._outbox.recover_inflight()
+                    if recovered_inflight:
+                        print(
+                            "[state] Recovered "
+                            f"{recovered_inflight} in-flight intent(s) as UNKNOWN; venue query required"
+                        )
+            except Exception as exc:
+                self._state_backend_supported = False
+                self._state_backend_error = type(exc).__name__
+                diagnostic_db_path = ".beidou/state.db"
+                self._store = PersistentStore.get_instance(diagnostic_db_path)
+                self._outbox = IntentOutbox(db_path=diagnostic_db_path)
+                from beidou_shared.config import redact_database_url
+
+                print(
+                    "[state] ERROR: configured PostgreSQL backend is unavailable; "
+                    f"diagnostic store={diagnostic_db_path!r} configured={redact_database_url(database_url)!r} "
+                    f"error={type(exc).__name__}; trading/readiness remain BLOCKED"
+                )
         else:
-            # PostgreSQL is not yet wired into the transaction-outbox/store
-            # contract.  Keep a local diagnostic path, but explicitly mark the
-            # configured backend unsupported; readiness/trading gates must not
-            # mistake this local fallback for the configured production store.
             durable_db_path = ".beidou/state.db"
             self._state_backend_supported = False
+            self._state_backend_error = "UNSUPPORTED_DATABASE_URL"
+            self._store = PersistentStore.get_instance(durable_db_path)
+            self._outbox = IntentOutbox(db_path=durable_db_path)
+            from beidou_shared.config import redact_database_url
+
             print(
-                f"[state] WARNING: unsupported database URL {database_url!r}; "
+                f"[state] ERROR: unsupported database URL {redact_database_url(database_url)!r}; "
                 f"using {durable_db_path!r} for diagnostics; state backend is NOT READY"
             )
-        self._store = PersistentStore.get_instance(durable_db_path)
         self._feed = MarketDataFeed(client=self._adapter)  # 行情也经过同一 Adapter 传输边界
         self._alerts = AlertDispatcher(
             webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
@@ -969,12 +1216,13 @@ class AutonomousEngine:
         self._pending_protection_retry: set[str] = set()
         self._protection_owner_unknown = False
         self._protection_owner_id = self._service_identity.service_id
-        self._session_id = uuid.uuid4().hex
         self._position_generation: dict[str, int] = {}
         self._position_projection: dict[str, dict[str, Any]] = {
             str(row["symbol"]): row for row in self._store.restore_position_projection()
         }
         for protection in self._store.restore_protections():
+            if str(protection.get("status", "")).upper() != "ACTIVE":
+                continue
             owner_id = str(protection.get("owner_id") or "UNKNOWN")
             exchange_order_id = protection.get("exchange_order_id")
             if owner_id != self._protection_owner_id or not exchange_order_id:
@@ -985,15 +1233,25 @@ class AutonomousEngine:
             generation = int(protection.get("position_generation") or 0)
             self._position_generation[symbol] = max(self._position_generation.get(symbol, 0), generation)
         self._last_order_placed_at: float = 0.0  # 最近一次下单时间戳（用于对账宽限期）
-        # IntentOutbox uses the same database file as PersistentStore; its
-        # schema is independent, but a single WAL gives restart recovery one
-        # authoritative local journal.
-        self._outbox = IntentOutbox(db_path=durable_db_path)
+        # The selected outbox uses the same configured authority as the store;
+        # SQLite remains only for Paper or an explicitly blocked diagnostic
+        # bootstrap after a PostgreSQL failure.
         self._ledger = ImmutableLedger()
         self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
         self._user_stream_projector = UserStreamProjector(store=self._store)
         self._event_stream_facts: AccountFactSnapshot | None = None
+        # A durable projector alone is not proof that a live user-data socket
+        # is connected.  Writable readiness requires an explicit runtime
+        # transport status and a recent parsed event; the default is therefore
+        # NOT_STARTED/UNKNOWN and cannot be promoted by a REST snapshot.
+        self._user_stream_runtime: dict[str, Any] = {
+            "status": "NOT_STARTED" if self._can_write else "NOT_REQUIRED",
+            "last_event_mono": None,
+            "last_state_mono": None,
+            "listen_key_active": False,
+            "last_error": "",
+        }
         if self._user_stream_projector.sequencer.last_sequence is not None:
             self._event_stream_facts = self._user_stream_projector.fact_snapshot()
         self._last_reconciliation_result: Any | None = None
@@ -1012,6 +1270,20 @@ class AutonomousEngine:
         # Testnet 也不得使用源码内置密钥或任何兼容旁路。
         self._approval = RiskApprovalSignerImpl(signing_key=os.environ.get("BEIDOU_SIGNING_KEY", ""))
         self._risk_sm = RiskApprovalStateMachine()
+        # Rehydrate only approvals attached to unresolved durable intents.  A
+        # completed/failed intent is deliberately not restored, so restart
+        # cannot turn a single-use approval into a reusable write token.
+        for approval in self._outbox.restore_pending_approvals():
+            try:
+                approval_id = RiskApprovalId(str(approval["approval_id"]))
+                signature = str(approval["signature"])
+                expires_at = float(approval["expires_at"])
+                if self._approval.restore_signature(signature, expires_at):
+                    self._risk_sm.approve(approval_id)
+            except (KeyError, TypeError, ValueError):
+                # Malformed durable approval remains UNKNOWN and keeps the
+                # normal final-send verification gate closed.
+                continue
         self._post_risk = PostRiskMonitor()
         self._cost_model = CostModel()
         self._optimizer = PortfolioOptimizerImpl(
@@ -1043,9 +1315,12 @@ class AutonomousEngine:
             source="MARKET_QUALITY_OBSERVATION",
         )
         for sym in configured_symbols:
-            entry = self._trading_pool.add(sym)
-            if self._env_mode.value == "testnet":
-                entry.status = PoolStatus.ACTIVE
+            # A configured symbol is only an observation candidate.  Startup
+            # must never manufacture an ACTIVE trading universe: activation
+            # requires fresh market-quality, PIT-universe and evidence-gated
+            # lifecycle decisions.  Testnet is an execution environment, not
+            # a factor/universe promotion bypass.
+            self._trading_pool.add(sym)
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)})"
@@ -1209,18 +1484,10 @@ class AutonomousEngine:
         # 过去在 Paper/Testnet 以 ``strict=False`` 把注册即晋级写成 ACTIVE，
         # 这会让没有 dataset/OOS/cost/capacity/paper 证据的因子进入真实运行图。
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
-        self._factor_gate = FactorPromotionGate(strict=(self._env_mode.value != "testnet"))
-        print(
-            f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}"
-        )
-        if self._env_mode.value == "testnet":
-            for fid, record in list(self._factor_registry._factors.items()):
-                if record.lifecycle in (FactorLifecycle.IDEA, FactorLifecycle.DEGRADED):
-                    record.lifecycle = FactorLifecycle.ACTIVE
-                    print(f"[beidou-autopilot] Bootstrap: {fid} IDEA→ACTIVE (testnet)")
-
+        self._factor_gate = FactorPromotionGate(strict=True)
+        print(f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}")
         active_factors = [
-            fid for fid, r in self._factor_registry._factors.items() if r.lifecycle == FactorLifecycle.ACTIVE
+            fid for fid, record in self._factor_registry._factors.items() if record.has_authorized_active_evidence()
         ]
         print(
             f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
@@ -1314,7 +1581,9 @@ class AutonomousEngine:
         # 仅添加 FactorRegistry 中标记为 ACTIVE 的因子组件
         added_components: list[str] = []
         component_instances: dict[str, AlphaComponent] = {}
-        active_factor_ids = [fid for fid in active_factors if fid in self._factor_component_registry]
+        # Stable ordering is part of the strategy/provenance identity; a set
+        # iteration order must never change the graph hash or DAG wiring.
+        active_factor_ids = sorted(fid for fid in active_factors if fid in self._factor_component_registry)
         for fid in active_factor_ids:
             component_cls, _ = self._factor_component_registry[fid]
             component = component_cls()
@@ -1371,6 +1640,12 @@ class AutonomousEngine:
         # Order tracking
         self._order_trackers: dict[str, OrderStateTracker] = {}
         self._active_order_ids: set[str] = set()
+        # Ownership is process-local until a durable intent/venue mapping is
+        # re-established.  Orders discovered from the venue on startup are
+        # deliberately *not* added here: a graceful shutdown may cancel only
+        # orders acknowledged by this process, never manual/other-worker
+        # orders that happen to share the account.
+        self._owned_order_ids: set[str] = set()
         self._order_symbols: dict[str, str] = {}  # orderId → symbol mapping
         self._filled_quantities_by_order: dict[str, float] = {
             str(row["order_id"]): float(row.get("filled_qty") or 0)
@@ -1413,6 +1688,10 @@ class AutonomousEngine:
         # State
         self._running = False
         self._last_realtime = time.time()
+        # Wall-clock timestamps are retained for operator/audit display, but
+        # liveness and scheduling must use monotonic time so NTP/manual clock
+        # changes cannot manufacture a healthy or stale executor.
+        self._last_realtime_mono = time.monotonic()
         self._last_nearline = 0.0  # 设为 0 使首次近线 tick 立即执行（而非等 300s）
         self._last_offline = time.time()
         self._last_recon = time.time()
@@ -1431,15 +1710,19 @@ class AutonomousEngine:
     # --- Signed policy parameter helpers (BD-05) ---
 
     def _policy_float(self, key: str, default: float) -> float:
-        """已签名 Policy 参数（float）；不可用时回退 YAML 默认值。"""
+        """Read a signed risk parameter, or a simulation-only default."""
         if key in self._policy_params:
             return float(self._policy_params[key])
+        if getattr(self, "_can_write", False):
+            raise RuntimeError(f"SIGNED_POLICY_PARAMETER_MISSING:{key}")
         return default
 
     def _policy_int(self, key: str, default: int) -> int:
-        """已签名 Policy 参数（int）；不可用时回退 YAML 默认值。"""
+        """Read a signed risk parameter, or a simulation-only default."""
         if key in self._policy_params:
             return int(float(self._policy_params[key]))
+        if getattr(self, "_can_write", False):
+            raise RuntimeError(f"SIGNED_POLICY_PARAMETER_MISSING:{key}")
         return default
 
     # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
@@ -1449,7 +1732,7 @@ class AutonomousEngine:
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """异步 API 调用 — 通过 BinanceRESTClient Adapter 边界（BD-02）。
 
-        所有异步代码必须使用此方法，禁止直接 urllib/requests/httpx。
+        所有异步代码必须使用此方法，禁止直接创建网络客户端。
         BinanceRESTClient 提供统一错误分类、限频退避和熔断。
 
         注意: 失败时返回 {"error": code, "msg": "..."} dict。
@@ -1578,21 +1861,93 @@ class AutonomousEngine:
         from beidou_safety.execution import OrderIntent
 
         now_bucket = int(time.time() / 60)
-        intent = OrderIntent(
-            intent_id=f"emergency-{symbol}-{now_bucket}-{uuid.uuid4().hex[:10]}",
+        approval_nonce = f"emergency-{uuid.uuid4().hex}"
+        approval_id = f"EMERGENCY:{policy_id}:{policy_version}:{approval_nonce[-12:]}"
+        intent_id = f"emergency-{symbol}-{now_bucket}-{uuid.uuid4().hex[:10]}"
+        client_order_id = f"beidou-{str(symbol).lower()}-emergency-{now_bucket}-{uuid.uuid4().hex[:8]}"
+        idempotency_key = f"emergency-{str(symbol).upper()}-{now_bucket}"
+        correlation = CorrelationId(str(correlation_id)) if correlation_id else None
+        proposal_hash = hashlib.sha256(
+            f"{symbol}|{side}|{amount}|{policy_id}|{policy_version}|{policy_signature}|{approval_nonce}".encode()
+        ).hexdigest()
+        account_snapshot_hash = "EMERGENCY_FLATTEN"
+        risk_snapshot_hash = "EMERGENCY_FLATTEN"
+        risk_policy_version = f"{policy_id}:{policy_version}"
+        expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
+        unsigned_intent = OrderIntent(
+            intent_id=intent_id,
             account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
             instrument_id=InstrumentId(str(symbol).upper()),
             side=order_side,
             order_type=OrderType.MARKET,
             quantity=Quantity(amount=str(amount)),
             time_in_force=TimeInForce.GTC,
-            client_order_id=f"beidou-{str(symbol).lower()}-emergency-{now_bucket}-{uuid.uuid4().hex[:8]}",
-            correlation_id=CorrelationId(str(correlation_id)) if correlation_id else None,
-            idempotency_key=f"emergency-{str(symbol).upper()}-{now_bucket}",
-            risk_approval_id=f"EMERGENCY:{policy_id}:{policy_version}",
+            client_order_id=client_order_id,
+            correlation_id=correlation,
+            idempotency_key=idempotency_key,
+            risk_approval_id=approval_id,
             reduce_only=True,
             close_position=True,
             emergency_policy_signed=True,
+            risk_proposal_hash=proposal_hash,
+        )
+        intent_hash = order_intent_binding_hash(unsigned_intent)
+        try:
+            approval_signature = self._approval.issue_for_approved_risk(
+                RiskApprovalId(approval_id),
+                risk_approved=True,
+                proposal_hash=proposal_hash,
+                intent_hash=intent_hash,
+                account_snapshot_hash=account_snapshot_hash,
+                risk_snapshot_hash=risk_snapshot_hash,
+                policy_version=risk_policy_version,
+                nonce=approval_nonce,
+                expires_at=expires_at,
+            )
+            signature_valid = await self._approval.verify(
+                RiskApprovalId(approval_id),
+                signature=approval_signature,
+                proposal_hash=proposal_hash,
+                intent_hash=intent_hash,
+                account_snapshot_hash=account_snapshot_hash,
+                risk_snapshot_hash=risk_snapshot_hash,
+                policy_version=risk_policy_version,
+                nonce=approval_nonce,
+                expires_at=expires_at,
+                consume_nonce=False,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return False
+        if (
+            self._risk_sm.approve_if_verified(
+                RiskApprovalId(approval_id), signature_valid=signature_valid, risk_check_passed=True
+            )
+            != RiskDecision.APPROVED
+        ):
+            return False
+        intent = OrderIntent(
+            intent_id=intent_id,
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+            instrument_id=InstrumentId(str(symbol).upper()),
+            side=order_side,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount=str(amount)),
+            time_in_force=TimeInForce.GTC,
+            client_order_id=client_order_id,
+            correlation_id=correlation,
+            idempotency_key=idempotency_key,
+            risk_approval_id=approval_id,
+            reduce_only=True,
+            close_position=True,
+            emergency_policy_signed=True,
+            risk_approval_signature=approval_signature,
+            risk_proposal_hash=proposal_hash,
+            risk_intent_hash=intent_hash,
+            risk_account_snapshot_hash=account_snapshot_hash,
+            risk_snapshot_hash=risk_snapshot_hash,
+            risk_policy_version=risk_policy_version,
+            risk_nonce=approval_nonce,
+            risk_expires_at=expires_at,
         )
         if not self._control.should_accept(intent):
             return False
@@ -1637,8 +1992,10 @@ class AutonomousEngine:
                 binance_code = None
 
         if binance_code == -2028:
-            # 降低杠杆时保证金不足 → 查询当前杠杆并沿用
-            actual = target_leverage  # fallback
+            # 降低杠杆时保证金不足 → 必须从交易所读取当前杠杆。
+            # 响应缺失或不可解析时保持 UNKNOWN；绝不能把请求值当成
+            # 已生效杠杆，否则仓位上限会以未经证实的杠杆继续计算。
+            actual = -1
             try:
                 pos_resp = await self._api_async(
                     Endpoint.POSITION_RISK,
@@ -1653,9 +2010,10 @@ class AutonomousEngine:
                 print(f"[leverage] UNKNOWN: failed to query leverage for {symbol}: {e}")
                 self._leverage_cache[symbol] = -1  # UNKNOWN state
                 return -1
-            # 如果查询返回 0（testnet 常见），保持目标杠杆
             if actual <= 0:
-                actual = target_leverage
+                print(f"[leverage] UNKNOWN: exchange returned no valid leverage for {symbol}")
+                self._leverage_cache[symbol] = -1
+                return -1
             self._leverage_cache[symbol] = actual
             print(f"[leverage] {symbol}: cannot lower to {target_leverage}x, keeping {actual}x (existing positions)")
             return actual
@@ -1666,10 +2024,44 @@ class AutonomousEngine:
 
     # --- Health & Metrics ---
 
+    def _realtime_age_seconds(self) -> float:
+        """Return heartbeat age from a monotonic clock when available."""
+
+        last_mono = getattr(self, "_last_realtime_mono", None)
+        if isinstance(last_mono, (int, float)):
+            return max(0.0, time.monotonic() - float(last_mono))
+        # Compatibility for diagnostic/test shells created without __init__.
+        return max(0.0, time.time() - float(getattr(self, "_last_realtime", 0.0)))
+
+    def _fresh_matched_reconciliation(self, *, max_age_seconds: float = 60.0) -> bool:
+        """Require a recent independent reconciliation before cleanup writes.
+
+        A stale ``_last_account`` snapshot is not enough evidence to cancel a
+        conditional order.  In particular, a temporary account/API failure
+        must not be interpreted as a confirmed flat position.  Automated
+        ghost/excess cleanup therefore has a short freshness bound and is
+        skipped until the three-way reconciliation is matched again.
+        """
+
+        result = getattr(self, "_last_reconciliation_result", None)
+        if result is None or not bool(getattr(result, "matched", False)):
+            return False
+        checked_at = getattr(result, "checked_at", None)
+        if not isinstance(checked_at, datetime):
+            return False
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - checked_at).total_seconds()
+        return math.isfinite(age) and 0.0 <= age <= max_age_seconds
+
     def _check_liveness(self) -> HealthState:
         """Expose stalled event-loop state instead of unconditional HEALTHY."""
 
-        if self._running and time.time() - self._last_realtime > 15.0:
+        if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
+            return HealthState.UNHEALTHY
+        if getattr(self, "_can_write", False) and not self._user_stream_readiness()[0]:
+            return HealthState.UNHEALTHY
+        if self._running and self._realtime_age_seconds() > 15.0:
             return HealthState.UNHEALTHY
         if (
             self._control.get_status() != ControlAction.RESUME
@@ -1703,11 +2095,13 @@ class AutonomousEngine:
                 if str(row.get("status", "")).upper() in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}
             ]
             tracked_order_ids = {str(order_id) for order_id in getattr(self, "_active_order_ids", set())}
+            owned_order_ids = {str(order_id) for order_id in getattr(self, "_owned_order_ids", set())}
             untracked_active_orders = [
                 str(row.get("order_id", ""))
                 for row in active_rows
                 if str(row.get("order_id", "")) not in tracked_order_ids
             ]
+            unowned_active_orders = sorted(tracked_order_ids - owned_order_ids)
 
             raw_stats = getattr(outbox, "stats", {})
             outbox_stats = raw_stats() if callable(raw_stats) else raw_stats
@@ -1742,6 +2136,7 @@ class AutonomousEngine:
                 "unknown_orders": len(unknown_orders),
                 "active_orders": len(active_rows),
                 "untracked_active_orders": len(untracked_active_orders),
+                "unowned_active_orders": len(unowned_active_orders),
                 "unknown_outbox": unknown_outbox,
                 "active_protections": len(active_protections),
                 "local_positions": len(local_positions),
@@ -1760,14 +2155,214 @@ class AutonomousEngine:
                         "order_ids": untracked_active_orders[:20],
                     },
                 )
-            if (local_positions or exchange_positions) and not active_protections:
+            # A live process may only claim/cancel orders it acknowledged in
+            # the current ownership epoch.  Startup discovery is venue truth,
+            # not proof that this worker owns the order.  Keep the write path
+            # fail-closed until an operator-governed reconciliation/adoption
+            # flow establishes that mapping.
+            if bool(getattr(self, "_can_write", False)) and unowned_active_orders:
+                return (
+                    False,
+                    "DURABLE_ACTIVE_ORDER_OWNER_UNKNOWN",
+                    {**evidence, "order_ids": unowned_active_orders[:20]},
+                )
+            protection_ok, protection_evidence = self._assess_protection_coverage(
+                exchange_positions,
+                active_protections,
+                local_positions,
+            )
+            evidence.update(protection_evidence)
+            if not protection_ok:
                 return False, "DURABLE_PROTECTION_COVERAGE_UNKNOWN", evidence
             return True, "DURABLE_FACTS_VERIFIED", evidence
         except Exception as exc:
             return False, f"DURABLE_FACTS_UNKNOWN:{type(exc).__name__}", {"error": str(exc)[:200]}
 
+    def _owned_active_order_ids(self) -> set[str]:
+        """Return active venue orders acknowledged by this process only.
+
+        The intersection is intentionally recomputed instead of trusting a
+        single mutable collection.  This keeps shutdown safe if an order was
+        already removed from the active tracker while its ownership marker
+        remains for audit purposes.
+        """
+
+        active = {str(order_id) for order_id in getattr(self, "_active_order_ids", set())}
+        owned = {str(order_id) for order_id in getattr(self, "_owned_order_ids", set())}
+        return active & owned
+
+    def _unowned_active_order_ids(self) -> set[str]:
+        """Return venue-active orders whose ownership is not proven locally."""
+
+        active = {str(order_id) for order_id in getattr(self, "_active_order_ids", set())}
+        return active - self._owned_active_order_ids()
+
+    def _assess_protection_coverage(
+        self,
+        exchange_positions: list[dict[str, Any]],
+        active_protections: list[dict[str, Any]],
+        local_positions: dict[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Require venue-backed, owner/generation-bound coverage per position.
+
+        A single active conditional order is not evidence that every position
+        is protected.  Coverage is therefore checked independently for each
+        non-zero venue position: the protection side must be the exact
+        reduce-only side, the current durable position generation must match,
+        and a stop-loss quantity must cover the complete position quantity.
+        This intentionally fails closed when either the venue snapshot or the
+        local position projection is inconsistent.
+        """
+
+        local_positions = local_positions or {}
+        exchange_symbols = {str(row.get("symbol", "")) for row in exchange_positions}
+        local_symbols = {
+            str(getattr(position, "instrument_id", ""))
+            for position in local_positions.values()
+            if str(getattr(position, "instrument_id", ""))
+        }
+        protection_symbols = {
+            str(row.get("symbol", "")).strip() for row in active_protections if str(row.get("symbol", "")).strip()
+        }
+        gaps: list[dict[str, Any]] = []
+
+        # A local position without a matching independent venue fact cannot be
+        # safely considered flat or covered after a restart.
+        for symbol in sorted(local_symbols - exchange_symbols):
+            gaps.append({"symbol": symbol, "reason": "LOCAL_POSITION_WITHOUT_VENUE_FACT"})
+        for symbol in sorted(protection_symbols - exchange_symbols):
+            gaps.append({"symbol": symbol, "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"})
+
+        for position in exchange_positions:
+            symbol = str(position.get("symbol", "")).strip()
+            if not symbol:
+                gaps.append({"symbol": "", "reason": "VENUE_POSITION_SYMBOL_UNKNOWN"})
+                continue
+            try:
+                position_amount = Decimal(str(position.get("positionAmt", "0") or "0"))
+            except (InvalidOperation, ValueError, TypeError):
+                gaps.append({"symbol": symbol, "reason": "VENUE_POSITION_QUANTITY_UNKNOWN"})
+                continue
+            if not position_amount.is_finite():
+                gaps.append({"symbol": symbol, "reason": "VENUE_POSITION_QUANTITY_UNKNOWN"})
+                continue
+            position_quantity = abs(position_amount)
+            if position_quantity <= Decimal("1e-12"):
+                continue
+
+            expected_side = "SELL" if position_amount > 0 else "BUY"
+            projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
+            try:
+                projected_generation = int(projection.get("position_generation", 0) or 0)
+                current_generation = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+            except (TypeError, ValueError):
+                projected_generation = 0
+                current_generation = 0
+            expected_generation = max(projected_generation, current_generation)
+
+            symbol_protections: list[dict[str, Any]] = []
+            for row in active_protections:
+                if str(row.get("symbol", "")).strip() != symbol:
+                    continue
+                row_side = getattr(row.get("side"), "value", row.get("side", ""))
+                if str(row_side).upper() != expected_side:
+                    continue
+                try:
+                    row_generation = int(row.get("position_generation", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if expected_generation <= 0 or row_generation != expected_generation:
+                    continue
+                symbol_protections.append(row)
+
+            stop_quantity = Decimal("0")
+            total_quantity = Decimal("0")
+            invalid_quantity = False
+            for row in symbol_protections:
+                try:
+                    quantity = Decimal(str(row.get("quantity", "0") or "0"))
+                except (InvalidOperation, ValueError, TypeError):
+                    invalid_quantity = True
+                    continue
+                if not quantity.is_finite() or quantity <= 0:
+                    invalid_quantity = True
+                    continue
+                total_quantity += quantity
+                order_type = str(row.get("order_type", "")).upper()
+                if row.get("stop_type") or order_type.startswith("STOP"):
+                    stop_quantity += quantity
+
+            if invalid_quantity or stop_quantity + Decimal("1e-12") < position_quantity:
+                gaps.append(
+                    {
+                        "symbol": symbol,
+                        "reason": "STOP_LOSS_QUANTITY_UNCOVERED",
+                        "position_quantity": str(position_quantity),
+                        "stop_quantity": str(stop_quantity),
+                        "total_protection_quantity": str(total_quantity),
+                        "expected_side": expected_side,
+                        "expected_generation": expected_generation,
+                    }
+                )
+
+        return not gaps, {"unprotected_symbols": gaps}
+
+    def _user_stream_readiness(self, *, max_event_age: float = 60.0) -> tuple[bool, dict[str, Any]]:
+        """Return explicit live user-stream evidence for writable readiness.
+
+        ``UserStreamProjector`` is durable, but a restored projection or a
+        fresh REST account snapshot cannot prove that the current process is
+        receiving venue events.  Keep transport state separate and expose
+        missing/old facts as UNKNOWN so a writable engine cannot become ready
+        by merely injecting a replay baseline.
+        """
+
+        if not bool(getattr(self, "_can_write", False)):
+            return True, {"status": "NOT_REQUIRED", "required": False}
+        runtime = getattr(self, "_user_stream_runtime", {})
+        if not isinstance(runtime, dict):
+            runtime = {}
+        status = str(runtime.get("status", "UNKNOWN") or "UNKNOWN").upper()
+        last_event_mono = runtime.get("last_event_mono")
+        event_age: float | None = None
+        try:
+            if last_event_mono is not None:
+                event_age = max(0.0, time.monotonic() - float(last_event_mono))
+        except (TypeError, ValueError, OverflowError):
+            event_age = None
+        projector = getattr(self, "_user_stream_projector", None)
+        raw_projector_status = getattr(getattr(projector, "sequencer", None), "status", "UNKNOWN")
+        projector_status = str(getattr(raw_projector_status, "value", raw_projector_status)).upper()
+        event_facts = getattr(self, "_event_stream_facts", None)
+        projection_complete = bool(getattr(event_facts, "complete", False))
+        ready = (
+            status == "HEALTHY"
+            and event_age is not None
+            and event_age <= max_event_age
+            and projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE", "UNKNOWN"}
+            and projection_complete
+        )
+        return ready, {
+            "status": status,
+            "event_age_seconds": event_age,
+            "threshold_seconds": max_event_age,
+            "projector_status": projector_status,
+            "projection_complete": projection_complete,
+            "listen_key_active": bool(runtime.get("listen_key_active", False)),
+            "last_error": str(runtime.get("last_error", "") or ""),
+            "required": True,
+        }
+
     def _check_ready(self) -> bool:
+        if getattr(self, "_can_write", False) and getattr(self, "_policy_error", None):
+            return False
         if not self._state_backend_supported:
+            return False
+        # A writable engine must have a live realtime loop before it can
+        # advertise readiness.  ``not self._running`` is only acceptable for
+        # zero-write diagnostics; allowing RESUME+stopped to pass here makes
+        # an independent health endpoint claim that a dead executor is ready.
+        if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
             return False
         durable_ok, _, _ = self._durable_fact_status()
         if not durable_ok:
@@ -1782,9 +2377,14 @@ class AutonomousEngine:
             return False
         if self._last_reconciliation_result is None or not self._last_reconciliation_result.matched:
             return False
-        return not self._running or time.time() - self._last_realtime <= 15.0
+        user_stream_ready, _ = self._user_stream_readiness()
+        if not user_stream_ready:
+            return False
+        return self._realtime_age_seconds() <= 15.0
 
     def _check_trading_ready(self) -> tuple[bool, str]:
+        if getattr(self, "_can_write", False) and getattr(self, "_policy_error", None):
+            return False, str(self._policy_error)
         if not self._state_backend_supported:
             return False, "STATE_BACKEND_UNSUPPORTED"
         durable_ok, durable_reason, _ = self._durable_fact_status()
@@ -1873,8 +2473,13 @@ class AutonomousEngine:
                 if hasattr(self, "_user_stream_projector")
                 else "UNKNOWN"
             ),
+            "user_stream_runtime": dict(getattr(self, "_user_stream_runtime", {})),
             "state_backend_supported": self._state_backend_supported,
-            "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
+            "state_backend_error": self._state_backend_error,
+            "policy_id": self._policy_id_active,
+            "policy_version": self._policy_version,
+            "policy_ready": not bool(self._policy_error),
+            "realtime_age_seconds": round(self._realtime_age_seconds(), 3),
             "active_orders": len(self._active_order_ids),
             "positions": self._protection.position_count(),
             "alerts": self._alerts.get_alert_stats(),
@@ -1892,6 +2497,10 @@ class AutonomousEngine:
             "symbols": self._symbols,
             "mode": self._env_mode.value,
             "state_backend_supported": self._state_backend_supported,
+            "state_backend_error": self._state_backend_error,
+            "policy_id": self._policy_id_active,
+            "policy_version": self._policy_version,
+            "policy_error": self._policy_error,
             "uptime_seconds": round(self._health.uptime_seconds(), 1),
             "last_realtime_tick": self._last_realtime,
             "last_nearline_tick": self._last_nearline,
@@ -1918,7 +2527,8 @@ class AutonomousEngine:
                     self._user_stream_projector.frozen_reason if hasattr(self, "_user_stream_projector") else None
                 ),
             },
-            "realtime_age_seconds": round(max(0.0, time.time() - self._last_realtime), 3),
+            "user_stream_runtime": dict(getattr(self, "_user_stream_runtime", {})),
+            "realtime_age_seconds": round(self._realtime_age_seconds(), 3),
             "protection_owner_unknown": self._protection_owner_unknown,
             "active_incidents": self._alerts.get_active_incidents(),
             "strategy_risk": {
@@ -1950,11 +2560,27 @@ class AutonomousEngine:
         当因子生命周期变更（promotion/degradation/suspension）时调用，
         确保交易图仅包含 ACTIVE 因子。新增或移除的因子自动反映到 DAG 拓扑。
         """
-        # BD-T06: 非生产模式包含 CHALLENGER+PAPER_TRADING 因子用于测试
-        trading_factors = set(self._factor_registry.get_active())
-        if self._env_mode.value not in ("production", "canary", "live"):
-            trading_factors.update(self._factor_registry.get_challengers())
-        active_factor_ids = [fid for fid in trading_factors if fid in self._factor_component_registry]
+        # BD-T06: CHALLENGER 只允许进入零写模拟/影子路径。
+        # Testnet 具有交易所写能力，不能因为它不是 production 就把
+        # 尚未完成 ACTIVE 生产批准的 challenger 接入可写执行图。
+        # FactorRecord is mutable and intentionally unhashable.  Keep the
+        # graph keyed by the immutable registry identifier instead of putting
+        # records themselves in a set; otherwise the first real promotion to
+        # ACTIVE would crash this rebuild path with TypeError.
+        trading_factors: set[str] = set()
+        for record in self._factor_registry.get_active():
+            authorization_check = getattr(record, "has_authorized_active_evidence", None)
+            # Real FactorRecord instances always expose the evidence-bound
+            # predicate.  Keep lightweight diagnostic fakes usable in unit
+            # probes without weakening the production registry contract.
+            authorized = bool(authorization_check()) if callable(authorization_check) else True
+            if authorized:
+                trading_factors.add(record.definition.factor_id)
+        if self._can_simulate:
+            trading_factors.update(record.definition.factor_id for record in self._factor_registry.get_challengers())
+        # Stable ordering is part of the strategy/provenance identity; a set
+        # iteration order must never change the graph hash or DAG wiring.
+        active_factor_ids = sorted(fid for fid in trading_factors if fid in self._factor_component_registry)
 
         new_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
         component_instances: dict[str, AlphaComponent] = {}
@@ -1966,11 +2592,11 @@ class AutonomousEngine:
 
         # Re-wire ENTRY → FILTER → EXIT
         added = set(active_factor_ids)
-        for entry_id in added & self._entry_ids:
-            for filter_id in added & self._filter_ids:
+        for entry_id in sorted(added & self._entry_ids):
+            for filter_id in sorted(added & self._filter_ids):
                 new_graph.connect(entry_id, filter_id)
-        for filter_id in added & self._filter_ids:
-            for exit_id in added & self._exit_ids:
+        for filter_id in sorted(added & self._filter_ids):
+            for exit_id in sorted(added & self._exit_ids):
                 new_graph.connect(filter_id, exit_id)
 
         order = new_graph.topological_order()
@@ -2100,14 +2726,18 @@ class AutonomousEngine:
                     ticker = self._feed.get_last_ticker(symbol)
                     ob = self._feed.get_last_orderbook(symbol)
                     if ticker and ob and features:
-                        features["price"] = float(ticker.get("lastPrice", features.get("close", 0)))
-                        features["bid"] = float(ticker.get("bid", features.get("close", 0)))
-                        features["ask"] = float(ticker.get("ask", features.get("close", 0)))
-                        features["spread_bps"] = (
-                            (features["ask"] - features["bid"]) / features["ask"] * 10000
-                            if features["ask"] > 0
-                            else features.get("spread_bps", 1.0)
-                        )
+                        quote = _validated_ws_quote(ticker)
+                        if quote is not None:
+                            ws_price, ws_bid, ws_ask = quote
+                            features["price"] = ws_price
+                            features["bid"] = ws_bid
+                            features["ask"] = ws_ask
+                            features["spread_bps"] = (ws_ask - ws_bid) / ws_ask * 10000
+                        else:
+                            # A stale/incomplete WS ticker cannot be repaired
+                            # by copying the last close into bid/ask.  Refresh
+                            # the complete snapshot through the feed boundary.
+                            features = await self._feed.async_update_features(symbol)
                     else:
                         features = await self._feed.async_update_features(symbol)
                 else:
@@ -2154,7 +2784,11 @@ class AutonomousEngine:
             if self._can_write or self._can_simulate:
                 if durable_outbox:
                     while True:
-                        intent = self._outbox.claim(owner=f"engine-{id(self)}")
+                        # The constructor-bound process-generation owner is
+                        # part of the durable fencing identity; a per-call
+                        # owner would make later ACK/FAIL transitions
+                        # unverifiable and strand the intent in SENDING.
+                        intent = self._outbox.claim(owner=self._lease_owner)
                         if intent is None:
                             break
                         await self._place_order(intent)
@@ -2212,6 +2846,7 @@ class AutonomousEngine:
             )
         finally:
             self._last_realtime = time.time()
+            self._last_realtime_mono = time.monotonic()
 
     async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
         """平仓时取消交易所上的关联条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
@@ -2297,6 +2932,291 @@ class AutonomousEngine:
             category="protection",
         )
 
+    def _protection_inventory_semantic_issues(self, inventory: list[dict[str, Any]]) -> list[str]:
+        """Compare venue Algo facts with durable protection intent semantics.
+
+        An ``algoId`` proves identity only.  A venue order can still have the
+        wrong symbol, side, quantity, trigger, type or reduce-only flag.  Such
+        a row cannot certify coverage; callers must keep the risk gate closed
+        and obtain an independently governed reconciliation decision.
+        """
+
+        store = getattr(self, "_store", None)
+        if store is None:
+            return ["PROTECTION_STORE_UNAVAILABLE"] if getattr(self, "_can_write", False) else []
+        try:
+            expected_rows = [
+                row
+                for row in store.restore_protections()
+                if str(row.get("status", "")).upper() == "ACTIVE"
+                and str(row.get("owner_id", "")) == str(getattr(self, "_protection_owner_id", ""))
+                and str(row.get("exchange_order_id", "")).strip()
+            ]
+        except Exception as exc:
+            return [f"PROTECTION_STORE_READ_UNKNOWN:{type(exc).__name__}"]
+
+        venue_by_id = {
+            str(row.get("algoId")): row
+            for row in inventory
+            if isinstance(row, dict) and str(row.get("algoId", "")).strip()
+        }
+        issues: list[str] = []
+
+        def _decimal(value: Any) -> Decimal | None:
+            try:
+                parsed = Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            return parsed if parsed.is_finite() else None
+
+        for expected in expected_rows:
+            algo_id = str(expected.get("exchange_order_id", "")).strip()
+            actual = venue_by_id.get(algo_id)
+            if actual is None:
+                # Presence is checked separately, but retain a semantic
+                # reason here so the persisted incident identifies the exact
+                # protection row that cannot be certified.
+                issues.append(f"PROTECTION_VENUE_ROW_MISSING:{algo_id}")
+                continue
+            expected_symbol = str(expected.get("symbol", "")).strip().upper()
+            actual_symbol = str(actual.get("symbol", "")).strip().upper()
+            if not expected_symbol or actual_symbol != expected_symbol:
+                issues.append(f"PROTECTION_SYMBOL_MISMATCH:{algo_id}")
+            expected_side = str(expected.get("side", "")).strip().upper()
+            actual_side = str(actual.get("side", "")).strip().upper()
+            if not expected_side or actual_side != expected_side:
+                issues.append(f"PROTECTION_SIDE_MISMATCH:{algo_id}")
+            expected_type = str(expected.get("order_type", "")).strip().upper()
+            actual_type = str(actual.get("orderType", actual.get("type", ""))).strip().upper()
+            if not expected_type or actual_type != expected_type:
+                issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
+            expected_qty = _decimal(expected.get("quantity"))
+            actual_qty = _decimal(actual.get("quantity"))
+            if expected_qty is None or actual_qty is None or expected_qty <= 0 or actual_qty != expected_qty:
+                issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
+            expected_trigger = _decimal(expected.get("trigger_price"))
+            actual_trigger = _decimal(actual.get("triggerPrice"))
+            if (
+                expected_trigger is None
+                or actual_trigger is None
+                or expected_trigger <= 0
+                or actual_trigger != expected_trigger
+            ):
+                issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
+            reduce_only = actual.get("reduceOnly")
+            if reduce_only is not True and str(reduce_only).strip().lower() not in {"1", "true", "yes"}:
+                issues.append(f"PROTECTION_REDUCE_ONLY_UNPROVEN:{algo_id}")
+        return sorted(set(issues))
+
+    def _restore_durable_protection_projection(
+        self,
+        account: dict[str, Any],
+        inventory: list[dict[str, Any]] | None,
+    ) -> bool:
+        """Hydrate the local protection projection from ACK-backed durable rows.
+
+        The venue inventory is read-only evidence.  When an ACTIVE durable
+        protection already exists, startup must rebuild the in-memory
+        position projection and must not call ``create_protection`` (which
+        would submit a duplicate SL/TP pair).  Any ambiguity leaves the risk
+        gate closed and returns ``False``; it never adopts or cancels a row.
+        """
+
+        try:
+            rows = list(self._store.restore_protections())
+        except Exception as exc:
+            self._block_unowned_protection_orders([f"PROTECTION_STORE_READ_UNKNOWN:{type(exc).__name__}"])
+            return False
+        if not rows:
+            return True
+        if not isinstance(inventory, list):
+            self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+            return False
+
+        semantic_issues = self._protection_inventory_semantic_issues(inventory)
+        if semantic_issues:
+            self._block_unowned_protection_orders(semantic_issues)
+            return False
+
+        raw_positions = account.get("positions") if isinstance(account, dict) else None
+        if not isinstance(raw_positions, list):
+            self._block_unowned_protection_orders(["ACCOUNT_POSITIONS_UNKNOWN"])
+            return False
+        venue_positions: dict[str, tuple[Decimal, float]] = {}
+        for raw in raw_positions:
+            if not isinstance(raw, dict):
+                self._block_unowned_protection_orders(["ACCOUNT_POSITION_ROW_UNKNOWN"])
+                return False
+            symbol = str(raw.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            try:
+                amount = Decimal(str(raw.get("positionAmt", "0") or "0"))
+                entry = float(raw.get("entryPrice", 0) or 0)
+            except (InvalidOperation, TypeError, ValueError, OverflowError):
+                self._block_unowned_protection_orders([f"ACCOUNT_POSITION_FACT_UNKNOWN:{symbol}"])
+                return False
+            if not amount.is_finite() or not math.isfinite(entry):
+                self._block_unowned_protection_orders([f"ACCOUNT_POSITION_FACT_UNKNOWN:{symbol}"])
+                return False
+            if abs(amount) > Decimal("1e-12"):
+                if symbol in venue_positions:
+                    self._block_unowned_protection_orders([f"ACCOUNT_POSITION_DUPLICATE:{symbol}"])
+                    return False
+                venue_positions[symbol] = (amount, entry)
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            position_id = str(row.get("position_id", "")).strip()
+            if not position_id:
+                self._block_unowned_protection_orders(["PROTECTION_POSITION_ID_UNKNOWN"])
+                return False
+            grouped.setdefault(position_id, []).append(row)
+
+        symbol_position_ids: dict[str, set[str]] = {}
+        for position_id, position_rows in grouped.items():
+            for symbol in {str(row.get("symbol", "")).strip().upper() for row in position_rows if row.get("symbol")}:
+                symbol_position_ids.setdefault(symbol, set()).add(position_id)
+        conflicting_symbols = sorted(
+            symbol for symbol, position_ids in symbol_position_ids.items() if len(position_ids) > 1
+        )
+        if conflicting_symbols:
+            self._block_unowned_protection_orders(
+                [f"PROTECTION_MULTIPLE_ACTIVE_GENERATIONS:{symbol}" for symbol in conflicting_symbols]
+            )
+            return False
+
+        for position_id, position_rows in grouped.items():
+            symbols = {str(row.get("symbol", "")).strip().upper() for row in position_rows}
+            owners = {str(row.get("owner_id", "")).strip() for row in position_rows}
+            try:
+                generations = {int(row.get("position_generation", 0) or 0) for row in position_rows}
+            except (TypeError, ValueError, OverflowError):
+                self._block_unowned_protection_orders([f"PROTECTION_GENERATION_UNKNOWN:{position_id}"])
+                return False
+            sessions = {str(row.get("session_id", "")) for row in position_rows}
+            if len(symbols) != 1 or "" in symbols:
+                self._block_unowned_protection_orders([f"PROTECTION_SYMBOL_UNKNOWN:{position_id}"])
+                return False
+            symbol = next(iter(symbols))
+            if owners != {str(self._protection_owner_id)} or len(generations) != 1 or 0 in generations:
+                self._block_unowned_protection_orders([f"PROTECTION_OWNER_OR_GENERATION_UNKNOWN:{position_id}"])
+                return False
+            if len(sessions) != 1:
+                self._block_unowned_protection_orders([f"PROTECTION_SESSION_MISMATCH:{position_id}"])
+                return False
+            venue_position = venue_positions.get(symbol)
+            if venue_position is None:
+                self._block_unowned_protection_orders([f"PROTECTION_WITHOUT_VENUE_POSITION:{symbol}"])
+                return False
+            signed_quantity, account_entry = venue_position
+            if account_entry <= 0:
+                projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
+                try:
+                    account_entry = float(projection.get("entry_price", 0) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    account_entry = 0.0
+            if not math.isfinite(account_entry) or account_entry <= 0:
+                self._block_unowned_protection_orders([f"PROTECTION_ENTRY_PRICE_UNKNOWN:{symbol}"])
+                return False
+
+            position_side = OrderSide.BUY if signed_quantity > 0 else OrderSide.SELL
+            expected_protection_side = OrderSide.SELL if position_side == OrderSide.BUY else OrderSide.BUY
+            stop_orders: list[ProtectionOrder] = []
+            take_profit_orders: list[ProtectionOrder] = []
+            stop_quantity = Decimal("0")
+            for row in position_rows:
+                try:
+                    protection_id = str(row["protection_id"])
+                    exchange_order_id = str(row["exchange_order_id"]).strip()
+                    order_side = OrderSide(str(row["side"]).upper())
+                    order_type = str(row["order_type"]).strip().upper()
+                    trigger_price = Decimal(str(row["trigger_price"]))
+                    quantity = Decimal(str(row["quantity"]))
+                except (KeyError, InvalidOperation, TypeError, ValueError):
+                    self._block_unowned_protection_orders([f"PROTECTION_ROW_UNKNOWN:{position_id}"])
+                    return False
+                if (
+                    not protection_id
+                    or not exchange_order_id
+                    or order_side != expected_protection_side
+                    or not order_type
+                    or not trigger_price.is_finite()
+                    or trigger_price <= 0
+                    or not quantity.is_finite()
+                    or quantity <= 0
+                ):
+                    self._block_unowned_protection_orders([f"PROTECTION_ROW_SEMANTICS_UNKNOWN:{protection_id}"])
+                    return False
+                stop_type_raw = str(row.get("stop_type", "") or "").strip()
+                take_profit_type_raw = str(row.get("take_profit_type", "") or "").strip()
+                try:
+                    stop_type = StopLossType(stop_type_raw) if stop_type_raw else None
+                    take_profit_type = TakeProfitType(take_profit_type_raw) if take_profit_type_raw else None
+                except ValueError:
+                    self._block_unowned_protection_orders([f"PROTECTION_TYPE_UNKNOWN:{protection_id}"])
+                    return False
+                is_stop = stop_type is not None or order_type.startswith("STOP")
+                is_take_profit = take_profit_type is not None or order_type.startswith("TAKE_PROFIT")
+                if (
+                    is_stop == is_take_profit
+                    or (is_stop and stop_type is None)
+                    or (is_take_profit and take_profit_type is None)
+                ):
+                    self._block_unowned_protection_orders([f"PROTECTION_ROLE_UNKNOWN:{protection_id}"])
+                    return False
+                order = ProtectionOrder(
+                    protection_id=protection_id,
+                    position_id=position_id,
+                    instrument_id=InstrumentId(symbol),
+                    venue_id=VenueId("BINANCE"),
+                    side=order_side,
+                    trigger_price=Price(amount=str(trigger_price)),
+                    order_price=(Price(amount=str(row["order_price"])) if row.get("order_price") else None),
+                    quantity=Quantity(amount=str(quantity)),
+                    order_type=order_type,
+                    reduce_only=True,
+                    status=ProtectionStatus.ACTIVE,
+                    stop_type=stop_type,
+                    take_profit_type=take_profit_type,
+                    owner_id=str(self._protection_owner_id),
+                    position_generation=next(iter(generations)),
+                    session_id=next(iter(sessions)),
+                    exchange_order_id=exchange_order_id,
+                )
+                if is_stop:
+                    stop_orders.append(order)
+                    stop_quantity += quantity
+                else:
+                    take_profit_orders.append(order)
+
+            if len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
+                self._block_unowned_protection_orders([f"PROTECTION_STOP_COVERAGE_UNKNOWN:{position_id}"])
+                return False
+            if position_id in self._protection.all_positions():
+                continue
+            projection = PositionProtection(
+                position_id=position_id,
+                instrument_id=InstrumentId(symbol),
+                venue_id=VenueId("BINANCE"),
+                entry_price=account_entry,
+                quantity=float(abs(signed_quantity)),
+                side=position_side,
+                stop_loss=stop_orders[0],
+                take_profits=take_profit_orders,
+                owner_id=str(self._protection_owner_id),
+                position_generation=next(iter(generations)),
+                session_id=next(iter(sessions)),
+            )
+            projection.update_price_extremes(account_entry)
+            try:
+                self._protection.restore_position_protection(projection)
+            except (TypeError, ValueError) as exc:
+                self._block_unowned_protection_orders([f"PROTECTION_RESTORE_FAILED:{type(exc).__name__}"])
+                return False
+            self._position_entry_times.setdefault(position_id, time.time())
+        return True
+
     def _require_protection_config(self, symbol: str, config: Any) -> None:
         """Reject protection construction when market-derived inputs are absent.
 
@@ -2375,7 +3295,13 @@ class AutonomousEngine:
                     f"Durable ledger reconstruction failed for {row.get('transaction_id', '<unknown>')}"
                 ) from exc
 
-    def _record_execution_fact_failure(self, reason: str) -> None:
+    def _record_execution_fact_failure(
+        self,
+        reason: str,
+        *,
+        alert_title: str = "Execution fact persistence blocked",
+        alert_category: str = "execution_fact",
+    ) -> None:
         """Freeze execution truth after a durable fact write cannot be proven.
 
         A fill is an exchange fact, not a best-effort application log.  If its
@@ -2399,10 +3325,48 @@ class AutonomousEngine:
             with contextlib.suppress(Exception):
                 alerts.send_incident(
                     AlertSeverity.CRITICAL,
-                    "Execution fact persistence blocked",
+                    alert_title,
                     str(reason)[:500],
-                    category="execution_fact",
+                    category=alert_category,
                 )
+
+    def _mark_order_unknown(self, order_id: str, symbol: str, reason: str) -> None:
+        """Persist an ambiguous venue order as ``UNKNOWN`` and close risk.
+
+        An order-status/read-after-fill failure is not equivalent to a
+        cancellation.  The durable UNKNOWN row is the restart/reconciliation
+        anchor; dropping the process-local tracker alone would allow a later
+        process to forget an in-flight venue fact and potentially submit new
+        exposure against an incomplete projection.
+        """
+
+        tracker = getattr(self, "_order_trackers", {}).get(order_id)
+        if tracker is not None:
+            with contextlib.suppress(Exception):
+                tracker.apply(OrderEvent.UNKNOWN)
+
+        persist_error = ""
+        try:
+            store = getattr(self, "_store", None)
+            if store is None or not callable(getattr(store, "save_order_state", None)):
+                raise RuntimeError("ORDER_UNKNOWN_STORE_UNAVAILABLE")
+            store.save_order_state(
+                order_id,
+                str(symbol or getattr(self, "_order_symbols", {}).get(order_id, "UNKNOWN")),
+                "UNKNOWN",
+                "UNKNOWN",
+                "0",
+                None,
+                "UNKNOWN",
+            )
+        except Exception as exc:
+            persist_error = f"; UNKNOWN_PERSISTENCE_FAILED:{type(exc).__name__}"
+
+        # Keep the venue order out of the ordinary polling path, but retain a
+        # durable UNKNOWN record that blocks readiness and requires governed
+        # client-order/exchange reconciliation before any retry.
+        getattr(self, "_active_order_ids", set()).discard(order_id)
+        self._record_execution_fact_failure(f"{reason}{persist_error}")
 
     def _post_ledger_transaction(self, transaction: LedgerTransaction) -> None:
         """Persist then append a balanced transaction, failing closed on drift.
@@ -2431,11 +3395,33 @@ class AutonomousEngine:
 
         if not self._can_write:
             return True
+        # The configured Testnet/Production database must be the authoritative
+        # execution fact store.  Readiness already reports this condition, but
+        # the executor is a second, independent safety boundary: a direct
+        # engine caller must not turn the diagnostic SQLite fallback into a
+        # live risk-increasing send.  Explicit reduce-only/close-position
+        # intents remain eligible for a governed emergency exit.
+        if not getattr(self, "_state_backend_supported", False) and not (
+            bool(getattr(intent, "reduce_only", False)) or bool(getattr(intent, "close_position", False))
+        ):
+            return False
+        if (
+            getattr(self, "_can_write", False)
+            and getattr(self, "_policy_error", None)
+            and not (bool(getattr(intent, "reduce_only", False)) or bool(getattr(intent, "close_position", False)))
+        ):
+            return False
         approval_id = str(getattr(intent, "risk_approval_id", "") or "")
         if approval_id == "RISK_EXEMPT_CLOSE":
             # 仅允许明确标记为 reduce-only 的风险下降命令走紧急路径。
             return bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
         if not approval_id or not getattr(intent, "risk_approval_signature", None):
+            return False
+        intent_hash = str(getattr(intent, "risk_intent_hash", "") or "")
+        if not intent_hash or intent_hash != order_intent_binding_hash(intent):
+            # The signed risk proposal is not enough: a durable payload could
+            # otherwise mutate quantity/side/client-id after approval.  The
+            # exact venue order must match the HMAC-bound canonical digest.
             return False
         if self._risk_sm.get(RiskApprovalId(approval_id)) != RiskDecision.APPROVED:
             return False
@@ -2444,6 +3430,7 @@ class AutonomousEngine:
                 RiskApprovalId(approval_id),
                 signature=str(intent.risk_approval_signature),
                 proposal_hash=str(getattr(intent, "risk_proposal_hash", "")),
+                intent_hash=intent_hash,
                 account_snapshot_hash=str(getattr(intent, "risk_account_snapshot_hash", "")),
                 risk_snapshot_hash=str(getattr(intent, "risk_snapshot_hash", "")),
                 policy_version=str(getattr(intent, "risk_policy_version", "")),
@@ -2455,6 +3442,21 @@ class AutonomousEngine:
 
     async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
+
+        # Keep the backend gate visible at the executor boundary so an engine
+        # invoked without the supervisor cannot bypass the readiness contract.
+        # Exit-only intents are retained for a separately governed emergency
+        # flatten path; new risk is rejected and durably recorded.
+        if self._can_write and not getattr(self, "_state_backend_supported", False):
+            exit_only = bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
+            if not exit_only:
+                print(f"[order] ❌ Intent {intent.intent_id} rejected: STATE_BACKEND_UNSUPPORTED")
+                self._outbox.reject(
+                    intent.intent_id,
+                    "STATE_BACKEND_UNSUPPORTED",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                return
 
         # P0 Gate 2: Executor 发送前再次校验控制状态
         # 防止 Outbox 提交后到发送前控制状态变更的竞态窗口
@@ -2590,6 +3592,7 @@ class AutonomousEngine:
 
             if persisted_status in {"NEW", "PARTIALLY_FILLED"}:
                 self._active_order_ids.add(intent.intent_id)
+                self._owned_order_ids.add(intent.intent_id)
             else:
                 self._active_order_ids.discard(intent.intent_id)
 
@@ -2648,13 +3651,7 @@ class AutonomousEngine:
 
             # Paper Shadow 指标（若 shadow runner 激活）
             if self._shadow_runner is not None:
-                predicted = "LONG" if side == "BUY" else "SHORT"
-                actual = predicted if status in ("FILLED", "PARTIALLY_FILLED") else "NO_ACTION"
-                self._shadow_runner.record_tick(
-                    predicted_direction=predicted,
-                    predicted_strength=1.0,
-                    actual_direction=actual,
-                    actual_strength=min(1.0, filled_qty / qty) if qty > 0 else 0.0,
+                self._shadow_runner.record_execution_observation(
                     estimated_cost_bps=estimated_cost_bps,
                     actual_cost_bps=actual_cost_bps,
                 )
@@ -2927,12 +3924,110 @@ class AutonomousEngine:
             )
             return None
 
+        slices_ok, slices_reason = self._validate_slices_against_intent(
+            intent,
+            slices,
+            order_symbol=order_symbol,
+            side=getattr(getattr(intent, "side", None), "value", getattr(intent, "side", "")),
+            client_id=client_id,
+        )
+        if not slices_ok:
+            print(f"[order] {order_symbol}: slices rejected at final binding gate ({slices_reason})")
+            self._outbox.reject(
+                intent.intent_id,
+                f"EXECUTION_SLICE_BINDING_FAILED:{slices_reason}",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            return None
+
         print(
             f"[order] {order_symbol}: algo={plan.algorithm.value} slices={len(slices)} "
             f"total_qty={plan.total_quantity():.6f} est_cost={plan.total_estimated_cost_bps:.1f}bps "
             f"est_completion={plan.estimated_completion_seconds:.0f}s"
         )
         return slices, plan.algorithm, ctx
+
+    @staticmethod
+    def _validate_slices_against_intent(
+        intent: Any,
+        slices: list[tuple[str, str | None, str, str, str]],
+        *,
+        order_symbol: str,
+        side: str,
+        client_id: str,
+    ) -> tuple[bool, str]:
+        """Prove execution slices cannot mutate the signed order semantics.
+
+        The approval digest covers the aggregate intent.  A planner may split
+        that quantity for execution quality, but it may not increase the
+        approved total, change side/symbol/order type/price/TIF, or invent an
+        unrelated client id.  Anything ambiguous is rejected before the first
+        venue request.
+        """
+
+        if str(order_symbol) != str(getattr(intent, "instrument_id", "")):
+            return False, "SYMBOL_MISMATCH"
+        expected_side = getattr(getattr(intent, "side", None), "value", getattr(intent, "side", ""))
+        if str(side).upper() != str(expected_side).upper():
+            return False, "SIDE_MISMATCH"
+        expected_type = getattr(getattr(intent, "order_type", None), "value", getattr(intent, "order_type", ""))
+        expected_tif = getattr(
+            getattr(intent, "time_in_force", None),
+            "value",
+            getattr(intent, "time_in_force", ""),
+        )
+        approved_price = getattr(getattr(intent, "price", None), "amount", None)
+        try:
+            approved_qty = Decimal(str(getattr(getattr(intent, "quantity", None), "amount", "")))
+            if not approved_qty.is_finite() or approved_qty <= 0:
+                return False, "APPROVED_QUANTITY_UNKNOWN"
+        except (InvalidOperation, TypeError, ValueError):
+            return False, "APPROVED_QUANTITY_UNKNOWN"
+
+        total = Decimal("0")
+        seen_client_ids: set[str] = set()
+        multi_slice = len(slices) > 1
+        for qty_text, price_text, order_type, tif, slice_client_id in slices:
+            try:
+                qty = Decimal(str(qty_text))
+            except (InvalidOperation, TypeError, ValueError):
+                return False, "SLICE_QUANTITY_UNKNOWN"
+            if not qty.is_finite() or qty <= 0:
+                return False, "SLICE_QUANTITY_INVALID"
+            total += qty
+            if total > approved_qty:
+                return False, "TOTAL_QUANTITY_EXCEEDS_APPROVAL"
+            if str(order_type).upper() != str(expected_type).upper():
+                return False, "ORDER_TYPE_MISMATCH"
+            if str(tif or expected_tif).upper() != str(expected_tif).upper():
+                return False, "TIME_IN_FORCE_MISMATCH"
+            if str(expected_type).upper() == OrderType.LIMIT.value:
+                if approved_price is None or price_text is None:
+                    return False, "LIMIT_PRICE_UNKNOWN"
+                try:
+                    if Decimal(str(price_text)) != Decimal(str(approved_price)):
+                        return False, "LIMIT_PRICE_MISMATCH"
+                except (InvalidOperation, TypeError, ValueError):
+                    return False, "LIMIT_PRICE_UNKNOWN"
+            elif price_text is not None:
+                return False, "MARKET_PRICE_UNEXPECTED"
+
+            slice_id = str(slice_client_id)
+            if not multi_slice:
+                if slice_id != client_id:
+                    return False, "CLIENT_ORDER_ID_MISMATCH"
+            else:
+                prefix = f"{client_id}-"
+                suffix = slice_id[len(prefix) :] if slice_id.startswith(prefix) else ""
+                if not suffix or not suffix.isdigit():
+                    return False, "SLICE_CLIENT_ORDER_ID_INVALID"
+            if slice_id in seen_client_ids:
+                return False, "DUPLICATE_SLICE_CLIENT_ORDER_ID"
+            seen_client_ids.add(slice_id)
+
+        if not slices or total <= 0:
+            return False, "SLICE_TOTAL_UNKNOWN"
+        return True, "OK"
 
     async def _submit_order_slice(
         self,
@@ -3047,6 +4142,7 @@ class AutonomousEngine:
                 await self._process_fill(oid_str, order_symbol, order)
             else:
                 self._active_order_ids.add(oid_str)
+                self._owned_order_ids.add(oid_str)
                 self._store.save_order_state(
                     oid_str,
                     order_symbol,
@@ -3065,14 +4161,23 @@ class AutonomousEngine:
             client_id = params.get("newClientOrderId", "")
             print(f"[order] -4141 DUPLICATE clientOrderId={client_id} — querying existing order")
             try:
-                query_resp = await self._api_async(
-                    Endpoint.ALL_ORDERS,
-                    signed=True,
-                    params={"symbol": order_symbol, "origClientOrderId": client_id},
-                )
-                if isinstance(query_resp, list) and query_resp:
-                    existing = query_resp[0]
-                    oid_str = str(existing.get("orderId", ""))
+                query_result = await self._adapter.query_order_by_client_id(order_symbol, client_id)
+                if query_result.is_success() and isinstance(query_result.data, dict):
+                    existing = query_result.data
+                    valid, reason = _validate_duplicate_order_response(
+                        existing,
+                        client_order_id=client_id,
+                        symbol=order_symbol,
+                        side=side,
+                        order_type=order_type,
+                        quantity=params.get("quantity", ""),
+                        reduce_only=bool(
+                            getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False)
+                        ),
+                    )
+                    if not valid:
+                        raise ValueError(f"duplicate lookup semantic mismatch: {reason}")
+                    oid_str = str(existing["orderId"])
                     if oid_str:
                         actual_status = existing.get("status", "UNKNOWN")
                         print(f"[order] RECOVERED from -4141: orderId={oid_str} status={actual_status}")
@@ -3089,6 +4194,7 @@ class AutonomousEngine:
                             await self._process_fill(oid_str, order_symbol, existing)
                         else:
                             self._active_order_ids.add(oid_str)
+                        self._owned_order_ids.add(oid_str)
                         return existing
             except Exception as qe:
                 print(f"[order] -4141 recovery query failed: {qe}")
@@ -3261,13 +4367,11 @@ class AutonomousEngine:
                 # Log error but do NOT silently swallow — maintain visibility
                 if fill_event_id_for_retry and not fill_committed:
                     self._mark_fill_retryable(order_id, fill_event_id_for_retry)
-                    self._record_execution_fact_failure(
-                        f"partial fill {fill_event_id_for_retry} could not be committed: {type(e).__name__}: {e}"
-                    )
-                    tracker = self._order_trackers.get(order_id)
-                    if tracker is not None:
-                        tracker.apply(OrderEvent.UNKNOWN)
-                    self._active_order_ids.discard(order_id)
+                self._mark_order_unknown(
+                    order_id,
+                    order_sym,
+                    f"ORDER_MONITOR_UNKNOWN:{type(e).__name__}:{str(e)[:240]}",
+                )
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
 
     def _consume_cumulative_fill(
@@ -3502,6 +4606,30 @@ class AutonomousEngine:
         tracker = self._order_trackers.get(order_id)
         if not tracker:
             return
+
+        # A venue ``FILLED`` status without a finite positive cumulative
+        # quantity and average price is an incomplete fact, not a zero-value
+        # fill.  Never advance the state machine or remove the tracker until
+        # the execution facts needed for ledger/position projection exist.
+        try:
+            raw_executed_qty = float(result.get("executedQty", 0) or 0)
+            raw_avg_price = float(result.get("avgPrice", 0) or 0)
+        except (TypeError, ValueError):
+            raw_executed_qty = 0.0
+            raw_avg_price = 0.0
+        if (
+            not math.isfinite(raw_executed_qty)
+            or not math.isfinite(raw_avg_price)
+            or raw_executed_qty <= 0
+            or raw_avg_price <= 0
+        ):
+            self._mark_order_unknown(
+                order_id,
+                symbol,
+                "FILLED_EXECUTION_FACTS_INCOMPLETE",
+            )
+            return
+
         executed_qty, avg_price, fill_event_id = self._consume_cumulative_fill(
             order_id,
             symbol,
@@ -3509,6 +4637,14 @@ class AutonomousEngine:
             status="FILLED",
         )
         if executed_qty <= 0:
+            # A cumulative poll with zero delta is only safe when the durable
+            # fill journal already proves that this exact observation reached
+            # COMMITTED.  An in-memory high-water mark or a PENDING journal
+            # row cannot certify the ledger/position projection after a crash.
+            fill_row = self._store.get_fill_event(fill_event_id) if fill_event_id else None
+            if not fill_event_id or fill_row is None or str(fill_row.get("processing_state", "")) != "COMMITTED":
+                self._mark_order_unknown(order_id, symbol, f"FILL_FACT_COMMIT_UNKNOWN:{fill_event_id or 'MISSING'}")
+                return
             tracker.apply(OrderEvent.FILLED)
             self._active_order_ids.discard(order_id)
             self._order_trackers.pop(order_id, None)
@@ -3530,9 +4666,11 @@ class AutonomousEngine:
             row = self._store.get_fill_event(fill_event_id) or {}
             if str(row.get("processing_state", "PENDING")) != "COMMITTED":
                 self._mark_fill_retryable(order_id, fill_event_id)
-            tracker.apply(OrderEvent.UNKNOWN)
-            self._active_order_ids.discard(order_id)
-            self._record_execution_fact_failure(f"fill {fill_event_id} commit failed: {type(exc).__name__}: {exc}")
+            self._mark_order_unknown(
+                order_id,
+                symbol,
+                f"FILL_FACT_COMMIT_UNKNOWN:{fill_event_id}:{type(exc).__name__}:{str(exc)[:240]}",
+            )
             raise
         tracker.apply(OrderEvent.FILLED)
         self._active_order_ids.discard(order_id)
@@ -3871,6 +5009,196 @@ class AutonomousEngine:
         )
         return False
 
+    def _update_user_stream_runtime(self, **updates: Any) -> None:
+        """Update redacted live user-stream evidence without storing secrets."""
+
+        runtime = getattr(self, "_user_stream_runtime", None)
+        if not isinstance(runtime, dict):
+            runtime = {}
+            self._user_stream_runtime = runtime
+        runtime.update(updates)
+        runtime["last_state_mono"] = time.monotonic()
+
+    def _user_stream_fault(self, reason: str, *, terminal: bool = False) -> None:
+        """Fail closed on a listen-key, parser, or continuity fault."""
+
+        runtime = getattr(self, "_user_stream_runtime", {})
+        previous = str(runtime.get("status", "UNKNOWN")) if isinstance(runtime, dict) else "UNKNOWN"
+        status = "FAILED" if terminal else "DEGRADED"
+        self._update_user_stream_runtime(status=status, last_error=str(reason)[:500], listen_key_active=False)
+        if previous in {"FAILED", "DEGRADED"} and not terminal:
+            return
+        with contextlib.suppress(Exception):
+            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
+        with contextlib.suppress(Exception):
+            self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
+        with contextlib.suppress(Exception):
+            self._alerts.send_incident(
+                AlertSeverity.CRITICAL,
+                "User data stream unavailable",
+                str(reason)[:500],
+                category="user_stream",
+            )
+
+    async def _start_user_stream(self) -> bool:
+        """Start the authenticated user stream for writable environments.
+
+        The stream is intentionally independent from market-data REST
+        fallback.  A missing listen key, parser rejection, sequence gap, or
+        reconnect fault keeps the process in ``NO_NEW_RISK``; it never turns
+        into a REST-only writable mode.
+        """
+
+        if not bool(getattr(self, "_can_write", False)):
+            self._update_user_stream_runtime(status="NOT_REQUIRED", listen_key_active=False)
+            return True
+        existing_task = getattr(self, "_user_ws_task", None)
+        if existing_task is not None and not existing_task.done():
+            return self._user_stream_readiness()[0]
+
+        self._update_user_stream_runtime(status="STARTING", last_error="", listen_key_active=False)
+        websocket = None
+        try:
+            from beidou_exchange.binance_usdm import (
+                FSTREAM_PRODUCTION_URL,
+                FSTREAM_TESTNET_URL,
+                BinanceUsdmWebSocketClient,
+            )
+            from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+
+            create_key = getattr(self._adapter, "create_user_listen_key", None)
+            if not callable(create_key):
+                self._user_stream_fault("ADAPTER_USER_STREAM_CREATE_UNSUPPORTED", terminal=True)
+                return False
+            key_result = await create_key()
+            if not key_result.is_success() or not isinstance(key_result.data, dict):
+                reason = str(getattr(getattr(key_result, "error", None), "message", "LISTEN_KEY_UNKNOWN"))
+                self._user_stream_fault(f"LISTEN_KEY_CREATE_FAILED:{reason}", terminal=True)
+                return False
+            listen_key = str(key_result.data.get("listenKey") or "").strip()
+            if not listen_key:
+                self._user_stream_fault("LISTEN_KEY_EMPTY", terminal=True)
+                return False
+
+            websocket = BinanceUsdmWebSocketClient(
+                base_url=FSTREAM_TESTNET_URL if self._env_mode.value == "testnet" else FSTREAM_PRODUCTION_URL
+            )
+            self._user_ws_client = websocket
+            self._user_stream_listen_key = listen_key
+            self._user_stream_stopping = False
+
+            def _on_state_change(_old: Any, new: Any, _group_id: int) -> None:
+                state = str(getattr(new, "value", new)).upper()
+                if getattr(self, "_user_stream_stopping", False):
+                    return
+                if state == "CONNECTED":
+                    self._update_user_stream_runtime(status="CONNECTED", listen_key_active=True)
+                elif state == "RECONNECTING":
+                    self._user_stream_fault("USER_STREAM_RECONNECTING")
+                elif state == "DISCONNECTED":
+                    self._user_stream_fault("USER_STREAM_DISCONNECTED", terminal=True)
+
+            websocket.on_state_change(_on_state_change)
+
+            async def _on_user_event(_stream: str, data: dict[str, Any]) -> None:
+                if not isinstance(data, dict):
+                    self._user_stream_fault("USER_STREAM_EVENT_NOT_OBJECT")
+                    return
+                event_type = str(data.get("e") or "").strip()
+                if event_type == "listenKeyExpired":
+                    self._user_stream_fault("LISTEN_KEY_EXPIRED", terminal=True)
+                    return
+                self._update_user_stream_runtime(last_state_mono=time.monotonic())
+                if event_type == "ORDER_TRADE_UPDATE":
+                    parsed = BinanceUsdmAdapter.parse_user_order_update(data)
+                    if not parsed.is_success() or parsed.data is None:
+                        self._user_stream_fault("ORDER_EVENT_PARSE_UNKNOWN")
+                        return
+                    accepted = self.ingest_user_order_update(parsed.data)
+                elif event_type == "ACCOUNT_UPDATE":
+                    parsed = BinanceUsdmAdapter.parse_user_account_update(data)
+                    if not parsed.is_success() or parsed.data is None:
+                        self._user_stream_fault("ACCOUNT_EVENT_PARSE_UNKNOWN")
+                        return
+                    accepted = self.ingest_user_account_update(parsed.data)
+                else:
+                    self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
+                    return
+                if accepted:
+                    self._update_user_stream_runtime(
+                        status="HEALTHY",
+                        last_event_mono=time.monotonic(),
+                        listen_key_active=True,
+                        last_error="",
+                    )
+                else:
+                    # Replay authorization or sequence continuity may reject
+                    # an otherwise valid event; preserve the socket but keep
+                    # readiness closed until the governed recovery succeeds.
+                    self._update_user_stream_runtime(status="DEGRADED", listen_key_active=True)
+
+            await websocket.subscribe(listen_key, _on_user_event)
+            self._update_user_stream_runtime(status="CONNECTED", listen_key_active=True)
+            self._user_ws_task = asyncio.create_task(websocket.run())
+            self._user_stream_keepalive_task = asyncio.create_task(self._user_stream_keepalive_loop(listen_key))
+            return True
+        except Exception as exc:
+            self._user_stream_fault(f"USER_STREAM_START_FAILED:{type(exc).__name__}", terminal=True)
+            if websocket is not None:
+                with contextlib.suppress(Exception):
+                    await websocket.close()
+            self._user_ws_client = None
+            self._user_stream_listen_key = None
+            return False
+
+    async def _user_stream_keepalive_loop(self, listen_key: str) -> None:
+        """Renew the exact listen key; failure revokes writable authority."""
+
+        try:
+            while True:
+                await asyncio.sleep(30 * 60)
+                if getattr(self, "_user_stream_stopping", False):
+                    return
+                keepalive = getattr(self._adapter, "keepalive_user_listen_key", None)
+                if not callable(keepalive):
+                    self._user_stream_fault("ADAPTER_USER_STREAM_KEEPALIVE_UNSUPPORTED", terminal=True)
+                    return
+                result = await keepalive(listen_key)
+                if not result.is_success():
+                    self._user_stream_fault("LISTEN_KEY_KEEPALIVE_FAILED", terminal=True)
+                    return
+                self._update_user_stream_runtime(listen_key_active=True, last_keepalive_mono=time.monotonic())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._user_stream_fault(f"LISTEN_KEY_KEEPALIVE_ERROR:{type(exc).__name__}", terminal=True)
+
+    async def _stop_user_stream(self) -> None:
+        """Stop user-stream tasks and close the socket without touching orders."""
+
+        self._user_stream_stopping = True
+        keepalive_task = getattr(self, "_user_stream_keepalive_task", None)
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await keepalive_task
+            self._user_stream_keepalive_task = None
+        websocket_task = getattr(self, "_user_ws_task", None)
+        if websocket_task is not None:
+            websocket_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await websocket_task
+            self._user_ws_task = None
+        websocket = getattr(self, "_user_ws_client", None)
+        if websocket is not None:
+            with contextlib.suppress(Exception):
+                await websocket.close()
+        self._user_ws_client = None
+        self._user_stream_listen_key = None
+        if bool(getattr(self, "_can_write", False)):
+            self._update_user_stream_runtime(status="STOPPED", listen_key_active=False)
+
     def _build_system_reconciliation_facts(self) -> AccountFactSnapshot:
         """Build facts only from durable local projections.
 
@@ -4066,18 +5394,15 @@ class AutonomousEngine:
     async def _ensure_exchange_position_protections(self) -> None:
         """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。
 
-        BD-FIX (S4): 保护单下发前检查控制面状态，
-        LOCK/EMERGENCY_FLATTEN 时跳过交易所下单但仍注册本地保护，
-        避免监控假阳性 MISSING_SL/MISSING_TP → LOCK 死循环。
+        Startup inventory is observational.  If an exchange position is not
+        already covered by an ACK-backed, owner-bound durable protection, the
+        governed recovery state machine must take over; this compatibility
+        check never submits an unowned raw Algo order.
         """
-        # BD-FIX: LOCK/EMERGENCY_FLATTEN 下仅跳过交易所下单，本地注册照常执行。
         ctrl_state = self._control.get_status()
         skip_exchange_orders = ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN)
         if skip_exchange_orders:
-            print(
-                f"[protection] Control plane is {ctrl_state.value} — skipping exchange order placement, "
-                f"local registration will proceed"
-            )
+            print(f"[protection] Control plane is {ctrl_state.value} — startup recovery remains read-only")
         try:
             account = self._last_account
             if not account or "positions" not in account:
@@ -4099,8 +5424,6 @@ class AutonomousEngine:
             # 若 Phase 1/2 已处理所有持仓，直接跳过
             local_symbols = {str(pp.instrument_id) for pp in self._protection.all_positions().values()}
             already_handled = set(exchange_positions.keys()) - local_symbols
-            if not already_handled:
-                return  # 所有持仓已由 Phase 1/2 处理完毕
 
             # 检查哪些已有保护单
             algos_resp = await self._get_open_algo_inventory()
@@ -4120,139 +5443,55 @@ class AutonomousEngine:
                     self._block_unowned_protection_orders(unowned_algo_ids)
                     print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
                     return
+                venue_algo_ids = {str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None}
+                missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
+                if missing_owned_ids:
+                    # A durable ACTIVE row is not proof that the venue still
+                    # has the protection.  Missing IDs are ambiguous (the
+                    # order may have triggered, expired, or been cancelled),
+                    # so freeze new risk and require reconciliation rather
+                    # than silently recreating or cancelling anything.
+                    self._block_unowned_protection_orders(
+                        [f"OWNED_PROTECTION_MISSING:{algo_id}" for algo_id in missing_owned_ids]
+                    )
+                    print("[startup] Durable protection is absent from venue inventory; recovery remains read-only")
+                    return
+                semantic_issues = self._protection_inventory_semantic_issues(algos_resp)
+                if semantic_issues:
+                    self._block_unowned_protection_orders(semantic_issues)
+                    print(
+                        "[startup] Conditional-order semantics do not match durable protection; recovery remains read-only"
+                    )
+                    return
                 for item in algos_resp:
                     if str(item.get("algoId")) in known_algo_ids:
                         protected_symbols.add(str(item.get("symbol", "")))
+
+            # The inventory check above is required even when every venue
+            # position already has a local projection.  Only after the
+            # independent venue fact is verified may we skip creation.
+            if not already_handled:
+                return  # 所有持仓已由 Phase 1/2 处理完毕且库存已核验
 
             unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
             if not unprotected:
                 return
 
-            if skip_exchange_orders:
-                print(
-                    f"[startup] {len(unprotected)} positions without protection — skipping exchange orders (control={ctrl_state.value})"
-                )
+            # This compatibility path used to submit raw Algo orders and only
+            # register a local projection afterwards.  That creates an
+            # unowned venue order if the process dies between the ACK and the
+            # local write, and it can race the governed recovery path.  Leave
+            # the position untouched and require the explicit recovery state
+            # machine to establish an owner/generation-bound pair instead.
+            self._block_unowned_protection_orders(
+                [f"UNPROTECTED_POSITION_RECOVERY_REQUIRED:{symbol}" for symbol in sorted(unprotected)]
+            )
+            print(
+                f"[startup] {len(unprotected)} positions without certified protection — recovery remains read-only"
+                + (f" (control={ctrl_state.value})" if skip_exchange_orders else "")
+            )
+            return
 
-            print(f"[startup] {len(unprotected)} positions without protection, placing orders...")
-            for symbol, data in unprotected.items():
-                try:
-                    if skip_exchange_orders:
-                        continue
-                    amt = data["amt"]
-                    entry = data["entry"]
-                    side = "SELL" if amt > 0 else "BUY"
-                    qty = abs(amt)
-                    prec = self._symbol_precision.get(symbol)
-                    if prec is None:
-                        print(f"[startup] {symbol}: exchange precision UNKNOWN; protection remains PENDING")
-                        continue
-                    qty_str = f"{qty:.{prec['quantity']}f}"
-
-                    kline_features = await self._feed.async_get_kline_features(symbol)
-                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
-                    self._require_protection_config(symbol, adaptive_cfg)
-                    atr_value = float(adaptive_cfg.stop_loss_config.get("atr", 0) or 0)
-                    multiplier = float(adaptive_cfg.stop_loss_config.get("multiplier", 0) or 0)
-                    stop_distance = atr_value * multiplier
-                    if stop_distance <= 0:
-                        self._block_unowned_protection_orders([f"PROTECTION_DISTANCE_UNKNOWN:{symbol}"])
-                        raise RuntimeError(f"protection distance UNKNOWN for {symbol}")
-                    if amt > 0:
-                        stop_price = entry - stop_distance
-                        tp_price = entry + stop_distance * adaptive_cfg.rr_ratio
-                    else:
-                        stop_price = entry + stop_distance
-                        tp_price = entry - stop_distance * adaptive_cfg.rr_ratio
-                    stop_str = f"{stop_price:.{prec['price']}f}"
-                    tp_str = f"{tp_price:.{prec['price']}f}"
-
-                    # 止损单
-                    sl_resp = await self._create_algo_order(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "algoType": "CONDITIONAL",
-                            "type": "STOP_MARKET",
-                            "quantity": qty_str,
-                            "triggerPrice": stop_str,
-                            "reduceOnly": "true",
-                            "workingType": "CONTRACT_PRICE",
-                        }
-                    )
-                    sl_id = str(sl_resp.get("algoId", "")) if "algoId" in sl_resp else ""
-
-                    # 止盈单
-                    tp_resp = await self._create_algo_order(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "algoType": "CONDITIONAL",
-                            "type": "TAKE_PROFIT_MARKET",
-                            "quantity": qty_str,
-                            "triggerPrice": tp_str,
-                            "reduceOnly": "true",
-                            "workingType": "CONTRACT_PRICE",
-                        }
-                    )
-                    tp_id = str(tp_resp.get("algoId", "")) if "algoId" in tp_resp else ""
-
-                    if sl_id or tp_id:
-                        print(f"[startup] ✅ Protection placed for {symbol}: SL={sl_id} TP={tp_id}")
-                    else:
-                        sl_err = sl_resp.get("msg", "?")
-                        tp_err = tp_resp.get("msg", "?")
-                        print(f"[startup] ⚠️ Protection FAILED for {symbol}: SL={sl_err} TP={tp_err}")
-                except Exception as e:
-                    print(f"[startup] Protection placement error for {symbol}: {e}")
-
-            # 将交易所持仓注册到本地保护系统，避免 system={} 对账 mismatch
-            # 即使保护单下发失败，交易所实际持仓也必须被系统感知
-            registered = 0
-            for symbol, data in exchange_positions.items():
-                try:
-                    existing = [
-                        pp for pp in self._protection.all_positions().values() if str(pp.instrument_id) == symbol
-                    ]
-                    if existing:
-                        continue
-                    amt = data["amt"]
-                    entry = data["entry"]
-                    if entry <= 0:
-                        features = await self._feed.async_update_features(symbol)
-                        entry = features.get("price", 0) if features else 0
-                        if entry <= 0:
-                            continue
-                    pos_id = f"pos-{symbol}"
-                    pos_side = OrderSide.BUY if amt > 0 else OrderSide.SELL
-                    position_generation = self._next_position_generation(symbol)
-                    # BD-FIX: 使用自适应计算器生成保护参数，避免 stop_loss/take_profits
-                    # 为 None/空导致保护覆盖检查 expected_orders=0 → FAIL。
-                    # AdaptiveProtectionCalculator 在 kline 缺失时有内置保守默认值。
-                    kline_features = await self._feed.async_get_kline_features(symbol)
-                    adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry, kline_features)
-                    self._require_protection_config(symbol, adaptive_cfg)
-                    self._protection.create_protection(
-                        position_id=pos_id,
-                        instrument_id=InstrumentId(symbol),
-                        venue_id=VenueId("BINANCE"),
-                        entry_price=entry,
-                        quantity=abs(amt),
-                        side=pos_side,
-                        stop_loss_config=adaptive_cfg.stop_loss_config,
-                        take_profit_config=adaptive_cfg.take_profit_config,
-                        owner_id=self._protection_owner_id,
-                        position_generation=position_generation,
-                        session_id=self._session_id,
-                    )
-                    registered += 1
-                    print(
-                        f"[startup] Registered {symbol} position {pos_id} with "
-                        f"SL={adaptive_cfg.stop_pct:.1f}% RR={adaptive_cfg.rr_ratio:.1f}"
-                    )
-                except Exception:
-                    logger.warning("[startup] Failed to register protection for position, skipped")
-            if registered:
-                print(f"[startup] Registered {registered} exchange positions in local state")
         except Exception as e:
             print(f"[startup] Exchange protection check error: {e}")
 
@@ -4261,6 +5500,12 @@ class AutonomousEngine:
 
         解决多轮 nearline 重试累积重复订单的问题。
         """
+        # Cancellation is a state-changing operation.  A stale account
+        # snapshot, a failed reconciliation, or NO_NEW_RISK must never be
+        # treated as proof that an old conditional order is excess.
+        if self._control.get_status() != ControlAction.RESUME or not self._fresh_matched_reconciliation():
+            print("[nearline] Excess-order cleanup skipped: fresh matched reconciliation/RESUME required")
+            return
         try:
             existing_algos = await self._get_open_algo_inventory()
             if not isinstance(existing_algos, list):
@@ -4275,18 +5520,62 @@ class AutonomousEngine:
                 self._block_unowned_protection_orders(unowned_algo_ids)
                 print("[nearline] Excess-order cleanup blocked: conditional-order ownership UNKNOWN")
                 return
-            # 按标的聚合
+            semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
+            if semantic_issues:
+                self._block_unowned_protection_orders(semantic_issues)
+                print("[nearline] Excess-order cleanup blocked: protection semantics UNKNOWN")
+                return
+            exchange_symbols = {
+                str(row.get("symbol", "")).strip().upper()
+                for row in (getattr(self, "_last_account", {}) or {}).get("positions", [])
+                if isinstance(row, dict)
+                and str(row.get("symbol", "")).strip()
+                and abs(float(row.get("positionAmt", 0) or 0)) > 1e-12
+            }
+            durable_rows = [
+                row
+                for row in self._store.restore_protections()
+                if str(row.get("status", "")).upper() == "ACTIVE"
+                and str(row.get("owner_id", "")) == str(self._protection_owner_id)
+                and str(row.get("exchange_order_id", "")).strip()
+            ]
+            durable_ids = {str(row.get("exchange_order_id")) for row in durable_rows}
+            if known_algo_ids != durable_ids:
+                self._block_unowned_protection_orders(["PROTECTION_OWNER_MAPPING_INCOMPLETE"])
+                print("[nearline] Excess-order cleanup blocked: durable/local Algo mapping differs")
+                return
+            expected_by_symbol: dict[str, int] = {}
+            for row in durable_rows:
+                symbol = str(row.get("symbol", "")).strip().upper()
+                if symbol:
+                    expected_by_symbol[symbol] = expected_by_symbol.get(symbol, 0) + 1
+            # 按标的聚合；without a live position and durable expected rows,
+            # there is no safe basis for cancelling any conditional order.
             by_symbol: dict[str, list[dict]] = {}
             for a in existing_algos:
-                by_symbol.setdefault(a["symbol"], []).append(a)
+                symbol = str(a.get("symbol", "")).strip().upper()
+                if symbol:
+                    by_symbol.setdefault(symbol, []).append(a)
 
             for symbol, orders in by_symbol.items():
-                expected = 2  # 1 SL + 1 TP per position
+                if symbol not in exchange_symbols:
+                    continue
+                expected = expected_by_symbol.get(symbol, 0)
+                if expected <= 0:
+                    continue
                 excess = len(orders) - expected
                 if excess <= 0:
                     continue
-                # 按创建时间排序，取消最旧的
-                orders.sort(key=lambda a: a.get("createTime", 0))
+                # Missing/invalid venue creation time makes "oldest" an
+                # unproven policy; leave all orders untouched and escalate.
+                if any(a.get("createTime") in (None, "") for a in orders):
+                    self._block_unowned_protection_orders([f"EXCESS_ORDER_AGE_UNKNOWN:{symbol}"])
+                    continue
+                try:
+                    orders.sort(key=lambda a: int(a["createTime"]))
+                except (KeyError, TypeError, ValueError):
+                    self._block_unowned_protection_orders([f"EXCESS_ORDER_AGE_UNKNOWN:{symbol}"])
+                    continue
                 for a in orders[:excess]:
                     try:
                         await self._cancel_algo_order(symbol, int(a["algoId"]))
@@ -4319,6 +5608,11 @@ class AutonomousEngine:
             if not api_ok:
                 self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
                 print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
+                return
+            semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
+            if semantic_issues:
+                self._block_unowned_protection_orders(semantic_issues)
+                print("[nearline] Protection retry blocked: protection semantics UNKNOWN")
                 return
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
@@ -4375,8 +5669,6 @@ class AutonomousEngine:
                     else:
                         continue
 
-                # 首次重试即加宽 (2.0x)，之后每次递增 0.5x
-                widen_factor = 2.0 + retry_count * 0.5
                 side = "SELL" if pp.side == OrderSide.BUY else "BUY"
                 prec = self._symbol_precision.get(symbol)
                 if prec is None:
@@ -4388,26 +5680,10 @@ class AutonomousEngine:
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
                 if _needs_exchange_protection(pp.stop_loss):
-                    orig_sl_price = float(pp.stop_loss.trigger_price.amount)
-                    current_price = float(self._last_prices.get(symbol, 0))
-                    entry_ref = float(pp.entry_price)
-                    # 扩展止损距离（远离市价，避免 -2021 立即触发错误）
-                    if current_price > 0 and abs(orig_sl_price / current_price - 1.0) > 0.001:
-                        # 有行情数据：基于当前价格按比例扩展
-                        if pp.side == OrderSide.BUY:
-                            widened_sl = current_price * (1 - abs(1 - orig_sl_price / current_price) * widen_factor)
-                            widened_sl = min(widened_sl, orig_sl_price)
-                        else:
-                            widened_sl = current_price * (1 + abs(orig_sl_price / current_price - 1) * widen_factor)
-                            widened_sl = max(widened_sl, orig_sl_price)
-                    else:
-                        # 无行情数据或价格过于接近：基于入场价按固定百分比扩展
-                        base_pct = max(abs(entry_ref - orig_sl_price) / entry_ref, 0.02) if entry_ref > 0 else 0.03
-                        if pp.side == OrderSide.BUY:
-                            widened_sl = entry_ref * (1 - base_pct * widen_factor)
-                        else:
-                            widened_sl = entry_ref * (1 + base_pct * widen_factor)
-                    price_str = f"{widened_sl:.{prec['price']}f}"
+                    # Retry the exact approved trigger.  Moving a stop after
+                    # rejection changes the signed risk contract and could
+                    # silently widen the permitted loss.
+                    price_str = f"{float(pp.stop_loss.trigger_price.amount):.{prec['price']}f}"
                     algo_resp = await self._create_algo_order(
                         {
                             "symbol": symbol,
@@ -4427,7 +5703,7 @@ class AutonomousEngine:
                         pp.stop_loss.status = ProtectionStatus.ACTIVE
                         self._persist_protection_order(pp.stop_loss, status="ACTIVE")
                         print(
-                            f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}"
+                            f"[nearline] ✅ Retried stop loss for {symbol} at approved trigger → algoId={algo_resp['algoId']}"
                         )
                         placed += 1
                     else:
@@ -4439,24 +5715,10 @@ class AutonomousEngine:
                 for i, tp in enumerate(pp.take_profits):
                     if not _needs_exchange_protection(tp):
                         continue
-                    orig_tp_price = float(tp.trigger_price.amount)
-                    current_price = float(self._last_prices.get(symbol, 0))
-                    entry_ref = float(pp.entry_price)
-                    # 扩展止盈距离（远离市价，增加触发空间）
-                    if current_price > 0 and abs(orig_tp_price / current_price - 1.0) > 0.001:
-                        if pp.side == OrderSide.BUY:
-                            widened_tp = current_price * (1 + abs(orig_tp_price / current_price - 1) * widen_factor)
-                            widened_tp = max(widened_tp, orig_tp_price)
-                        else:
-                            widened_tp = current_price * (1 - abs(1 - orig_tp_price / current_price) * widen_factor)
-                            widened_tp = min(widened_tp, orig_tp_price)
-                    else:
-                        base_pct = max(abs(orig_tp_price - entry_ref) / entry_ref, 0.02) if entry_ref > 0 else 0.03
-                        if pp.side == OrderSide.BUY:
-                            widened_tp = entry_ref * (1 + base_pct * widen_factor)
-                        else:
-                            widened_tp = entry_ref * (1 - base_pct * widen_factor)
-                    tp_price_str = f"{widened_tp:.{prec['price']}f}"
+                    # Take-profit retries use the same approved trigger; a
+                    # venue rejection remains UNKNOWN instead of inventing a
+                    # new exit policy at runtime.
+                    tp_price_str = f"{float(tp.trigger_price.amount):.{prec['price']}f}"
                     tp_resp = await self._create_algo_order(
                         {
                             "symbol": symbol,
@@ -4476,7 +5738,7 @@ class AutonomousEngine:
                         tp.status = ProtectionStatus.ACTIVE
                         self._persist_protection_order(tp, status="ACTIVE")
                         print(
-                            f"[nearline] ✅ Retried take profit #{i} for {symbol} (widened {widen_factor:.1f}x) → algoId={tp_resp['algoId']}"
+                            f"[nearline] ✅ Retried take profit #{i} for {symbol} at approved trigger → algoId={tp_resp['algoId']}"
                         )
                         placed += 1
                     else:
@@ -4496,7 +5758,7 @@ class AutonomousEngine:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
                     self._protection_retries[pos_id] = retries
                     print(
-                        f"[nearline] 🔄 Partial retry #{retries}/3 for {symbol}: {placed} placed, {server_count}/{expected_count} — widening next attempt"
+                        f"[nearline] 🔄 Partial retry #{retries}/3 for {symbol}: {placed} placed, {server_count}/{expected_count} — approved triggers preserved"
                     )
                 else:
                     retries = self._protection_retries.setdefault(pos_id, 0) + 1
@@ -4526,35 +5788,47 @@ class AutonomousEngine:
         # === 幽灵仓位清理：交易所已无持仓但系统仍追踪的保护单 ===
         # BD-FIX: 防抖清理 — 仅在连续 N 轮确认零持仓后才删除本地保护，
         # 避免因 _last_account 瞬时快照缺失而误删正在使用的保护单。
-        exchange_positions_raw = self._last_account.get("positions", [])
+        cleanup_facts_ready = (
+            self._control.get_status() == ControlAction.RESUME and self._fresh_matched_reconciliation()
+        )
+        exchange_positions_raw = self._last_account.get("positions", []) if cleanup_facts_ready else []
         exchange_symbols: set[str] = set()
         for ep in exchange_positions_raw:
-            amt = float(ep.get("positionAmt", 0) or 0)
-            sym = str(ep.get("symbol", ""))
-            if abs(amt) > 0 and sym:
+            try:
+                amt = float(ep.get("positionAmt", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            sym = str(ep.get("symbol", "")).strip().upper()
+            if math.isfinite(amt) and abs(amt) > 0 and sym:
                 exchange_symbols.add(sym)
 
         _GHOST_DEBOUNCE_ROUNDS = 3
         if not hasattr(self, "_ghost_absence_count"):
             self._ghost_absence_count: dict[str, int] = {}
 
-        for old_pid, old_pp in list(self._protection.all_positions().items()):
-            symbol = str(old_pp.instrument_id)
-            if symbol not in exchange_symbols:
-                count = self._ghost_absence_count.get(symbol, 0) + 1
-                self._ghost_absence_count[symbol] = count
-                if count >= _GHOST_DEBOUNCE_ROUNDS:
-                    self._remove_protection_with_cleanup(old_pid, symbol)
-                    await self._cancel_algo_orders(old_pid, symbol)
-                    self._ghost_absence_count.pop(symbol, None)
-                    print(f"[nearline] 🧹 Cleaned up ghost position: {symbol} (absent {count} rounds, pos={old_pid})")
+        if not cleanup_facts_ready:
+            print("[nearline] Ghost-position cleanup skipped: fresh matched reconciliation/RESUME required")
+
+        if cleanup_facts_ready:
+            for old_pid, old_pp in list(self._protection.all_positions().items()):
+                symbol = str(old_pp.instrument_id)
+                if symbol not in exchange_symbols:
+                    count = self._ghost_absence_count.get(symbol, 0) + 1
+                    self._ghost_absence_count[symbol] = count
+                    if count >= _GHOST_DEBOUNCE_ROUNDS:
+                        self._remove_protection_with_cleanup(old_pid, symbol)
+                        await self._cancel_algo_orders(old_pid, symbol)
+                        self._ghost_absence_count.pop(symbol, None)
+                        print(
+                            f"[nearline] 🧹 Cleaned up ghost position: {symbol} (absent {count} rounds, pos={old_pid})"
+                        )
+                    else:
+                        print(
+                            f"[nearline] ⏳ Ghost candidate {symbol}: absent {count}/{_GHOST_DEBOUNCE_ROUNDS} rounds, waiting"
+                        )
                 else:
-                    print(
-                        f"[nearline] ⏳ Ghost candidate {symbol}: absent {count}/{_GHOST_DEBOUNCE_ROUNDS} rounds, waiting"
-                    )
-            else:
-                # Symbol reappeared — reset counter
-                self._ghost_absence_count.pop(symbol, None)
+                    # Symbol reappeared — reset counter
+                    self._ghost_absence_count.pop(symbol, None)
 
         # === 超量保护单清理：每个持仓最多保留 expected_count 个交易所订单 ===
         await self._cleanup_excess_orders()
@@ -4988,6 +6262,17 @@ class AutonomousEngine:
                 )
 
             # === 执行阶段: 使用仲裁后的目标仓位进行风控评估与下单 ===
+            # Probe the durable duplicate-identity fact once per nearline
+            # cycle; querying once per symbol would add avoidable database
+            # load without improving the evidence.
+            duplicate_orders_24h: int | None = None
+            duplicate_probe = getattr(self._outbox, "duplicate_order_count_24h", None)
+            if callable(duplicate_probe):
+                try:
+                    duplicate_orders_24h = duplicate_probe()
+                except Exception as exc:
+                    print(f"[nearline] duplicate-order evidence UNKNOWN: {exc}")
+
             for prop in proposals:
                 symbol = prop["symbol"]
                 venue_id = prop["venue_id"]
@@ -5021,32 +6306,75 @@ class AutonomousEngine:
                     print(f"[nearline] {symbol}: SKIP (cost too high: {cost_est.total_fee_bps}bps)")
                     continue
 
-                # Build risk context for full R0-R10 evaluation
+                # Build risk context for full R0-R10 evaluation.  Exchange
+                # position facts are explicit: a missing/invalid position
+                # snapshot must remain UNKNOWN, never be interpreted as flat.
+                strategy_risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
+                position_qty: float | None = None
+                liquidation_price: float | None = None
+                account_positions = (
+                    self._last_account.get("positions") if isinstance(self._last_account, dict) else None
+                )
+                if isinstance(account_positions, list):
+                    position_qty = 0.0
+                    for account_position in account_positions:
+                        if not isinstance(account_position, dict) or account_position.get("symbol") != symbol:
+                            continue
+                        try:
+                            raw_qty = float(account_position.get("positionAmt"))
+                        except (TypeError, ValueError):
+                            position_qty = None
+                            break
+                        if not math.isfinite(raw_qty):
+                            position_qty = None
+                            break
+                        position_qty = abs(raw_qty)
+                        try:
+                            raw_liquidation = account_position.get("liquidationPrice")
+                            if raw_liquidation not in (None, ""):
+                                liquidation_candidate = float(raw_liquidation)
+                                if math.isfinite(liquidation_candidate) and liquidation_candidate > 0:
+                                    liquidation_price = liquidation_candidate
+                        except (TypeError, ValueError):
+                            liquidation_price = None
+                        break
+
                 risk_context: dict = {
                     "leverage": dyn_leverage,
-                    "max_leverage": 3.0,
+                    "max_leverage": self._policy_float("max_leverage", self._settings.production.max_leverage),
                     "concentration_pct": position_notional / max(account_balance, 1) * 100,
-                    "max_concentration_pct": 50.0,
-                    "drawdown_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).current_drawdown_pct
-                    if self._strategy_risk.get_state(self._autopilot_strategy_id)
-                    else 0.0,
-                    "max_drawdown_pct": 20.0,
-                    "daily_loss_pct": self._strategy_risk.get_state(self._autopilot_strategy_id).daily_pnl
-                    / max(account_balance, 1)
-                    * -100
-                    if self._strategy_risk.get_state(self._autopilot_strategy_id) and account_balance > 0
-                    else 0.0,
-                    "max_daily_loss_pct": 5.0,
+                    "max_concentration_pct": self._policy_float(
+                        "max_concentration_pct", self._settings.production.max_concentration_pct
+                    ),
+                    "drawdown_pct": strategy_risk_state.current_drawdown_pct if strategy_risk_state else None,
+                    "max_drawdown_pct": self._policy_float(
+                        "max_drawdown_pct", self._settings.production.max_drawdown_pct
+                    ),
+                    "daily_loss_pct": (
+                        strategy_risk_state.daily_pnl / max(account_balance, 1) * -100
+                        if strategy_risk_state and account_balance > 0
+                        else None
+                    ),
+                    "max_daily_loss_pct": self._policy_float(
+                        "max_daily_loss_pct", self._settings.production.max_daily_loss_pct
+                    ),
                     "consecutive_losses": self._loss_count,
-                    "max_consecutive_losses": 5,
-                    "rolling_sharpe": self._drift_detector._baseline.get("sharpe", 0.0)
-                    if self._drift_detector.is_calibrated()
-                    else 0.0,  # P0修复: 未校准时使用中性基线(0.0 >= min_sharpe=0.0)，避免新账户R5 UNKNOWN死锁
-                    "min_sharpe_rolling": 0.0,
+                    "max_consecutive_losses": self._policy_int(
+                        "max_consecutive_losses", self._settings.production.max_consecutive_losses
+                    ),
+                    "rolling_sharpe": (
+                        self._drift_detector._baseline.get("sharpe")
+                        if self._drift_detector.is_calibrated() and self._drift_detector._baseline
+                        else None
+                    ),
+                    "min_sharpe_rolling": self._policy_float(
+                        "min_sharpe_rolling", self._settings.production.min_sharpe_rolling
+                    ),
                     "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1)
                     if account_balance > 0
                     else 1.0,
-                    "liquidation_price": 0,  # Updated below if available
+                    "position_qty": position_qty,
+                    "liquidation_price": liquidation_price,
                     "current_price": price,
                     "protected_positions": sum(
                         1
@@ -5055,18 +6383,9 @@ class AutonomousEngine:
                     ),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
-                    "can_withdraw": self._can_withdraw,  # Must be False per R9
-                    "duplicate_orders_24h": 0,
+                    "can_withdraw": self._can_withdraw,  # venue fact: True/UNKNOWN blocks R9
+                    "duplicate_orders_24h": duplicate_orders_24h,
                 }
-
-                # Attempt to get liquidation price from Binance positions
-                with contextlib.suppress(Exception):
-                    for p in self._last_account.get("positions", []):
-                        if p.get("symbol") == symbol and float(p.get("positionAmt", 0)) != 0:
-                            liq_price = float(p.get("liquidationPrice", 0))
-                            if liq_price > 0:
-                                risk_context["liquidation_price"] = liq_price
-                            break
 
                 # Evaluate all R0-R10 rules
                 risk_results = RiskRuleRegistry.evaluate_all(risk_context)
@@ -5075,6 +6394,10 @@ class AutonomousEngine:
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
                     print(f"[nearline] {symbol}: SKIP (risk rules failed: {failed_rules})")
+                    continue
+
+                if self._can_write and self._policy_error:
+                    print(f"[nearline] {symbol}: SKIP (signed risk policy unavailable: {self._policy_error})")
                     continue
 
                 # === 8. Approval with proper signing ===
@@ -5091,17 +6414,42 @@ class AutonomousEngine:
                 ).hexdigest()[:16]
                 import secrets
 
+                risk_policy_version = f"{self._policy_id_active or 'UNSIGNED'}:{self._policy_version or 'UNKNOWN'}"
+
                 nonce = secrets.token_hex(8)
 
                 approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
+                intent_id = f"intent-{symbol}-{int(time.time())}"
+                client_order_id = f"beidou-{symbol.lower()}-entry-{int(time.time())}"
+                correlation = CorrelationId(f"nearline-{int(time.time())}")
+                idempotency_key = f"idem-{symbol}-{int(time.time() / 300)}"
+                from beidou_safety.execution import OrderIntent
+
+                unsigned_intent = OrderIntent(
+                    intent_id=intent_id,
+                    account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
+                    instrument_id=instrument_id,
+                    side=side,
+                    order_type=OrderType.MARKET,
+                    quantity=Quantity(amount=str(position_size)),
+                    price=Price(amount=str(price)),
+                    time_in_force=TimeInForce.GTC,
+                    client_order_id=client_order_id,
+                    correlation_id=correlation,
+                    idempotency_key=idempotency_key,
+                    risk_approval_id=str(approval_id),
+                    risk_proposal_hash=proposal_hash,
+                )
+                intent_hash = order_intent_binding_hash(unsigned_intent)
                 approval_expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
                 signature = self._approval.issue_for_approved_risk(
                     approval_id,
                     risk_approved=risk_approved,
                     proposal_hash=proposal_hash,
+                    intent_hash=intent_hash,
                     account_snapshot_hash=account_hash,
                     risk_snapshot_hash=risk_hash,
-                    policy_version="2.0.0",
+                    policy_version=risk_policy_version,
                     nonce=nonce,
                     expires_at=approval_expires_at,
                 )
@@ -5111,9 +6459,10 @@ class AutonomousEngine:
                     approval_id,
                     signature=signature,
                     proposal_hash=proposal_hash,
+                    intent_hash=intent_hash,
                     account_snapshot_hash=account_hash,
                     risk_snapshot_hash=risk_hash,
-                    policy_version="2.0.0",
+                    policy_version=risk_policy_version,
                     nonce=nonce,
                     expires_at=approval_expires_at,
                     consume_nonce=False,
@@ -5132,10 +6481,8 @@ class AutonomousEngine:
                     print(f"[nearline] {symbol}: SKIP (risk not approved)")
                     continue
 
-                from beidou_safety.execution import OrderIntent
-
                 intent = OrderIntent(
-                    intent_id=f"intent-{symbol}-{int(time.time())}",
+                    intent_id=intent_id,
                     account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
                     instrument_id=instrument_id,
                     side=side,
@@ -5143,15 +6490,16 @@ class AutonomousEngine:
                     quantity=Quantity(amount=str(position_size)),
                     price=Price(amount=str(price)),
                     time_in_force=TimeInForce.GTC,
-                    client_order_id=f"beidou-{symbol.lower()}-entry-{int(time.time())}",
-                    correlation_id=CorrelationId(f"nearline-{int(time.time())}"),
-                    idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
+                    client_order_id=client_order_id,
+                    correlation_id=correlation,
+                    idempotency_key=idempotency_key,
                     risk_approval_id=str(approval_id),
                     risk_approval_signature=signature,
                     risk_proposal_hash=proposal_hash,
+                    risk_intent_hash=intent_hash,
                     risk_account_snapshot_hash=account_hash,
                     risk_snapshot_hash=risk_hash,
-                    risk_policy_version="2.0.0",
+                    risk_policy_version=risk_policy_version,
                     risk_nonce=nonce,
                     risk_expires_at=approval_expires_at,
                 )
@@ -5212,189 +6560,13 @@ class AutonomousEngine:
         - 保护单补建：为交易所存在但系统未保护的持仓创建止盈止损
         - 不修改已正确追踪的状态，只修复差异
         """
-        if not self._can_write:
-            return
-
-        try:
-            # 重置熔断器确保关键对账不被限流拦截
-            self._adapter.reset_circuit_breaker()
-
-            # Step 1: 获取交易所完整状态
-            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
-            if not ok or "positions" not in account:
-                print("[sync] SKIP: account API unavailable")
-                return
-
-            exchange_positions: dict[str, float] = {}
-            for p in account.get("positions", []):
-                amt = float(p.get("positionAmt", 0))
-                if abs(amt) > 0:
-                    exchange_positions[p["symbol"]] = abs(amt)
-
-            # 获取交易所挂单
-            exchange_order_ids: set[str] = set()
-            try:
-                open_orders, orders_ok = await self._api_async_safe(Endpoint.OPEN_ORDERS, signed=True)
-                if orders_ok and isinstance(open_orders, list):
-                    exchange_order_ids = {str(o["orderId"]) for o in open_orders}
-            except Exception:
-                logger.warning("[sync] Failed to query open orders during exchange state sync")
-
-            # Step 2: 系统状态 vs 交易所状态对比
-            system_positions: dict[str, float] = {}
-            for _pos_id, pp in self._protection.all_positions().items():
-                sym = str(pp.instrument_id)
-                if sym in system_positions:
-                    system_positions[sym] += pp.quantity
-                else:
-                    system_positions[sym] = pp.quantity
-
-            # Step 3: 清理幽灵持仓（系统有但交易所无）
-            ghost_cleaned = 0
-            for old_pid, old_pp in list(self._protection.all_positions().items()):
-                sym = str(old_pp.instrument_id)
-                if sym not in exchange_positions:
-                    self._protection.cancel_protection(old_pid)
-                    self._protection.remove_position(old_pid)
-                    self._position_entry_times.pop(old_pid, None)
-                    await self._cancel_algo_orders(old_pid, sym)
-                    ghost_cleaned += 1
-                    print(f"[sync] 🧹 Ghost position cleaned: {sym} (id={old_pid})")
-
-            # Step 4: 清理系统内已不存在的挂单（系统有但交易所无）
-            # BD-FIX (D3): 查询交易所订单真实状态，如果是 FILLED 则走 _process_fill 正常记账，
-            # 不再直接标记 quantity=0 的假 FILLED。
-            stale_order_ids = self._active_order_ids - exchange_order_ids
-            for oid in stale_order_ids:
-                self._active_order_ids.discard(oid)
-                symbol = self._order_symbols.pop(oid, None)
-                if symbol and self._can_write:
-                    try:
-                        order_result, query_ok = await self._api_async_safe(
-                            Endpoint.ORDER,
-                            signed=True,
-                            params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid},
-                        )
-                    except Exception as exc:
-                        logger.warning("[sync] stale order query failed for %s: %s", oid, exc)
-                        order_result, query_ok = None, False
-                    if query_ok and isinstance(order_result, dict) and "orderId" in order_result:
-                        status = order_result.get("status", "UNKNOWN")
-                        if status == "FILLED":
-                            await self._process_fill(oid, symbol, order_result)
-                            print(f"[sync] 📊 Stale order {oid} ({symbol}) FILLED — processed via _process_fill")
-                        else:
-                            self._store.save_order_state(
-                                oid,
-                                symbol,
-                                order_result.get("side", "UNKNOWN"),
-                                order_result.get("type", "MARKET"),
-                                str(order_result.get("origQty", "0")),
-                                order_result.get("price"),
-                                status,
-                            )
-                            print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
-                        continue
-                # 回退: 无法查询时保留 tracker 以便后续处理，标记为 UNKNOWN
-                self._order_trackers.pop(oid, None)
-                if symbol:
-                    self._store.save_order_state(oid, symbol, "UNKNOWN", "UNKNOWN", "0", None, "UNKNOWN")
-            if stale_order_ids:
-                print(f"[sync] 🧹 Stale orders cleaned: {len(stale_order_ids)}")
-
-            # Step 5: 对齐交易所新增/变更的持仓（交易所持仓 ≠ 系统持仓）
-            # 当交易所持仓量与系统记录不一致时，以交易所为准更新系统状态
-            # 这处理了近线订单成交后实时循环未及时追踪的场景
-            for sym, ex_qty in exchange_positions.items():
-                sys_qty = system_positions.get(sym, 0)
-                if abs(ex_qty - sys_qty) > 0.0001:
-                    # 交易所与系统不一致 — 以交易所为准
-                    diff = ex_qty - sys_qty
-                    direction = "increased" if diff > 0 else "decreased"
-                    print(
-                        f"[sync] 📊 {sym}: system={sys_qty:.4f} exchange={ex_qty:.4f} ({direction} by {abs(diff):.4f})"
-                    )
-
-                    # 如果系统没有该持仓，补建
-                    if sys_qty == 0 and ex_qty > 0:
-                        # 新持仓 — 需要创建保护
-                        features = await self._feed.async_get_kline_features(sym)
-                        entry_price = features.get("close", 0) if features else 0
-                        if entry_price <= 0:
-                            entry_price = float(
-                                next(
-                                    (
-                                        p.get("entryPrice", 0)
-                                        for p in account.get("positions", [])
-                                        if p.get("symbol") == sym
-                                    ),
-                                    0,
-                                )
-                            )
-                        if entry_price > 0:
-                            with contextlib.suppress(Exception):
-                                await self._ensure_exchange_position_protections()
-                    elif ex_qty == 0 and sys_qty > 0:
-                        # 已在 Step 3 处理；不要把已消失的 venue position
-                        # 当成数量变更继续推导。
-                        continue
-                    else:
-                        # 数量变化 — 以交易所为准调整系统追踪
-                        for old_pid, old_pp in list(self._protection.all_positions().items()):
-                            if str(old_pp.instrument_id) == sym:
-                                real_entry = float(
-                                    next(
-                                        (
-                                            p.get("entryPrice", 0)
-                                            for p in account.get("positions", [])
-                                            if p.get("symbol") == sym
-                                        ),
-                                        old_pp.entry_price,
-                                    )
-                                )
-                                if real_entry <= 0:
-                                    real_entry = old_pp.entry_price
-                                side = OrderSide.BUY if ex_qty > 0 else OrderSide.SELL
-                                new_pos_id = f"pos-synced-{sym}-{int(time.time())}"
-                                position_generation = self._next_position_generation(sym)
-                                old_trailing = old_pp.trailing_config
-                                self._remove_protection_with_cleanup(old_pid, sym)
-                                # 用自适应计算器重新生成保护参数
-                                kf = await self._feed.async_get_kline_features(sym)
-                                ac = AdaptiveProtectionCalculator.calculate(sym, real_entry, kf)
-                                self._require_protection_config(sym, ac)
-                                self._protection.create_protection(
-                                    position_id=new_pos_id,
-                                    instrument_id=InstrumentId(sym),
-                                    venue_id=VenueId("BINANCE"),
-                                    entry_price=real_entry,
-                                    quantity=abs(ex_qty),
-                                    side=side,
-                                    stop_loss_config=ac.stop_loss_config,
-                                    take_profit_config=ac.take_profit_config,
-                                    trailing_config=old_trailing,
-                                    owner_id=self._protection_owner_id,
-                                    position_generation=position_generation,
-                                    session_id=self._session_id,
-                                )
-                                self._position_entry_times[new_pos_id] = time.time()
-                                print(
-                                    f"[sync] 📊 {sym}: quantity adjusted {sys_qty:.4f}→{ex_qty:.4f} "
-                                    f"(pos {old_pid}→{new_pos_id})"
-                                )
-                                await self._cancel_algo_orders(old_pid, sym)
-                                break
-
-            # Step 6: 补建缺失的保护单
-            await self._ensure_exchange_position_protections()
-
-            # Step 7: 更新 _last_account 为最新数据，确保后续对账使用正确基准
-            self._last_account = account
-            if ghost_cleaned > 0 or stale_order_ids:
-                print(f"[sync] ✅ Self-healed: {ghost_cleaned} ghosts, {len(stale_order_ids)} stale orders")
-
-        except Exception as e:
-            print(f"[sync] Self-heal error: {e}")
+        # This legacy path mutates protections, order trackers and positions
+        # from a single exchange snapshot.  That is not a governed
+        # three-way reconciliation and can erase evidence after a timeout or
+        # partial user-stream gap.  Keep the symbol only for compatibility;
+        # callers must use ``_reconcile`` plus the explicit recovery state
+        # machine instead of invoking a self-healing mutation.
+        raise RuntimeError("EXCHANGE_STATE_MUTATION_RECOVERY_DISABLED")
 
     # --- Clock Domain: OFFLINE (every 1h) ---
 
@@ -5753,11 +6925,11 @@ class AutonomousEngine:
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
             else:
                 health["level"] = "OK"
-            # R9: 提款权限无条件禁止 — 异常开启时立即纠正并告警
+            # R9: venue 提款权限必须明确为 False。不要把真实的 True
+            # 改写成 False，否则状态/证据会出现安全假阳性。
             if self._can_withdraw:
                 health["level"] = "CRITICAL"
                 health["r9_violation"] = "WITHDRAW_ENABLED"
-                self._can_withdraw = False
                 self._alerts.send_incident(
                     AlertSeverity.HIGH,
                     "R9 violation: withdraw enabled on trading credential",
@@ -5769,6 +6941,40 @@ class AutonomousEngine:
             health["error"] = f"{type(exc).__name__}: {exc}"
         self._credential_health = health
         return health
+
+    def _apply_venue_account_permissions(self, account: Any) -> tuple[bool, str]:
+        """Apply explicit venue permissions and return the writable gate.
+
+        Account permissions are independent exchange facts. Missing or
+        malformed values remain UNKNOWN and therefore block risk-increasing
+        execution; a venue-enabled withdrawal permission is a hard P0 stop.
+        """
+
+        if not isinstance(account, dict):
+            self._venue_can_trade = None
+            self._venue_can_withdraw = None
+            self._can_trade = False
+            self._can_withdraw = True
+            return False, "ACCOUNT_PERMISSION_UNKNOWN"
+
+        venue_can_trade = account.get("canTrade")
+        venue_can_withdraw = account.get("canWithdraw")
+        if not isinstance(venue_can_trade, bool) or not isinstance(venue_can_withdraw, bool):
+            self._venue_can_trade = None
+            self._venue_can_withdraw = None
+            self._can_trade = False
+            self._can_withdraw = True
+            return False, "ACCOUNT_PERMISSION_UNKNOWN"
+
+        self._venue_can_trade = venue_can_trade
+        self._venue_can_withdraw = venue_can_withdraw
+        self._can_trade = venue_can_trade
+        self._can_withdraw = venue_can_withdraw
+        if venue_can_withdraw:
+            return False, "WITHDRAWAL_PERMISSION_ENABLED"
+        if not venue_can_trade:
+            return False, "VENUE_TRADING_DISABLED"
+        return True, "OK"
 
     # --- Main loop ---
 
@@ -5793,8 +6999,10 @@ class AutonomousEngine:
                 server_time_ok = True
                 break
             if attempt < 4:
-                wait_s = 1.0 * (2 ** attempt)
-                print(f"[beidou-autopilot] Server time check attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
+                wait_s = 1.0 * (2**attempt)
+                print(
+                    f"[beidou-autopilot] Server time check attempt {attempt + 1}/5 failed, retrying in {wait_s:.0f}s..."
+                )
                 await asyncio.sleep(wait_s)
         if not server_time_ok:
             print("[beidou-autopilot] FATAL: Cannot connect to exchange after 5 attempts")
@@ -5806,11 +7014,15 @@ class AutonomousEngine:
         account = None
         for attempt in range(5):
             account, acct_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
-            if acct_ok and isinstance(account, dict) and ("totalWalletBalance" in account or "assets" in account or "canTrade" in account):
+            if (
+                acct_ok
+                and isinstance(account, dict)
+                and ("totalWalletBalance" in account or "assets" in account or "canTrade" in account)
+            ):
                 break
             if attempt < 4:
-                wait_s = 1.0 * (2 ** attempt)
-                print(f"[beidou-autopilot] Account access attempt {attempt+1}/5 failed, retrying in {wait_s:.0f}s...")
+                wait_s = 1.0 * (2**attempt)
+                print(f"[beidou-autopilot] Account access attempt {attempt + 1}/5 failed, retrying in {wait_s:.0f}s...")
                 await asyncio.sleep(wait_s)
             account = None
         if account is None:
@@ -5818,6 +7030,19 @@ class AutonomousEngine:
             self._lifecycle.transition(ModuleState.FAILED)
             return
         self._last_account = account
+        permissions_ok, permission_reason = self._apply_venue_account_permissions(account)
+        if not permissions_ok and self._can_write:
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            self._record_execution_fact_failure(
+                permission_reason,
+                alert_title="Venue account permission blocked",
+                alert_category="credential",
+            )
+            print(f"[beidou-autopilot] FATAL: account permission gate: {permission_reason}")
+            self._lifecycle.transition(ModuleState.FAILED)
+            return
+        if not permissions_ok:
+            print(f"[beidou-autopilot] Account permission facts are not writable-safe: {permission_reason}")
         init_equity = float(account.get("totalWalletBalance", 0))
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
@@ -5830,6 +7055,13 @@ class AutonomousEngine:
             print("[beidou-autopilot] WebSocket market data stream active")
         else:
             print("[beidou-autopilot] WebSocket unavailable — falling back to REST polling")
+
+        # Writable environments require an authenticated user-data stream;
+        # market-data REST fallback must never become an execution fallback.
+        user_stream_ok = await self._start_user_stream()
+        if not user_stream_ok and self._can_write:
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            print("[beidou-autopilot] User data stream unavailable — writable authority remains blocked")
 
         # Clean stale NEW orders from previous sessions
         print("[beidou-autopilot] Cleaning stale orders from previous sessions...")
@@ -5866,13 +7098,26 @@ class AutonomousEngine:
                     self._order_trackers[oid] = tracker
                     self._active_order_ids.add(oid)
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
+                unowned = self._unowned_active_order_ids()
+                if self._can_write and unowned:
+                    self._control.execute_action(ControlAction.NO_NEW_RISK)
+                    self._record_execution_fact_failure(f"ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned)[:20])}")
+                    self._alerts.send_incident(
+                        AlertSeverity.CRITICAL,
+                        "Active order ownership unknown",
+                        f"Startup discovered venue orders without current-worker ownership: {sorted(unowned)[:20]}",
+                        category="execution",
+                    )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
         try:
-            exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
+            exchange_info, info_ok = await self._api_async_safe(Endpoint.EXCHANGE_INFO)
+            if not info_ok or not isinstance(exchange_info, dict):
+                print("[beidou-autopilot] Warning: exchangeInfo unavailable; precision cache empty")
+                exchange_info = {}
             if not hasattr(self, "_symbol_precision"):
                 self._symbol_precision = {}
             for s in exchange_info.get("symbols", []):
@@ -5902,9 +7147,11 @@ class AutonomousEngine:
         # worker's valid protection and create a naked position.  Recovery is
         # read-only here; only an explicitly owned, ACK-backed order may be
         # cancelled by a governed close/replacement path.
+        existing_algo_inventory: list[dict[str, Any]] | None = None
         try:
             existing_algos = await self._get_open_algo_inventory()
             if isinstance(existing_algos, list):
+                existing_algo_inventory = existing_algos
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
                 unowned_algo_ids = [
                     str(item.get("algoId"))
@@ -5932,11 +7179,19 @@ class AutonomousEngine:
                 account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
                 if not ok:
                     print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable)")
+                    await self._stop_user_stream()
+                    await self._feed.stop_ws()
+                    self._lifecycle.transition(ModuleState.DEGRADED)
                     return
             positions_list = account.get("positions", [])
+            durable_projection_ok = self._restore_durable_protection_projection(account, existing_algo_inventory)
+            if not durable_projection_ok:
+                print(
+                    "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"
+                )
             # Phase 1: 本地创建所有保护单
             pending_submissions: list[dict] = []
-            for p in positions_list:
+            for p in positions_list if durable_projection_ok else []:
                 amt = float(p.get("positionAmt", 0))
                 if amt == 0:
                     continue
@@ -6097,7 +7352,11 @@ class AutonomousEngine:
         # Initial reconciliation is read-only.  A mismatch or incomplete
         # projection closes the risk gate; state synchronization is a separate
         # explicitly authorized recovery workflow.
-        recon_ok = await self._reconcile()
+        try:
+            recon_ok = await asyncio.wait_for(self._reconcile(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[beidou-autopilot] Initial reconciliation timed out — keeping risk gate closed")
+            recon_ok = False
         self._last_recon = time.time()
         print(
             "[beidou-autopilot] Initial reconciliation verified"
@@ -6105,10 +7364,26 @@ class AutonomousEngine:
             else "[beidou-autopilot] Initial reconciliation blocked ACTIVE"
         )
 
-        # Phase 5b: 交易所残留持仓保护补充
-        await self._ensure_exchange_position_protections()
+        # Phase 5b: 交易所残留持仓保护补充；超时保持风险门关闭。
+        try:
+            await asyncio.wait_for(self._ensure_exchange_position_protections(), timeout=15.0)
+        except asyncio.TimeoutError:
+            print("[beidou-autopilot] Position protection recovery timed out — keeping risk gate closed")
 
-        # BD-T14: 对账未完成 → 不进入 ACTIVE，保持在 DEGRADED
+        # Protection recovery happens after the first account reconciliation,
+        # so the reconciliation result alone cannot authorize ACTIVE: it may
+        # have observed a position before the venue-backed SL/TP ACKs existed.
+        # Re-evaluate the durable coverage gate before transitioning lifecycle;
+        # any UNKNOWN/pending/mismatched protection keeps the engine degraded.
+        durable_ok, durable_reason, durable_evidence = self._durable_fact_status()
+        if not durable_ok:
+            recon_ok = False
+            self._record_execution_fact_failure(
+                f"STARTUP_DURABLE_FACT_GATE:{durable_reason}:{json.dumps(durable_evidence, sort_keys=True, default=str)[:500]}"
+            )
+
+        # BD-T14: 对账未完成时，所有写环境都保持 DEGRADED；Testnet
+        # 不能把“持续重试”当作账户/持仓事实已验证，更不能进入 ACTIVE。
         if not recon_ok:
             self._lifecycle.transition(ModuleState.DEGRADED)
             print("[beidou-autopilot] State: DEGRADED (reconciliation not verified)")
@@ -6145,6 +7420,7 @@ class AutonomousEngine:
 
         self._running = True
         self._last_realtime = time.time()
+        self._last_realtime_mono = time.monotonic()
         self._last_recon = time.time()
         print("[beidou-autopilot] ========================================")
         print("[beidou-autopilot] Engine running. Press Ctrl+C to stop.")
@@ -6155,7 +7431,7 @@ class AutonomousEngine:
         async def _realtime_loop() -> None:
             while self._running:
                 try:
-                    if time.time() - self._last_realtime >= 5:
+                    if self._realtime_age_seconds() >= 5:
                         await self._realtime_tick()
                 except Exception as exc:
                     self._error_count += 1
@@ -6228,8 +7504,10 @@ class AutonomousEngine:
         print("[beidou-autopilot] 1. NO_NEW_RISK")
 
         # 2. Cancel pending orders (BD-FIX F22: 使用 _order_symbols 精确查找)
+        owned_active_order_ids = self._owned_active_order_ids()
+        unowned_active_order_ids = self._unowned_active_order_ids()
         if self._can_write:
-            for order_id in list(self._active_order_ids):
+            for order_id in sorted(owned_active_order_ids):
                 symbol = self._order_symbols.get(order_id, "")
                 if not symbol:
                     continue
@@ -6245,7 +7523,24 @@ class AutonomousEngine:
                     )
                 except Exception as e:
                     print(f"[shutdown] Failed to cancel order {order_id}: {e}")
-        print(f"[beidou-autopilot] 2. Cancelled {len(self._active_order_ids)} pending orders")
+            if unowned_active_order_ids:
+                # Never broaden cancellation to orders whose owner cannot be
+                # proven.  Keep the account in NO_NEW_RISK and surface the
+                # exact IDs for operator-governed reconciliation.
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                self._record_execution_fact_failure(
+                    f"SHUTDOWN_ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned_active_order_ids)[:20])}"
+                )
+                self._alerts.send_incident(
+                    AlertSeverity.CRITICAL,
+                    "Shutdown left unowned active orders untouched",
+                    f"Manual/other-worker order IDs require reconciliation: {sorted(unowned_active_order_ids)[:20]}",
+                    category="execution",
+                )
+        print(
+            f"[beidou-autopilot] 2. Cancelled {len(owned_active_order_ids)} owned pending orders; "
+            f"left {len(unowned_active_order_ids)} unowned orders untouched"
+        )
 
         # 2b. BD-FIX: 停止 WebSocket 连接
         try:
@@ -6253,6 +7548,12 @@ class AutonomousEngine:
             print("[beidou-autopilot] 2b. WebSocket stopped")
         except Exception as e:
             print(f"[shutdown] WS stop error: {e}")
+
+        try:
+            await self._stop_user_stream()
+            print("[beidou-autopilot] 2c. User data stream stopped")
+        except Exception as e:
+            print(f"[shutdown] User data stream stop error: {e}")
 
         # 3. Save checkpoint
         self._mapek.save_checkpoint(

@@ -11,7 +11,12 @@ from .registry import inspect_engine_wiring
 
 
 async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict[str, Any]:
-    """使用真实公共行情执行 Alpha DAG，不提交 OrderIntent。"""
+    """使用真实公共行情执行唯一 StrategyKernel，不提交 OrderIntent。
+
+    ``_alpha_graph`` 仍可出现在诊断注册表中，但不能成为运行时探针或
+    下单前决策的第二条执行路径。探针必须证明 typed graph 已执行，即使
+    最终结果是安全的 NO_ACTION/VETO。
+    """
     symbol = symbols[0]
     started = time.perf_counter()
     try:
@@ -47,26 +52,55 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
                 "pnl_pct": 0.0,
             },
         }
-        graph = engine._alpha_graph
-        signals: list[Any] = []
-        component_results: dict[str, dict[str, Any]] = {}
-        for component_id in graph.topological_order():
-            component = graph._components[component_id]
-            signal = await component.generate(context)
-            signals.append(signal)
-            raw_direction = getattr(signal, "direction", "UNKNOWN")
-            component_results[component_id] = {
-                "direction": str(getattr(raw_direction, "value", raw_direction)),
-                "strength": float(getattr(signal, "strength", 0.0)),
+        kernel = getattr(engine, "_strategy_kernel", None)
+        evaluate = getattr(kernel, "evaluate", None)
+        if not callable(evaluate):
+            raise RuntimeError("StrategyKernel.evaluate 未接线")
+        kernel_result = await evaluate(context)
+        if not isinstance(kernel_result, dict) or kernel_result.get("kernel") != "typed_graph":
+            raise RuntimeError("策略探针未通过唯一 typed StrategyKernel")
+        compute_hash = getattr(kernel, "compute_proposal_hash", None)
+        if not callable(compute_hash):
+            raise RuntimeError("StrategyKernel.compute_proposal_hash 未接线")
+
+        proposal = kernel_result.get("proposal")
+        graph_hash = str(kernel_result.get("graph_hash", ""))
+        if not graph_hash:
+            raise RuntimeError("typed graph 缺少 graph hash")
+
+        # VETO/NO_ACTION 也是一次成功的、可审计的策略执行；用稳定的
+        # no-action 证据代替空 hash，避免把安全阻断误报成探针故障。
+        proposal_evidence: Any = proposal
+        if proposal_evidence is None:
+            proposal_evidence = {
+                "status": "NO_ACTION",
+                "reason": str(kernel_result.get("blocked_by", "typed_graph_no_proposal")),
+                "instrument_id": str(context["instrument_id"]),
+                "venue_id": str(context["venue_id"]),
+                "graph_hash": graph_hash,
             }
-        proposal = max(signals, key=lambda item: float(getattr(item, "strength", 0.0)))
-        proposal_hash = engine._strategy_kernel.compute_proposal_hash(proposal)
-        if not proposal_hash or len(component_results) != 8:
-            raise RuntimeError("策略探针未生成完整 8 节点证据或 proposal hash")
+        proposal_hash = compute_hash(proposal_evidence)
+        if not proposal_hash:
+            raise RuntimeError("策略探针未生成 proposal hash")
+
+        component_results: dict[str, dict[str, Any]] = {}
+        typed_graph = getattr(kernel, "_typed_graph", None)
+        order_fn = getattr(typed_graph, "topological_order", None)
+        if callable(order_fn):
+            nodes = getattr(typed_graph, "_nodes", {})
+            for component_id in order_fn():
+                node = nodes.get(component_id)
+                node_type = getattr(getattr(node, "node_type", None), "value", "UNKNOWN")
+                component_results[component_id] = {"node_type": str(node_type)}
+        if not component_results:
+            raise RuntimeError("typed graph 未提供节点执行证据")
         return {
             "ok": True,
             "symbol": symbol,
             "proposal_hash": proposal_hash,
+            "kernel": "typed_graph",
+            "graph_hash": graph_hash,
+            "blocked_by": kernel_result.get("blocked_by", ""),
             "components": component_results,
             "feature_count": len(features),
             "duration_ms": round((time.perf_counter() - started) * 1000, 3),
@@ -279,7 +313,15 @@ def collect_runtime_checks(
         )
     )
 
-    realtime_age = now - float(getattr(engine, "_last_realtime", 0.0))
+    last_realtime_mono = getattr(engine, "_last_realtime_mono", None)
+    if isinstance(last_realtime_mono, (int, float)):
+        realtime_age = max(0.0, time.monotonic() - float(last_realtime_mono))
+        heartbeat_clock = "monotonic"
+    else:
+        # Compatibility for diagnostic/test shells created without the
+        # monotonic field; real engine instances always provide it.
+        realtime_age = max(0.0, now - float(getattr(engine, "_last_realtime", 0.0)))
+        heartbeat_clock = "wall_clock_compatibility"
     realtime_ok = realtime_age <= 60.0
     # 启动阶段（_last_realtime 被 supervisor 重置为 0），允许等待首个 tick
     if resume_authorized:
@@ -295,7 +337,131 @@ def collect_runtime_checks(
             status=rt_status,
             severity=rt_severity,
             message=f"最近实时 tick {realtime_age:.1f}s 前",
-            evidence={"age_seconds": round(realtime_age, 3), "threshold_seconds": 60.0},
+            evidence={
+                "age_seconds": round(realtime_age, 3),
+                "threshold_seconds": 60.0,
+                "clock": heartbeat_clock,
+            },
+        )
+    )
+
+    # A recent timestamp alone is not proof that the executor is alive: the
+    # timestamp can survive a stalled task or be initialized before startup.
+    # Once RESUME has been authorized, a stopped writable engine is a P0
+    # authority failure and must revoke readiness immediately.
+    engine_running = bool(getattr(engine, "_running", False))
+    loop_status = (
+        CheckStatus.PASS if engine_running else (CheckStatus.WARN if not resume_authorized else CheckStatus.FAIL)
+    )
+    loop_severity = CheckSeverity.P1 if not resume_authorized else CheckSeverity.P0
+    checks.append(
+        CheckResult(
+            check_id="runtime.health.engine_loop",
+            name="引擎实时循环状态",
+            status=loop_status,
+            severity=loop_severity,
+            message="引擎实时循环运行中" if engine_running else "引擎实时循环未运行，不能保持交易授权",
+            evidence={"running": engine_running, "resume_authorized": resume_authorized},
+        )
+    )
+
+    # The engine's three-way reconciliation result is the authoritative
+    # position/order fact chain.  Do not infer readiness from a fresh account
+    # snapshot or from the monitoring projection below: a process can have a
+    # healthy REST call while its durable system, venue and user-stream facts
+    # disagree (or while the event stream is missing).  The supervisor uses
+    # this check during startup and every runtime cycle, so the old
+    # ``/health=HEALTHY + RESUME`` false certificate cannot recur.
+    reconciliation = getattr(engine, "_last_reconciliation_result", None)
+    reconciliation_status = str(
+        getattr(getattr(reconciliation, "status", None), "value", getattr(reconciliation, "status", "UNKNOWN"))
+    ).upper()
+    checked_at = getattr(reconciliation, "checked_at", None)
+    reconciliation_age: float | None = None
+    if checked_at is not None:
+        try:
+            if getattr(checked_at, "tzinfo", None) is None:
+                checked_at = checked_at.replace(tzinfo=timezone.utc)
+            reconciliation_age = max(0.0, time.time() - float(checked_at.timestamp()))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            reconciliation_age = None
+    reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= 60.0
+    reconciliation_ok = (
+        reconciliation is not None
+        and bool(getattr(reconciliation, "matched", False))
+        and reconciliation_status == "MATCHED"
+        and reconciliation_fresh
+    )
+    if reconciliation_ok:
+        recon_status = CheckStatus.PASS
+        recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
+    elif reconciliation is None:
+        recon_status = CheckStatus.FAIL
+        recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
+    else:
+        recon_status = CheckStatus.FAIL
+        recon_message = (
+            f"三方对账不可授权: status={reconciliation_status}, "
+            f"matched={bool(getattr(reconciliation, 'matched', False))}, "
+            f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
+        )
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.reconciliation_authority",
+            name="权威三方对账事实",
+            status=recon_status,
+            severity=CheckSeverity.P0,
+            message=recon_message,
+            evidence={
+                "status": reconciliation_status,
+                "matched": bool(getattr(reconciliation, "matched", False)) if reconciliation else False,
+                "age_seconds": round(reconciliation_age, 3) if reconciliation_age is not None else None,
+                "threshold_seconds": 60.0,
+                "differences": list(getattr(reconciliation, "differences", []) or [])[:20]
+                if reconciliation is not None
+                else ["NO_RECONCILIATION_RESULT"],
+                "source": "engine._last_reconciliation_result",
+            },
+        )
+    )
+
+    # A durable projector or REST snapshot cannot prove that this process is
+    # still receiving venue user-data events.  Writable engines therefore
+    # require an explicit transport status plus a recent complete event fact;
+    # a missing runtime boundary is a P0 UNKNOWN even before RESUME.
+    can_write = bool(getattr(engine, "_can_write", False))
+    user_stream_ready = False
+    user_stream_evidence: dict[str, Any] = {"required": can_write}
+    readiness_fn = getattr(engine, "_user_stream_readiness", None)
+    if callable(readiness_fn):
+        try:
+            user_stream_ready, user_stream_evidence = readiness_fn()
+        except Exception as exc:
+            user_stream_evidence = {"required": can_write, "error": type(exc).__name__}
+    elif can_write:
+        user_stream_evidence = {"required": True, "status": "UNKNOWN", "reason": "runtime_boundary_missing"}
+    else:
+        user_stream_ready = True
+    if can_write:
+        user_stream_status = CheckStatus.PASS if user_stream_ready else CheckStatus.FAIL
+        user_stream_severity = CheckSeverity.P0
+        user_stream_message = (
+            "用户数据流已连接且有新鲜完整事实"
+            if user_stream_ready
+            else "用户数据流未形成当前进程的可验证新鲜事实，禁止交易授权"
+        )
+    else:
+        user_stream_status = CheckStatus.PASS
+        user_stream_severity = CheckSeverity.P1
+        user_stream_message = "写能力关闭；用户数据流不参与本模式授权"
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.user_stream",
+            name="用户数据流事实",
+            status=user_stream_status,
+            severity=user_stream_severity,
+            message=user_stream_message,
+            evidence=user_stream_evidence,
         )
     )
 
@@ -355,4 +521,58 @@ def collect_runtime_checks(
             evidence={"incidents": incidents},
         )
     )
+
+    # Webhook delivery is part of the unattended safety certificate when the
+    # dispatcher exposes durable delivery state.  Older test doubles without
+    # this method are left untouched; the production dispatcher must not hide
+    # CRITICAL/LOCKDOWN delivery UNKNOWN or dead-letter states.
+    delivery_getter = getattr(getattr(engine, "_alerts", None), "get_delivery_health", None)
+    if callable(delivery_getter):
+        try:
+            delivery = delivery_getter()
+            critical_pending = int(delivery.get("critical_pending", 0))
+            dead_letter = int(delivery.get("dead_letter", 0))
+            unknown = int(delivery.get("unknown", 0))
+            pending = int(delivery.get("pending", 0))
+            configured = bool(delivery.get("configured", False))
+            if critical_pending or dead_letter or unknown:
+                delivery_status = CheckStatus.FAIL
+                delivery_severity = CheckSeverity.P0
+                delivery_message = (
+                    f"告警送达不可证明: critical_pending={critical_pending}, "
+                    f"dead_letter={dead_letter}, unknown={unknown}"
+                )
+            elif pending:
+                delivery_status = CheckStatus.WARN
+                delivery_severity = CheckSeverity.P1
+                delivery_message = f"告警仍在重试队列: pending={pending}"
+            elif not configured:
+                delivery_status = CheckStatus.WARN
+                delivery_severity = CheckSeverity.P1
+                delivery_message = "未配置外部 webhook；仅本地告警文件可用"
+            else:
+                delivery_status = CheckStatus.PASS
+                delivery_severity = CheckSeverity.P1
+                delivery_message = "告警 webhook 当前无待投递事实"
+            checks.append(
+                CheckResult(
+                    check_id="runtime.health.alert_delivery",
+                    name="告警送达状态",
+                    status=delivery_status,
+                    severity=delivery_severity,
+                    message=delivery_message,
+                    evidence=delivery,
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                CheckResult(
+                    check_id="runtime.health.alert_delivery",
+                    name="告警送达状态",
+                    status=CheckStatus.FAIL,
+                    severity=CheckSeverity.P0,
+                    message=f"告警送达状态查询失败: {type(exc).__name__}",
+                    evidence={"error": type(exc).__name__},
+                )
+            )
     return checks, error_count

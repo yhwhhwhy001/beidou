@@ -36,7 +36,15 @@ class CheckResult:
 
     @property
     def is_blocking(self) -> bool:
-        return self.status == CheckStatus.FAIL and self.severity in {CheckSeverity.P0, CheckSeverity.P1}
+        # UNKNOWN is an absent fact, not a successful check.  Treating a P0/P1
+        # UNKNOWN as non-blocking lets a monitoring adapter silently turn an
+        # account, protection, reconciliation, or liveness query failure into
+        # a RESUME/READY certificate.  Only low-severity diagnostic UNKNOWNs
+        # may remain non-blocking.
+        return self.status in {CheckStatus.FAIL, CheckStatus.UNKNOWN} and self.severity in {
+            CheckSeverity.P0,
+            CheckSeverity.P1,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

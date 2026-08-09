@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -120,13 +121,37 @@ class PaperShadowRunner:
         self,
         predicted_direction: str,
         predicted_strength: float,
-        actual_direction: str,
-        actual_strength: float,
+        actual_direction: str | None = None,
+        actual_strength: float | None = None,
         estimated_cost_bps: float = 0.0,
         actual_cost_bps: float = 0.0,
+        *,
+        decision_timestamp: float | None = None,
+        outcome_source: str | None = None,
+        outcome_available_at: float | None = None,
     ) -> None:
-        """记录单次 tick 的预测与实际比较。"""
+        """Record a prediction and optional independently available outcome.
+
+        Direction error and ``total_executed`` are outcome metrics, not fill
+        metrics.  If an outcome is supplied it must carry a non-empty source
+        and a timestamp strictly after the decision; otherwise the call is
+        rejected instead of allowing a same-tick self-label.
+        """
         self.metrics.total_ticks += 1
+        decision_at = time.time() if decision_timestamp is None else float(decision_timestamp)
+        if not math.isfinite(decision_at):
+            raise ValueError("decision_timestamp must be finite")
+        if actual_direction is not None or actual_strength is not None:
+            if actual_direction is None or actual_strength is None:
+                raise ValueError("INDEPENDENT_FORWARD_LABEL_REQUIRED")
+            if not str(outcome_source or "").strip():
+                raise ValueError("INDEPENDENT_FORWARD_LABEL_SOURCE_REQUIRED")
+            try:
+                available_at = float(outcome_available_at)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("forward outcome timestamp/strength is invalid") from exc
+            if not math.isfinite(available_at) or available_at <= decision_at:
+                raise ValueError("forward outcome must be available after the decision")
 
         if predicted_direction != "NO_ACTION":
             self.metrics.total_signals += 1
@@ -138,43 +163,111 @@ class PaperShadowRunner:
                     "strength": predicted_strength,
                     "cost_bps": estimated_cost_bps,
                     "tick": self.metrics.total_ticks,
+                    "decision_timestamp": decision_at,
+                    "outcome_recorded": False,
                 }
             )
 
-            # 与实际比较
-            if actual_direction != "NO_ACTION":
-                self.metrics.total_executed += 1
-                self._actuals.append(
-                    {
-                        "direction": actual_direction,
-                        "strength": actual_strength,
-                        "cost_bps": actual_cost_bps,
-                        "tick": self.metrics.total_ticks,
-                    }
+            if actual_direction is not None or actual_strength is not None:
+                self.record_forward_outcome(
+                    tick=self.metrics.total_ticks,
+                    actual_direction=actual_direction,
+                    actual_strength=actual_strength,
+                    outcome_source=outcome_source,
+                    outcome_available_at=outcome_available_at,
                 )
-            else:
-                self.metrics.total_rejected += 1
 
-            # 计算偏差
-            if predicted_direction == actual_direction:
-                strength_err = abs(predicted_strength - actual_strength)
-            else:
-                strength_err = abs(predicted_strength + actual_strength)
+        # A fill/cost observation is independent of a future directional label.
+        self._record_cost_observation(estimated_cost_bps, actual_cost_bps)
 
-            # 更新 MAE (指数移动平均)
-            n = self.metrics.total_signals
-            self.metrics.prediction_vs_simulation_mae = (
-                self.metrics.prediction_vs_simulation_mae * (n - 1) + strength_err * 100
-            ) / n
+    def record_forward_outcome(
+        self,
+        *,
+        tick: int,
+        actual_direction: str | None,
+        actual_strength: float | None,
+        outcome_source: str | None,
+        outcome_available_at: float | None,
+    ) -> None:
+        """Attach one independently observed future-window label to a tick."""
 
-            # 成本偏差
-            if estimated_cost_bps > 0 and actual_cost_bps > 0:
-                cost_err = abs(estimated_cost_bps - actual_cost_bps) / estimated_cost_bps * 100
-                self.metrics.cost_observations += 1
-                n_cost = self.metrics.cost_observations
-                self.metrics.cost_estimated_vs_actual_mae = (
-                    self.metrics.cost_estimated_vs_actual_mae * (n_cost - 1) + cost_err
-                ) / n_cost
+        if not isinstance(tick, int) or tick <= 0:
+            raise ValueError("forward outcome tick must be a positive integer")
+        if actual_direction is None or actual_strength is None:
+            raise ValueError("INDEPENDENT_FORWARD_LABEL_REQUIRED")
+        source = str(outcome_source or "").strip()
+        if not source:
+            raise ValueError("INDEPENDENT_FORWARD_LABEL_SOURCE_REQUIRED")
+        try:
+            available_at = float(outcome_available_at)
+            strength = float(actual_strength)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("forward outcome timestamp/strength is invalid") from exc
+        if not math.isfinite(available_at) or not math.isfinite(strength):
+            raise ValueError("forward outcome timestamp/strength must be finite")
+
+        prediction = next((item for item in self._predictions if item.get("tick") == tick), None)
+        if prediction is None:
+            raise ValueError(f"unknown prediction tick: {tick}")
+        if prediction.get("outcome_recorded"):
+            raise ValueError(f"forward outcome already recorded for tick: {tick}")
+        decision_at = float(prediction["decision_timestamp"])
+        if available_at <= decision_at:
+            raise ValueError("forward outcome must be available after the decision")
+
+        direction = str(actual_direction).strip().upper()
+        if not direction:
+            raise ValueError("forward outcome direction is required")
+        prediction["outcome_recorded"] = True
+        prediction["outcome_source"] = source
+        prediction["outcome_available_at"] = available_at
+        if direction != "NO_ACTION":
+            self.metrics.total_executed += 1
+            self._actuals.append(
+                {
+                    "direction": direction,
+                    "strength": strength,
+                    "tick": tick,
+                    "outcome_source": source,
+                    "outcome_available_at": available_at,
+                }
+            )
+        else:
+            self.metrics.total_rejected += 1
+
+        predicted_direction = str(prediction["direction"])
+        predicted_strength = float(prediction["strength"])
+        strength_err = (
+            abs(predicted_strength - strength)
+            if predicted_direction == direction
+            else abs(predicted_strength + strength)
+        )
+        labeled_count = sum(1 for item in self._predictions if item.get("outcome_recorded"))
+        self.metrics.prediction_vs_simulation_mae = (
+            self.metrics.prediction_vs_simulation_mae * (labeled_count - 1) + strength_err * 100
+        ) / labeled_count
+
+    def record_execution_observation(self, estimated_cost_bps: float, actual_cost_bps: float) -> None:
+        """Record a fill/cost fact without inventing a future signal label.
+
+        The execution engine observes a simulated fill at decision time.  It
+        cannot know the independent forward outcome yet, so it must not call
+        :meth:`record_tick` with ``actual_direction=predicted_direction``.
+        Such a self-label would make the prediction MAE tautologically zero
+        and could falsely satisfy the Paper→Testnet gate.
+        """
+
+        self.metrics.total_ticks += 1
+        self._record_cost_observation(estimated_cost_bps, actual_cost_bps)
+
+    def _record_cost_observation(self, estimated_cost_bps: float, actual_cost_bps: float) -> None:
+        if estimated_cost_bps > 0 and actual_cost_bps > 0:
+            cost_err = abs(estimated_cost_bps - actual_cost_bps) / estimated_cost_bps * 100
+            self.metrics.cost_observations += 1
+            n_cost = self.metrics.cost_observations
+            self.metrics.cost_estimated_vs_actual_mae = (
+                self.metrics.cost_estimated_vs_actual_mae * (n_cost - 1) + cost_err
+            ) / n_cost
 
     def record_incident(self, level: str) -> None:
         """记录事件。"""

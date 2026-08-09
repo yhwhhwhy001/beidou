@@ -112,8 +112,28 @@ class IntentOutbox:
                 );
                 CREATE INDEX IF NOT EXISTS idx_intent_outbox_state
                     ON intent_outbox(state, created_at);
+                CREATE TABLE IF NOT EXISTS risk_approvals (
+                    approval_id TEXT PRIMARY KEY NOT NULL,
+                    intent_id TEXT UNIQUE NOT NULL,
+                    decision TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    proposal_hash TEXT NOT NULL,
+                    account_snapshot_hash TEXT NOT NULL,
+                    risk_snapshot_hash TEXT NOT NULL,
+                    intent_hash TEXT NOT NULL DEFAULT '',
+                    policy_version TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_risk_approvals_intent
+                    ON risk_approvals(intent_id);
                 """
             )
+            approval_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(risk_approvals)").fetchall()}
+            if "intent_hash" not in approval_columns:
+                conn.execute("ALTER TABLE risk_approvals ADD COLUMN intent_hash TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def _serialize_intent(intent: OrderIntent, key: str) -> str:
@@ -140,6 +160,7 @@ class IntentOutbox:
                 "emergency_policy_signed": intent.emergency_policy_signed,
                 "risk_approval_signature": intent.risk_approval_signature,
                 "risk_proposal_hash": intent.risk_proposal_hash,
+                "risk_intent_hash": intent.risk_intent_hash,
                 "risk_account_snapshot_hash": intent.risk_account_snapshot_hash,
                 "risk_snapshot_hash": intent.risk_snapshot_hash,
                 "risk_policy_version": intent.risk_policy_version,
@@ -188,6 +209,7 @@ class IntentOutbox:
             emergency_policy_signed=bool(data.get("emergency_policy_signed", False)),
             risk_approval_signature=data.get("risk_approval_signature"),
             risk_proposal_hash=str(data.get("risk_proposal_hash", "")),
+            risk_intent_hash=str(data.get("risk_intent_hash", "")),
             risk_account_snapshot_hash=str(data.get("risk_account_snapshot_hash", "")),
             risk_snapshot_hash=str(data.get("risk_snapshot_hash", "")),
             risk_policy_version=str(data.get("risk_policy_version", "")),
@@ -230,6 +252,39 @@ class IntentOutbox:
     def dead_letter_ids(self) -> list[str]:
         return list(self._dead_letter_ids)
 
+    def duplicate_order_count_24h(self) -> int | None:
+        """Return durable duplicate-identity count for the last 24 hours.
+
+        The in-memory compatibility queue is not an authoritative execution
+        source, so it deliberately returns ``None``.  Persistent SQLite rows
+        must carry both a client order ID and an idempotency key; malformed or
+        unidentified rows remain UNKNOWN rather than being counted as zero.
+        """
+
+        if not self._db_path:
+            return None
+        with self._db_lock, closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT payload FROM intent_outbox "
+                "WHERE julianday(created_at) >= julianday('now', '-24 hours') ORDER BY created_at"
+            ).fetchall()
+        client_ids: list[str] = []
+        idempotency_keys: list[str] = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload"]))
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                return None
+            if not isinstance(payload, dict):
+                return None
+            client_order_id = str(payload.get("client_order_id") or "")
+            idempotency_key = str(payload.get("idempotency_key") or "")
+            if not client_order_id or not idempotency_key:
+                return None
+            client_ids.append(client_order_id)
+            idempotency_keys.append(idempotency_key)
+        return max(len(client_ids) - len(set(client_ids)), len(idempotency_keys) - len(set(idempotency_keys)))
+
     @property
     def stats(self) -> dict:
         if self._db_path:
@@ -247,7 +302,15 @@ class IntentOutbox:
                     state_counts.get(state.value, 0)
                     for state in (OutboxState.PENDING, OutboxState.SENDING, OutboxState.UNKNOWN)
                 ),
+                # Readiness/reconciliation consumers must be able to see
+                # UNKNOWN/DEAD_LETTER explicitly; a single pending_count is
+                # insufficient to distinguish a recoverable queue from an
+                # ambiguous execution fact.
+                "state_counts": state_counts,
             }
+        state_counts: dict[str, int] = {}
+        for state in self._states.values():
+            state_counts[state.value] = state_counts.get(state.value, 0) + 1
         return {
             "outbox_size": len(self._memory_outbox),
             "inbox_size": len(self._inbox),
@@ -256,6 +319,7 @@ class IntentOutbox:
             "total_committed": self._total_committed,
             "total_acked": self._total_acked,
             "pending_count": self.pending_count(),
+            "state_counts": state_counts,
         }
 
     def commit(self, intent: OrderIntent) -> str:
@@ -265,6 +329,49 @@ class IntentOutbox:
             payload = self._serialize_intent(intent, key)
             try:
                 with self._db_lock, closing(self._connect()) as conn, conn:
+                    approval_id = str(intent.risk_approval_id or "")
+                    signature = str(intent.risk_approval_signature or "")
+                    if bool(approval_id) != bool(signature):
+                        raise ValueError("RISK_APPROVAL_ENVELOPE_INCOMPLETE")
+                    if approval_id and signature:
+                        if intent.risk_expires_at is None:
+                            raise ValueError("Risk approval expiry is required for durable intent commit")
+                        required_approval_fields = {
+                            "risk_proposal_hash": intent.risk_proposal_hash,
+                            "risk_intent_hash": intent.risk_intent_hash,
+                            "risk_account_snapshot_hash": intent.risk_account_snapshot_hash,
+                            "risk_snapshot_hash": intent.risk_snapshot_hash,
+                            "risk_policy_version": intent.risk_policy_version,
+                            "risk_nonce": intent.risk_nonce,
+                        }
+                        missing = [name for name, value in required_approval_fields.items() if not str(value or "")]
+                        if missing:
+                            raise ValueError(f"RISK_APPROVAL_FIELDS_REQUIRED: {','.join(missing)}")
+                        # Approval and intent are committed in this same SQLite
+                        # transaction.  The signing key never enters the DB;
+                        # only the signed envelope needed for restart
+                        # verification is durable.
+                        conn.execute(
+                            "INSERT INTO risk_approvals "
+                            "(approval_id,intent_id,decision,signature,proposal_hash,account_snapshot_hash,"
+                            "risk_snapshot_hash,intent_hash,policy_version,nonce,expires_at,created_at,updated_at) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                approval_id,
+                                intent.intent_id,
+                                "APPROVED",
+                                signature,
+                                str(intent.risk_proposal_hash),
+                                str(intent.risk_account_snapshot_hash),
+                                str(intent.risk_snapshot_hash),
+                                str(intent.risk_intent_hash),
+                                str(intent.risk_policy_version),
+                                str(intent.risk_nonce),
+                                float(intent.risk_expires_at),
+                                now,
+                                now,
+                            ),
+                        )
                     conn.execute(
                         "INSERT INTO intent_outbox "
                         "(idempotency_key,intent_id,payload,state,created_at,updated_at) VALUES (?,?,?,?,?,?)",
@@ -280,6 +387,31 @@ class IntentOutbox:
         self._total_committed += 1
         self._groom()
         return key
+
+    def restore_pending_approvals(self) -> list[dict[str, object]]:
+        """Restore only approvals attached to unresolved durable intents.
+
+        ACKED/FAILED approvals are intentionally excluded: an approval is
+        single-use and a restart must not make a completed intent reusable.
+        The returned envelope contains no signing key.
+        """
+
+        if not self._db_path:
+            return []
+        with self._db_lock, closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT r.approval_id,r.intent_id,r.decision,r.signature,r.proposal_hash,"
+                "r.account_snapshot_hash,r.risk_snapshot_hash,r.intent_hash,r.policy_version,r.nonce,r.expires_at "
+                "FROM risk_approvals AS r JOIN intent_outbox AS i ON i.intent_id=r.intent_id "
+                "WHERE i.state IN (?, ?, ?) AND r.decision=? ORDER BY r.created_at",
+                (
+                    OutboxState.PENDING.value,
+                    OutboxState.SENDING.value,
+                    OutboxState.UNKNOWN.value,
+                    "APPROVED",
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def _groom(self) -> None:
         """清理内存：移除已 ack 的过期条目，防止内存无限增长。
@@ -387,15 +519,36 @@ class IntentOutbox:
         self._processed.add(intent_id)
         if idempotency_key:
             self._processed.add(idempotency_key)
+        key = idempotency_key
+        if not key:
+            for item in self._memory_outbox:
+                if item.intent_id == intent_id:
+                    key = item.idempotency_key or self._hash(item)
+                    break
         self._memory_outbox = [i for i in self._memory_outbox if i.intent_id != intent_id]
-        self._states[intent_id] = OutboxState.FAILED
+        if key:
+            self._states[key] = OutboxState.FAILED
 
     def unacked(self) -> list[OrderIntent]:
         if self._db_path:
             return self._db_intents((OutboxState.PENDING.value, OutboxState.SENDING.value, OutboxState.UNKNOWN.value))
-        # Check both _inbox and _outbox for unprocessed intents
-        inbox_unacked = [v for k, v in self._inbox.items() if k not in self._processed]
-        outbox_unacked = [i for i in self._memory_outbox if i.intent_id not in self._processed]
+        # Check both _inbox and _outbox for unprocessed intents.  UNKNOWN is
+        # deliberately excluded: it requires an independent venue query
+        # before any retry, even in the compatibility/in-memory path.
+        inbox_unacked = [
+            v
+            for k, v in self._inbox.items()
+            if k not in self._processed
+            and self._states.get(v.idempotency_key or self._hash(v), OutboxState.PENDING)
+            in {OutboxState.PENDING, OutboxState.SENDING}
+        ]
+        outbox_unacked = [
+            i
+            for i in self._memory_outbox
+            if i.intent_id not in self._processed
+            and self._states.get(i.idempotency_key or self._hash(i), OutboxState.PENDING)
+            in {OutboxState.PENDING, OutboxState.SENDING}
+        ]
         return inbox_unacked + outbox_unacked
 
     def pending_count(self) -> int:
@@ -412,8 +565,15 @@ class IntentOutbox:
         """单写者 claim；UNKNOWN 不会被盲目重发。"""
 
         if not self._db_path:
-            pending = self._memory_outbox[0] if self._memory_outbox else None
-            return pending
+            for pending in self._memory_outbox:
+                if pending.intent_id in self._processed:
+                    continue
+                key = pending.idempotency_key or self._hash(pending)
+                if self._states.get(key, OutboxState.PENDING) is not OutboxState.PENDING:
+                    continue
+                self._states[key] = OutboxState.SENDING
+                return pending
+            return None
         now = datetime.now(timezone.utc).isoformat()
         lease_until = datetime.now(timezone.utc).timestamp() + lease_seconds
         with self._db_lock, closing(self._connect()) as conn, conn:
@@ -441,7 +601,10 @@ class IntentOutbox:
 
     def mark_unknown(self, intent_id: str, reason: str) -> None:
         if not self._db_path:
-            self._states[intent_id] = OutboxState.UNKNOWN
+            for intent in self._memory_outbox:
+                if intent.intent_id == intent_id:
+                    self._states[intent.idempotency_key or self._hash(intent)] = OutboxState.UNKNOWN
+                    break
             return
         with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(

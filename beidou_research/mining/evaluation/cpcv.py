@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from beidou_shared.types import GateResult
@@ -24,11 +24,15 @@ from beidou_shared.types import GateResult
 class CPCVConfig:
     """CPCV 配置。"""
 
-    n_groups: int = 6  # 将数据分为 N 组
+    n_groups: int = 8  # 将数据分为 N 组；8 choose 2 = 28 条路径
     n_test_groups: int = 2  # 每组测试集大小（组数）
     purge_bars: int = 5  # purge K线数
     embargo_bars: int = 0  # embargo K线数
     min_train_groups: int = 3  # 最小训练组数
+    min_train_samples: int = 60
+    min_test_samples: int = 10
+    min_paths_for_verdict: int = 20
+    min_path_consistency: float = 0.60
     random_seed: int = 42
 
 
@@ -58,6 +62,7 @@ class CPCVResult:
     path_consistency: float
     gate_result: GateResult = GateResult.UNVERIFIABLE
     evidence_hash: str = ""
+    failure_reasons: list[str] = field(default_factory=list)
 
 
 class CPCVEvaluator:
@@ -89,6 +94,9 @@ class CPCVEvaluator:
                 groups[g] = []
             groups[g].append(i)
 
+        if len(group_labels) != n_samples or n_samples <= 0:
+            return []
+
         n_groups = len(groups)
         if n_groups < cfg.n_groups:
             # 回退到简单分 N 组
@@ -105,7 +113,12 @@ class CPCVEvaluator:
         import itertools
 
         all_group_ids = list(groups.keys())
-        k = min(cfg.n_test_groups, len(all_group_ids) - cfg.min_train_groups)
+        available_test_groups = len(all_group_ids) - cfg.min_train_groups
+        if available_test_groups < 1:
+            return []
+        k = min(cfg.n_test_groups, available_test_groups)
+        if k < 1:
+            return []
 
         paths = []
         path_id = 0
@@ -123,17 +136,23 @@ class CPCVEvaluator:
                 if g not in test_set:
                     train_indices.extend(groups[g])
 
-            # Purge: 移除训练集中与测试集相邻的样本
-            if cfg.purge_bars > 0:
-                train_min = min(test_indices) if test_indices else 0
-                train_max = max(test_indices) if test_indices else 0
-                train_indices = [
-                    i
-                    for i in train_indices
-                    if abs(i - train_min) > cfg.purge_bars and abs(i - train_max) > cfg.purge_bars
-                ]
+            # Purge 每一个测试块的边界；只看测试集最小/最大索引会让
+            # 中间测试块两侧的训练样本泄漏到路径中。
+            if test_indices and (cfg.purge_bars > 0 or cfg.embargo_bars > 0):
+                test_index_set = set(test_indices)
 
-            if len(train_indices) < cfg.min_train_groups * 20:
+                def _overlaps_barrier(index: int, *, _test_index_set=test_index_set) -> bool:
+                    return (
+                        cfg.purge_bars > 0
+                        and any(abs(index - test_index) <= cfg.purge_bars for test_index in _test_index_set)
+                    ) or (
+                        cfg.embargo_bars > 0
+                        and any(0 < index - test_index <= cfg.embargo_bars for test_index in _test_index_set)
+                    )
+
+                train_indices = [index for index in train_indices if not _overlaps_barrier(index)]
+
+            if len(train_indices) < max(cfg.min_train_samples, cfg.min_train_groups):
                 continue
 
             paths.append(
@@ -177,7 +196,7 @@ class CPCVEvaluator:
 
         paths = self.generate_paths(n, group_labels[:n])
 
-        if len(paths) < 2:
+        if len(paths) < self.config.min_paths_for_verdict:
             return CPCVResult(
                 n_paths=len(paths),
                 n_completed=0,
@@ -188,14 +207,20 @@ class CPCVEvaluator:
                 metric_q05=0.0,
                 metric_q95=0.0,
                 path_consistency=0.0,
+                failure_reasons=[
+                    "insufficient_cpcv_paths",
+                    f"required={self.config.min_paths_for_verdict}",
+                ],
             )
 
         oos_metrics = []
         for path in paths:
             test_preds = [predictions[i] for i in path.test_indices if i < n]
             test_rets = [returns[i] for i in path.test_indices if i < n]
-            if len(test_preds) >= 10:
+            if len(test_preds) >= self.config.min_test_samples:
                 metric = metric_fn(test_preds, test_rets)
+                if not _is_finite(metric):
+                    continue
                 oos_metrics.append(
                     {
                         "path_id": path.path_id,
@@ -215,6 +240,7 @@ class CPCVEvaluator:
                 metric_q05=0.0,
                 metric_q95=0.0,
                 path_consistency=0.0,
+                failure_reasons=["no_completed_cpcv_paths"],
             )
 
         metrics = [m["metric"] for m in oos_metrics]
@@ -233,8 +259,19 @@ class CPCVEvaluator:
         consistency = max(positive, negative) / n_p if n_p > 0 else 0.0
 
         gate = GateResult.PASS
-        if consistency < 0.6 or mean_m <= 0:
+        failure_reasons: list[str] = []
+        if n_p < self.config.min_paths_for_verdict:
+            gate = GateResult.UNVERIFIABLE
+            failure_reasons.append("insufficient_completed_cpcv_paths")
+        if consistency < self.config.min_path_consistency:
             gate = GateResult.FAIL
+            failure_reasons.append("path_inconsistency")
+        if mean_m <= 0:
+            gate = GateResult.FAIL
+            failure_reasons.append("non_positive_mean_metric")
+        if q05 <= 0:
+            gate = GateResult.FAIL
+            failure_reasons.append("non_positive_oos_q05")
 
         content = f"cpcv:{n_p}:{mean_m:.6f}:{std_m:.6f}:{consistency:.3f}"
         evidence_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
@@ -251,6 +288,7 @@ class CPCVEvaluator:
             path_consistency=round(consistency, 4),
             gate_result=gate,
             evidence_hash=evidence_hash,
+            failure_reasons=failure_reasons,
         )
 
 
@@ -269,3 +307,12 @@ def _default_ic(predictions: list[float], returns: list[float]) -> float:
     if sp == 0 or sr == 0:
         return 0.0
     return cov / (sp * sr)
+
+
+def _is_finite(value: float) -> bool:
+    try:
+        import math
+
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False

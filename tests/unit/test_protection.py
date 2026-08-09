@@ -106,6 +106,14 @@ class TestTakeProfitCalculator:
         assert len(result) == 1
         assert result[0]["price"] == 115.0  # 100 + 5*3
 
+    def test_missing_market_inputs_are_rejected(self):
+        with pytest.raises(ValueError, match="atr is required"):
+            StopLossCalculator.calculate(StopLossType.ATR_BASED, 100.0, OrderSide.BUY)
+        with pytest.raises(ValueError, match="volatility_pct is required"):
+            StopLossCalculator.calculate(StopLossType.VOLATILITY_BASED, 100.0, OrderSide.BUY)
+        with pytest.raises(ValueError, match="unavailable"):
+            StopLossCalculator.swing_structure(None, None, OrderSide.BUY, entry_price=100.0)
+
 
 class TestProtectionManager:
     """保护管理器测试。"""
@@ -205,6 +213,45 @@ class TestProtectionManager:
         )
         sl_price = float(pp.stop_loss.trigger_price.amount)
         assert sl_price == 1900.0  # 2000 - 50*2
+
+    def test_zero_distance_stop_is_rejected_at_manager_boundary(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="stop_pct"):
+            mgr.create_protection(
+                position_id="pos-zero-stop",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 0.0},
+            )
+
+    def test_take_profit_cannot_bypass_stop_loss(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="explicit stop-loss"):
+            mgr.create_protection(
+                position_id="pos-tp-only",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
+            )
+
+    def test_reversed_stop_direction_is_rejected(self):
+        mgr = ProtectionManager()
+        with pytest.raises(ValueError, match="stop_pct"):
+            mgr.create_protection(
+                position_id="pos-reversed-stop",
+                instrument_id=InstrumentId("BTCUSDT"),
+                venue_id=VenueId("BINANCE"),
+                entry_price=100.0,
+                quantity=0.1,
+                side=OrderSide.BUY,
+                stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": -1.0},
+            )
 
     def test_cancel_protections(self):
         mgr, pid = self._make_manager_with_position()
