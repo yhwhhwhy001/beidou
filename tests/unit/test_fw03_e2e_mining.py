@@ -57,6 +57,7 @@ def generate_synthetic_ohlcv(
             "mark": p,
             "mid": p,
             "vwap": p,
+            "is_closed": True,
         }
         for i, p in enumerate(prices)
     ]
@@ -117,6 +118,31 @@ class TestEndToEndMining:
             assert bundle.artifact_hash, f"Bundle {bundle.bundle_id} has no artifact_hash"
             # 重新计算应一致
             assert bundle.artifact_hash == bundle.compute_bundle_hash()
+
+    def test_evidence_records_real_validation_gates_and_unbound_manifest_blocks(self):
+        """A completed local run must still be blocked without provenance."""
+        result = MiningRunner(
+            PipelineConfig(run_id="gate-evidence", evidence_dir="/tmp/beidou-e2e-gates")
+        ).run(generate_synthetic_ohlcv(n=500, seed=7))
+
+        assert result.evidence_bundles
+        bundle = result.evidence_bundles[0]
+        assert bundle.raw_metrics["wfo_folds_completed"] >= 0
+        assert "wfo_gate" in bundle.raw_metrics
+        assert "cpcv_gate" in bundle.raw_metrics
+        assert bundle.dataset_manifest_hash == "UNKNOWN"
+        assert bundle.gate_decision != "PASS"
+        assert "dataset_manifest_unbound" in bundle.failure_reasons
+
+    def test_missing_closed_bar_metadata_is_not_verifiable(self):
+        data = generate_synthetic_ohlcv(n=200, seed=11)
+        for row in data:
+            row.pop("is_closed", None)
+        result = MiningRunner(PipelineConfig(run_id="missing-close", evidence_dir="/tmp/beidou-e2e-close")).run(data)
+
+        assert result.status == "NOT_VERIFIABLE"
+        assert result.candidates_passed == 0
+        assert result.failure_taxonomy["closed_bar_metadata_missing"] == len(data)
 
     def test_multiple_testing_integration(self):
         """多重检验与挖掘流水线集成。"""

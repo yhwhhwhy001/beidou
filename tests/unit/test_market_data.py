@@ -2,10 +2,69 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from beidou_data.klines import KLineGenerator
 from beidou_data.market import BookLevel, MarketEvent, MarketEventType, OrderBookSnapshot, RawLayer
 from beidou_data.quality import AutoRepair, DataQualityGate, DQCheckResult, DQCheckType
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.core.error_taxonomy import Result
 from beidou_shared.types import DataQualityTier, InstrumentId, Price, Quantity, VenueId, VenueInstrument
+
+
+class _AdapterResultClient:
+    async def request(self, method, path, signed=False, params=None):
+        if path == Endpoint.TICKER_24HR:
+            return Result.success({"lastPrice": "100", "volume": "10", "highPrice": "101", "lowPrice": "99"})
+        if path == Endpoint.DEPTH:
+            return Result.success({"bids": [["99.9", "1"]], "asks": [["100.1", "1"]]})
+        if path == Endpoint.KLINES:
+            return Result.success([[0, "99", "101", "98", "100", "10", 3600000, "1000", 3]])
+        return Result.failure("unexpected path")
+
+
+class _UnclosedBarClient(_AdapterResultClient):
+    async def request(self, method, path, signed=False, params=None):
+        if path == Endpoint.KLINES:
+            future_close = int((datetime.now(timezone.utc).timestamp() + 3600) * 1000)
+            return Result.success([[future_close - 3600000, "99", "101", "98", "100", "10", future_close, "1000", 3]])
+        return await super().request(method, path, signed=signed, params=params)
+
+
+@pytest.mark.asyncio
+async def test_market_data_feed_unwraps_adapter_results():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    assert (await feed.async_fetch_ticker("BTCUSDT"))["lastPrice"] == "100"
+    assert (await feed.async_fetch_orderbook("BTCUSDT"))["bids"]
+    assert len(await feed.async_fetch_klines("BTCUSDT", "1h")) == 1
+    features = await feed.async_update_features("BTCUSDT")
+    assert features["price"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_market_data_feed_rejects_unclosed_rest_bar():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_UnclosedBarClient())
+    assert await feed.async_fetch_klines("BTCUSDT", "1h") == []
+
+
+def test_generated_market_features_exclude_unclosed_bar_by_default():
+    from beidou_core.feed import MarketDataFeed
+
+    feed = MarketDataFeed(client=_AdapterResultClient())
+    generator = feed._get_kline_generator("BTCUSDT", "1h")
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    generator.process_tick(
+        vi,
+        Price(amount="100"),
+        Quantity(amount="1"),
+        datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc),
+    )
+
+    assert feed.get_generated_klines("BTCUSDT", "1h") == []
 
 
 class TestOrderBook:

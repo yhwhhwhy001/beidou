@@ -113,6 +113,23 @@ class TestRiskApproval:
         # 重放相同 nonce
         assert not asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-004"))
 
+    def test_preflight_verify_does_not_consume_nonce_before_final_send(self):
+        """审批预检可重复；nonce 只在最终发送边界消费。"""
+        signer = self._make_signer()
+        aid = RiskApprovalId("approval-004-preflight")
+        sig = signer.sign(aid, nonce="nonce-004-preflight")
+        import asyncio
+
+        assert asyncio.run(
+            signer.verify(aid, signature=sig, nonce="nonce-004-preflight", consume_nonce=False)
+        )
+        assert asyncio.run(
+            signer.verify(aid, signature=sig, nonce="nonce-004-preflight")
+        )
+        assert not asyncio.run(
+            signer.verify(aid, signature=sig, nonce="nonce-004-preflight")
+        )
+
     def test_verify_tampered_payload_rejected(self):
         """篡改 payload 字段导致签名不匹配。"""
         signer = self._make_signer()

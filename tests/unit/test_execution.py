@@ -1,11 +1,15 @@
 """PKG-21~27: Execution Chain 测试。Intent、Executor、Ledger、Reconciliation。"""
 
+import sqlite3
+
+import pytest
+
 from beidou_safety.execution import OrderIntent
 from beidou_safety.execution.conditional import (
     EmergencyFlattenPolicy,
     PositionManager,
 )
-from beidou_safety.execution.intent import IntentOutbox
+from beidou_safety.execution.intent import IntentOutbox, OutboxState
 from beidou_safety.execution.ledger import (
     AccountType,
     ImmutableLedger,
@@ -71,6 +75,64 @@ class TestIntentOutbox:
         ob.commit(intent)
         with pytest.raises(ValueError, match="Duplicate"):
             ob.commit(intent)
+
+    def test_sqlite_outbox_survives_restart_and_preserves_unknown(self, tmp_path):
+        db_path = str(tmp_path / "intent-outbox.db")
+        intent = OrderIntent(
+            intent_id="int-durable-001",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            client_order_id="cid-durable-001",
+            idempotency_key="idem-durable-001",
+            reduce_only=True,
+            net_alpha_bps=12.5,
+            predicted_cost_bps=4.25,
+        )
+
+        first = IntentOutbox(db_path)
+        first.commit(intent)
+        claimed = first.claim("worker-a", lease_seconds=60)
+        assert claimed is not None
+        assert claimed.intent_id == intent.intent_id
+        assert claimed.net_alpha_bps == pytest.approx(12.5)
+        assert claimed.predicted_cost_bps == pytest.approx(4.25)
+
+        # A new process must not blindly retry an ambiguous in-flight send.
+        second = IntentOutbox(db_path)
+        assert [i.intent_id for i in second.unacked()] == [intent.intent_id]
+        assert second.claim("worker-b") is None
+        second.resolve_unknown(intent.intent_id, exchange_order_found=False)
+        assert second.claim("worker-b") is not None
+
+        second.ack(intent.intent_id, idempotency_key=intent.idempotency_key or "")
+        third = IntentOutbox(db_path)
+        assert third.pending_count() == 0
+        with pytest.raises(ValueError, match="Duplicate"):
+            third.commit(intent)
+
+    def test_sqlite_outbox_marks_sending_unknown_on_restart(self, tmp_path):
+        db_path = str(tmp_path / "intent-outbox-unknown.db")
+        intent = OrderIntent(
+            intent_id="int-durable-002",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            idempotency_key="idem-durable-002",
+        )
+
+        first = IntentOutbox(db_path)
+        first.commit(intent)
+        assert first.claim("worker-a") is not None
+        second = IntentOutbox(db_path)
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT state FROM intent_outbox WHERE intent_id=?", (intent.intent_id,)).fetchone()
+        assert row[0] == OutboxState.UNKNOWN.value
+        assert second.claim("worker-b") is None
 
 
 class TestLeaseManager:

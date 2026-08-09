@@ -48,7 +48,9 @@ class PricePoint:
     mark: float | None = None
     mid: float | None = None
     vwap: float | None = None
-    is_closed: bool = True
+    # Missing close-state metadata must not silently become usable market data.
+    # Callers that cannot prove a bar is closed are rejected by LabelBuilder.
+    is_closed: bool = False
 
     def get_price(self, price_type: PriceType) -> float | None:
         """根据价格类型获取价格。"""

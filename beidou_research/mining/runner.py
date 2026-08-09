@@ -33,6 +33,7 @@ from typing import Any, Callable
 
 from beidou_shared.types import (
     FactorId,
+    GateResult,
     InstrumentId,
     SchemaVersion,
     VenueId,
@@ -44,9 +45,12 @@ from .contracts import (
     ReturnType,
 )
 from .evaluation.cost_capacity import CapacityEvaluator, CostModel
+from .evaluation.cpcv import CPCVEvaluator
 from .evaluation.fast_screen import FastScreen, FastScreenConfig
+from .evaluation.multiple_testing import evaluate_multiple_testing
 from .evaluation.purged_walk_forward import (
     FoldConfig,
+    FoldResult,
     PurgedWalkForward,
 )
 from .evaluation.stability import StabilityEvaluator
@@ -69,6 +73,9 @@ class PipelineConfig:
     fast_screen: FastScreenConfig | None = None
     fold_config: FoldConfig | None = None
     cost_model: CostModel | None = None
+    # Production runs must bind evidence to an externally supplied dataset
+    # manifest.  A hash inferred only from payload bytes is not provenance.
+    dataset_manifest_hash: str = ""
     evidence_dir: str = "evidence/mining-runs"
 
     @classmethod
@@ -143,6 +150,7 @@ class MiningRunner:
         self._label_builder = LabelBuilder()
         self._fast_screen = FastScreen(self.config.fast_screen)
         self._wfo = PurgedWalkForward(self.config.fold_config)
+        self._cpcv = CPCVEvaluator()
         self._stability = StabilityEvaluator()
         self._capacity = CapacityEvaluator(self.config.cost_model)
         self._store = JSONFileFactorStore(self.config.evidence_dir)
@@ -159,18 +167,10 @@ class MiningRunner:
         """
         if not price_data or len(price_data) < 100:
             return "UNKNOWN"
-        import hashlib as _hlib
-        import json as _json
-
-        # 取首尾样本 + 总长度作为指纹
-        samples = [
-            price_data[0],
-            price_data[-1],
-            price_data[len(price_data) // 2],
-        ]
-        payload = _json.dumps(samples, sort_keys=True, default=str)
-        payload += str(len(price_data))
-        return _hlib.sha256(payload.encode()).hexdigest()[:24]
+        # A payload hash is useful for reproducibility but is not a data
+        # provenance manifest.  Require an explicit manifest at the run
+        # boundary; otherwise certification must remain UNKNOWN.
+        return "UNKNOWN"
 
     def run(
         self,
@@ -202,6 +202,7 @@ class MiningRunner:
         # Phase 1: 构造标签
         # ================================================================
         self._notify(progress_callback, "labels", 0, 5)
+        missing_closed_metadata = sum(1 for d in price_data if "is_closed" not in d)
         price_points = [
             PricePoint(
                 venue=ven,
@@ -212,7 +213,7 @@ class MiningRunner:
                 mark=d.get("mark"),
                 mid=d.get("mid"),
                 vwap=d.get("vwap"),
-                is_closed=True,
+                is_closed=bool(d.get("is_closed", False)),
             )
             for d in price_data
         ]
@@ -277,6 +278,8 @@ class MiningRunner:
         self._notify(progress_callback, "evaluating_wfo", 3, 5)
 
         evidence_bundles = []
+        evaluation_records: list[dict[str, Any]] = []
+        dataset_manifest_hash = self.config.dataset_manifest_hash or "UNKNOWN"
         # label_returns[t] = 从 bar t 起算的 forward return
         label_returns = [l.label_value for l in labels if l.is_valid_for_evaluation()]
 
@@ -297,6 +300,70 @@ class MiningRunner:
             if len(valid_returns) < 50:
                 continue
 
+            # Bind every usable observation to its own prediction/label
+            # interval.  The WFO evaluator below must never infer time from
+            # array position after warm-up/quality filtering.
+            sample_times = []
+            label_end_times = []
+            for label, factor_value in zip(labels, factor_vals, strict=False):
+                if label.is_valid_for_evaluation() and _is_finite(factor_value) and _is_finite(label.label_value):
+                    sample_times.append(label.prediction_key.prediction_time)
+                    label_end_times.append(label.label_end_time)
+
+            wfo_fold_counter = [0]
+
+            def _evaluate_wfo_fold(
+                train_indices: list[int],
+                test_indices: list[int],
+                *,
+                _valid_vals: list[float] = valid_vals,
+                _valid_returns: list[float] = valid_returns,
+                _fold_counter: list[int] = wfo_fold_counter,
+            ) -> FoldResult:
+                fold_id = _fold_counter[0]
+                _fold_counter[0] += 1
+                train_preds = [_valid_vals[i] for i in train_indices if i < len(_valid_vals)]
+                train_rets = [_valid_returns[i] for i in train_indices if i < len(_valid_returns)]
+                test_preds = [_valid_vals[i] for i in test_indices if i < len(_valid_vals)]
+                test_rets = [_valid_returns[i] for i in test_indices if i < len(_valid_returns)]
+                if len(test_preds) < 3 or len(train_preds) < 3:
+                    return FoldResult(
+                        fold_id=fold_id,
+                        train_samples=len(train_preds),
+                        test_samples=len(test_preds),
+                        failure_reason="insufficient_fold_samples",
+                    )
+                test_ic = _compute_ic(test_preds, test_rets)
+                train_ic = _compute_ic(train_preds, train_rets)
+                return FoldResult(
+                    fold_id=fold_id,
+                    train_samples=len(train_preds),
+                    test_samples=len(test_preds),
+                    ic_mean=test_ic,
+                    ic_std=abs(train_ic - test_ic),
+                    icir=test_ic,
+                    sharpe=_compute_sharpe(test_rets),
+                    cost_adjusted_return=sum(test_rets) / len(test_rets),
+                    metrics={
+                        "train_ic": train_ic,
+                        "test_ic": test_ic,
+                        "train_sharpe": _compute_sharpe(train_rets),
+                    },
+                )
+
+            total_duration_days = (
+                (max(sample_times) - min(sample_times)).total_seconds() / 86400.0 if sample_times else 0.0
+            )
+            label_horizon_days = label_spec.horizon_bars * _timeframe_to_hours(timeframe) / 24.0
+            wfo_result = self._wfo.run(
+                sample_times,
+                label_end_times,
+                total_duration_days,
+                evaluator=_evaluate_wfo_fold,
+                label_horizon_days=label_horizon_days,
+            )
+            cpcv_result = self._cpcv.evaluate(valid_vals, valid_returns)
+
             # 快速 IC 评估
             ic = _compute_ic(valid_vals, valid_returns)
             sharpe = _compute_sharpe(valid_returns)
@@ -310,8 +377,17 @@ class MiningRunner:
                 valid_returns,
             )
 
-            # BD-P1-12: 从真实数据计算 manifest hash，禁止 synthetic/test-fixture
-            dataset_manifest_hash = self._compute_dataset_hash(price_data) if price_data is not None else "UNKNOWN"
+            # BD-P1-12: only an externally bound manifest can support a
+            # promotion decision.  A local payload hash is not provenance.
+            # Fold-level train Sharpe is recorded in metrics when available;
+            # keep the explicit arrays for the later multi-test report.
+            wfo_train_sharpes = [
+                float(r.metrics.get("train_sharpe", 0.0))
+                for r in wfo_result.fold_results
+                if not r.failure_reason
+            ]
+            wfo_test_sharpes = [r.sharpe for r in wfo_result.fold_results if not r.failure_reason]
+            p_value = _correlation_p_value(ic, len(valid_returns))
 
             # 构造证据包
             bundle = EvidenceBundle(
@@ -330,6 +406,13 @@ class MiningRunner:
                     "ic_mean": round(ic, 6),
                     "sharpe": round(sharpe, 4),
                     "sample_count": len(valid_returns),
+                    "wfo_gate": wfo_result.gate_result.value,
+                    "wfo_icir_cv": round(wfo_result.icir_cv, 6),
+                    "wfo_fold_consistency": round(wfo_result.fold_consistency, 6),
+                    "wfo_folds_completed": wfo_result.n_folds_completed,
+                    "cpcv_gate": cpcv_result.gate_result.value,
+                    "cpcv_paths_completed": cpcv_result.n_completed,
+                    "cpcv_metric_mean": cpcv_result.metric_mean,
                 },
                 stability_results=[
                     {
@@ -343,18 +426,71 @@ class MiningRunner:
                     "recommended_max_aum": capacity_result.recommended_max_aum,
                     "capacity_at_zero_return": capacity_result.capacity_at_zero_return,
                 },
-                gate_decision="PASS" if ic > 0.02 else "FAIL",
+                gate_decision="NOT_VERIFIABLE",
                 failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
             )
-            bundle.seal()
+            evaluation_records.append(
+                {
+                    "bundle": bundle,
+                    "p_value": p_value,
+                    "sharpe": sharpe,
+                    "train_sharpes": wfo_train_sharpes,
+                    "test_sharpes": wfo_test_sharpes,
+                    "wfo": wfo_result,
+                    "cpcv": cpcv_result,
+                }
+            )
             evidence_bundles.append(bundle)
 
-            # 持久化（品种前缀避免多品种覆盖）
-            self._store.save_factor_version(
-                f"{symbol}:{candidate['hash']}",
-                "2.0.0",
-                bundle.to_dict(),
-            )
+        # Multi-test correction is a single run-level operation: every
+        # candidate attempted by the generator belongs in the denominator.
+        if evaluation_records:
+            pvalues = [r["p_value"] for r in evaluation_records]
+            train_sharpes = [
+                sum(r["train_sharpes"]) / len(r["train_sharpes"]) if r["train_sharpes"] else 0.0
+                for r in evaluation_records
+            ]
+            test_sharpes = [
+                sum(r["test_sharpes"]) / len(r["test_sharpes"]) if r["test_sharpes"] else 0.0
+                for r in evaluation_records
+            ]
+            for record in evaluation_records:
+                bundle = record["bundle"]
+                report = evaluate_multiple_testing(
+                    pvalues,
+                    observed_sharpe=record["sharpe"],
+                    n_trials=max(len(candidates), 1),
+                    in_sample_sharpes=train_sharpes,
+                    out_of_sample_sharpes=test_sharpes,
+                    sample_length=len(label_returns),
+                )
+                bundle.multiple_testing_results = {
+                    "verdict": report.verdict,
+                    "n_total_trials": report.n_total_trials,
+                    "n_evaluated": report.n_evaluated,
+                    "bh_significant_05": report.bh_result.n_significant_05 if report.bh_result else 0,
+                    "dsr": report.dsr,
+                    "pbo": report.pbo.__dict__ if report.pbo else None,
+                }
+                reasons = list(bundle.failure_reasons)
+                if record["wfo"].gate_result != GateResult.PASS:
+                    reasons.append(f"wfo:{record['wfo'].gate_result.value}")
+                if record["cpcv"].gate_result != GateResult.PASS:
+                    reasons.append(f"cpcv:{record['cpcv'].gate_result.value}")
+                if report.verdict != "PASS":
+                    reasons.append(f"multiple_testing:{report.verdict}")
+                if dataset_manifest_hash == "UNKNOWN":
+                    reasons.append("dataset_manifest_unbound")
+                if missing_closed_metadata:
+                    reasons.append("closed_bar_metadata_missing")
+                bundle.failure_reasons = list(dict.fromkeys(reasons))
+                bundle.gate_decision = "PASS" if not bundle.failure_reasons else "FAIL"
+                bundle.seal()
+                self._store.save_factor_version(
+                    f"{symbol}:{bundle.candidate_id}",
+                    "2.0.0",
+                    bundle.to_dict(),
+                )
 
         # ================================================================
         # Phase 4.5: 交互因子 & 残差因子（基于 PASS 候选的因子值）
@@ -476,6 +612,9 @@ class MiningRunner:
 
         passed = sum(1 for b in evidence_bundles if b.gate_decision == "PASS")
         runtime = round(time.time() - t0, 2)
+        if missing_closed_metadata:
+            failure_taxonomy["closed_bar_metadata_missing"] = missing_closed_metadata
+        pipeline_status = "COMPLETED" if labels and not missing_closed_metadata else "NOT_VERIFIABLE"
 
         result = MiningResult(
             run_id=run_id,
@@ -486,6 +625,7 @@ class MiningRunner:
             evidence_bundles=evidence_bundles,
             failure_taxonomy=failure_taxonomy,
             runtime_seconds=runtime,
+            status=pipeline_status,
         )
 
         self._notify(progress_callback, "complete", 5, 5)
@@ -755,3 +895,29 @@ def _compute_sharpe(returns: list[float]) -> float:
     if std == 0:
         return 0.0
     return mean / std
+
+
+def _timeframe_to_hours(timeframe: str) -> float:
+    """Convert a supported bar timeframe to hours for purge/embargo math."""
+
+    value = timeframe.strip().lower()
+    if not value:
+        return 0.0
+    units = {"m": 1 / 60, "h": 1.0, "d": 24.0, "w": 24.0 * 7}
+    try:
+        return float(value[:-1]) * units[value[-1]]
+    except (KeyError, ValueError):
+        return 0.0
+
+
+def _correlation_p_value(correlation: float, sample_length: int) -> float:
+    """Conservative normal approximation for a correlation test statistic."""
+
+    if sample_length < 4 or not math.isfinite(correlation) or abs(correlation) >= 1.0:
+        return 1.0 if abs(correlation) < 1.0 else 0.0
+    z = abs(correlation) * math.sqrt(max(sample_length - 2, 1) / max(1.0 - correlation**2, 1e-12))
+    return max(0.0, min(1.0, 2.0 * (1.0 - _normal_cdf(z))))
+
+
+def _normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))

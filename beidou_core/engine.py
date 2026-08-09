@@ -1,6 +1,6 @@
 """自主运行引擎 — 三层时钟域事件循环。
 
-绕过存根 BinanceUsdmAdapter，直接调用 Binance REST API。
+通过 BinanceUsdmAdapter 的唯一传输边界访问 Binance REST API。
 实现真实市场状态估算和具体 AlphaComponent。
 完整激活所有策略/因子/风控模块。
 """
@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
@@ -24,8 +26,10 @@ from beidou_core.store import PersistentStore
 from beidou_data.trading_pool_lifecycle import InstrumentScore, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_exchange.core.protocol import OrderRequest
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
 from beidou_observability.telemetry import AlertSeverity
+from beidou_policy.loader import PolicyLoader
 from beidou_research.factors.factor import (
     FactorDefinition,
     FactorEvaluator,
@@ -50,14 +54,14 @@ from beidou_safety.execution.ledger import (
 )
 from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
 from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
-from beidou_safety.protection.engine import ProtectionManager
+from beidou_safety.protection.engine import ProtectionManager, ProtectionStatus
 from beidou_safety.risk.engine import (
+    DEFAULT_APPROVAL_TTL_SECONDS,
     PostRiskMonitor,
     PreRiskCheckerImpl,
     RiskApprovalSignerImpl,
     RiskApprovalStateMachine,
     RiskEngineImpl,
-    RiskSnapshot,
 )
 from beidou_safety.risk.rules import RiskRuleRegistry, RuleDecision
 from beidou_security.identity import (
@@ -66,7 +70,6 @@ from beidou_security.identity import (
     KeyRotationStatus,
     KeyRotator,
     Permission,
-    SecretSanitizer,
     ServiceIdentity,
 )
 from beidou_shared.config import ConfigProvider, TypedSettings
@@ -79,6 +82,7 @@ from beidou_shared.types import (
     MonetaryValue,
     OrderId,
     OrderSide,
+    OrderStatus,
     OrderType,
     Price,
     Quantity,
@@ -97,12 +101,11 @@ from beidou_strategy.alpha import (
     SignalDirection,
 )  # BD-T05: legacy, migrated to StrategyKernel
 from beidou_strategy.alpha.mean_reversion import MeanReversionEngine, MultiPeriodMomentum
-from beidou_strategy.alpha.model_registry import DriftDetector, ModelRegistry
+from beidou_strategy.alpha.model_registry import DriftDetector, ModelRecord, ModelRegistry, ModelStatus
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, robust_zscore
 from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernelContract
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
-from beidou_policy.loader import PolicyLoader
 from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
@@ -909,8 +912,24 @@ class AutonomousEngine:
         self._adapter = BinanceUsdmAdapter(rest_client=self._exchange)
 
         # Infrastructure
-        self._store = PersistentStore.get_instance()
-        self._feed = MarketDataFeed(client=self._exchange)  # 共享引擎的 REST client，避免独立无凭证实例
+        # The state store and the intent outbox must use the same durable
+        # database.  A process-local singleton or a second implicit SQLite
+        # file would make a restart appear healthy while losing the ledger
+        # and intent truth used by the safety gates.
+        database_url = self._settings.database.url
+        if database_url.startswith("sqlite:///"):
+            durable_db_path = database_url.removeprefix("sqlite:///")
+        else:
+            # PostgreSQL is not yet wired into the transaction-outbox/store
+            # contract.  Keep a local durable path and leave the production
+            # gate blocked rather than silently falling back to memory.
+            durable_db_path = ".beidou/state.db"
+            print(
+                f"[state] WARNING: unsupported database URL {database_url!r}; "
+                f"using {durable_db_path!r} and keeping production gate blocked"
+            )
+        self._store = PersistentStore.get_instance(durable_db_path)
+        self._feed = MarketDataFeed(client=self._adapter)  # 行情也经过同一 Adapter 传输边界
         self._alerts = AlertDispatcher(
             webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
             alerts_file=self._settings.infrastructure.alerts_file,
@@ -928,9 +947,18 @@ class AutonomousEngine:
         # Business modules
         self._protection = ProtectionManager()
         self._protection_retries: dict[str, int] = {}  # 保护单重试计数
+        # Protection IDs are durable facts, not process-local discovery state.
+        # Initialise these collections before any recovery/cleanup path can run.
+        self._protection_exchange_attempted: set[str] = set()
+        self._active_algo_ids: dict[str, set[str]] = {}
+        self._pending_protection_retry: set[str] = set()
         self._last_order_placed_at: float = 0.0  # 最近一次下单时间戳（用于对账宽限期）
-        self._outbox = IntentOutbox()
+        # IntentOutbox uses the same database file as PersistentStore; its
+        # schema is independent, but a single WAL gives restart recovery one
+        # authoritative local journal.
+        self._outbox = IntentOutbox(db_path=durable_db_path)
         self._ledger = ImmutableLedger()
+        self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
         self._pre_risk = PreRiskCheckerImpl(
             max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
@@ -1354,7 +1382,7 @@ class AutonomousEngine:
         return default
 
     # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
-    # 所有 Binance API 访问统一通过 self._exchange (BinanceRESTClient)
+    # 所有 Binance API 访问统一通过 self._adapter (BinanceUsdmAdapter)
     # 不再在 engine 内重复实现签名逻辑
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
@@ -1367,7 +1395,7 @@ class AutonomousEngine:
         调用方必须检查 "error" 键是否存在，不可将错误响应当作正常数据。
         对于关键状态读取，优先使用 _api_async_safe() 以防止熔断级联。
         """
-        result = await self._exchange.request(method, path, signed, params)
+        result = await self._adapter.request(method, path, signed, params)
         if result.is_success():
             return result.data
         err = result.error
@@ -1382,7 +1410,7 @@ class AutonomousEngine:
         关键状态读取（账户、持仓、订单）必须使用此方法，
         防止熔断/限流返回的 {"error": ...} 被当作正常数据覆盖有效状态。
         """
-        result = await self._exchange.request(method, path, signed, params)
+        result = await self._adapter.request(method, path, signed, params)
         if result.is_success():
             return result.data, True
         err = result.error
@@ -1408,7 +1436,7 @@ class AutonomousEngine:
             pass  # 不在异步上下文中，正常
 
         try:
-            result = _asyncio.run(self._exchange.request(method, path, signed, params))
+            result = _asyncio.run(self._adapter.request(method, path, signed, params))
         except Exception as ex:
             return {"error": -1, "msg": f"Adapter error: {ex}"}
 
@@ -1474,20 +1502,9 @@ class AutonomousEngine:
             self._leverage_cache[symbol] = actual
             print(f"[leverage] {symbol}: cannot lower to {target_leverage}x, keeping {actual}x (existing positions)")
             return actual
-        elif err_code == -2028:
-            # -2028: 仓位存在所以无法改杠杆 → 查询实际杠杆
-            try:
-                pos_resp = await self._api_async(Endpoint.POSITION_INFO, signed=True, params={"symbol": symbol})
-                if isinstance(pos_resp, list) and pos_resp:
-                    actual = int(pos_resp[0].get("leverage", target_leverage)) if pos_resp[0].get("leverage") else target_leverage
-                    print(f"[leverage] {symbol}: -2028 resolved: actual={actual}x")
-                    return actual
-            except Exception:
-                pass
-            return -1  # 无法确认实际杠杆 → UNKNOWN → 风控阻断
         else:
             # P2修复: 非预期错误不返回 target_leverage（fail-open → fail-closed）
-            print(f"[leverage] FAILED {symbol}: code={err_code} {resp.get('msg', resp)}")
+            print(f"[leverage] FAILED {symbol}: code={binance_code} {resp.get('msg', resp)}")
             return -1  # UNKNOWN → R0/R6 阻断，而非静默继续
 
     # --- Health & Metrics ---
@@ -1605,7 +1622,7 @@ class AutonomousEngine:
         """
         # BD-T06: 非生产模式包含 CHALLENGER+PAPER_TRADING 因子用于测试
         trading_factors = set(self._factor_registry.get_active())
-        if not (self._env_mode.value in ("production", "canary", "live")):
+        if self._env_mode.value not in ("production", "canary", "live"):
             trading_factors.update(self._factor_registry.get_challengers())
         active_factor_ids = [
             fid for fid in trading_factors if fid in self._factor_component_registry
@@ -1701,7 +1718,10 @@ class AutonomousEngine:
                     features.get("volume_24h"),
                 )
 
-            # 5. Process unacked intents → place orders (once per tick, all symbols)
+            # 5. Process only claimable intents.  Durable UNKNOWN intents are
+            # deliberately excluded until an explicit exchange query resolves
+            # them; a restart must never blind-retry an ambiguous submission.
+            durable_outbox = bool(getattr(self._outbox, "_db_path", None))
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
             if self._tick_count % 5 == 0:
@@ -1714,8 +1734,15 @@ class AutonomousEngine:
                 )
             # P0修复: Paper/Shadow 模式也需要执行 intent（通过 _place_order 的 Paper 撮合分支）
             if self._can_write or self._can_simulate:
-                for intent in unacked:
-                    await self._place_order(intent)
+                if durable_outbox:
+                    while True:
+                        intent = self._outbox.claim(owner=f"engine-{id(self)}")
+                        if intent is None:
+                            break
+                        await self._place_order(intent)
+                else:
+                    for intent in unacked:
+                        await self._place_order(intent)
 
             # 6. Reconciliation (every 30s)
             if time.time() - self._last_recon > 30:
@@ -1797,10 +1824,122 @@ class AutonomousEngine:
         self._position_entry_times.pop(pid, None)
         self._protection_exchange_attempted.discard(pid)
         # 持久化删除
-        try:
+        with contextlib.suppress(Exception):
             self._store.remove_protection(pid)
-        except Exception:
-            pass
+
+    def _persist_protection_order(self, p_order: Any, *, status: str | None = None) -> None:
+        """Persist one protection order using the exchange-acknowledged state.
+
+        ``ProtectionManager.create_protection`` builds a local definition before
+        the venue call.  Until an ``algoId`` is returned that definition is only
+        a pending intent and must not be restored as ACTIVE after a restart.
+        """
+
+        local_status = getattr(p_order, "status", ProtectionStatus.CREATED)
+        local_status_value = getattr(local_status, "value", str(local_status))
+        persisted_status = status or ("ACTIVE" if local_status_value == ProtectionStatus.ACTIVE.value else "PENDING")
+        stop_type = getattr(getattr(p_order, "stop_type", None), "value", None)
+        take_profit_type = getattr(getattr(p_order, "take_profit_type", None), "value", None)
+        self._store.save_protection(
+            protection_id=str(p_order.protection_id),
+            position_id=str(p_order.position_id),
+            symbol=str(p_order.instrument_id),
+            side=str(getattr(p_order.side, "value", p_order.side)),
+            trigger_price=str(p_order.trigger_price.amount),
+            order_price=(str(p_order.order_price.amount) if p_order.order_price is not None else None),
+            quantity=str(p_order.quantity.amount),
+            order_type=str(p_order.order_type),
+            status=persisted_status,
+            stop_type=stop_type,
+            take_profit_type=take_profit_type,
+        )
+
+    def _restore_durable_ledger(self) -> None:
+        """Rebuild the in-memory ledger projection from the durable journal."""
+
+        durable_rows = self._store.restore_ledger_transactions()
+        legacy_rows = self._store.restore_ledger_entries()
+        if legacy_rows and not durable_rows:
+            raise RuntimeError(
+                "Durable ledger journal is missing while legacy ledger entries exist; "
+                "migration is required before the engine can start"
+            )
+        for row in durable_rows:
+            try:
+                postings = tuple(
+                    Posting(
+                        posting_id=str(posting["posting_id"]),
+                        account_id=AccountId(str(posting["account_id"])),
+                        account_type=AccountType(str(posting["account_type"])),
+                        venue_id=VenueId(str(posting["venue_id"])),
+                        instrument_id=(
+                            InstrumentId(str(posting["instrument_id"]))
+                            if posting["instrument_id"] is not None
+                            else None
+                        ),
+                        amount=MonetaryValue(
+                            amount=str(posting["amount"]),
+                            currency=str(posting["currency"]),
+                            decimals=int(posting["decimals"]),
+                        ),
+                        side=PostingSide(str(posting["side"])),
+                        description=str(posting["description"] or ""),
+                    )
+                    for posting in row["postings"]
+                )
+                transaction = LedgerTransaction(
+                    transaction_id=str(row["transaction_id"]),
+                    transaction_type=LedgerTransactionType(str(row["transaction_type"])),
+                    postings=postings,
+                    source_event_id=str(row["source_event_id"] or ""),
+                    correlation_id=(
+                        CorrelationId(str(row["correlation_id"]))
+                        if row["correlation_id"]
+                        else None
+                    ),
+                    timestamp=datetime.fromisoformat(str(row["timestamp"])),
+                    is_correction=bool(row["is_correction"]),
+                    reverses_transaction_id=str(row["reverses_transaction_id"] or ""),
+                    metadata=json.loads(str(row["metadata"] or "{}")),
+                )
+                self._ledger.post(transaction)
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Durable ledger reconstruction failed for {row.get('transaction_id', '<unknown>')}"
+                ) from exc
+
+    def _post_ledger_transaction(self, transaction: LedgerTransaction) -> None:
+        """Append a balanced transaction and its durable journal atomically enough for restart."""
+
+        self._ledger.post(transaction)
+        self._store.save_ledger_transaction(transaction)
+
+    async def _verify_intent_at_send(self, intent) -> bool:
+        """最终写边界复核审批、nonce、策略版本和风险下降语义。"""
+
+        if not self._can_write:
+            return True
+        approval_id = str(getattr(intent, "risk_approval_id", "") or "")
+        if approval_id == "RISK_EXEMPT_CLOSE":
+            # 仅允许明确标记为 reduce-only 的风险下降命令走紧急路径。
+            return bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
+        if not approval_id or not getattr(intent, "risk_approval_signature", None):
+            return False
+        if self._risk_sm.get(RiskApprovalId(approval_id)) != RiskDecision.APPROVED:
+            return False
+        try:
+            return await self._approval.verify(
+                RiskApprovalId(approval_id),
+                signature=str(intent.risk_approval_signature),
+                proposal_hash=str(getattr(intent, "risk_proposal_hash", "")),
+                account_snapshot_hash=str(getattr(intent, "risk_account_snapshot_hash", "")),
+                risk_snapshot_hash=str(getattr(intent, "risk_snapshot_hash", "")),
+                policy_version=str(getattr(intent, "risk_policy_version", "")),
+                nonce=str(getattr(intent, "risk_nonce", "")),
+                expires_at=getattr(intent, "risk_expires_at", None),
+            )
+        except (RuntimeError, TypeError, ValueError):
+            return False
 
     async def _place_order(self, intent, symbol: str = "") -> None:
         """向交易所发送订单。"""
@@ -1812,6 +1951,15 @@ class AutonomousEngine:
                 f"[order] ❌ Intent {intent.intent_id} REJECTED at executor gate ({self._control.get_status().value} v{self._control.version})"
             )
             self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+            return
+
+        if not await self._verify_intent_at_send(intent):
+            print(f"[order] ❌ Intent {intent.intent_id} rejected: final risk approval invalid or missing")
+            self._outbox.reject(
+                intent.intent_id,
+                "FINAL_APPROVAL_INVALID",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
             return
 
         # BD-FIX: Intent dead-letter — 超过最大重试次数的意图标记为失败
@@ -1854,20 +2002,35 @@ class AutonomousEngine:
             # 仅 LIMIT 单携带限价；MARKET 单的 reference price 不参与撮合（否则永远入队）
             limit_px = float(intent.price.amount) if order_type == "LIMIT" and intent.price else None
 
-            # 最近 ticker 的 bid/ask；缺失时用 last price ±0.1% 构造
+            # Paper must consume the same executable two-sided market fact as
+            # the live planner.  A synthetic spread would make Paper/Shadow
+            # look healthy while hiding stale or incomplete market data.
             ticker = self._feed.get_last_ticker(order_symbol)
-            last_px = getattr(self, "_last_prices", {}).get(order_symbol, 0) or float(ticker.get("lastPrice", 0) or 0)
-            bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or 0) or (last_px * 0.999 if last_px > 0 else 0.0)
-            ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or 0) or (last_px * 1.001 if last_px > 0 else 0.0)
+            bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or 0)
+            ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or 0)
+            if not (0 < bid <= ask):
+                print(f"[order] PAPER rejected: executable bid/ask UNKNOWN for {order_symbol}")
+                self._outbox.reject(
+                    intent.intent_id,
+                    "PAPER_MARKET_DATA_UNKNOWN",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                return
 
-            status, filled_qty, avg_price, latency_ms = "FILLED", qty, (bid if side == "BUY" else ask), 0.0
             try:
                 status, filled_qty, avg_price, latency_ms = self._paper_matching.match(
                     order_symbol, side, qty, limit_px, bid, ask
                 )
             except Exception as exc:
-                # 撮合引擎异常 → 回退即时成交
-                print(f"[order] PAPER matching engine failed ({exc}) — instant fill fallback")
+                # A simulator failure is an UNKNOWN execution result, never a
+                # synthetic fill.  Keep the intent auditable and fail closed.
+                print(f"[order] PAPER matching engine failed ({exc}) — rejecting intent")
+                self._outbox.reject(
+                    intent.intent_id,
+                    "PAPER_MATCHING_UNKNOWN",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                return
 
             print(
                 f"[order] PAPER match: {order_symbol} {side} qty={qty} "
@@ -1875,7 +2038,7 @@ class AutonomousEngine:
                 f"latency={latency_ms:.1f}ms (bid={bid:.4f} ask={ask:.4f})"
             )
 
-            if status in ("FILLED", "PARTIALLY_FILLED"):
+            if status == "FILLED":
                 tracker.apply(OrderEvent.FILLED)
                 self._store.save_order_state(
                     order_id=intent.intent_id,
@@ -1885,6 +2048,20 @@ class AutonomousEngine:
                     quantity=str(qty),
                     price=params.get("price"),
                     status="FILLED",
+                    filled_qty=str(filled_qty),
+                    avg_price=str(avg_price),
+                    client_order_id=client_id,
+                )
+            elif status == "PARTIALLY_FILLED":
+                tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                self._store.save_order_state(
+                    order_id=intent.intent_id,
+                    symbol=order_symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=str(qty),
+                    price=params.get("price"),
+                    status="PARTIALLY_FILLED",
                     filled_qty=str(filled_qty),
                     avg_price=str(avg_price),
                     client_order_id=client_id,
@@ -1912,7 +2089,7 @@ class AutonomousEngine:
             if self._shadow_runner is not None:
                 predicted = "LONG" if side == "BUY" else "SHORT"
                 actual = predicted if status in ("FILLED", "PARTIALLY_FILLED") else "NO_ACTION"
-                spread_bps = (ask - bid) / ((ask + bid) / 2) * 10000 if ask > bid > 0 else 1.0
+                spread_bps = (ask - bid) / ((ask + bid) / 2) * 10000
                 self._shadow_runner.record_tick(
                     predicted_direction=predicted,
                     predicted_strength=0.5,
@@ -1974,6 +2151,11 @@ class AutonomousEngine:
             if order is not None:
                 intent_acked = True
 
+        if not intent_acked and getattr(self._outbox, "_db_path", None):
+            # No venue acknowledgement is an ambiguous outcome.  Persist
+            # UNKNOWN and require a client-order-id query before any retry.
+            self._outbox.mark_unknown(intent.intent_id, "ORDER_ACK_UNKNOWN")
+
         # === 执行质量反馈：Contextual Bandit 学习实际执行成本 ===
         if algo_type is not None and slices:
             realized_cost_bps = ctx.predicted_cost_bps
@@ -1994,9 +2176,14 @@ class AutonomousEngine:
         返回 None 表示计划被取消（预测成本 > 净 Alpha），intent 已 ack。
         """
         # 1. 实时市场数据：订单簿 → bid/ask/深度/价差
+        is_reduce_only = (
+            bool(getattr(intent, "reduce_only", False))
+            or bool(getattr(intent, "close_position", False))
+            or ("-close-" in client_id)
+        )
         bid: float | None = None
         ask: float | None = None
-        spread_bps = 1.0
+        spread_bps: float | None = None
         bid_depth = 0.0
         ask_depth = 0.0
         try:
@@ -2006,7 +2193,7 @@ class AutonomousEngine:
                 ask = float(ob["asks"][0][0])
                 bid_depth = sum(float(b[1]) for b in ob["bids"])
                 ask_depth = sum(float(a[1]) for a in ob["asks"])
-                spread_bps = (ask - bid) / ask * 10000 if ask > 0 else 1.0
+                spread_bps = (ask - bid) / ask * 10000 if ask > 0 else None
         except Exception as e:
             print(f"[order] {order_symbol}: orderbook fetch failed ({e}), falling back to features")
         if bid is None or ask is None:
@@ -2015,44 +2202,73 @@ class AutonomousEngine:
                 if features.get("bid") and features.get("ask"):
                     bid = float(features["bid"])
                     ask = float(features["ask"])
-                    spread_bps = float(features.get("spread_bps", 1.0))
-            except Exception:
-                pass
+                    spread_value = features.get("spread_bps")
+                    if spread_value is not None:
+                        spread_bps = float(spread_value)
+            except Exception as exc:
+                print(f"[order] {order_symbol}: feature fetch failed ({exc})")
             if bid is None or ask is None:
-                print(f"[order] {order_symbol}: no live market data — using defaults")
-        bid_depth = bid_depth or 1_000_000.0
-        ask_depth = ask_depth or 1_000_000.0
+                if not is_reduce_only:
+                    self._outbox.reject(
+                        intent.intent_id,
+                        "MARKET_DATA_UNKNOWN",
+                        idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                    )
+                    print(f"[order] {order_symbol}: rejected — market data UNKNOWN")
+                    return None
+                print(f"[order] {order_symbol}: market data UNKNOWN; reduce-only emergency path only")
+        if (bid_depth <= 0 or ask_depth <= 0) and not is_reduce_only:
+            self._outbox.reject(
+                intent.intent_id,
+                "MARKET_DEPTH_UNKNOWN",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            print(f"[order] {order_symbol}: rejected — market depth UNKNOWN")
+            return None
+        if spread_bps is None:
+            spread_bps = 0.0 if is_reduce_only else float("inf")
         price = (
             (bid + ask) / 2
             if bid and ask
-            else float(getattr(self, "_last_prices", {}).get(order_symbol, 0) or 0)
+            else float(intent.price.amount) if intent.price else 0.0
         )
 
         # 2. 紧急减仓（reduce-only）→ 最高紧急度，强制 EMERGENCY_REDUCE_ONLY
-        is_reduce_only = (
-            bool(getattr(intent, "reduce_only", False))
-            or bool(getattr(intent, "close_position", False))
-            or ("-close-" in client_id)
-        )
         urgency = 0.9 if is_reduce_only else 0.3
 
         # 3. 成本估算与净 Alpha
-        predicted_cost_bps = spread_bps * 0.5  # 默认：半价差
-        net_alpha_bps = 15.0  # 默认净 Alpha（无信号强度信息时的保守估计）
+        predicted_cost_bps = spread_bps * 0.5
+        net_alpha_bps = float(getattr(intent, "net_alpha_bps", 0.0) or 0.0)
+        if not is_reduce_only and net_alpha_bps <= 0:
+            self._outbox.reject(
+                intent.intent_id,
+                "ALPHA_UNKNOWN",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            print(f"[order] {order_symbol}: rejected — net alpha UNKNOWN")
+            return None
         try:
             vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol))
             self._cost_model.set_fee_tier(VenueId("BINANCE"), "vip1", 2.0, 4.0)
             est = self._cost_model.estimate_order(
                 vi,
                 Quantity(amount=str(float(intent.quantity.amount))),
-                Price(amount=str(price)) if price > 0 else Price(amount="1"),
+                Price(amount=str(price)) if price > 0 else Price(amount="0"),
                 intent.side,
                 urgency=urgency,
                 spread_bps=spread_bps,
             )
             predicted_cost_bps = float(getattr(est, "total_fee_bps", predicted_cost_bps))
         except Exception as e:
-            print(f"[order] {order_symbol}: cost estimation failed ({e}) — using default {predicted_cost_bps:.1f}bps")
+            if not is_reduce_only:
+                self._outbox.reject(
+                    intent.intent_id,
+                    "COST_MODEL_UNKNOWN",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                print(f"[order] {order_symbol}: rejected — cost model UNKNOWN ({e})")
+                return None
+            print(f"[order] {order_symbol}: cost estimation unavailable for reduce-only ({e})")
 
         # 4. 构建执行上下文
         ctx = ExecutionContext(
@@ -2173,24 +2389,37 @@ class AutonomousEngine:
                 found = False
                 for s in exchange_info.get("symbols", []):
                     sym = s.get("symbol", "")
-                    prec = {"quantity": 3, "price": 2}  # defaults
+                    quantity_step: str | None = None
+                    price_tick: str | None = None
                     for f_item in s.get("filters", []):
-                        if f_item.get("filterType") == "LOT_SIZE":
-                            step = f_item.get("stepSize", "0.001")
-                            prec["quantity"] = max(0, len(step.split(".")[1].rstrip("0")) if "." in step else 0)
+                        if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                            quantity_step = str(f_item.get("stepSize", "")) or quantity_step
                         if f_item.get("filterType") == "PRICE_FILTER":
-                            tick = f_item.get("tickSize", "0.01")
-                            prec["price"] = max(0, len(tick.split(".")[1].rstrip("0")) if "." in tick else 0)
-                    self._symbol_precision[sym] = prec
+                            price_tick = str(f_item.get("tickSize", "")) or price_tick
+                    if not quantity_step or not price_tick:
+                        continue
+                    try:
+                        quantity_decimals = max(0, -Decimal(quantity_step).as_tuple().exponent)
+                        price_decimals = max(0, -Decimal(price_tick).as_tuple().exponent)
+                    except (InvalidOperation, ValueError):
+                        continue
+                    self._symbol_precision[sym] = {
+                        "quantity": quantity_decimals,
+                        "price": price_decimals,
+                    }
                     if sym == order_symbol:
                         found = True
-                # 未找到时缓存默认精度，避免重复 exchangeInfo 查询
                 if not found:
-                    self._symbol_precision[order_symbol] = {"quantity": 3, "price": 2}
-            except Exception:
-                self._symbol_precision[order_symbol] = {"quantity": 3, "price": 2}
+                    print(f"[order] {order_symbol}: exchange precision UNKNOWN")
+                    return None
+            except Exception as exc:
+                print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
+                return None
 
-        prec = self._symbol_precision.get(order_symbol, {"quantity": 3, "price": 2})
+        prec = self._symbol_precision.get(order_symbol)
+        if prec is None:
+            print(f"[order] {order_symbol}: exchange precision UNKNOWN")
+            return None
         qty = float(params["quantity"])
         params["quantity"] = f"{qty:.{prec['quantity']}f}"
         price_raw = params.get("price")
@@ -2198,7 +2427,29 @@ class AutonomousEngine:
             params["price"] = f"{float(price_raw):.{prec['price']}f}"
 
         print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
-        order = await self._api_async(Endpoint.ORDER, method="POST", signed=True, params=params)
+        try:
+            adapter_response = await self._adapter.create_order(
+                OrderRequest(
+                    venue_instrument=VenueInstrument(
+                        venue_id=VenueId("BINANCE"),
+                        instrument_id=InstrumentId(order_symbol),
+                    ),
+                    account_ref=intent.account_ref,
+                    side=OrderSide(side),
+                    order_type=OrderType(order_type),
+                    quantity=Quantity(amount=str(params["quantity"])),
+                    price=Price(amount=str(params["price"])) if params.get("price") else None,
+                    time_in_force=TimeInForce(params.get("timeInForce", TimeInForce.GTC.value)),
+                    client_order_id=params.get("newClientOrderId"),
+                    correlation_id=getattr(intent, "correlation_id", None),
+                    reduce_only=bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False)),
+                )
+            )
+            order = adapter_response.raw_response or {}
+            if not order and adapter_response.status in (OrderStatus.REJECTED, OrderStatus.UNKNOWN):
+                order = {"error": adapter_response.status.value, "msg": "adapter returned no order acknowledgement"}
+        except (TypeError, ValueError) as exc:
+            order = {"error": "ADAPTER_REQUEST_INVALID", "msg": str(exc)}
         print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
@@ -2276,9 +2527,12 @@ class AutonomousEngine:
                         return existing
             except Exception as qe:
                 print(f"[order] -4141 recovery query failed: {qe}")
-            # 恢复失败 → 将此 intent 视为已存在，ack 避免死循环重试
+            # 恢复失败 → 保留 UNKNOWN，禁止盲目重发。
             if ack_outbox:
-                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
+                if getattr(self._outbox, "_db_path", None):
+                    self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
+                else:
+                    self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, 'idempotency_key', ''))
             return None
 
         print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
@@ -2382,7 +2636,7 @@ class AutonomousEngine:
                             ),
                             correlation_id=CorrelationId(f"exec-{order_id}"),
                         )
-                        self._ledger.post(tx)
+                        self._post_ledger_transaction(tx)
                         print(
                             f"[order] PARTIAL FILL recorded: {order_sym or symbol} {side_desc} "
                             f"qty={executed_qty} @ {avg_price} notional={partial_notional:.2f}"
@@ -2444,7 +2698,7 @@ class AutonomousEngine:
             ),
             correlation_id=CorrelationId(f"exec-{order_id}"),
         )
-        self._ledger.post(tx)
+        self._post_ledger_transaction(tx)
         self._store.save_ledger_entry(
             tx_id,
             "default",
@@ -2522,13 +2776,17 @@ class AutonomousEngine:
                 take_profit_config=adaptive_cfg.take_profit_config,
             )
             self._position_entry_times[pos_id] = time.time()
-            # BD-FIX: 持久化保护单状态
-            self._store.save_protection(
-                pos_id, symbol, "BINANCE", entry_price, qty,
-                pos_side.value if hasattr(pos_side, 'value') else str(pos_side),
-                str(adaptive_cfg.stop_loss_config) if adaptive_cfg.stop_loss_config else "",
-                str(adaptive_cfg.take_profit_config) if adaptive_cfg.take_profit_config else "",
-            )
+            protect_orders = [pp.stop_loss] if pp.stop_loss else []
+            protect_orders.extend(pp.take_profits)
+            # The local manager creates definitions before the venue ACK.  Keep
+            # them CREATED/PENDING until each individual conditional order is
+            # acknowledged; otherwise restart recovery would claim coverage
+            # that never existed at the exchange.
+            for p_order in protect_orders:
+                if p_order is None:
+                    continue
+                p_order.status = ProtectionStatus.CREATED
+                self._persist_protection_order(p_order, status="PENDING")
 
             # 打印保护摘要
             sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
@@ -2562,8 +2820,6 @@ class AutonomousEngine:
 
             # 提交止盈止损到交易所
             reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
-            protect_orders = [pp.stop_loss] if pp.stop_loss else []
-            protect_orders.extend(pp.take_profits)
             exchange_protection_count = 0
             for p_order in protect_orders:
                 if p_order is None:
@@ -2574,7 +2830,10 @@ class AutonomousEngine:
                     continue
                 self._protection_exchange_attempted.add(p_order.protection_id)
 
-                prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                prec_map = self._symbol_precision.get(symbol)
+                if prec_map is None:
+                    print(f"[protection] {symbol}: exchange precision UNKNOWN; keeping protection PENDING")
+                    continue
                 qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
                 price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
 
@@ -2609,13 +2868,15 @@ class AutonomousEngine:
                             f"[protection] ⚠️ {symbol} {p_order.reason}: retry {algo_attempt + 1}/{max_algo_retries} after {wait:.1f}s (err={err_code})"
                         )
                         await asyncio.sleep(wait)
-                        self._exchange.reset_circuit_breaker()  # 重置熔断器重试
+                        self._adapter.reset_circuit_breaker()  # 重置熔断器重试
                 if "algoId" in algo_resp:
                     exchange_protection_count += 1
                     algo_id = str(algo_resp["algoId"])
                     if not hasattr(self, "_active_algo_ids"):
                         self._active_algo_ids: dict[str, set[str]] = {}
                     self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                    p_order.status = ProtectionStatus.ACTIVE
+                    self._persist_protection_order(p_order, status="ACTIVE")
                     print(
                         f"[protection] ✅ {symbol} {p_order.reason} → algoId={algo_id} "
                         f"triggerPrice={price_str} status={algo_resp.get('algoStatus', 'NEW')}"
@@ -2623,6 +2884,8 @@ class AutonomousEngine:
                 else:
                     err_code = algo_resp.get("code", "unknown")
                     err_msg = algo_resp.get("msg", str(algo_resp)[:150])
+                    p_order.status = ProtectionStatus.CREATED
+                    self._persist_protection_order(p_order, status="PENDING")
                     print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
 
             if exchange_protection_count > 0:
@@ -2824,7 +3087,7 @@ class AutonomousEngine:
                 return
 
             # 重置客户端熔断器，确保关键恢复不被限流拦截
-            self._exchange.reset_circuit_breaker()
+            self._adapter.reset_circuit_breaker()
 
             # 若 Phase 1/2 已处理所有持仓，直接跳过
             local_symbols = {str(pp.instrument_id) for pp in self._protection.all_positions().values()}
@@ -2855,7 +3118,10 @@ class AutonomousEngine:
                     entry = data["entry"]
                     side = "SELL" if amt > 0 else "BUY"
                     qty = abs(amt)
-                    prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                    prec = self._symbol_precision.get(symbol)
+                    if prec is None:
+                        print(f"[startup] {symbol}: exchange precision UNKNOWN; protection remains PENDING")
+                        continue
                     qty_str = f"{qty:.{prec['quantity']}f}"
 
                     # 使用默认止损（1% ATR 止损 + 1.6 RR 止盈）
@@ -3059,8 +3325,14 @@ class AutonomousEngine:
                 existing_ids = exchange_algo_symbols.get(symbol, set())
 
                 # 计算该仓位应有保护单数量
-                expected_count = (1 if pp.stop_loss and pp.stop_loss.is_active() else 0) + sum(
-                    1 for tp in pp.take_profits if tp.is_active()
+                def _needs_exchange_protection(p_order: Any | None) -> bool:
+                    if p_order is None:
+                        return False
+                    status = getattr(getattr(p_order, "status", None), "value", "")
+                    return status in (ProtectionStatus.ACTIVE.value, ProtectionStatus.CREATED.value)
+
+                expected_count = (1 if _needs_exchange_protection(pp.stop_loss) else 0) + sum(
+                    1 for tp in pp.take_profits if _needs_exchange_protection(tp)
                 )
                 server_count = len(existing_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
@@ -3078,13 +3350,16 @@ class AutonomousEngine:
                 # 首次重试即加宽 (2.0x)，之后每次递增 0.5x
                 widen_factor = 2.0 + retry_count * 0.5
                 side = "SELL" if pp.side == OrderSide.BUY else "BUY"
-                prec = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                prec = self._symbol_precision.get(symbol)
+                if prec is None:
+                    print(f"[protection] {symbol}: exchange precision UNKNOWN; retry deferred")
+                    continue
                 qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
                 placed = 0
 
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
-                if pp.stop_loss is not None and pp.stop_loss.is_active():
+                if _needs_exchange_protection(pp.stop_loss):
                     orig_sl_price = float(pp.stop_loss.trigger_price.amount)
                     current_price = float(self._last_prices.get(symbol, 0))
                     entry_ref = float(pp.entry_price)
@@ -3122,6 +3397,8 @@ class AutonomousEngine:
                     )
                     if "algoId" in algo_resp:
                         self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
+                        pp.stop_loss.status = ProtectionStatus.ACTIVE
+                        self._persist_protection_order(pp.stop_loss, status="ACTIVE")
                         print(
                             f"[nearline] ✅ Retried stop loss for {symbol} (widened {widen_factor:.1f}x) → algoId={algo_resp['algoId']}"
                         )
@@ -3133,7 +3410,7 @@ class AutonomousEngine:
 
                 # --- 重试止盈单 ---
                 for i, tp in enumerate(pp.take_profits):
-                    if not tp.is_active():
+                    if not _needs_exchange_protection(tp):
                         continue
                     orig_tp_price = float(tp.trigger_price.amount)
                     current_price = float(self._last_prices.get(symbol, 0))
@@ -3170,6 +3447,8 @@ class AutonomousEngine:
                     )
                     if "algoId" in tp_resp:
                         self._active_algo_ids.setdefault(pos_id, set()).add(str(tp_resp["algoId"]))
+                        tp.status = ProtectionStatus.ACTIVE
+                        self._persist_protection_order(tp, status="ACTIVE")
                         print(
                             f"[nearline] ✅ Retried take profit #{i} for {symbol} (widened {widen_factor:.1f}x) → algoId={tp_resp['algoId']}"
                         )
@@ -3368,11 +3647,16 @@ class AutonomousEngine:
                                 f"→ {signal.direction} strength={signal.strength:.3f}"
                             )
                         # BD-FIX: Mandatory VETO short-circuit — 任何 FILTER 返回 VETO 立即终止
-                        if comp.component_type == AlphaComponentType.FILTER:
-                            if hasattr(signal, "direction") and signal.direction == SignalDirection.NO_ACTION and signal.strength == 0.0 and signal.confidence >= 0.8:
-                                veto_triggered = True
-                                print(f"[nearline] {symbol}: DAG VETO by {comp_id} — all signals rejected")
-                                break
+                        if (
+                            comp.component_type == AlphaComponentType.FILTER
+                            and hasattr(signal, "direction")
+                            and signal.direction == SignalDirection.NO_ACTION
+                            and signal.strength == 0.0
+                            and signal.confidence >= 0.8
+                        ):
+                            veto_triggered = True
+                            print(f"[nearline] {symbol}: DAG VETO by {comp_id} — all signals rejected")
+                            break
                 except ValueError as e:
                     print(f"[nearline] {symbol}: DAG error: {e}")
                     continue
@@ -3407,11 +3691,13 @@ class AutonomousEngine:
                 if exit_flat_signals and pos_info["has_position"]:
                     # 生成平仓订单
                     close_side = OrderSide.SELL if pos_info["side"] == "LONG" else OrderSide.BUY
-                    close_qty = (
-                        abs(float(symbol_positions[next(iter(symbol_positions))].quantity))
-                        if symbol_positions
-                        else 0.001
-                    )
+                    if not symbol_positions:
+                        # A position without an authoritative quantity is an
+                        # unsafe close request.  Do not invent a minimum lot;
+                        # reconciliation must supply the exact owner quantity.
+                        print(f"[nearline] {symbol}: CLOSE SKIP (position quantity UNKNOWN)")
+                        continue
+                    close_qty = abs(float(symbol_positions[next(iter(symbol_positions))].quantity))
                     from beidou_safety.execution import OrderIntent
 
                     close_intent = OrderIntent(
@@ -3495,8 +3781,22 @@ class AutonomousEngine:
                     continue
                 account_balance = float(account_balance_str)
 
-                ann_vol = features.get("ann_volatility", 0.3)
-                spread_bps_val = features.get("spread_bps", 1.0)
+                ann_vol = features.get("ann_volatility")
+                spread_bps_val = features.get("spread_bps")
+                atr_pct = features.get("atr_pct")
+                if (
+                    ann_vol is None
+                    or spread_bps_val is None
+                    or atr_pct is None
+                    or float(ann_vol) <= 0
+                    or float(spread_bps_val) < 0
+                    or float(atr_pct) <= 0
+                ):
+                    print(f"[nearline] {symbol}: SKIP (market/risk features UNKNOWN)")
+                    continue
+                ann_vol = float(ann_vol)
+                spread_bps_val = float(spread_bps_val)
+                atr_pct = float(atr_pct)
                 signal_strength = fused.strength
 
                 # 自适应杠杆 — 波动率越高杠杆越低
@@ -3506,8 +3806,8 @@ class AutonomousEngine:
                 adaptive_pct = adaptive_position_pct(signal_strength, ann_vol, spread_bps_val)
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
 
-                # ATR-based stop loss (volatility-adaptive, default 2% if ATR unavailable)
-                atr_pct = features.get("atr_pct", 2.0)
+                # ATR-based stop loss (volatility-adaptive; missing ATR was
+                # rejected above rather than replaced with a trading default).
                 stop_loss_pct = max(1.0, min(atr_pct * 1.5, 5.0))  # 1.5× ATR, capped 1%-5%
                 stop_loss_price = price * (1 - stop_loss_pct / 100)
 
@@ -3528,7 +3828,10 @@ class AutonomousEngine:
                 # 自适应仓位: risk_based_size × adaptive_pct, 受 leverage 约束
                 max_by_leverage = (account_balance * dyn_leverage) / price
                 position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
-                position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
+                position_size = min(position_size, max_by_leverage * 0.5)
+                if position_size <= 0:
+                    print(f"[nearline] {symbol}: SKIP (computed position size UNKNOWN/zero)")
+                    continue
                 position_notional = price * position_size
 
                 print(
@@ -3550,7 +3853,10 @@ class AutonomousEngine:
                         dyn_leverage = float(actual_lev)  # 使用实际杠杆重新计算仓位
                         max_by_leverage = (account_balance * dyn_leverage) / price
                         position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
-                        position_size = max(0.001, min(position_size, max_by_leverage * 0.5))
+                        position_size = min(position_size, max_by_leverage * 0.5)
+                        if position_size <= 0:
+                            print(f"[nearline] {symbol}: SKIP (recomputed position size UNKNOWN/zero)")
+                            continue
                         position_notional = price * position_size
 
                 # === 5.7 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）===
@@ -3611,7 +3917,11 @@ class AutonomousEngine:
                 price = prop["price"]
                 account_balance = prop["account_balance"]
                 dyn_leverage = prop["dyn_leverage"]
-                spread_bps = prop["features"].get("spread_bps", 1.0)
+                spread_bps_value = prop["features"].get("spread_bps")
+                if spread_bps_value is None or float(spread_bps_value) < 0:
+                    print(f"[nearline] {symbol}: SKIP (spread UNKNOWN at execution boundary)")
+                    continue
+                spread_bps = float(spread_bps_value)
                 # 使用优化器仲裁后的目标仓位；无冲突时保持原始 size
                 position_size = resolved_qty.get(f"{venue_id}:{instrument_id}", prop["position_size"])
                 position_notional = price * position_size
@@ -3631,17 +3941,6 @@ class AutonomousEngine:
                 if cost_est.total_fee_bps > 30:
                     print(f"[nearline] {symbol}: SKIP (cost too high: {cost_est.total_fee_bps}bps)")
                     continue
-
-                # === 7. Full R0-R10 Risk Rule Evaluation ===
-                snapshot = RiskSnapshot(
-                    total_exposure=position_notional,
-                    margin_used=position_notional / dyn_leverage if dyn_leverage > 0 else position_notional / 2,
-                    margin_total=account_balance,
-                    position_count=self._protection.position_count(),
-                    pending_orders=len(self._active_order_ids),
-                    leverage=dyn_leverage,
-                    concentration_pct=position_notional / max(account_balance, 1) * 100,
-                )
 
                 # Build risk context for full R0-R10 evaluation
                 risk_context: dict = {
@@ -3678,15 +3977,13 @@ class AutonomousEngine:
                 }
 
                 # Attempt to get liquidation price from Binance positions
-                try:
+                with contextlib.suppress(Exception):
                     for p in self._last_account.get("positions", []):
                         if p.get("symbol") == symbol and float(p.get("positionAmt", 0)) != 0:
                             liq_price = float(p.get("liquidationPrice", 0))
                             if liq_price > 0:
                                 risk_context["liquidation_price"] = liq_price
                             break
-                except Exception:
-                    pass
 
                 # Evaluate all R0-R10 rules
                 risk_results = RiskRuleRegistry.evaluate_all(risk_context)
@@ -3713,6 +4010,7 @@ class AutonomousEngine:
                 nonce = secrets.token_hex(8)
 
                 approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
+                approval_expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
                 signature = self._approval.sign(
                     approval_id,
                     proposal_hash=proposal_hash,
@@ -3720,10 +4018,10 @@ class AutonomousEngine:
                     risk_snapshot_hash=risk_hash,
                     policy_version="2.0.0",
                     nonce=nonce,
+                    expires_at=approval_expires_at,
                 )
-                self._risk_sm.approve(approval_id)
 
-                # Verify the approval before proceeding
+                # 提交前只预检签名；nonce 必须保留到最终发送边界消费。
                 if not await self._approval.verify(
                     approval_id,
                     signature=signature,
@@ -3732,11 +4030,17 @@ class AutonomousEngine:
                     risk_snapshot_hash=risk_hash,
                     policy_version="2.0.0",
                     nonce=nonce,
+                    expires_at=approval_expires_at,
+                    consume_nonce=False,
                 ):
                     print(f"[nearline] {symbol}: SKIP (approval verification failed)")
                     continue
 
-                if self._risk_sm.get(approval_id) != RiskDecision.APPROVED:
+                if self._risk_sm.approve_if_verified(
+                    approval_id,
+                    signature_valid=True,
+                    risk_check_passed=risk_approved,
+                ) != RiskDecision.APPROVED:
                     print(f"[nearline] {symbol}: SKIP (risk not approved)")
                     continue
 
@@ -3755,6 +4059,13 @@ class AutonomousEngine:
                     correlation_id=CorrelationId(f"nearline-{int(time.time())}"),
                     idempotency_key=f"idem-{symbol}-{int(time.time() / 300)}",
                     risk_approval_id=str(approval_id),
+                    risk_approval_signature=signature,
+                    risk_proposal_hash=proposal_hash,
+                    risk_account_snapshot_hash=account_hash,
+                    risk_snapshot_hash=risk_hash,
+                    risk_policy_version="2.0.0",
+                    risk_nonce=nonce,
+                    risk_expires_at=approval_expires_at,
                 )
 
                 # P1修复: 内联 PreRisk 检查 — 避免 PreRiskCheckerImpl.check() 签名不匹配
@@ -3820,7 +4131,7 @@ class AutonomousEngine:
 
         try:
             # 重置熔断器确保关键对账不被限流拦截
-            self._exchange.reset_circuit_breaker()
+            self._adapter.reset_circuit_breaker()
 
             # Step 1: 获取交易所完整状态
             account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
@@ -3872,7 +4183,7 @@ class AutonomousEngine:
                 self._active_order_ids.discard(oid)
                 symbol = self._order_symbols.pop(oid, None)
                 if symbol and self._can_write:
-                    try:
+                    with contextlib.suppress(Exception):
                         order_result = await self._api_async(
                             Endpoint.ORDER, signed=True,
                             params={"symbol": symbol, "orderId": int(oid) if oid.isdigit() else oid}
@@ -3888,8 +4199,6 @@ class AutonomousEngine:
                                     order_result.get("price"), status)
                                 print(f"[sync] 🧹 Stale order {oid} ({symbol}) → {status} (no fill processing)")
                             continue
-                    except Exception:
-                        pass
                 # 回退: 无法查询时保留 tracker 以便后续处理，标记为 UNKNOWN
                 self._order_trackers.pop(oid, None)
                 if symbol:
@@ -4449,57 +4758,42 @@ class AutonomousEngine:
                 self._symbol_precision = {}
             for s in exchange_info.get("symbols", []):
                 sym = s.get("symbol", "")
-                prec = {"quantity": 3, "price": 2}
+                quantity_step: str | None = None
+                price_tick: str | None = None
                 for f_item in s.get("filters", []):
-                    if f_item.get("filterType") == "LOT_SIZE":
-                        step = f_item.get("stepSize", "0.001")
-                        prec["quantity"] = max(0, len(step.split(".")[1].rstrip("0")) if "." in step else 0)
+                    if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                        quantity_step = str(f_item.get("stepSize", "")) or quantity_step
                     if f_item.get("filterType") == "PRICE_FILTER":
-                        tick = f_item.get("tickSize", "0.01")
-                        prec["price"] = max(0, len(tick.split(".")[1].rstrip("0")) if "." in tick else 0)
-                self._symbol_precision[sym] = prec
+                        price_tick = str(f_item.get("tickSize", "")) or price_tick
+                if not quantity_step or not price_tick:
+                    continue
+                try:
+                    self._symbol_precision[sym] = {
+                        "quantity": max(0, -Decimal(quantity_step).as_tuple().exponent),
+                        "price": max(0, -Decimal(price_tick).as_tuple().exponent),
+                    }
+                except (InvalidOperation, ValueError):
+                    continue
             print(f"[beidou-autopilot] Loaded precision for {len(self._symbol_precision)} symbols")
         except Exception as e:
             print(f"[beidou-autopilot] Warning: exchangeInfo load failed: {e}")
 
-        # BD-FIX: 启动时取消交易所所有已有条件单，避免跨 session 累积重复
-        # 分批取消（每批最多 5 个，批次间隔 2s），避免触发 Binance 限流熔断
+        # Never cancel every conditional order on startup.  Without a durable
+        # owner/session mapping that action can delete a manual or another
+        # worker's valid protection and create a naked position.  Recovery is
+        # read-only here; only an explicitly owned, ACK-backed order may be
+        # cancelled by a governed close/replacement path.
         try:
             existing_algos = await self._api_async(Endpoint.OPEN_ALGO_ORDERS, signed=True)
-            if isinstance(existing_algos, list) and existing_algos:
-                cancelled_count = 0
-                batch_size = 5
-                for i in range(0, len(existing_algos), batch_size):
-                    batch = existing_algos[i : i + batch_size]
-
-                    async def _cancel_one(algo: dict) -> bool:
-                        try:
-                            cancel_resp = await self._api_async(
-                                Endpoint.ALGO_ORDER,
-                                method="DELETE",
-                                signed=True,
-                                params={"symbol": algo["symbol"], "algoId": int(algo["algoId"])},
-                            )
-                            return "code" not in cancel_resp
-                        except Exception:
-                            return False
-
-                    results = await asyncio.gather(*[_cancel_one(a) for a in batch])
-                    cancelled_count += sum(1 for r in results if r)
-
-                    # 批次间休息，避免触发限流 (Binance testnet 限制较严格)
-                    if i + batch_size < len(existing_algos):
-                        await asyncio.sleep(2)
-
+            if isinstance(existing_algos, list):
                 print(
-                    f"[beidou-autopilot] Cleaned up {cancelled_count}/{len(existing_algos)} "
-                    f"stale algo orders before recovery"
+                    f"[beidou-autopilot] Observed {len(existing_algos)} open conditional orders; "
+                    "skipping unowned startup cancellation"
                 )
-        except Exception as e:
-            print(f"[beidou-autopilot] Warning: stale algo cleanup failed: {e}")
+        except Exception as exc:
+            print(f"[beidou-autopilot] Conditional-order inventory UNKNOWN: {exc}")
 
-        # 清理旧订单可能触发客户端熔断器，重置以确保后续恢复不受影响
-        self._exchange.reset_circuit_breaker()
+        self._adapter.reset_circuit_breaker()
 
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
@@ -4507,7 +4801,7 @@ class AutonomousEngine:
             if not ok or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
-                self._exchange.reset_circuit_breaker()
+                self._adapter.reset_circuit_breaker()
                 account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
                 if not ok:
                     print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable)")
@@ -4558,7 +4852,10 @@ class AutonomousEngine:
                 for p_order in protect_orders:
                     if p_order is None:
                         continue
-                    prec_map = self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})
+                    prec_map = self._symbol_precision.get(symbol)
+                    if prec_map is None:
+                        print(f"[startup] {symbol}: exchange precision UNKNOWN; recovery deferred")
+                        continue
                     qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
                     price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
                     pending_submissions.append(
@@ -4693,7 +4990,7 @@ class AutonomousEngine:
             print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         else:
             print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
-        if self._exchange is None:
+        if self._adapter is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 
         # BD-FIX: 启动 WebSocket 实时行情流（REST 轮询作为回退）

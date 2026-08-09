@@ -307,6 +307,35 @@ def test_only_adapter_accesses_binance_api() -> None:
         )
 
 
+def test_engine_transport_calls_cross_binance_adapter() -> None:
+    """引擎不得直接持有 REST client 的 request/reset 写边界。"""
+
+    root = Path(__file__).resolve().parent.parent.parent
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    assert "self._exchange.request" not in source
+    assert "self._exchange.reset_circuit_breaker" not in source
+    assert "self._adapter.request" in source
+    assert "_api_async(Endpoint.ORDER, method=\"POST\"" not in source
+    assert "self._adapter.create_order" in source
+
+
+def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() -> None:
+    """Missing venue facts must reject an order rather than inventing inputs."""
+
+    root = Path(__file__).resolve().parent.parent.parent
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    assert "MARKET_DATA_UNKNOWN" in source
+    assert "MARKET_DEPTH_UNKNOWN" in source
+    assert "PAPER_MARKET_DATA_UNKNOWN" in source
+    assert "EXCHANGE_RULES_UNKNOWN" not in source  # no hidden fallback token
+    assert "instant fill fallback" not in source
+    assert "last_px * 0.999" not in source
+    assert "last_px * 1.001" not in source
+    assert 'self._symbol_precision.get(order_symbol, {"quantity": 3, "price": 2})' not in source
+    assert 'self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})' not in source
+    assert "skipping unowned startup cancellation" in source
+
+
 # ================================================================
 # MON00-08: 监控模块架构边界 — 监控代码不得直接发出风险增加订单
 # ================================================================

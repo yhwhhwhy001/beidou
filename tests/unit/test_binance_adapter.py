@@ -1,13 +1,41 @@
 """PKG-06: Binance Adapter 测试。参考数据、健康监控、交易规则。"""
 
+import pytest
+
 from beidou_exchange.binance_usdm import (
     BinanceHealthMonitor,
     BinanceReferenceData,
     BinanceUsdmAdapter,
 )
 from beidou_exchange.binance_usdm.adapter import InstrumentStatus
-from beidou_exchange.core.protocol import Capability
-from beidou_shared.types import HealthStatus, InstrumentId, VenueId
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.core.error_taxonomy import Result
+from beidou_exchange.core.protocol import Capability, OrderRequest
+from beidou_shared.types import (
+    AccountId,
+    AccountRef,
+    HealthStatus,
+    InstrumentId,
+    OrderSide,
+    OrderType,
+    Quantity,
+    VenueId,
+    VenueInstrument,
+)
+
+
+class FakeRestClient:
+    def __init__(self, response: object) -> None:
+        self.response = response
+        self.calls: list[tuple[str, str, bool, dict | None]] = []
+        self.reset_count = 0
+
+    async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
+        self.calls.append((method, path, signed, params))
+        return Result.success(self.response)
+
+    def reset_circuit_breaker(self) -> None:
+        self.reset_count += 1
 
 
 class TestBinanceReferenceData:
@@ -91,3 +119,56 @@ class TestBinanceAdapter:
         from beidou_shared.errors import ErrorCategory
 
         assert error.category == ErrorCategory.AUTH_FAILURE
+
+    @pytest.mark.asyncio
+    async def test_order_write_and_reduce_only_cross_adapter_boundary(self):
+        transport = FakeRestClient({"orderId": 17, "status": "NEW", "executedQty": "0"})
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.01"),
+            client_order_id="cid-1",
+            reduce_only=True,
+        )
+
+        response = await adapter.create_order(request)
+
+        assert response.order_id == "17"
+        method, path, signed, params = transport.calls[-1]
+        assert (method, path, signed) == ("POST", Endpoint.ORDER, True)
+        assert params is not None and params["reduceOnly"] == "true"
+
+    @pytest.mark.asyncio
+    async def test_cancel_and_status_use_adapter_transport(self):
+        transport = FakeRestClient({"orderId": 17, "status": "FILLED", "origQty": "0.01", "executedQty": "0.01"})
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        venue_instrument = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+
+        cancel = await adapter.cancel_order("17", venue_instrument)
+        status = await adapter.get_order_status("17", venue_instrument)
+
+        assert cancel.status.value == "CANCELED"
+        assert status.value == "FILLED"
+        assert transport.calls[0][1] == Endpoint.ORDER
+        assert transport.calls[1][1] == Endpoint.ORDER
+
+    @pytest.mark.asyncio
+    async def test_missing_transport_is_unknown_not_success(self):
+        adapter = BinanceUsdmAdapter()
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.01"),
+        )
+
+        response = await adapter.create_order(request)
+
+        assert response.status.value == "UNKNOWN"

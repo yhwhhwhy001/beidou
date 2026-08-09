@@ -49,6 +49,19 @@ class OrderIntent:
     reduce_only: bool = False
     close_position: bool = False
     emergency_policy_signed: bool = False
+    # Final-send approval envelope.  These fields are immutable intent data;
+    # the executor must revalidate them immediately before the adapter call.
+    risk_approval_signature: str | None = None
+    risk_proposal_hash: str = ""
+    risk_account_snapshot_hash: str = ""
+    risk_snapshot_hash: str = ""
+    risk_policy_version: str = ""
+    risk_nonce: str = ""
+    risk_expires_at: float | None = None
+    # Execution economics must be explicit; zero means unavailable and blocks
+    # risk-increasing live sends at the final planner boundary.
+    net_alpha_bps: float = 0.0
+    predicted_cost_bps: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

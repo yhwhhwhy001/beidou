@@ -29,13 +29,24 @@ class PersistentStore:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = cls(db_path)
+        elif cls._instance._db_path != db_path:
+            # A singleton silently serving another database would split the
+            # execution truth across files.  Refuse the ambiguity instead of
+            # allowing a second engine to start on stale state.
+            raise RuntimeError(
+                f"PersistentStore already bound to {cls._instance._db_path!r}; "
+                f"requested {db_path!r}"
+            )
         return cls._instance
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._local.conn.execute("PRAGMA journal_mode=WAL")
-            self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            # FULL is required for a trading truth journal: a successful
+            # commit must survive a process/host crash before an ACK can be
+            # interpreted by the control plane.
+            self._local.conn.execute("PRAGMA synchronous=FULL")
             self._local.conn.execute("PRAGMA busy_timeout=10000")  # BD-FIX: 10s 忙等
             self._local.conn.row_factory = sqlite3.Row
         return self._local.conn
@@ -55,6 +66,29 @@ class PersistentStore:
                 correlation_id TEXT,
                 timestamp TEXT NOT NULL,
                 is_reversible INTEGER DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS ledger_transactions (
+                transaction_id TEXT PRIMARY KEY,
+                transaction_type TEXT NOT NULL,
+                source_event_id TEXT,
+                correlation_id TEXT,
+                timestamp TEXT NOT NULL,
+                is_correction INTEGER DEFAULT 0,
+                reverses_transaction_id TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS ledger_postings (
+                posting_id TEXT PRIMARY KEY,
+                transaction_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                venue_id TEXT NOT NULL,
+                instrument_id TEXT,
+                amount TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                decimals INTEGER NOT NULL DEFAULT 8,
+                side TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS order_states (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,6 +152,7 @@ class PersistentStore:
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_account ON ledger_entries(account_id, venue_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_correlation ON ledger_entries(correlation_id);
+            CREATE INDEX IF NOT EXISTS idx_ledger_postings_tx ON ledger_postings(transaction_id);
             CREATE INDEX IF NOT EXISTS idx_orders_status ON order_states(status);
             CREATE INDEX IF NOT EXISTS idx_protection_position ON protection_orders(position_id);
             CREATE INDEX IF NOT EXISTS idx_checkpoints_module ON checkpoints(module_name);
@@ -150,6 +185,71 @@ class PersistentStore:
         conn = self._get_conn()
         rows = conn.execute("SELECT * FROM ledger_entries ORDER BY id").fetchall()
         return [dict(r) for r in rows]
+
+    def save_ledger_transaction(self, transaction: Any) -> None:
+        """Persist the immutable transaction and every posting atomically."""
+
+        conn = self._get_conn()
+        transaction_id = str(transaction.transaction_id)
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO ledger_transactions
+                   (transaction_id, transaction_type, source_event_id, correlation_id,
+                    timestamp, is_correction, reverses_transaction_id, metadata)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    transaction_id,
+                    str(getattr(transaction.transaction_type, "value", transaction.transaction_type)),
+                    str(transaction.source_event_id or ""),
+                    str(transaction.correlation_id) if transaction.correlation_id is not None else None,
+                    transaction.timestamp.isoformat(),
+                    int(bool(transaction.is_correction)),
+                    str(transaction.reverses_transaction_id or ""),
+                    json.dumps(transaction.metadata or {}, sort_keys=True, default=str),
+                ),
+            )
+            for posting in transaction.postings:
+                amount = posting.amount
+                conn.execute(
+                    """INSERT OR IGNORE INTO ledger_postings
+                       (posting_id, transaction_id, account_id, account_type, venue_id,
+                        instrument_id, amount, currency, decimals, side, description)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        str(posting.posting_id),
+                        transaction_id,
+                        str(posting.account_id),
+                        str(getattr(posting.account_type, "value", posting.account_type)),
+                        str(posting.venue_id),
+                        str(posting.instrument_id) if posting.instrument_id is not None else None,
+                        str(amount.amount),
+                        str(amount.currency),
+                        int(amount.decimals),
+                        str(getattr(posting.side, "value", posting.side)),
+                        str(posting.description or ""),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def restore_ledger_transactions(self) -> list[dict[str, Any]]:
+        """Return durable journal rows for reconstruction by the domain ledger."""
+
+        conn = self._get_conn()
+        transactions = [dict(row) for row in conn.execute(
+            "SELECT * FROM ledger_transactions ORDER BY timestamp, transaction_id"
+        ).fetchall()]
+        postings = [dict(row) for row in conn.execute(
+            "SELECT * FROM ledger_postings ORDER BY transaction_id, posting_id"
+        ).fetchall()]
+        by_transaction: dict[str, list[dict[str, Any]]] = {}
+        for posting in postings:
+            by_transaction.setdefault(str(posting["transaction_id"]), []).append(posting)
+        for transaction in transactions:
+            transaction["postings"] = by_transaction.get(str(transaction["transaction_id"]), [])
+        return transactions
 
     def get_account_balance(self, account_id: str, venue_id: str) -> float:
         conn = self._get_conn()

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from beidou_exchange.core.error_taxonomy import ErrorNormalizer
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.core.error_taxonomy import ErrorNormalizer, Result
 from beidou_exchange.core.protocol import (
     AccountInfo,
     Capability,
@@ -16,6 +18,7 @@ from beidou_exchange.core.protocol import (
     OrderRequest,
     OrderResponse,
 )
+from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -31,6 +34,8 @@ from beidou_shared.types import (
     VenueId,
     VenueInstrument,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentStatus(str, Enum):
@@ -179,6 +184,42 @@ class BinanceUsdmAdapter(ExchangeAdapter):
     def reference_data(self) -> BinanceReferenceData:
         return self._reference_data
 
+    async def request(
+        self,
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict[str, Any] | None = None,
+    ) -> Result[Any]:
+        """唯一的底层传输边界。
+
+        上层可以请求已登记的端点，但不能持有或直接调用 REST client。
+        没有真实传输层时返回 UNKNOWN，而不是伪造成功状态。
+        """
+
+        if self._rest_client is None:
+            return Result.failure(
+                "Exchange transport is not configured",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_usdm_adapter",
+            )
+        if method.upper() in {"POST", "PUT", "DELETE"} and not self._health_monitor.is_safe_for_new_risk():
+            return Result.failure(
+                "Venue health is not verified for a write",
+                category=ErrorCategory.EXCHANGE_UNAVAILABLE,
+                source="binance_usdm_adapter",
+            )
+        result = await self._rest_client.request(method, path, signed=signed, params=params)
+        if path == Endpoint.SERVER_TIME and result.is_success():
+            self._health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        return result
+
+    def reset_circuit_breaker(self) -> None:
+        """通过 Adapter 暴露受控的传输熔断恢复。"""
+
+        if self._rest_client is not None:
+            self._rest_client.reset_circuit_breaker()
+
     async def get_exchange_info(self) -> ExchangeInfo:
         return ExchangeInfo(
             venue_id=self._venue_id,
@@ -207,7 +248,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return ResultStatus.UNKNOWN, {}
         if self._rest_client is not None:
             try:
-                result = await self._rest_client.request("GET", Endpoint.BALANCE, signed=True)
+                transport_result = await self.request("GET", Endpoint.BALANCE, signed=True)
+                if not transport_result.is_success():
+                    return ResultStatus.UNKNOWN, {}
+                result = transport_result.data
                 if isinstance(result, list):
                     balances: dict[str, MonetaryValue] = {}
                     for b in result:
@@ -226,7 +270,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return ResultStatus.UNKNOWN, {}
         if self._rest_client is not None:
             try:
-                result = await self._rest_client.request("GET", Endpoint.ACCOUNT, signed=True)
+                transport_result = await self.request("GET", Endpoint.ACCOUNT, signed=True)
+                if not transport_result.is_success():
+                    return ResultStatus.UNKNOWN, {}
+                result = transport_result.data
                 if isinstance(result, dict) and "positions" in result:
                     positions: dict[str, Quantity] = {}
                     for p in result["positions"]:
@@ -261,27 +308,49 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             try:
                 from beidou_shared.types import Price as _Price
 
-                result = await self._rest_client.request(
-                    "POST",
-                    "/fapi/v1/order",
-                    signed=True,
-                    params={
-                        "symbol": str(request.venue_instrument.instrument_id),
-                        "side": request.side.value if hasattr(request.side, "value") else str(request.side),
-                        "type": request.order_type.value if hasattr(request.order_type, "value") else str(request.order_type),
-                        "quantity": str(float(request.quantity.amount)),
-                        "price": str(float(request.price.amount)) if request.price else None,
-                        "timeInForce": request.time_in_force or "GTC",
-                        "newClientOrderId": request.client_order_id or "",
-                    },
-                )
+                order_params: dict[str, Any] = {
+                    "symbol": str(request.venue_instrument.instrument_id),
+                    "side": request.side.value if hasattr(request.side, "value") else str(request.side),
+                    "type": request.order_type.value if hasattr(request.order_type, "value") else str(request.order_type),
+                    "quantity": str(float(request.quantity.amount)),
+                    "timeInForce": (
+                        request.time_in_force.value
+                        if hasattr(request.time_in_force, "value")
+                        else str(request.time_in_force or "GTC")
+                    ),
+                    "newClientOrderId": request.client_order_id or "",
+                }
+                if request.price:
+                    order_params["price"] = str(float(request.price.amount))
+                if request.reduce_only:
+                    # Binance ONE_WAY safety invariant: reduce-only must be
+                    # sent to the venue, not merely kept in local intent data.
+                    order_params["reduceOnly"] = "true"
+                transport_result = await self.request("POST", Endpoint.ORDER, signed=True, params=order_params)
+                if not transport_result.is_success():
+                    return OrderResponse(
+                        venue_instrument=request.venue_instrument,
+                        account_ref=request.account_ref,
+                        order_id="",
+                        client_order_id=request.client_order_id,
+                        status=OrderStatus.UNKNOWN,
+                        side=request.side,
+                        order_type=request.order_type,
+                        original_quantity=request.quantity,
+                        executed_quantity=Quantity(amount="0"),
+                        average_price=None,
+                        commission=None,
+                        correlation_id=request.correlation_id,
+                        raw_response={"reason": "api_call_failed"},
+                    )
+                result = transport_result.data
                 if isinstance(result, dict) and "orderId" in result:
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
                         order_id=str(result.get("orderId", "")),
                         client_order_id=request.client_order_id,
-                        status=OrderStatus.NEW,
+                        status=OrderStatus(str(result.get("status", OrderStatus.NEW.value))),
                         side=request.side,
                         order_type=request.order_type,
                         original_quantity=request.quantity,
@@ -312,7 +381,52 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         )
 
     async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:
-        # BD-T03 修复: 不构造 CANCELED — 真实传输接入前返回 UNKNOWN
+        if self._rest_client is not None:
+            try:
+                transport_result = await self.request(
+                    "DELETE",
+                    Endpoint.ORDER,
+                    signed=True,
+                    params={
+                        "symbol": str(venue_instrument.instrument_id),
+                        "orderId": int(order_id),
+                    },
+                )
+                if not transport_result.is_success():
+                    return OrderResponse(
+                        venue_instrument=venue_instrument,
+                        account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
+                        order_id=order_id,
+                        client_order_id=None,
+                        status=OrderStatus.UNKNOWN,
+                        side=OrderSide.BUY,
+                        order_type=OrderType.MARKET,
+                        original_quantity=Quantity(amount="0"),
+                        executed_quantity=Quantity(amount="0"),
+                        average_price=None,
+                        commission=None,
+                        correlation_id=None,
+                        raw_response={"reason": "api_call_failed"},
+                    )
+                result = transport_result.data
+                if isinstance(result, dict) and result.get("orderId"):
+                    return OrderResponse(
+                        venue_instrument=venue_instrument,
+                        account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
+                        order_id=str(result["orderId"]),
+                        client_order_id=result.get("clientOrderId"),
+                        status=OrderStatus.CANCELED,
+                        side=OrderSide(result.get("side", OrderSide.BUY.value)),
+                        order_type=OrderType(result.get("type", OrderType.MARKET.value)),
+                        original_quantity=Quantity(amount=str(result.get("origQty", "0"))),
+                        executed_quantity=Quantity(amount=str(result.get("executedQty", "0"))),
+                        average_price=None,
+                        commission=None,
+                        correlation_id=None,
+                        raw_response=result,
+                    )
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("cancel order response could not be normalized: %s", exc)
         return OrderResponse(
             venue_instrument=venue_instrument,
             account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
@@ -329,7 +443,24 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         )
 
     async def get_order_status(self, order_id: str, venue_instrument: VenueInstrument) -> OrderStatus:
-        # BD-T03 修复: 不返回 NEW — 无真实查询时返回 UNKNOWN
+        if self._rest_client is not None:
+            try:
+                transport_result = await self.request(
+                    "GET",
+                    Endpoint.ORDER,
+                    signed=True,
+                    params={
+                        "symbol": str(venue_instrument.instrument_id),
+                        "orderId": int(order_id),
+                    },
+                )
+                if not transport_result.is_success():
+                    return OrderStatus.UNKNOWN
+                result = transport_result.data
+                if isinstance(result, dict):
+                    return OrderStatus(str(result.get("status", OrderStatus.UNKNOWN.value)))
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("order status response could not be normalized: %s", exc)
         return OrderStatus.UNKNOWN
 
     def normalize_error(self, error_code: int, message: str, correlation_id: str | None = None) -> Any:

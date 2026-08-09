@@ -296,6 +296,7 @@ class RiskApprovalSignerImpl:
         policy_version: str = "",
         nonce: str = "",
         expires_at: float | None = None,
+        consume_nonce: bool = True,
     ) -> bool:
         """验证签名 — 严格模式，无向后兼容旁路。
 
@@ -303,7 +304,8 @@ class RiskApprovalSignerImpl:
         参数与签名时不一致（篡改/版本不匹配）、重放 nonce。
 
         未显式传入 expires_at 时，使用签名时记录的默认有效期进行
-        过期校验与 payload 重建。
+        过期校验与 payload 重建。``consume_nonce=False`` 仅用于提交前
+        的预检；最终发送边界必须使用默认值消费 nonce。
         """
         if not signature:
             return False
@@ -335,7 +337,7 @@ class RiskApprovalSignerImpl:
         )
         expected = self._compute_signature(payload)
         ok = self._hmac.compare_digest(signature, expected)
-        if ok and nonce:
+        if ok and nonce and consume_nonce:
             self._nonces.add(nonce)
         return ok
 
@@ -378,7 +380,9 @@ class RiskApprovalStateMachine:
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
 
-    def approve_if_verified(self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool) -> RiskDecision:
+    def approve_if_verified(
+        self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool
+    ) -> RiskDecision:
         """安全审批 — 必须签名有效 + 风控通过才批准。
 
         任一条件不满足 → REJECTED。
