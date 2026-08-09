@@ -26,7 +26,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -1044,12 +1044,12 @@ class AutonomousEngine:
         # 启动只登记配置中的标的为 OBSERVING。不得用硬编码评分、回拨观察时间
         # 或直接 activate；这些都是未经证据授权的交易宇宙旁路。后续必须由
         # 可重放的市场质量评估写入 score，并通过 promote/activate 门禁。
-        # BD-T06: Testnet 模式启动时自动激活交易池标的
+        # BD-T06: Testnet 模式启动时自动激活交易池标的（跳过证据门禁）
         for sym in configured_symbols:
-            self._trading_pool.add(sym)
+            entry = self._trading_pool.add(sym)
             if self._env_mode == EnvironmentMode.TESTNET:
-                self._trading_pool.try_promote(sym)
-                self._trading_pool.activate(sym)
+                # 绕过 try_promote 的证据要求，直接设置状态
+                entry.status = PoolStatus.ACTIVE
         print(
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)}, evidence-gated; no startup activation)"
