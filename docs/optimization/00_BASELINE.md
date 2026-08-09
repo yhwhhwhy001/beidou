@@ -1,8 +1,8 @@
 # 北斗全项目优化审查基线
 
-更新时间：2026-08-09 15:27（本地工作树，代码未提交/未部署）
+更新时间：2026-08-09 15:50（本地工作树；安全覆盖尚未部署）
 
-当前 HEAD（最近观测）：`d4cadfa2b2534ca2f5028f7bea2811d8ba6052b0`；当前工作树包含 13 个未提交的本轮收敛切片（含证据文档）。
+当前 HEAD（最近观测）：`62ed6ef85d4b41b553e5dd380afbda56f047f225`；工作树有 1 个未提交的安全覆盖（交易池/因子不得启动即 ACTIVE）。该 SHA 正被外部 Claude Testnet 进程使用，运行事实不纳入本轮证据。
 
 ## 决策
 
@@ -16,8 +16,8 @@
 
 ## 当前事实
 
-- 分支 `codex/full-system-convergence-v3`，工作树 DIRTY；外部 `beidou start --startup-timeout 600` 进程已结束，最终只读状态为 `ENGINE_STARTING/FAILED`、`trading_ready=false`，不能把它视为已在线或可交易。
-- 2026-08-09T07:30:21Z 状态没有形成 READY 证书；外部进程使用 Testnet mock signing-key 环境，未纳入本轮生产证据。
+- 分支 `codex/full-system-convergence-v3`，工作树 DIRTY；外部 `beidou start --startup-timeout 900` 仍在运行（Testnet mock signing-key），其提交与运行时均不属于本轮授权证据。
+- 最近本地监督状态为 `ENGINE_STARTING`、`trading_ready=false`、`passed=false`，没有形成 READY 证书。
 - 新代码已将 UNKNOWN、未跟踪在途单、无交易所 ACK 的保护、缺失持仓事实、无闭合 bar、无研究 provenance 置为阻断。
 - 本轮尚未授权停机、重启、部署、交易所写入、真实资金或 Git 推送。
 
@@ -35,9 +35,9 @@
 
 | 门 | 结果 |
 |---|---|
-| 全量回归 | `.venv/bin/pytest -q`：1032 passed, 1 skipped（1033 collected） |
-| CI 覆盖率 | `.venv/bin/pytest tests/ -q --cov --cov-report=term --cov-fail-under=85`：**FAIL，56.54% < 85%**；并有 49 条 ResourceWarning |
-| Ruff lint/format | PASS（275 files） |
+| 全量回归 | `.venv/bin/pytest -q -W error::ResourceWarning`：1034 passed, 1 skipped（1035 collected） |
+| CI 覆盖率 | `.venv/bin/pytest tests/ -q --cov --cov-report=term --cov-fail-under=85`：**FAIL，56.66% < 85%** |
+| Ruff lint/format | PASS（276 files） |
 | CI 包范围 mypy | PASS |
 | compileall | PASS |
 | `git diff --check` | PASS |
