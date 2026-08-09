@@ -248,6 +248,24 @@ class IntentOutbox:
     def dead_letter_count(self) -> int:
         return self._dead_letter_count
 
+    def dead_letter(self, intent_id: str, reason: str, idempotency_key: str = "") -> None:
+        """标记 intent 为永久死信，不再重试。"""
+        intent_id_str = str(intent_id)
+        self._dead_letter_count += 1
+        self._dead_letter_ids.append(intent_id_str)
+        if len(self._dead_letter_ids) > 20:
+            self._dead_letter_ids = self._dead_letter_ids[-20:]
+        # 从活跃状态移除
+        self._inbox.pop(intent_id_str, None)
+        self._states.pop(intent_id_str, None)
+        if self._db_path:
+            with self._db_lock, closing(self._connect()) as conn, conn:
+                conn.execute(
+                    "UPDATE intent_outbox SET state=? WHERE intent_id=?",
+                    ("DEAD_LETTER", intent_id_str),
+                )
+                conn.commit()
+
     @property
     def dead_letter_ids(self) -> list[str]:
         return list(self._dead_letter_ids)

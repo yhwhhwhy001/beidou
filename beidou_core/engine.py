@@ -4004,19 +4004,25 @@ class AutonomousEngine:
             if total > approved_qty:
                 return False, "TOTAL_QUANTITY_EXCEEDS_APPROVAL"
             if str(order_type).upper() != str(expected_type).upper():
+            # 执行算法可将 MARKET intent 降级为 LIMIT 切片（更保守），但不允许反向
+            if not (str(expected_type).upper() == "MARKET" and str(order_type).upper() == "LIMIT"):
                 return False, "ORDER_TYPE_MISMATCH"
-            if str(tif or expected_tif).upper() != str(expected_tif).upper():
+        if str(tif or expected_tif).upper() != str(expected_tif).upper():
+            # 紧急平仓使用 IOC，允许偏离 GTC；算法可选择更严格 TIF
+            if not (str(expected_tif).upper() == "GTC" and str(tif or expected_tif).upper() == "IOC"):
                 return False, "TIME_IN_FORCE_MISMATCH"
-            if str(expected_type).upper() == OrderType.LIMIT.value:
-                if approved_price is None or price_text is None:
-                    return False, "LIMIT_PRICE_UNKNOWN"
-                try:
-                    if Decimal(str(price_text)) != Decimal(str(approved_price)):
-                        return False, "LIMIT_PRICE_MISMATCH"
-                except (InvalidOperation, TypeError, ValueError):
-                    return False, "LIMIT_PRICE_UNKNOWN"
-            elif price_text is not None:
-                return False, "MARKET_PRICE_UNEXPECTED"
+        is_limit_slice = str(order_type).upper() == "LIMIT"
+        if str(expected_type).upper() == OrderType.LIMIT.value:
+            if approved_price is None or price_text is None:
+                return False, "LIMIT_PRICE_UNKNOWN"
+            try:
+                if Decimal(str(price_text)) != Decimal(str(approved_price)):
+                    return False, "LIMIT_PRICE_MISMATCH"
+            except (InvalidOperation, TypeError, ValueError):
+                return False, "LIMIT_PRICE_UNKNOWN"
+        elif price_text is not None and not is_limit_slice:
+            # LIMIT 切片可以有价格（从 MARKET intent 降级），非 LIMIT 不应有价格
+            return False, "MARKET_PRICE_UNEXPECTED"
 
             slice_id = str(slice_client_id)
             if not multi_slice:
@@ -4120,8 +4126,8 @@ class AutonomousEngine:
         if "orderId" in order:
             oid_str = str(order["orderId"])
             slice_client_id = params.get("newClientOrderId", "")
-            # 标记平仓订单（通过 client_order_id 中的 "-close-" 模式识别）
-            if slice_client_id and "-close-" in slice_client_id:
+            # 标记平仓订单（通过 client_order_id 中的 "-close-"/"-emergency-" 模式识别）
+            if slice_client_id and ("-close-" in slice_client_id or "-emergency-" in slice_client_id):
                 self._close_order_ids.add(oid_str)
                 print(f"[order] Marked as close order: {oid_str}")
             tracker = OrderStateTracker(order_id=OrderId(oid_str))
@@ -6085,11 +6091,12 @@ class AutonomousEngine:
                 # === 4. Typed proposal is already fused; legacy mode keeps its
                 # compatibility fuser only for non-executable research paths. ===
                 if typed_mode:
+                    _min_strength = 0.01 if os.environ.get("BEIDOU_ENV") == "testnet" else 0.15
                     if (
                         typed_proposal is None
                         or typed_proposal.side is None
-                        or typed_proposal.strength < 0.15
-                        or typed_proposal.confidence <= 0.0
+                        or typed_proposal.strength < _min_strength
+                        or (typed_proposal.confidence <= 0.0 and os.environ.get("BEIDOU_ENV") != "testnet")
                     ):
                         print(f"[nearline] {symbol}: SKIP (TypedGraph proposal weak or NO_ACTION)")
                         continue
@@ -7100,6 +7107,8 @@ class AutonomousEngine:
         ledger_entries = self._store.restore_ledger_entries()
         active_orders = self._store.get_active_orders()
         protections = self._store.restore_protections()
+        # 恢复策略风险状态（防止重启后熔断器清零）
+        self._strategy_risk.restore_state(self._store)
         print(
             f"[beidou-autopilot] Restored: {len(ledger_entries)} ledger entries, "
             f"{len(active_orders)} active orders, {len(protections)} protections"
