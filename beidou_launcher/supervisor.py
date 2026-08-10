@@ -174,7 +174,9 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+            # LEVERAGE 是配置操作，在任何状态下允许
+            _is_config = "/fapi/v1/leverage" in str(path)
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
                 return record(path, method)
             return await original_async(path, method=method, signed=signed, params=params)
 
@@ -184,7 +186,8 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+            _is_config = "/fapi/v1/leverage" in str(path)
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
