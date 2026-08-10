@@ -6692,8 +6692,18 @@ class AutonomousEngine:
                 }
 
                 # Evaluate all R0-R10 rules
-                risk_results = RiskRuleRegistry.evaluate_all(risk_context)
-                risk_approved = RiskRuleRegistry.is_approved(risk_results)
+                # BD-FIX (S30): Testnet 跳过 R7(清算距离)和 R8(保护覆盖)
+                # R7 需要 liquidation_price 在 testnet 不可靠
+                # R8 需要已有保护单，但保护单在首次成交后才创建
+                _skip_rules = {"R7", "R8"} if os.environ.get("BEIDOU_ENV") == "testnet" else set()
+                risk_results = {
+                    rid: decision
+                    for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()
+                    if rid not in _skip_rules
+                }
+                risk_approved = all(
+                    d == RuleDecision.PASS for d in risk_results.values()
+                )
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
