@@ -3132,8 +3132,45 @@ class AutonomousEngine:
 
         semantic_issues = self._protection_inventory_semantic_issues(inventory)
         if semantic_issues:
-            self._block_unowned_protection_orders(semantic_issues)
-            return False
+            # BD-FIX (S2): 区分"交易所缺失"与"语义不匹配"。
+            # 交易所缺失 → 保护单已被触发/取消/过期 → 清理本地存储。
+            # 语义不匹配 → 真正风险 → 保持阻断。
+            venue_missing = [i for i in semantic_issues if i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+            hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+            if venue_missing and not hard_issues:
+                # 所有问题都是"交易所缺失" → 保护单已被触发/取消/过期
+                # → 清理本地过期记录，而非永久阻断。
+                store = getattr(self, "_store", None)
+                cleaned = 0
+                for row in rows:
+                    algo_id = str(row.get("exchange_order_id", "")).strip()
+                    if any(algo_id in issue for issue in venue_missing):
+                        pos_id = str(row.get("position_id", "")).strip()
+                        if store and pos_id:
+                            try:
+                                store.remove_protection(pos_id)
+                                cleaned += 1
+                            except Exception as exc:
+                                print(
+                                    f"[beidou-autopilot] Failed to clean stale "
+                                    f"protection pos={pos_id} algo={algo_id}: {exc}"
+                                )
+                if cleaned:
+                    print(
+                        f"[beidou-autopilot] Cleaned {cleaned} stale protection(s) "
+                        "(no longer on venue)"
+                    )
+                # 重新加载
+                try:
+                    rows = list(self._store.restore_protections())
+                except Exception:
+                    pass
+                if not rows:
+                    return True
+                semantic_issues = self._protection_inventory_semantic_issues(inventory)
+            if semantic_issues:
+                self._block_unowned_protection_orders(semantic_issues)
+                return False
 
         raw_positions = account.get("positions") if isinstance(account, dict) else None
         if not isinstance(raw_positions, list):
@@ -5741,9 +5778,41 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    self._block_unowned_protection_orders(unowned_algo_ids)
-                    print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
-                    return
+                    # BD-FIX (S2): Testnet 模式下，无持仓时取消残留无主订单。
+                    is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+                    if is_testnet and not exchange_positions:
+                        print(
+                            f"[startup] Testnet: cancelling {len(unowned_algo_ids)} "
+                            "stale unowned Algo orders (no positions)"
+                        )
+                        for item in algos_resp:
+                            algo_id = str(item.get("algoId"))
+                            if algo_id not in known_algo_ids:
+                                sym = str(item.get("symbol", ""))
+                                try:
+                                    await self._adapter.cancel_algo_order(sym, int(algo_id))
+                                except Exception as cancel_exc:
+                                    print(
+                                        f"[startup]   ⚠️  Failed to cancel "
+                                        f"{sym} Algo {algo_id}: {cancel_exc}"
+                                    )
+                        # Refresh inventory
+                        algos_resp = await self._get_open_algo_inventory()
+                        if not isinstance(algos_resp, list):
+                            self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                            print("[startup] Conditional-order inventory UNKNOWN after cleanup")
+                            return
+                        # Recalculate after cleanup
+                        known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                        unowned_algo_ids = [
+                            str(item.get("algoId"))
+                            for item in algos_resp
+                            if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                        ]
+                    if unowned_algo_ids:
+                        self._block_unowned_protection_orders(unowned_algo_ids)
+                        print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
+                        return
                 venue_algo_ids = {str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None}
                 missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
                 if missing_owned_ids:
@@ -7537,6 +7606,10 @@ class AutonomousEngine:
         # worker's valid protection and create a naked position.  Recovery is
         # read-only here; only an explicitly owned, ACK-backed order may be
         # cancelled by a governed close/replacement path.
+        #
+        # BD-FIX (S2): Testnet 模式下，无持仓时自动取消残留的无主 Algo 订单。
+        # 非正常退出（kill -9 / 崩溃）会导致交易所残留条件单，新进程无法
+        # 认领所有权，造成 protection_owner_unknown 永久阻断。
         existing_algo_inventory: list[dict[str, Any]] | None = None
         try:
             existing_algos = await self._get_open_algo_inventory()
@@ -7549,7 +7622,45 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+                    # Check if there are any open positions — only safe to
+                    # clean up when the account is flat.
+                    account_for_cleanup, acct_ok = await self._api_async_safe(
+                        Endpoint.ACCOUNT, signed=True
+                    )
+                    has_positions = False
+                    if acct_ok and isinstance(account_for_cleanup, dict):
+                        positions = account_for_cleanup.get("positions", [])
+                        has_positions = any(
+                            abs(float(p.get("positionAmt", 0))) > 0
+                            for p in (positions if isinstance(positions, list) else [])
+                            if isinstance(p, dict)
+                        )
+                    if is_testnet and not has_positions:
+                        # Safe to clean up stale orders from a crashed session.
+                        print(
+                            f"[beidou-autopilot] Testnet: cancelling {len(unowned_algo_ids)} "
+                            "stale unowned Algo orders (no open positions)"
+                        )
+                        for item in existing_algos:
+                            algo_id = str(item.get("algoId"))
+                            if algo_id not in known_algo_ids:
+                                sym = str(item.get("symbol", ""))
+                                try:
+                                    await self._adapter.cancel_algo_order(sym, int(algo_id))
+                                    print(f"[beidou-autopilot]   ✅ Cancelled {sym} Algo {algo_id}")
+                                except Exception as cancel_exc:
+                                    print(
+                                        f"[beidou-autopilot]   ⚠️  Failed to cancel "
+                                        f"{sym} Algo {algo_id}: {cancel_exc}"
+                                    )
+                        # Refresh inventory after cleanup
+                        existing_algos = await self._get_open_algo_inventory()
+                        existing_algo_inventory = (
+                            existing_algos if isinstance(existing_algos, list) else None
+                        )
+                    else:
+                        self._block_unowned_protection_orders(unowned_algo_ids)
                 print(
                     f"[beidou-autopilot] Observed {len(existing_algos)} open conditional orders; "
                     "skipping unowned startup cancellation and unowned adoption"
