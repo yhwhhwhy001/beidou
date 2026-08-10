@@ -11,6 +11,17 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
 
+
+def _format_decimal(value: str) -> str:
+    """将数量/价格字符串转为无科学计数法的十进制字符串。"""
+    try:
+        d = Decimal(value)
+        # 去除末尾零但保留至少一位小数
+        formatted = f"{d:f}"
+        return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+    except InvalidOperation:
+        return value
+
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import ErrorNormalizer, Result
 from beidou_exchange.core.protocol import (
@@ -513,7 +524,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     "type": request.order_type.value
                     if hasattr(request.order_type, "value")
                     else str(request.order_type),
-                    "quantity": str(float(request.quantity.amount)),
+                    "quantity": _format_decimal(str(request.quantity.amount)),
                     "timeInForce": (
                         request.time_in_force.value
                         if hasattr(request.time_in_force, "value")
@@ -522,7 +533,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     "newClientOrderId": request.client_order_id or "",
                 }
                 if request.price:
-                    order_params["price"] = str(float(request.price.amount))
+                    order_params["price"] = _format_decimal(str(request.price.amount))
                 if request.reduce_only:
                     # Binance ONE_WAY safety invariant: reduce-only must be
                     # sent to the venue, not merely kept in local intent data.

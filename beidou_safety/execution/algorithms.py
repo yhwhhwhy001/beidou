@@ -407,6 +407,11 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
         slice_pct = self._determine_slice_pct(ctx)
         slice_qty = total_qty * slice_pct
         slice_count = max(1, int(1.0 / slice_pct))
+        # 小数量时减少切片数，避免每个切片低于交易所最小下单量
+        _min_slice_qty = 0.0005  # 低于此值合并为单个切片
+        if slice_qty < _min_slice_qty:
+            slice_count = 1
+            slice_qty = total_qty
 
         slices: list[OrderSlice] = []
         alpha_remaining = ctx.net_alpha_bps
