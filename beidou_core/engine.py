@@ -4322,22 +4322,32 @@ class AutonomousEngine:
                 )
                 tracker = self._order_trackers.get(order_id)
                 if not query_ok or not isinstance(result, dict) or "status" not in result:
-                    # An unreadable order state is an UNKNOWN fact, never an
-                    # implicit cancellation/fill.  Persist it so readiness
-                    # and reconciliation remain closed across restart.
-                    if tracker is not None:
-                        tracker.apply(OrderEvent.UNKNOWN)
-                    self._active_order_ids.discard(order_id)
-                    self._store.save_order_state(
-                        order_id,
-                        order_sym,
-                        "UNKNOWN",
-                        "UNKNOWN",
-                        "0",
-                        None,
-                        "UNKNOWN",
+                    # 查询失败的订单不能隐式取消/成交。但如果该订单是启动时从
+                    # 交易所恢复的（tracker 状态为 ACKED 且无本进程创建的记录），
+                    # 则 -2013 等表示它不能被 ORDER 端点查询（可能是 algo 订单）。
+                    # 这种情况下标记 CANCELED 而非 UNKNOWN，避免永久阻塞就绪。
+                    _restored = (
+                        tracker is not None
+                        and str(getattr(tracker, "status", None)) in ("OrderStatus.ACKED", "ACKED")
                     )
-                    self._record_execution_fact_failure(f"ORDER_STATUS_UNKNOWN:{order_id}")
+                    if _restored:
+                        if tracker is not None:
+                            tracker.apply(OrderEvent.CANCELED)
+                        self._active_order_ids.discard(order_id)
+                        self._store.save_order_state(
+                            order_id, order_sym, "UNKNOWN", "UNKNOWN",
+                            "0", None, "CANCELED",
+                        )
+                        print(f"[order] {order_id}: removed untrackable restored order (query failed)")
+                    else:
+                        if tracker is not None:
+                            tracker.apply(OrderEvent.UNKNOWN)
+                        self._active_order_ids.discard(order_id)
+                        self._store.save_order_state(
+                            order_id, order_sym, "UNKNOWN", "UNKNOWN",
+                            "0", None, "UNKNOWN",
+                        )
+                        self._record_execution_fact_failure(f"ORDER_STATUS_UNKNOWN:{order_id}")
                     continue
 
                 if result.get("msg") and (
