@@ -1131,8 +1131,8 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            # DEV_FAST_START: 跳过深度验证，直接 RESUME (仅开发/调试环境)
-            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
+            # DEV_FAST_START / Testnet: 跳过深度验证，直接 RESUME
+            if os.environ.get("BEIDOU_DEV_FAST_START") == "1" or self.mode == "testnet":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
                 # 仍需要运行算法探针以消除启动阻断
                 try:
