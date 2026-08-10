@@ -239,14 +239,18 @@ class BeidouSupervisor:
 
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
-                print(f"[supervisor] BLOCKED RESUME: _resume_authorized=False")
+                print(f"[supervisor] BLOCKED RESUME: _resume_authorized=False", flush=True)
                 return original(ControlAction.NO_NEW_RISK)
             if action == ControlAction.RESUME:
-                print(f"[supervisor] ALLOWED RESUME: _resume_authorized=True")
+                print(f"[supervisor] ALLOWED RESUME: _resume_authorized=True", flush=True)
             return original(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
-        control.execute_action(ControlAction.NO_NEW_RISK)
+        # BD-FIX (S22): Testnet 不初始化 NO_NEW_RISK，由 FAST START 直接 RESUME
+        if self.mode != "testnet":
+            control.execute_action(ControlAction.NO_NEW_RISK)
+        else:
+            print("[supervisor] Testnet: skipping initial NO_NEW_RISK, awaiting FAST START RESUME", flush=True)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
