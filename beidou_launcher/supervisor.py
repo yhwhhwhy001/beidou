@@ -398,11 +398,16 @@ class BeidouSupervisor:
                 raise RuntimeError(str(response)[:300])
             self._exchange_account_snapshot = {"ok": True, "account": response, "observed_at": time.time()}
         except Exception as exc:
-            self._exchange_account_snapshot = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "observed_at": time.time(),
-            }
+            # API 查询失败时，回退到引擎缓存的账户数据
+            _cached = getattr(self.engine, "_last_account", None)
+            if isinstance(_cached, dict) and "totalWalletBalance" in _cached:
+                self._exchange_account_snapshot = {"ok": True, "account": _cached, "observed_at": time.time(), "source": "cached_fallback"}
+            else:
+                self._exchange_account_snapshot = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "observed_at": time.time(),
+                }
 
     async def _refresh_position_mode(self) -> None:
         """读取当前账户 Position Mode (ONE_WAY/HEDGE)。
