@@ -176,8 +176,12 @@ class BeidouSupervisor:
         ) -> Any:
             # LEVERAGE 是配置操作，在任何状态下允许
             _is_config = "/fapi/v1/leverage" in str(path)
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
+            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config
+            if _blocked:
+                print(f"[supervisor] BLOCKED: {method} {path} is_config={_is_config}")
                 return record(path, method)
+            if _is_config:
+                print(f"[supervisor] ALLOWED config: {method} {path}")
             return await original_async(path, method=method, signed=signed, params=params)
 
         def guarded_sync(
