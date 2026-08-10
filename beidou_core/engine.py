@@ -346,9 +346,15 @@ class MeanReversionEntry(AlphaComponent):
             component_id="meanrev_entry_v1",
             version=SchemaVersion("2.0.0"),
         )
-        # 极低阈值用于 Testnet 信号触发验证
-        _z = 0.1 if os.environ.get("BEIDOU_ENV") == "testnet" else 1.5
-        self._engine = MeanReversionEngine(half_life_window=100, z_threshold=_z)
+        # Testnet: 零阈值 + 免成本门控，确保信号触发
+        _z = 1.5
+        _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+        self._engine = MeanReversionEngine(
+            half_life_window=100,
+            z_threshold=_z,
+            no_trade_band=0.0 if _testnet else _z,
+            cost_margin=0.0 if _testnet else 2.0,
+        )
 
     async def generate(self, context: dict) -> Any:
         features = context.get("features", {})

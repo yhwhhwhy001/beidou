@@ -34,9 +34,17 @@ class MeanReversionEngine:
     - volatility scaling (size inversely to vol)
     """
 
-    def __init__(self, half_life_window: int = 100, z_threshold: float = 1.5):
+    def __init__(
+        self,
+        half_life_window: int = 100,
+        z_threshold: float = 1.5,
+        no_trade_band: float | None = None,
+        cost_margin: float | None = None,
+    ):
         self._window = half_life_window
         self._z_threshold = z_threshold
+        self._no_trade_band = no_trade_band if no_trade_band is not None else z_threshold
+        self._cost_margin = cost_margin if cost_margin is not None else 2.0
 
     def compute_z_score(self, price: float, prices: list[float]) -> float:
         """Robust z-score = (price - median) / MAD。"""
@@ -92,7 +100,7 @@ class MeanReversionEngine:
         half_life = self.estimate_half_life(prices)
 
         # No-trade band: z-score within [-threshold, +threshold]
-        no_trade_band = self._z_threshold
+        no_trade_band = self._no_trade_band
         in_band = abs(z_score) < no_trade_band
 
         # Regime gate: only trade in RANGING markets
@@ -100,8 +108,7 @@ class MeanReversionEngine:
 
         # Cost gate: expected return must exceed cost
         expected_return_bps = abs(z_score) * volatility * 100  # rough estimate
-        _margin = 0.5 if __import__('os').environ.get("BEIDOU_ENV") == "testnet" else 2.0
-        cost_viable = expected_return_bps > estimated_cost_bps * _margin
+        cost_viable = expected_return_bps > estimated_cost_bps * self._cost_margin
 
         # Direction
         if in_band or not regime_allowed or not cost_viable:
