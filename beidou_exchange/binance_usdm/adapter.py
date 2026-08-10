@@ -243,12 +243,17 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         # the adapter must not reject them solely because its health probe is
         # stale.  This mirrors the supervisor NO_NEW_RISK/EXIT_ONLY contract.
         exit_only = (
-            method_upper == "DELETE" or enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
+            method_upper == "DELETE"
+            or enabled(params.get("reduceOnly"))
+            or enabled(params.get("closePosition"))
         )
+        # LEVERAGE 是配置操作，非风险增加交易，豁免健康检查
+        _is_config = path == Endpoint.LEVERAGE
         if (
             method_upper in {"POST", "PUT", "DELETE"}
             and not self._health_monitor.is_safe_for_new_risk()
             and not exit_only
+            and not _is_config
         ):
             return Result.failure(
                 "Venue health is not verified for a write",

@@ -1977,7 +1977,6 @@ class AutonomousEngine:
         """确保交易所杠杆设置与自适应杠杆一致（带缓存）。
 
         返回实际生效的杠杆值（如遇 -2028 则查询当前杠杆）。
-        直接使用 adapter 传输层绕过健康检查（杠杆设置非风险操作）。
         """
         if not hasattr(self, "_leverage_cache"):
             self._leverage_cache: dict[str, int] = {}
@@ -1985,18 +1984,10 @@ class AutonomousEngine:
         if current == target_leverage:
             return current
 
-        _adapter = getattr(self, "_adapter", None)
-        if _adapter is not None:
-            _result = await _adapter.request(
-                "POST", Endpoint.LEVERAGE, signed=True,
-                params={"symbol": symbol, "leverage": target_leverage},
-            )
-            resp = _result.data if _result.is_success() else {}
-        else:
-            resp = await self._api_async(
-                Endpoint.LEVERAGE, method="POST", signed=True,
-                params={"symbol": symbol, "leverage": target_leverage},
-            )
+        resp = await self._api_async(
+            Endpoint.LEVERAGE, method="POST", signed=True,
+            params={"symbol": symbol, "leverage": target_leverage},
+        )
         if "leverage" in resp:
             actual = int(resp["leverage"])
             self._leverage_cache[symbol] = actual
