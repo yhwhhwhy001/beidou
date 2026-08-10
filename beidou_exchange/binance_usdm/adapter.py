@@ -524,6 +524,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     order_params["reduceOnly"] = "true"
                 transport_result = await self.request("POST", Endpoint.ORDER, signed=True, params=order_params)
                 if not transport_result.is_success():
+                    _err = transport_result.error
+                    print(f"[adapter] ORDER failed: category={_err.category if _err else '?'} msg={_err.message if _err else '?'} code={_err.code if _err else '?'}")
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
@@ -537,7 +539,11 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         average_price=None,
                         commission=None,
                         correlation_id=request.correlation_id,
-                        raw_response={"reason": "api_call_failed"},
+                        raw_response={
+                            "reason": "api_call_failed",
+                            "error_category": str(_err.category) if _err else "?",
+                            "error_message": str(_err.message)[:200] if _err else "?",
+                        },
                     )
                 result = transport_result.data
                 if isinstance(result, dict) and "orderId" in result:
