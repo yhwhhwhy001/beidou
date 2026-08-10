@@ -7726,7 +7726,8 @@ class AutonomousEngine:
         async def _nearline_loop() -> None:
             while self._running:
                 try:
-                    if time.time() - self._last_nearline >= 300:
+                    _nearline_interval = 30 if os.environ.get("BEIDOU_ENV") == "testnet" else 300
+                    if time.time() - self._last_nearline >= _nearline_interval:
                         await self._nearline_tick()
                 except Exception as exc:
                     self._error_count += 1

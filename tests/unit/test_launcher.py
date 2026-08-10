@@ -433,6 +433,10 @@ def test_launchagent_template_is_direct_and_fail_closed() -> None:
     assert "/bin/zsh" not in arguments
     assert "-c" not in arguments
     assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
+    symbols_index = arguments.index("--symbols")
+    configured_symbols = arguments[symbols_index + 1]
+    assert configured_symbols not in {"DEFAULT", "ALL"}
+    assert configured_symbols.split(",") == ["BTCUSDT", "ETHUSDT"]
     assert payload["KeepAlive"] is False
     assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}
 
