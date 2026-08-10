@@ -6374,6 +6374,18 @@ class AutonomousEngine:
                 max_by_leverage = (account_balance * dyn_leverage) / price
                 position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
                 position_size = min(position_size, max_by_leverage * 0.5)
+                # 确保不低于交易所最小下单量（BTCUSDT=0.001, ETHUSDT=0.01 等）
+                _min_qty = 0.001  # BTCUSDT 最小下单量
+                _precision = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                _step = _precision.get("quantity", None)
+                if _step is not None:
+                    try:
+                        _step_size = float(10 ** -int(_step))
+                        _min_qty = max(_min_qty, _step_size)
+                    except (ValueError, TypeError):
+                        pass
+                if position_size < _min_qty:
+                    position_size = _min_qty
                 if position_size <= 0:
                     print(f"[nearline] {symbol}: SKIP (computed position size UNKNOWN/zero)")
                     continue
