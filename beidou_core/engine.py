@@ -2378,7 +2378,7 @@ class AutonomousEngine:
             startup_elapsed = 0.0
         startup_grace = startup_elapsed < 600.0
         if is_testnet:
-            effective_max_age = 300.0
+            effective_max_age = 600.0  # S26: 放宽到 10min，适应稀疏事件
         elif status in ("CONNECTED", "UNKNOWN") or startup_grace:
             effective_max_age = 300.0
         else:
