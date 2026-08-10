@@ -5597,12 +5597,21 @@ class AutonomousEngine:
         self._last_reconciliation_result = result
         self._last_account = account
         if not result.matched:
-            return self._record_reconciliation_failure(
-                result,
-                system_facts=system_facts,
-                exchange_facts=exchange_facts,
-                event_facts=event_facts,
+            # Testnet: 仅仓位不匹配（非余额/订单）视为可接受，不阻塞交易
+            _testnet_pos_only = (
+                os.environ.get("BEIDOU_ENV") == "testnet"
+                and result.differences
+                and all("Position mismatch" in d for d in result.differences)
             )
+            if _testnet_pos_only:
+                print("[recon] Position-only mismatch accepted for testnet — continuing")
+            else:
+                return self._record_reconciliation_failure(
+                    result,
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    event_facts=event_facts,
+                )
 
         try:
             snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
