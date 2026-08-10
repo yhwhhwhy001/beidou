@@ -396,8 +396,10 @@ class FusionNode(TypedGraphNode):
 
         for inp in inputs.values():
             if inp.node_type == NodeType.ENTRY and inp.data is not None:
-                # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
                 _ep = inp.data
+                # 诊断：打印每个入场提案
+                print(f"[fusion] ENTRY {inp.node_id}: side={getattr(_ep, 'side', '?')} strength={getattr(_ep, 'strength', '?')}")
+                # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
                 if entry_proposal is None or (
                     getattr(_ep, "side", None) is not None and getattr(entry_proposal, "side", None) is None
                 ):
