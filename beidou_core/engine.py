@@ -6239,7 +6239,7 @@ class AutonomousEngine:
                         time_in_force=TimeInForce.GTC,
                         client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time() * 1_000_000)}",
                         correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
-                        idempotency_key=f"idem-{symbol}-close-{int(time.time() / 300)}",
+                        idempotency_key=f"idem-{symbol}-close-{int(time.time())}",
                         risk_approval_id=_close_approval_id,
                         risk_approval_signature=_close_sig,
                         reduce_only=True,
@@ -6615,7 +6615,7 @@ class AutonomousEngine:
                 intent_id = f"intent-{symbol}-{int(time.time())}"
                 client_order_id = f"beidou-{symbol.lower()}-entry-{int(time.time())}"
                 correlation = CorrelationId(f"nearline-{int(time.time())}")
-                idempotency_key = f"idem-{symbol}-{int(time.time() / 300)}"
+                idempotency_key = f"idem-{symbol}-{int(time.time())}"
                 from beidou_safety.execution import OrderIntent
 
                 unsigned_intent = OrderIntent(
