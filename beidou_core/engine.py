@@ -7169,6 +7169,23 @@ class AutonomousEngine:
                         tracker.apply(OrderEvent.PARTIALLY_FILLED)
                     self._order_trackers[oid] = tracker
                     self._active_order_ids.add(oid)
+                    self._owned_order_ids.add(oid)
+                    # 持久化到 store，避免对账时 system_facts.open_orders 为空
+                    try:
+                        self._store.save_order_state(
+                            order_id=oid,
+                            symbol=str(o.get("symbol", "")),
+                            side=str(o.get("side", "")),
+                            order_type=str(o.get("type", "")),
+                            quantity=str(o.get("origQty", "0")),
+                            price=str(o.get("price", "0")) if o.get("price") else None,
+                            status=str(o.get("status", "NEW")),
+                            filled_qty=str(o.get("executedQty", "0")),
+                            avg_price=str(o.get("avgPrice", "0")) if o.get("avgPrice") else None,
+                            client_order_id=str(o.get("clientOrderId", "")) or None,
+                        )
+                    except Exception as _persist_exc:
+                        print(f"[beidou-autopilot] Warning: Failed to persist restored order {oid}: {_persist_exc}")
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
                 unowned = self._unowned_active_order_ids()
                 if self._can_write and unowned:
