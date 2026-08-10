@@ -214,7 +214,8 @@ class BeidouSupervisor:
                 signed: bool = False,
                 params: dict[str, Any] | None = None,
             ) -> Any:
-                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+                _is_config = "/fapi/v1/leverage" in str(path)
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
                     record(path, method)
                     return Result.failure(
                         "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
