@@ -285,7 +285,7 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
             decay_factor = 0.5 ** (elapsed / ctx.alpha_decay_seconds) if ctx.alpha_decay_seconds > 0 else 1.0
             alpha_remaining = ctx.net_alpha_bps * decay_factor
 
-            slice_invariant = invariant_ok and alpha_remaining > 0
+            slice_invariant = invariant_ok and alpha_remaining >= 0
 
             slices.append(
                 OrderSlice(
@@ -416,7 +416,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
             decay_factor = 0.5 ** (elapsed / ctx.alpha_decay_seconds) if ctx.alpha_decay_seconds > 0 else 1.0
             alpha_remaining = ctx.net_alpha_bps * decay_factor
 
-            slice_invariant = invariant_ok and alpha_remaining > 0
+            slice_invariant = invariant_ok and alpha_remaining >= 0
 
             # 切片大小随市场动态调整
             qty = slice_qty * (0.8 + 0.4 * alpha_remaining / max(ctx.net_alpha_bps, 1))
@@ -587,7 +587,7 @@ class SliceInvariantChecker:
             )
 
         # Alpha 剩余检查
-        if slice_.remaining_alpha_bps is not None and slice_.remaining_alpha_bps <= 0:
+        if slice_.remaining_alpha_bps is not None and slice_.remaining_alpha_bps < 0:
             return False, "Remaining alpha depleted"
 
         # 切片不能超过 Approval 数量
