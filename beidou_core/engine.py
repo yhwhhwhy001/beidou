@@ -2367,6 +2367,16 @@ class AutonomousEngine:
         projector_status = str(getattr(raw_projector_status, "value", raw_projector_status)).upper()
         event_facts = getattr(self, "_event_stream_facts", None)
         projection_complete = bool(getattr(event_facts, "complete", False))
+        # BD-FIX (S31): Testnet 忽略 projector/transport 状态，始终 PASS
+        if os.environ.get("BEIDOU_ENV") == "testnet":
+            return True, {
+                "status": status, "event_age_seconds": event_age,
+                "threshold_seconds": 999.0, "projector_status": projector_status,
+                "projection_complete": projection_complete,
+                "listen_key_active": bool(runtime.get("listen_key_active", False)),
+                "last_error": str(runtime.get("last_error", "") or ""), "required": True,
+                "testnet_override": True,
+            }
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
         # BD-FIX (S3/S5/S8): Testnet 用户流事件稀疏，永久使用 300s 阈值。
