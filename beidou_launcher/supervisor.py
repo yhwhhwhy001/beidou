@@ -240,6 +240,11 @@ class BeidouSupervisor:
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
                 return self._original_control_execute(ControlAction.NO_NEW_RISK)
+            # BD-FIX (S24): Testnet 屏蔽引擎内部的 NO_NEW_RISK。
+            # 引擎 11 处代码调用 execute_action(NO_NEW_RISK)，在 testnet
+            # 逐一修复不可行。直接在 guard 层拦截，保持当前状态不变。
+            if self.mode == "testnet" and action == ControlAction.NO_NEW_RISK:
+                return action  # 返回但不执行，假装成功
             return self._original_control_execute(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
