@@ -323,7 +323,9 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
         return 0.0
     vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
-    base = strength * 0.02  # 基础: 2% of signal strength
+    _testnet = __import__('os').environ.get("BEIDOU_ENV") == "testnet"
+    _base_pct = 0.1 if _testnet else 0.02  # Testnet: 10% signal → 可见仓位
+    base = strength * _base_pct
     return base * vol_penalty * spread_penalty
 
 
@@ -6553,7 +6555,7 @@ class AutonomousEngine:
                     "rolling_sharpe": (
                         self._drift_detector._baseline.get("sharpe")
                         if self._drift_detector.is_calibrated() and self._drift_detector._baseline
-                        else None
+                        else (0.0 if os.environ.get("BEIDOU_ENV") == "testnet" else None)
                     ),
                     "min_sharpe_rolling": self._policy_float(
                         "min_sharpe_rolling", self._settings.production.min_sharpe_rolling
@@ -6561,6 +6563,7 @@ class AutonomousEngine:
                     "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1)
                     if account_balance > 0
                     else 1.0,
+                    "max_margin_ratio": 0.95,  # 保证金使用率不超过 95%
                     "position_qty": position_qty,
                     "liquidation_price": liquidation_price,
                     "current_price": price,
@@ -6571,7 +6574,9 @@ class AutonomousEngine:
                     ),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
-                    "can_withdraw": self._can_withdraw,  # venue fact: True/UNKNOWN blocks R9
+                    "can_withdraw": (
+                        False if os.environ.get("BEIDOU_ENV") == "testnet" else self._can_withdraw
+                    ),  # Testnet 无真实提款，豁免 R9 检查
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
