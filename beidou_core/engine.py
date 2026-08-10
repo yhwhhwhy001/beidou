@@ -6119,8 +6119,13 @@ class AutonomousEngine:
                             _dbg_parts = []
                             for _cid, _cout in _dbg_components.items():
                                 _cdir = getattr(_cout, 'direction', None)
+                                if _cdir is None:
+                                    _cdir = getattr(_cout, 'side', None)
+                                if _cdir is None:
+                                    _cdir = getattr(_cout, 'decision', None)
                                 _cstr = getattr(_cout, 'strength', None)
-                                _dbg_parts.append(f"{_cid}={getattr(_cdir, 'value', _cdir)}/{_cstr}")
+                                _cdir_str = str(getattr(_cdir, 'value', _cdir)) if _cdir is not None else '?'
+                                _dbg_parts.append(f"{_cid}={_cdir_str}/{_cstr}")
                             print(f"[nearline] {symbol}: COMPONENTS: {', '.join(_dbg_parts)}")
                         if kernel_result.get("blocked_by"):
                             print(
