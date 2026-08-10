@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -313,8 +314,8 @@ class BinanceRESTClient:
         if params is None:
             params = {}
 
-        # 熔断检查
-        if self._rate_state.circuit_open:
+        # 熔断检查 — testnet 环境跳过，避免网络不稳定导致的误跳闸
+        if os.environ.get("BEIDOU_ENV") != "testnet" and self._rate_state.circuit_open:
             if time.monotonic() < self._rate_state.circuit_open_until:
                 return Result.fail(ErrorCategory.RATE_LIMIT, "Circuit breaker open")
             self._rate_state.circuit_open = False
