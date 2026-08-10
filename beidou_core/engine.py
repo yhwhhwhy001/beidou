@@ -3402,11 +3402,13 @@ class AutonomousEngine:
         """Freeze execution truth after a durable fact write cannot be proven."""
         with contextlib.suppress(Exception):
             self._ledger.freeze()
-        control = getattr(self, "_control", None)
-        if control is not None:
-            with contextlib.suppress(Exception):
-                if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                    control.execute_action(ControlAction.NO_NEW_RISK)
+        # Testnet: 不因执行事实失败而降级控制面（API 不稳定导致误触发）
+        if os.environ.get("BEIDOU_ENV") != "testnet":
+            control = getattr(self, "_control", None)
+            if control is not None:
+                with contextlib.suppress(Exception):
+                    if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                        control.execute_action(ControlAction.NO_NEW_RISK)
         alerts = getattr(self, "_alerts", None)
         if alerts is not None:
             with contextlib.suppress(Exception):
