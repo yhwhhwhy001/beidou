@@ -6113,6 +6113,15 @@ class AutonomousEngine:
                     if typed_mode:
                         typed_proposal = kernel_result.get("proposal")
                         typed_exit_signals = list(kernel_result.get("exit_signals", []))
+                        # 诊断：打印每个组件的原始输出
+                        _dbg_components = kernel_result.get("component_outputs", {})
+                        if _dbg_components:
+                            _dbg_parts = []
+                            for _cid, _cout in _dbg_components.items():
+                                _cdir = getattr(_cout, 'direction', None)
+                                _cstr = getattr(_cout, 'strength', None)
+                                _dbg_parts.append(f"{_cid}={getattr(_cdir, 'value', _cdir)}/{_cstr}")
+                            print(f"[nearline] {symbol}: COMPONENTS: {', '.join(_dbg_parts)}")
                         if kernel_result.get("blocked_by"):
                             print(
                                 f"[nearline] {symbol}: TypedGraph BLOCKED by {kernel_result['blocked_by']} "

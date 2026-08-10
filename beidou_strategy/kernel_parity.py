@@ -160,17 +160,25 @@ class StrategyKernel:
         强制 VETO）时偷偷回退并产生另一份策略结果。
         """
         if self._typed_graph is not None:
-            result = await self._typed_graph.execute(context)
+            _detailed_fn = getattr(self._typed_graph, "_execute_detailed", None)
+            if callable(_detailed_fn):
+                _detailed = await _detailed_fn(context)
+                _proposal = _detailed.get("proposal")
+                _component_outputs = _detailed.get("component_outputs", {})
+            else:
+                _proposal = await self._typed_graph.execute(context)
+                _component_outputs = {}
             graph_hash = ""
             graph_hash_fn = getattr(self._typed_graph, "compute_graph_hash", None)
             if callable(graph_hash_fn):
                 graph_hash = str(graph_hash_fn())
             return {
-                "proposal": result,
+                "proposal": _proposal,
+                "component_outputs": _component_outputs,
                 "kernel": "typed_graph",
                 "mode": self.mode,
                 "graph_hash": graph_hash,
-                "blocked_by": "typed_graph_no_proposal" if result is None else "",
+                "blocked_by": "typed_graph_no_proposal" if _proposal is None else "",
             }
         if self._alpha_graph is not None:
             signals = await self._alpha_graph.generate(context)
