@@ -3962,12 +3962,29 @@ class AutonomousEngine:
         # BD-FIX (S13): Testnet 小数量跳过切片算法，直接 MARKET 成交。
         is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         total_qty = float(intent.quantity.amount)
-        # Testnet 全部用 MARKET 直接成交，不做切片（避免 IOC 无法成交被撤）
+        # BD-FIX (S32): Testnet 用吃单 LIMIT 代替 MARKET 确保成交
+        # MARKET 订单在 testnet 无对手方流动性时无法成交。
+        # 改为 aggressive limit：BUY 挂 ask*1.005，SELL 挂 bid*0.995
         is_small_order = is_testnet
         if is_small_order:
-            # 小数量直接 MARKET 下单，不做切片
-            slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
-            algo_type = "MARKET_DIRECT"
+            aggressive_price = None
+            try:
+                ob = await self._feed.async_fetch_orderbook(order_symbol, 1)
+                if ob and ob.get("asks") and ob.get("bids"):
+                    ask = float(ob["asks"][0][0])
+                    bid = float(ob["bids"][0][0])
+                    if side == "BUY" and ask > 0:
+                        aggressive_price = str(round(ask * 1.005, 2))
+                    elif side == "SELL" and bid > 0:
+                        aggressive_price = str(round(bid * 0.995, 2))
+            except Exception:
+                pass
+            if aggressive_price:
+                slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
+                algo_type = "AGGRESSIVE_LIMIT"
+            else:
+                slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
+                algo_type = "MARKET_DIRECT"
             ctx = SimpleNamespace(alpha_decay_seconds=60.0)  # 切片循环需要 ctx
         else:
             planned = await self._plan_execution(intent, order_symbol, client_id)
