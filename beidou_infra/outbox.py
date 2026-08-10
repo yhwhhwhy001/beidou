@@ -986,7 +986,7 @@ class PostgresIntentOutbox:
     @property
     def stats(self) -> dict[str, Any]:
         if self._connection_factory is None:
-            return {"state_counts": {"UNKNOWN": 1}, "pending_count": 0, "outbox_size": 0}
+            return {"state_counts": {}, "pending_count": 0, "outbox_size": 0, "unknown_count": 0, "dead_letter_count": 0}
         with (
             OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
             OutboxWorker._cursor_scope(conn) as cursor,
