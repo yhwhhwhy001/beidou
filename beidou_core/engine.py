@@ -2365,10 +2365,16 @@ class AutonomousEngine:
         projection_complete = bool(getattr(event_facts, "complete", False))
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
-        # BD-FIX (S3): CONNECTED 状态下放宽事件年龄阈值到 300s。
-        # WebSocket 连接后可能需要数分钟才收到第一个用户事件，
-        # 60s 阈值在启动阶段过于激进，导致误触发 DEGRADED→LOCKED。
-        effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") else max_event_age
+        # BD-FIX (S3/S5): 启动阶段放宽事件年龄阈值到 300s。
+        # 1m K 线信号产生快，近线循环处理 20 标的耗时 >60s，
+        # 期间若无新用户事件则 readiness 失败 → NO_NEW_RISK → 全部 Intent 被拒。
+        # 前 10 分钟启动期内全局使用 300s 阈值。
+        startup_elapsed = time.monotonic() - getattr(self, "_startup_mono", time.monotonic())
+        if not hasattr(self, "_startup_mono"):
+            self._startup_mono = time.monotonic()
+            startup_elapsed = 0.0
+        startup_grace = startup_elapsed < 600.0  # 前 10 分钟
+        effective_max_age = 300.0 if (status in ("CONNECTED", "UNKNOWN") or startup_grace) else max_event_age
         # BD-FIX (S4): 启动阶段无事件时 projector 状态无关。
         # ACCOUNT_UPDATE 可能缺少 `u` 字段导致 sequencer → SEQUENCE_UNAVAILABLE，
         # 在没有足够事件构建投影时不应以此为据阻断 readiness。
@@ -2382,7 +2388,7 @@ class AutonomousEngine:
         return ready, {
             "status": status,
             "event_age_seconds": event_age,
-            "threshold_seconds": max_event_age,
+            "threshold_seconds": effective_max_age,
             "projector_status": projector_status,
             "projection_complete": projection_complete,
             "listen_key_active": bool(runtime.get("listen_key_active", False)),
