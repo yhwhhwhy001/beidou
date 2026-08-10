@@ -436,6 +436,27 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
                 )
             )
 
+        # 归一化切片总量不超过批准量
+        _total = sum(float(s.quantity.amount) for s in slices)
+        if _total > total_qty and _total > 0:
+            _scale = total_qty / _total
+            slices = [
+                OrderSlice(
+                    slice_id=s.slice_id,
+                    parent_order_id=s.parent_order_id,
+                    quantity=Quantity(amount=str(float(s.quantity.amount) * _scale)),
+                    price=s.price,
+                    order_type=s.order_type,
+                    time_in_force=s.time_in_force,
+                    algorithm=s.algorithm,
+                    sequence_number=s.sequence_number,
+                    estimated_cost_bps=s.estimated_cost_bps,
+                    invariants_check_passed=s.invariants_check_passed,
+                    remaining_alpha_bps=s.remaining_alpha_bps,
+                )
+                for s in slices
+            ]
+
         return ExecutionPlan(
             algorithm=self.algorithm_type,
             slices=slices,

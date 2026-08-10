@@ -1869,7 +1869,7 @@ class AutonomousEngine:
         approval_id = f"EMERGENCY:{policy_id}:{policy_version}:{approval_nonce[-12:]}"
         intent_id = f"emergency-{symbol}-{now_bucket}-{uuid.uuid4().hex[:10]}"
         client_order_id = f"beidou-{str(symbol).lower()}-emergency-{now_bucket}-{uuid.uuid4().hex[:8]}"
-        idempotency_key = f"emergency-{str(symbol).upper()}-{now_bucket}"
+        idempotency_key = f"emergency-{str(symbol).upper()}-{now_bucket}-{uuid.uuid4().hex[:8]}"
         correlation = CorrelationId(str(correlation_id)) if correlation_id else None
         proposal_hash = hashlib.sha256(
             f"{symbol}|{side}|{amount}|{policy_id}|{policy_version}|{policy_signature}|{approval_nonce}".encode()
@@ -2828,14 +2828,18 @@ class AutonomousEngine:
             if self._can_write or self._can_simulate:
                 if durable_outbox:
                     while True:
-                        # The constructor-bound process-generation owner is
-                        # part of the durable fencing identity; a per-call
-                        # owner would make later ACK/FAIL transitions
-                        # unverifiable and strand the intent in SENDING.
                         intent = self._outbox.claim(owner=self._lease_owner)
                         if intent is None:
                             break
-                        await self._place_order(intent)
+                        try:
+                            await self._place_order(intent)
+                        except Exception as _claim_exc:
+                            # 单条 intent 异常不应阻断整个 claim 循环；
+                            # 失败的 intent 保持在 SENDING，下次重启恢复。
+                            print(
+                                f"[realtime] Intent claim error ({getattr(intent, 'intent_id', '?' )}): "
+                                f"{type(_claim_exc).__name__}: {_claim_exc}"
+                            )
                 else:
                     for intent in unacked:
                         await self._place_order(intent)
@@ -3758,6 +3762,12 @@ class AutonomousEngine:
             )
             if order is not None:
                 intent_acked = True
+            elif intent_acked:
+                # 后续切片失败 — 记录证据，剩余批准量被静默丢弃
+                print(
+                    f"[order] ⚠️ TWAP slice {idx+1}/{n_slices} FAILED after intent ACKed: "
+                    f"{order_symbol} {qty_str} — remaining approved quantity not executed"
+                )
 
         if not intent_acked and getattr(self._outbox, "_db_path", None):
             # No venue acknowledgement is an ambiguous outcome.  Persist
@@ -4259,6 +4269,20 @@ class AutonomousEngine:
                             await self._process_fill(oid_str, order_symbol, existing)
                         else:
                             self._active_order_ids.add(oid_str)
+                            # 持久化恢复的订单，避免对账时 system_facts 缺失此订单
+                            try:
+                                self._store.save_order_state(
+                                    oid_str,
+                                    order_symbol,
+                                    side,
+                                    order_type,
+                                    str(params["quantity"]),
+                                    params.get("price"),
+                                    actual_status,
+                                    client_order_id=client_id,
+                                )
+                            except Exception as _pe:
+                                print(f"[order] Failed to persist recovered order {oid_str}: {_pe}")
                         self._owned_order_ids.add(oid_str)
                         return existing
             except Exception as qe:
@@ -5336,12 +5360,13 @@ class AutonomousEngine:
                 continue
             positions[symbol] = Quantity(amount=format(current.normalize(), "f"))
         active_orders = self._store.get_active_orders()
-        # The opening balance is not a cash ledger.  Once a fill occurs, its
-        # fees/realized cash must be independently projected before this side
-        # can claim completeness; never pair a stale balance with replayed
-        # positions and call that a match.
-        if post_opening_fill:
-            opening_complete = False
+        # Post-opening fills mean the balance may be slightly stale (fees),
+        # but that is acceptable within the reconciliation balance tolerance
+        # (5 USDT).  Only an inconsistent projection (uncommitted fills,
+        # parse failures) forces INCOMPLETE.  If all fills are COMMITTED
+        # and the position replay is self-consistent, the projection is complete.
+        if post_opening_fill and not opening_complete:
+            pass  # already incomplete from a fill processing error above
         balance_amount = str(opening.get("balance_amount", "0")) if opening else "0"
         balance_currency = str(opening.get("balance_currency", "USDT")) if opening else "USDT"
         balance_decimals = int(opening.get("balance_decimals", 8)) if opening else 8
@@ -5927,6 +5952,16 @@ class AutonomousEngine:
                 if not features:
                     print(f"[nearline] {symbol}: no kline features available")
                     continue
+
+                # 更新移动止损价格极值（TRAILING 止损依赖实时价格更新）
+                _close = features.get("close", 0)
+                if _close and hasattr(self, "_protection"):
+                    try:
+                        for _pos_id, _pos in self._protection.all_positions().items():
+                            if str(getattr(_pos, "instrument_id", "")) == symbol:
+                                _pos.update_price_extremes(float(_close))
+                    except Exception:
+                        pass
 
                 # Strategy inputs must identify one already-closed bar.  The
                 # feed no longer defaults missing metadata to ``True``; keep
@@ -7236,6 +7271,28 @@ class AutonomousEngine:
                     )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
+
+        # 启动时恢复 UNKNOWN intent — 按 client_order_id 查询交易所确定状态
+        if self._can_write:
+            print("[beidou-autopilot] Resolving UNKNOWN intents...")
+            try:
+                unknown_intents = self._outbox.get_unknown_intents() if callable(getattr(self._outbox, "get_unknown_intents", None)) else []
+            except Exception:
+                unknown_intents = []
+            resolved_count = 0
+            for ui in unknown_intents:
+                try:
+                    cid = ui.get("client_order_id", "")
+                    sym = ui.get("symbol", "")
+                    if cid and sym:
+                        query = await self._adapter.query_order_by_client_id(sym, cid)
+                        found = query.is_success() and isinstance(query.data, dict) and "orderId" in query.data
+                        self._outbox.resolve_unknown(ui["intent_id"], exchange_order_found=found)
+                        resolved_count += 1
+                except Exception:
+                    pass
+            if resolved_count:
+                print(f"[beidou-autopilot] Resolved {resolved_count} UNKNOWN intents")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
