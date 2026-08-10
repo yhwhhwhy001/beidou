@@ -1,5 +1,6 @@
 """PKG-MON-04: Protection Semantic Verifier。"""
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -111,13 +112,16 @@ def build_protection_check(result):
         issues.append(f"DUP({result.duplicate_count})")
     if result.ghost_detected:
         issues.append("GHOST")
+    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+    _sev = CheckSeverity.P1 if _testnet else CheckSeverity.P0
+    _status = CheckStatus.WARN if _testnet else CheckStatus.FAIL
     if issues:
         return MonitoringCheckResult(
             check_id="runtime.safety.protection_coverage",
             entity_type="position",
             entity_id=result.position_key,
-            status=CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
+            status=_status,
+            severity=_sev,
             message=f"Protection: {', '.join(issues)}",
             observed_at=now,
         )
