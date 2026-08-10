@@ -323,7 +323,7 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
         return 0.0
     vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
-    _testnet = __import__('os').environ.get("BEIDOU_ENV") == "testnet"
+    _testnet = __import__("os").environ.get("BEIDOU_ENV") == "testnet"
     _base_pct = 0.1 if _testnet else 0.02  # Testnet: 10% signal → 可见仓位
     base = strength * _base_pct
     return base * vol_penalty * spread_penalty
@@ -1747,8 +1747,8 @@ class AutonomousEngine:
         if result.is_success():
             return result.data
         err = result.error
-        _msg = str(getattr(err, 'message', 'unknown')) if err else "unknown"
-        return {"error": getattr(err, 'http_status', -1) or -1, "msg": _msg}
+        _msg = str(getattr(err, "message", "unknown")) if err else "unknown"
+        return {"error": getattr(err, "http_status", -1) or -1, "msg": _msg}
 
     async def _api_async_safe(
         self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None
@@ -1798,7 +1798,26 @@ class AutonomousEngine:
         if result.is_success() and result.data is not None:
             return dict(result.data.raw_response)
         error = result.error
-        return {"error": -1, "msg": error.message if error else "Algo ACK UNKNOWN"}
+        if error is None:
+            return {
+                "error": -1,
+                "code": -1,
+                "msg": "Algo ACK UNKNOWN",
+                "category": "UNKNOWN",
+                "retryable": False,
+                "http_status": 0,
+            }
+        raw = error.raw if isinstance(error.raw, dict) else {}
+        code = raw.get("code", -1)
+        category = getattr(error.category, "value", str(error.category))
+        return {
+            "error": code,
+            "code": code,
+            "msg": str(raw.get("msg") or error.message)[:500],
+            "category": category,
+            "retryable": bool(error.retryable),
+            "http_status": int(error.http_status or 0),
+        }
 
     async def _cancel_algo_order(self, symbol: str, algo_id: int) -> dict[str, Any]:
         """Cancel one Algo id through the typed adapter boundary."""
@@ -1978,7 +1997,9 @@ class AutonomousEngine:
             return current
 
         resp = await self._api_async(
-            Endpoint.LEVERAGE, method="POST", signed=True,
+            Endpoint.LEVERAGE,
+            method="POST",
+            signed=True,
             params={"symbol": symbol, "leverage": target_leverage},
         )
         if "leverage" in resp:
@@ -2150,38 +2171,9 @@ class AutonomousEngine:
                 "exchange_positions": len(exchange_positions),
             }
             if unknown_orders:
-                # 启动时可能因僵尸/algo 订单出现 UNKNOWN。尝试清理：
-                # UNKNOWN 订单来源于无法查询的恢复订单。将其标记为 CANCELED
-                # 防止永久阻塞就绪状态。真实订单会被 _monitor_orders 重新追踪。
-                for _uo_id in unknown_orders:
-                    try:
-                        _uo_row = next((r for r in order_rows if str(r.get("order_id", "")) == _uo_id), {})
-                        store.save_order_state(
-                            str(_uo_id),
-                            str(_uo_row.get("symbol", "")),
-                            str(_uo_row.get("side", "UNKNOWN")),
-                            str(_uo_row.get("order_type", "UNKNOWN")),
-                            str(_uo_row.get("quantity", "0")),
-                            str(_uo_row.get("price", "")) or None,
-                            "CANCELED",
-                        )
-                        print(f"[state] Cleaned UNKNOWN order {_uo_id} -> CANCELED")
-                    except Exception:
-                        pass
-                # 重新检查是否还有 UNKNOWN
-                order_rows_after = list(store.restore_order_states())
-                unknown_after = [
-                    str(row.get("order_id", ""))
-                    for row in order_rows_after
-                    if str(row.get("status", "")).upper() == "UNKNOWN"
-                ]
-                if unknown_after:
-                    return False, "DURABLE_ORDER_UNKNOWN", {**evidence, "order_ids": unknown_after[:20]}
+                return False, "DURABLE_ORDER_UNKNOWN", {**evidence, "order_ids": unknown_orders[:20]}
             if unknown_outbox:
-                # Testnet: outbox UNKNOWN 条目通常来自历史会话恢复，
-                # 不影响当前交易就绪。生产环境保持 fail-closed。
-                if os.environ.get("BEIDOU_ENV") != "testnet":
-                    return False, "DURABLE_OUTBOX_UNKNOWN", evidence
+                return False, "DURABLE_OUTBOX_UNKNOWN", evidence
             if untracked_active_orders:
                 return (
                     False,
@@ -2374,13 +2366,11 @@ class AutonomousEngine:
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
-        # Testnet: 无真实交易活动，用户流可能长时间无事件。只要 listenKey 活跃即可。
-        _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         ready = (
             transport_ok
-            and (_testnet or event_age is None or event_age <= max_event_age)
-            and (_testnet or projector_ok)
-            and (_testnet or projection_complete or event_facts is None)
+            and (event_age is None or event_age <= max_event_age)
+            and projector_ok
+            and (projection_complete or event_facts is None)
         )
         return ready, {
             "status": status,
@@ -2404,7 +2394,7 @@ class AutonomousEngine:
         # an independent health endpoint claim that a dead executor is ready.
         if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
             return False
-        durable_ok, durable_reason, durable_evidence = self._durable_fact_status()
+        durable_ok, _, _ = self._durable_fact_status()
         if not durable_ok:
             return False
         if self._lifecycle.state != ModuleState.ACTIVE:
@@ -2833,7 +2823,6 @@ class AutonomousEngine:
                     price_str = str(round(px * 0.98, 1))
                     # 必须走完整风控链：PreRisk → RiskRules → Approval → Outbox
                     from beidou_safety.execution import OrderIntent
-                    from beidou_shared.types import AccountId, InstrumentId, VenueId, VenueInstrument, RiskApprovalId
 
                     intent = OrderIntent(
                         intent_id=f"test-self-order-{int(time.time())}",
@@ -2875,7 +2864,7 @@ class AutonomousEngine:
                             # 单条 intent 异常不应阻断整个 claim 循环；
                             # 失败的 intent 保持在 SENDING，下次重启恢复。
                             print(
-                                f"[realtime] Intent claim error ({getattr(intent, 'intent_id', '?' )}): "
+                                f"[realtime] Intent claim error ({getattr(intent, 'intent_id', '?')}): "
                                 f"{type(_claim_exc).__name__}: {_claim_exc}"
                             )
                 else:
@@ -2898,13 +2887,16 @@ class AutonomousEngine:
                                     if getattr(_inc, "root_cause_category", "") == "execution_fact":
                                         _alerts.resolve_incident(_iid)
                                         print("[realtime] Auto-resolved execution_fact incident")
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.warning(
+                                    "execution_fact incident resolution failed: %s",
+                                    type(exc).__name__,
+                                )
                         try:
                             self._control.execute_action(ControlAction.RESUME)
                             print("[realtime] Auto-restored RESUME after durable facts verified")
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning("automatic RESUME failed: %s", type(exc).__name__)
 
             # 7. Protection status report (every 60 ticks ≈ 60s)
             if self._tick_count % 60 == 0:
@@ -3463,6 +3455,138 @@ class AutonomousEngine:
         getattr(self, "_active_order_ids", set()).discard(order_id)
         self._record_execution_fact_failure(f"{reason}{persist_error}")
 
+    async def _resolve_unknown_outbox_intents(self) -> int:
+        """Resolve UNKNOWN only from an identity-bound positive venue fact.
+
+        A failed client-order lookup is not proof that the venue never
+        accepted the write.  Until the adapter exposes a separately typed,
+        definitive absence result, failures stay UNKNOWN and cannot be
+        requeued.
+        """
+
+        try:
+            get_unknown = getattr(self._outbox, "get_unknown_intents", None)
+            unknown_intents = get_unknown() if callable(get_unknown) else []
+        except Exception:
+            return 0
+
+        resolved_count = 0
+        for item in unknown_intents:
+            if not isinstance(item, dict):
+                continue
+            intent_id = str(item.get("intent_id", "")).strip()
+            client_id = str(item.get("client_order_id", "")).strip()
+            symbol = str(item.get("symbol", "")).strip().upper()
+            if not intent_id or not client_id or not symbol:
+                continue
+            try:
+                query = await self._adapter.query_order_by_client_id(symbol, client_id)
+            except Exception as exc:
+                logger.warning(
+                    "UNKNOWN intent lookup failed for %s: %s",
+                    intent_id,
+                    type(exc).__name__,
+                )
+                continue
+            if not query.is_success() or not isinstance(query.data, dict) or not query.data.get("orderId"):
+                continue
+            venue_order = query.data
+            if (
+                str(venue_order.get("clientOrderId", "")) != client_id
+                or str(venue_order.get("symbol", "")).strip().upper() != symbol
+            ):
+                continue
+            try:
+                OrderStatus(str(venue_order.get("status", "")))
+            except ValueError:
+                continue
+            try:
+                store = getattr(self, "_store", None)
+                save_order_state = getattr(store, "save_order_state", None)
+                if not callable(save_order_state):
+                    raise RuntimeError("UNKNOWN_ORDER_FACT_STORE_UNAVAILABLE")
+                save_order_state(
+                    order_id=str(venue_order["orderId"]),
+                    symbol=symbol,
+                    side=str(venue_order["side"]),
+                    order_type=str(venue_order["type"]),
+                    quantity=str(venue_order["origQty"]),
+                    price=str(venue_order["price"]) if venue_order.get("price") not in (None, "", "0") else None,
+                    status=str(venue_order["status"]),
+                    filled_qty=str(venue_order["executedQty"]),
+                    avg_price=(
+                        str(venue_order["avgPrice"]) if venue_order.get("avgPrice") not in (None, "", "0") else None
+                    ),
+                    client_order_id=client_id,
+                )
+            except Exception as exc:
+                self._record_execution_fact_failure(
+                    f"UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:{intent_id}:{type(exc).__name__}"
+                )
+                continue
+            self._outbox.resolve_unknown(intent_id, exchange_order_found=True)
+            resolved_count += 1
+        return resolved_count
+
+    @staticmethod
+    def _protection_client_algo_id(protection_order: Any) -> str:
+        """Derive a stable venue idempotency key from the exact protection command."""
+
+        def _value(value: Any) -> str:
+            return str(getattr(value, "value", value) or "")
+
+        material = "|".join(
+            [
+                _value(getattr(protection_order, "protection_id", "")),
+                _value(getattr(protection_order, "owner_id", "")),
+                _value(getattr(protection_order, "position_generation", "")),
+                _value(getattr(protection_order, "instrument_id", "")),
+                _value(getattr(protection_order, "side", "")),
+                _value(getattr(protection_order, "order_type", "")),
+                _value(getattr(getattr(protection_order, "quantity", None), "amount", "")),
+                _value(getattr(getattr(protection_order, "trigger_price", None), "amount", "")),
+            ]
+        )
+        return f"bdp-{hashlib.sha256(material.encode()).hexdigest()[:28]}"
+
+    @classmethod
+    def _protection_algo_params(
+        cls,
+        protection_order: Any,
+        *,
+        symbol: str,
+        side: str,
+        precision: dict[str, int],
+    ) -> dict[str, str]:
+        """Build one exact, idempotency-bound protection command."""
+
+        try:
+            quantity_value = Decimal(str(protection_order.quantity.amount))
+            trigger_value = Decimal(str(protection_order.trigger_price.amount))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("protection quantity or trigger is invalid") from exc
+        if not quantity_value.is_finite() or quantity_value <= 0:
+            raise ValueError("protection quantity must be finite and positive")
+        if not trigger_value.is_finite() or trigger_value <= 0:
+            raise ValueError("protection trigger must be finite and positive")
+        quantity = f"{quantity_value:.{precision['quantity']}f}"
+        trigger_price = f"{trigger_value:.{precision['price']}f}"
+        if Decimal(quantity) <= 0:
+            raise ValueError("protection quantity rounds to zero at venue precision")
+        if Decimal(trigger_price) <= 0:
+            raise ValueError("protection trigger rounds to zero at venue precision")
+        return {
+            "symbol": str(symbol),
+            "side": str(side),
+            "algoType": "CONDITIONAL",
+            "type": str(protection_order.order_type),
+            "quantity": quantity,
+            "triggerPrice": trigger_price,
+            "reduceOnly": "true",
+            "workingType": "CONTRACT_PRICE",
+            "clientAlgoId": cls._protection_client_algo_id(protection_order),
+        }
+
     def _post_ledger_transaction(self, transaction: LedgerTransaction) -> None:
         """Persist then append a balanced transaction, failing closed on drift.
 
@@ -3756,20 +3880,13 @@ class AutonomousEngine:
             return
 
         # === 执行算法选择 + 切片计划 (TWAP/POV/AdaptiveSlice/...) ===
-        # Testnet: MARKET 意图跳过算法直接市价单，确保立即成交
-        _testnet_market = (
-            os.environ.get("BEIDOU_ENV") == "testnet"
-            and order_type == "MARKET"
-        )
-        if _testnet_market:
-            slices = [(str(float(intent.quantity.amount)), None, "MARKET", "GTC", client_id)]
-            algo_type = None
-            ctx = None
-        else:
-            planned = await self._plan_execution(intent, order_symbol, client_id)
-            if planned is None:
-                return
-            slices, algo_type, ctx = planned
+        # Testnet and production share the same market-fact, slippage and
+        # slice-invariant gates.  The environment label changes the venue,
+        # never the approved execution contract.
+        planned = await self._plan_execution(intent, order_symbol, client_id)
+        if planned is None:
+            return
+        slices, algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
         # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
@@ -3821,14 +3938,19 @@ class AutonomousEngine:
             elif intent_acked:
                 # 后续切片失败 — 记录证据，剩余批准量被静默丢弃
                 print(
-                    f"[order] ⚠️ TWAP slice {idx+1}/{n_slices} FAILED after intent ACKed: "
+                    f"[order] ⚠️ TWAP slice {idx + 1}/{n_slices} FAILED after intent ACKed: "
                     f"{order_symbol} {qty_str} — remaining approved quantity not executed"
                 )
 
-        if not intent_acked and getattr(self._outbox, "_db_path", None):
+        if not intent_acked:
             # No venue acknowledgement is an ambiguous outcome.  Persist
             # UNKNOWN and require a client-order-id query before any retry.
-            self._outbox.mark_unknown(intent.intent_id, "ORDER_ACK_UNKNOWN")
+            try:
+                self._outbox.mark_unknown(intent.intent_id, "ORDER_ACK_UNKNOWN")
+            except Exception as exc:
+                self._record_execution_fact_failure(
+                    f"ORDER_ACK_UNKNOWN_PERSISTENCE_FAILED:{intent.intent_id}:{type(exc).__name__}"
+                )
 
         # === 执行质量反馈：Contextual Bandit 学习实际执行成本 ===
         if algo_type is not None and slices:
@@ -3909,18 +4031,14 @@ class AutonomousEngine:
         # 3. 成本估算与净 Alpha
         predicted_cost_bps = spread_bps * 0.5
         net_alpha_bps = float(getattr(intent, "net_alpha_bps", 0.0) or 0.0)
-        if not is_reduce_only and net_alpha_bps <= 0:
-            # net_alpha_bps 未由策略层填充时不阻塞 — 策略层已自行评估信号质量。
-            # 这是一个诊断警告，不影响执行。
-            if net_alpha_bps < 0:
-                self._outbox.reject(
-                    intent.intent_id,
-                    "ALPHA_NEGATIVE",
-                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
-                )
-                print(f"[order] {order_symbol}: rejected — negative net alpha")
-                return None
-            # net_alpha_bps == 0 (未填充) → 诊断日志，继续执行
+        if not is_reduce_only and net_alpha_bps < 0:
+            self._outbox.reject(
+                intent.intent_id,
+                "ALPHA_NEGATIVE",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            print(f"[order] {order_symbol}: rejected — negative net alpha")
+            return None
         try:
             vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol))
             self._cost_model.set_fee_tier(VenueId("BINANCE"), "vip1", 2.0, 4.0)
@@ -4114,14 +4232,16 @@ class AutonomousEngine:
             total += qty
             if total > approved_qty:
                 return False, "TOTAL_QUANTITY_EXCEEDS_APPROVAL"
-            if str(order_type).upper() != str(expected_type).upper():
+            if str(order_type).upper() != str(expected_type).upper() and not (
+                str(expected_type).upper() == "MARKET" and str(order_type).upper() == "LIMIT"
+            ):
                 # 执行算法可将 MARKET intent 降级为 LIMIT 切片（更保守），但不允许反向
-                if not (str(expected_type).upper() == "MARKET" and str(order_type).upper() == "LIMIT"):
-                    return False, "ORDER_TYPE_MISMATCH"
-            if str(tif or expected_tif).upper() != str(expected_tif).upper():
+                return False, "ORDER_TYPE_MISMATCH"
+            if str(tif or expected_tif).upper() != str(expected_tif).upper() and not (
+                str(expected_tif).upper() == "GTC" and str(tif or expected_tif).upper() == "IOC"
+            ):
                 # 紧急平仓使用 IOC，允许偏离 GTC；算法可选择更严格 TIF
-                if not (str(expected_tif).upper() == "GTC" and str(tif or expected_tif).upper() == "IOC"):
-                    return False, "TIME_IN_FORCE_MISMATCH"
+                return False, "TIME_IN_FORCE_MISMATCH"
             is_limit_slice = str(order_type).upper() == "LIMIT"
             if str(expected_type).upper() == OrderType.LIMIT.value:
                 if approved_price is None or price_text is None:
@@ -4242,8 +4362,8 @@ class AutonomousEngine:
                 self._close_order_ids.add(oid_str)
                 print(f"[order] Marked as close order: {oid_str}")
             tracker = OrderStateTracker(order_id=OrderId(oid_str))
-            tracker.apply(OrderEvent.ACKED)
             tracker.apply(OrderEvent.SENT)
+            tracker.apply(OrderEvent.ACKED)
             self._order_trackers[oid_str] = tracker
             self._order_symbols[oid_str] = order_symbol
             if ack_outbox:
@@ -4255,8 +4375,10 @@ class AutonomousEngine:
                 approval_id_val = str(getattr(intent, "risk_approval_id", ""))
                 if nonce_val and approval_id_val:
                     await self._approval.consume_nonce(RiskApprovalId(approval_id_val), nonce_val)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_execution_fact_failure(
+                    f"RISK_NONCE_CONSUMPTION_FAILED:{intent.intent_id}:{type(exc).__name__}"
+                )
 
             actual_status = order.get("status", "NEW")
             self._last_order_placed_at = time.time()
@@ -4313,8 +4435,8 @@ class AutonomousEngine:
                         actual_status = existing.get("status", "UNKNOWN")
                         print(f"[order] RECOVERED from -4141: orderId={oid_str} status={actual_status}")
                         tracker = OrderStateTracker(order_id=OrderId(oid_str))
-                        tracker.apply(OrderEvent.ACKED)
                         tracker.apply(OrderEvent.SENT)
+                        tracker.apply(OrderEvent.ACKED)
                         self._order_trackers[oid_str] = tracker
                         self._order_symbols[oid_str] = order_symbol
                         if ack_outbox:
@@ -4348,7 +4470,9 @@ class AutonomousEngine:
                 self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
             return None
 
-        print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))} | raw={json.dumps(order, default=str)[:200]}")
+        print(
+            f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))} | raw={json.dumps(order, default=str)[:200]}"
+        )
         return None
 
     async def _monitor_orders(self, symbol: str) -> None:
@@ -4372,33 +4496,7 @@ class AutonomousEngine:
                 )
                 tracker = self._order_trackers.get(order_id)
                 if not query_ok or not isinstance(result, dict) or "status" not in result:
-                    # 查询失败的订单不能隐式取消/成交。但如果该订单是启动时从
-                    # 交易所恢复的（tracker 状态为 ACKED 且无本进程创建的记录），
-                    # 则 -2013 等表示它不能被 ORDER 端点查询（可能是 algo 订单）。
-                    # 这种情况下标记 CANCELED 而非 UNKNOWN，避免永久阻塞就绪。
-                    _restored = (
-                        tracker is not None
-                        and str(getattr(tracker, "status", None))
-                        in ("OrderStatus.ACKED", "ACKED", "OrderStatus.SENT", "SENT")
-                    )
-                    if _restored:
-                        if tracker is not None:
-                            tracker.apply(OrderEvent.CANCELED)
-                        self._active_order_ids.discard(order_id)
-                        self._store.save_order_state(
-                            order_id, order_sym, "UNKNOWN", "UNKNOWN",
-                            "0", None, "CANCELED",
-                        )
-                        print(f"[order] {order_id}: removed untrackable restored order (query failed)")
-                    else:
-                        if tracker is not None:
-                            tracker.apply(OrderEvent.UNKNOWN)
-                        self._active_order_ids.discard(order_id)
-                        self._store.save_order_state(
-                            order_id, order_sym, "UNKNOWN", "UNKNOWN",
-                            "0", None, "UNKNOWN",
-                        )
-                        self._record_execution_fact_failure(f"ORDER_STATUS_UNKNOWN:{order_id}")
+                    self._mark_order_unknown(order_id, order_sym, f"ORDER_STATUS_UNKNOWN:{order_id}")
                     continue
 
                 if result.get("msg") and (
@@ -4407,21 +4505,7 @@ class AutonomousEngine:
                     last_status = str(getattr(getattr(tracker, "status", None), "value", "UNKNOWN"))
                     is_expected = last_status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED")
                     if not is_expected:
-                        # 启动时从交易所恢复的订单（algo/conditional 订单可能在
-                        # OPEN_ORDERS 中列出但无法通过 ORDER 端点查询）→ 静默移除。
-                        # 这些订单不是本进程创建的，-2013 表示它们不能被追踪，
-                        # 不应该标记为 UNKNOWN 永久阻塞就绪状态。
-                        self._active_order_ids.discard(order_id)
-                        if tracker is not None:
-                            tracker.apply(OrderEvent.CANCELED)
-                        try:
-                            self._store.save_order_state(
-                                order_id, order_sym, "UNKNOWN", "UNKNOWN",
-                                "0", None, "CANCELED",
-                            )
-                        except Exception:
-                            pass
-                        print(f"[order] {order_id}: removed untrackable exchange order (not found via ORDER endpoint)")
+                        self._mark_order_unknown(order_id, order_sym, f"ORDER_DISAPPEARED_UNKNOWN:{order_id}")
                     else:
                         self._active_order_ids.discard(order_id)
                     continue
@@ -4953,39 +5037,25 @@ class AutonomousEngine:
                 if prec_map is None:
                     print(f"[protection] {symbol}: exchange precision UNKNOWN; keeping protection PENDING")
                     continue
-                qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
-                price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
-
-                algo_params = {
-                    "symbol": symbol,
-                    "side": reduce_side,
-                    "algoType": "CONDITIONAL",
-                    "type": p_order.order_type,
-                    "quantity": qty_str,
-                    "triggerPrice": price_str,
-                    "reduceOnly": "true",
-                    "workingType": "CONTRACT_PRICE",
-                }
-                # BD-FIX: 带重试和指数退避的 algo order 提交，应对 testnet 限流
-                algo_resp = {}
-                max_algo_retries = 3
-                for algo_attempt in range(max_algo_retries):
-                    algo_resp = await self._create_algo_order(algo_params)
-                    if "algoId" in algo_resp:
-                        break
-                    err_code = algo_resp.get("code", 0)
-                    # -4120: 已存在相同的条件单，不需要重试
-                    if err_code == -4120:
-                        print(f"[protection] ⚠️ {symbol} {p_order.reason}: venue reports an existing order (-4120)")
-                        self._block_unowned_protection_orders([f"DUPLICATE_CONDITIONAL_ORDER:{symbol}"])
-                        break
-                    if algo_attempt < max_algo_retries - 1:
-                        wait = 1.5 * (2**algo_attempt)  # 1.5s, 3s, 6s
-                        print(
-                            f"[protection] ⚠️ {symbol} {p_order.reason}: retry {algo_attempt + 1}/{max_algo_retries} after {wait:.1f}s (err={err_code})"
-                        )
-                        await asyncio.sleep(wait)
-                        self._adapter.reset_circuit_breaker()  # 重置熔断器重试
+                algo_params = self._protection_algo_params(
+                    p_order,
+                    symbol=symbol,
+                    side=reduce_side,
+                    precision=prec_map,
+                )
+                price_str = algo_params["triggerPrice"]
+                # One write attempt per durable identity.  A failed ACK is
+                # ambiguous and must be reconciled by clientAlgoId/inventory;
+                # resetting the circuit or immediately resending can create
+                # duplicate protection orders.
+                algo_resp = await self._create_algo_order(algo_params)
+                err_code = algo_resp.get("code", 0)
+                if "algoId" not in algo_resp and err_code in {-4116, -4120}:
+                    print(
+                        f"[protection] ⚠️ {symbol} {p_order.reason}: "
+                        f"venue reports a duplicate/conditional conflict ({err_code})"
+                    )
+                    self._block_unowned_protection_orders([f"DUPLICATE_CONDITIONAL_ORDER:{symbol}"])
                 if "algoId" in algo_resp:
                     exchange_protection_count += 1
                     algo_id = str(algo_resp["algoId"])
@@ -5843,7 +5913,6 @@ class AutonomousEngine:
                 if prec is None:
                     print(f"[protection] {symbol}: exchange precision UNKNOWN; retry deferred")
                     continue
-                qty_str = f"{float(pp.quantity):.{prec['quantity']}f}"
                 placed = 0
 
                 # --- 重试止损单 ---
@@ -5852,18 +5921,13 @@ class AutonomousEngine:
                     # Retry the exact approved trigger.  Moving a stop after
                     # rejection changes the signed risk contract and could
                     # silently widen the permitted loss.
-                    price_str = f"{float(pp.stop_loss.trigger_price.amount):.{prec['price']}f}"
                     algo_resp = await self._create_algo_order(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "algoType": "CONDITIONAL",
-                            "type": pp.stop_loss.order_type,
-                            "quantity": qty_str,
-                            "triggerPrice": price_str,
-                            "reduceOnly": "true",
-                            "workingType": "CONTRACT_PRICE",
-                        }
+                        self._protection_algo_params(
+                            pp.stop_loss,
+                            symbol=symbol,
+                            side=side,
+                            precision=prec,
+                        )
                     )
                     if "algoId" in algo_resp:
                         algo_id = str(algo_resp["algoId"])
@@ -5887,18 +5951,13 @@ class AutonomousEngine:
                     # Take-profit retries use the same approved trigger; a
                     # venue rejection remains UNKNOWN instead of inventing a
                     # new exit policy at runtime.
-                    tp_price_str = f"{float(tp.trigger_price.amount):.{prec['price']}f}"
                     tp_resp = await self._create_algo_order(
-                        {
-                            "symbol": symbol,
-                            "side": side,
-                            "algoType": "CONDITIONAL",
-                            "type": tp.order_type,
-                            "quantity": qty_str,
-                            "triggerPrice": tp_price_str,
-                            "reduceOnly": "true",
-                            "workingType": "CONTRACT_PRICE",
-                        }
+                        self._protection_algo_params(
+                            tp,
+                            symbol=symbol,
+                            side=side,
+                            precision=prec,
+                        )
                     )
                     if "algoId" in tp_resp:
                         algo_id = str(tp_resp["algoId"])
@@ -6029,8 +6088,8 @@ class AutonomousEngine:
                         for _pos_id, _pos in self._protection.all_positions().items():
                             if str(getattr(_pos, "instrument_id", "")) == symbol:
                                 _pos.update_price_extremes(float(_close))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("position price-extreme update skipped: %s", type(exc).__name__)
 
                 # Strategy inputs must identify one already-closed bar.  The
                 # feed no longer defaults missing metadata to ``True``; keep
@@ -6123,7 +6182,9 @@ class AutonomousEngine:
                     _dbg_has_prices = bool(_dbg_f.get("prices"))
                     _dbg_has_spread = "spread_bps" in _dbg_f
                     if self._tick_count % 10 == 0:
-                        print(f"[nearline] {symbol}: DEBUG features: prices={_dbg_has_prices} spread_bps={_dbg_has_spread} close={_dbg_f.get('close','?')} sma20={_dbg_f.get('sma_20','?')} rsi={_dbg_f.get('rsi_14','?')} ann_vol={_dbg_f.get('ann_volatility','?')}")
+                        print(
+                            f"[nearline] {symbol}: DEBUG features: prices={_dbg_has_prices} spread_bps={_dbg_has_spread} close={_dbg_f.get('close', '?')} sma20={_dbg_f.get('sma_20', '?')} rsi={_dbg_f.get('rsi_14', '?')} ann_vol={_dbg_f.get('ann_volatility', '?')}"
+                        )
                     # BD-T05: the only executable DAG boundary.  The engine
                     # must not maintain a second hand-written component loop.
                     kernel_result = await self._strategy_kernel.evaluate(context)
@@ -6138,13 +6199,13 @@ class AutonomousEngine:
                         if _dbg_components:
                             _dbg_parts = []
                             for _cid, _cout in _dbg_components.items():
-                                _cdir = getattr(_cout, 'direction', None)
+                                _cdir = getattr(_cout, "direction", None)
                                 if _cdir is None:
-                                    _cdir = getattr(_cout, 'side', None)
+                                    _cdir = getattr(_cout, "side", None)
                                 if _cdir is None:
-                                    _cdir = getattr(_cout, 'decision', None)
-                                _cstr = getattr(_cout, 'strength', None)
-                                _cdir_str = str(getattr(_cdir, 'value', _cdir)) if _cdir is not None else '?'
+                                    _cdir = getattr(_cout, "decision", None)
+                                _cstr = getattr(_cout, "strength", None)
+                                _cdir_str = str(getattr(_cdir, "value", _cdir)) if _cdir is not None else "?"
                                 _dbg_parts.append(f"{_cid}={_cdir_str}/{_cstr}")
                             print(f"[nearline] {symbol}: COMPONENTS: {', '.join(_dbg_parts)}")
                         if kernel_result.get("blocked_by"):
@@ -7277,9 +7338,10 @@ class AutonomousEngine:
         # 同步开盘投影余额，避免对账余额不匹配
         try:
             from beidou_bootstrap.dev import _sync_opening_balance as _sync_bal
+
             _sync_bal(self, "")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("opening-balance projection sync failed: %s", type(exc).__name__)
 
         # Start WebSocket real-time market data stream
         print("[beidou-autopilot] Starting WebSocket market data...")
@@ -7320,9 +7382,10 @@ class AutonomousEngine:
         )
 
         # Restore active_order_ids from exchange.
-        # Orders from previous sessions are adopted (tracked + persisted)
-        # rather than cancelled, preserving idempotency across restarts.
-        # Cancellation is reserved for the governed flatten path only.
+        # Do not claim current-worker ownership. Venue discovery is tracked
+        # and persisted, but only a separately fenced reconciliation/adoption flow may add it to
+        # ``_owned_order_ids``.  Cancellation remains reserved for the
+        # governed flatten path.
         try:
             exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
             if isinstance(exchange_open, list):
@@ -7332,13 +7395,12 @@ class AutonomousEngine:
                     osymbol = str(o.get("symbol", ""))
                     oside = str(o.get("side", ""))
                     tracker = OrderStateTracker(order_id=OrderId(oid))
-                    tracker.apply(OrderEvent.ACKED)
                     tracker.apply(OrderEvent.SENT)
+                    tracker.apply(OrderEvent.ACKED)
                     if ostatus == "PARTIALLY_FILLED":
                         tracker.apply(OrderEvent.PARTIALLY_FILLED)
                     self._order_trackers[oid] = tracker
                     self._active_order_ids.add(oid)
-                    self._owned_order_ids.add(oid)
                     self._order_symbols[oid] = osymbol
                     # 持久化到 store，避免对账时 system_facts.open_orders 为空
                     try:
@@ -7373,22 +7435,7 @@ class AutonomousEngine:
         # 启动时恢复 UNKNOWN intent — 按 client_order_id 查询交易所确定状态
         if self._can_write:
             print("[beidou-autopilot] Resolving UNKNOWN intents...")
-            try:
-                unknown_intents = self._outbox.get_unknown_intents() if callable(getattr(self._outbox, "get_unknown_intents", None)) else []
-            except Exception:
-                unknown_intents = []
-            resolved_count = 0
-            for ui in unknown_intents:
-                try:
-                    cid = ui.get("client_order_id", "")
-                    sym = ui.get("symbol", "")
-                    if cid and sym:
-                        query = await self._adapter.query_order_by_client_id(sym, cid)
-                        found = query.is_success() and isinstance(query.data, dict) and "orderId" in query.data
-                        self._outbox.resolve_unknown(ui["intent_id"], exchange_order_found=found)
-                        resolved_count += 1
-                except Exception:
-                    pass
+            resolved_count = await self._resolve_unknown_outbox_intents()
             if resolved_count:
                 print(f"[beidou-autopilot] Resolved {resolved_count} UNKNOWN intents")
 

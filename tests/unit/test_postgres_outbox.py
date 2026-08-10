@@ -400,3 +400,27 @@ def test_postgres_intent_outbox_startup_recovery_requires_fencing_token() -> Non
 
     with pytest.raises(RuntimeError, match="OUTBOX_FENCING_TOKEN_UNKNOWN"):
         store.recover_inflight()
+
+
+def test_postgres_unknown_intents_expose_only_identity_bound_recovery_fields() -> None:
+    conn = _RecordingConnection()
+    payload = PostgresIntentOutbox._intent_payload(_intent(), "idem-intent-pg-1")
+    conn.cursor_state.fetchall_values.append([(json.dumps(payload),)])
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-current",
+        fencing_token=7,
+    )
+
+    unknown = store.get_unknown_intents()
+
+    assert unknown == [
+        {
+            "intent_id": "intent-pg-1",
+            "symbol": "BTCUSDT",
+            "client_order_id": "cid-pg-1",
+        }
+    ]
+    query, params = conn.cursor_state.statements[-1]
+    assert "status IN (%s)" in query
+    assert params == ("UNKNOWN",)

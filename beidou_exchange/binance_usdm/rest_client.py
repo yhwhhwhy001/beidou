@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -314,10 +313,18 @@ class BinanceRESTClient:
         if params is None:
             params = {}
 
-        # 熔断检查 — testnet 环境跳过，避免网络不稳定导致的误跳闸
-        if os.environ.get("BEIDOU_ENV") != "testnet" and self._rate_state.circuit_open:
+        # A writable Testnet request has the same ambiguity and rate-limit
+        # semantics as any other venue write.  Environment labels must never
+        # bypass the shared transport circuit.
+        if self._rate_state.circuit_open:
             if time.monotonic() < self._rate_state.circuit_open_until:
-                return Result.fail(ErrorCategory.RATE_LIMIT, "Circuit breaker open")
+                return Result.failure(
+                    "Circuit breaker open",
+                    category=ErrorCategory.RATE_LIMIT,
+                    retryable=False,
+                    raw={"reason": "CIRCUIT_BREAKER_OPEN"},
+                    source="binance_rest",
+                )
             self._rate_state.circuit_open = False
             self._rate_state.consecutive_failures = 0
 
@@ -359,8 +366,15 @@ class BinanceRESTClient:
 
                 if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
                     binance_code = data["code"]
-                    category, _retryable = classify_http_error(200, "", binance_code)
-                    return Result.fail(category, data.get("msg", str(data)), code=binance_code)
+                    category, retryable = classify_http_error(200, "", binance_code)
+                    return Result.failure(
+                        data.get("msg", str(data)),
+                        http_status=200,
+                        category=category,
+                        retryable=retryable,
+                        raw=dict(data),
+                        source="binance_rest",
+                    )
 
                 return Result.ok(data)
 
@@ -375,11 +389,19 @@ class BinanceRESTClient:
                     e.close()
 
                 binance_code = 0
+                err_data: Any = None
                 try:
                     err_data = json.loads(error_body)
                     binance_code = err_data.get("code", 0)
                 except Exception:
                     binance_code = 0
+
+                raw_error = dict(err_data) if isinstance(err_data, dict) else {"body": error_body[:200]}
+                error_message = (
+                    str(err_data.get("msg", ""))
+                    if isinstance(err_data, dict) and err_data.get("msg")
+                    else error_body[:200]
+                )
 
                 category, retryable = classify_http_error(http_status, "", binance_code)
 
@@ -399,7 +421,14 @@ class BinanceRESTClient:
                     if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
                         self._rate_state.circuit_open = True
                         self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
-                    return Result.fail(category, error_body[:200] or "Rate limit response", code=http_status)
+                    return Result.failure(
+                        error_message or "Rate limit response",
+                        http_status=http_status,
+                        category=category,
+                        retryable=retryable,
+                        raw=raw_error,
+                        source="binance_rest",
+                    )
 
                 if retryable and attempt < self._max_retries - 1:
                     wait = 0.5 * (2**attempt)
@@ -411,16 +440,34 @@ class BinanceRESTClient:
                     self._rate_state.circuit_open = True
                     self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
 
-                return Result.fail(category, error_body[:200], code=http_status)
+                return Result.failure(
+                    error_message or f"HTTP {http_status}",
+                    http_status=http_status,
+                    category=category,
+                    retryable=retryable,
+                    raw=raw_error,
+                    source="binance_rest",
+                )
 
             except Exception as e:
                 if attempt < self._max_retries - 1:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 self._rate_state.consecutive_failures += 1
-                return Result.fail(ErrorCategory.NETWORK, str(e)[:200])
+                return Result.failure(
+                    str(e)[:200],
+                    category=ErrorCategory.NETWORK,
+                    retryable=True,
+                    raw={"exception_type": type(e).__name__},
+                    source="binance_rest",
+                )
 
-        return Result.fail(ErrorCategory.NETWORK, "Max retries exhausted")
+        return Result.failure(
+            "Max retries exhausted",
+            category=ErrorCategory.NETWORK,
+            retryable=True,
+            source="binance_rest",
+        )
 
 
 def _sync_urlopen(req: urllib.request.Request, timeout: int) -> bytes:

@@ -514,8 +514,15 @@ class IntentOutbox:
         self._processed.add(intent_id)
         if idempotency_key:
             self._processed.add(idempotency_key)
+        state_key = idempotency_key
+        if not state_key:
+            matched = next((item for item in self._memory_outbox if item.intent_id == intent_id), None)
+            if matched is not None:
+                state_key = matched.idempotency_key or self._hash(matched)
         self._inbox.pop(intent_id, None)
         self._memory_outbox = [i for i in self._memory_outbox if i.intent_id != intent_id]
+        if state_key:
+            self._states[state_key] = OutboxState.ACKED
         self._total_acked += 1
         stale_keys = [k for k, v in self._states.items() if v == OutboxState.PENDING]
         for k in stale_keys:
@@ -630,12 +637,44 @@ class IntentOutbox:
                 (OutboxState.UNKNOWN.value, reason, datetime.now(timezone.utc).isoformat(), intent_id),
             )
 
+    def get_unknown_intents(self) -> list[dict[str, str]]:
+        """Return only the stable identity fields required for venue recovery."""
+
+        if self._db_path:
+            with self._db_lock, closing(self._connect()) as conn, conn:
+                rows = conn.execute(
+                    "SELECT payload FROM intent_outbox WHERE state=? ORDER BY created_at",
+                    (OutboxState.UNKNOWN.value,),
+                ).fetchall()
+            intents = [self._deserialize_intent(str(row["payload"])) for row in rows]
+        else:
+            intents = [
+                intent
+                for intent in self._memory_outbox
+                if self._states.get(intent.idempotency_key or self._hash(intent)) is OutboxState.UNKNOWN
+            ]
+        return [
+            {
+                "intent_id": str(intent.intent_id),
+                "symbol": str(intent.instrument_id),
+                "client_order_id": str(intent.client_order_id or ""),
+            }
+            for intent in intents
+        ]
+
     def resolve_unknown(self, intent_id: str, *, exchange_order_found: bool) -> None:
         """只有查询得出结论后才允许 ACK 或重新进入 PENDING。"""
 
         state = OutboxState.ACKED.value if exchange_order_found else OutboxState.PENDING.value
         if not self._db_path:
-            self._states[intent_id] = OutboxState(state)
+            intent = next((item for item in self._memory_outbox if item.intent_id == intent_id), None)
+            if intent is None:
+                return
+            key = intent.idempotency_key or self._hash(intent)
+            if exchange_order_found:
+                self.ack(intent_id, idempotency_key=key)
+            else:
+                self._states[key] = OutboxState.PENDING
             return
         with self._db_lock, closing(self._connect()) as conn, conn:
             conn.execute(

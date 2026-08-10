@@ -11,17 +11,6 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
 
-
-def _format_decimal(value: str) -> str:
-    """将数量/价格字符串转为无科学计数法的十进制字符串。"""
-    try:
-        d = Decimal(value)
-        # 去除末尾零但保留至少一位小数
-        formatted = f"{d:f}"
-        return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
-    except InvalidOperation:
-        return value
-
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import ErrorNormalizer, Result
 from beidou_exchange.core.protocol import (
@@ -59,6 +48,18 @@ from beidou_shared.types import (
 logger = logging.getLogger(__name__)
 
 
+def _format_decimal(value: str) -> str:
+    """将数量/价格字符串转为无科学计数法的十进制字符串。"""
+
+    try:
+        d = Decimal(value)
+        # 去除末尾零但保留至少一位小数
+        formatted = f"{d:f}"
+        return formatted.rstrip("0").rstrip(".") if "." in formatted else formatted
+    except InvalidOperation:
+        return value
+
+
 def _strict_bool(value: Any, *, field_name: str) -> bool:
     """Parse venue booleans without Python's truthy-string trap."""
 
@@ -72,6 +73,21 @@ def _strict_bool(value: Any, *, field_name: str) -> bool:
     if normalized in {"0", "false", "no"}:
         return False
     raise ValueError(f"{field_name} is not a valid boolean")
+
+
+def _sanitized_adapter_error(error: Any, *, fallback: str) -> dict[str, Any]:
+    """Expose recovery-relevant venue semantics without forwarding arbitrary payloads."""
+
+    raw = getattr(error, "raw", None)
+    raw_mapping = raw if isinstance(raw, dict) else {}
+    category = getattr(error, "category", ErrorCategory.UNKNOWN)
+    return {
+        "code": raw_mapping.get("code", -1),
+        "msg": str(raw_mapping.get("msg") or getattr(error, "message", fallback))[:500],
+        "category": getattr(category, "value", str(category)),
+        "retryable": bool(getattr(error, "retryable", False)),
+        "http_status": int(getattr(error, "http_status", 0) or 0),
+    }
 
 
 class InstrumentStatus(str, Enum):
@@ -254,9 +270,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         # the adapter must not reject them solely because its health probe is
         # stale.  This mirrors the supervisor NO_NEW_RISK/EXIT_ONLY contract.
         exit_only = (
-            method_upper == "DELETE"
-            or enabled(params.get("reduceOnly"))
-            or enabled(params.get("closePosition"))
+            method_upper == "DELETE" or enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
         )
         # LEVERAGE 是配置操作，非风险增加交易，豁免健康检查
         _is_config = path == Endpoint.LEVERAGE
@@ -544,10 +558,13 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 transport_result = await self.request("POST", Endpoint.ORDER, signed=True, params=order_params)
                 if not transport_result.is_success():
                     _err = transport_result.error
-                    _cat = str(getattr(_err, 'category', '?')) if _err else '?'
-                    _msg = str(getattr(_err, 'message', '?'))[:200] if _err else '?'
-                    _code = getattr(_err, 'code', None)
-                    print(f"[adapter] ORDER FAILED: cat={_cat} msg={_msg} code={_code}")
+                    failure = _sanitized_adapter_error(_err, fallback="Order acknowledgement is UNKNOWN")
+                    logger.warning(
+                        "ORDER FAILED: cat=%s msg=%s code=%s",
+                        failure["category"],
+                        failure["msg"][:200],
+                        failure["code"],
+                    )
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
@@ -561,7 +578,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         average_price=None,
                         commission=None,
                         correlation_id=request.correlation_id,
-                        raw_response={"reason": "api_call_failed", "error_category": _cat, "error_message": _msg},
+                        raw_response={"reason": "api_call_failed", **failure},
                     )
                 result = transport_result.data
                 if isinstance(result, dict) and "orderId" in result:
@@ -809,7 +826,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_order_recovery",
             )
         raw = response.data
-        required = ("orderId", "clientOrderId", "symbol", "status")
+        required = (
+            "orderId",
+            "clientOrderId",
+            "symbol",
+            "status",
+            "side",
+            "type",
+            "origQty",
+            "executedQty",
+        )
         if any(raw.get(field) in (None, "") for field in required):
             return Result.failure(
                 "Client-order lookup response is incomplete",
@@ -826,9 +852,21 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             )
         try:
             OrderStatus(str(raw["status"]))
-        except ValueError:
+            OrderSide(str(raw["side"]))
+            OrderType(str(raw["type"]))
+            original_quantity = Decimal(str(raw["origQty"]))
+            executed_quantity = Decimal(str(raw["executedQty"]))
+            if (
+                not original_quantity.is_finite()
+                or original_quantity <= 0
+                or not executed_quantity.is_finite()
+                or executed_quantity < 0
+                or executed_quantity > original_quantity
+            ):
+                raise ValueError("invalid recovery quantities")
+        except (InvalidOperation, TypeError, ValueError):
             return Result.failure(
-                "Client-order lookup status is UNKNOWN",
+                "Client-order lookup semantics are UNKNOWN",
                 category=ErrorCategory.UNKNOWN,
                 raw=raw,
                 source="binance_order_recovery",
@@ -934,11 +972,25 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             )
         response = await self.request("POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params))
         if not response.is_success():
+            error = response.error
+            if error is None:
+                return Result.failure(
+                    "Algo order acknowledgement is UNKNOWN",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=response.data,
+                    source=response.source or "binance_algo_adapter",
+                    observed_at=response.observed_at,
+                    correlation_id=response.correlation_id,
+                )
             return Result.failure(
-                "Algo order acknowledgement is UNKNOWN",
-                category=ErrorCategory.UNKNOWN,
-                raw=response.data,
-                source="binance_algo_adapter",
+                error.message,
+                http_status=error.http_status,
+                category=error.category,
+                retryable=error.retryable,
+                raw=error.raw,
+                source=response.source or "binance_algo_adapter",
+                observed_at=response.observed_at,
+                correlation_id=response.correlation_id,
             )
         account_ref = AccountRef(venue_id=self._venue_id, account_id=self._account_id)
         parsed = self.parse_algo_order_snapshot(response.data, account_ref)
@@ -963,6 +1015,30 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             mismatches.append("side")
         if not expected_type or actual_type != expected_type:
             mismatches.append("orderType")
+
+        expected_client_algo_id = str(params.get("clientAlgoId", "")).strip()
+        actual_client_algo_id = str(raw.get("clientAlgoId", "")).strip()
+        if expected_client_algo_id and actual_client_algo_id != expected_client_algo_id:
+            mismatches.append("clientAlgoId")
+
+        expected_trigger = params.get("triggerPrice")
+        actual_trigger = raw.get("triggerPrice")
+        if expected_trigger not in (None, ""):
+            try:
+                if Decimal(str(expected_trigger)) <= 0 or Decimal(str(actual_trigger)) != Decimal(
+                    str(expected_trigger)
+                ):
+                    mismatches.append("triggerPrice")
+            except (InvalidOperation, TypeError, ValueError):
+                mismatches.append("triggerPrice")
+
+        expected_working_type = str(params.get("workingType", "")).strip().upper()
+        if expected_working_type and str(raw.get("workingType", "")).strip().upper() != expected_working_type:
+            mismatches.append("workingType")
+
+        expected_position_side = str(params.get("positionSide", "")).strip().upper()
+        if expected_position_side and str(raw.get("positionSide", "")).strip().upper() != expected_position_side:
+            mismatches.append("positionSide")
 
         def _enabled(value: Any) -> bool:
             return value is True or str(value).strip().lower() in {"1", "true", "yes"}

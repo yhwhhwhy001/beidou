@@ -112,15 +112,12 @@ def build_protection_check(result):
     if result.ghost_detected:
         issues.append("GHOST")
     if issues:
-        import os
-        _sev = CheckSeverity.P1 if os.environ.get("BEIDOU_ENV") == "testnet" else CheckSeverity.P0
-        _st = CheckStatus.WARN if os.environ.get("BEIDOU_ENV") == "testnet" else CheckStatus.FAIL
         return MonitoringCheckResult(
             check_id="runtime.safety.protection_coverage",
             entity_type="position",
             entity_id=result.position_key,
-            status=_st,
-            severity=_sev,
+            status=CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
             message=f"Protection: {', '.join(issues)}",
             observed_at=now,
         )
