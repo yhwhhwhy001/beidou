@@ -465,7 +465,7 @@ class TestReconciliation:
             AccountFactSnapshot(
                 account_id=AccountId("test"),
                 venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount="9999"),
+                balance=MonetaryValue(amount="9990"),
                 positions={},
                 open_orders=[],
             )

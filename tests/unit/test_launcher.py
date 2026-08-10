@@ -571,7 +571,7 @@ def test_reconciliation_moved_to_monitoring() -> None:
         side=SimpleNamespace(value="BUY"),
     )
     engine._protection = SimpleNamespace(all_positions=lambda: {"pos-BTCUSDT": mock_protected})
-    engine._ledger = SimpleNamespace(_entries=[])
+    engine._ledger = SimpleNamespace(_transactions=[])
     engine._last_account = {
         "totalWalletBalance": "1000",
         "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}],
@@ -596,7 +596,7 @@ def test_writable_monitoring_reconciliation_requires_authoritative_three_way_fac
     engine = _runtime_engine()
     engine._can_write = True
     engine._last_reconciliation_result = None
-    engine._ledger = SimpleNamespace(_entries=[])
+    engine._ledger = SimpleNamespace(_transactions=[])
     engine._protection = SimpleNamespace(all_positions=lambda: {})
 
     mon_checks = collect_monitoring_checks(

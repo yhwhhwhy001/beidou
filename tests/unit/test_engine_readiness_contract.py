@@ -25,6 +25,7 @@ from beidou_shared.types import (
     InstrumentId,
     OrderSide,
     OrderType,
+    Price,
     Quantity,
     RiskApprovalId,
     VenueId,
@@ -316,9 +317,23 @@ def test_execution_slices_cannot_change_signed_order_semantics() -> None:
         intent, valid, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-1"
     ) == (True, "OK")
 
-    bad_type = [(*valid[0][:2], "LIMIT", valid[0][3], valid[0][4]), valid[1]]
+    # MARKET → LIMIT 降级是允许的（更保守），但 LIMIT → MARKET 反向升级应被阻止
+    limit_intent = OrderIntent(
+        intent_id="intent-slices-2",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Quantity(amount="1.0"),
+        price=Price(amount="50000"),
+        client_order_id="cid-slices-2",
+    )
+    bad_type = [
+        ("0.5", "50000", "MARKET", "GTC", "cid-slices-2-1"),
+        ("0.5", "50000", "MARKET", "GTC", "cid-slices-2-2"),
+    ]
     ok, reason = AutonomousEngine._validate_slices_against_intent(
-        intent, bad_type, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-1"
+        limit_intent, bad_type, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-2"
     )
     assert ok is False
     assert reason == "ORDER_TYPE_MISMATCH"

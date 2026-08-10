@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from beidou_shared.types import StrategyId
 
@@ -392,7 +394,7 @@ class StrategyRiskManager:
             for sid, state in self._states.items():
                 store.save_strategy_risk_state(str(sid), state.to_dict())
         except Exception:
-            pass  # 非致命
+            logging.warning("策略风险状态保存失败（非致命）", exc_info=True)
 
     def restore_state(self, store: Any) -> None:
         """从持久化存储恢复策略风险状态。"""
@@ -403,9 +405,9 @@ class StrategyRiskManager:
                     try:
                         self._states[StrategyId(sid)] = StrategyRiskState.from_dict(data)
                     except Exception:
-                        continue
+                        logging.debug("跳过损坏的策略风险状态: %s", sid, exc_info=True)
         except Exception:
-            pass  # 存储不可用不影响引擎启动
+            logging.warning("策略风险状态恢复失败（存储不可用不影响引擎启动）", exc_info=True)
 
     # ---- 查询 ----
 
