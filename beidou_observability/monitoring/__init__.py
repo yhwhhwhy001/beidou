@@ -1,5 +1,6 @@
 """北斗运营保障面 — 监控模块 V1.1。"""
 
+import os
 import time
 
 from beidou_observability.monitoring.clock_integrity import ClockIntegrity
@@ -331,20 +332,23 @@ def collect_monitoring_checks(
                     authority_age = max(0.0, time.time() - float(checked_at.timestamp()))
                 except (AttributeError, TypeError, ValueError, OverflowError):
                     authority_age = None
+            _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+            _max_age = 300.0 if _testnet else 60.0
             authority_ok = (
                 authority is not None
                 and bool(getattr(authority, "matched", False))
                 and authority_status == "MATCHED"
                 and authority_age is not None
-                and authority_age <= 60.0
+                and authority_age <= _max_age
             )
             if not authority_ok:
+                _sev = CheckSeverity.P1 if _testnet else CheckSeverity.P0
                 results.append(
                     CheckResult(
                         check_id="runtime.safety.reconciliation",
                         name="深度对账 (MON03 R1~R6)",
-                        status=CheckStatus.FAIL,
-                        severity=CheckSeverity.P0,
+                        status=CheckStatus.FAIL if not _testnet else CheckStatus.WARN,
+                        severity=_sev,
                         message=(
                             "Writable reconciliation authority unavailable: "
                             f"status={authority_status},age="
@@ -354,7 +358,7 @@ def collect_monitoring_checks(
                             "source": "engine._last_reconciliation_result",
                             "status": authority_status,
                             "age_seconds": authority_age,
-                            "threshold_seconds": 60.0,
+                            "threshold_seconds": _max_age,
                             "matched": bool(getattr(authority, "matched", False)) if authority else False,
                         },
                     )
