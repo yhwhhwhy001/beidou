@@ -525,13 +525,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     if hasattr(request.order_type, "value")
                     else str(request.order_type),
                     "quantity": _format_decimal(str(request.quantity.amount)),
-                    "timeInForce": (
+                    "newClientOrderId": request.client_order_id or "",
+                }
+                # MARKET 订单不允许 timeInForce 参数
+                _is_market = str(order_params.get("type", "")).upper() == "MARKET"
+                if not _is_market:
+                    order_params["timeInForce"] = (
                         request.time_in_force.value
                         if hasattr(request.time_in_force, "value")
                         else str(request.time_in_force or "GTC")
-                    ),
-                    "newClientOrderId": request.client_order_id or "",
-                }
+                    )
                 if request.price:
                     order_params["price"] = _format_decimal(str(request.price.amount))
                 if request.reduce_only:
