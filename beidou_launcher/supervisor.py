@@ -239,7 +239,10 @@ class BeidouSupervisor:
 
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
+                print(f"[supervisor] BLOCKED RESUME: _resume_authorized=False")
                 return original(ControlAction.NO_NEW_RISK)
+            if action == ControlAction.RESUME:
+                print(f"[supervisor] ALLOWED RESUME: _resume_authorized=True")
             return original(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
