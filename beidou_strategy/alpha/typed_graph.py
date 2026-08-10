@@ -396,7 +396,12 @@ class FusionNode(TypedGraphNode):
 
         for inp in inputs.values():
             if inp.node_type == NodeType.ENTRY and inp.data is not None:
-                entry_proposal = inp.data
+                # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
+                _ep = inp.data
+                if entry_proposal is None or (
+                    getattr(_ep, "side", None) is not None and getattr(entry_proposal, "side", None) is None
+                ):
+                    entry_proposal = _ep
             elif inp.node_type == NodeType.FILTER and inp.data is not None:
                 filter_results.append(inp.data)
 
