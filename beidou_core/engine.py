@@ -2778,29 +2778,42 @@ class AutonomousEngine:
             durable_outbox = bool(getattr(self._outbox, "_db_path", None))
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
-            # Testnet 自动下测试订单验证交易所链路 (tick=20)
-            if self._can_write and self._tick_count == 20 and self._order_count == 0 and self._trading_pool.active_count() > 0:
+            # 自测试单 — 严格仅限显式 opt-in，默认禁用。
+            # 启用: export BEIDOU_TEST_SELF_ORDER=1
+            if (
+                self._can_write
+                and self._tick_count == 20
+                and self._order_count == 0
+                and self._trading_pool.active_count() > 0
+                and os.environ.get("BEIDOU_TEST_SELF_ORDER") == "1"
+            ):
                 try:
                     sym = self._trading_pool.active_instruments()[0]
                     ticker = self._feed.get_last_ticker(sym)
                     px = float(ticker.get("lastPrice", 0)) if ticker else 65000
                     qty = "0.001"
-                    params = {"symbol": sym, "side": "BUY", "type": "LIMIT",
-                              "quantity": qty, "price": str(round(px * 0.98, 1)),
-                              "timeInForce": "GTC", "newClientOrderId": f"beidou-test-{int(time.time())}"}
-                    resp = await self._adapter.create_order(OrderRequest(
-                        venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(sym)),
+                    price_str = str(round(px * 0.98, 1))
+                    # 必须走完整风控链：PreRisk → RiskRules → Approval → Outbox
+                    from beidou_safety.execution import OrderIntent
+                    from beidou_shared.types import AccountId, InstrumentId, VenueId, VenueInstrument, RiskApprovalId
+
+                    intent = OrderIntent(
+                        intent_id=f"test-self-order-{int(time.time())}",
                         account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
-                        side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=Quantity(amount=qty),
-                        price=Price(amount=str(round(px * 0.98, 1))), time_in_force=TimeInForce.GTC,
+                        instrument_id=InstrumentId(sym),
+                        side=OrderSide.BUY,
+                        order_type=OrderType.LIMIT,
+                        quantity=Quantity(amount=qty),
+                        price=Price(amount=price_str),
+                        time_in_force=TimeInForce.GTC,
                         client_order_id=f"beidou-test-{int(time.time())}",
-                    ))
-                    result = resp.raw_response or {}
-                    oid = result.get("orderId", "")
-                    status = result.get("status", "UNKNOWN")
-                    print(f"[realtime] 🧪 TEST ORDER PLACED: {sym} BUY {qty} @ ~{round(px*0.98,1)} orderId={oid} status={status}")
-                    if oid:
+                    )
+                    if await self._verify_intent_at_send(intent):
+                        await self._submit_order_slice(intent, qty, price_str, "LIMIT", "GTC", sym, "BUY")
                         self._order_count += 1
+                        print(f"[realtime] 🧪 TEST ORDER (gated): {sym} BUY {qty} @ ~{price_str}")
+                    else:
+                        print("[realtime] 🧪 TEST ORDER REJECTED by risk gate")
                 except Exception as _te:
                     print(f"[realtime] TEST ORDER FAILED: {type(_te).__name__}: {_te}")
             if self._tick_count % 5 == 0:
@@ -7156,30 +7169,37 @@ class AutonomousEngine:
             f"{len(active_orders)} active orders, {len(protections)} protections"
         )
 
-        # Restore active_order_ids from exchange
+        # Restore active_order_ids from exchange.
+        # Orders from previous sessions are adopted (tracked + persisted)
+        # rather than cancelled, preserving idempotency across restarts.
+        # Cancellation is reserved for the governed flatten path only.
         try:
             exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
             if isinstance(exchange_open, list):
                 for o in exchange_open:
                     oid = str(o["orderId"])
+                    ostatus = str(o.get("status", "NEW")).upper()
+                    osymbol = str(o.get("symbol", ""))
+                    oside = str(o.get("side", ""))
                     tracker = OrderStateTracker(order_id=OrderId(oid))
                     tracker.apply(OrderEvent.ACKED)
                     tracker.apply(OrderEvent.SENT)
-                    if o.get("status") == "PARTIALLY_FILLED":
+                    if ostatus == "PARTIALLY_FILLED":
                         tracker.apply(OrderEvent.PARTIALLY_FILLED)
                     self._order_trackers[oid] = tracker
                     self._active_order_ids.add(oid)
                     self._owned_order_ids.add(oid)
+                    self._order_symbols[oid] = osymbol
                     # 持久化到 store，避免对账时 system_facts.open_orders 为空
                     try:
                         self._store.save_order_state(
                             order_id=oid,
-                            symbol=str(o.get("symbol", "")),
-                            side=str(o.get("side", "")),
+                            symbol=osymbol,
+                            side=oside,
                             order_type=str(o.get("type", "")),
                             quantity=str(o.get("origQty", "0")),
                             price=str(o.get("price", "0")) if o.get("price") else None,
-                            status=str(o.get("status", "NEW")),
+                            status=ostatus,
                             filled_qty=str(o.get("executedQty", "0")),
                             avg_price=str(o.get("avgPrice", "0")) if o.get("avgPrice") else None,
                             client_order_id=str(o.get("clientOrderId", "")) or None,
