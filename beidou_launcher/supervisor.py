@@ -848,7 +848,16 @@ class BeidouSupervisor:
         if self.engine is None:
             return False
         if not self._resume_authorized:
-            # _fail_closed() 已撤销原授权；无具名新授权时禁止自动恢复。
+            # 所有检查通过时（无 blocker），重新授权 RESUME
+            has_blockers = any(item.is_blocking for item in checks)
+            if not has_blockers and self.report.supervisor_state == "DEGRADED":
+                print("[supervisor] All checks clear — re-authorizing RESUME")
+                self._resume_authorized = True
+                from beidou_control.plane import ControlAction as _CA2
+                self.engine._control.execute_action(_CA2.RESUME)
+                self.report.supervisor_state = "RUNNING"
+                self.report.trading_ready = True
+                return True
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
