@@ -3402,16 +3402,10 @@ class AutonomousEngine:
         alert_title: str = "Execution fact persistence blocked",
         alert_category: str = "execution_fact",
     ) -> None:
-        """Freeze execution truth after a durable fact write cannot be proven.
-
-        A fill is an exchange fact, not a best-effort application log.  If its
-        ledger journal or projection cannot be durably recorded, continuing in
-        ``RESUME`` would allow new exposure to be sized from incomplete state.
-        The only safe local action is to freeze the ledger, close the
-        risk-increase gate, and emit a non-suppressible incident.  This helper
-        is deliberately defensive so failure handling itself never hides the
-        original persistence error during startup or unit-level fault tests.
-        """
+        """Freeze execution truth after a durable fact write cannot be proven."""
+        import traceback as _tb
+        print(f"[EXEC_FACT] {reason}")
+        _tb.print_stack(limit=6)
 
         with contextlib.suppress(Exception):
             self._ledger.freeze()
