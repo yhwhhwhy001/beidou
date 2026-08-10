@@ -102,7 +102,10 @@ class BeidouSupervisor:
         # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
         from .models import HealthDebounce
 
-        self._health_debounce = HealthDebounce()
+        self._health_debounce = HealthDebounce(
+            degrade_after=30 if mode == "testnet" else 6,
+            lock_after=999 if mode == "testnet" else 12,  # Testnet 永不自动 LOCK
+        )
         # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
         from .g7_tracker import G7LiveTracker
 
@@ -823,9 +826,15 @@ class BeidouSupervisor:
             self._control_paused_by_supervisor = True
         lifecycle = self.engine._lifecycle
         if fatal:
-            with suppress(Exception):
-                lifecycle.transition(ModuleState.LOCKED)
-            self.engine._running = False
+            if self.mode == "testnet":
+                # BD-FIX (S16): Testnet 永不死锁 — 降级但不停止引擎
+                with suppress(Exception):
+                    lifecycle.transition(ModuleState.DEGRADED)
+                print(f"[supervisor] Testnet: fatal escalation suppressed, staying DEGRADED")
+            else:
+                with suppress(Exception):
+                    lifecycle.transition(ModuleState.LOCKED)
+                self.engine._running = False
         elif str(getattr(lifecycle.state, "value", lifecycle.state)) == "ACTIVE":
             with suppress(Exception):
                 lifecycle.transition(ModuleState.DEGRADED)
