@@ -1148,6 +1148,12 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "RUNNING"
                 self.report.trading_ready = True
                 ready = True
+                # BD-FIX (S20): 引擎 task 先于 RESUME 授权启动，存在竞态。
+                # 等待 bootstrap 完成后重新确认控制面状态。
+                await asyncio.sleep(5)
+                if self.engine._control.get_status() != _CA.RESUME:
+                    print("[supervisor] Re-confirming RESUME after engine bootstrap")
+                    self.engine._control.execute_action(_CA.RESUME)
             else:
                 ready = await self._wait_for_startup()
             if not ready:
