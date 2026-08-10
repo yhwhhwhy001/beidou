@@ -2365,10 +2365,14 @@ class AutonomousEngine:
         projection_complete = bool(getattr(event_facts, "complete", False))
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
+        # BD-FIX (S3): CONNECTED 状态下放宽事件年龄阈值到 300s。
+        # WebSocket 连接后可能需要数分钟才收到第一个用户事件，
+        # 60s 阈值在启动阶段过于激进，导致误触发 DEGRADED→LOCKED。
+        effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") else max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         ready = (
             transport_ok
-            and (event_age is None or event_age <= max_event_age)
+            and (event_age is None or event_age <= effective_max_age)
             and projector_ok
             and (projection_complete or event_facts is None)
         )
@@ -6199,6 +6203,8 @@ class AutonomousEngine:
             # No active pool evidence means no proposal collection.  Falling
             # back to the configured feed universe would bypass the pool gate.
             active_symbols = self._trading_pool.active_instruments()
+            # BD-FIX: 多时间框架 — 1m/5m/1h/1d 独立评估信号
+            TIMEFRAMES = ("1m", "5m", "1h", "1d")
             # 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）
             proposals: list[dict] = []
             proposed_targets: list[PortfolioTarget] = []
@@ -6206,328 +6212,155 @@ class AutonomousEngine:
                 # Yield to REALTIME clock between symbols
                 await asyncio.sleep(0)
 
-                # 1. K-line features
-                features = await self._feed.async_get_kline_features(symbol, "1h", 100)
-                if not features:
-                    print(f"[nearline] {symbol}: no kline features available")
-                    continue
+                # 1. K-line features — 多时间框架
+                best_signal: Any = None
+                best_strength = 0.0
+                for tf in TIMEFRAMES:
+                    features = await self._feed.async_get_kline_features(symbol, tf, 100)
+                    if not features:
+                        continue
 
-                # 更新移动止损价格极值（TRAILING 止损依赖实时价格更新）
-                _close = features.get("close", 0)
-                if _close and hasattr(self, "_protection"):
+                    # 更新移动止损价格极值
+                    _close = features.get("close", 0)
+                    if _close and hasattr(self, "_protection"):
+                        try:
+                            for _pos_id, _pos in self._protection.all_positions().items():
+                                if str(getattr(_pos, "instrument_id", "")) == symbol:
+                                    _pos.update_price_extremes(float(_close))
+                        except Exception as exc:
+                            logger.debug("position price-extreme update skipped: %s", type(exc).__name__)
+
+                    # Bar closure check per timeframe
+                    bar_open_time = features.get("bar_open_time")
+                    bar_close_time = features.get("bar_close_time")
+                    bar_available_at = features.get("bar_available_at")
+                    close = features.get("close", 0)
+                    if (
+                        features.get("bar_is_closed") is not True
+                        or not isinstance(bar_open_time, datetime)
+                        or not isinstance(bar_close_time, datetime)
+                        or not isinstance(bar_available_at, datetime)
+                        or bar_open_time >= bar_close_time
+                        or bar_close_time > datetime.now(timezone.utc)
+                        or bar_available_at > datetime.now(timezone.utc)
+                        or not isinstance(close, (int, float))
+                        or not math.isfinite(float(close))
+                        or float(close) <= 0
+                    ):
+                        continue  # bar not closed for this timeframe
+                    close = float(close)
+                    if not self._advance_factor_bar(symbol, tf, bar_open_time, close):
+                        continue
+
+                    # Market state per timeframe
+                    state = RealMarketStateEstimator.estimate(features)
+                    print(
+                        f"[nearline] {symbol}@{tf}: price={close} "
+                        f"trend={state['direction']} stress={state['stress']} "
+                        f"rsi={features.get('rsi_14', '?')}"
+                    )
+                    if state["stress"] == "HIGH":
+                        continue
+
+                    # DAG signal generation per timeframe
+                    instrument_id = InstrumentId(symbol)
+                    venue_id = VenueId("BINANCE")
+                    positions = self._protection.all_positions()
+                    symbol_positions = {k: v for k, v in positions.items() if str(v.instrument_id) == symbol}
+                    pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
+                    if symbol_positions:
+                        pos_id, pos = next(iter(symbol_positions.items()))
+                        entry_price = pos.entry_price
+                        pos_side = "LONG" if pos.side == OrderSide.BUY else "SHORT"
+                        pos_info["has_position"] = True
+                        pos_info["entry_price"] = entry_price
+                        pos_info["side"] = pos_side
+                        pos_info["entry_time"] = self._position_entry_times.get(pos_id, time.time())
+                        if entry_price > 0 and close > 0:
+                            if pos_side == "LONG":
+                                pos_info["pnl_pct"] = (close - entry_price) / entry_price * 100
+                            elif pos_side == "SHORT":
+                                pos_info["pnl_pct"] = (entry_price - close) / entry_price * 100
+
+                    context = {
+                        "features": features,
+                        "instrument_id": instrument_id,
+                        "venue_id": venue_id,
+                        "state": state,
+                        "_predictions": {},
+                        "_position_info": pos_info,
+                    }
+                    if features.get("n_candles", 0) < 10:
+                        continue
+
                     try:
-                        for _pos_id, _pos in self._protection.all_positions().items():
-                            if str(getattr(_pos, "instrument_id", "")) == symbol:
-                                _pos.update_price_extremes(float(_close))
-                    except Exception as exc:
-                        logger.debug("position price-extreme update skipped: %s", type(exc).__name__)
+                        kernel_result = await self._strategy_kernel.evaluate(context)
+                        if not isinstance(kernel_result, dict):
+                            continue
+                        typed_mode = kernel_result.get("kernel") == "typed_graph"
+                        typed_proposal = kernel_result.get("proposal") if typed_mode else None
+                        all_signals = (
+                            list(kernel_result.get("exit_signals", [])) if typed_mode
+                            else list(kernel_result.get("signals", []))
+                        )
+                        if not typed_proposal and not all_signals:
+                            continue
+                    except Exception:
+                        continue
 
-                # Strategy inputs must identify one already-closed bar.  The
-                # feed no longer defaults missing metadata to ``True``; keep
-                # this boundary explicit so repeated 5-second polling cannot
-                # create duplicate predictions/orders for the same bar.
+                    # Track best signal across timeframes
+                    if typed_mode and typed_proposal is not None:
+                        strength = getattr(typed_proposal, "strength", 0)
+                        if strength > best_strength:
+                            best_strength = strength
+                            best_signal = (tf, close, features, state, typed_proposal, pos_info, True, context)
+                    elif all_signals:
+                        strongest = max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
+                        if strongest and getattr(strongest, "strength", 0) > best_strength:
+                            best_strength = getattr(strongest, "strength", 0)
+                            best_signal = (tf, close, features, state, strongest, pos_info, False, context)
+
+                # ── After timeframe loop: act on the best signal ──
+                if best_signal is None:
+                    continue
+                tf, close, features, state, signal_obj, pos_info, typed_mode, context = best_signal
+
+                # Save predictions for factor IC evaluation per timeframe
+                predictions = context.get("_predictions", {})
                 bar_open_time = features.get("bar_open_time")
-                bar_close_time = features.get("bar_close_time")
-                bar_available_at = features.get("bar_available_at")
-                close = features.get("close", 0)
-                if (
-                    features.get("bar_is_closed") is not True
-                    or not isinstance(bar_open_time, datetime)
-                    or not isinstance(bar_close_time, datetime)
-                    or not isinstance(bar_available_at, datetime)
-                    or bar_open_time >= bar_close_time
-                    or bar_close_time > datetime.now(timezone.utc)
-                    or bar_available_at > datetime.now(timezone.utc)
-                    or not isinstance(close, (int, float))
-                    or not math.isfinite(float(close))
-                    or float(close) <= 0
-                ):
-                    print(f"[nearline] {symbol}: SKIP (DQ BLOCK: closed-bar/PIT metadata unavailable)")
-                    continue
-                close = float(close)
-                if not self._advance_factor_bar(symbol, "1h", bar_open_time, close):
-                    # Same closed bar has already produced its decision, or a
-                    # sequence violation was observed.
-                    continue
+                self._store_factor_predictions(symbol, tf, bar_open_time, close, predictions)
 
-                # 2. Market state estimation
-                state = RealMarketStateEstimator.estimate(features)
+                # Build fused signal from the best timeframe's proposal
                 instrument_id = InstrumentId(symbol)
                 venue_id = VenueId("BINANCE")
-
-                print(
-                    f"[nearline] {symbol}: price={features.get('close', '?')} "
-                    f"trend={state['direction']} stress={state['stress']} "
-                    f"rsi={features.get('rsi_14', '?')} "
-                    f"sma5={features.get('sma_5', '?')} sma20={features.get('sma_20', '?')}"
-                )
-
-                if state["stress"] == "HIGH":
-                    print(f"[nearline] {symbol}: SKIP (high volatility: ann_vol={features.get('ann_volatility', '?')})")
-                    continue
-
-                # === 3. Execute full AlphaGraph DAG in topological order ===
-
-                # Inject position info for EXIT components
-                positions = self._protection.all_positions()
-                symbol_positions = {k: v for k, v in positions.items() if str(v.instrument_id) == symbol}
-                pos_info = {"has_position": False, "entry_price": 0, "side": "", "entry_time": 0, "pnl_pct": 0}
-                if symbol_positions:
-                    # Use the first matching position
-                    pos_id, pos = next(iter(symbol_positions.items()))
-                    entry_price = pos.entry_price
-                    pos_side = "LONG" if pos.side == OrderSide.BUY else "SHORT"
-                    pos_info["has_position"] = True
-                    pos_info["entry_price"] = entry_price
-                    pos_info["side"] = pos_side
-                    pos_info["entry_time"] = self._position_entry_times.get(pos_id, time.time())
-                    if entry_price > 0 and close > 0:
-                        if pos_side == "LONG":
-                            pos_info["pnl_pct"] = (close - entry_price) / entry_price * 100
-                        elif pos_side == "SHORT":
-                            pos_info["pnl_pct"] = (entry_price - close) / entry_price * 100
-
-                context = {
-                    "features": features,
-                    "instrument_id": instrument_id,
-                    "venue_id": venue_id,
-                    "state": state,
-                    "_predictions": {},
-                    "_position_info": pos_info,
-                }
-
-                all_signals: list[Any] = []
-                typed_proposal: Any | None = None
-                typed_exit_signals: list[Any] = []
-                typed_mode = False
-                veto_triggered = False
-                # BD-FIX: DQ-BLOCK gating — 特征数据质量不可接受时跳过整个 DAG
-                if features.get("n_candles", 0) < 10:
-                    print(
-                        f"[nearline] {symbol}: SKIP (DQ BLOCK: insufficient candle data n={features.get('n_candles', 0)})"
-                    )
-                    continue
-                try:
-                    # DEBUG: 检查 entry 组件所需的字段
-                    _dbg_f = context.get("features", {})
-                    _dbg_has_prices = bool(_dbg_f.get("prices"))
-                    _dbg_has_spread = "spread_bps" in _dbg_f
-                    if self._tick_count % 10 == 0:
-                        print(
-                            f"[nearline] {symbol}: DEBUG features: prices={_dbg_has_prices} spread_bps={_dbg_has_spread} close={_dbg_f.get('close', '?')} sma20={_dbg_f.get('sma_20', '?')} rsi={_dbg_f.get('rsi_14', '?')} ann_vol={_dbg_f.get('ann_volatility', '?')}"
-                        )
-                    # BD-T05: the only executable DAG boundary.  The engine
-                    # must not maintain a second hand-written component loop.
-                    kernel_result = await self._strategy_kernel.evaluate(context)
-                    if not isinstance(kernel_result, dict):
-                        raise TypeError("strategy kernel returned a non-mapping result")
-                    typed_mode = kernel_result.get("kernel") == "typed_graph"
-                    if typed_mode:
-                        typed_proposal = kernel_result.get("proposal")
-                        typed_exit_signals = list(kernel_result.get("exit_signals", []))
-                        # 诊断：打印每个组件的原始输出
-                        _dbg_components = kernel_result.get("component_outputs", {})
-                        if _dbg_components:
-                            _dbg_parts = []
-                            for _cid, _cout in _dbg_components.items():
-                                _cdir = getattr(_cout, "direction", None)
-                                if _cdir is None:
-                                    _cdir = getattr(_cout, "side", None)
-                                if _cdir is None:
-                                    _cdir = getattr(_cout, "decision", None)
-                                _cstr = getattr(_cout, "strength", None)
-                                _cdir_str = str(getattr(_cdir, "value", _cdir)) if _cdir is not None else "?"
-                                _dbg_parts.append(f"{_cid}={_cdir_str}/{_cstr}")
-                            print(f"[nearline] {symbol}: COMPONENTS: {', '.join(_dbg_parts)}")
-                        if kernel_result.get("blocked_by"):
-                            print(
-                                f"[nearline] {symbol}: TypedGraph BLOCKED by {kernel_result['blocked_by']} "
-                                f"(graph={kernel_result.get('graph_hash', '')})"
-                            )
-                            continue
-                        if typed_proposal is None:
-                            print(f"[nearline] {symbol}: SKIP (TypedGraph produced no proposal)")
-                            continue
-                        print(
-                            f"[nearline] {symbol}: TypedGraph → side={getattr(typed_proposal.side, 'value', None)} "
-                            f"strength={typed_proposal.strength:.3f} confidence={typed_proposal.confidence:.3f} "
-                            f"graph={kernel_result.get('graph_hash', '')}"
-                        )
-                    else:
-                        all_signals = list(kernel_result.get("signals", []))
-                        for signal in all_signals:
-                            print(
-                                f"[nearline] {symbol}: DAG ({signal.component_type.value}) "
-                                f"→ {signal.direction} strength={signal.strength:.3f}"
-                            )
-                        veto_triggered = any(
-                            signal.component_type == AlphaComponentType.FILTER
-                            and signal.direction == SignalDirection.NO_ACTION
-                            and signal.strength == 0.0
-                            and signal.confidence >= 0.8
-                            for signal in all_signals
-                        )
-                except ValueError as e:
-                    print(f"[nearline] {symbol}: DAG error: {e}")
-                    continue
-                except Exception as e:
-                    print(f"[nearline] {symbol}: StrategyKernel FAIL-CLOSED: {type(e).__name__}: {e}")
-                    continue
-
-                if veto_triggered:
-                    print(f"[nearline] {symbol}: SKIP (VETO triggered by filter component)")
-                    continue
-                # Record parity after execution using the final typed proposal;
-                # legacy mode retains its diagnostic strongest-signal hash.
-                result_proposal = (
-                    typed_proposal
-                    if typed_mode
-                    else max(all_signals, key=lambda s: getattr(s, "strength", 0), default=None)
-                )
-                self._kernel_parity = (
-                    StrategyKernelContract.compute_proposal_hash(result_proposal) if result_proposal else ""
-                )
-
-                # Save predictions for factor IC evaluation.  They are
-                # paired only with the next closed bar by
-                # ``_advance_factor_bar``; never append a same-tick/past
-                # return or align by list position.
-                predictions = context.get("_predictions", {})
-                self._store_factor_predictions(symbol, "1h", bar_open_time, close, predictions)
-
-                if not typed_mode and not all_signals:
-                    print(f"[nearline] {symbol}: SKIP (no signals from DAG)")
-                    continue
-
-                # === 3.5 检测 EXIT 组件平仓信号（优先于入场） ===
-                exit_flat_signals = (
-                    [
-                        s
-                        for s in typed_exit_signals
-                        if s.component_type == AlphaComponentType.EXIT
-                        and s.direction == SignalDirection.FLAT
-                        and s.strength >= 0.3
-                    ]
-                    if typed_mode
-                    else [
-                        s
-                        for s in all_signals
-                        if s.component_type == AlphaComponentType.EXIT
-                        and s.direction == SignalDirection.FLAT
-                        and s.strength >= 0.3
-                    ]
-                )
-                if exit_flat_signals and pos_info["has_position"]:
-                    # 生成平仓订单
-                    close_side = OrderSide.SELL if pos_info["side"] == "LONG" else OrderSide.BUY
-                    if not symbol_positions:
-                        # A position without an authoritative quantity is an
-                        # unsafe close request.  Do not invent a minimum lot;
-                        # reconciliation must supply the exact owner quantity.
-                        print(f"[nearline] {symbol}: CLOSE SKIP (position quantity UNKNOWN)")
-                        continue
-                    close_qty = abs(float(symbol_positions[next(iter(symbol_positions))].quantity))
-                    from beidou_safety.execution import OrderIntent
-
-                    # 为 RISK_EXEMPT_CLOSE 生成绑定签名，满足 outbox commit 的 envelope 完整性要求
-                    _close_approval_id = "RISK_EXEMPT_CLOSE"
-                    _close_sig = self._approval.sign(
-                        intent_id=f"intent-{symbol}-close-{int(time.time())}",
-                        risk_approval_id=_close_approval_id,
-                        order_symbol=symbol,
-                        side="SELL" if pos_info["side"] == "LONG" else "BUY",
-                        quantity=str(close_qty),
-                    )
-                    close_intent = OrderIntent(
-                        intent_id=f"intent-{symbol}-close-{int(time.time())}",
-                        account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
-                        instrument_id=instrument_id,
-                        side=close_side,
-                        order_type=OrderType.MARKET,
-                        quantity=Quantity(amount=str(close_qty)),
-                        price=Price(amount=str(close)),
-                        time_in_force=TimeInForce.GTC,
-                        client_order_id=f"beidou-{symbol.lower()}-close-{int(time.time() * 1_000_000)}",
-                        correlation_id=CorrelationId(f"nearline-close-{int(time.time())}"),
-                        idempotency_key=f"idem-{symbol}-close-{int(time.time())}",
-                        risk_approval_id=_close_approval_id,
-                        risk_approval_signature=_close_sig,
-                        reduce_only=True,
-                    )
-                    # P0 Gate 1: 控制面校验
-                    if not self._control.should_accept(close_intent):
-                        print(
-                            f"[nearline] {symbol}: CLOSE REJECTED by control plane ({self._control.get_status().value})"
-                        )
-                        continue
-                    try:
-                        self._outbox.commit(close_intent)
-                        reasons = [s.metadata.get("reason", "unknown") for s in exit_flat_signals]
-                        print(
-                            f"[nearline] {symbol}: CLOSE ORDER → {close_side.value} {close_qty:.4f} reasons={reasons}"
-                        )
-                    except ValueError:
-                        print(f"[nearline] {symbol}: CLOSE SKIP (duplicate close in window)")
-                    continue  # 平仓后跳过入场逻辑
-
-                # === 4. Typed proposal is already fused; legacy mode keeps its
-                # compatibility fuser only for non-executable research paths. ===
                 if typed_mode:
-                    _min_strength = 0.0 if os.environ.get("BEIDOU_ENV") == "testnet" else 0.15
-                    if (
-                        typed_proposal is None
-                        or typed_proposal.side is None
-                        or (typed_proposal.strength <= _min_strength and os.environ.get("BEIDOU_ENV") != "testnet")
-                        or (typed_proposal.confidence <= 0.0 and os.environ.get("BEIDOU_ENV") != "testnet")
-                    ):
-                        print(f"[nearline] {symbol}: SKIP (TypedGraph proposal weak or NO_ACTION)")
+                    proposal = signal_obj
+                    side = getattr(proposal, "side", None)
+                    if side is None:
                         continue
+                    print(
+                        f"[nearline] {symbol}@{tf}: TypedGraph → "
+                        f"side={side.value if hasattr(side,'value') else side} "
+                        f"strength={getattr(proposal,'strength',0):.3f}"
+                    )
                     fused = SimpleNamespace(
-                        direction=(
-                            SignalDirection.LONG if typed_proposal.side == OrderSide.BUY else SignalDirection.SHORT
-                        ),
-                        strength=float(typed_proposal.strength),
-                        confidence=float(typed_proposal.confidence),
-                        conflict_detected=bool(typed_proposal.conflict_detected),
+                        direction=SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT,
+                        strength=float(getattr(proposal, "strength", 0)),
+                        confidence=float(getattr(proposal, "confidence", 0)),
+                        conflict_detected=bool(getattr(proposal, "conflict_detected", False)),
                     )
                 else:
-                    entry_signals = [
-                        s
-                        for s in all_signals
-                        if s.component_type != AlphaComponentType.EXIT
-                        and s.direction != SignalDirection.NO_ACTION
-                        and s.direction != SignalDirection.FLAT
-                        and s.strength >= 0.15
-                    ]
-                    if not entry_signals:
-                        print(f"[nearline] {symbol}: SKIP (all signals weak or NO_ACTION)")
-                        continue
-
-                    direction_signals = [s for s in all_signals if s.component_type != AlphaComponentType.EXIT]
-                    fused = self._fuser.fuse(direction_signals)
-                if fused.direction == SignalDirection.NO_ACTION:
-                    # If fusion rejects, check if entry alone would have fired
-                    entry_only = [s for s in all_signals if s.component_type == AlphaComponentType.ENTRY]
-                    if entry_only:
-                        # Check MomentumFilter: if filter returned NO_ACTION, it vetoed the entry
-                        filter_neg = [
-                            s
-                            for s in all_signals
-                            if s.component_type == AlphaComponentType.FILTER
-                            and s.direction == SignalDirection.NO_ACTION
-                        ]
-                        if filter_neg:
-                            print(f"[nearline] {symbol}: SKIP (MomentumFilter veto: {filter_neg[0].metadata})")
-                        else:
-                            print(f"[nearline] {symbol}: SKIP (fusion rejected)")
-                    else:
-                        print(f"[nearline] {symbol}: SKIP (fusion rejected)")
-                    continue
-
-                print(
-                    f"[nearline] {symbol}: FUSED → {fused.direction} strength={fused.strength:.3f} confidence={fused.confidence:.3f}"
-                    + (" CONFLICT" if fused.conflict_detected else "")
-                )
+                    print(
+                        f"[nearline] {symbol}@{tf}: DAG → "
+                        f"{getattr(signal_obj,'direction','?')} "
+                        f"strength={getattr(signal_obj,'strength',0):.3f}"
+                    )
+                    fused = SimpleNamespace(
+                        direction=getattr(signal_obj, "direction", SignalDirection.NO_ACTION),
+                        strength=float(getattr(signal_obj, "strength", 0)),
+                        confidence=float(getattr(signal_obj, "confidence", 0)),
+                        conflict_detected=False,
+                    )
 
                 # === 5. Adaptive position sizing & leverage ===
                 price = features["close"]
@@ -6599,7 +6432,16 @@ class AutonomousEngine:
                 if position_size <= 0:
                     print(f"[nearline] {symbol}: SKIP (computed position size UNKNOWN/zero)")
                     continue
+                # BD-FIX (S3): 确保不低于 Binance 最小名义价值 ($20)
+                MIN_NOTIONAL = 20.0
                 position_notional = price * position_size
+                if position_notional < MIN_NOTIONAL:
+                    position_size = MIN_NOTIONAL / price
+                    position_notional = MIN_NOTIONAL
+                    print(
+                        f"[nearline] {symbol}: Boosted size to {position_size:.4f} "
+                        f"to meet min notional ${MIN_NOTIONAL} (was ${price * _min_qty:.2f})"
+                    )
 
                 print(
                     f"[nearline] {symbol}: Adaptive → size={position_size:.4f} "
