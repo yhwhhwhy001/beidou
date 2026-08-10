@@ -948,7 +948,6 @@ class BeidouSupervisor:
 
             if (
                 not any(item.is_blocking for item in checks)
-                and self._resume_authorized
                 and await self._recover_if_validated(checks)
             ):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
