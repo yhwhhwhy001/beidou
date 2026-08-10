@@ -1747,10 +1747,8 @@ class AutonomousEngine:
         if result.is_success():
             return result.data
         err = result.error
-        _msg = str(err.message) if err else "unknown"
-        if "/leverage" in str(path):
-            print(f"[api] LEVERAGE failed: category={err.category if err else '?'} msg={_msg}")
-        return {"error": err.http_status or -1, "msg": _msg}
+        _msg = str(getattr(err, 'message', 'unknown')) if err else "unknown"
+        return {"error": getattr(err, 'http_status', -1) or -1, "msg": _msg}
 
     async def _api_async_safe(
         self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None
@@ -3406,10 +3404,6 @@ class AutonomousEngine:
         alert_category: str = "execution_fact",
     ) -> None:
         """Freeze execution truth after a durable fact write cannot be proven."""
-        import traceback as _tb
-        print(f"[EXEC_FACT] {reason}")
-        _tb.print_stack(limit=6)
-
         with contextlib.suppress(Exception):
             self._ledger.freeze()
         control = getattr(self, "_control", None)
