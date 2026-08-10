@@ -2157,7 +2157,33 @@ class AutonomousEngine:
                 "exchange_positions": len(exchange_positions),
             }
             if unknown_orders:
-                return False, "DURABLE_ORDER_UNKNOWN", {**evidence, "order_ids": unknown_orders[:20]}
+                # 启动时可能因僵尸/algo 订单出现 UNKNOWN。尝试清理：
+                # UNKNOWN 订单来源于无法查询的恢复订单。将其标记为 CANCELED
+                # 防止永久阻塞就绪状态。真实订单会被 _monitor_orders 重新追踪。
+                for _uo_id in unknown_orders:
+                    try:
+                        _uo_row = next((r for r in order_rows if str(r.get("order_id", "")) == _uo_id), {})
+                        store.save_order_state(
+                            str(_uo_id),
+                            str(_uo_row.get("symbol", "")),
+                            str(_uo_row.get("side", "UNKNOWN")),
+                            str(_uo_row.get("order_type", "UNKNOWN")),
+                            str(_uo_row.get("quantity", "0")),
+                            str(_uo_row.get("price", "")) or None,
+                            "CANCELED",
+                        )
+                        print(f"[state] Cleaned UNKNOWN order {_uo_id} -> CANCELED")
+                    except Exception:
+                        pass
+                # 重新检查是否还有 UNKNOWN
+                order_rows_after = list(store.restore_order_states())
+                unknown_after = [
+                    str(row.get("order_id", ""))
+                    for row in order_rows_after
+                    if str(row.get("status", "")).upper() == "UNKNOWN"
+                ]
+                if unknown_after:
+                    return False, "DURABLE_ORDER_UNKNOWN", {**evidence, "order_ids": unknown_after[:20]}
             if unknown_outbox:
                 return False, "DURABLE_OUTBOX_UNKNOWN", evidence
             if untracked_active_orders:
