@@ -5239,6 +5239,52 @@ class AutonomousEngine:
         )
         return False
 
+    def _ingest_account_config_update(self, data: dict[str, Any]) -> bool:
+        """Ingest a Binance ACCOUNT_CONFIG_UPDATE event without faulting.
+
+        Binance pushes ACCOUNT_CONFIG_UPDATE when leverage or margin mode
+        changes (including through the UI or another session).  This is an
+        informational event — rejecting it as UNSUPPORTED causes a self-
+        reinforcing failure loop where every config change resets the
+        control plane to NO_NEW_RISK.
+
+        Returns True so the user-stream runtime stays HEALTHY.
+        """
+        import logging
+        _logger = logging.getLogger(__name__)
+
+        ac = data.get("ac") if isinstance(data, dict) else None
+        ai = data.get("ai") if isinstance(data, dict) else None
+        symbol = str(ac.get("s") or "").strip().upper() if isinstance(ac, dict) else ""
+        leverage = None
+        is_joint = None
+        try:
+            if isinstance(ac, dict) and ac.get("l") is not None:
+                leverage = int(ac["l"])
+        except (TypeError, ValueError):
+            pass
+        try:
+            if isinstance(ai, dict) and ai.get("j") is not None:
+                raw = ai["j"]
+                is_joint = raw if isinstance(raw, bool) else str(raw).strip().lower() in {"1", "true", "yes"}
+        except (TypeError, ValueError):
+            pass
+
+        _logger.info(
+            "ACCOUNT_CONFIG_UPDATE ingested: symbol=%s leverage=%s joint_margin=%s",
+            symbol or "<none>",
+            leverage,
+            is_joint,
+        )
+
+        # ACCOUNT_CONFIG_UPDATE carries symbol-level leverage changes and
+        # account-wide margin-mode facts.  The position mode (ONE_WAY/HEDGE)
+        # is governed by the positionSide/dual endpoint rather than this
+        # event, so we log the config change without overwriting the
+        # independently verified position-mode evidence.
+
+        return True
+
     def _update_user_stream_runtime(self, **updates: Any) -> None:
         """Update redacted live user-stream evidence without storing secrets."""
 
@@ -5352,6 +5398,11 @@ class AutonomousEngine:
                         self._user_stream_fault("ACCOUNT_EVENT_PARSE_UNKNOWN")
                         return
                     accepted = self.ingest_user_account_update(parsed.data)
+                elif event_type == "ACCOUNT_CONFIG_UPDATE":
+                    # BD-FIX (S1): ACCOUNT_CONFIG_UPDATE 是 Binance 推送的
+                    # 信息性事件（杠杆变更、保证金模式变更等），不是数据流
+                    # 故障。接收并更新账户配置事实，保持流健康。
+                    accepted = self._ingest_account_config_update(data)
                 else:
                     self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
                     return
