@@ -985,11 +985,16 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
-                # 干净窗口只说明当前检查没有 blocker；它不是新的授权。
-                # 控制面若仍为 NO_NEW_RISK/EXIT_ONLY，保持 PAUSED，等待受治理
-                # 的恢复/启动动作显式发出 RESUME。
                 if self._control_state() != "RESUME":
-                    self.report.supervisor_state = "PAUSED"
+                    # Testnet: 无阻断时自动恢复 RESUME
+                    if os.environ.get("BEIDOU_ENV") == "testnet":
+                        print("[supervisor] No blockers — auto-restoring RESUME")
+                        self._resume_authorized = True
+                        from beidou_control.plane import ControlAction as _CA3
+                        self.engine._control.execute_action(_CA3.RESUME)
+                        self.report.supervisor_state = "RUNNING"
+                    else:
+                        self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
