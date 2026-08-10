@@ -2387,11 +2387,14 @@ class AutonomousEngine:
         # ACCOUNT_UPDATE 可能缺少 `u` 字段导致 sequencer → SEQUENCE_UNAVAILABLE，
         # 在没有足够事件构建投影时不应以此为据阻断 readiness。
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
+        # BD-FIX (S10): Testnet 不要求完整投影。事件稀疏导致 projection_complete
+        # 长期为 False，与 event_facts is not None 组合后阻断 readiness。
+        require_complete_projection = not is_testnet
         ready = (
             transport_ok
             and (event_age is None or event_age <= effective_max_age)
             and (projector_ok or event_age is None)
-            and (projection_complete or event_facts is None)
+            and (projection_complete or event_facts is None or not require_complete_projection)
         )
         return ready, {
             "status": status,
