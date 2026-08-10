@@ -2408,9 +2408,23 @@ class AutonomousEngine:
         # an independent health endpoint claim that a dead executor is ready.
         if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
             return False
-        durable_ok, _, _ = self._durable_fact_status()
+        durable_ok, durable_reason, durable_evidence = self._durable_fact_status()
         if not durable_ok:
             return False
+        # 持久事实通过 → 清除事故并恢复控制面
+        if durable_ok and self._control.get_status() != ControlAction.RESUME:
+            _alerts = getattr(self, "_alerts", None)
+            if _alerts is not None:
+                try:
+                    for _inc in list(getattr(_alerts, "_incidents", [])):
+                        if getattr(_inc, "category", "") == "execution_fact":
+                            _alerts.resolve_incident(_inc.incident_id)
+                except Exception:
+                    pass
+            try:
+                self._control.execute_action(ControlAction.RESUME)
+            except Exception:
+                pass
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
         if not self._feed.is_healthy():
