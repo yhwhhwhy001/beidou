@@ -3949,7 +3949,8 @@ class AutonomousEngine:
         # BD-FIX (S13): Testnet 小数量跳过切片算法，直接 MARKET 成交。
         is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         total_qty = float(intent.quantity.amount)
-        is_small_order = total_qty <= 0.01 and is_testnet
+        # Testnet 全部用 MARKET 直接成交，不做切片（避免 IOC 无法成交被撤）
+        is_small_order = is_testnet
         if is_small_order:
             # 小数量直接 MARKET 下单，不做切片
             slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
