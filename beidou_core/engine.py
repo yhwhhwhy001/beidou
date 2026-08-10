@@ -1742,20 +1742,15 @@ class AutonomousEngine:
     # 不再在 engine 内重复实现签名逻辑
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
-        """异步 API 调用 — 通过 BinanceRESTClient Adapter 边界（BD-02）。
-
-        所有异步代码必须使用此方法，禁止直接创建网络客户端。
-        BinanceRESTClient 提供统一错误分类、限频退避和熔断。
-
-        注意: 失败时返回 {"error": code, "msg": "..."} dict。
-        调用方必须检查 "error" 键是否存在，不可将错误响应当作正常数据。
-        对于关键状态读取，优先使用 _api_async_safe() 以防止熔断级联。
-        """
+        """异步 API 调用 — 通过 BinanceRESTClient Adapter 边界（BD-02）。"""
         result = await self._adapter.request(method, path, signed, params)
         if result.is_success():
             return result.data
         err = result.error
-        return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+        _msg = str(err.message) if err else "unknown"
+        if "/leverage" in str(path):
+            print(f"[api] LEVERAGE failed: category={err.category if err else '?'} msg={_msg}")
+        return {"error": err.http_status or -1, "msg": _msg}
 
     async def _api_async_safe(
         self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None
