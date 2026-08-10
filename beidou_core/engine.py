@@ -2411,20 +2411,6 @@ class AutonomousEngine:
         durable_ok, durable_reason, durable_evidence = self._durable_fact_status()
         if not durable_ok:
             return False
-        # 持久事实通过 → 清除事故并恢复控制面
-        if durable_ok and self._control.get_status() != ControlAction.RESUME:
-            _alerts = getattr(self, "_alerts", None)
-            if _alerts is not None:
-                try:
-                    for _inc in list(getattr(_alerts, "_incidents", [])):
-                        if getattr(_inc, "category", "") == "execution_fact":
-                            _alerts.resolve_incident(_inc.incident_id)
-                except Exception:
-                    pass
-            try:
-                self._control.execute_action(ControlAction.RESUME)
-            except Exception:
-                pass
         if self._lifecycle.state != ModuleState.ACTIVE:
             return False
         if not self._feed.is_healthy():
@@ -2898,8 +2884,27 @@ class AutonomousEngine:
 
             # 6. Reconciliation (every 30s)
             if time.time() - self._last_recon > 30:
-                await self._reconcile()
+                recon_ok = await self._reconcile()
                 self._last_recon = time.time()
+                # 对账通过 → 检查持久事实并自动清除事故
+                if recon_ok:
+                    durable_ok, _, _ = self._durable_fact_status()
+                    if durable_ok and self._control.get_status() != ControlAction.RESUME:
+                        _alerts = getattr(self, "_alerts", None)
+                        if _alerts is not None:
+                            try:
+                                _active = getattr(_alerts, "_active_incidents", {})
+                                for _iid, _inc in list(_active.items()):
+                                    if getattr(_inc, "root_cause_category", "") == "execution_fact":
+                                        _alerts.resolve_incident(_iid)
+                                        print("[realtime] Auto-resolved execution_fact incident")
+                            except Exception:
+                                pass
+                        try:
+                            self._control.execute_action(ControlAction.RESUME)
+                            print("[realtime] Auto-restored RESUME after durable facts verified")
+                        except Exception:
+                            pass
 
             # 7. Protection status report (every 60 ticks ≈ 60s)
             if self._tick_count % 60 == 0:
