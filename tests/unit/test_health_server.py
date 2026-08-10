@@ -67,6 +67,19 @@ def test_health_server_exposes_distinct_default_layers() -> None:
         server.stop()
 
 
+def test_health_uptime_uses_monotonic_clock(monkeypatch) -> None:
+    import beidou_core.health as health_module
+
+    mono = [100.0]
+    wall = [1_000.0]
+    monkeypatch.setattr(health_module.time, "monotonic", lambda: mono[0])
+    monkeypatch.setattr(health_module.time, "time", lambda: wall[0])
+    server = HealthServer()
+    wall[0] = 10_000_000.0
+    mono[0] = 103.5
+    assert server.uptime_seconds() == 3.5
+
+
 def test_health_server_callbacks_preserve_degraded_vs_unhealthy_semantics() -> None:
     server = HealthServer(port=_free_port())
     server.set_liveness_check(lambda: HealthState.DEGRADED)

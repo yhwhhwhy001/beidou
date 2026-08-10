@@ -102,13 +102,11 @@ async def test_typed_kernel_never_falls_back_after_veto() -> None:
 
     result = await kernel.evaluate({})
 
-    assert result == {
-        "proposal": None,
-        "kernel": "typed_graph",
-        "mode": "TESTNET",
-        "graph_hash": "typed-graph",
-        "blocked_by": "typed_graph_no_proposal",
-    }
+    assert result.get("proposal") is None
+    assert result.get("kernel") == "typed_graph"
+    assert result.get("mode") == "TESTNET"
+    assert result.get("graph_hash") == "typed-graph"
+    assert result.get("blocked_by") == "typed_graph_no_proposal"
 
 
 def test_kernel_proposal_hash_uses_final_result() -> None:

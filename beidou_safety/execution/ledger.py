@@ -98,18 +98,18 @@ class LedgerTransaction:
             balances[currency] = bal
         return all(abs(b) < 1e-12 for b in balances.values())
 
-    def total_debit(self, currency: str = "USDT") -> float:
+    def total_debit(self, currency: str | None = None) -> float:
         return sum(
             float(p.amount.amount)
             for p in self.postings
-            if p.side == PostingSide.DEBIT and p.amount.currency == currency
+            if p.side == PostingSide.DEBIT and (currency is None or p.amount.currency == currency)
         )
 
-    def total_credit(self, currency: str = "USDT") -> float:
+    def total_credit(self, currency: str | None = None) -> float:
         return sum(
             float(p.amount.amount)
             for p in self.postings
-            if p.side == PostingSide.CREDIT and p.amount.currency == currency
+            if p.side == PostingSide.CREDIT and (currency is None or p.amount.currency == currency)
         )
 
 
@@ -228,10 +228,17 @@ class ImmutableLedger:
         return balances
 
     def is_balanced(self) -> bool:
-        """全局借贷是否平衡。"""
-        total_debit = sum(tx.total_debit() for tx in self._transactions)
-        total_credit = sum(tx.total_credit() for tx in self._transactions)
-        return abs(total_debit - total_credit) < 1e-12
+        """全局借贷是否平衡（所有币种独立校验）。"""
+        currencies: set[str] = set()
+        for tx in self._transactions:
+            for p in tx.postings:
+                currencies.add(p.amount.currency or "USDT")
+        for currency in currencies:
+            total_debit = sum(tx.total_debit(currency) for tx in self._transactions)
+            total_credit = sum(tx.total_credit(currency) for tx in self._transactions)
+            if abs(total_debit - total_credit) >= 1e-12:
+                return False
+        return True
 
     def rebuild_projection(self) -> dict[str, Any]:
         """从 posting 序列重建完整投影。"""

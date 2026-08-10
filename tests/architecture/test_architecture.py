@@ -319,6 +319,42 @@ def test_engine_transport_calls_cross_binance_adapter() -> None:
     assert "self._adapter.create_order" in source
 
 
+def test_fill_protection_submission_cannot_reset_transport_circuit_or_blind_retry() -> None:
+    """An ambiguous protection write must remain UNKNOWN, never force-open the transport."""
+
+    root = Path(__file__).resolve().parent.parent.parent
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _process_fill(")
+    end = source.index("\n    async def ", start + 1)
+    process_fill = source[start:end]
+    assert "reset_circuit_breaker" not in process_fill
+    assert "max_algo_retries" not in process_fill
+
+
+def test_startup_discovery_never_claims_current_worker_order_ownership() -> None:
+    """Venue discovery is inventory evidence, not a fenced worker-ownership fact."""
+
+    root = Path(__file__).resolve().parent.parent.parent
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("        # Restore active_order_ids from exchange.")
+    end = source.index("        # 启动时恢复 UNKNOWN intent", start)
+    startup_restore = source[start:end]
+    assert "self._owned_order_ids.add(oid)" not in startup_restore
+    assert "ACTIVE_ORDER_OWNER_UNKNOWN" in startup_restore
+
+
+def test_testnet_market_orders_cannot_bypass_execution_plan() -> None:
+    """Environment labels cannot skip market facts, slippage, or slice invariants."""
+
+    root = Path(__file__).resolve().parent.parent.parent
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _place_order(")
+    end = source.index("    async def _plan_execution(", start)
+    place_order = source[start:end]
+    assert "_testnet_market" not in place_order
+    assert "planned = await self._plan_execution" in place_order
+
+
 def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() -> None:
     """Missing venue facts must reject an order rather than inventing inputs."""
 

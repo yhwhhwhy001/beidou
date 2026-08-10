@@ -18,7 +18,7 @@
         <string>--mode</string>
         <string>testnet</string>
         <string>--symbols</string>
-        <string>DEFAULT</string>
+        <string>BTCUSDT,ETHUSDT</string>
         <string>--no-self-heal</string>
     </array>
 

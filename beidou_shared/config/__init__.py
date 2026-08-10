@@ -113,8 +113,8 @@ class InfrastructureConfig:
     redis_port: int = 6379
     redis_timeout: int = 2
     s3_bucket: str = "beidou-certificates"
-    s3_endpoint: str = "http://localhost:9000"
-    alerts_file: str = "/tmp/beidou_alerts.jsonl"
+    s3_endpoint: str = ""
+    alerts_file: str = "evidence/beidou_alerts.jsonl"
     webhook_timeout: int = 5
 
 
@@ -223,8 +223,8 @@ class ConfigProvider:
             "redis_port": 6379,
             "redis_timeout": 2,
             "s3_bucket": "beidou-certificates",
-            "s3_endpoint": "http://localhost:9000",
-            "alerts_file": "/tmp/beidou_alerts.jsonl",
+            "s3_endpoint": "",
+            "alerts_file": "evidence/beidou_alerts.jsonl",
             "webhook_timeout": 5,
         },
         "production_ladder": {
@@ -415,8 +415,8 @@ class ConfigProvider:
             redis_port=int(infra_redis.get("port", 6379)),
             redis_timeout=int(infra_redis.get("timeout_seconds", 2)),
             s3_bucket=str(infra_s3.get("bucket", "beidou-certificates")),
-            s3_endpoint=str(infra_s3.get("endpoint", "http://localhost:9000")),
-            alerts_file=str(infra_alerts.get("file_path", "/tmp/beidou_alerts.jsonl")),
+            s3_endpoint=str(infra_s3.get("endpoint", "")),
+            alerts_file=str(infra_alerts.get("file_path", "evidence/beidou_alerts.jsonl")),
             webhook_timeout=int(infra_alerts.get("webhook_timeout", 5)),
         )
 

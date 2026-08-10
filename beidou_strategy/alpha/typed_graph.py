@@ -396,7 +396,14 @@ class FusionNode(TypedGraphNode):
 
         for inp in inputs.values():
             if inp.node_type == NodeType.ENTRY and inp.data is not None:
-                entry_proposal = inp.data
+                _ep = inp.data
+                # 诊断：打印每个入场提案
+                print(f"[fusion] ENTRY {inp.node_id}: side={getattr(_ep, 'side', '?')} strength={getattr(_ep, 'strength', '?')}")
+                # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
+                if entry_proposal is None or (
+                    getattr(_ep, "side", None) is not None and getattr(entry_proposal, "side", None) is None
+                ):
+                    entry_proposal = _ep
             elif inp.node_type == NodeType.FILTER and inp.data is not None:
                 filter_results.append(inp.data)
 
@@ -555,42 +562,36 @@ class TypedAlphaGraph:
         return order
 
     async def execute(self, context: dict) -> StrategyProposal | None:
-        """执行完整 DAG。
+        """执行完整 DAG。返回最终融合提案。"""
+        result = await self._execute_detailed(context)
+        return result["proposal"] if isinstance(result, dict) else result
 
-        按拓扑顺序执行每个节点，传递 TypedNodeOutput。
-        在遇到强制 VETO 时短路。
-
-        Returns:
-            最终 StrategyProposal，如果被否决则返回 None
-        """
+    async def _execute_detailed(self, context: dict) -> dict:
+        """执行完整 DAG 并返回每个组件的诊断输出。"""
         order = self.topological_order()
         outputs: dict[str, TypedNodeOutput] = {}
+        component_outputs: dict[str, Any] = {}
 
         for node_id in order:
             node = self._nodes[node_id]
-
-            # 收集上游输出
             upstream_outputs = {dep: outputs[dep] for dep in node._input_nodes if dep in outputs}
-
-            # 执行节点
             output = await node.execute(upstream_outputs, context)
             outputs[node_id] = output
+            if output.data is not None:
+                component_outputs[node_id] = output.data
 
-            # 强制 VETO 短路
             if isinstance(node, FilterNode) and node.is_mandatory:
                 if isinstance(output.data, FilterResult) and output.data.decision == FilterDecision.VETO:
-                    # 返回否决结果，不再执行后续节点
-                    return None
+                    return {"proposal": None, "component_outputs": component_outputs}
 
-        # 找 FusionNode 的输出
         for node_id in reversed(order):
             node = self._nodes[node_id]
             if node.node_type == NodeType.FUSION and node_id in outputs:
                 data = outputs[node_id].data
                 if isinstance(data, StrategyProposal):
-                    return data
+                    return {"proposal": data, "component_outputs": component_outputs}
 
-        return None
+        return {"proposal": None, "component_outputs": component_outputs}
 
     def compute_graph_hash(self) -> str:
         """计算图结构的确定性哈希（用于 parity 验证）。"""

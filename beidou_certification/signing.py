@@ -99,8 +99,13 @@ class CertificateStore:
 
         bucket 和 endpoint 优先从参数读取，否则从环境变量读取。
         """
-        bucket = bucket or os.environ.get("BEIDOU_S3_BUCKET", "beidou-certificates")
-        endpoint = endpoint or os.environ.get("BEIDOU_S3_ENDPOINT", "http://localhost:9000")
+        bucket = bucket or os.environ.get("BEIDOU_S3_BUCKET", "")
+        endpoint = endpoint or os.environ.get("BEIDOU_S3_ENDPOINT", "")
+        if not bucket.strip() or not endpoint.strip():
+            # A local file export is not evidence of a configured S3/MinIO
+            # publication target; report it as unavailable instead of
+            # silently claiming the certificate was published.
+            return False
         try:
             import json
             import os as _os

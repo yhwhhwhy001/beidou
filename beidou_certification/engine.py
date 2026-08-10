@@ -9,6 +9,7 @@ G8: 30天无人值守 + Owner失联安全。
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -141,6 +142,15 @@ class CertificationFramework:
                     status=ScenarioStatus.NOT_RUN,
                     error_detail="Not executed",
                 )
+            elif result.status == ScenarioStatus.PASS and scenario.required_evidence:
+                missing_evidence = [
+                    key
+                    for key in scenario.required_evidence
+                    if key not in result.evidence or result.evidence[key] in (None, "", [], {}, ())
+                ]
+                if missing_evidence:
+                    result.status = ScenarioStatus.NOT_VERIFIABLE
+                    result.error_detail = "Required evidence missing: " + ", ".join(missing_evidence)
             scenarios_completed.append(result)
 
             if scenario.is_blocking:
@@ -670,49 +680,45 @@ class CapitalLevel:
     auto_rollback: bool = True  # P0 失败自动回退上一级
 
 
-# BD-P2-18: 资本阶梯级别定义 — 默认值（ConfigProvider 可用时优先从 YAML 加载）
-_DEFAULT_CAPITAL_LADDER: list[CapitalLevel] = [
-    CapitalLevel("shadow", CertificationGate.G6_SHADOW, max_capital=0.0, max_leverage=0.0),
-    CapitalLevel(
-        "canary", CertificationGate.G7_L2_CANARY, max_capital=500.0, max_leverage=1.0, min_unattended_hours=24.0
-    ),
-    CapitalLevel("ramp", CertificationGate.G7_L3_RAMP, max_capital=2000.0, max_leverage=2.0, min_unattended_hours=72.0),
-    CapitalLevel(
-        "normal", CertificationGate.G7_L4_NORMAL, max_capital=10000.0, max_leverage=3.0, min_unattended_hours=168.0
-    ),
-    CapitalLevel(
-        "champion", CertificationGate.G7_L5_CHAMPION, max_capital=50000.0, max_leverage=3.0, min_unattended_hours=720.0
-    ),
-]
-
 # Gate 名称到 CertificationGate 枚举的映射
 _GATE_NAME_TO_ENUM: dict[str, CertificationGate] = {g.name: g for g in CertificationGate}
 
 
-def _build_ladder_from_config() -> list[CapitalLevel]:
-    """从 ConfigProvider 加载资本阶梯，不可用时回退默认值。"""
+def _build_ladder_from_config() -> tuple[list[CapitalLevel], bool]:
+    """从 ConfigProvider 加载资本阶梯；未知配置只允许 shadow 且保持阻断。"""
     try:
         from beidou_shared.config import ConfigProvider
 
         settings = ConfigProvider().load()
         levels = settings.capital_ladder.levels
-        if levels:
-            return [
+        if settings.source.startswith("safety_only") or not levels:
+            raise ValueError("capital ladder is safety-only or empty")
+        parsed: list[CapitalLevel] = []
+        for lv in levels:
+            gate = _GATE_NAME_TO_ENUM.get(lv.gate)
+            if not lv.name or gate is None:
+                raise ValueError("capital ladder level identity is incomplete")
+            values = (lv.max_capital, lv.max_leverage, lv.min_unattended_hours)
+            if any(not math.isfinite(float(value)) or float(value) < 0 for value in values):
+                raise ValueError("capital ladder contains invalid numeric values")
+            parsed.append(
                 CapitalLevel(
                     level=lv.name,
-                    gate=_GATE_NAME_TO_ENUM.get(lv.gate, CertificationGate.G5_TESTNET),
+                    gate=gate,
                     max_capital=lv.max_capital,
                     max_leverage=lv.max_leverage,
                     min_unattended_hours=lv.min_unattended_hours,
                 )
-                for lv in levels
-            ]
+            )
+        if len(parsed) < 2:
+            raise ValueError("capital ladder must contain a shadow level and an advance level")
+        return parsed, True
     except Exception as exc:
-        logger.warning("capital ladder config unavailable; using fail-safe defaults: %s", type(exc).__name__)
-    return list(_DEFAULT_CAPITAL_LADDER)
+        logger.warning("capital ladder config unavailable; ladder remains blocked: %s", type(exc).__name__)
+    return [CapitalLevel("shadow", CertificationGate.G6_SHADOW, max_capital=0.0, max_leverage=0.0)], False
 
 
-CAPITAL_LADDER: list[CapitalLevel] = _build_ladder_from_config()
+CAPITAL_LADDER, CAPITAL_LADDER_VERIFIED = _build_ladder_from_config()
 
 
 class ProductionLadder:
@@ -729,6 +735,7 @@ class ProductionLadder:
         self._cert_manager = cert_manager
         self._current_level_index: int = 0  # 起始于 shadow (level 0)
         self._level_history: list[tuple[str, str, datetime]] = []  # (level, reason, timestamp)
+        self._configuration_verified = CAPITAL_LADDER_VERIFIED
 
     @property
     def current_level(self) -> CapitalLevel:
@@ -752,6 +759,8 @@ class ProductionLadder:
             return False, f"Unknown level: {target_level}"
         if target_idx <= self._current_level_index:
             return False, f"Already at or above {target_level}"
+        if not self._configuration_verified:
+            return False, "Capital ladder configuration is UNKNOWN — promotion remains blocked"
 
         # 检查所有中间 Gate
         for i in range(self._current_level_index + 1, target_idx + 1):

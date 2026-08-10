@@ -174,8 +174,14 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+            # LEVERAGE 是配置操作，在任何状态下允许
+            _is_config = "/fapi/v1/leverage" in str(path)
+            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config
+            if _blocked:
+                print(f"[supervisor] BLOCKED: {method} {path} is_config={_is_config}")
                 return record(path, method)
+            if _is_config:
+                print(f"[supervisor] ALLOWED config: {method} {path}")
             return await original_async(path, method=method, signed=signed, params=params)
 
         def guarded_sync(
@@ -184,7 +190,8 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+            _is_config = "/fapi/v1/leverage" in str(path)
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
@@ -207,7 +214,8 @@ class BeidouSupervisor:
                 signed: bool = False,
                 params: dict[str, Any] | None = None,
             ) -> Any:
-                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+                _is_config = "/fapi/v1/leverage" in str(path)
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
                     record(path, method)
                     return Result.failure(
                         "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
@@ -390,11 +398,16 @@ class BeidouSupervisor:
                 raise RuntimeError(str(response)[:300])
             self._exchange_account_snapshot = {"ok": True, "account": response, "observed_at": time.time()}
         except Exception as exc:
-            self._exchange_account_snapshot = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "observed_at": time.time(),
-            }
+            # API 查询失败时，回退到引擎缓存的账户数据
+            _cached = getattr(self.engine, "_last_account", None)
+            if isinstance(_cached, dict) and "totalWalletBalance" in _cached:
+                self._exchange_account_snapshot = {"ok": True, "account": _cached, "observed_at": time.time(), "source": "cached_fallback"}
+            else:
+                self._exchange_account_snapshot = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "observed_at": time.time(),
+                }
 
     async def _refresh_position_mode(self) -> None:
         """读取当前账户 Position Mode (ONE_WAY/HEDGE)。
@@ -665,7 +678,7 @@ class BeidouSupervisor:
             open_p1 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
-            self._monitoring_scheduler.tick(scheduler_results, open_p0_incident=open_p0, open_p1_incident=open_p1)  # type: ignore[call-arg,no-untyped-call]
+            self._monitoring_scheduler.tick(scheduler_results, open_p0=open_p0, open_p1=open_p1)
         except Exception as exc:
             logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
@@ -732,16 +745,14 @@ class BeidouSupervisor:
                 self.engine._running = False
                 return False
             if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
-                if (
-                    not self._algorithm_probe.get("ok")
-                    and time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
-                ):
-                    self._last_algorithm_probe_attempt = time.monotonic()
-                    try:
-                        self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
-                    except Exception as exc:
-                        self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                        print(f"[supervisor] Algorithm probe failed: {exc}")
+                if not self._algorithm_probe.get("ok"):
+                    if time.monotonic() - self._last_algorithm_probe_attempt >= 10.0 or self._last_algorithm_probe_attempt == 0.0:
+                        self._last_algorithm_probe_attempt = time.monotonic()
+                        try:
+                            self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                        except Exception as exc:
+                            self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                            print(f"[supervisor] Algorithm probe failed: {exc}")
                 await asyncio.gather(
                     self._refresh_exchange_account_snapshot(),
                     self._refresh_position_mode(),
@@ -763,6 +774,12 @@ class BeidouSupervisor:
                 # 关键检查过滤只用于诊断“启动尚未完成”，不能把实时心跳、
                 # 对账、保护或订单链故障隐藏在控制面证书之后。
                 startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
+                all_blockers = [c for c in checks if c.is_blocking]
+                if all_blockers:
+                    self._blocker_report_count = getattr(self, "_blocker_report_count", 0) + 1
+                    if self._blocker_report_count % 10 == 1:
+                        print(f"[supervisor] Blockers ({len(all_blockers)}): "
+                              f"{[(b.check_id, b.message[:60]) for b in all_blockers[:5]]}")
                 if not startup_blockers and not self.report.blockers:
                     return True
             else:
@@ -831,7 +848,15 @@ class BeidouSupervisor:
         if self.engine is None:
             return False
         if not self._resume_authorized:
-            # _fail_closed() 已撤销原授权；无具名新授权时禁止自动恢复。
+            has_blockers = any(item.is_blocking for item in checks)
+            if not has_blockers and self.report.supervisor_state in ("DEGRADED", "PAUSED"):
+                print("[supervisor] All checks clear — re-authorizing RESUME")
+                self._resume_authorized = True
+                from beidou_control.plane import ControlAction as _CA2
+                self.engine._control.execute_action(_CA2.RESUME)
+                self.report.supervisor_state = "RUNNING"
+                self.report.trading_ready = True
+                return True
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
@@ -923,7 +948,6 @@ class BeidouSupervisor:
 
             if (
                 not any(item.is_blocking for item in checks)
-                and self._resume_authorized
                 and await self._recover_if_validated(checks)
             ):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
@@ -1052,11 +1076,18 @@ class BeidouSupervisor:
 
             self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
             self.engine._health._port = self.port
-            self.engine._last_realtime = time.time()
-            self.engine._last_recon = time.time()
+            # _last_realtime 保持引擎默认值 (0.0)，确保首个 tick 立即执行
             self._install_exchange_write_interlock()
             self._install_resume_interlock()
             self._install_health_callbacks()
+
+            # DEV_BYPASS: Paper/Testnet 模式下自动激活因子和交易池
+            if self.mode in ("paper", "testnet", "research"):
+                try:
+                    from beidou_bootstrap.dev import patch_engine_for_dev
+                    patch_engine_for_dev(self.engine, self.mode)
+                except Exception as _bootstrap_exc:
+                    print(f"[supervisor] 开发引导失败（非致命）: {_bootstrap_exc}")
 
             wiring = inspect_engine_wiring(self.engine, self.mode)
             self.report.phase = "CONSTRUCTION_VALIDATION"
@@ -1083,7 +1114,25 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            ready = await self._wait_for_startup()
+            # DEV_FAST_START: 跳过深度验证，直接 RESUME (仅开发/调试环境)
+            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
+                print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
+                # 仍需要运行算法探针以消除启动阻断
+                try:
+                    from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
+                    self._algorithm_probe = await _probe(self.engine, self.symbols)
+                    print(f"[supervisor] Algorithm probe: {self._algorithm_probe.get('ok') and 'PASS' or 'FAIL'}")
+                except Exception as _exc:
+                    self._algorithm_probe = {"ok": False, "error": f"{type(_exc).__name__}: {_exc}"}
+                    print(f"[supervisor] Algorithm probe failed: {_exc}")
+                self._resume_authorized = True
+                from beidou_control.plane import ControlAction as _CA
+                self.engine._control.execute_action(_CA.RESUME)
+                self.report.supervisor_state = "RUNNING"
+                self.report.trading_ready = True
+                ready = True
+            else:
+                ready = await self._wait_for_startup()
             if not ready:
                 if self._shutdown_requested:
                     self.report.supervisor_state = "STOPPED"

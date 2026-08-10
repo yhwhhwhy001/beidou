@@ -269,7 +269,7 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
         slice_qty = total_qty / self.slice_count
 
         # 执行成本 > 净Alpha → 取消
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
@@ -285,7 +285,7 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
             decay_factor = 0.5 ** (elapsed / ctx.alpha_decay_seconds) if ctx.alpha_decay_seconds > 0 else 1.0
             alpha_remaining = ctx.net_alpha_bps * decay_factor
 
-            slice_invariant = invariant_ok and alpha_remaining > 0
+            slice_invariant = invariant_ok and alpha_remaining >= 0
 
             slices.append(
                 OrderSlice(
@@ -328,7 +328,7 @@ class POVAlgorithm(BaseExecutionAlgorithm):
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
 
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
@@ -396,7 +396,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
 
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
@@ -407,6 +407,11 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
         slice_pct = self._determine_slice_pct(ctx)
         slice_qty = total_qty * slice_pct
         slice_count = max(1, int(1.0 / slice_pct))
+        # 小数量时减少切片数，避免每个切片低于交易所最小下单量
+        _min_slice_qty = 0.0005  # 低于此值合并为单个切片
+        if slice_qty < _min_slice_qty:
+            slice_count = 1
+            slice_qty = total_qty
 
         slices: list[OrderSlice] = []
         alpha_remaining = ctx.net_alpha_bps
@@ -416,7 +421,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
             decay_factor = 0.5 ** (elapsed / ctx.alpha_decay_seconds) if ctx.alpha_decay_seconds > 0 else 1.0
             alpha_remaining = ctx.net_alpha_bps * decay_factor
 
-            slice_invariant = invariant_ok and alpha_remaining > 0
+            slice_invariant = invariant_ok and alpha_remaining >= 0
 
             # 切片大小随市场动态调整
             qty = slice_qty * (0.8 + 0.4 * alpha_remaining / max(ctx.net_alpha_bps, 1))
@@ -435,6 +440,27 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
                     remaining_alpha_bps=alpha_remaining,
                 )
             )
+
+        # 归一化切片总量不超过批准量
+        _total = sum(float(s.quantity.amount) for s in slices)
+        if _total > total_qty and _total > 0:
+            _scale = total_qty / _total
+            slices = [
+                OrderSlice(
+                    slice_id=s.slice_id,
+                    parent_order_id=s.parent_order_id,
+                    quantity=Quantity(amount=str(float(s.quantity.amount) * _scale)),
+                    price=s.price,
+                    order_type=s.order_type,
+                    time_in_force=s.time_in_force,
+                    algorithm=s.algorithm,
+                    sequence_number=s.sequence_number,
+                    estimated_cost_bps=s.estimated_cost_bps,
+                    invariants_check_passed=s.invariants_check_passed,
+                    remaining_alpha_bps=s.remaining_alpha_bps,
+                )
+                for s in slices
+            ]
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -566,7 +592,7 @@ class SliceInvariantChecker:
             )
 
         # Alpha 剩余检查
-        if slice_.remaining_alpha_bps is not None and slice_.remaining_alpha_bps <= 0:
+        if slice_.remaining_alpha_bps is not None and slice_.remaining_alpha_bps < 0:
             return False, "Remaining alpha depleted"
 
         # 切片不能超过 Approval 数量

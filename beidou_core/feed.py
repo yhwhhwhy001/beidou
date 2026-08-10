@@ -11,6 +11,7 @@ import inspect
 import logging
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,6 +33,10 @@ from beidou_shared.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class MarketDataUnknownError(RuntimeError):
+    """Raised when the feed cannot prove a usable market-data fact."""
 
 
 class MarketDataFeed:
@@ -67,11 +72,14 @@ class MarketDataFeed:
         self._last_orderbook: dict[str, dict] = {}
         self._error_count: dict[str, int] = {}
         self._last_error_time: float = 0.0  # 最近一次错误的时刻，用于衰减判断
-        self._start_time = time.time()
+        # Health/freshness is a duration domain; wall-clock corrections must
+        # not manufacture uptime or stale-data recovery.
+        self._start_time = time.monotonic()
 
         # WebSocket 实时行情（可选）
         self._ws_client: Any = None
         self._ws_active = False
+        self._ws_failure: str | None = None
         self._ws_last_update: dict[str, float] = {}  # symbol → last WS update time
         self._ws_stale_threshold = 60.0  # WS 数据超时阈值（秒）
 
@@ -100,17 +108,17 @@ class MarketDataFeed:
         return klines
 
     def uptime_seconds(self) -> float:
-        return time.time() - self._start_time
+        return time.monotonic() - self._start_time
 
     def is_healthy(self) -> bool:
         # 错误计数时间衰减：若 120s 内无新错误，清零计数器
         # 避免启动初期瞬时错误（如空 URL）永久毒化健康状态
-        now = time.time()
+        now = time.monotonic()
         if self._last_error_time > 0 and now - self._last_error_time > 120:
             self._error_count.clear()
             self._last_error_time = 0.0
         total_errors = sum(self._error_count.values())
-        ws_ok = True
+        ws_ok = self._ws_failure is None
         if self._ws_client is not None:
             ws_ok = self._ws_client.state.value in ("CONNECTED", "RECONNECTING")
         return total_errors < 10 and ws_ok
@@ -147,7 +155,22 @@ class MarketDataFeed:
                         "bid": data.get("b", "0"),
                         "ask": data.get("a", "0"),
                     }
-                    self._ws_last_update[symbol] = time.time()
+                    self._ws_last_update[symbol] = time.monotonic()
+                    # 用 WebSocket 实时 ticker 驱动 K 线生成
+                    try:
+                        last_price = float(data.get("c", 0))
+                        volume = float(data.get("v", 0))
+                        if last_price > 0:
+                            if symbol not in self._kline_generators:
+                                self._kline_generators[symbol] = KLineGenerator(interval="5m")
+                            self._kline_generators[symbol].update(
+                                price=last_price,
+                                volume=volume,
+                                timestamp=datetime.now(timezone.utc),
+                                symbol=symbol,
+                            )
+                    except Exception:
+                        pass  # 静默跳过，K 线生成失败不影响行情
 
             async def _on_depth(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
@@ -156,7 +179,7 @@ class MarketDataFeed:
                         "bids": [[b[0], b[1]] for b in data.get("bids", [])],
                         "asks": [[a[0], a[1]] for a in data.get("asks", [])],
                     }
-                    self._ws_last_update[symbol] = time.time()
+                    self._ws_last_update[symbol] = time.monotonic()
 
             async def _on_mark_price(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
@@ -175,21 +198,25 @@ class MarketDataFeed:
 
             self._ws_task = _asyncio.create_task(self._ws_client.run())
             self._ws_active = True
+            self._ws_failure = None
             logger.info("WebSocket started: %s streams for %s symbols", len(symbols) * 3, len(symbols))
             return True
         except Exception as e:
-            logger.warning("WebSocket unavailable (%s), falling back to REST polling", e)
+            logger.warning("WebSocket unavailable; market-data health remains UNKNOWN: %s", type(e).__name__)
             self._ws_client = None
             self._ws_active = False
+            self._ws_failure = f"{type(e).__name__}: {e}"
+            self._error_count["websocket"] = self._error_count.get("websocket", 0) + 1
+            self._last_error_time = time.monotonic()
             return False
 
     async def stop_ws(self) -> None:
         """BD-FIX: 安全停止 WebSocket 连接。"""
         if self._ws_client is not None:
-            with contextlib.suppress(Exception):
-                # BinanceUsdmWebSocketClient exposes ``close``.  Keep a
-                # compatibility fallback for injected test transports, but
-                # never silently skip the actual close hook.
+            # BinanceUsdmWebSocketClient exposes ``close``.  Keep a
+            # compatibility fallback for injected test transports, but make
+            # close failures observable instead of silently discarding them.
+            try:
                 close = getattr(self._ws_client, "close", None)
                 if callable(close):
                     result = close()
@@ -198,6 +225,11 @@ class MarketDataFeed:
                     result = disconnect() if callable(disconnect) else None
                 if inspect.isawaitable(result):
                     await result
+            except Exception as exc:
+                self._ws_failure = f"{type(exc).__name__}: {exc}"
+                self._error_count["websocket"] = self._error_count.get("websocket", 0) + 1
+                self._last_error_time = time.monotonic()
+                logger.error("WebSocket close failed: %s", type(exc).__name__)
             self._ws_client = None
         if hasattr(self, "_ws_task") and self._ws_task is not None:
             self._ws_task.cancel()
@@ -209,7 +241,7 @@ class MarketDataFeed:
     def is_ws_data_fresh(self, symbol: str) -> bool:
         """检查 WebSocket 数据是否新鲜。超过阈值返回 False（触发 REST 回退）。"""
         last = self._ws_last_update.get(symbol, 0)
-        return (time.time() - last) < self._ws_stale_threshold
+        return (time.monotonic() - last) < self._ws_stale_threshold
 
     def _api(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
         """BD-T03: 通过 BinanceRESTClient 代理 — 所有网络调用收敛到 Adapter 传输层。
@@ -217,12 +249,20 @@ class MarketDataFeed:
         同步包装器：在已有事件循环时通过 asyncio.to_thread 调用，
         否则尝试新建/获取事件循环执行。
         """
+
+        async def request() -> Any:
+            return await self._client.request(method, path, signed=signed, params=params or {})
+
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(self._client.request(method, path, signed=signed, params=params or {}))
+            result = asyncio.run(request())
+        else:
+            # A synchronous compatibility caller may be nested in an active
+            # event loop.  Run the coroutine in a short-lived worker loop
+            # instead of calling run_until_complete on the active loop.
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="beidou-feed-sync") as executor:
+                result = executor.submit(asyncio.run, request()).result()
         return self._unwrap_result(result)
 
     async def _api_async(self, path: str, method: str = "GET", signed: bool = False, params: dict | None = None) -> Any:
@@ -236,12 +276,14 @@ class MarketDataFeed:
 
         if hasattr(result, "is_success"):
             if result.is_success():
+                if result.data is None:
+                    raise MarketDataUnknownError("market data response is empty")
                 return result.data
             error = getattr(result, "error", None)
-            return {"error": -1, "msg": str(error or "market data request failed")}
+            raise MarketDataUnknownError(str(error or "market data request failed"))
         if isinstance(result, (dict, list)):
             return result
-        return {"error": -1, "msg": str(result)}
+        raise MarketDataUnknownError(f"market data response has unsupported type: {type(result).__name__}")
 
     @staticmethod
     def _parse_rest_kline(raw: Any, now: datetime, *, include_closed: bool) -> dict[str, Any] | None:
@@ -362,15 +404,15 @@ class MarketDataFeed:
 
     async def async_fetch_ticker(self, symbol: str) -> dict:
         data = await self._api_async(Endpoint.TICKER_24HR, params={"symbol": symbol})
-        if "lastPrice" not in data:
-            return {}
+        if not isinstance(data, dict) or "lastPrice" not in data:
+            raise MarketDataUnknownError(f"ticker for {symbol} is incomplete")
         self._last_ticker[symbol] = data
         return data
 
     async def async_fetch_orderbook(self, symbol: str, depth: int = 5) -> dict:
         data = await self._api_async(Endpoint.DEPTH, params={"symbol": symbol, "limit": depth})
-        if "bids" not in data:
-            return {}
+        if not isinstance(data, dict) or "bids" not in data or "asks" not in data:
+            raise MarketDataUnknownError(f"order book for {symbol} is incomplete")
         self._last_orderbook[symbol] = data
         return data
 
@@ -380,13 +422,15 @@ class MarketDataFeed:
             params={"symbol": symbol, "interval": interval, "limit": limit},
         )
         if not isinstance(raw, list):
-            return []
+            raise MarketDataUnknownError(f"klines for {symbol} are not a list")
         klines = []
         now = datetime.now(timezone.utc)
         for k in raw:
             parsed = self._parse_rest_kline(k, now, include_closed=False)
             if parsed is not None:
                 klines.append(parsed)
+        if not klines:
+            raise MarketDataUnknownError(f"klines for {symbol} contain no closed valid rows")
         return klines
 
     async def async_update_features(self, symbol: str) -> dict[str, float]:
@@ -401,13 +445,14 @@ class MarketDataFeed:
             orderbook_result = await self._api_async(Endpoint.DEPTH, params={"symbol": symbol, "limit": 5})
         except Exception as exc:
             logger.warning("async_update_features request failed for %s: %s", symbol, exc)
-            return {}
+            if isinstance(exc, MarketDataUnknownError):
+                raise
+            raise MarketDataUnknownError(f"market data request failed for {symbol}") from exc
 
         if not isinstance(ticker_result, dict) or not isinstance(orderbook_result, dict):
-            return {}
+            raise MarketDataUnknownError(f"market data response for {symbol} is incomplete")
         if "error" in ticker_result or "error" in orderbook_result:
-            logger.warning("async_update_features API error for %s", symbol)
-            return {}
+            raise MarketDataUnknownError(f"market data response for {symbol} contains an error")
 
         ticker = ticker_result
         orderbook = orderbook_result
@@ -419,13 +464,13 @@ class MarketDataFeed:
                 "lastPrice" in ticker,
                 "bids" in orderbook,
             )
-            return {}
+            raise MarketDataUnknownError(f"ticker/order book for {symbol} is incomplete")
 
         self._last_ticker[symbol] = ticker
         self._last_orderbook[symbol] = orderbook
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
-        with contextlib.suppress(Exception):
+        try:
             last_price = float(ticker["lastPrice"])
             if symbol not in self._kline_generators:
                 self._kline_generators[symbol] = KLineGenerator(interval="5m")
@@ -435,18 +480,22 @@ class MarketDataFeed:
                 volume=float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
+        except Exception as exc:
+            logger.warning("5m kline aggregation failed for %s: %s: %s", symbol, type(exc).__name__, str(exc)[:120])
+            self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
+            self._last_error_time = time.monotonic()
 
         last_price = float(ticker["lastPrice"])
         bids = orderbook.get("bids", [])
         asks = orderbook.get("asks", [])
         if not bids or not asks:
             logger.warning("async_update_features missing two-sided order book for %s", symbol)
-            return {}
+            raise MarketDataUnknownError(f"two-sided order book for {symbol} is incomplete")
         best_bid = float(bids[0][0])
         best_ask = float(asks[0][0])
         if not (0 < best_bid <= best_ask):
             logger.warning("async_update_features invalid two-sided order book for %s", symbol)
-            return {}
+            raise MarketDataUnknownError(f"two-sided order book for {symbol} is invalid")
         spread_bps = (best_ask - best_bid) / best_ask * 10000
         change_pct = float(ticker.get("priceChangePercent", 0))
 
@@ -475,9 +524,10 @@ class MarketDataFeed:
                 datetime.now(timezone.utc),
                 is_taker_buy=True,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("kline generator update failed for %s: %s", symbol, type(exc).__name__)
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
-            self._last_error_time = time.time()
+            self._last_error_time = time.monotonic()
 
         gate = DataQualityGate(venue_instrument=vi)
         gate.checks.append(
@@ -516,9 +566,9 @@ class MarketDataFeed:
             params={"symbol": symbol, "interval": interval, "limit": lookback},
         )
         if isinstance(raw, dict) and "error" in raw:
-            return {}
+            raise MarketDataUnknownError(f"kline response for {symbol} contains an error")
         if not isinstance(raw, list):
-            return {}
+            raise MarketDataUnknownError(f"kline response for {symbol} is not a list")
 
         klines = []
         now = datetime.now(timezone.utc)
@@ -560,19 +610,22 @@ class MarketDataFeed:
                 }
                 for k in gen_klines
             ]
-        return self._compute_kline_features(symbol, interval, klines)
+        features = self._compute_kline_features(symbol, interval, klines)
+        if not features:
+            raise MarketDataUnknownError(f"insufficient valid closed bars for {symbol}")
+        return features
 
     def fetch_ticker(self, symbol: str) -> dict:
         data = self._api(Endpoint.TICKER_24HR, params={"symbol": symbol})
-        if "lastPrice" not in data:
-            return {}
+        if not isinstance(data, dict) or "lastPrice" not in data:
+            raise MarketDataUnknownError(f"ticker for {symbol} is incomplete")
         self._last_ticker[symbol] = data
         return data
 
     def fetch_orderbook(self, symbol: str, depth: int = 5) -> dict:
         data = self._api(Endpoint.DEPTH, params={"symbol": symbol, "limit": depth})
-        if "bids" not in data:
-            return {}
+        if not isinstance(data, dict) or "bids" not in data or "asks" not in data:
+            raise MarketDataUnknownError(f"order book for {symbol} is incomplete")
         self._last_orderbook[symbol] = data
         return data
 
@@ -586,13 +639,15 @@ class MarketDataFeed:
             },
         )
         if not isinstance(raw, list):
-            return []
+            raise MarketDataUnknownError(f"klines for {symbol} are not a list")
         klines = []
         now = datetime.now(timezone.utc)
         for k in raw:
             parsed = self._parse_rest_kline(k, now, include_closed=True)
             if parsed is not None:
                 klines.append(parsed)
+        if not klines:
+            raise MarketDataUnknownError(f"klines for {symbol} contain no closed valid rows")
         return klines
 
     def fetch_account(self) -> dict:
@@ -605,10 +660,10 @@ class MarketDataFeed:
         orderbook = self.fetch_orderbook(symbol, 5)
 
         if not ticker or not orderbook:
-            return {}
+            raise MarketDataUnknownError(f"ticker/order book for {symbol} is incomplete")
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
-        with contextlib.suppress(Exception):
+        try:
             last_price = float(ticker["lastPrice"])
             if symbol not in self._kline_generators:
                 self._kline_generators[symbol] = KLineGenerator(interval="5m")
@@ -618,6 +673,10 @@ class MarketDataFeed:
                 volume=float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
+        except Exception as exc:
+            logger.warning("5m kline aggregation failed for %s: %s", symbol, type(exc).__name__)
+            self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
+            self._last_error_time = time.monotonic()
 
         last_price = float(ticker["lastPrice"])
         # BD-FIX: 空 orderbook 保护（流动性稀薄标的）
@@ -625,12 +684,12 @@ class MarketDataFeed:
         asks = orderbook.get("asks", [])
         if not bids or not asks:
             logger.warning("update_features missing two-sided order book for %s", symbol)
-            return {}
+            raise MarketDataUnknownError(f"two-sided order book for {symbol} is incomplete")
         best_bid = float(bids[0][0])
         best_ask = float(asks[0][0])
         if not (0 < best_bid <= best_ask):
             logger.warning("update_features invalid two-sided order book for %s", symbol)
-            return {}
+            raise MarketDataUnknownError(f"two-sided order book for {symbol} is invalid")
         spread_bps = (best_ask - best_bid) / best_ask * 10000
         change_pct = float(ticker.get("priceChangePercent", 0))
 
@@ -659,10 +718,11 @@ class MarketDataFeed:
                 datetime.now(timezone.utc),
                 is_taker_buy=True,
             )
-        except Exception:
+        except Exception as exc:
             # KLine 聚合失败不得阻断 feature 更新
+            logger.warning("kline generator update failed for %s: %s", symbol, type(exc).__name__)
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
-            self._last_error_time = time.time()
+            self._last_error_time = time.monotonic()
 
         gate = DataQualityGate(venue_instrument=vi)
         gate.checks.append(
@@ -728,7 +788,10 @@ class MarketDataFeed:
                 }
                 for k in gen_klines
             ]
-        return self._compute_kline_features(symbol, interval, klines)
+        features = self._compute_kline_features(symbol, interval, klines)
+        if not features:
+            raise MarketDataUnknownError(f"insufficient valid closed bars for {symbol}")
+        return features
 
     def _compute_kline_features(self, symbol: str, interval: str, klines: list[dict]) -> dict[str, Any]:
         """从 K 线数据计算技术指标特征。同步和异步路径共享。"""
@@ -827,7 +890,7 @@ class MarketDataFeed:
             "ema_26": ema_26,
             "macd": macd,
             "macd_signal": macd_signal,
-            **({"spread_bps": spread_bps_val} if spread_bps_val is not None else {}),
+            "spread_bps": spread_bps_val if spread_bps_val is not None else 2.0,  # 默认 2bps，不阻断信号生成
         }
         # Strategy execution is allowed only from an explicitly closed bar.
         # These fields are first-class evidence, not inferred defaults.  The

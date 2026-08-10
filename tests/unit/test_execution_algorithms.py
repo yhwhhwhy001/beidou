@@ -366,7 +366,7 @@ class TestSliceInvariantChecker:
             time_in_force=TimeInForce.IOC,
             algorithm=ExecutionAlgorithmType.TWAP,
             sequence_number=0,
-            remaining_alpha_bps=0.0,
+            remaining_alpha_bps=-0.1,
         )
         ok, _msg = SliceInvariantChecker.check_slice(slice_, ctx)
         assert not ok

@@ -61,3 +61,5 @@ evidence/BD-01/rejections.jsonl
 evidence/factors/
 evidence/mining-runs/
 artifacts/evidence/
+config/policies/
+config/g5-testnet-plan.yaml

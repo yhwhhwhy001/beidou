@@ -433,6 +433,10 @@ def test_launchagent_template_is_direct_and_fail_closed() -> None:
     assert "/bin/zsh" not in arguments
     assert "-c" not in arguments
     assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
+    symbols_index = arguments.index("--symbols")
+    configured_symbols = arguments[symbols_index + 1]
+    assert configured_symbols not in {"DEFAULT", "ALL"}
+    assert configured_symbols.split(",") == ["BTCUSDT", "ETHUSDT"]
     assert payload["KeepAlive"] is False
     assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}
 
@@ -571,7 +575,7 @@ def test_reconciliation_moved_to_monitoring() -> None:
         side=SimpleNamespace(value="BUY"),
     )
     engine._protection = SimpleNamespace(all_positions=lambda: {"pos-BTCUSDT": mock_protected})
-    engine._ledger = SimpleNamespace(_entries=[])
+    engine._ledger = SimpleNamespace(_transactions=[])
     engine._last_account = {
         "totalWalletBalance": "1000",
         "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}],
@@ -596,7 +600,7 @@ def test_writable_monitoring_reconciliation_requires_authoritative_three_way_fac
     engine = _runtime_engine()
     engine._can_write = True
     engine._last_reconciliation_result = None
-    engine._ledger = SimpleNamespace(_entries=[])
+    engine._ledger = SimpleNamespace(_transactions=[])
     engine._protection = SimpleNamespace(all_positions=lambda: {})
 
     mon_checks = collect_monitoring_checks(

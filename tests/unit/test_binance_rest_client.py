@@ -148,6 +148,8 @@ def test_binance_business_error_is_classified_without_retry(monkeypatch: pytest.
     assert result.is_success() is False
     assert result.error is not None
     assert result.error.category is ErrorCategory.AUTH_FAILURE
+    assert result.error.retryable is False
+    assert result.error.raw == {"code": -2015, "msg": "invalid api-key"}
     assert calls == 1
 
 
@@ -201,6 +203,7 @@ def test_rate_limit_retries_and_circuit_breaker_blocks(monkeypatch: pytest.Monke
     blocked = asyncio.run(client.get_ticker("BTCUSDT"))
     assert blocked.error is not None
     assert blocked.error.category is ErrorCategory.RATE_LIMIT
+    assert blocked.error.retryable is False
     assert errors == 5
     client.reset_circuit_breaker()
     assert client._rate_state.circuit_open is False

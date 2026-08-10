@@ -866,6 +866,23 @@ class PersistentStore:
             conn.rollback()
             raise
 
+    def save_strategy_risk_state(self, strategy_id: str, state: dict) -> None:
+        import json
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO v3_runtime_records (record_type, record_id, payload, updated_at) VALUES (?,?,?,datetime('now'))",
+            ("strategy_risk", str(strategy_id), json.dumps(state)),
+        )
+        conn.commit()
+
+    def restore_strategy_risk_states(self) -> dict[str, dict]:
+        import json
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT record_id, payload FROM v3_runtime_records WHERE record_type='strategy_risk'"
+        ).fetchall()
+        return {str(row[0]): (json.loads(row[1]) if isinstance(row[1], str) else dict(row[1])) for row in rows}
+
     def restore_account_opening_projection(self, account_id: str, venue_id: str) -> dict[str, Any] | None:
         conn = self._get_conn()
         row = conn.execute(

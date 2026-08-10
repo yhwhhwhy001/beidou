@@ -601,6 +601,13 @@ class PostgresPersistentStore:
     def restore_account_opening_projection(self, account_id: str, venue_id: str) -> dict[str, Any] | None:
         return self._get_record("account_opening_projection", f"{account_id}:{venue_id}")
 
+    def save_strategy_risk_state(self, strategy_id: str, state: dict) -> None:
+        self._write_record("strategy_risk", str(strategy_id), state, event_type="RISK_STATE_UPDATE")
+
+    def restore_strategy_risk_states(self) -> dict[str, dict]:
+        records = self._records("strategy_risk")
+        return {str(r.get("strategy_id", r.get("record_id", ""))): r for r in records}
+
     def save_position_projection(
         self,
         symbol: str,

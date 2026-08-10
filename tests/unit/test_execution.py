@@ -97,6 +97,37 @@ class TestIntentOutbox:
         assert ob.claim("worker-a") is None
         assert ob.unacked() == []
         assert ob.stats["state_counts"][OutboxState.UNKNOWN.value] == 1
+        assert ob.get_unknown_intents() == [
+            {
+                "intent_id": "int-memory-unknown",
+                "symbol": "BTCUSDT",
+                "client_order_id": "",
+            }
+        ]
+
+    def test_memory_unknown_positive_exchange_fact_closes_the_exact_identity(self):
+        ob = IntentOutbox()
+        intent = OrderIntent(
+            intent_id="int-memory-found",
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            instrument_id=InstrumentId("BTCUSDT"),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.1"),
+            client_order_id="cid-memory-found",
+            idempotency_key="idem-memory-found",
+        )
+        ob.commit(intent)
+        assert ob.claim("worker-a") is not None
+        ob.mark_unknown(intent.intent_id, "TRANSPORT_UNKNOWN")
+
+        ob.resolve_unknown(intent.intent_id, exchange_order_found=True)
+
+        assert ob.get_unknown_intents() == []
+        assert ob.pending_count() == 0
+        assert intent.intent_id in ob._processed
+        assert intent.idempotency_key in ob._processed
+        assert ob.stats["state_counts"] == {OutboxState.ACKED.value: 1}
 
     def test_sqlite_outbox_survives_restart_and_preserves_unknown(self, tmp_path):
         db_path = str(tmp_path / "intent-outbox.db")
@@ -127,6 +158,13 @@ class TestIntentOutbox:
         second = IntentOutbox(db_path)
         assert [i.intent_id for i in second.unacked()] == [intent.intent_id]
         assert second.claim("worker-b") is None
+        assert second.get_unknown_intents() == [
+            {
+                "intent_id": "int-durable-001",
+                "symbol": "BTCUSDT",
+                "client_order_id": "cid-durable-001",
+            }
+        ]
         second.resolve_unknown(intent.intent_id, exchange_order_found=False)
         assert second.claim("worker-b") is not None
         assert second.stats["state_counts"][OutboxState.SENDING.value] == 1
@@ -465,7 +503,7 @@ class TestReconciliation:
             AccountFactSnapshot(
                 account_id=AccountId("test"),
                 venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount="9999"),
+                balance=MonetaryValue(amount="9990"),
                 positions={},
                 open_orders=[],
             )

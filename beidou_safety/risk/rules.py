@@ -69,18 +69,32 @@ class RiskRuleRegistry:
 
 def _r0_max_leverage(context: dict) -> RuleDecision:
     """R0: 最大杠杆检查。"""
-    leverage = context.get("leverage", 0)
-    max_lev = context.get("max_leverage", 3.0)
-    if leverage <= 0 or max_lev <= 0:
+    leverage = context.get("leverage")
+    max_lev = context.get("max_leverage")
+    if leverage is None or max_lev is None:
+        return RuleDecision.UNKNOWN
+    try:
+        leverage = float(leverage)
+        max_lev = float(max_lev)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(leverage) or not math.isfinite(max_lev) or leverage <= 0 or max_lev <= 0:
         return RuleDecision.UNKNOWN
     return RuleDecision.PASS if leverage <= max_lev else RuleDecision.REJECT
 
 
 def _r1_concentration(context: dict) -> RuleDecision:
     """R1: 集中度检查。"""
-    conc = context.get("concentration_pct", 0)
-    max_conc = context.get("max_concentration_pct", 50.0)
-    if conc <= 0:
+    conc = context.get("concentration_pct")
+    max_conc = context.get("max_concentration_pct")
+    if conc is None or max_conc is None:
+        return RuleDecision.UNKNOWN
+    try:
+        conc = float(conc)
+        max_conc = float(max_conc)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(conc) or not math.isfinite(max_conc) or conc <= 0 or max_conc <= 0:
         return RuleDecision.UNKNOWN
     return RuleDecision.PASS if conc <= max_conc else RuleDecision.REJECT
 
@@ -90,7 +104,15 @@ def _r2_drawdown(context: dict) -> RuleDecision:
     dd = context.get("drawdown_pct")
     if dd is None:
         return RuleDecision.UNKNOWN
-    max_dd = context.get("max_drawdown_pct", 20.0)
+    max_dd = context.get("max_drawdown_pct")
+    if max_dd is None:
+        return RuleDecision.UNKNOWN
+    try:
+        max_dd = float(max_dd)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(max_dd) or max_dd < 0:
+        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if dd < max_dd else RuleDecision.REJECT
 
 
@@ -99,7 +121,15 @@ def _r3_daily_loss(context: dict) -> RuleDecision:
     daily = context.get("daily_loss_pct")
     if daily is None:
         return RuleDecision.UNKNOWN
-    max_daily = context.get("max_daily_loss_pct", 5.0)
+    max_daily = context.get("max_daily_loss_pct")
+    if max_daily is None:
+        return RuleDecision.UNKNOWN
+    try:
+        max_daily = float(max_daily)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(max_daily) or max_daily < 0:
+        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if daily < max_daily else RuleDecision.REJECT
 
 
@@ -108,7 +138,15 @@ def _r4_consecutive_losses(context: dict) -> RuleDecision:
     consecutive = context.get("consecutive_losses")
     if consecutive is None:
         return RuleDecision.UNKNOWN
-    max_cons = context.get("max_consecutive_losses", 5)
+    max_cons = context.get("max_consecutive_losses")
+    if max_cons is None:
+        return RuleDecision.UNKNOWN
+    try:
+        max_cons = int(max_cons)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if max_cons < 0:
+        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if consecutive < max_cons else RuleDecision.REJECT
 
 
@@ -117,16 +155,37 @@ def _r5_sharpe(context: dict) -> RuleDecision:
     sharpe = context.get("rolling_sharpe")
     if sharpe is None:
         return RuleDecision.UNKNOWN
-    min_sharpe = context.get("min_sharpe_rolling", 0.0)
+    min_sharpe = context.get("min_sharpe_rolling")
+    if min_sharpe is None:
+        return RuleDecision.UNKNOWN
+    try:
+        min_sharpe = float(min_sharpe)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(min_sharpe):
+        return RuleDecision.UNKNOWN
     return RuleDecision.PASS if sharpe >= min_sharpe else RuleDecision.REJECT
 
 
 def _r6_margin(context: dict) -> RuleDecision:
     """R6: 保证金充足率。"""
-    margin_ratio = context.get("margin_ratio", 0)
-    if margin_ratio <= 0:
+    margin_ratio = context.get("margin_ratio")
+    max_margin_ratio = context.get("max_margin_ratio")
+    if margin_ratio is None or max_margin_ratio is None:
         return RuleDecision.UNKNOWN
-    return RuleDecision.PASS if margin_ratio < 0.8 else RuleDecision.REJECT
+    try:
+        margin_ratio = float(margin_ratio)
+        max_margin_ratio = float(max_margin_ratio)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if (
+        not math.isfinite(margin_ratio)
+        or not math.isfinite(max_margin_ratio)
+        or margin_ratio <= 0
+        or max_margin_ratio <= 0
+    ):
+        return RuleDecision.UNKNOWN
+    return RuleDecision.PASS if margin_ratio < max_margin_ratio else RuleDecision.REJECT
 
 
 def _r7_liquidation_distance(context: dict) -> RuleDecision:
@@ -165,7 +224,16 @@ def _r7_liquidation_distance(context: dict) -> RuleDecision:
     if liq_price <= 0 or current_price <= 0:
         return RuleDecision.UNKNOWN
     distance_pct = abs(current_price - liq_price) / current_price * 100
-    return RuleDecision.PASS if distance_pct > 5.0 else RuleDecision.REJECT
+    minimum_distance_pct = context.get("min_liquidation_distance_pct")
+    if minimum_distance_pct is None:
+        return RuleDecision.UNKNOWN
+    try:
+        minimum_distance_pct = float(minimum_distance_pct)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(minimum_distance_pct) or minimum_distance_pct < 0:
+        return RuleDecision.UNKNOWN
+    return RuleDecision.PASS if distance_pct > minimum_distance_pct else RuleDecision.REJECT
 
 
 def _r8_protection_coverage(context: dict) -> RuleDecision:
@@ -194,8 +262,10 @@ def _r8_protection_coverage(context: dict) -> RuleDecision:
 
 def _r9_account_capability(context: dict) -> RuleDecision:
     """R9: 账户能力检查。"""
-    can_trade = context.get("can_trade", False)
-    can_withdraw = context.get("can_withdraw", True)
+    can_trade = context.get("can_trade")
+    can_withdraw = context.get("can_withdraw")
+    if not isinstance(can_trade, bool) or not isinstance(can_withdraw, bool):
+        return RuleDecision.UNKNOWN
     if can_withdraw:
         return RuleDecision.REJECT  # 提款权限必须关闭
     return RuleDecision.PASS if can_trade else RuleDecision.UNKNOWN
@@ -217,8 +287,15 @@ for rule in [
     RiskRule("R3", "单日亏损", "单日亏损不得超过上限", 3, _r3_daily_loss, remediation="当日停止交易"),
     RiskRule("R4", "连续亏损", "连续亏损笔数不得超过上限", 4, _r4_consecutive_losses, remediation="暂停策略、审查信号"),
     RiskRule("R5", "Sharpe下限", "滚动Sharpe不得低于下限", 5, _r5_sharpe, remediation="降级至Paper、重新校准"),
-    RiskRule("R6", "保证金充足", "保证金使用率不得超过80%", 6, _r6_margin, remediation="减仓或追加保证金"),
-    RiskRule("R7", "清算距离", "清算价格距离当前价格至少5%", 7, _r7_liquidation_distance, remediation="减仓或移动止损"),
+    RiskRule("R6", "保证金充足", "保证金使用率不得超过已签发策略上限", 6, _r6_margin, remediation="减仓或追加保证金"),
+    RiskRule(
+        "R7",
+        "清算距离",
+        "清算价格距离当前价格不得低于已签发策略下限",
+        7,
+        _r7_liquidation_distance,
+        remediation="减仓或移动止损",
+    ),
     RiskRule(
         "R8",
         "保护覆盖",

@@ -875,6 +875,19 @@ class PostgresIntentOutbox:
     def unacked(self) -> list[Any]:
         return self._query_intents(("PENDING", "SENDING", "UNKNOWN"))
 
+    def get_unknown_intents(self) -> list[dict[str, str]]:
+        """Return identity-bound UNKNOWN rows for read-after-write recovery."""
+
+        intents = self._query_intents(("UNKNOWN",))
+        return [
+            {
+                "intent_id": str(intent.intent_id),
+                "symbol": str(intent.instrument_id),
+                "client_order_id": str(intent.client_order_id or ""),
+            }
+            for intent in intents
+        ]
+
     def pending_count(self) -> int:
         if self._connection_factory is None:
             return 0
@@ -986,7 +999,13 @@ class PostgresIntentOutbox:
     @property
     def stats(self) -> dict[str, Any]:
         if self._connection_factory is None:
-            return {"state_counts": {"UNKNOWN": 1}, "pending_count": 0, "outbox_size": 0}
+            return {
+                "state_counts": {},
+                "pending_count": 0,
+                "outbox_size": 0,
+                "unknown_count": 0,
+                "dead_letter_count": 0,
+            }
         with (
             OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
             OutboxWorker._cursor_scope(conn) as cursor,

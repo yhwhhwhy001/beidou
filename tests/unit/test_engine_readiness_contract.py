@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -14,9 +15,10 @@ import pytest
 from beidou_control.plane import ControlAction
 from beidou_core.engine import AutonomousEngine, MeanReversionEntry, TrendFollowingEntry
 from beidou_core.guard import EnvironmentMode
-from beidou_exchange.core.error_taxonomy import Result
+from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_lifecycle.lifecycle import ModuleState
 from beidou_safety.execution import OrderIntent, order_intent_binding_hash
+from beidou_safety.execution.order_state import OrderEvent
 from beidou_safety.protection.engine import ProtectionManager
 from beidou_safety.risk.engine import RiskApprovalSignerImpl, RiskApprovalStateMachine
 from beidou_shared.types import (
@@ -25,6 +27,7 @@ from beidou_shared.types import (
     InstrumentId,
     OrderSide,
     OrderType,
+    Price,
     Quantity,
     RiskApprovalId,
     VenueId,
@@ -35,12 +38,16 @@ class _Store:
     def __init__(self, orders=None, protections=None) -> None:
         self.orders = list(orders or [])
         self.protections = list(protections or [])
+        self.saved_order_states: list[tuple[tuple, dict]] = []
 
     def restore_order_states(self):
         return list(self.orders)
 
     def restore_protections(self):
         return list(self.protections)
+
+    def save_order_state(self, *args, **kwargs) -> None:
+        self.saved_order_states.append((args, kwargs))
 
 
 class _Protection:
@@ -108,6 +115,345 @@ def test_durable_facts_block_unknown_or_untracked_orders(orders, outbox_stats, e
     assert ok is False
     assert reason == expected
     assert evidence
+
+
+def test_durable_unknown_order_is_never_reclassified_without_exchange_evidence() -> None:
+    engine = _engine(
+        orders=[{"order_id": "u-1", "symbol": "BTCUSDT", "status": "UNKNOWN"}],
+        outbox_stats={"state_counts": {}},
+    )
+
+    ok, reason, evidence = engine._durable_fact_status()
+
+    assert ok is False
+    assert reason == "DURABLE_ORDER_UNKNOWN"
+    assert evidence["order_ids"] == ["u-1"]
+    assert engine._store.saved_order_states == []
+
+
+@pytest.mark.asyncio
+async def test_unqueryable_restored_order_remains_unknown() -> None:
+    class RestoredTracker:
+        status = "ACKED"
+
+        def __init__(self) -> None:
+            self.events: list[OrderEvent] = []
+
+        def apply(self, event: OrderEvent) -> bool:
+            self.events.append(event)
+            self.status = event.value
+            return True
+
+    async def query_order(*_args, **_kwargs):
+        return ({"code": -2013, "msg": "Order does not exist"}, False)
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    tracker = RestoredTracker()
+    store = _Store()
+    failures: list[str] = []
+    engine._active_order_ids = {"123"}
+    engine._order_symbols = {"123": "BTCUSDT"}
+    engine._order_trackers = {"123": tracker}
+    engine._store = store
+    engine._api_async_safe = query_order
+    engine._record_execution_fact_failure = failures.append
+
+    await engine._monitor_orders("BTCUSDT")
+
+    assert tracker.events[-1] is OrderEvent.UNKNOWN
+    assert "123" not in engine._active_order_ids
+    assert store.saved_order_states[-1][0][6] == "UNKNOWN"
+    assert failures == ["ORDER_STATUS_UNKNOWN:123"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_lookup_failure_is_not_requeued() -> None:
+    resolutions: list[tuple[str, bool]] = []
+
+    async def failed_lookup(_symbol: str, _client_id: str) -> Result:
+        return Result.failure(
+            "network timeout",
+            category=ErrorCategory.TIMEOUT,
+            retryable=True,
+            raw={"reason": "timeout"},
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(query_order_by_client_id=failed_lookup)
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-1",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-1",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 0
+    assert resolutions == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_identity_bound_venue_fact_is_acknowledged() -> None:
+    resolutions: list[tuple[str, bool]] = []
+    persisted: list[tuple[tuple, dict]] = []
+
+    async def found_lookup(_symbol: str, _client_id: str) -> Result:
+        return Result.success(
+            {
+                "orderId": 42,
+                "clientOrderId": "beidou-intent-unknown-2",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "0.01",
+                "executedQty": "0.01",
+                "avgPrice": "95000",
+                "status": "FILLED",
+            }
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(query_order_by_client_id=found_lookup)
+    engine._store = SimpleNamespace(save_order_state=lambda *args, **kwargs: persisted.append((args, kwargs)))
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-2",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-2",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 1
+    assert resolutions == [("intent-unknown-2", True)]
+    assert persisted[0][1] == {
+        "order_id": "42",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "order_type": "MARKET",
+        "quantity": "0.01",
+        "price": None,
+        "status": "FILLED",
+        "filled_qty": "0.01",
+        "avg_price": "95000",
+        "client_order_id": "beidou-intent-unknown-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_order_fact_persistence_failure_stays_unknown() -> None:
+    resolutions: list[tuple[str, bool]] = []
+    failures: list[str] = []
+
+    async def found_lookup(_symbol: str, _client_id: str) -> Result:
+        return Result.success(
+            {
+                "orderId": 44,
+                "clientOrderId": "beidou-intent-unknown-4",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "0.01",
+                "executedQty": "0",
+                "status": "NEW",
+            }
+        )
+
+    def fail_persist(*_args, **_kwargs) -> None:
+        raise RuntimeError("injected persistence failure")
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(query_order_by_client_id=found_lookup)
+    engine._store = SimpleNamespace(save_order_state=fail_persist)
+    engine._record_execution_fact_failure = failures.append
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-4",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-4",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 0
+    assert resolutions == []
+    assert failures == ["UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:intent-unknown-4:RuntimeError"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_mismatched_lookup_identity_stays_unknown() -> None:
+    resolutions: list[tuple[str, bool]] = []
+
+    async def mismatched_lookup(_symbol: str, _client_id: str) -> Result:
+        return Result.success(
+            {
+                "orderId": 43,
+                "clientOrderId": "another-client-id",
+                "symbol": "ETHUSDT",
+                "status": "FILLED",
+            }
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(query_order_by_client_id=mismatched_lookup)
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-3",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-3",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 0
+    assert resolutions == []
+
+
+@pytest.mark.asyncio
+async def test_algo_failure_preserves_sanitized_exchange_semantics() -> None:
+    async def reject_algo(_params: dict) -> Result:
+        return Result.failure(
+            "Order would immediately trigger.",
+            http_status=400,
+            category=ErrorCategory.ORDER_REJECTED,
+            retryable=False,
+            raw={"code": -2021, "msg": "Order would immediately trigger."},
+            source="binance_rest",
+            correlation_id="corr-1",
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(create_algo_order=reject_algo)
+
+    response = await engine._create_algo_order({"symbol": "BTCUSDT"})
+
+    assert response["code"] == -2021
+    assert response["msg"] == "Order would immediately trigger."
+    assert response["category"] == ErrorCategory.ORDER_REJECTED.value
+    assert response["retryable"] is False
+    assert response["http_status"] == 400
+
+
+def test_protection_client_algo_id_is_stable_and_bound_to_exact_command() -> None:
+    order = SimpleNamespace(
+        protection_id="sl-position-1234567890",
+        owner_id="owner-1",
+        position_generation=7,
+        instrument_id="BTCUSDT",
+        side="SELL",
+        order_type="STOP_MARKET",
+        quantity=SimpleNamespace(amount="0.01"),
+        trigger_price=SimpleNamespace(amount="95000"),
+    )
+    changed_trigger = SimpleNamespace(**{**vars(order), "trigger_price": SimpleNamespace(amount="94900")})
+
+    first = AutonomousEngine._protection_client_algo_id(order)
+    repeated = AutonomousEngine._protection_client_algo_id(order)
+    changed = AutonomousEngine._protection_client_algo_id(changed_trigger)
+
+    assert first == repeated
+    assert first != changed
+    assert len(first) <= 36
+    assert re.fullmatch(r"[.A-Z:/a-z0-9_-]+", first)
+
+
+def test_protection_algo_params_use_each_exit_slice_quantity() -> None:
+    take_profit = SimpleNamespace(
+        protection_id="tp-position-1-0",
+        owner_id="owner-1",
+        position_generation=7,
+        instrument_id="BTCUSDT",
+        side="SELL",
+        order_type="TAKE_PROFIT_MARKET",
+        quantity=SimpleNamespace(amount="0.003"),
+        trigger_price=SimpleNamespace(amount="105000.25"),
+    )
+
+    params = AutonomousEngine._protection_algo_params(
+        take_profit,
+        symbol="BTCUSDT",
+        side="SELL",
+        precision={"quantity": 3, "price": 2},
+    )
+
+    assert params == {
+        "symbol": "BTCUSDT",
+        "side": "SELL",
+        "algoType": "CONDITIONAL",
+        "type": "TAKE_PROFIT_MARKET",
+        "quantity": "0.003",
+        "triggerPrice": "105000.25",
+        "reduceOnly": "true",
+        "workingType": "CONTRACT_PRICE",
+        "clientAlgoId": AutonomousEngine._protection_client_algo_id(take_profit),
+    }
+
+
+def test_protection_algo_params_reject_non_finite_quantity() -> None:
+    protection = SimpleNamespace(
+        protection_id="sl-position-1",
+        owner_id="owner-1",
+        position_generation=7,
+        instrument_id="BTCUSDT",
+        side="SELL",
+        order_type="STOP_MARKET",
+        quantity=SimpleNamespace(amount="NaN"),
+        trigger_price=SimpleNamespace(amount="95000"),
+    )
+
+    with pytest.raises(ValueError, match="protection quantity"):
+        AutonomousEngine._protection_algo_params(
+            protection,
+            symbol="BTCUSDT",
+            side="SELL",
+            precision={"quantity": 3, "price": 2},
+        )
+
+
+def test_protection_algo_params_reject_quantity_that_rounds_to_zero() -> None:
+    protection = SimpleNamespace(
+        protection_id="tp-position-1-0",
+        owner_id="owner-1",
+        position_generation=7,
+        instrument_id="BTCUSDT",
+        side="SELL",
+        order_type="TAKE_PROFIT_MARKET",
+        quantity=SimpleNamespace(amount="0.0004"),
+        trigger_price=SimpleNamespace(amount="105000"),
+    )
+
+    with pytest.raises(ValueError, match="rounds to zero"):
+        AutonomousEngine._protection_algo_params(
+            protection,
+            symbol="BTCUSDT",
+            side="SELL",
+            precision={"quantity": 3, "price": 2},
+        )
 
 
 def test_live_durable_facts_block_active_order_without_current_worker_ownership() -> None:
@@ -316,9 +662,23 @@ def test_execution_slices_cannot_change_signed_order_semantics() -> None:
         intent, valid, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-1"
     ) == (True, "OK")
 
-    bad_type = [(*valid[0][:2], "LIMIT", valid[0][3], valid[0][4]), valid[1]]
+    # MARKET → LIMIT 降级是允许的（更保守），但 LIMIT → MARKET 反向升级应被阻止
+    limit_intent = OrderIntent(
+        intent_id="intent-slices-2",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Quantity(amount="1.0"),
+        price=Price(amount="50000"),
+        client_order_id="cid-slices-2",
+    )
+    bad_type = [
+        ("0.5", "50000", "MARKET", "GTC", "cid-slices-2-1"),
+        ("0.5", "50000", "MARKET", "GTC", "cid-slices-2-2"),
+    ]
     ok, reason = AutonomousEngine._validate_slices_against_intent(
-        intent, bad_type, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-1"
+        limit_intent, bad_type, order_symbol="BTCUSDT", side="BUY", client_id="cid-slices-2"
     )
     assert ok is False
     assert reason == "ORDER_TYPE_MISMATCH"
@@ -643,6 +1003,25 @@ def test_writable_readiness_requires_live_user_stream_event_fact() -> None:
 
     assert engine._check_ready() is False
     assert engine._check_trading_ready() == (False, "RUNTIME_NOT_READY")
+
+
+def test_testnet_user_stream_gap_remains_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BEIDOU_ENV", "testnet")
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._can_write = True
+    engine._user_stream_runtime = {
+        "status": "CONNECTED",
+        "last_event_mono": time.monotonic(),
+        "listen_key_active": True,
+    }
+    engine._user_stream_projector = SimpleNamespace(sequencer=SimpleNamespace(status=SimpleNamespace(value="GAP")))
+    engine._event_stream_facts = SimpleNamespace(complete=False)
+
+    ready, evidence = engine._user_stream_readiness()
+
+    assert ready is False
+    assert evidence["projector_status"] == "GAP"
+    assert evidence["projection_complete"] is False
 
 
 def test_user_stream_runtime_starts_and_stops_without_rest_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

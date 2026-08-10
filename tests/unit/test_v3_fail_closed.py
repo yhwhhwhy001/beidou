@@ -388,6 +388,20 @@ def test_g7_cost_pnl_sli_does_not_alias_runtime_error_rate() -> None:
     assert summary["slis"]["cost_and_pnl_reporting"]["latest_value"] == 0.0
 
 
+def test_g7_elapsed_window_uses_monotonic_clock(monkeypatch) -> None:
+    import beidou_launcher.g7_tracker as g7_tracker
+
+    mono = [100.0]
+    wall = [1_000.0]
+    monkeypatch.setattr(g7_tracker.time, "monotonic", lambda: mono[0])
+    monkeypatch.setattr(g7_tracker.time, "time", lambda: wall[0])
+    tracker = g7_tracker.G7LiveTracker(minimum_elapsed_seconds=10.0, minimum_cycles=0)
+
+    wall[0] = 10_000_000.0
+    mono[0] = 110.0
+    assert tracker.summary()["uptime_seconds"] == 10.0
+
+
 def test_config_safe_defaults_do_not_offer_network_write() -> None:
     from beidou_shared.config import ConfigProvider, Environment
 

@@ -48,6 +48,9 @@ class SLISample:
     value: float  # 1.0 = PASS, 0.0 = FAIL
     threshold: float
     observed_at: float = field(default_factory=time.time)
+    # Wall-clock time is retained for audit display; expiry uses this
+    # monotonic value so clock corrections cannot manufacture G7 elapsed time.
+    observed_mono: float = field(default_factory=time.monotonic)
 
     @property
     def passed(self) -> bool:
@@ -65,16 +68,23 @@ class SLIState:
     total_samples: int = 0
     total_passed: int = 0
 
-    def record(self, value: float) -> None:
-        now = time.time()
-        sample = SLISample(sli_name=self.name, value=value, threshold=self.threshold, observed_at=now)
+    def record(self, value: float, *, now_wall: float | None = None, now_mono: float | None = None) -> None:
+        wall = time.time() if now_wall is None else float(now_wall)
+        mono = time.monotonic() if now_mono is None else float(now_mono)
+        sample = SLISample(
+            sli_name=self.name,
+            value=value,
+            threshold=self.threshold,
+            observed_at=wall,
+            observed_mono=mono,
+        )
         self.samples.append(sample)
         self.total_samples += 1
         if sample.passed:
             self.total_passed += 1
         # 清理过期样本
-        cutoff = now - self.window_seconds
-        while self.samples and self.samples[0].observed_at < cutoff:
+        cutoff = mono - self.window_seconds
+        while self.samples and self.samples[0].observed_mono < cutoff:
             self.samples.popleft()
 
     @property
@@ -126,7 +136,8 @@ class G7LiveTracker:
             for name in SLI_NAMES
         }
         self._cycle_count: int = 0
-        self._started_at: float = time.time()
+        self._started_at: float = time.monotonic()
+        self._started_at_wall: float = time.time()
         self._last_feed_at: float = 0.0
         self._minimum_elapsed_seconds = minimum_elapsed_seconds
         self._minimum_cycles = minimum_cycles
@@ -148,7 +159,9 @@ class G7LiveTracker:
     def feed(self, checks: list[CheckResult]) -> None:
         """从当前监控检查结果中提取 SLI 样本。"""
         self._cycle_count += 1
-        self._last_feed_at = time.time()
+        wall = time.time()
+        mono = time.monotonic()
+        self._last_feed_at = wall
         if any(item.is_blocking and item.severity.value == "P0" for item in checks):
             self._invalidated = True
             self._invalidated_reason = "P0_BLOCKER"
@@ -158,12 +171,12 @@ class G7LiveTracker:
         market = check_map.get("runtime.health.market_data")
         probe = check_map.get("runtime.health.algorithm_probe")
         dq_ok = (market and market.status == CheckStatus.PASS) and (not probe or probe.status != CheckStatus.FAIL)
-        self._slis["data_quality"].record(1.0 if dq_ok else 0.0)
+        self._slis["data_quality"].record(1.0 if dq_ok else 0.0, now_wall=wall, now_mono=mono)
 
         # 2. order_duplicates: order_trace 检查中是否有重复订单
         order_results = [c for c in checks if c.check_id == "runtime.execution.order_trace"]
         dup_free = bool(order_results) and all("DUP" not in c.message for c in order_results)
-        self._slis["order_duplicates"].record(1.0 if dup_free else 0.0)
+        self._slis["order_duplicates"].record(1.0 if dup_free else 0.0, now_wall=wall, now_mono=mono)
 
         # 3. protection_slo: protection_coverage 覆盖率
         protection_results = [c for c in checks if c.check_id == "runtime.safety.protection_coverage"]
@@ -172,22 +185,26 @@ class G7LiveTracker:
             rate = covered / len(protection_results)
         else:
             rate = 0.0  # 零样本不得证明保护 SLO
-        self._slis["protection_slo"].record(rate)
+        self._slis["protection_slo"].record(rate, now_wall=wall, now_mono=mono)
 
         # 4. reconciliation: reconciliation 状态
         recon = check_map.get("runtime.safety.reconciliation")
         recon_ok = recon is not None and recon.status == CheckStatus.PASS
-        self._slis["reconciliation"].record(1.0 if recon_ok else 0.0)
+        self._slis["reconciliation"].record(1.0 if recon_ok else 0.0, now_wall=wall, now_mono=mono)
 
         # 5. recovery_bounded: no context is not a PASS.  The supervisor
         # must provide the restart budget result explicitly; otherwise G7
         # would certify a window whose recovery behavior was never observed.
-        self._slis["recovery_bounded"].record(1.0 if self._recovery_context_seen and self._recovery_bounded else 0.0)
+        self._slis["recovery_bounded"].record(
+            1.0 if self._recovery_context_seen and self._recovery_bounded else 0.0,
+            now_wall=wall,
+            now_mono=mono,
+        )
 
         # 6. incident_closure: 活动事故计数
         incidents = check_map.get("runtime.health.incidents")
         inc_ok = incidents is not None and incidents.status == CheckStatus.PASS
-        self._slis["incident_closure"].record(1.0 if inc_ok else 0.0)
+        self._slis["incident_closure"].record(1.0 if inc_ok else 0.0, now_wall=wall, now_mono=mono)
 
         # 7. cost_and_pnl_reporting: this is deliberately independent from
         # runtime error rate.  Until an authoritative cost/PnL evidence check
@@ -195,7 +212,7 @@ class G7LiveTracker:
         # than treating "no runtime errors" as financial evidence.
         cost_pnl = check_map.get("runtime.safety.cost_and_pnl_reporting")
         cost_pnl_ok = cost_pnl is not None and cost_pnl.status == CheckStatus.PASS
-        self._slis["cost_and_pnl_reporting"].record(1.0 if cost_pnl_ok else 0.0)
+        self._slis["cost_and_pnl_reporting"].record(1.0 if cost_pnl_ok else 0.0, now_wall=wall, now_mono=mono)
 
     def feed_recovery_context(self, recovery_count: int, max_restarts: int) -> None:
         """补充 recovery_bounded SLI 上下文（由 supervisor 传入）。"""
@@ -223,7 +240,7 @@ class G7LiveTracker:
     def summary(self) -> dict[str, Any]:
         """返回完整 SLI 摘要，供 /status 端点使用。"""
         sli_details = {name: self._slis[name].summary() for name in SLI_NAMES}
-        elapsed = time.time() - self._started_at
+        elapsed = time.monotonic() - self._started_at
         return {
             "overall_pass_rate": round(self.overall_pass_rate, 4),
             "all_slis_passing": self.all_slis_passing,

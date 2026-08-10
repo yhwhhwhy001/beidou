@@ -14,11 +14,12 @@ NETWORK = re.compile(r"\b(?:urllib|requests|httpx|aiohttp)\b|/fapi/")
 ALLOWED_NETWORK = (
     "beidou_exchange/",
     "tests/",
-    "tools/",
-    "scripts/",
     # Alert webhooks and local backup URI quoting are not exchange order paths.
     "beidou_core/alerts.py",
     "beidou_infra/backup.py",
+    # This daemon polls the local health endpoint only; it is not an exchange
+    # transport and has no order/write endpoint.
+    "scripts/monitor_daemon.py",
     # Database URL redaction/normalization parses strings only; it never opens
     # a network connection or bypasses the exchange adapter.
     "beidou_shared/config/__init__.py",
@@ -68,7 +69,11 @@ def main() -> int:
                 continue
             for m in pat.finditer(s):
                 findings.append((rel, s[: m.start()].count("\n") + 1, name, m.group(0)[:80]))
-        if NETWORK.search(s) and not any(rel.startswith(x) or "/" + x in rel for x in ALLOWED_NETWORK):
+        if (
+            NETWORK.search(s)
+            and rel not in SELF_SCAN_FILES
+            and not any(rel.startswith(x) or "/" + x in rel for x in ALLOWED_NETWORK)
+        ):
             findings.append((rel, 1, "network_bypass", "network/endpoint outside exchange adapter"))
     if findings:
         for rel, lineno, rule, detail in findings:

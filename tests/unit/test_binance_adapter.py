@@ -9,7 +9,7 @@ from beidou_exchange.binance_usdm import (
 )
 from beidou_exchange.binance_usdm.adapter import InstrumentStatus
 from beidou_exchange.binance_usdm.endpoints import Endpoint
-from beidou_exchange.core.error_taxonomy import Result
+from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_exchange.core.protocol import Capability, OrderRequest
 from beidou_exchange.core.user_stream import UserStreamSequencer, UserStreamStatus
 from beidou_shared.types import (
@@ -33,6 +33,8 @@ class FakeRestClient:
 
     async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
         self.calls.append((method, path, signed, params))
+        if isinstance(self.response, Result):
+            return self.response
         return Result.success(self.response)
 
     def reset_circuit_breaker(self) -> None:
@@ -200,6 +202,47 @@ class TestBinanceAdapter:
         assert params is not None and params["reduceOnly"] == "true"
 
     @pytest.mark.asyncio
+    async def test_risk_increasing_order_submits_once_with_stable_identity_and_bound_ack(self):
+        transport = FakeRestClient(
+            {
+                "orderId": 21,
+                "clientOrderId": "cid-risk-1",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "0.01",
+                "status": "NEW",
+                "executedQty": "0",
+                "reduceOnly": False,
+            }
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.01"),
+            client_order_id="cid-risk-1",
+        )
+
+        response = await adapter.create_order(request)
+
+        assert response.order_id == "21"
+        assert response.client_order_id == "cid-risk-1"
+        assert response.status.value == "NEW"
+        assert len(transport.calls) == 1
+        method, path, signed, params = transport.calls[0]
+        assert (method, path, signed) == ("POST", Endpoint.ORDER, True)
+        assert params is not None
+        assert params["newClientOrderId"] == "cid-risk-1"
+        assert params["symbol"] == "BTCUSDT"
+        assert params["side"] == "BUY"
+        assert params["type"] == "MARKET"
+        assert params["quantity"] == "0.01"
+
+    @pytest.mark.asyncio
     async def test_exit_only_write_is_not_blocked_by_unknown_venue_health(self):
         transport = FakeRestClient(
             {
@@ -262,6 +305,37 @@ class TestBinanceAdapter:
         assert response.status.value == "UNKNOWN"
         assert response.order_id == ""
         assert response.raw_response is not None and response.raw_response["reason"] == "ACK_CLIENT_ORDER_ID_MISMATCH"
+
+    @pytest.mark.asyncio
+    async def test_order_submission_failure_preserves_exchange_code_for_idempotent_recovery(self):
+        transport = FakeRestClient(
+            Result.failure(
+                "Client order id is not unique.",
+                http_status=400,
+                category=ErrorCategory.ORDER_REJECTED,
+                retryable=False,
+                raw={"code": -4141, "msg": "Client order id is not unique."},
+                source="binance_rest",
+            )
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount="0.01"),
+            client_order_id="cid-duplicate",
+        )
+
+        response = await adapter.create_order(request)
+
+        assert response.status.value == "UNKNOWN"
+        assert response.raw_response is not None
+        assert response.raw_response["code"] == -4141
+        assert response.raw_response["category"] == ErrorCategory.ORDER_REJECTED.value
+        assert response.raw_response["retryable"] is False
 
     @pytest.mark.asyncio
     async def test_risk_increasing_write_remains_blocked_by_unknown_venue_health(self):
@@ -361,6 +435,17 @@ class TestBinanceAdapter:
         transport.response = {"orderId": 21, "clientOrderId": "other", "symbol": "BTCUSDT", "status": "FILLED"}
         mismatch = await adapter.query_order_by_client_id("BTCUSDT", "cid-recover")
         assert not mismatch.is_success()
+
+        transport.response = {
+            "orderId": 21,
+            "clientOrderId": "cid-recover",
+            "symbol": "BTCUSDT",
+            "status": "FILLED",
+        }
+        incomplete = await adapter.query_order_by_client_id("BTCUSDT", "cid-recover")
+        assert not incomplete.is_success()
+        assert incomplete.error is not None
+        assert "incomplete" in incomplete.error.message
 
     @pytest.mark.asyncio
     async def test_position_query_preserves_signed_position_amount(self):
@@ -526,6 +611,7 @@ class TestBinanceAdapter:
                 "triggerPrice": "95000",
                 "algoStatus": "NEW",
                 "reduceOnly": True,
+                "clientAlgoId": "bdp-fixed-id",
             }
         )
         adapter = BinanceUsdmAdapter(rest_client=transport)
@@ -537,10 +623,103 @@ class TestBinanceAdapter:
                 "quantity": "0.01",
                 "triggerPrice": "95000",
                 "reduceOnly": "true",
+                "clientAlgoId": "bdp-fixed-id",
             }
         )
         assert result.is_success()
         assert result.data is not None and result.data.algo_id == "100"
+
+    @pytest.mark.asyncio
+    async def test_create_algo_order_rejects_mismatched_client_identity(self):
+        transport = FakeRestClient(
+            {
+                "algoId": 102,
+                "clientAlgoId": "other-id",
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "orderType": "STOP_MARKET",
+                "quantity": "0.01",
+                "triggerPrice": "95000",
+                "algoStatus": "NEW",
+                "reduceOnly": True,
+            }
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+
+        result = await adapter.create_algo_order(
+            {
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "type": "STOP_MARKET",
+                "quantity": "0.01",
+                "triggerPrice": "95000",
+                "reduceOnly": "true",
+                "clientAlgoId": "bdp-expected-id",
+            }
+        )
+
+        assert result.is_success() is False
+        assert result.error is not None
+        assert "clientAlgoId" in result.error.message
+
+    @pytest.mark.asyncio
+    async def test_create_algo_order_rejects_mismatched_trigger_price(self):
+        transport = FakeRestClient(
+            {
+                "algoId": 103,
+                "clientAlgoId": "bdp-expected-id",
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "orderType": "STOP_MARKET",
+                "quantity": "0.01",
+                "triggerPrice": "94000",
+                "algoStatus": "NEW",
+                "reduceOnly": True,
+            }
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+
+        result = await adapter.create_algo_order(
+            {
+                "symbol": "BTCUSDT",
+                "side": "SELL",
+                "type": "STOP_MARKET",
+                "quantity": "0.01",
+                "triggerPrice": "95000",
+                "reduceOnly": "true",
+                "clientAlgoId": "bdp-expected-id",
+            }
+        )
+
+        assert result.is_success() is False
+        assert result.error is not None
+        assert "triggerPrice" in result.error.message
+
+    @pytest.mark.asyncio
+    async def test_create_algo_order_preserves_transport_failure_semantics(self):
+        transport = FakeRestClient(
+            Result.failure(
+                "rate limited",
+                http_status=429,
+                category=ErrorCategory.RATE_LIMIT,
+                retryable=True,
+                raw={"code": -1003, "msg": "rate limited"},
+                source="binance_rest",
+                correlation_id="corr-algo-1",
+            )
+        )
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+
+        result = await adapter.create_algo_order({"symbol": "BTCUSDT", "reduceOnly": "true"})
+
+        assert result.is_success() is False
+        assert result.error is not None
+        assert result.error.category is ErrorCategory.RATE_LIMIT
+        assert result.error.retryable is True
+        assert result.error.http_status == 429
+        assert result.error.raw == {"code": -1003, "msg": "rate limited"}
+        assert result.source == "binance_rest"
+        assert result.correlation_id == "corr-algo-1"
 
     @pytest.mark.asyncio
     async def test_create_algo_order_rejects_mismatched_or_unproven_ack(self):

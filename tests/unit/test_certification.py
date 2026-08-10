@@ -198,6 +198,21 @@ class TestCertificationFramework:
         assert cert.blocking_p0_count() == 1
         assert "P0_FAILURE" in cert.degradation_conditions
 
+    def test_pass_without_required_evidence_is_not_verifiable(self):
+        fw = CertificationFramework(CertificationGate.G5_TESTNET)
+        scenario = CertificationScenario(
+            scenario_id="evidence-required",
+            name="Evidence Required",
+            description="",
+            gate=CertificationGate.G5_TESTNET,
+            category="test",
+            required_evidence=["observed_fact"],
+        )
+        fw.register_scenario(scenario)
+        fw.record_result(ScenarioResult(scenario=scenario, status=ScenarioStatus.PASS))
+        cert = fw.evaluate()
+        assert cert.result == GateResult.UNVERIFIABLE
+
 
 class TestG5TestnetCertification:
     """G5 Testnet 认证测试。"""
@@ -225,7 +240,13 @@ class TestG5TestnetCertification:
     def test_full_evaluation(self):
         g5 = G5TestnetCertification()
         for s in g5.get_scenarios():
-            g5.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.PASS))
+            g5.record_result(
+                ScenarioResult(
+                    scenario=s,
+                    status=ScenarioStatus.PASS,
+                    evidence={key: f"observed:{key}" for key in s.required_evidence},
+                )
+            )
         cert = g5.evaluate()
         assert cert.gate == CertificationGate.G5_TESTNET
         assert cert.is_pass()
@@ -284,7 +305,13 @@ class TestG7LiveCertification:
     def test_evaluate_all_pass(self):
         g7 = G7LiveCertification(CertificationGate.G7_L3_RAMP)
         for s in g7.get_scenarios():
-            g7.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.PASS))
+            g7.record_result(
+                ScenarioResult(
+                    scenario=s,
+                    status=ScenarioStatus.PASS,
+                    evidence={key: f"observed:{key}" for key in s.required_evidence},
+                )
+            )
         cert = g7.evaluate()
         assert cert.is_pass()
 
@@ -349,7 +376,13 @@ class TestCertificationManager:
         mgr.register_framework(g6)
         # 全部 PASS
         for s in g5.get_scenarios():
-            g5.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.PASS))
+            g5.record_result(
+                ScenarioResult(
+                    scenario=s,
+                    status=ScenarioStatus.PASS,
+                    evidence={key: f"observed:{key}" for key in s.required_evidence},
+                )
+            )
         g5.evaluate()
         assert mgr.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G6_SHADOW)
 
@@ -365,7 +398,13 @@ class TestCertificationManager:
         g5 = G5TestnetCertification()
         mgr.register_framework(g5)
         for s in g5.get_scenarios():
-            g5.record_result(ScenarioResult(scenario=s, status=ScenarioStatus.PASS))
+            g5.record_result(
+                ScenarioResult(
+                    scenario=s,
+                    status=ScenarioStatus.PASS,
+                    evidence={key: f"observed:{key}" for key in s.required_evidence},
+                )
+            )
         g5.evaluate()
         # G5 PASS 但 G6/G7 不存在 → 不能直接跳到 G8
         assert not mgr.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G8_UNATTENDED)

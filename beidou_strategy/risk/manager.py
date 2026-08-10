@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from beidou_shared.types import StrategyId
 
@@ -95,6 +97,39 @@ class StrategyRiskState:
 
     def is_new_position_allowed(self) -> bool:
         return self.risk_level == StrategyRiskLevel.NORMAL
+
+    def to_dict(self) -> dict:
+        return {
+            "strategy_id": str(self.strategy_id),
+            "current_drawdown_pct": self.current_drawdown_pct,
+            "peak_equity": self.peak_equity,
+            "daily_pnl": self.daily_pnl,
+            "daily_loss_pct": self.daily_loss_pct,
+            "consecutive_losses": self.consecutive_losses,
+            "rolling_sharpe": self.rolling_sharpe,
+            "current_leverage": self.current_leverage,
+            "position_count": self.position_count,
+            "active_circuit_breakers": [cb.value for cb in self.active_circuit_breakers],
+            "risk_level": self.risk_level.value,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StrategyRiskState":
+        s = cls(strategy_id=StrategyId(str(d.get("strategy_id", ""))))
+        s.current_drawdown_pct = float(d.get("current_drawdown_pct", 0))
+        s.peak_equity = float(d.get("peak_equity", 0))
+        s.daily_pnl = float(d.get("daily_pnl", 0))
+        s.daily_loss_pct = float(d.get("daily_loss_pct", 0))
+        s.consecutive_losses = int(d.get("consecutive_losses", 0))
+        s.rolling_sharpe = d.get("rolling_sharpe")
+        s.current_leverage = float(d.get("current_leverage", 0))
+        s.position_count = int(d.get("position_count", 0))
+        s.active_circuit_breakers = [CircuitBreakerReason(v) for v in d.get("active_circuit_breakers", [])]
+        try:
+            s.risk_level = StrategyRiskLevel(str(d.get("risk_level", "NORMAL")))
+        except ValueError:
+            s.risk_level = StrategyRiskLevel.NORMAL
+        return s
 
 
 class DrawdownMonitor:
@@ -349,7 +384,30 @@ class StrategyRiskManager:
                 StrategyRiskLevel.LOCKED,
                 StrategyRiskLevel.EXIT_ONLY,
             ):
-                state.risk_level = StrategyRiskLevel.DEGRADED
+                state.risk_level = StrategyRiskLevel.CAUTION
+
+    # ---- 持久化 ----
+
+    def save_state(self, store: Any) -> None:
+        """持久化所有策略风险状态到持久化存储（防止重启后熔断清零）。"""
+        try:
+            for sid, state in self._states.items():
+                store.save_strategy_risk_state(str(sid), state.to_dict())
+        except Exception:
+            logging.warning("策略风险状态保存失败（非致命）", exc_info=True)
+
+    def restore_state(self, store: Any) -> None:
+        """从持久化存储恢复策略风险状态。"""
+        try:
+            states = store.restore_strategy_risk_states()
+            if states:
+                for sid, data in states.items():
+                    try:
+                        self._states[StrategyId(sid)] = StrategyRiskState.from_dict(data)
+                    except Exception:
+                        logging.debug("跳过损坏的策略风险状态: %s", sid, exc_info=True)
+        except Exception:
+            logging.warning("策略风险状态恢复失败（存储不可用不影响引擎启动）", exc_info=True)
 
     # ---- 查询 ----
 
