@@ -4330,7 +4330,7 @@ class AutonomousEngine:
                 self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
             return None
 
-        print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))}")
+        print(f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))} | raw={json.dumps(order, default=str)[:200]}")
         return None
 
     async def _monitor_orders(self, symbol: str) -> None:
