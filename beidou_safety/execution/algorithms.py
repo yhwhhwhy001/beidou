@@ -269,7 +269,7 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
         slice_qty = total_qty / self.slice_count
 
         # 执行成本 > 净Alpha → 取消
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
@@ -328,7 +328,7 @@ class POVAlgorithm(BaseExecutionAlgorithm):
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
 
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
@@ -396,7 +396,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
 
-        if ctx.predicted_cost_bps > ctx.net_alpha_bps:
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
             return ExecutionPlan(
                 algorithm=self.algorithm_type,
                 is_canceled=True,
