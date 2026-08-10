@@ -3756,11 +3756,20 @@ class AutonomousEngine:
             return
 
         # === 执行算法选择 + 切片计划 (TWAP/POV/AdaptiveSlice/...) ===
-        # 返回 (slices, algorithm_type, ctx)；None 表示计划被取消（intent 已 ack）
-        planned = await self._plan_execution(intent, order_symbol, client_id)
-        if planned is None:
-            return
-        slices, algo_type, ctx = planned
+        # Testnet: MARKET 意图跳过算法直接市价单，确保立即成交
+        _testnet_market = (
+            os.environ.get("BEIDOU_ENV") == "testnet"
+            and order_type == "MARKET"
+        )
+        if _testnet_market:
+            slices = [(str(float(intent.quantity.amount)), None, "MARKET", "GTC", client_id)]
+            algo_type = None
+            ctx = None
+        else:
+            planned = await self._plan_execution(intent, order_symbol, client_id)
+            if planned is None:
+                return
+            slices, algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
         # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
