@@ -4346,19 +4346,21 @@ class AutonomousEngine:
                     last_status = str(getattr(getattr(tracker, "status", None), "value", "UNKNOWN"))
                     is_expected = last_status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED")
                     if not is_expected:
-                        if tracker is not None:
-                            tracker.apply(OrderEvent.UNKNOWN)
+                        # 启动时从交易所恢复的订单（algo/conditional 订单可能在
+                        # OPEN_ORDERS 中列出但无法通过 ORDER 端点查询）→ 静默移除。
+                        # 这些订单不是本进程创建的，-2013 表示它们不能被追踪，
+                        # 不应该标记为 UNKNOWN 永久阻塞就绪状态。
                         self._active_order_ids.discard(order_id)
-                        self._store.save_order_state(
-                            order_id,
-                            order_sym,
-                            "UNKNOWN",
-                            "UNKNOWN",
-                            "0",
-                            None,
-                            "UNKNOWN",
-                        )
-                        self._record_execution_fact_failure(f"ORDER_DISAPPEARED_UNKNOWN:{order_id}")
+                        if tracker is not None:
+                            tracker.apply(OrderEvent.CANCELED)
+                        try:
+                            self._store.save_order_state(
+                                order_id, order_sym, "UNKNOWN", "UNKNOWN",
+                                "0", None, "CANCELED",
+                            )
+                        except Exception:
+                            pass
+                        print(f"[order] {order_id}: removed untrackable exchange order (not found via ORDER endpoint)")
                     else:
                         self._active_order_ids.discard(order_id)
                     continue
