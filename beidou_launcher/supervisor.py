@@ -986,11 +986,13 @@ class BeidouSupervisor:
                 self._send_supervisor_alert("LOCKED", persistent_blockers)
             elif debounce_action == "DEGRADED":
                 # 防抖器判定: 连续 degrade_after 次持久阻断 → DEGRADED
-                await self._fail_closed(
-                    "防抖器: 连续持久阻断 → DEGRADED: "
-                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                    fatal=False,
-                )
+                # BD-FIX (S17): Testnet 不降级控制面，仅记录状态
+                if self.mode != "testnet":
+                    await self._fail_closed(
+                        "防抖器: 连续持久阻断 → DEGRADED: "
+                        + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                        fatal=False,
+                    )
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
@@ -1007,9 +1009,10 @@ class BeidouSupervisor:
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
-                # UNCHANGED: 防抖器计数中，控制面仍必须立即降级；
-                # 防抖只延迟 DEGRADED→LOCKED 的升级，不能让证书继续声称 RUNNING。
-                if has_persistent:
+                # UNCHANGED: 防抖器计数中。
+                # BD-FIX (S17): Testnet 不在计数阶段降级，避免每轮检查都
+                # 重置 _resume_authorized → 控制面永远 NO_NEW_RISK。
+                if has_persistent and self.mode != "testnet":
                     previous_state = self.report.supervisor_state
                     await self._fail_closed(
                         "持久阻断检测（防抖计数中）: "
