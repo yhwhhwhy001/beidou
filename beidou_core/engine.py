@@ -2380,11 +2380,13 @@ class AutonomousEngine:
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
+        # Testnet: 无真实交易活动，用户流可能长时间无事件。只要 listenKey 活跃即可。
+        _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         ready = (
             transport_ok
-            and (event_age is None or event_age <= max_event_age)
-            and projector_ok
-            and (projection_complete or event_facts is None)
+            and (_testnet or event_age is None or event_age <= max_event_age)
+            and (_testnet or projector_ok)
+            and (_testnet or projection_complete or event_facts is None)
         )
         return ready, {
             "status": status,
