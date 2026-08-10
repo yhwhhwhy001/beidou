@@ -3044,8 +3044,11 @@ class AutonomousEngine:
         """Freeze new risk when venue protection ownership is unproven."""
 
         self._protection_owner_unknown = True
-        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+        # BD-FIX (S19): Testnet 不因保护所有权未知而切换控制面。
+        # 残留保护记录已在 S2 中自动清理，testnet 不应阻断交易。
+        if os.environ.get("BEIDOU_ENV") != "testnet":
+            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
         self._alerts.send_incident(
             AlertSeverity.CRITICAL,
             "Protection ownership unknown",
@@ -5376,9 +5379,11 @@ class AutonomousEngine:
         self._update_user_stream_runtime(status=status, last_error=str(reason)[:500], listen_key_active=False)
         if previous in {"FAILED", "DEGRADED"} and not terminal:
             return
-        with contextlib.suppress(Exception):
-            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
+        # BD-FIX (S19): Testnet 用户流瞬时故障不切换控制面
+        if os.environ.get("BEIDOU_ENV") != "testnet":
+            with contextlib.suppress(Exception):
+                if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                    self._control.execute_action(ControlAction.NO_NEW_RISK)
         with contextlib.suppress(Exception):
             self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
         with contextlib.suppress(Exception):
