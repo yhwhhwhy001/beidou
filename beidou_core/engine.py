@@ -2809,7 +2809,11 @@ class AutonomousEngine:
             # 5. Process only claimable intents.  Durable UNKNOWN intents are
             # deliberately excluded until an explicit exchange query resolves
             # them; a restart must never blind-retry an ambiguous submission.
-            durable_outbox = bool(getattr(self._outbox, "_db_path", None))
+            durable_outbox = bool(
+                getattr(self._outbox, "_db_path", None)
+                or getattr(self._outbox, "_connection_factory", None)
+                or getattr(self._outbox, "_dsn", None)
+            )
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
             # 自测试单 — 严格仅限显式 opt-in，默认禁用。
