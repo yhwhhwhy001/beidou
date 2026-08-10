@@ -848,9 +848,8 @@ class BeidouSupervisor:
         if self.engine is None:
             return False
         if not self._resume_authorized:
-            # 所有检查通过时（无 blocker），重新授权 RESUME
             has_blockers = any(item.is_blocking for item in checks)
-            if not has_blockers and self.report.supervisor_state == "DEGRADED":
+            if not has_blockers and self.report.supervisor_state in ("DEGRADED", "PAUSED"):
                 print("[supervisor] All checks clear — re-authorizing RESUME")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA2
