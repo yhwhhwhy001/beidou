@@ -235,22 +235,17 @@ class BeidouSupervisor:
 
         assert self.engine is not None
         control = self.engine._control
-        original = control.execute_action
+        self._original_control_execute = control.execute_action  # BD-FIX (S23): 保存原始方法
 
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
-                print(f"[supervisor] BLOCKED RESUME: _resume_authorized=False", flush=True)
-                return original(ControlAction.NO_NEW_RISK)
-            if action == ControlAction.RESUME:
-                print(f"[supervisor] ALLOWED RESUME: _resume_authorized=True", flush=True)
-            return original(action, *args, **kwargs)
+                return self._original_control_execute(ControlAction.NO_NEW_RISK)
+            return self._original_control_execute(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
-        # BD-FIX (S22): Testnet 不初始化 NO_NEW_RISK，由 FAST START 直接 RESUME
+        # BD-FIX (S22): Testnet 不初始化 NO_NEW_RISK
         if self.mode != "testnet":
             control.execute_action(ControlAction.NO_NEW_RISK)
-        else:
-            print("[supervisor] Testnet: skipping initial NO_NEW_RISK, awaiting FAST START RESUME", flush=True)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
@@ -1151,15 +1146,15 @@ class BeidouSupervisor:
                     print(f"[supervisor] Algorithm probe failed: {_exc}")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA
-                self.engine._control.execute_action(_CA.RESUME)
+                # BD-FIX (S23): 通过保存的原始方法直接设置 RESUME，绕过 guard
+                self._original_control_execute(_CA.RESUME)
+                print(f"[supervisor] RESUME set via original method. Status: {self.engine._control.get_status().value}", flush=True)
                 self.report.supervisor_state = "RUNNING"
                 self.report.trading_ready = True
                 ready = True
-                # BD-FIX (S20): 引擎 task 先于 RESUME 授权启动，存在竞态。
-                # 等待 bootstrap 完成后重新确认控制面状态。
                 await asyncio.sleep(5)
                 if self.engine._control.get_status() != _CA.RESUME:
-                    print("[supervisor] Re-confirming RESUME after engine bootstrap")
+                    print("[supervisor] Re-confirming RESUME", flush=True)
                     self.engine._control.execute_action(_CA.RESUME)
             else:
                 ready = await self._wait_for_startup()
