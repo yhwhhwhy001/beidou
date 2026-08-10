@@ -275,7 +275,9 @@ def collect_runtime_checks(
     tick_count = int(getattr(engine, "_tick_count", 0))
     feed_healthy = feed_internal_healthy and tick_count > 0 and bool(observed_symbols)
     # 启动阶段行情可能尚未到达，降级为非阻断
-    if resume_authorized:
+    # BD-FIX (S27): Testnet 行情数据问题不应阻断交易
+    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+    if resume_authorized and not _testnet:
         market_severity = CheckSeverity.P0
         market_status = CheckStatus.PASS if feed_healthy else CheckStatus.FAIL
     else:
