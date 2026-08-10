@@ -3967,25 +3967,24 @@ class AutonomousEngine:
         # 改为 aggressive limit：BUY 挂 ask*1.005，SELL 挂 bid*0.995
         is_small_order = is_testnet
         if is_small_order:
+            # BD-FIX (S32): 用行情价吃单 LIMIT 代替 MARKET
+            # MARKET 在 testnet 无流动性不成交。BUY=price*1.005, SELL=price*0.995
+            ref_price = float(getattr(intent.price, "amount", 0) if intent.price else 0)
+            if ref_price <= 0:
+                features = await self._feed.async_update_features(order_symbol)
+                ref_price = float(features.get("price", 0)) if features else 0
             aggressive_price = None
-            try:
-                ob = await self._feed.async_fetch_orderbook(order_symbol, 1)
-                if ob and ob.get("asks") and ob.get("bids"):
-                    ask = float(ob["asks"][0][0])
-                    bid = float(ob["bids"][0][0])
-                    if side == "BUY" and ask > 0:
-                        aggressive_price = str(round(ask * 1.005, 2))
-                    elif side == "SELL" and bid > 0:
-                        aggressive_price = str(round(bid * 0.995, 2))
-            except Exception:
-                pass
-            if aggressive_price:
+            if ref_price > 0:
+                if side == "BUY":
+                    aggressive_price = str(round(ref_price * 1.005, 2))
+                else:
+                    aggressive_price = str(round(ref_price * 0.995, 2))
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
             else:
                 slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
                 algo_type = "MARKET_DIRECT"
-            ctx = SimpleNamespace(alpha_decay_seconds=60.0)  # 切片循环需要 ctx
+            ctx = SimpleNamespace(alpha_decay_seconds=60.0)
         else:
             planned = await self._plan_execution(intent, order_symbol, client_id)
             if planned is None:
