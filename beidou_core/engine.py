@@ -3946,10 +3946,20 @@ class AutonomousEngine:
         # Testnet and production share the same market-fact, slippage and
         # slice-invariant gates.  The environment label changes the venue,
         # never the approved execution contract.
-        planned = await self._plan_execution(intent, order_symbol, client_id)
-        if planned is None:
-            return
-        slices, algo_type, ctx = planned
+        # BD-FIX (S13): Testnet 小数量跳过切片算法，直接 MARKET 成交。
+        is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+        total_qty = float(intent.quantity.amount)
+        is_small_order = total_qty <= 0.01 and is_testnet
+        if is_small_order:
+            # 小数量直接 MARKET 下单，不做切片
+            slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
+            algo_type = "MARKET_DIRECT"
+            ctx = SimpleNamespace(alpha_decay_seconds=60.0)  # 切片循环需要 ctx
+        else:
+            planned = await self._plan_execution(intent, order_symbol, client_id)
+            if planned is None:
+                return
+            slices, algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
         # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
