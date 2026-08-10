@@ -7785,13 +7785,17 @@ class AutonomousEngine:
 
         # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
         # BD-FIX: 仅当 Supervisor 尚未 RESUME 时才设置 NO_NEW_RISK，消除启动竞态。
-        # 原代码无条件执行 NO_NEW_RISK，可能覆盖 Supervisor 在 _wait_for_startup 返回后
-        # 立即发出的 RESUME（supervisor.py:842），导致系统永久停在 NO_NEW_RISK/PAUSED。
-        if self._control.get_status() != ControlAction.RESUME:
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
-            print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
+        # BD-FIX (S21): Testnet 不在此处覆盖 supervisor 授权的 RESUME。
+        # 引擎 bootstrap 与 supervisor RESUME 授权存在竞态 — supervisor
+        # 在 create_task(engine.run()) 之后才授权，引擎先到达此处。
+        if os.environ.get("BEIDOU_ENV") != "testnet":
+            if self._control.get_status() != ControlAction.RESUME:
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
+            else:
+                print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
         else:
-            print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
+            print("[beidou-autopilot] Control plane: managed by supervisor (testnet)")
         if self._adapter is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 
