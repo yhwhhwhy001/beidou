@@ -4328,7 +4328,8 @@ class AutonomousEngine:
                     # 这种情况下标记 CANCELED 而非 UNKNOWN，避免永久阻塞就绪。
                     _restored = (
                         tracker is not None
-                        and str(getattr(tracker, "status", None)) in ("OrderStatus.ACKED", "ACKED")
+                        and str(getattr(tracker, "status", None))
+                        in ("OrderStatus.ACKED", "ACKED", "OrderStatus.SENT", "SENT")
                     )
                     if _restored:
                         if tracker is not None:
