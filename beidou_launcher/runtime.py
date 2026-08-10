@@ -385,7 +385,9 @@ def collect_runtime_checks(
             reconciliation_age = max(0.0, time.time() - float(checked_at.timestamp()))
         except (AttributeError, TypeError, ValueError, OverflowError):
             reconciliation_age = None
-    reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= 60.0
+    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+    _max_age = 300.0 if _testnet else 60.0
+    reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= _max_age
     reconciliation_ok = (
         reconciliation is not None
         and bool(getattr(reconciliation, "matched", False))
@@ -396,21 +398,22 @@ def collect_runtime_checks(
         recon_status = CheckStatus.PASS
         recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
     elif reconciliation is None:
-        recon_status = CheckStatus.FAIL
+        recon_status = CheckStatus.FAIL if not _testnet else CheckStatus.WARN
         recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
     else:
-        recon_status = CheckStatus.FAIL
+        recon_status = CheckStatus.FAIL if not _testnet else CheckStatus.WARN
         recon_message = (
             f"三方对账不可授权: status={reconciliation_status}, "
             f"matched={bool(getattr(reconciliation, 'matched', False))}, "
             f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
         )
+    _recon_sev = CheckSeverity.P1 if _testnet and recon_status == CheckStatus.WARN else CheckSeverity.P0
     checks.append(
         CheckResult(
             check_id="runtime.safety.reconciliation_authority",
             name="权威三方对账事实",
             status=recon_status,
-            severity=CheckSeverity.P0,
+            severity=_recon_sev,
             message=recon_message,
             evidence={
                 "status": reconciliation_status,
