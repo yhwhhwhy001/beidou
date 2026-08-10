@@ -2369,11 +2369,14 @@ class AutonomousEngine:
         # WebSocket 连接后可能需要数分钟才收到第一个用户事件，
         # 60s 阈值在启动阶段过于激进，导致误触发 DEGRADED→LOCKED。
         effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") else max_event_age
+        # BD-FIX (S4): 启动阶段无事件时 projector 状态无关。
+        # ACCOUNT_UPDATE 可能缺少 `u` 字段导致 sequencer → SEQUENCE_UNAVAILABLE，
+        # 在没有足够事件构建投影时不应以此为据阻断 readiness。
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         ready = (
             transport_ok
             and (event_age is None or event_age <= effective_max_age)
-            and projector_ok
+            and (projector_ok or event_age is None)
             and (projection_complete or event_facts is None)
         )
         return ready, {
