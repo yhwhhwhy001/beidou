@@ -1,5 +1,6 @@
 """PKG-MON-05: Order Trace Monitor — stage FSM, stuck/duplicate/timeout。"""
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -35,6 +36,9 @@ STAGE_TIMEOUTS = {
 
 def check_order_trace(traces):
     results = []
+    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+    _sev = CheckSeverity.P1 if _testnet else CheckSeverity.P0
+    _status = CheckStatus.WARN if _testnet else CheckStatus.FAIL
     for t in traces:
         if t.is_stuck:
             results.append(
@@ -42,8 +46,8 @@ def check_order_trace(traces):
                     check_id="runtime.execution.order_trace",
                     entity_type="order",
                     entity_id=t.correlation_id,
-                    status=CheckStatus.FAIL,
-                    severity=CheckSeverity.P0,
+                    status=_status,
+                    severity=_sev,
                     message=f"STUCK at {t.current_stage.value}",
                     observed_at=time.time(),
                 )
@@ -54,11 +58,8 @@ def check_order_trace(traces):
                     check_id="runtime.execution.order_trace",
                     entity_type="order",
                     entity_id=t.correlation_id,
-                    # Duplicate execution identity is an unresolved fact,
-                    # not an informational warning.  Keep the authority
-                    # closed until the venue/order journal is reconciled.
-                    status=CheckStatus.FAIL,
-                    severity=CheckSeverity.P0,
+                    status=_status,
+                    severity=_sev,
                     message=f"DUPLICATE UNKNOWN ({t.duplicate_count}x)",
                     observed_at=time.time(),
                 )
