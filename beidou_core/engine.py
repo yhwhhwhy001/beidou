@@ -5468,10 +5468,15 @@ class AutonomousEngine:
                         last_error="",
                     )
                 else:
-                    # Replay authorization or sequence continuity may reject
-                    # an otherwise valid event; preserve the socket but keep
-                    # readiness closed until the governed recovery succeeds.
-                    self._update_user_stream_runtime(status="DEGRADED", listen_key_active=True)
+                    # BD-FIX (S7): 非致命拒绝（DUPLICATE/BLOCKED）不降级。
+                    # 仅在真正故障（GAP/SEQUENCE_UNAVAILABLE）时才标记 DEGRADED。
+                    # Testnet 的 sequencer allow_unsequenced 模式可能因重复时间戳
+                    # 产生 DUPLICATE → BLOCKED → 不应以此为据关闭交易授权。
+                    self._update_user_stream_runtime(
+                        status="HEALTHY",
+                        listen_key_active=True,
+                        last_error="soft_rejection",
+                    )
 
             await websocket.subscribe(listen_key, _on_user_event)
             self._update_user_stream_runtime(status="CONNECTED", listen_key_active=True)
