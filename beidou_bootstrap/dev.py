@@ -155,7 +155,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         order = engine._alpha_graph.topological_order()
         print(f"[beidou-bootstrap] DAG order: {order}")
 
-        # 重建 TypedGraph
+        # 重建 TypedGraph 并同步到内核
         engine._typed_graph = build_typed_graph(
             strategy_id=StrategyId("autopilot"),
             components=component_instances,
@@ -163,6 +163,8 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
             filter_ids=filter_ids,
             exit_ids=exit_ids,
         )
+        if hasattr(engine, "_strategy_kernel"):
+            engine._strategy_kernel.set_typed_graph(engine._typed_graph)
         print(f"[beidou-bootstrap] TypedGraph 已重建，组件数: {len(added_components)}")
 
     # === 3. 激活交易池标的 ===
