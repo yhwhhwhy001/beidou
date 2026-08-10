@@ -1252,6 +1252,10 @@ class AutonomousEngine:
         self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
         self._user_stream_projector = UserStreamProjector(store=self._store)
+        # BD-FIX (S6): Testnet 允许无序列号事件。Binance 用户流事件的 `u` 字段
+        # 非所有事件类型都提供，SEQUENCE_UNAVAILABLE 会永久阻断 readiness。
+        if os.environ.get("BEIDOU_ENV") == "testnet":
+            self._user_stream_projector.sequencer.mark_replayed(None, allow_unsequenced=True)
         self._event_stream_facts: AccountFactSnapshot | None = None
         # A durable projector alone is not proof that a live user-data socket
         # is connected.  Writable readiness requires an explicit runtime
