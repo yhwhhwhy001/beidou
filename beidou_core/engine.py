@@ -1764,7 +1764,11 @@ class AutonomousEngine:
         关键状态读取（账户、持仓、订单）必须使用此方法，
         防止熔断/限流返回的 {"error": ...} 被当作正常数据覆盖有效状态。
         """
-        result = await self._adapter.request(method, path, signed, params)
+        try:
+            result = await self._adapter.request(method, path, signed, params)
+        except Exception as exc:
+            print(f"[api] {path} request exception: {type(exc).__name__}: {exc}")
+            return None, False
         if result.is_success():
             return result.data, True
         err = result.error
