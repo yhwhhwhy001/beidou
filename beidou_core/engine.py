@@ -2369,16 +2369,20 @@ class AutonomousEngine:
         projection_complete = bool(getattr(event_facts, "complete", False))
         # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
         transport_ok = status in ("HEALTHY", "CONNECTED")
-        # BD-FIX (S3/S5): 启动阶段放宽事件年龄阈值到 300s。
-        # 1m K 线信号产生快，近线循环处理 20 标的耗时 >60s，
-        # 期间若无新用户事件则 readiness 失败 → NO_NEW_RISK → 全部 Intent 被拒。
-        # 前 10 分钟启动期内全局使用 300s 阈值。
+        # BD-FIX (S3/S5/S8): Testnet 用户流事件稀疏，永久使用 300s 阈值。
+        # 生产环境维持 60s 标准阈值。
+        is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         startup_elapsed = time.monotonic() - getattr(self, "_startup_mono", time.monotonic())
         if not hasattr(self, "_startup_mono"):
             self._startup_mono = time.monotonic()
             startup_elapsed = 0.0
-        startup_grace = startup_elapsed < 600.0  # 前 10 分钟
-        effective_max_age = 300.0 if (status in ("CONNECTED", "UNKNOWN") or startup_grace) else max_event_age
+        startup_grace = startup_elapsed < 600.0
+        if is_testnet:
+            effective_max_age = 300.0
+        elif status in ("CONNECTED", "UNKNOWN") or startup_grace:
+            effective_max_age = 300.0
+        else:
+            effective_max_age = max_event_age
         # BD-FIX (S4): 启动阶段无事件时 projector 状态无关。
         # ACCOUNT_UPDATE 可能缺少 `u` 字段导致 sequencer → SEQUENCE_UNAVAILABLE，
         # 在没有足够事件构建投影时不应以此为据阻断 readiness。
@@ -7539,9 +7543,10 @@ class AutonomousEngine:
                 self._adapter.reset_circuit_breaker()
                 account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
                 if not ok:
-                    print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable)")
-                    await self._stop_user_stream()
-                    await self._feed.stop_ws()
+                    # BD-FIX (S9): 账户 API 不可用时跳过恢复但不停止用户流。
+                    # 停止用户流会导致整个 trading readiness 连锁失败 → LOCKED。
+                    # Testnet API 不稳定不应影响系统持续运行能力。
+                    print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable) — user stream kept alive")
                     self._lifecycle.transition(ModuleState.DEGRADED)
                     return
             positions_list = account.get("positions", [])
