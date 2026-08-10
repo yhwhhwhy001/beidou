@@ -580,7 +580,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     )
             except Exception as exc:
                 self._health_monitor.record_error(Endpoint.ORDER, type(exc).__name__)
-                logger.warning("order submission failed; returning UNKNOWN: %s", type(exc).__name__)
+                logger.warning("order submission failed; returning UNKNOWN: %s: %s", type(exc).__name__, str(exc)[:200])
+                print(f"[adapter] create_order FAILED: {type(exc).__name__}: {str(exc)[:200]}")
         return OrderResponse(
             venue_instrument=request.venue_instrument,
             account_ref=request.account_ref,
