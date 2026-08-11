@@ -3979,15 +3979,25 @@ class AutonomousEngine:
                     px = ref_price * 1.02
                 else:
                     px = ref_price * 0.98
-                # 对齐交易所 tick size
+                # 对齐交易所 tick size (Binance USDT-M futures)
                 from decimal import Decimal, ROUND_DOWN
                 prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
                 price_decimals = prec.get("price")
                 if price_decimals is None:
-                    if px > 5000: price_decimals = 1
-                    elif px > 100: price_decimals = 2
-                    elif px > 1: price_decimals = 3
-                    else: price_decimals = 5
+                    # Fallback: Binance USDT-M tick size map
+                    _TICK_MAP = {
+                        "BTCUSDT": 1, "ETHUSDT": 2, "BNBUSDT": 2, "SOLUSDT": 2,
+                        "XRPUSDT": 4, "ADAUSDT": 5, "DOGEUSDT": 5, "AVAXUSDT": 2,
+                        "DOTUSDT": 3, "LINKUSDT": 3, "UNIUSDT": 3, "ATOMUSDT": 3,
+                        "LTCUSDT": 2, "APTUSDT": 4, "ARBUSDT": 5, "OPUSDT": 5,
+                        "SUIUSDT": 4, "NEARUSDT": 3, "INJUSDT": 3,
+                    }
+                    price_decimals = _TICK_MAP.get(order_symbol)
+                    if price_decimals is None:
+                        if px > 5000: price_decimals = 1
+                        elif px > 100: price_decimals = 2
+                        elif px > 1: price_decimals = 4
+                        else: price_decimals = 5
                 tick = Decimal(str(10 ** (-price_decimals)))
                 px_d = (Decimal(str(px)) / tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick
                 aggressive_price = str(px_d)
