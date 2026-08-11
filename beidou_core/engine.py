@@ -7595,6 +7595,8 @@ class AutonomousEngine:
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
         # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
+        # 确保断路器已复位，避免 exchangeInfo 被熔断阻挡
+        self._adapter.reset_circuit_breaker()
         try:
             exchange_info, info_ok = await self._api_async_safe(Endpoint.EXCHANGE_INFO)
             if not info_ok or not isinstance(exchange_info, dict):
