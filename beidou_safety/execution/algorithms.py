@@ -57,6 +57,8 @@ class ExecutionContext:
     predicted_cost_bps: float = 0.0  # 预测执行成本(bps)
     # PKG13 (BDS-P0-015): min_quantity from ExchangeInfo/venue rules (lotSize/stepSize/minQty)
     min_quantity: float = 0.0
+    # BD-FIX: min_notional from ExchangeInfo MIN_NOTIONAL filter (e.g. $20 for ETHUSDT)
+    min_notional: float = 0.0
     net_alpha_bps: float = 0.0  # 净 Alpha(bps)
     hard_slippage_limit_bps: float = 50.0  # 硬滑点上限(bps)
     correlation_id: str | None = None
@@ -494,15 +496,31 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
                 f"Cannot plan execution without venue precision rules."
             )
         _min_qty = _venue_min_qty
+        _min_notional = float(getattr(ctx, "min_notional", 0) or 0)
+
+        # BD-FIX: 确保每个切片的名义价值不低于交易所最低限额。
+        # 例如 ETHUSDT MIN_NOTIONAL=$20，0.009 ETH * $1864 = $16.78 < $20，
+        # 会被交易所拒绝。用交易所最低名义价值反推最小切片数量。
+        _price = float(ctx.limit_price.amount) if ctx.limit_price else 0.0
+        if _price <= 0 and ctx.side == OrderSide.BUY:
+            _price = float(ctx.best_ask.amount) if ctx.best_ask else 0.0
+        if _price <= 0 and ctx.side == OrderSide.SELL:
+            _price = float(ctx.best_bid.amount) if ctx.best_bid else 0.0
+        if _price <= 0:
+            _price = 1.0  # 极端兜底，不抛异常
+        _min_qty_by_notional = _min_notional / _price if _min_notional > 0 else 0.0
+        _effective_min_qty = max(_min_qty, _min_qty_by_notional)
+
         slice_pct = self._determine_slice_pct(ctx)
         slice_qty = total_qty * slice_pct
         slice_count = max(1, int(1.0 / slice_pct))
         # 每切片低于最小量 → 合并为单切片
-        if slice_qty < _min_qty:
+        if slice_qty < _effective_min_qty:
             slice_count = 1
             slice_qty = total_qty
+        # 确保最终切片数量不低于名义价值要求的最低数量
         # 限制切片数：不超出总数量可支持的最大切片
-        max_slices_by_qty = max(1, int(total_qty / _min_qty))
+        max_slices_by_qty = max(1, int(total_qty / _effective_min_qty))
         slice_count = min(slice_count, max_slices_by_qty)
 
         slices: list[OrderSlice] = []
@@ -517,6 +535,11 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
 
             # 切片大小随市场动态调整
             qty = slice_qty * (0.8 + 0.4 * alpha_remaining / max(ctx.net_alpha_bps, 1))
+            # BD-FIX: 确保每个切片的名义价值不低于交易所最低限额。
+            # 当 alpha 较弱时倍数可能降至 0.8x，导致切片 < min_notional。
+            # 将切片数量钳制到 effective_min_qty 以上。
+            if qty < _effective_min_qty:
+                qty = _effective_min_qty
             slices.append(
                 OrderSlice(
                     slice_id=f"{order_id}-adaptive-{i}",

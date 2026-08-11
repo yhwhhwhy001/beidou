@@ -63,6 +63,17 @@ class StrategyKernelContract:
             # A non-finite or otherwise non-serializable proposal cannot be
             # used as an execution/parity identity.
             return ""
+        # BD-FIX: NO_ACTION/VETO 提案也可能因 _canonicalize 产生的 dict
+        # 在 json.dumps 后为空对象 "{}" 导致 hash 计算为空。对有效 JSON
+        # 但空内容的提案，基于原始 proposal 的字符串表示计算 fallback hash。
+        if not content or content == "{}":
+            try:
+                content = json.dumps(
+                    {"_fallback": str(proposal)},
+                    sort_keys=True, separators=(",", ":"), allow_nan=False,
+                )
+            except (TypeError, ValueError, OverflowError):
+                return ""
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     @staticmethod
