@@ -6100,7 +6100,8 @@ class AutonomousEngine:
             for pos_id, pp in positions:
                 symbol = str(pp.instrument_id)
                 # API 正常时仅处理有交易所仓位的品种；API 失败时处理所有
-                if api_ok and symbol not in exchange_symbols:
+                # BD-FIX (S35): Testnet 不跳过 protection 创建
+                if api_ok and symbol not in exchange_symbols and os.environ.get("BEIDOU_ENV") != "testnet":
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
                 owned_ids = existing_ids & self._active_algo_ids.get(pos_id, set())
