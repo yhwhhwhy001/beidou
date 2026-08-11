@@ -542,12 +542,15 @@ class PaperMatchingEngine:
 
         self._rng = _random.Random(seed)
         self._base_latency_ms: float = 50.0
+        self._latency_jitter_ms: float = 30.0  # BD-CV24: 延迟抖动
         self._fill_probability: float = 0.85
         self._partial_fill_probability: float = 0.10
+        self._cancel_fill_race_probability: float = 0.03  # BD-CV24: 撤单-成交竞态
         # Keep fee policy separate from the stochastic spread/slippage path;
         # Paper/Shadow cost validation must compare an estimate with an
         # independently realised execution cost.
         self._taker_fee_bps: float = 4.0
+        self._race_events: list[dict] = []  # BD-CV24: 竞态事件记录
 
     def realized_cost_bps(self, side: str, avg_price: float, bid: float, ask: float) -> float:
         """Return realised execution cost versus the mid, including fee."""
@@ -572,7 +575,8 @@ class PaperMatchingEngine:
         Returns:
             (status, filled_qty, avg_price, latency_ms)
         """
-        latency = self._base_latency_ms * (0.5 + self._rng.random())
+        # BD-CV24: 延迟 = base + jitter * random
+        latency = self._base_latency_ms + self._latency_jitter_ms * self._rng.random()
         is_buy = side.upper() == "BUY"
 
         # 限价单撮合：限价不满足时入队
@@ -595,7 +599,50 @@ class PaperMatchingEngine:
             fill_pct = 0.3 + self._rng.random() * 0.5
             return (PaperOrderStatus.PARTIALLY_FILLED.value, quantity * fill_pct, exec_price, latency)
 
+        # BD-CV24: 撤单-成交竞态模拟
+        if self._rng.random() < self._cancel_fill_race_probability:
+            self._race_events.append({
+                "symbol": symbol, "side": side, "quantity": quantity,
+                "resolution": "cancel_wins", "latency_ms": latency,
+            })
+            return (PaperOrderStatus.CANCELED.value, 0.0, 0.0, latency)
+
         return (PaperOrderStatus.FILLED.value, quantity, exec_price, latency)
+
+    def simulate_cancel_fill_race(self, order_id: str, symbol: str, side: str, quantity: float) -> tuple[str, float]:
+        """BD-CV24: 模拟撤单-成交竞态。
+
+        Paper 能产生 partial fill/reject/cancel-fill race。
+        Returns (resolution, filled_qty)。
+        """
+        roll = self._rng.random()
+        if roll < 0.3:
+            # 撤单先到 — 取消成功
+            self._race_events.append({
+                "order_id": order_id, "symbol": symbol, "side": side,
+                "quantity": quantity, "resolution": "cancel_wins",
+            })
+            return ("CANCEL_WINS", 0.0)
+        elif roll < 0.7:
+            # 成交先到 — 部分成交后取消剩余
+            fill_pct = 0.3 + self._rng.random() * 0.5
+            filled = quantity * fill_pct
+            self._race_events.append({
+                "order_id": order_id, "symbol": symbol, "side": side,
+                "quantity": quantity, "filled": filled, "resolution": "fill_then_cancel",
+            })
+            return ("FILL_THEN_CANCEL", filled)
+        else:
+            # 全部成交 — cancel 到达时已全部成交
+            self._race_events.append({
+                "order_id": order_id, "symbol": symbol, "side": side,
+                "quantity": quantity, "resolution": "fill_wins",
+            })
+            return ("FILL_WINS", quantity)
+
+    def race_event_count(self) -> int:
+        """BD-CV24: 竞态事件计数。"""
+        return len(self._race_events)
 
     def compute_hash(self, orders: list[dict], session_id: str, model_version: str, seed: int) -> str:
         content = json.dumps(
