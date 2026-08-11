@@ -119,7 +119,7 @@ class TestProtectionManager:
     """保护管理器测试。"""
 
     def _make_manager_with_position(self, **kwargs) -> tuple[ProtectionManager, str]:
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         pp = mgr.create_protection(
             position_id="pos-001",
             instrument_id=InstrumentId("BTCUSDT"),
@@ -156,7 +156,7 @@ class TestProtectionManager:
         assert tp_price == 110.0  # 100 + 5*2
 
     def test_create_short_with_sl_tp(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         pp = mgr.create_protection(
             position_id="pos-short",
             instrument_id=InstrumentId("BTCUSDT"),
@@ -176,7 +176,8 @@ class TestProtectionManager:
         assert pp.stop_loss.side == OrderSide.BUY
 
     def test_multi_target_take_profit(self):
-        mgr = ProtectionManager()
+        # BD-CV43: precision from InstrumentRuleSnapshot (BTCUSDT: price=2, qty=3)
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         pp = mgr.create_protection(
             position_id="pos-multi",
             instrument_id=InstrumentId("BTCUSDT"),
@@ -201,7 +202,7 @@ class TestProtectionManager:
         assert float(pp.take_profits[2].quantity.amount) == 0.09
 
     def test_atr_stop_loss(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         pp = mgr.create_protection(
             position_id="pos-atr",
             instrument_id=InstrumentId("ETHUSDT"),
@@ -215,7 +216,7 @@ class TestProtectionManager:
         assert sl_price == 1900.0  # 2000 - 50*2
 
     def test_zero_distance_stop_is_rejected_at_manager_boundary(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         with pytest.raises(ValueError, match="stop_pct"):
             mgr.create_protection(
                 position_id="pos-zero-stop",
@@ -228,7 +229,7 @@ class TestProtectionManager:
             )
 
     def test_take_profit_cannot_bypass_stop_loss(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         with pytest.raises(ValueError, match="explicit stop-loss"):
             mgr.create_protection(
                 position_id="pos-tp-only",
@@ -241,7 +242,7 @@ class TestProtectionManager:
             )
 
     def test_reversed_stop_direction_is_rejected(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         with pytest.raises(ValueError, match="stop_pct"):
             mgr.create_protection(
                 position_id="pos-reversed-stop",
@@ -263,7 +264,7 @@ class TestProtectionManager:
             assert tp.status == ProtectionStatus.CANCELLED
 
     def test_venue_ack_is_required_for_active_status(self):
-        mgr = ProtectionManager()
+        mgr = ProtectionManager(price_decimals=2, quantity_decimals=3)
         pp = mgr.create_protection(
             position_id="pos-owned",
             instrument_id=InstrumentId("BTCUSDT"),

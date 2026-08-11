@@ -377,21 +377,22 @@ class ProtectionManager:
     4. 保护单触发后自动生成 OrderIntent
     """
 
-    def __init__(self, price_decimals: int = 2, quantity_decimals: int = 4) -> None:
-        """PKG (BDS-P0-019, BDS-P0-020): price_decimals/quantity_decimals 从 ExchangeInfo 获取。
+    def __init__(self, price_decimals: int = 0, quantity_decimals: int = 0) -> None:
+        """BD-CV43: price_decimals/quantity_decimals 从 InstrumentRuleSnapshot 获取。
 
-        不同交易对的 tickSize/stepSize 不同:
-        - BTC: price=2 decimals (0.01), quantity=3 decimals (0.001)
-        - ETH: price=2 decimals (0.01), quantity=3 decimals (0.001)
-        - XRP: price=4 decimals (0.0001), quantity=0 decimals (1)
-        - SOL: price=2 decimals (0.01), quantity=1 decimal (0.1)
-
+        默认值 0 表示未从规则快照获取，调用时必须提供有效规则。
         禁止对不同交易对使用统一精度。
         """
         self._protections: dict[str, PositionProtection] = {}
         self._history: list[ProtectionOrder] = []
         self._price_decimals = price_decimals
         self._quantity_decimals = quantity_decimals
+
+    def set_precision_from_rule(self, rule_snapshot: Any) -> None:
+        """BD-CV43: 从 InstrumentRuleSnapshot 设置精度。"""
+        if rule_snapshot is not None:
+            self._price_decimals = getattr(rule_snapshot, "price_precision", 0)
+            self._quantity_decimals = getattr(rule_snapshot, "qty_precision", 0)
 
     # ---- 创建保护 ----
 

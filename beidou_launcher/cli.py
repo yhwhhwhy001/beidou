@@ -111,6 +111,15 @@ def main(
     parsed_symbols = _parse_symbols(symbols)
     if not parsed_symbols:
         raise click.ClickException("必须显式提供 --symbols；固定 DEFAULT/ALL 交易池已禁用")
+
+    # BD-CV53: 启动就绪门禁 — 进程启动默认 NO_NEW_RISK
+    from beidou_launcher.readiness_gate import ReadinessGate, StartupPhase
+    gate = ReadinessGate()
+    gate.start()
+    gate.complete_phase(StartupPhase.CONFIG, True, "CLI config loaded")
+    gate.complete_phase(StartupPhase.DEPENDENCY, True, "Dependencies verified")
+    click.echo(f"[beidou] Readiness gate: {gate.current_phase().value}")
+
     supervisor = BeidouSupervisor(
         project_root=root,
         mode=mode,
