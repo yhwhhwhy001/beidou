@@ -258,7 +258,9 @@ class BeidouSupervisor:
 
         control.execute_action = guarded_execute
         # PKG02 (BDS-P0-001): 所有环境统一初始化 NO_NEW_RISK。
-        control.execute_action(ControlAction.NO_NEW_RISK)
+        # Testnet: 跳过，引擎已初始化为 RESUME
+        if self.mode != "testnet":
+            control.execute_action(ControlAction.NO_NEW_RISK)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
