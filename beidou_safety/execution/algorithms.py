@@ -196,9 +196,26 @@ class MarketableLimitAlgorithm(BaseExecutionAlgorithm):
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
-        fill_price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
-        # 限价必须穿越价差
-        effective_price = fill_price if (ctx.side == OrderSide.BUY and fill_price) or fill_price else ctx.limit_price
+        # PKG (BDS-P0-013): 限价是硬约束 — 不得被市场价穿越
+        market_price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
+        limit = float(ctx.limit_price.amount) if ctx.limit_price else 0.0
+
+        if limit <= 0:
+            return ExecutionPlan(
+                algorithm=self.algorithm_type,
+                slices=[],
+                is_canceled=True,
+                cancel_reason="MARKETABLE_LIMIT_MISSING_LIMIT_PRICE",
+                total_estimated_cost_bps=0,
+                estimated_completion_seconds=0,
+            )
+
+        # BUY:  effective = min(market, limit)  — 买价不能超过限价
+        # SELL: effective = max(market, limit) — 卖价不能低于限价
+        if ctx.side == OrderSide.BUY:
+            effective_price = min(float(market_price.amount) if market_price else limit, limit)
+        else:
+            effective_price = max(float(market_price.amount) if market_price else limit, limit)
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -345,6 +362,7 @@ class POVAlgorithm(BaseExecutionAlgorithm):
         slices: list[OrderSlice] = []
         seq = 0
 
+        # PKG (BDS-P0-014): 执行计划必须守恒 — sum(filled)+remaining+cancelled == approved_qty
         while remaining > 0:
             slice_qty = min(remaining, max_slice)
             slices.append(
@@ -363,8 +381,32 @@ class POVAlgorithm(BaseExecutionAlgorithm):
             )
             remaining -= slice_qty
             seq += 1
-            if seq > 50:  # 防止无限循环
+            if seq > 50:
+                # PKG (BDS-P0-014): 剩余量不丢失 — 最后一个切片吸收全部剩余
+                if remaining > 0:
+                    slices.append(
+                        OrderSlice(
+                            slice_id=f"{order_id}-pov-{seq}",
+                            parent_order_id=order_id,
+                            quantity=Quantity(amount=str(remaining)),
+                            price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                            order_type=OrderType.LIMIT,
+                            time_in_force=TimeInForce.IOC,
+                            algorithm=self.algorithm_type,
+                            sequence_number=seq,
+                            estimated_cost_bps=ctx.predicted_cost_bps * (remaining / total_qty),
+                            invariants_check_passed=invariant_ok,
+                        )
+                    )
                 break
+
+        # PKG (BDS-P0-014): 验证执行计划守恒
+        planned_qty = sum(float(s.quantity.amount) for s in slices)
+        if abs(planned_qty - total_qty) > 1e-12:
+            raise RuntimeError(
+                f"POV plan violates quantity conservation: "
+                f"planned={planned_qty} != approved={total_qty}"
+            )
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
