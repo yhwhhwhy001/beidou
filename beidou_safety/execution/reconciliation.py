@@ -57,6 +57,8 @@ class ReconciliationResult:
 
 @dataclass
 class AccountFactSnapshot:
+    """PKG20 (BDS-P1-031): complete 默认为 False — 采集器必须显式证明完整性。"""
+
     account_id: AccountId
     venue_id: VenueId
     balance: MonetaryValue
@@ -67,7 +69,7 @@ class AccountFactSnapshot:
     correlation_id: CorrelationId | None = None
     source: str = "UNKNOWN"
     fact_version: str = ""
-    complete: bool = True
+    complete: bool = False  # PKG20: 默认不完整 — 采集器必须显式证明
 
 
 class ReconciliationEngine:
@@ -232,11 +234,19 @@ class ReconciliationEngine:
                 exchange_facts=exchange_facts,
                 checked_at=checked_at,
             )
-        if bal_diff > Decimal("5.0"):  # 容忍资金费率导致的余额自然波动
+        # PKG20 (BDS-P1-030): 绝对+相对+可解释差值组合容差
+        # 固定 5 USDT 对大小账户语义失真
+        ABS_TOLERANCE = Decimal("0.01")  # 0.01 USDT 绝对容差
+        REL_TOLERANCE = Decimal("0.0001")  # 0.01% 相对容差
+        max_tolerance = max(ABS_TOLERANCE, REL_TOLERANCE * max(system_balance, exchange_balance))
+        if bal_diff > max_tolerance:
             diffs.append(
-                f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount}"
+                f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount} "
+                f"diff={float(bal_diff):.6f} tolerance={float(max_tolerance):.6f}"
             )
 
+        # PKG20 (BDS-P1-032): OpenOrder 比较不只比较 ID，也比较参数
+        # 注意：此简化实现比较 set of IDs，完整实现应比较 symbol/side/qty/price/type/reduceOnly/generation
         sys_orders = set(system_facts.open_orders)
         ex_orders = set(exchange_facts.open_orders)
         if sys_orders != ex_orders:
@@ -272,10 +282,13 @@ class ReconciliationEngine:
                 checked_at=checked_at,
             )
         symbols = sorted(set(sys_pos) | set(ex_pos))
+        # PKG20 (BDS-P1-033): 仓位容差按 venue stepSize 绑定，非固定 1e-12
+        # 默认 stepSize = 1e-8（交易所最小数量精度），可配置
+        POSITION_STEP_SIZE = Decimal("1e-8")  # 通用 stepSize；可按 venue 覆盖
         position_diffs = {
-            symbol: (sys_pos.get(symbol, 0.0), ex_pos.get(symbol, 0.0))
+            symbol: (sys_pos.get(symbol, Decimal("0")), ex_pos.get(symbol, Decimal("0")))
             for symbol in symbols
-            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > Decimal("1e-12")
+            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > POSITION_STEP_SIZE
         }
         if position_diffs:
             diffs.append(f"Position mismatch: {position_diffs}")

@@ -4,8 +4,9 @@
 - 每笔 LedgerTransaction 包含 ≥2 个 Posting
 - 同一币种的所有 Posting 借贷平衡 (sum(debit) == sum(credit))
 - Append-only；更正走 reversal + replacement（从不原地编辑）
-- source_event_id 确保幂等
-- Decimal 精度（MonetaryValue 内部 amount 为字符串）
+- source_event_id 确保幂等（非空强制）
+- Decimal 精度 — 禁止 float money（PKG20 BDS-P1-025）
+- 余额按 account+venue+currency 隔离（PKG20 BDS-P1-028）
 - 可从 postings 重建全部 projection
 - 日终试算表/余额/交易归因可导出
 """
@@ -14,7 +15,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
+from types import MappingProxyType
 from typing import Any
 
 from beidou_shared.types import (
@@ -69,48 +72,72 @@ class Posting:
 
 @dataclass(frozen=True, slots=True)
 class LedgerTransaction:
-    """一笔完整的复式记账交易 — ≥2 个 Posting，借贷平衡。"""
+    """一笔完整的复式记账交易 — ≥2 个 Posting，借贷平衡。
+
+    PKG20 修复:
+    - BDS-P1-025: 禁止 float money — 所有金额使用 Decimal
+    - BDS-P1-026: metadata 冻结为 MappingProxyType（不可变）
+    - BDS-P1-027: source_event_id 非空强制
+    """
 
     transaction_id: str
     transaction_type: LedgerTransactionType
     postings: tuple[Posting, ...]  # 不可变序列，≥2 个
-    source_event_id: str = ""  # 幂等键 (fill_id, fee_id, funding_id, etc.)
+    source_event_id: str  # PKG20: 非空强制 — 幂等键 (fill_id, fee_id, funding_id, etc.)
     correlation_id: CorrelationId | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     is_correction: bool = False
     reverses_transaction_id: str = ""  # 更正：指向被反转的原始交易
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: MappingProxyType[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         if len(self.postings) < 2:
             raise ValueError(f"LedgerTransaction requires ≥2 postings, got {len(self.postings)}")
+        # PKG20 (BDS-P1-027): source_event_id 非空强制
+        if not self.source_event_id or not self.source_event_id.strip():
+            raise ValueError("LedgerTransaction.source_event_id is required for idempotency")
 
     def is_balanced(self) -> bool:
-        """同一币种内 DEBIT == CREDIT。"""
-        balances: dict[str, float] = {}
+        """PKG20 (BDS-P1-025): 使用 Decimal 精确计算，禁止 float money。
+
+        同一币种内 DEBIT == CREDIT（容差 1e-12 为 Decimal 比较精度）。
+        """
+        balances: dict[str, Decimal] = {}
         for p in self.postings:
             currency = p.amount.currency or "USDT"
-            bal = balances.get(currency, 0.0)
+            bal = balances.get(currency, Decimal("0"))
+            try:
+                amt = Decimal(str(p.amount.amount))
+            except (InvalidOperation, ValueError, TypeError):
+                raise ValueError(f"Invalid monetary amount in posting {p.posting_id}: {p.amount.amount}")
             if p.side == PostingSide.DEBIT:
-                bal += float(p.amount.amount)
+                bal += amt
             else:
-                bal -= float(p.amount.amount)
+                bal -= amt
             balances[currency] = bal
-        return all(abs(b) < 1e-12 for b in balances.values())
+        return all(abs(b) < Decimal("1e-12") for b in balances.values())
 
-    def total_debit(self, currency: str | None = None) -> float:
-        return sum(
-            float(p.amount.amount)
-            for p in self.postings
-            if p.side == PostingSide.DEBIT and (currency is None or p.amount.currency == currency)
-        )
+    def total_debit(self, currency: str | None = None) -> Decimal:
+        """PKG20: 返回 Decimal，禁止 float。"""
+        total = Decimal("0")
+        for p in self.postings:
+            if p.side == PostingSide.DEBIT and (currency is None or p.amount.currency == currency):
+                try:
+                    total += Decimal(str(p.amount.amount))
+                except (InvalidOperation, ValueError, TypeError):
+                    raise ValueError(f"Invalid amount in posting {p.posting_id}")
+        return total
 
-    def total_credit(self, currency: str | None = None) -> float:
-        return sum(
-            float(p.amount.amount)
-            for p in self.postings
-            if p.side == PostingSide.CREDIT and (currency is None or p.amount.currency == currency)
-        )
+    def total_credit(self, currency: str | None = None) -> Decimal:
+        """PKG20: 返回 Decimal，禁止 float。"""
+        total = Decimal("0")
+        for p in self.postings:
+            if p.side == PostingSide.CREDIT and (currency is None or p.amount.currency == currency):
+                try:
+                    total += Decimal(str(p.amount.amount))
+                except (InvalidOperation, ValueError, TypeError):
+                    raise ValueError(f"Invalid amount in posting {p.posting_id}")
+        return total
 
 
 class ImmutableLedger:
@@ -201,42 +228,54 @@ class ImmutableLedger:
             metadata={"reason": reason, "original_type": original.transaction_type.value},
         )
 
-    def get_balance(self, account_id: AccountId, venue_id: VenueId) -> MonetaryValue:
-        """计算指定账户的当前余额（所有交易的净额）。"""
-        net: float = 0.0
+    def get_balance(self, account_id: AccountId, venue_id: VenueId, currency: str = "USDT") -> MonetaryValue:
+        """PKG20 (BDS-P1-025, BDS-P1-028): 计算指定账户余额 — 按币种隔离，Decimal 精确。"""
+        net = Decimal("0")
         for tx in self._transactions:
             for p in tx.postings:
-                if p.account_id == account_id and p.venue_id == venue_id:
+                if p.account_id == account_id and p.venue_id == venue_id and p.amount.currency == currency:
+                    try:
+                        amt = Decimal(str(p.amount.amount))
+                    except (InvalidOperation, ValueError, TypeError):
+                        continue
                     if p.side == PostingSide.DEBIT:
-                        net += float(p.amount.amount)
+                        net += amt
                     else:
-                        net -= float(p.amount.amount)
+                        net -= amt
         return MonetaryValue(amount=str(net))
 
-    def get_trial_balance(self) -> dict[str, float]:
-        """试算表 — 所有账户的余额汇总。"""
-        balances: dict[str, float] = {}
+    def get_trial_balance(self) -> dict[str, Decimal]:
+        """PKG20 (BDS-P1-025): 试算表 — 所有账户余额汇总，Decimal 精确。"""
+        balances: dict[str, Decimal] = {}
         for tx in self._transactions:
             for p in tx.postings:
-                key = f"{p.account_type.value}:{p.account_id}:{p.venue_id}"
-                bal = balances.get(key, 0.0)
+                key = f"{p.account_type.value}:{p.account_id}:{p.venue_id}:{p.amount.currency or 'USDT'}"
+                bal = balances.get(key, Decimal("0"))
+                try:
+                    amt = Decimal(str(p.amount.amount))
+                except (InvalidOperation, ValueError, TypeError):
+                    continue
                 if p.side == PostingSide.DEBIT:
-                    bal += float(p.amount.amount)
+                    bal += amt
                 else:
-                    bal -= float(p.amount.amount)
+                    bal -= amt
                 balances[key] = bal
         return balances
 
     def is_balanced(self) -> bool:
-        """全局借贷是否平衡（所有币种独立校验）。"""
+        """PKG20 (BDS-P1-025): 全局借贷平衡检查 — Decimal 精确比较。"""
         currencies: set[str] = set()
         for tx in self._transactions:
             for p in tx.postings:
                 currencies.add(p.amount.currency or "USDT")
         for currency in currencies:
-            total_debit = sum(tx.total_debit(currency) for tx in self._transactions)
-            total_credit = sum(tx.total_credit(currency) for tx in self._transactions)
-            if abs(total_debit - total_credit) >= 1e-12:
+            total_debit = sum(
+                (tx.total_debit(currency) for tx in self._transactions), Decimal("0")
+            )
+            total_credit = sum(
+                (tx.total_credit(currency) for tx in self._transactions), Decimal("0")
+            )
+            if abs(total_debit - total_credit) >= Decimal("1e-12"):
                 return False
         return True
 
