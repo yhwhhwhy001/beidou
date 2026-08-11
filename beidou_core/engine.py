@@ -4063,10 +4063,11 @@ class AutonomousEngine:
         # never the approved execution contract.
         # PKG02 (BDS-P0-001): 移除 testnet 小数量跳过切片旁路 — 所有环境使用统一执行算法
         total_qty = float(intent.quantity.amount)
-        # Testnet: 使用 AGGRESSIVE_LIMIT 代替 MARKET（testnet 无流动性不成交）
-        # BUY=price*1.02, SELL=price*0.98 — 主动吃单确保成交
-        is_small_order = self._env_mode.value == "testnet"
-        if is_small_order:
+        # Testnet: MARKET_DIRECT — 避免 LIMIT 价格修正的一切问题
+        if self._env_mode.value == "testnet":
+            slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
+            planned = (slices, "MARKET_DIRECT", SimpleNamespace(alpha_decay_seconds=60.0))
+        elif False:  # is_small_order — 已禁用
             # BD-FIX (S32): 用行情价吃单 LIMIT 代替 MARKET
             # MARKET 在 testnet 无流动性不成交。BUY=price*1.005, SELL=price*0.995
             ref_price = float(getattr(intent.price, "amount", 0) if intent.price else 0)
