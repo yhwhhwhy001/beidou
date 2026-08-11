@@ -6798,6 +6798,7 @@ class AutonomousEngine:
                 )
 
                 # BD-CV30: 构建 SignedPortfolioTarget contract
+                trade_dir = 1 if fused.direction == SignalDirection.LONG else (-1 if fused.direction == SignalDirection.SHORT else 0)
                 _side = "LONG" if trade_dir > 0 else "SHORT"
                 _target = self.build_portfolio_target(
                     symbol=symbol, side=_side, exposure=position_notional, delta=position_notional * 0.01
