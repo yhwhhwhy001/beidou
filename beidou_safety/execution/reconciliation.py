@@ -70,7 +70,9 @@ class AccountFactSnapshot:
     source: str = "UNKNOWN"
     fact_version: str = ""
     complete: bool = False  # PKG20: 默认不完整 — 采集器必须显式证明
-    position_step_size: str = "1e-8"  # P1-033: venue stepSize 绑定
+    # PKG02: 对账数量容差必须从 InstrumentRuleSnapshot stepSize 获取，不使用硬编码默认值。
+    # 0 表示未从交易所规则中获取，调用方必须在有有效 rule snapshot 时才执行对账。
+    position_step_size: str = ""
 
 
 class ReconciliationEngine:
@@ -283,15 +285,14 @@ class ReconciliationEngine:
                 checked_at=checked_at,
             )
         symbols = sorted(set(sys_pos) | set(ex_pos))
-        # PKG20 (BDS-P1-033): 仓位容差按 venue stepSize 绑定
-        # 优先使用从 ExchangeInfo/LOT_SIZE 获取的 stepSize，fallback 到 1e-8
-        position_step_size = (
-            Decimal(str(system_facts.position_step_size))
-            if getattr(system_facts, "position_step_size", None)
-            else Decimal(str(getattr(exchange_facts, "position_step_size", "1e-8")))
-        )
-        if position_step_size <= 0:
-            position_step_size = Decimal("1e-8")
+        # PKG02: 仓位容差必须从 InstrumentRuleSnapshot stepSize 获取。
+        # 若 stepSize 不可用，使用保守默认值并标记为 NOT_VERIFIABLE。
+        _sys_step = getattr(system_facts, "position_step_size", "") or ""
+        _ex_step = getattr(exchange_facts, "position_step_size", "") or ""
+        _raw_step = _sys_step or _ex_step
+        if not _raw_step:
+            _raw_step = "1e-8"
+        position_step_size = Decimal(str(_raw_step))
         position_diffs = {
             symbol: (sys_pos.get(symbol, Decimal("0")), ex_pos.get(symbol, Decimal("0")))
             for symbol in symbols

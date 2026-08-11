@@ -4,8 +4,13 @@
   "required_hours": 72,
   "commit": "06bf1e0",
   "branch": "feature/monitoring-v1.1",
-  "prerequisites": {"p0_count": 0, "tests": "917 passed, 0 failed"},
+  "prerequisites": {
+    "p0_count": 0,
+    "tests": "917 passed, 0 failed"
+  },
   "inv012_compliant": true,
   "state": "RUNNING",
-  "last_evidence_utc": null
+  "last_evidence_utc": null,
+  "_legacy_status": "LEGACY_NOT_VERIFIABLE",
+  "_legacy_marked_at": "2026-08-12"
 }

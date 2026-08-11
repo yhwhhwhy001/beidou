@@ -97,7 +97,8 @@ class CostEstimate:
         Args:
             hold_hours: 持有时间（小时），用于估算 funding
         """
-        fee_bps = 4.0  # taker fee 4bps × 2 (open + close)
+        # PKG02: 费用从 CostEstimate 类属性获取，默认 0 表示未验证
+        fee_bps = float(getattr(cls, "_configured_taker_fee_bps", 0.0) or 0.0)
         spread_bps = 1.0  # 平均 spread
         slippage_bps = 1.0  # 预期滑点
         # funding: ~0.01% per 8h, estimated for hold period

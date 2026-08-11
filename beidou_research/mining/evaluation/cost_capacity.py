@@ -26,8 +26,9 @@ from dataclasses import dataclass, field
 class CostModel:
     """交易成本模型（信号感知）。"""
 
-    taker_fee_bps: float = 4.0  # Taker 费率（VIP1: 2bps × 2 = 4bps round trip）
-    maker_fee_bps: float = 2.0  # Maker 费率
+    # PKG02: 默认值仅表示未获取到真实费率，使用前必须验证 is_verified
+    taker_fee_bps: float = 0.0
+    maker_fee_bps: float = 0.0
     avg_spread_bps: float = 1.0  # 平均买卖价差
     slippage_bps: float = 1.0  # 预期滑点
     funding_rate_8h_pct: float = 0.01  # 资金费率（每 8 小时百分比）

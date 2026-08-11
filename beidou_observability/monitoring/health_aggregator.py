@@ -4,12 +4,15 @@ from beidou_observability.monitoring.contracts import CheckSeverity, CheckStatus
 
 
 def aggregate_health(results):
-    has_p0 = any(r.severity == CheckSeverity.P0 and r.status != CheckStatus.PASS for r in results)
+    """BD-CV50: 监控状态聚合。P1 FAIL 聚合为 RED，不可能 GREEN。"""
+    has_p0_fail = any(r.severity == CheckSeverity.P0 and r.status == CheckStatus.FAIL for r in results)
+    has_p1_fail = any(r.severity == CheckSeverity.P1 and r.status == CheckStatus.FAIL for r in results)
     has_unknown = any(
         r.status == CheckStatus.UNKNOWN and r.severity in (CheckSeverity.P0, CheckSeverity.P1) for r in results
     )
     has_warn = any(r.status == CheckStatus.WARN for r in results)
-    if has_p0 or has_unknown:
+    # P0 FAIL、P1 FAIL、UNKNOWN 均→RED
+    if has_p0_fail or has_p1_fail or has_unknown:
         return HealthStatus.RED
     if has_warn:
         return HealthStatus.YELLOW
@@ -30,13 +33,13 @@ def enforce_inv007(p0_fail_count, pass_count):
 
 def health_summary(results):
     status = aggregate_health(results)
-    p0_fails = sum(1 for r in results if r.severity == CheckSeverity.P0 and r.status != CheckStatus.PASS)
+    p0_fails = sum(1 for r in results if r.severity == CheckSeverity.P0 and r.status == CheckStatus.FAIL)
+    p1_fails = sum(1 for r in results if r.severity == CheckSeverity.P1 and r.status == CheckStatus.FAIL)
     unknowns = sum(1 for r in results if r.status == CheckStatus.UNKNOWN)
-    _inv007_ok, inv007_msg = enforce_inv007(p0_fails, sum(1 for r in results if r.status == CheckStatus.PASS))
     return {
         "status": status.value,
         "p0_fails": p0_fails,
+        "p1_fails": p1_fails,
         "unknowns": unknowns,
         "total": len(results),
-        "inv007": inv007_msg,
     }

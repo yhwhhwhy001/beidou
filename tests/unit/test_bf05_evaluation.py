@@ -379,7 +379,8 @@ class TestStability:
 
 class TestCostModel:
     def test_default_model(self):
-        model = CostModel()
+        """PKG02: 费用默认值从交易所获取，不再硬编码。"""
+        model = CostModel(taker_fee_bps=4.0)
         assert model.taker_fee_bps == 4.0
         assert model.avg_spread_bps == 1.0
         cost = model.round_trip_cost_bps(hold_hours=4.0)

@@ -86,7 +86,9 @@ class TestCostEstimate:
     """成本估算测试。"""
 
     def test_default_perpetual(self):
-        """默认永续合约成本模型。"""
+        """PKG02: 费用默认值从交易所获取，不再硬编码。"""
+        # Set configured fee for test
+        CostEstimate._configured_taker_fee_bps = 4.0
         cost = CostEstimate.default_perpetual(hold_hours=4.0)
         assert cost.fee_bps == 4.0
         assert cost.spread_bps == 1.0

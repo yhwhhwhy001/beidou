@@ -22,8 +22,9 @@ class CostEstimate:
     notional: float = 0.0
 
     # Fee
-    maker_fee_bps: float = 2.0
-    taker_fee_bps: float = 4.0
+    # PKG02: 默认值仅表示未获取到真实费率，使用前必须验证 is_verified
+    maker_fee_bps: float = 0.0
+    taker_fee_bps: float = 0.0
     effective_fee_bps: float = 0.0
 
     # Spread
