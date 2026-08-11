@@ -7715,7 +7715,13 @@ class AutonomousEngine:
         except Exception as exc:
             print(f"[beidou-autopilot] Conditional-order inventory UNKNOWN: {exc}")
 
-        self._adapter.reset_circuit_breaker()
+        # Only reset the circuit breaker if it is still open from a previous
+        # session crash.  If the venue is genuinely rate-limiting us, clearing
+        # the breaker here would hammer it harder during the protection-write
+        # burst below.
+        if self._adapter.is_circuit_breaker_open():
+            self._adapter.reset_circuit_breaker()
+            print("[beidou-autopilot] Reset stale circuit breaker from previous session")
 
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
@@ -7725,7 +7731,8 @@ class AutonomousEngine:
             if not ok or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
-                self._adapter.reset_circuit_breaker()
+                if self._adapter.is_circuit_breaker_open():
+                    self._adapter.reset_circuit_breaker()
                 account, ok = await asyncio.wait_for(
                     self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0
                 )
@@ -7992,9 +7999,14 @@ class AutonomousEngine:
         if self._adapter is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 
-        # BD-FIX: 启动 WebSocket 实时行情流（REST 轮询作为回退）
+        # BD-FIX: 启动 WebSocket 实时行情流（REST 轮询作为回退）。
+        # 如果 bootstrap 阶段已创建 WS client（line ~7513），跳过第二次
+        # start_ws 调用，避免构建第二个 client 导致第一个 client 泄漏。
         is_testnet = self._env_mode.value == "testnet"
-        ws_started = await self._feed.start_ws(self._symbols, testnet=is_testnet)
+        if getattr(self._feed, "_ws_client", None) is not None:
+            ws_started = self._feed.is_healthy()
+        else:
+            ws_started = await self._feed.start_ws(self._symbols, testnet=is_testnet)
         if ws_started:
             print("[beidou-autopilot] WebSocket market data stream ACTIVE (REST polling as fallback)")
         else:

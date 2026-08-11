@@ -82,6 +82,16 @@ class BinanceRESTClient:
         self._rate_state.consecutive_failures = 0
         self._rate_state.circuit_open_until = 0.0
 
+    def is_circuit_breaker_open(self) -> bool:
+        """检查断路器是否因连续失败而打开。
+
+        用于区分「旧 session 残留的熔断」和「当前 session 的真实限频」。
+        只有前者才应无条件重置；后者代表 venue 保护，不应清除。
+        """
+        if not self._rate_state.circuit_open:
+            return False
+        return time.monotonic() < self._rate_state.circuit_open_until
+
     # === 公共查询（无需签名）===
 
     async def get_server_time(self) -> Result[dict]:

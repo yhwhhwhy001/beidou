@@ -1141,11 +1141,17 @@ class BeidouSupervisor:
             # DEV_FAST_START / Testnet: 跳过深度验证，直接 RESUME
             if os.environ.get("BEIDOU_DEV_FAST_START") == "1" or self.mode == "testnet":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
-                # 仍需要运行算法探针以消除启动阻断
+                # 仍需要运行算法探针以消除启动阻断。
+                # 加超时防止 REST API 缓慢时无限挂起。
                 try:
                     from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
-                    self._algorithm_probe = await _probe(self.engine, self.symbols)
+                    self._algorithm_probe = await asyncio.wait_for(
+                        _probe(self.engine, self.symbols), timeout=60.0
+                    )
                     print(f"[supervisor] Algorithm probe: {self._algorithm_probe.get('ok') and 'PASS' or 'FAIL'}")
+                except asyncio.TimeoutError:
+                    self._algorithm_probe = {"ok": False, "error": "Algorithm probe timed out after 60s"}
+                    print("[supervisor] Algorithm probe timed out")
                 except Exception as _exc:
                     self._algorithm_probe = {"ok": False, "error": f"{type(_exc).__name__}: {_exc}"}
                     print(f"[supervisor] Algorithm probe failed: {_exc}")
