@@ -112,9 +112,9 @@ def build_protection_check(result):
         issues.append(f"DUP({result.duplicate_count})")
     if result.ghost_detected:
         issues.append("GHOST")
-    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-    _sev = CheckSeverity.P1 if _testnet else CheckSeverity.P0
-    _status = CheckStatus.WARN if _testnet else CheckStatus.FAIL
+    # PKG02 (BDS-P0-001): 所有环境统一保护覆盖检查标准。
+    _sev = CheckSeverity.P0
+    _status = CheckStatus.FAIL
     if issues:
         return MonitoringCheckResult(
             check_id="runtime.safety.protection_coverage",

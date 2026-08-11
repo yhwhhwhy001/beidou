@@ -274,10 +274,8 @@ def collect_runtime_checks(
         observed_symbols = []
     tick_count = int(getattr(engine, "_tick_count", 0))
     feed_healthy = feed_internal_healthy and tick_count > 0 and bool(observed_symbols)
-    # 启动阶段行情可能尚未到达，降级为非阻断
-    # BD-FIX (S27): Testnet 行情数据问题不应阻断交易
-    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-    if resume_authorized and not _testnet:
+    # PKG02 (BDS-P0-001): 所有环境统一行情数据健康检查。
+    if resume_authorized:
         market_severity = CheckSeverity.P0
         market_status = CheckStatus.PASS if feed_healthy else CheckStatus.FAIL
     else:
@@ -388,8 +386,8 @@ def collect_runtime_checks(
             reconciliation_age = max(0.0, time.time() - float(checked_at.timestamp()))
         except (AttributeError, TypeError, ValueError, OverflowError):
             reconciliation_age = None
-    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-    _max_age = 300.0 if _testnet else 60.0
+    # PKG02 (BDS-P0-001): 所有环境统一对账标准和严重级别。
+    _max_age = 60.0
     reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= _max_age
     reconciliation_ok = (
         reconciliation is not None
@@ -401,16 +399,16 @@ def collect_runtime_checks(
         recon_status = CheckStatus.PASS
         recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
     elif reconciliation is None:
-        recon_status = CheckStatus.FAIL if not _testnet else CheckStatus.WARN
+        recon_status = CheckStatus.FAIL
         recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
     else:
-        recon_status = CheckStatus.FAIL if not _testnet else CheckStatus.WARN
+        recon_status = CheckStatus.FAIL
         recon_message = (
             f"三方对账不可授权: status={reconciliation_status}, "
             f"matched={bool(getattr(reconciliation, 'matched', False))}, "
             f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
         )
-    _recon_sev = CheckSeverity.P1 if _testnet and recon_status == CheckStatus.WARN else CheckSeverity.P0
+    _recon_sev = CheckSeverity.P0
     checks.append(
         CheckResult(
             check_id="runtime.safety.reconciliation_authority",

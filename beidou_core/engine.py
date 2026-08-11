@@ -1783,22 +1783,12 @@ class AutonomousEngine:
         此时返回空列表（而非 None）允许 testnet 上 protection 正常下发。
         """
 
-        _is_testnet = (
-            getattr(self, "_env_mode", None) is not None
-            and str(self._env_mode.value) == "testnet"
-        )
         try:
             result = await self._adapter.get_open_algo_orders()
         except Exception as exc:
             print(f"[api] open Algo inventory failed: {type(exc).__name__}: {exc}")
-            if _is_testnet:
-                print("[api] Testnet fallback: returning empty Algo inventory")
-                return []
             return None
         if not result.is_success() or result.data is None:
-            if _is_testnet:
-                print("[api] Testnet fallback: returning empty Algo inventory (API UNKNOWN)")
-                return []
             return None
         return [dict(snapshot.raw_response) for snapshot in result.data]
 
@@ -2377,12 +2367,7 @@ class AutonomousEngine:
         projector_status = str(getattr(raw_projector_status, "value", raw_projector_status)).upper()
         event_facts = getattr(self, "_event_stream_facts", None)
         projection_complete = bool(getattr(event_facts, "complete", False))
-        # PKG02 (BDS-P0-001): 统一生产就绪标准，但 Testnet 基础设施
-        # 有限制（sequencer 不可用、投影不完整），允许降级通过。
-        _is_testnet_stream = (
-            getattr(self, "_env_mode", None) is not None
-            and str(self._env_mode.value) == "testnet"
-        )
+        # PKG02 (BDS-P0-001): 统一生产就绪标准 — 所有环境使用相同 readiness check。
         transport_ok = status in ("HEALTHY", "CONNECTED")
         startup_elapsed = time.monotonic() - getattr(self, "_startup_mono", time.monotonic())
         if not hasattr(self, "_startup_mono"):
@@ -2395,12 +2380,6 @@ class AutonomousEngine:
             effective_max_age = max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         require_complete_projection = True
-        # BD-FIX: Testnet 的 sequencer 常处于 SEQUENCE_UNAVAILABLE，
-        # 且 Binance Testnet 用户流不保证投影完整性。只要传输层健康、
-        # 事件在流动，就视为就绪。
-        if _is_testnet_stream and transport_ok:
-            projector_ok = True
-            require_complete_projection = False
         ready = (
             transport_ok
             and (event_age is None or event_age <= effective_max_age)
@@ -4125,15 +4104,10 @@ class AutonomousEngine:
             }
             if order_type == "LIMIT" and price_str:
                 params["price"] = price_str
-                # BD-FIX: Testnet 流动性极薄，IOC 限价单几乎全部 EXPIRED。
-                # 将 IOC/FOK 覆写为 GTC，让订单挂在订单簿上等待成交。
+                # PKG02 (BDS-P0-001): TIF 语义在所有环境必须一致。
+                # Testnet 不允许将 IOC/FOK 静默改为 GTC。
+                # 如需 testnet 特殊执行策略，须在 ExecutionPlan 中显式建模。
                 _tif = tif or "GTC"
-                _is_testnet_tif = (
-                    getattr(self, "_env_mode", None) is not None
-                    and str(self._env_mode.value) == "testnet"
-                )
-                if _is_testnet_tif and _tif in ("IOC", "FOK"):
-                    _tif = "GTC"
                 params["timeInForce"] = _tif
 
             order = await self._submit_order_slice(
@@ -5652,18 +5626,9 @@ class AutonomousEngine:
                     # 避免 UNSUPPORTED_USER_EVENT 导致流 DEGRADED。
                     accepted = True
                 else:
-                    # BD-FIX: Testnet 模式下，未知事件类型仅记录警告，
-                    # 不降级用户数据流。生产环境严格 fail-closed。
-                    is_testnet_stream = (
-                        getattr(self, "_env_mode", None) is not None
-                        and str(self._env_mode.value) == "testnet"
-                    )
-                    if is_testnet_stream:
-                        print(f"[user_stream] Unknown event type ignored (testnet): {event_type}")
-                        accepted = True
-                    else:
-                        self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
-                        return
+                    # PKG02 (BDS-P0-001): 所有环境统一 fail-closed。
+                    self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
+                    return
                 if accepted:
                     self._update_user_stream_runtime(
                         status="HEALTHY",
@@ -5996,52 +5961,40 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    # BD-FIX (S2): Testnet 模式下，始终取消残留无主 Algo 订单。
-                    # 原逻辑仅在无持仓时清理，但崩溃重启后若有持仓，残留
-                    # 订单会永久阻断 protection。新逻辑无条件清理所有无主订单，
-                    # 然后在 Phase 3 中为持仓重新创建保护单。
-                    is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-                    if is_testnet:
-                        print(
-                            f"[startup] Testnet: cancelling {len(unowned_algo_ids)} "
-                            f"stale unowned Algo orders (positions={len(exchange_positions)})"
-                        )
-                        for item in algos_resp:
-                            algo_id = str(item.get("algoId"))
-                            if algo_id not in known_algo_ids:
-                                sym = str(item.get("symbol", ""))
-                                try:
-                                    await self._adapter.cancel_algo_order(sym, int(algo_id))
-                                    print(f"[startup]   ✓ Cancelled {sym} Algo {algo_id}")
-                                except Exception as cancel_exc:
-                                    print(
-                                        f"[startup]   ⚠️  Failed to cancel "
-                                        f"{sym} Algo {algo_id}: {cancel_exc}"
-                                    )
-                        # Refresh inventory
-                        algos_resp = await self._get_open_algo_inventory()
-                        if not isinstance(algos_resp, list):
-                            self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
-                            print("[startup] Conditional-order inventory UNKNOWN after cleanup")
-                            return
-                        # Recalculate after cleanup
-                        known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
-                        unowned_algo_ids = [
-                            str(item.get("algoId"))
-                            for item in algos_resp
-                            if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
-                        ]
-                    if unowned_algo_ids:
-                        if is_testnet:
-                            print(
-                                f"[startup] ⚠️  Testnet: {len(unowned_algo_ids)} unowned Algo orders "
-                                "remain after cleanup (cancel API may be unreliable); "
-                                "logging but NOT blocking — will re-evaluate on next cycle"
-                            )
-                        else:
-                            self._block_unowned_protection_orders(unowned_algo_ids)
-                            print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
-                            return
+                    # PKG02 (BDS-P0-001): 所有环境统一处理 — 无条件清理残留无主 Algo 订单。
+                    print(
+                        f"[startup] Cancelling {len(unowned_algo_ids)} "
+                        f"stale unowned Algo orders (positions={len(exchange_positions)})"
+                    )
+                    for item in algos_resp:
+                        algo_id = str(item.get("algoId"))
+                        if algo_id not in known_algo_ids:
+                            sym = str(item.get("symbol", ""))
+                            try:
+                                await self._adapter.cancel_algo_order(sym, int(algo_id))
+                                print(f"[startup]   ✓ Cancelled {sym} Algo {algo_id}")
+                            except Exception as cancel_exc:
+                                print(
+                                    f"[startup]   ⚠️  Failed to cancel "
+                                    f"{sym} Algo {algo_id}: {cancel_exc}"
+                                )
+                    # Refresh inventory
+                    algos_resp = await self._get_open_algo_inventory()
+                    if not isinstance(algos_resp, list):
+                        self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                        print("[startup] Conditional-order inventory UNKNOWN after cleanup")
+                        return
+                    # Recalculate after cleanup
+                    known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                    unowned_algo_ids = [
+                        str(item.get("algoId"))
+                        for item in algos_resp
+                        if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                    ]
+                if unowned_algo_ids:
+                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    print("[startup] Conditional-order owner mapping UNKNOWN; recovery remains read-only")
+                    return
                 venue_algo_ids = {str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None}
                 missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
                 if missing_owned_ids:
@@ -6116,15 +6069,8 @@ class AutonomousEngine:
                 if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
             ]
             if unowned_algo_ids:
-                is_testnet_nearline = (
-                    getattr(self, "_env_mode", None) is not None
-                    and str(self._env_mode.value) == "testnet"
-                )
-                if is_testnet_nearline:
-                    print(f"[nearline] Excess-order cleanup skipped: {len(unowned_algo_ids)} unowned Algo orders (testnet — not blocking)")
-                else:
-                    self._block_unowned_protection_orders(unowned_algo_ids)
-                    print("[nearline] Excess-order cleanup blocked: conditional-order ownership UNKNOWN")
+                self._block_unowned_protection_orders(unowned_algo_ids)
+                print("[nearline] Excess-order cleanup blocked: conditional-order ownership UNKNOWN")
                 return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
@@ -6230,15 +6176,8 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    is_testnet_nearline = (
-                        getattr(self, "_env_mode", None) is not None
-                        and str(self._env_mode.value) == "testnet"
-                    )
-                    if is_testnet_nearline:
-                        print(f"[nearline] Protection retry skipped: {len(unowned_algo_ids)} unowned Algo orders (testnet — not blocking)")
-                    else:
-                        self._block_unowned_protection_orders(unowned_algo_ids)
-                        print("[nearline] Protection retry blocked: conditional-order ownership UNKNOWN")
+                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    print("[nearline] Protection retry blocked: conditional-order ownership UNKNOWN")
                     return
                 for item in existing_algos:
                     sym = str(item.get("symbol", ""))
@@ -6895,16 +6834,8 @@ class AutonomousEngine:
                             liquidation_price = None
                         break
 
-                # BD-FIX: Testnet 全仓模式下 liquidationPrice 常为 0，
-                # 导致 R7 返回 UNKNOWN 阻塞所有信号。对极小仓位用安全
-                # 估算值（当前价格的 10%）确保 R7 在 testnet 正常放行。
-                _is_testnet_ctx = (
-                    getattr(self, "_env_mode", None) is not None
-                    and str(self._env_mode.value) == "testnet"
-                )
-                if _is_testnet_ctx and liquidation_price in (None, 0, 0.0) and position_qty and position_qty > 0 and price:
-                    liquidation_price = float(price) * 0.1
-
+                # PKG02 (BDS-P0-001): 所有环境统一使用交易所返回的 liquidation_price。
+                # 若为 None/0，R7 应如实返回 UNKNOWN。
                 risk_context: dict = {
                     "leverage": dyn_leverage,
                     "max_leverage": self._policy_float("max_leverage", self._settings.production.max_leverage),
@@ -6931,7 +6862,7 @@ class AutonomousEngine:
                     "rolling_sharpe": (
                         self._drift_detector._baseline.get("sharpe")
                         if self._drift_detector.is_calibrated() and self._drift_detector._baseline
-                        else (0.0 if os.environ.get("BEIDOU_ENV") == "testnet" else None)
+                        else None
                     ),
                     "min_sharpe_rolling": self._policy_float(
                         "min_sharpe_rolling", self._settings.production.min_sharpe_rolling
@@ -6943,11 +6874,8 @@ class AutonomousEngine:
                     "position_qty": position_qty,
                     "liquidation_price": liquidation_price,
                     "current_price": price,
-                    # BD-FIX: min_liquidation_distance_pct 之前未传入风险上下文，
-                    # 导致 R7 始终 UNKNOWN。Testnet 使用宽松阈值 1.0%。
-                    "min_liquidation_distance_pct": 1.0
-                    if _is_testnet_ctx
-                    else self._policy_float("min_liquidation_distance_pct", 5.0),
+                    # PKG02 (BDS-P0-001): 所有环境使用统一策略参数。
+                    "min_liquidation_distance_pct": self._policy_float("min_liquidation_distance_pct", 5.0),
                     "protected_positions": sum(
                         1
                         for pp in self._protection.all_positions().values()
@@ -6955,11 +6883,8 @@ class AutonomousEngine:
                     ),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
-                    # BD-FIX: Testnet API Key 默认 canWithdraw=True 无法修改，
-                    # 覆写为 False 避免 R9 误杀所有信号
-                    "can_withdraw": False if getattr(self, "_env_mode", None) is not None
-                                    and str(self._env_mode.value) == "testnet"
-                                    else self._can_withdraw,
+                    # PKG02 (BDS-P0-001): 使用交易所实际返回的 canWithdraw。
+                    "can_withdraw": self._can_withdraw,
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
@@ -7507,10 +7432,8 @@ class AutonomousEngine:
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
             else:
                 health["level"] = "OK"
-            # R9: venue 提款权限必须明确为 False（Testnet 除外，无真实提款）。
-            # 不要把真实的 True 改写成 False，否则状态/证据会出现安全假阳性。
-            is_testnet_health = getattr(self, "_env_mode", None) is not None and str(self._env_mode.value) == "testnet"
-            if self._can_withdraw and not is_testnet_health:
+            # PKG02 (BDS-P0-001): R9 提款权限在所有环境统一检查。
+            if self._can_withdraw:
                 health["level"] = "CRITICAL"
                 health["r9_violation"] = "WITHDRAW_ENABLED"
                 self._alerts.send_incident(
@@ -7553,9 +7476,8 @@ class AutonomousEngine:
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
-        # Testnet 环境无真实提款能力，允许提款权限为 True
-        is_testnet = getattr(self, "_env_mode", None) is not None and str(self._env_mode.value) == "testnet"
-        if venue_can_withdraw and not is_testnet:
+        # PKG02 (BDS-P0-001): 所有环境统一提款权限检查。
+        if venue_can_withdraw:
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
@@ -7822,56 +7744,31 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-                    # Check if there are any open positions — only safe to
-                    # clean up when the account is flat.
-                    account_for_cleanup, acct_ok = await self._api_async_safe(
-                        Endpoint.ACCOUNT, signed=True
-                    )
-                    has_positions = False
-                    if acct_ok and isinstance(account_for_cleanup, dict):
-                        positions = account_for_cleanup.get("positions", [])
-                        has_positions = any(
-                            abs(float(p.get("positionAmt", 0))) > 0
-                            for p in (positions if isinstance(positions, list) else [])
-                            if isinstance(p, dict)
-                        )
-                    if is_testnet:
-                        # BD-FIX: Testnet 模式下始终取消残留无主 Algo 订单。
-                        # 原逻辑仅在无持仓时清理，但崩溃重启后若有持仓，
-                        # 残留订单会永久阻断 protection。新逻辑无条件清理，
-                        # 后续 Phase 3 中会为持仓重新创建保护单。
-                        print(
-                            f"[beidou-autopilot] Testnet: cancelling {len(unowned_algo_ids)} "
-                            f"stale unowned Algo orders (positions={'YES' if has_positions else 'NONE'})"
-                        )
-                        for item in existing_algos:
-                            algo_id = str(item.get("algoId"))
-                            if algo_id not in known_algo_ids:
-                                sym = str(item.get("symbol", ""))
-                                try:
-                                    await self._adapter.cancel_algo_order(sym, int(algo_id))
-                                    print(f"[beidou-autopilot]   ✅ Cancelled {sym} Algo {algo_id}")
-                                except Exception as cancel_exc:
-                                    print(
-                                        f"[beidou-autopilot]   ⚠️  Failed to cancel "
-                                        f"{sym} Algo {algo_id}: {cancel_exc}"
-                                    )
-                        # Refresh inventory after cleanup
-                        existing_algos = await asyncio.wait_for(
-                            self._get_open_algo_inventory(), timeout=30.0
-                        )
-                        existing_algo_inventory = (
-                            existing_algos if isinstance(existing_algos, list) else None
-                        )
-                    else:
-                        self._block_unowned_protection_orders(unowned_algo_ids)
-                if not is_testnet:
+                    # PKG02 (BDS-P0-001): 所有环境统一处理 — 始终取消残留无主 Algo 订单。
+                    # 无条件清理，后续 Phase 3 中会为持仓重新创建保护单。
                     print(
-                        f"[beidou-autopilot] Observed {len(existing_algos)} open conditional orders; "
-                        "skipping unowned startup cancellation and unowned adoption"
+                        f"[beidou-autopilot] Cancelling {len(unowned_algo_ids)} "
+                        f"stale unowned Algo orders"
                     )
-                else:
+                    for item in existing_algos:
+                        algo_id = str(item.get("algoId"))
+                        if algo_id not in known_algo_ids:
+                            sym = str(item.get("symbol", ""))
+                            try:
+                                await self._adapter.cancel_algo_order(sym, int(algo_id))
+                                print(f"[beidou-autopilot]   ✓ Cancelled {sym} Algo {algo_id}")
+                            except Exception as cancel_exc:
+                                print(
+                                    f"[beidou-autopilot]   ⚠️  Failed to cancel "
+                                    f"{sym} Algo {algo_id}: {cancel_exc}"
+                                )
+                    # Refresh inventory after cleanup
+                    existing_algos = await asyncio.wait_for(
+                        self._get_open_algo_inventory(), timeout=30.0
+                    )
+                    existing_algo_inventory = (
+                        existing_algos if isinstance(existing_algos, list) else None
+                    )
                     remaining = (
                         len(existing_algos) if isinstance(existing_algos, list)
                         else len(existing_algo_inventory) if isinstance(existing_algo_inventory, list)
@@ -8031,15 +7928,8 @@ class AutonomousEngine:
 
             # Phase 2: 分批提交条件单到交易所（每批 5 个，间隔 2s，避免限流熔断）
             if self._protection_owner_unknown:
-                is_testnet_pp = (
-                    getattr(self, "_env_mode", None) is not None
-                    and str(self._env_mode.value) == "testnet"
-                )
-                if is_testnet_pp:
-                    print("[startup] ⚠️  Testnet: proceeding with protection placement despite unknown ownership")
-                else:
-                    pending_submissions.clear()
-                    print("[startup] Protection placement blocked: existing conditional-order ownership is UNKNOWN")
+                pending_submissions.clear()
+                print("[startup] Protection placement blocked: existing conditional-order ownership is UNKNOWN")
             if pending_submissions:
 
                 async def _submit_algo(sub: dict):
@@ -8210,7 +8100,7 @@ class AutonomousEngine:
         async def _nearline_loop() -> None:
             while self._running:
                 try:
-                    _nearline_interval = 30 if os.environ.get("BEIDOU_ENV") == "testnet" else 300
+                    _nearline_interval = 300  # PKG02: 所有环境使用统一近线周期
                     if time.time() - self._last_nearline >= _nearline_interval:
                         await self._nearline_tick()
                 except Exception as exc:

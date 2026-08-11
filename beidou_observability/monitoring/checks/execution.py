@@ -36,12 +36,9 @@ STAGE_TIMEOUTS = {
 
 def check_order_trace(traces):
     results = []
-    _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-    # BD-FIX: Testnet 下订单卡住仍是严重问题（意味着系统没有实际交易），
-    # 保留 P0 严重级别。仅将 FAIL 降为 WARN 避免阻断 supervisor 授权，
-    # 但 P0+WARN 在监控面板中足够醒目，不会被淹没。
+    # PKG02 (BDS-P0-001): 所有环境统一订单追踪检查标准。
     _sev = CheckSeverity.P0
-    _status = CheckStatus.WARN if _testnet else CheckStatus.FAIL
+    _status = CheckStatus.FAIL
     for t in traces:
         if t.is_stuck:
             results.append(

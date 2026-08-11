@@ -260,8 +260,8 @@ def test_authority_reconciliation_fact_is_required_and_fresh() -> None:
         last_error_count=0,
     )
     authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
-    assert authority.status is CheckStatus.WARN
-    # In testnet mode, some P0 checks may be downgraded to non-blocking WARN
+    # PKG02 (BDS-P0-001): 所有环境统一使用 FAIL。
+    assert authority.status is CheckStatus.FAIL
 
     engine._last_reconciliation_result = SimpleNamespace(
         matched=True,
@@ -612,6 +612,7 @@ def test_writable_monitoring_reconciliation_requires_authoritative_three_way_fac
     )
 
     recon_result = next(c for c in mon_checks if c.check_id == "runtime.safety.reconciliation")
-    assert recon_result.status is CheckStatus.WARN
-    assert recon_result.severity.value in ("P0", "P1")
+    # PKG02 (BDS-P0-001): 所有环境统一使用 FAIL。
+    assert recon_result.status is CheckStatus.FAIL
+    assert recon_result.severity.value == "P0"
     assert "authority unavailable" in recon_result.message

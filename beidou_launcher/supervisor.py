@@ -78,7 +78,8 @@ class BeidouSupervisor:
         self._last_error_count = 0
         self._algorithm_probe: dict[str, Any] = {}
         self._last_algorithm_probe_attempt = 0.0
-        self._exchange_algo_snapshot: dict[str, Any] = {"ok": mode != "testnet", "by_symbol": {}}
+        # PKG02 (BDS-P0-001): 所有环境统一初始化 — ok 由实际探测结果决定。
+        self._exchange_algo_snapshot: dict[str, Any] = {"ok": False, "by_symbol": {}}
         self._last_exchange_algo_probe = 0.0
         self._exchange_account_snapshot: dict[str, Any] = {"ok": False}
         self._last_exchange_account_probe = 0.0
@@ -102,9 +103,10 @@ class BeidouSupervisor:
         # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
         from .models import HealthDebounce
 
+        # PKG02 (BDS-P0-001): 所有环境使用统一的健康防抖参数。
         self._health_debounce = HealthDebounce(
-            degrade_after=30 if mode == "testnet" else 6,
-            lock_after=999 if mode == "testnet" else 12,  # Testnet 永不自动 LOCK
+            degrade_after=6,
+            lock_after=12,
         )
         # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
         from .g7_tracker import G7LiveTracker
@@ -240,17 +242,11 @@ class BeidouSupervisor:
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
                 return self._original_control_execute(ControlAction.NO_NEW_RISK)
-            # BD-FIX (S24): Testnet 屏蔽引擎内部的 NO_NEW_RISK。
-            # 引擎 11 处代码调用 execute_action(NO_NEW_RISK)，在 testnet
-            # 逐一修复不可行。直接在 guard 层拦截，保持当前状态不变。
-            if self.mode == "testnet" and action == ControlAction.NO_NEW_RISK:
-                return action  # 返回但不执行，假装成功
             return self._original_control_execute(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
-        # BD-FIX (S22): Testnet 不初始化 NO_NEW_RISK
-        if self.mode != "testnet":
-            control.execute_action(ControlAction.NO_NEW_RISK)
+        # PKG02 (BDS-P0-001): 所有环境统一初始化 NO_NEW_RISK。
+        control.execute_action(ControlAction.NO_NEW_RISK)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
@@ -470,7 +466,8 @@ class BeidouSupervisor:
 
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
         """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
-        if self.mode != "testnet" or self.engine is None:
+        # PKG02 (BDS-P0-001): 所有环境统一运行引擎探针。
+        if self.engine is None:
             return
         now = time.monotonic()
         if not force and now - self._last_exchange_algo_probe < 15.0:
@@ -504,10 +501,8 @@ class BeidouSupervisor:
         assert self.engine is not None
         # BD-FIX: Testnet 模式下，算法探针可能因市场 RANGING 无信号而
         # 返回 NO_ACTION（安全行为），不应作为阻断项。将失败的探针结果
-        # 掩码为成功，避免阻塞交易授权。
+        # PKG02 (BDS-P0-001): 所有环境使用真实探测结果，不掩码。
         _probe_for_check = dict(self._algorithm_probe)
-        if self.mode == "testnet" and not _probe_for_check.get("ok"):
-            _probe_for_check = {"ok": True, "proposal_hash": "testnet-bypass", "graph_hash": "testnet-bypass"}
         checks, error_count = collect_runtime_checks(
             engine=self.engine,
             mode=self.mode,
@@ -647,10 +642,8 @@ class BeidouSupervisor:
             logger.warning("alert delivery retry failed: %s: %s", type(exc).__name__, str(exc)[:160])
         monitoring_checks: list[CheckResult] = []
         try:
-            # BD-FIX: Testnet 模式下掩码算法探针失败，避免阻塞交易授权
+            # PKG02 (BDS-P0-001): 所有环境使用真实探测结果。
             _probe_for_mon = dict(self._algorithm_probe)
-            if self.mode == "testnet" and not _probe_for_mon.get("ok"):
-                _probe_for_mon = {"ok": True, "proposal_hash": "testnet-bypass", "graph_hash": "testnet-bypass"}
             monitoring_checks = collect_monitoring_checks(  # type: ignore[no-untyped-call] # beidou_observability.monitoring 遗留豁免
                 engine=self.engine,
                 supervisor=self,
@@ -843,15 +836,10 @@ class BeidouSupervisor:
             self._control_paused_by_supervisor = True
         lifecycle = self.engine._lifecycle
         if fatal:
-            if self.mode == "testnet":
-                # BD-FIX (S16): Testnet 永不死锁 — 降级但不停止引擎
-                with suppress(Exception):
-                    lifecycle.transition(ModuleState.DEGRADED)
-                print(f"[supervisor] Testnet: fatal escalation suppressed, staying DEGRADED")
-            else:
-                with suppress(Exception):
-                    lifecycle.transition(ModuleState.LOCKED)
-                self.engine._running = False
+            # PKG02 (BDS-P0-001): 所有环境统一的 fail-closed 行为。
+            with suppress(Exception):
+                lifecycle.transition(ModuleState.LOCKED)
+            self.engine._running = False
         elif str(getattr(lifecycle.state, "value", lifecycle.state)) == "ACTIVE":
             with suppress(Exception):
                 lifecycle.transition(ModuleState.DEGRADED)
@@ -1002,34 +990,22 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "LOCKED"
                 self._send_supervisor_alert("LOCKED", persistent_blockers)
             elif debounce_action == "DEGRADED":
-                # 防抖器判定: 连续 degrade_after 次持久阻断 → DEGRADED
-                # BD-FIX (S17): Testnet 不降级控制面，仅记录状态
-                if self.mode != "testnet":
-                    await self._fail_closed(
-                        "防抖器: 连续持久阻断 → DEGRADED: "
-                        + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                        fatal=False,
-                    )
+                # PKG02 (BDS-P0-001): 所有环境统一降级行为。
+                await self._fail_closed(
+                    "防抖器: 连续持久阻断 → DEGRADED: "
+                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                    fatal=False,
+                )
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
                 if self._control_state() != "RESUME":
-                    # Testnet: 无阻断时自动恢复 RESUME
-                    if os.environ.get("BEIDOU_ENV") == "testnet":
-                        print("[supervisor] No blockers — auto-restoring RESUME")
-                        self._resume_authorized = True
-                        from beidou_control.plane import ControlAction as _CA3
-                        self.engine._control.execute_action(_CA3.RESUME)
-                        self.report.supervisor_state = "RUNNING"
-                    else:
-                        self.report.supervisor_state = "PAUSED"
+                    self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
                 # UNCHANGED: 防抖器计数中。
-                # BD-FIX (S17): Testnet 不在计数阶段降级，避免每轮检查都
-                # 重置 _resume_authorized → 控制面永远 NO_NEW_RISK。
-                if has_persistent and self.mode != "testnet":
+                if has_persistent:
                     previous_state = self.report.supervisor_state
                     await self._fail_closed(
                         "持久阻断检测（防抖计数中）: "
@@ -1148,8 +1124,8 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            # DEV_FAST_START / Testnet: 跳过深度验证，直接 RESUME
-            if os.environ.get("BEIDOU_DEV_FAST_START") == "1" or self.mode == "testnet":
+            # PKG02 (BDS-P0-001): 所有环境统一执行深度启动验证。
+            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
                 # 仍需要运行算法探针以消除启动阻断。
                 # 加超时防止 REST API 缓慢时无限挂起。

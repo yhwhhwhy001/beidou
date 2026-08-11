@@ -564,7 +564,8 @@ def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() ->
     assert "last_px * 1.001" not in source
     assert 'self._symbol_precision.get(order_symbol, {"quantity": 3, "price": 2})' not in source
     assert 'self._symbol_precision.get(symbol, {"quantity": 3, "price": 2})' not in source
-    assert "skipping unowned startup cancellation" in source
+    # PKG02: 所有环境统一处理无主订单取消 (不再有 testnet skip)
+    assert "skipping unowned startup cancellation" not in source
 
 
 # ================================================================
