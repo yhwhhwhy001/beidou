@@ -6762,8 +6762,8 @@ class AutonomousEngine:
                 position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
                 position_size = min(position_size, max_by_leverage * 0.5)
                 # PKG02: 从交易所规则获取最小下单量
-                _min_qty = float(_precision.get("min_quantity", 0) or 0)
                 _precision = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                _min_qty = float(_precision.get("min_quantity", 0) or 0)
                 _step = _precision.get("quantity", None)
                 if _step is not None:
                     try:
