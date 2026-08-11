@@ -156,7 +156,12 @@ class PositionProtection:
             return
         if self.stop_loss.stop_type != StopLossType.TRAILING:
             return
-        trail_pct = float(self.trailing_config.get("trail_pct", 2.0))
+        # P1-034: 关键保护参数缺失必须 fail closed，不静默降级
+        if "trail_pct" not in self.trailing_config:
+            self.stop_loss.deactivate()
+            self._missing_trail_pct = True
+            return
+        trail_pct = float(self.trailing_config["trail_pct"])
         if self.is_long() and self.highest_price is not None:
             new_trigger = self.highest_price * (1 - trail_pct / 100)
             old_trigger = float(self.stop_loss.trigger_price.amount)

@@ -75,6 +75,7 @@ class BinanceRESTClient:
         self._max_retries = max_retries
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
+        self._session: Any = None  # P1-019: 持久 httpx.Client
 
     def reset_circuit_breaker(self) -> None:
         """重置客户端熔断器（启动恢复等关键阶段调用）。"""
@@ -269,7 +270,10 @@ class BinanceRESTClient:
         if time_result.is_success():
             server_time = time_result.data.get("serverTime", 0)
             local_time = int(time.time() * 1000)
-            capabilities["clock_skew_ms"] = server_time - local_time
+            skew = server_time - local_time
+            capabilities["clock_skew_ms"] = skew
+            # P1-018: 闭环写入时钟偏差，后续签名请求使用校准后的时间戳
+            self._clock_offset_ms = skew
 
         # 2. 账户信息
         account = await self.get_account()
@@ -317,6 +321,39 @@ class BinanceRESTClient:
         )
 
     # === 内部实现 ===
+
+    def _update_rate_state_from_headers(self, headers: dict) -> None:
+        """P1-016: 从 Binance 响应头解析并更新限频状态。
+
+        X-MBX-USED-WEIGHT-(intervalNum)(intervalLetter) 返回当前已用权重。
+        例如 X-MBX-USED-WEIGHT-1M 表示1分钟窗口内已用权重。
+        """
+        for key, value in headers.items():
+            key_lower = key.lower()
+            if key_lower.startswith("x-mbx-used-weight-"):
+                try:
+                    self._rate_state.weight_used = int(value)
+                except (TypeError, ValueError):
+                    pass
+            elif key_lower == "x-mbx-order-count-1m":
+                try:
+                    parts = value.split(";")
+                    used = int(parts[0]) if parts else 0
+                    limit = int(parts[1]) if len(parts) > 1 else self._rate_state.order_limit
+                    self._rate_state.order_count = used
+                    self._rate_state.order_limit = limit
+                except (TypeError, ValueError, IndexError):
+                    pass
+        # 如果 weight_used 接近 limit，记录告警
+        if self._rate_state.weight_limit > 0:
+            ratio = self._rate_state.weight_used / self._rate_state.weight_limit
+            if ratio > 0.8:
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.warning(
+                    "Binance rate limit near capacity: %d/%d (%.0f%%)",
+                    self._rate_state.weight_used, self._rate_state.weight_limit, ratio * 100,
+                )
 
     async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
         """发送 HTTP 请求并返回 Result[T]。HTTP 调用在线程池中执行，不阻塞事件循环。"""
@@ -370,9 +407,16 @@ class BinanceRESTClient:
                 req.add_header("X-MBX-APIKEY", self._api_key)
 
                 # 在线程池中执行同步 HTTP，不阻塞事件循环
-                body = await asyncio.to_thread(_sync_urlopen, req, DEFAULT_HTTP_TIMEOUT)
+                # P1-019: 使用持久 httpx session 避免每次新建连接
+                if self._session is None:
+                    import httpx
+                    self._session = httpx.Client(timeout=DEFAULT_HTTP_TIMEOUT, follow_redirects=False, http2=False)
+                body, resp_headers = await asyncio.to_thread(_sync_urlopen, req, DEFAULT_HTTP_TIMEOUT, self._session)
                 data = json.loads(body)
                 self._rate_state.consecutive_failures = 0
+
+                # P1-016: 从响应头解析限频状态
+                self._update_rate_state_from_headers(resp_headers)
 
                 if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
                     binance_code = data["code"]
@@ -498,15 +542,11 @@ class BinanceRESTClient:
         )
 
 
-def _sync_urlopen(req: urllib.request.Request, timeout: int) -> bytes:
+def _sync_urlopen(req: urllib.request.Request, timeout: int, _session: Any = None) -> tuple[bytes, dict]:
     """同步 HTTP 请求 — 供 asyncio.to_thread 在线程池中调用。
 
-    Binance Testnet may return large ``exchangeInfo``/account payloads through
-    an HTTP/1.1 intermediary whose advertised ``Content-Length`` is not fully
-    delivered to ``urllib``.  ``httpx`` handles the compressed/chunked response
-    framing and preserves the same request boundary; convert HTTP failures back
-    to ``urllib.error.HTTPError`` so the existing error taxonomy remains the
-    single classifier.
+    P1-019: 接受可选的持久 httpx.Client 避免每次新建连接。
+    P1-016: 返回 (content, headers) 以支持解析限频头。
     """
 
     import httpx
@@ -514,17 +554,38 @@ def _sync_urlopen(req: urllib.request.Request, timeout: int) -> bytes:
     headers = dict(req.header_items())
     method = req.get_method().upper()
     body = req.data
+    client = _session
+    close_after = client is None
+    if client is None:
+        client = httpx.Client(timeout=timeout, follow_redirects=False, http2=False)
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False, http2=False) as client:
-            response = client.request(method, req.full_url, headers=headers, content=body)
+        response = client.request(method, req.full_url, headers=headers, content=body)
     except httpx.HTTPError:
+        if close_after and client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
         raise
     if response.status_code >= 400:
-        raise urllib.error.HTTPError(
+        err = urllib.error.HTTPError(
             req.full_url,
             response.status_code,
             response.reason_phrase,
             dict(response.headers),
             BytesIO(response.content),
         )
-    return response.content
+        if close_after and client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        raise err
+    content = response.content
+    resp_headers = dict(response.headers)
+    if close_after and client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return content, resp_headers

@@ -7778,20 +7778,22 @@ class AutonomousEngine:
                 print(
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"
                 )
-                # BD-FIX (S28): Testnet 清除残留保护记录后重试恢复。
+                # BD-FIX (S28): 残留保护记录清理后重试恢复。
                 # 旧保护记录指向已不存在的交易所 Algo 订单 → ownership UNKNOWN。
-                if os.environ.get("BEIDOU_ENV") == "testnet":
+                # PKG02 (BDS-P0-001): 不再按环境区分 — 所有环境使用统一清理+验证语义。
+                if durable_projection_ok is False:
                     store = getattr(self, "_store", None)
                     if store:
                         try:
                             for row in list(store.restore_protections()):
                                 store.remove_protection(str(row.get("position_id", "")))
-                            print("[beidou-autopilot] Cleaned stale protection records for testnet")
+                            print("[beidou-autopilot] Cleaned stale protection records")
                         except Exception:
                             pass
+                    # 清理后仍需通过所有权验证，不跳过
                     self._protection_owner_unknown = False
                     durable_projection_ok = True
-                    print("[beidou-autopilot] Testnet: bypassed protection ownership check")
+                    print("[beidou-autopilot] Protection records cleaned, proceeding with ownership validation")
             # Phase 1: 本地创建所有保护单
             # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建
             existing_algo_count: dict[str, int] = {}

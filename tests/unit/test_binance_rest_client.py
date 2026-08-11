@@ -56,7 +56,8 @@ def test_sync_urlopen_handles_large_response_and_preserves_http_errors(monkeypat
         headers={"X-MBX-APIKEY": "api-key"},
         method="POST",
     )
-    assert rest_module._sync_urlopen(request, 3) == b'{"ok":true}'
+    body, _headers = rest_module._sync_urlopen(request, 3)
+    assert body == b'{"ok":true}'
     with pytest.raises(HTTPError) as raised:
         rest_module._sync_urlopen(request, 3)
     assert raised.value.code == 503
@@ -114,9 +115,9 @@ def test_signed_success_adds_timestamp_signature_and_auth_header(monkeypatch: py
     )
     captured: list[object] = []
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, _session=None):
         captured.append((request, timeout))
-        return json.dumps({"serverTime": 123}).encode()
+        return json.dumps({"serverTime": 123}).encode(), {}
 
     monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
     result = asyncio.run(client.get_server_time())
@@ -138,10 +139,10 @@ def test_binance_business_error_is_classified_without_retry(monkeypatch: pytest.
     client = BinanceRESTClient("https://demo.example", max_retries=3)
     calls = 0
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, _session=None):
         nonlocal calls
         calls += 1
-        return b'{"code":-2015,"msg":"invalid api-key"}'
+        return b'{"code":-2015,"msg":"invalid api-key"}', {}
 
     monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
     result = asyncio.run(client.get_account())
@@ -157,7 +158,7 @@ def test_network_failure_retries_then_fails_closed(monkeypatch: pytest.MonkeyPat
     client = BinanceRESTClient("https://demo.example", max_retries=2)
     calls = 0
 
-    def fail_urlopen(request, timeout):
+    def fail_urlopen(request, timeout, _session=None):
         nonlocal calls
         calls += 1
         raise OSError("network down")
@@ -178,7 +179,7 @@ def test_rate_limit_retries_and_circuit_breaker_blocks(monkeypatch: pytest.Monke
     client = BinanceRESTClient("https://demo.example", max_retries=1)
     errors = 0
 
-    def rate_limited(request, timeout):
+    def rate_limited(request, timeout, _session=None):
         nonlocal errors
         errors += 1
         raise HTTPError(
@@ -213,7 +214,7 @@ def test_http_5xx_retryable_error_and_business_rejection(monkeypatch: pytest.Mon
     client = BinanceRESTClient("https://demo.example", max_retries=2)
     calls = 0
 
-    def unavailable(request, timeout):
+    def unavailable(request, timeout, _session=None):
         nonlocal calls
         calls += 1
         raise HTTPError(request.full_url, 503, "unavailable", {}, BytesIO(b"gateway"))

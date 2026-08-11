@@ -134,6 +134,7 @@ class PostOnlyAlgorithm(BaseExecutionAlgorithm):
         return ctx.urgency < 0.5 and ctx.limit_price is not None and ctx.spread_bps > 1.0
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
+        """P1-020: PostOnly 使用 GTX (PostOnly) 语义，非普通 LIMIT+GTC。"""
         invariant_ok, _msg = self.check_invariants(ctx)
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -144,7 +145,7 @@ class PostOnlyAlgorithm(BaseExecutionAlgorithm):
                     quantity=ctx.total_quantity,
                     price=ctx.limit_price,
                     order_type=OrderType.LIMIT,
-                    time_in_force=TimeInForce.GTC,
+                    time_in_force=TimeInForce.GTX,  # P1-020: 真正 maker-only
                     algorithm=self.algorithm_type,
                     sequence_number=0,
                     invariants_check_passed=invariant_ok,

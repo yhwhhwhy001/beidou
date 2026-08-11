@@ -84,7 +84,7 @@ class TestPostOnlyAlgorithm:
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.algorithm == ExecutionAlgorithmType.POST_ONLY
         assert len(plan.slices) == 1
-        assert plan.slices[0].time_in_force == TimeInForce.GTC
+        assert plan.slices[0].time_in_force == TimeInForce.GTX  # P1-020: 真正 maker-only
 
 
 class TestPassiveAlgorithm:

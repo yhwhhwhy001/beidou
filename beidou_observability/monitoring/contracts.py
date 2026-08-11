@@ -136,6 +136,7 @@ class MonitoringCheckResult:
     policy_version: str = "1.1"
 
     def compute_evidence_hash(self):
+        """P1-050: 证据 hash 绑定完整上下文 — entity/policy/correlation/remediation/provenance。"""
         p = {
             "check_id": self.check_id,
             "status": self.status.value,
@@ -147,8 +148,15 @@ class MonitoringCheckResult:
             "source_timestamp": self.source_timestamp,
             "observed_at": self.observed_at,
             "trace_id": self.trace_id,
+            # P1-050: 新增绑定字段
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "policy_version": self.policy_version,
+            "correlation_id": self.correlation_id,
+            "remediation": self.remediation,
+            "rollout_mode": self.rollout_mode,
         }
-        return hashlib.sha256(json.dumps(p, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:32]
+        return hashlib.sha256(json.dumps(p, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
 @dataclass(slots=True)

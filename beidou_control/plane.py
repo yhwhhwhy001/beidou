@@ -72,6 +72,30 @@ CONTROL_ALLOW_MATRIX: dict[ControlAction, set[RiskDirection]] = {
     },
 }
 
+# P1-042: 控制状态转换矩阵 — 仅允许安全状态转换
+# LOCK/EMERGENCY_FLATTEN 不可自动恢复（需显式签名恢复）
+CONTROL_TRANSITION_MATRIX: dict[ControlAction, set[ControlAction]] = {
+    ControlAction.NO_NEW_RISK: {
+        ControlAction.EXIT_ONLY, ControlAction.EMERGENCY_FLATTEN,
+        ControlAction.LOCK, ControlAction.RESUME, ControlAction.NO_NEW_RISK,
+    },
+    ControlAction.EXIT_ONLY: {
+        ControlAction.EMERGENCY_FLATTEN, ControlAction.LOCK,
+        ControlAction.RESUME, ControlAction.EXIT_ONLY,
+    },
+    ControlAction.EMERGENCY_FLATTEN: {
+        ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN,
+    },
+    ControlAction.LOCK: {
+        ControlAction.LOCK,  # LOCK 是终态 — 仅允许显式恢复
+    },
+    ControlAction.RESUME: {
+        ControlAction.NO_NEW_RISK, ControlAction.EXIT_ONLY,
+        ControlAction.EMERGENCY_FLATTEN, ControlAction.LOCK,
+        ControlAction.RESUME,
+    },
+}
+
 
 @dataclass
 class RejectionRecord:
@@ -135,8 +159,35 @@ class ControlPlane:
 
     # --- State management ---
 
-    def execute_action(self, action: ControlAction) -> ControlAction:
-        """执行状态变更，递增版本号，持久化。"""
+    def execute_action(self, action: ControlAction, expected_version: int | None = None) -> ControlAction:
+        """执行状态变更，递增版本号，持久化。
+
+        P1-042: 支持 CAS (compare-and-swap) 版本检查。
+        LOCK 状态不可自动恢复（需显式签名恢复）。
+        """
+        # CAS: 版本不匹配时拒绝（仅当显式传入 expected_version）
+        if expected_version is not None and self._version != expected_version:
+            raise RuntimeError(
+                f"CAS rejected: expected version {expected_version}, actual {self._version}"
+            )
+
+        # 状态转换矩阵验证（仅当目标不同于当前状态）
+        if action != self._action:
+            allowed_targets = CONTROL_TRANSITION_MATRIX.get(self._action, set())
+            if action not in allowed_targets:
+                # P1-042: 非法转换被拒绝
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.error(
+                    "Invalid state transition blocked: %s → %s (allowed: %s)",
+                    self._action.value, action.value,
+                    [a.value for a in allowed_targets],
+                )
+                raise RuntimeError(
+                    f"Invalid state transition: {self._action.value} → {action.value} "
+                    f"(allowed: {[a.value for a in allowed_targets]})"
+                )
+
         old_action = self._action
         self._action = action
         self._version += 1
@@ -383,7 +434,7 @@ class ControlPlane:
             str(getattr(intent, "quantity", "")),
             str(getattr(intent, "instrument_id", "")),
         ]
-        return hashlib.sha256(":".join(parts).encode()).hexdigest()[:16]
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()  # P1-043: 完整 SHA-256
 
     # --- Legacy compatibility ---
 

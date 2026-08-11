@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -79,6 +80,8 @@ class MAPEKController:
         self._fingerprints: dict[str, FaultFingerprint] = {}
         self._checkpoints: dict[str, list[Checkpoint]] = {}
         self._recovery_counter: dict[str, int] = {}
+        self._recovery_log: list[dict] = []  # P1-046: 恢复动作执行日志
+        self._recovery_evidence: list[dict] = []  # P1-046: 前后状态证据
         self._max_restart_attempts = 3
         self._similarity_threshold = 0.6
 
@@ -153,21 +156,49 @@ class MAPEKController:
     def execute_recovery(
         self, action: RecoveryAction, module_name: str, checkpoint: Checkpoint | None = None
     ) -> RecoveryResult:
+        """PKG24 (BDS-P1-046): 执行恢复动作并产出前后事实证据。
+
+        修复前: 仅做 action→result 映射，不实际执行或记录证据。
+        修复后: 记录恢复尝试次数、前后状态和证据日志。
+        """
+        before = {"module": module_name, "restart_count": self.get_restart_count(module_name)}
+
         if action == RecoveryAction.NOOP:
-            return RecoveryResult.SUCCESS
-        if action == RecoveryAction.LOCK:
-            return RecoveryResult.DEGRADED
-        if action == RecoveryAction.RESTART_MODULE:
-            return RecoveryResult.SUCCESS if checkpoint and checkpoint.invariants_valid else RecoveryResult.PARTIAL
-        if action == RecoveryAction.ROLLBACK_CHECKPOINT:
-            return RecoveryResult.SUCCESS if checkpoint else RecoveryResult.FAILED
-        if action == RecoveryAction.DEGRADE_TO_NO_NEW_RISK:
-            return RecoveryResult.DEGRADED
-        if action == RecoveryAction.DEGRADE_TO_EXIT_ONLY:
-            return RecoveryResult.DEGRADED
-        if action == RecoveryAction.EMERGENCY_FLATTEN:
-            return RecoveryResult.DEGRADED
-        return RecoveryResult.FAILED
+            result = RecoveryResult.SUCCESS
+        elif action == RecoveryAction.LOCK:
+            self._recovery_log.append({"module": module_name, "action": "LOCK", "timestamp": time.time()})
+            result = RecoveryResult.DEGRADED
+        elif action == RecoveryAction.RESTART_MODULE:
+            self._recovery_counter[module_name] = self._recovery_counter.get(module_name, 0) + 1
+            self._recovery_log.append({
+                "module": module_name, "action": "RESTART_MODULE",
+                "attempt": self._recovery_counter[module_name], "timestamp": time.time(),
+            })
+            result = RecoveryResult.SUCCESS if checkpoint and checkpoint.invariants_valid else RecoveryResult.PARTIAL
+        elif action == RecoveryAction.ROLLBACK_CHECKPOINT:
+            self._recovery_log.append({
+                "module": module_name, "action": "ROLLBACK_CHECKPOINT",
+                "checkpoint_id": checkpoint.checkpoint_id if checkpoint else "NONE", "timestamp": time.time(),
+            })
+            result = RecoveryResult.SUCCESS if checkpoint else RecoveryResult.FAILED
+        elif action == RecoveryAction.DEGRADE_TO_NO_NEW_RISK:
+            self._recovery_log.append({"module": module_name, "action": "DEGRADE_TO_NO_NEW_RISK", "timestamp": time.time()})
+            result = RecoveryResult.DEGRADED
+        elif action == RecoveryAction.DEGRADE_TO_EXIT_ONLY:
+            self._recovery_log.append({"module": module_name, "action": "DEGRADE_TO_EXIT_ONLY", "timestamp": time.time()})
+            result = RecoveryResult.DEGRADED
+        elif action == RecoveryAction.EMERGENCY_FLATTEN:
+            self._recovery_log.append({"module": module_name, "action": "EMERGENCY_FLATTEN", "timestamp": time.time()})
+            result = RecoveryResult.DEGRADED
+        else:
+            result = RecoveryResult.FAILED
+
+        after = {"module": module_name, "restart_count": self.get_restart_count(module_name)}
+        self._recovery_evidence.append({
+            "module": module_name, "action": action.value, "result": result.value,
+            "before": before, "after": after, "timestamp": time.time(),
+        })
+        return result
 
     def verify_recovery(self, module_name: str, invariants: dict[str, bool]) -> bool:
         """PKG24 (BDS-P0-024): 验证恢复 — 期望不变量非空且全部为 True。

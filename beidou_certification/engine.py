@@ -191,12 +191,16 @@ class CertificationFramework:
         signer = _os.environ.get("BEIDOU_CERT_SIGNER", "beidou-certification-engine")
         signing_key = _os.environ.get("BEIDOU_SIGNING_KEY", "")
         signature = ""
+        degradation_reasons: list[str] = []  # P1-065
         if signing_key:
             import hmac
             sign_payload = f"{gate_result.value}|{evidence_root}|{manifest_keys}"
             signature = hmac.new(
                 signing_key.encode(), sign_payload.encode(), hashlib.sha256
             ).hexdigest()
+        if gate_result == GateResult.PASS and not signature:
+            # P1-065: 无签名的 PASS 证书标记为需额外验证
+            degradation_reasons.append("UNSIGNED_CERTIFICATE")
 
         cert = GateCertificate(
             certificate_id=f"cert-{self.gate.value}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
@@ -204,7 +208,7 @@ class CertificationFramework:
             result=gate_result,
             scenarios=scenarios_completed,
             blocking_failures=blocking_failures,
-            degradation_conditions=["P0_FAILURE"] if blocking_p0 else [],
+            degradation_conditions=(["P0_FAILURE"] if blocking_p0 else []) + degradation_reasons,
             signer=signer,
             signature=signature,
             evidence_manifest=manifest_keys,
