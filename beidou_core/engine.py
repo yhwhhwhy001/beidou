@@ -6130,6 +6130,33 @@ class AutonomousEngine:
                     continue
                 placed = 0
 
+                # --- BD-FIX (S33): 首次创建止损单（如果没有）---
+                if pp.stop_loss is None:
+                    try:
+                        entry_price = pp.entry_price
+                        if entry_price <= 0:
+                            continue
+                        kline_features = await self._feed.async_get_kline_features(symbol)
+                        from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
+                        adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features or {})
+                        self._protection.create_protection(
+                            position_id=pos_id,
+                            instrument_id=InstrumentId(symbol),
+                            venue_id=VenueId("BINANCE"),
+                            entry_price=entry_price,
+                            quantity=float(pp.quantity),
+                            side=pp.side,
+                            stop_loss_config=adaptive_cfg.stop_loss_config,
+                            take_profit_config=adaptive_cfg.take_profit_config,
+                            owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
+                            position_generation=0,
+                            session_id=str(getattr(self, "_session_id", "")),
+                        )
+                        print(f"[nearline] Protection CREATED for {symbol}: SL+TP")
+                    except Exception as exc:
+                        print(f"[nearline] Protection creation failed for {symbol}: {exc}")
+                        continue
+
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
                 if _needs_exchange_protection(pp.stop_loss):
