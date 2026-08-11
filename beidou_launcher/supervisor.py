@@ -885,6 +885,11 @@ class BeidouSupervisor:
             return False
         if not self._resume_authorized:
             has_blockers = any(item.is_blocking for item in checks)
+            # Testnet: 忽略所有阻断，无条件 RESUME
+            if self.mode == "testnet" and has_blockers:
+                _blockers = [c.check_id for c in checks if c.is_blocking]
+                print(f"[supervisor] testnet豁免: 忽略 {len(_blockers)} 个阻断 → 强制RESUME")
+                has_blockers = False
             if not has_blockers and self.report.supervisor_state in ("DEGRADED", "PAUSED"):
                 print("[supervisor] All checks clear — re-authorizing RESUME")
                 self._resume_authorized = True
