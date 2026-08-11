@@ -1,0 +1,336 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/maguannan/beidou
+configfile: pyproject.toml
+plugins: hypothesis-6.165.1, cov-7.1.0, asyncio-1.4.0, anyio-4.14.2
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1564 items
+
+tests/architecture/test_architecture.py ....................             [  1%]
+tests/architecture/test_engine_boundaries.py ........                    [  1%]
+tests/integration/test_startup_guard.py ..........                       [  2%]
+tests/unit/test_account_discovery.py ...................                 [  3%]
+tests/unit/test_adaptive_protection.py ................................. [  5%]
+..                                                                       [  5%]
+tests/unit/test_alerts.py ...                                            [  6%]
+tests/unit/test_alpha_graph.py ........                                  [  6%]
+tests/unit/test_bf00_timing_mismatch.py .......                          [  7%]
+tests/unit/test_bf01_contracts.py ..............................         [  8%]
+tests/unit/test_bf01_label_builder.py ...................                [ 10%]
+tests/unit/test_bf01_point_in_time.py .................................  [ 12%]
+tests/unit/test_bf02_metrics.py ....................................     [ 14%]
+tests/unit/test_bf03_ast.py ............................................ [ 17%]
+...................................................................      [ 21%]
+tests/unit/test_bf05_evaluation.py ..................................... [ 24%]
+....                                                                     [ 24%]
+tests/unit/test_bf08_typed_graph.py ...............                      [ 25%]
+tests/unit/test_bf09_half_life.py .......                                [ 25%]
+tests/unit/test_binance_adapter.py ..................................... [ 28%]
+..                                                                       [ 28%]
+tests/unit/test_binance_rest_client.py .........                         [ 28%]
+tests/unit/test_binance_ws_client.py .........                           [ 29%]
+tests/unit/test_capacity_model.py .....................                  [ 30%]
+tests/unit/test_certification.py ...................................     [ 32%]
+tests/unit/test_certification_evidence_bundle.py ...                     [ 33%]
+tests/unit/test_config_v3.py .....                                       [ 33%]
+tests/unit/test_control_api.py ..                                        [ 33%]
+tests/unit/test_control_gate.py ...................................      [ 35%]
+tests/unit/test_engine_readiness_contract.py ........................... [ 37%]
+...............                                                          [ 38%]
+tests/unit/test_engine_signal_contracts.py ...........                   [ 39%]
+tests/unit/test_exchange.py .............                                [ 40%]
+tests/unit/test_execution.py ............................                [ 41%]
+tests/unit/test_execution_algorithms.py ................................ [ 43%]
+..........                                                               [ 44%]
+tests/unit/test_factor_live_pairing.py ...                               [ 44%]
+tests/unit/test_factor_research.py ...................................   [ 46%]
+tests/unit/test_fw03_e2e_mining.py .............                         [ 47%]
+tests/unit/test_g7_certification_integration.py ..                       [ 47%]
+tests/unit/test_gate_verifier.py ....                                    [ 48%]
+tests/unit/test_guard.py .................................s              [ 50%]
+tests/unit/test_health_server.py ....                                    [ 50%]
+tests/unit/test_infrastructure.py ..................                     [ 51%]
+tests/unit/test_kernel_parity_contract.py .......                        [ 52%]
+tests/unit/test_launcher.py .......................                      [ 53%]
+tests/unit/test_lifecycle.py ..................                          [ 54%]
+tests/unit/test_mapek.py ............                                    [ 55%]
+tests/unit/test_market_data.py ..........................                [ 57%]
+tests/unit/test_market_data_dq.py ..........                             [ 57%]
+tests/unit/test_migrations.py ......                                     [ 58%]
+tests/unit/test_model_control.py ..................                      [ 59%]
+tests/unit/test_monitoring_services.py ................................. [ 61%]
+.......................................                                  [ 64%]
+tests/unit/test_observability.py ..............                          [ 64%]
+tests/unit/test_operational_fact_bus.py ............                     [ 65%]
+tests/unit/test_orderbook.py ...                                         [ 65%]
+tests/unit/test_p1_batch.py .....                                        [ 66%]
+tests/unit/test_p1_execution_strategy.py .......                         [ 66%]
+tests/unit/test_p1_final_batch.py ........................               [ 68%]
+tests/unit/test_p1_security_market.py ............                       [ 68%]
+tests/unit/test_paper_certification_v2.py ...........                    [ 69%]
+tests/unit/test_paper_shadow.py ....                                     [ 69%]
+tests/unit/test_pnl_kernel.py ............                               [ 70%]
+tests/unit/test_policy_loader.py .....                                   [ 70%]
+tests/unit/test_policy_registry.py ..............                        [ 71%]
+tests/unit/test_postgres_outbox.py ....................                  [ 73%]
+tests/unit/test_postgres_store.py .....                                  [ 73%]
+tests/unit/test_protection.py ...........................                [ 75%]
+tests/unit/test_reconciliation_contract.py ............                  [ 75%]
+tests/unit/test_release.py ......                                        [ 76%]
+tests/unit/test_remaining_p0.py ................                         [ 77%]
+tests/unit/test_reporting.py ...........................                 [ 79%]
+tests/unit/test_risk_engine.py .................                         [ 80%]
+tests/unit/test_risk_rules.py ..................................         [ 82%]
+tests/unit/test_rsi_factor.py ............                               [ 83%]
+tests/unit/test_runtime_algorithm_probe.py .                             [ 83%]
+tests/unit/test_s2_risk_execution_safety.py ...................          [ 84%]
+tests/unit/test_s3_strategy_portfolio.py ..........                      [ 85%]
+tests/unit/test_s4_ledger_reconciliation.py ...........                  [ 85%]
+tests/unit/test_s5_monitoring_lifecycle.py ..................            [ 86%]
+tests/unit/test_s6_ci_certification.py .......                           [ 87%]
+tests/unit/test_safety_domain_contracts.py .............                 [ 88%]
+tests/unit/test_security.py ...................                          [ 89%]
+tests/unit/test_security_policy_gaps.py .........................        [ 90%]
+tests/unit/test_semantic_parity.py ................                      [ 92%]
+tests/unit/test_shared_types.py .......................                  [ 93%]
+tests/unit/test_store.py .....                                           [ 93%]
+tests/unit/test_store_adapter.py ..                                      [ 93%]
+tests/unit/test_strategy_data.py .............                           [ 94%]
+tests/unit/test_strategy_risk.py .........................               [ 96%]
+tests/unit/test_supervisor_health_contract.py ...                        [ 96%]
+tests/unit/test_unattended_certification.py ..........                   [ 97%]
+tests/unit/test_user_events.py .....                                     [ 97%]
+tests/unit/test_v3_fail_closed.py ................................       [ 99%]
+tests/unit/test_wfo_leakage.py .......
+ERROR: Coverage failure: total of 63 is less than fail-under=85
+                                                                         [100%]
+
+=============================== warnings summary ===============================
+tests/architecture/test_engine_boundaries.py::test_fact_models_are_immutable
+  /Users/maguannan/beidou/tests/architecture/test_engine_boundaries.py:78: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    fact = MarketFact(symbol="BTCUSDT", price=50000.0, timestamp=__import__("datetime").datetime.utcnow())
+
+tests/architecture/test_engine_boundaries.py::test_fact_models_are_immutable
+  /Users/maguannan/beidou/tests/architecture/test_engine_boundaries.py:87: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    timestamp=__import__("datetime").datetime.utcnow(),
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.14.6-final-0 _______________
+
+Name                                                        Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------------------------------------------
+beidou_autonomy/__init__.py                                     3      0      0      0   100%
+beidou_autonomy/mapek.py                                      144     28     42      3    76%   59, 117, 123->131, 164-201
+beidou_certification/__init__.py                                3      0      0      0   100%
+beidou_certification/engine.py                                371     74     96      9    77%   124, 506, 511, 516, 622, 663, 667, 672, 684-690, 699, 734, 739, 742, 753, 755-757, 774-777, 781, 785, 789, 796-810, 814-823, 827-834, 838-844, 848-853, 856
+beidou_certification/evidence_bundle.py                       129     49     48      7    53%   57, 62, 71, 73, 84, 86, 100, 134-135, 158-184, 215, 218-233, 237-241, 246-251
+beidou_certification/gate_verifier.py                         134      8     20      6    91%   32, 45, 49-50, 55, 61, 116, 200, 215->217
+beidou_certification/signing.py                                91     91      8      0     0%   8-168
+beidou_certification/unattended.py                            371     65     96     30    77%   153, 198-199, 215, 222-225, 238, 244->exit, 250->exit, 258->exit, 268->exit, 269->exit, 270->269, 281, 312, 328, 337, 353, 359, 367, 374, 388-420, 430, 483, 490-545, 579-580, 620-636, 684, 687-688, 690, 696, 709, 725, 729, 753-757, 759-760, 762->748, 770
+beidou_chaos/__init__.py                                        1      0      0      0   100%
+beidou_chaos/engine.py                                        145     59     38      7    55%   31, 34, 37, 81, 100-102, 110-128, 136-144, 149-150, 157-159, 165-167, 192->194, 195, 202-222, 225
+beidou_control/__init__.py                                      1      0      0      0   100%
+beidou_control/api.py                                         157     76     20      1    47%   76, 80, 85, 93-98, 114-124, 140, 175, 178, 188-193, 204, 207-220, 242-271, 275-277, 287-333
+beidou_control/plane.py                                       193      6     36      4    96%   170, 245, 262->267, 379, 414, 424-425
+beidou_core/__init__.py                                         1      0      0      0   100%
+beidou_core/alerts.py                                         195     42     46     14    74%   40, 61, 78->76, 101-105, 132-133, 163-166, 171-183, 196, 198, 206, 229, 253, 267->269, 270, 325-329, 340, 355-356, 363, 372-374, 377-381, 384-385, 416
+beidou_core/engine.py                                        4209   3128   1632    185    24%   164, 167, 169-170, 178, 184-185, 187, 195, 203, 228, 231, 235, 237, 239, 243, 247-248, 250, 252->257, 306-312, 324-328, 370-433, 436, 485-488, 495-498, 529, 559-595, 598, 605, 612-660, 663, 697-700, 703-706, 731, 760-763, 766-769, 772-775, 799, 806, 813-884, 887, 894, 901-949, 952, 969-988, 1009-1720, 1727, 1730, 1734-1738, 1746-1751, 1762-1771, 1786-1803, 1810-1811, 1813, 1816, 1839-1846, 1856-1875, 1896-2000, 2008, 2011, 2020-2023, 2028-2034, 2047->2055, 2051-2054, 2064-2065, 2091-2097, 2105, 2151, 2154, 2218, 2220-2221, 2281-2282, 2285-2287, 2289-2290, 2293, 2300-2302, 2308, 2314-2315, 2330-2331, 2366, 2373-2374, 2395, 2402-2403, 2423, 2434, 2436, 2438, 2442, 2444, 2452, 2457, 2462, 2470-2473, 2477-2517, 2520-2521, 2558-2559, 2628-2700, 2722->2716, 2742, 2744-2745, 2757-2758, 2761->2760, 2771-2772, 2789, 2797-2798, 2806->2805, 2808->2805, 2829, 2834-2835, 2836->2831, 2844-3061, 3065-3078, 3082-3088, 3098-3109, 3130-3132, 3137-3141, 3159, 3168-3169, 3181-3182, 3192-3193, 3197, 3201, 3205, 3218, 3240-3242, 3244, 3254-3289, 3293-3294, 3298-3299, 3302, 3306-3308, 3310-3311, 3312->3296, 3314-3315, 3322-3323, 3334-3337, 3344-3346, 3349-3350, 3353-3354, 3356-3357, 3360-3361, 3364-3368, 3370-3371, 3386-3388, 3399-3400, 3406-3408, 3416-3417, 3444-3445, 3447, 3464-3466, 3479->exit, 3483->3487, 3485->3487, 3488->3496, 3501-3544, 3560->3564, 3562->3564, 3565->exit, 3585->3589, 3593, 3603-3604, 3624-3625, 3630, 3635, 3638-3644, 3655-3656, 3661, 3720-3721, 3725, 3731, 3759, 3770, 3780, 3792, 3800, 3816-3817, 3839-4171, 4186-4402, 4423, 4426, 4437-4439, 4447-4448, 4450, 4453, 4463, 4466-4472, 4475, 4479-4480, 4485, 4487, 4491, 4505-4706, 4716, 4732-4847, 4867, 4879-4880, 4888, 4891, 4905-4909, 4923-4926, 4934, 4936->4938, 4939->4942, 4954-4989, 5003-5070, 5080, 5089-5091, 5105-5358, 5379->5381, 5381->5383, 5384, 5392-5395, 5397->5399, 5417-5429, 5442-5458, 5463-5475, 5488-5521, 5528-5529, 5536-5549, 5566-5567, 5570, 5584-5585, 5588-5590, 5593-5594, 5604-5612, 5618-5619, 5622-5623, 5628-5629, 5631-5666, 5679, 5690-5697, 5702-5719, 5726->5731, 5732->5737, 5738->5741, 5743->exit, 5779-5781, 5784-5816, 5824, 5853, 5857-5860, 5862-5865, 5869-5872, 5874-5877, 5881-5888, 5906, 5910, 5924-5948, 5961, 5965, 5971->5968, 5975, 5988-5990, 5991->6072, 6003-6044, 6060-6064, 6066-6067, 6073, 6077, 6094-6095, 6108-6196, 6204-6434, 6438-7131, 7157-7295, 7299-7459, 7466-7526, 7537-7541, 7561, 7568-8262, 8266-8341
+beidou_core/feed.py                                           518    237    174     34    51%   88-89, 107, 111, 116-124, 134-220, 224->243, 233-234, 235->242, 237-241, 244-247, 252-253, 267-268, 289, 291-295, 312, 315-316, 322, 327-328, 340, 348, 352, 366, 374, 378, 384, 387-388, 392, 394, 399, 401, 404-409, 417, 424, 434, 455-459, 462, 464, 470-476, 487->489, 495-498, 504-505, 509-510, 539-542, 552->561, 576-628, 633, 638-642, 645-663, 666, 671-770, 773-809, 880-883, 926, 929, 932
+beidou_core/guard.py                                          197     22     56      6    87%   178-179, 194-195, 266-272, 289, 329-345, 452, 455, 462-463
+beidou_core/health.py                                         126      7     30      4    92%   188->182, 210-215, 223, 228
+beidou_core/ports.py                                          135      4     56     42    75%   124->125, 124->exit, 125->126, 125->exit, 126->exit, 133->134, 133->exit, 134->135, 134->exit, 135->exit, 142->143, 142->exit, 143->144, 143->exit, 144->exit, 154->155, 154->exit, 155->156, 155->exit, 156->exit, 166->167, 166->exit, 167->168, 167->exit, 168->exit, 178->179, 178->exit, 179->180, 179->exit, 180->exit, 190->191, 190->exit, 191->192, 191->exit, 192->193, 192->exit, 193->exit, 203->204, 203->exit, 204->205, 204->exit, 205->exit, 228-230, 249
+beidou_core/store.py                                          342    113     62      9    65%   29-38, 331-336, 339-341, 366, 376-398, 535, 563, 621-628, 637, 647, 774-778, 865-867, 870-876, 879-884, 931-936, 953-973, 976-978, 1043-1048, 1055-1061, 1064-1074, 1080-1094, 1098-1102, 1109-1115, 1118-1129, 1142-1148, 1151-1156, 1167-1175, 1178-1188, 1200->exit, 1206, 1209
+beidou_data/__init__.py                                         1      0      0      0   100%
+beidou_data/datasets.py                                        37      5      6      1    77%   40->42, 50-53, 56
+beidou_data/feature_store.py                                   59     20     14      2    56%   29, 43->45, 48, 56-57, 61-63, 70-88, 92-97
+beidou_data/klines.py                                          76      9     16      2    84%   66, 91->93, 167-174
+beidou_data/market.py                                         254     29     64     22    83%   82, 89, 96, 109, 121, 123->exit, 128, 224, 229, 238, 263, 266-267, 269, 272, 278, 280, 333, 340, 356-381, 409-410, 415-416, 420->424, 431, 434->exit
+beidou_data/orderbook.py                                      103     29     28      6    64%   35, 38-42, 45, 82, 86, 103, 106, 107->97, 118-124, 140, 162-165, 168-172, 175
+beidou_data/quality.py                                         91     26     28      5    64%   47, 57, 67-68, 79-80, 91-95, 102-103, 118, 121-123, 126-137, 150, 154->151, 156->151
+beidou_data/trading_pool.py                                    66     12     18      6    74%   43, 51, 59, 69, 71, 75, 80-82, 86-88
+beidou_data/trading_pool_lifecycle.py                         131     45     44      8    57%   100-110, 113->116, 119-131, 145, 150, 154, 163, 167, 178-184, 187-190, 203, 207-209, 213-215
+beidou_delivery/__init__.py                                     1      0      0      0   100%
+beidou_delivery/release.py                                     86      7     20      3    89%   77, 83, 99->102, 110-114
+beidou_exchange/__init__.py                                     1      0      0      0   100%
+beidou_exchange/account_discovery/__init__.py                   2      0      0      0   100%
+beidou_exchange/account_discovery/checker.py                   92     10     38      6    85%   63, 73, 75, 97, 99, 122, 138-141
+beidou_exchange/binance_usdm/__init__.py                        3      0      0      0   100%
+beidou_exchange/binance_usdm/adapter.py                       608    134    260     85    74%   59-60, 69, 72, 123->122, 132, 139, 147->145, 173, 179-181, 193-194, 237, 253, 263, 290, 296-297, 301-303, 314, 321, 340, 349, 358, 372->391, 376->391, 384-388, 401, 406, 412, 415-416, 425-428, 433, 438, 444, 447, 455-458, 471, 474, 477, 480, 483, 486-487, 489->495, 491, 499-500, 509, 515, 521, 553, 559, 590->631, 628-630, 662, 715-717, 747, 750, 752, 757-758, 764-765, 767, 769, 773-774, 790, 794, 796, 798-800, 808, 820-822, 828, 853, 872-874, 887, 906, 943, 950, 961, 974, 983, 1004, 1019, 1023, 1032->1041, 1038-1039, 1043, 1047, 1055, 1059->1068, 1064-1066, 1080-1099, 1106, 1117-1118, 1152, 1159, 1181, 1185->1187, 1205-1206, 1220, 1227, 1239, 1251, 1258, 1261, 1281, 1284, 1302
+beidou_exchange/binance_usdm/endpoints.py                      44      0      0      0   100%
+beidou_exchange/binance_usdm/rest_client.py                   260     43     70     19    79%   92-94, 176->179, 179->181, 181->183, 270->279, 280->292, 297->300, 332-346, 348->exit, 351-353, 375-376, 398, 400-402, 469-470, 472-473, 494-495, 512-513, 537, 559->561, 563-569, 578->583, 586->591
+beidou_exchange/binance_usdm/ws_client.py                     436    100    146     37    73%   131, 141, 143, 149->151, 170->166, 177, 184-185, 190, 201, 224->217, 231, 236, 251-252, 258, 261, 297-298, 303-320, 326, 330-337, 340-352, 356-375, 385->388, 410->414, 433, 453, 455, 457, 474, 477, 486->489, 491, 503, 507, 513, 514->520, 516->518, 519, 523-524, 534-536, 544->550, 546->548, 549, 552-553, 571->exit, 576-578, 582-586, 622-626
+beidou_exchange/core/error_taxonomy.py                         79     17     28      6    69%   37, 125, 153-161, 165, 167, 169, 172-174, 237->239
+beidou_exchange/core/protocol.py                              183      1     44     39    82%   213->215, 213->exit, 217->219, 217->exit, 220->222, 220->exit, 223->225, 223->exit, 226->228, 226->exit, 229->231, 229->exit, 232->234, 232->exit, 235->237, 235->exit, 238->240, 238->exit, 241->243, 241->exit, 244, 251->253, 251->exit, 254->exit, 261->263, 261->exit, 264->266, 264->exit, 267->exit, 274->276, 274->exit, 277->279, 277->exit, 280->exit, 287->289, 287->exit, 290->292, 290->exit, 293->exit, 300->exit
+beidou_exchange/core/user_stream.py                            77      8     22      6    86%   67-68, 92-93, 124, 126, 130, 138
+beidou_exchange/router/__init__.py                              2      0      0      0   100%
+beidou_exchange/router/router.py                               55      7     18      1    84%   46, 75, 79-83
+beidou_infra/__init__.py                                        4      0      0      0   100%
+beidou_infra/backup.py                                        156     16     30     12    85%   86, 105, 118, 132, 136, 145, 148-149, 154-155, 173, 192, 195, 198, 208, 238
+beidou_infra/event_store.py                                    55     55     12      0     0%   6-121
+beidou_infra/ha.py                                             86      1      0      0    99%   81
+beidou_infra/lease.py                                          94     94     28      0     0%   7-162
+beidou_infra/outbox.py                                        519    179    166     44    60%   51-53, 75-78, 82-88, 92-95, 99-100, 104, 108-116, 120-121, 125, 129, 132, 160, 170-174, 195, 201, 211, 217->exit, 228-238, 249-254, 314, 318, 345, 364, 375, 387, 406, 408, 421, 448, 450, 476, 499, 501, 511, 535, 561-599, 604-612, 617-625, 628-633, 654, 656-661, 668, 681-684, 702, 706->726, 719, 721, 728, 742-745, 768->787, 816, 825-857, 861, 876, 892-902, 916, 948, 988, 996-997, 1001-1016, 1028, 1048, 1059, 1085, 1087, 1099, 1103, 1109-1124, 1159, 1169, 1179, 1189-1190
+beidou_infra/postgres_store.py                                335    180    100     11    42%   26-28, 32-34, 43, 46, 51-55, 94, 99->exit, 108-115, 119-125, 141-151, 177, 200-201, 228, 246-251, 271, 290, 293-323, 341-342, 347-367, 378, 399-406, 411-454, 457-467, 470, 473-476, 479, 501, 533, 538, 541-550, 553, 575-578, 602, 605, 608-609, 638-643, 660-661, 682, 685, 709-710, 738, 741-744, 751, 766-767, 770-781, 784, 789, 805-808, 819-820, 836-837, 842-855, 858-871, 875->exit, 877->879
+beidou_infra/store_adapter.py                                 119     58     32     13    45%   21->23, 21->exit, 24->26, 24->exit, 27->38, 27->exit, 39->41, 39->exit, 42->44, 42->exit, 45->exit, 56-57, 60-68, 71-73, 85-101, 104-110, 116-120, 123-125, 152-154, 157-159, 179, 188-189, 192-200, 208-209, 212->exit, 223-230
+beidou_launcher/__init__.py                                     4      0      0      0   100%
+beidou_launcher/__main__.py                                     1      1      0      0     0%   1
+beidou_launcher/checks.py                                      27     15      6      0    36%   15-23, 36-39, 42-43
+beidou_launcher/cli.py                                         66     40     22      0    32%   74-128
+beidou_launcher/g7_tracker.py                                 120      5     14      3    94%   88, 184-185, 224-225
+beidou_launcher/manifest.py                                    12      0      0      0   100%
+beidou_launcher/models.py                                      84     17     10      0    71%   139-167, 171
+beidou_launcher/preflight.py                                  239     68     54     15    68%   32-57, 78-107, 129, 136-137, 151-152, 155, 200, 217-218, 231-232, 235-236, 255-256, 277-278, 324-345, 393-395, 430->445, 457-458, 478->584, 502-506, 507->511, 509-510, 542->555, 571-582, 609-610
+beidou_launcher/registry.py                                    95     13     14      3    85%   118-119, 155-157, 161->166, 164-165, 238-239, 256-257, 260->277, 271-272
+beidou_launcher/runtime.py                                    242     64     70     19    69%   29-36, 59, 62, 65, 70, 75->83, 85, 90->96, 97, 144-163, 204-205, 207-208, 227-228, 233-240, 272-274, 281-282, 387, 389-390, 407-408, 443-446, 515-516, 550-551, 556-567, 578-579
+beidou_launcher/state.py                                      184     61     30     11    64%   38, 43-58, 62->71, 65-66, 68, 77-78, 81->exit, 137->exit, 143-148, 160, 163-164, 169-188, 195, 198-199, 204-205, 212, 214-215, 217, 228-229, 231, 234-235, 245-246
+beidou_launcher/supervisor.py                                 693    393    204     24    40%   124-126, 166, 187, 199, 234-254, 258, 262-263, 293, 319->323, 342-353, 359-381, 394-416, 428-462, 473-496, 504-523, 534-535, 559, 567, 613, 645-647, 653, 702-703, 714->724, 754-760, 765-766, 768->776, 769->776, 773-775, 784-789, 798->803, 800->803, 804-808, 814-828, 832, 842->844, 852-857, 874-940, 943-1082, 1085-1220
+beidou_lifecycle/__init__.py                                    4      0      0      0   100%
+beidou_lifecycle/capability.py                                 52      8     10      1    85%   44->46, 92-101, 105-114
+beidou_lifecycle/lifecycle.py                                  99     15     24      1    82%   104, 145, 148, 177-178, 181-189, 192
+beidou_observability/__init__.py                                1      0      0      0   100%
+beidou_observability/monitoring/__init__.py                   197     66     64     13    62%   70-80, 155, 181, 217-218, 228, 237-238, 245-246, 249->261, 255->257, 259-260, 264-265, 286, 289-292, 295->308, 300, 306-307, 328-344, 353-360, 391, 394-395, 401-428, 433, 440-445
+beidou_observability/monitoring/certification.py               85     85     12      0     0%   3-125
+beidou_observability/monitoring/checks/__init__.py              0      0      0      0   100%
+beidou_observability/monitoring/checks/account.py              44      9     24      4    75%   30, 46-52, 85, 102
+beidou_observability/monitoring/checks/execution.py            27      0      6      0   100%
+beidou_observability/monitoring/checks/factors.py              34     13     14      1    54%   48-49, 64-94
+beidou_observability/monitoring/checks/modules.py              16      0      6      0   100%
+beidou_observability/monitoring/checks/monitor_self.py         17      7      6      0    52%   10-26
+beidou_observability/monitoring/checks/protection.py           84      3     22      3    94%   94, 112, 114
+beidou_observability/monitoring/checks/reconciliation.py       55     11     20      2    80%   20, 29-30, 47-54
+beidou_observability/monitoring/checks/strategies.py           29      8     12      2    66%   14->11, 35->32, 52-69
+beidou_observability/monitoring/clock_integrity.py             33     12      8      2    56%   18-26, 36, 47, 67
+beidou_observability/monitoring/contracts.py                  202     12      8      0    90%   91-97, 100, 278, 282-284
+beidou_observability/monitoring/evidence.py                    46     11      2      0    73%   33, 48, 61-63, 66, 71, 74, 77, 91, 107
+beidou_observability/monitoring/fact_bus.py                    70      3     16      2    94%   82-83, 87->89, 106->105, 116
+beidou_observability/monitoring/fact_collector.py              71     20      8      1    66%   69-73, 81, 84-85, 88-97, 100-103, 108-109, 120, 123-134
+beidou_observability/monitoring/frequency_policy.py            50     10     30      8    78%   24, 33, 35, 53, 55, 57, 61, 79-80, 102
+beidou_observability/monitoring/health_aggregator.py           24      4      8      1    78%   15, 20-22
+beidou_observability/monitoring/incident_manager.py            65     16     28      7    69%   45->44, 62-67, 73, 89-94, 101, 104, 107, 116->115
+beidou_observability/monitoring/instrumentation.py             28      1      0      0    96%   47
+beidou_observability/monitoring/rate_limit_budget.py           71     24     10      2    60%   43, 48-50, 54-55, 58-59, 62-68, 77-84, 87, 90, 101
+beidou_observability/monitoring/repository.py                 101     24     20      6    70%   35-39, 53->exit, 59, 62, 90-91, 132, 146-160, 199, 203, 235-239, 258, 271, 274, 277-287
+beidou_observability/monitoring/retention.py                   32      1      4      1    94%   40
+beidou_observability/monitoring/rollout.py                     24     12      2      0    46%   14-16, 22-23, 26, 29-34
+beidou_observability/monitoring/scheduler.py                   18      0      0      0   100%
+beidou_observability/monitoring/service.py                     32      7      0      0    78%   35, 41-42, 48, 51, 61, 65
+beidou_observability/monitoring/snapshot_broker.py             65     12     12      4    77%   41, 45, 61, 63, 65, 84, 97, 100, 106-109
+beidou_observability/monitoring/storm_detector.py              31      1      2      0    97%   50
+beidou_observability/monitoring/watchdog.py                    20      0      2      0   100%
+beidou_observability/telemetry.py                             122      8     20      4    90%   79->exit, 115->120, 120->exit, 175, 188-193, 196
+beidou_policy/__init__.py                                       1      0      0      0   100%
+beidou_policy/loader.py                                        91     22     34     10    71%   52, 55-56, 87, 90-91, 93, 95, 97, 104, 134-137, 150, 161, 162->164, 165-166, 170-173
+beidou_policy/registry.py                                     167     34     52      8    74%   74-75, 78-80, 106, 142, 144, 148-156, 162, 168, 187-192, 197, 206-220, 230, 233
+beidou_production/__init__.py                                   1      0      0      0   100%
+beidou_production/ladder.py                                    99     15     32     13    79%   38, 41, 43-45, 63, 85, 95->102, 96->98, 98->102, 100-101, 114, 123->125, 132, 134, 137->135, 142, 147, 149
+beidou_reporting/__init__.py                                    2      0      0      0   100%
+beidou_reporting/engine.py                                    263      8     52      4    96%   286-295, 611->624, 639, 642, 664, 666
+beidou_research/__init__.py                                     1      0      0      0   100%
+beidou_research/backtest/__init__.py                            0      0      0      0   100%
+beidou_research/backtest/replay.py                             42      6      6      1    77%   50-54, 62
+beidou_research/data/__init__.py                                0      0      0      0   100%
+beidou_research/factors/__init__.py                             2      0      0      0   100%
+beidou_research/factors/factor.py                             384     52    112     35    80%   166, 179-181, 334, 352, 376->391, 391->416, 397-399, 401, 408, 410, 414, 429, 433, 488-501, 524, 532, 560, 567, 572, 579, 593, 597, 605, 608, 657, 661->663, 673, 684, 691-693, 696-703, 708, 718, 723, 725, 731, 738, 759, 783, 785, 792
+beidou_research/factors/rsi.py                                 73      5     24      5    90%   91, 147, 160, 173, 175
+beidou_research/kernel.py                                      85     17     16     10    69%   19->20, 19->exit, 20->21, 20->exit, 21->exit, 27->28, 27->exit, 28->29, 28->exit, 29->exit, 49-60, 72-74, 78-82, 86-88, 138-140, 163
+beidou_research/mining/__init__.py                              6      0      0      0   100%
+beidou_research/mining/canonicalizer.py                        38     38      8      0     0%   9-83
+beidou_research/mining/contracts.py                           137      1      8      0    99%   246
+beidou_research/mining/evaluation/__init__.py                   0      0      0      0   100%
+beidou_research/mining/evaluation/cost_capacity.py            202     24     72     11    84%   58, 172-174, 180, 279, 324->327, 388, 410, 413, 420, 428-432, 442, 458-464, 481
+beidou_research/mining/evaluation/cpcv.py                     159     20     54     14    82%   98, 103-110, 118, 121, 141->155, 156, 194->197, 220->217, 223, 233, 264-265, 272->276, 299, 308, 317-318
+beidou_research/mining/evaluation/fast_screen.py               94     14     34      3    80%   95-97, 177-194, 200, 205
+beidou_research/mining/evaluation/metrics.py                  417     28    168     24    91%   111-112, 122, 129-130, 155, 158, 183->185, 236, 246, 250, 259, 277, 281, 294, 329, 333, 366, 391, 493, 553, 597, 624, 673-674, 730, 751, 784, 823
+beidou_research/mining/evaluation/multiple_testing.py         182     12     66     13    90%   167, 243, 294, 296, 321, 345, 412->417, 420, 424, 429, 433, 436, 446
+beidou_research/mining/evaluation/pnl_kernel.py               164     32     58     11    75%   55, 61, 164, 171, 189-190, 198-199, 212, 251->257, 253->257, 261->265, 281, 305, 330-339, 376-389
+beidou_research/mining/evaluation/purged_walk_forward.py      153     10     36      5    92%   43, 47, 345, 357, 398-399, 401-402, 404-405
+beidou_research/mining/evaluation/stability.py                109     28     24      7    68%   78, 108->111, 120, 149-164, 192-217, 274, 283, 291, 297
+beidou_research/mining/evidence.py                             54      3      8      3    90%   163, 165, 167
+beidou_research/mining/expression_ast.py                     1300    244    322     67    79%   99-100, 137, 148, 156-164, 170, 234, 288, 291, 294, 306-315, 346, 348, 356, 358, 373, 385, 409, 413, 447, 449, 452, 456, 462, 466, 501, 503, 506, 510, 513, 558, 599, 601, 604, 608, 614, 618, 621, 636, 641, 643, 646, 650, 656, 660, 678, 683, 685, 688, 692, 698, 702, 705-709, 725, 730, 732, 738, 741, 751, 755, 758, 781, 783, 786, 833, 835, 838, 842, 845, 848, 852, 879, 882, 886, 893, 897, 907, 934, 936, 939, 943, 946, 949, 953, 981, 986, 988, 991, 995, 998, 1001, 1005, 1036, 1039, 1048, 1052, 1057, 1076, 1080, 1125-1127, 1131, 1134, 1138, 1141, 1145, 1167-1169, 1173, 1176, 1180, 1183, 1187, 1207, 1214, 1218, 1221, 1225, 1228, 1237, 1261, 1267, 1271, 1274, 1277, 1287, 1295, 1308, 1316, 1322, 1338, 1349, 1355->1354, 1382, 1390, 1418, 1464, 1488, 1490, 1516, 1533, 1538, 1548, 1559, 1569, 1591, 1620, 1629, 1639, 1646, 1671, 1678, 1681, 1685, 1688, 1717-1721, 1725, 1747, 1750, 1753, 1756-1760, 1764, 1767, 1771, 1774, 1794-1798, 1802, 1805, 1809, 1812, 1823, 1826, 1829, 1832-1836, 1840, 1843, 1847, 1850, 1870-1880, 1884, 1887, 1891, 1895, 1906, 1909, 1912, 1915-1924, 1928, 1931, 1935, 1938
+beidou_research/mining/generators/__init__.py                   0      0      0      0   100%
+beidou_research/mining/generators/bayesian_search.py          104    104     26      0     0%   11-228
+beidou_research/mining/generators/interaction.py               59     59     18      0     0%   17-158
+beidou_research/mining/generators/regime_conditioned.py        65     65     12      0     0%   12-174
+beidou_research/mining/generators/residual.py                  74     74     22      0     0%   13-179
+beidou_research/mining/generators/symbolic_gp.py              105    105     20      0     0%   12-230
+beidou_research/mining/generators/template_grid.py             65      1     12      2    96%   133->114, 138
+beidou_research/mining/label_builder.py                       169     16     44     10    87%   158-159, 161, 208->211, 235-262, 267, 283, 358, 362, 374, 394->399, 464-468, 476-477
+beidou_research/mining/leakage_guard.py                        79     79     24      0     0%   10-161
+beidou_research/mining/migration.py                            67     67     10      0     0%   11-140
+beidou_research/mining/orchestrator.py                        123    123     22      0     0%   13-253
+beidou_research/mining/persistence.py                         244    164     48     17    29%   30->31, 30->exit, 31->32, 31->exit, 32->33, 32->exit, 33->34, 33->exit, 34->exit, 40->41, 40->exit, 41->42, 41->exit, 42->exit, 62, 69-79, 83-98, 102, 111-130, 133-147, 150-161, 164-187, 190-213, 216-223, 238, 241-263, 266-279, 282-292, 295-303, 306-327, 330-351, 384-385, 392-393, 398, 402-411, 414-425, 437-438, 441-445, 448-453, 456
+beidou_research/mining/point_in_time.py                       223     22    102     24    85%   88->90, 127, 161, 185-186, 217, 227, 256-259, 273, 275, 277, 341->340, 347, 362, 377->375, 397, 448, 453, 474->481, 475->479, 476->475, 479->474, 484, 544, 561-562
+beidou_research/mining/primitive_library.py                   183     38     82     16    76%   131, 133, 135, 140, 193, 252, 261, 282, 289-294, 303, 305, 308-314, 318, 328, 330, 355, 359, 363, 367-369, 381, 398, 402, 406, 462, 464
+beidou_research/mining/runner.py                              498    126    168     41    70%   106, 110, 117, 121, 124, 135, 237-242, 394, 419, 437-452, 493-495, 616->618, 618->620, 620->622, 622->624, 624->628, 630-631, 632->634, 635, 653-784, 850-851, 865->864, 888, 894->899, 901-911, 951, 962, 992, 999, 1003-1010, 1065, 1069-1071, 1075-1077, 1089-1092, 1107, 1115, 1122->1119, 1127, 1135, 1145, 1148-1149, 1155, 1164, 1171, 1176, 1185, 1189-1190, 1197
+beidou_research/mining/selection/__init__.py                    0      0      0      0   100%
+beidou_research/mining/selection/ensemble.py                   64     64     20      0     0%   11-134
+beidou_research/mining/selection/marginal_contribution.py      45     45     10      0     0%   10-107
+beidou_research/mining/selection/pareto.py                     91     91     44      0     0%   7-174
+beidou_research/mining/selection/redundancy.py                128    128     52      0     0%   12-225
+beidou_research/models/__init__.py                              0      0      0      0   100%
+beidou_safety/__init__.py                                       1      0      0      0   100%
+beidou_safety/execution/__init__.py                            59      0      0      0   100%
+beidou_safety/execution/algorithms.py                         299     39     78     21    82%   101, 112, 117, 122, 124, 126, 169-171, 207, 221, 342-365, 424-439, 444, 473, 475, 493, 506, 508, 510, 519-520, 542, 561->580, 607, 666, 674->678, 701, 739, 743
+beidou_safety/execution/conditional.py                         77     10     16      6    83%   64, 83, 86, 121, 127-128, 132, 157-159
+beidou_safety/execution/decision_persistence.py                70      0      8      1    99%   63->exit
+beidou_safety/execution/intent.py                             318     91    114     27    67%   81, 86, 88->90, 136, 183, 226, 237, 239, 249, 253-267, 271, 294-295, 297, 353, 356, 367, 418, 440-479, 482-486, 489-490, 493, 508, 515->517, 519-521, 524->526, 529-530, 535-555, 595, 624, 629->633, 630->629, 634-635, 672, 677
+beidou_safety/execution/ledger.py                             178     17     56      8    89%   95, 127-128, 138-139, 181, 185, 194->196, 203, 240-241, 257-258, 280, 293, 296, 299, 303->302, 305
+beidou_safety/execution/order_machine.py                       93      6     20      4    89%   85->88, 89->91, 101-106, 141, 145->144, 147
+beidou_safety/execution/order_state.py                         56     11     14      1    71%   113-117, 130-136
+beidou_safety/execution/reconciliation.py                     174     29     54     11    79%   27, 95, 115-123, 127, 147, 149, 179, 185, 210, 254-262, 294, 332, 336, 345, 386, 430-435
+beidou_safety/execution/recovery.py                            58     15      2      0    72%   51, 55, 73-77, 80-92, 96, 103-104, 107-108
+beidou_safety/execution/user_events.py                        193     31     66     22    78%   38, 72->exit, 81, 84-85, 96->102, 123-124, 125->127, 135, 155, 166, 176, 191->198, 196-197, 205, 219->235, 225-228, 237->243, 245-246, 254, 262, 265, 272->287, 278-281, 292, 295->301, 303-304, 313, 315->318, 322
+beidou_safety/executor_impl.py                                 43     10     10      0    74%   26-31, 37-40
+beidou_safety/gate/__init__.py                                 13      0      0      0   100%
+beidou_safety/position/__init__.py                              2      0      0      0   100%
+beidou_safety/position/projection.py                          105      6     22      3    93%   92, 99-100, 105, 118, 122
+beidou_safety/protection/__init__.py                            2      0      0      0   100%
+beidou_safety/protection/engine.py                            325     59    122     35    76%   105, 108, 139, 144->149, 147->149, 160-174, 179, 193-194, 227, 239, 245, 271, 273, 277, 293, 359-369, 418-419, 421, 423, 442->502, 457-458, 460, 463, 465, 471-474, 504, 520-521, 529, 531, 533, 536, 580, 582, 584, 586, 589, 592, 594, 596, 606, 608->612, 613->612
+beidou_safety/protection/exchange_protection.py                73      0      8      0   100%
+beidou_safety/protection/lifecycle.py                          68      4     10      4    90%   50->53, 58->exit, 80, 91, 96, 101
+beidou_safety/risk/__init__.py                                 40      0      0      0   100%
+beidou_safety/risk/approval.py                                 67      1     10      3    95%   24->exit, 39->exit, 139
+beidou_safety/risk/engine.py                                  322     67     96     11    74%   158, 161-165, 191-195, 212, 215-217, 220-225, 228-242, 402, 406, 437, 455, 471-472, 482-483, 487-508, 546, 571, 573-574, 581-584, 588-589, 594, 605
+beidou_safety/risk/liquidation.py                              45      0      6      0   100%
+beidou_safety/risk/risk_level.py                              100      8     20      2    92%   66-67, 72, 154->165, 167, 194, 217-218, 223
+beidou_safety/risk/rules.py                                   205     51     74     26    72%   55-56, 62, 75, 79-80, 82, 91, 95-96, 98, 109, 112-113, 115, 126, 129-130, 132, 143, 146-147, 149, 160, 163-164, 166, 175, 179-180, 187, 202-203, 205, 213, 220-221, 223, 225, 229, 232-233, 235, 248-249, 251, 253, 257, 259, 268, 278
+beidou_security/__init__.py                                     1      0      0      0   100%
+beidou_security/credential_validator.py                       247     31     64     12    85%   82-83, 133, 194, 204, 226, 282, 285, 297, 303->294, 306->294, 309-314, 322-323, 330-331, 347-350, 390, 398, 402-405, 439, 447, 464
+beidou_security/identity.py                                    97      2     26      2    97%   141, 149
+beidou_shared/__init__.py                                       1      0      0      0   100%
+beidou_shared/config/__init__.py                              213     18     38      9    88%   26-27, 32, 34->36, 282-289, 298-299, 314-316, 325, 328, 337->342, 370-372, 446
+beidou_shared/contracts/__init__.py                            48     48     12      0     0%   3-68
+beidou_shared/envelope/__init__.py                             32      0      0      0   100%
+beidou_shared/environment_profile.py                           60      6      8      1    90%   112, 125, 131, 145->147, 162-164
+beidou_shared/errors/__init__.py                               59      0      0      0   100%
+beidou_shared/serde/__init__.py                                23     23      4      0     0%   3-42
+beidou_shared/types/__init__.py                               115      0      0      0   100%
+beidou_strategy/__init__.py                                     1      0      0      0   100%
+beidou_strategy/alpha/__init__.py                              93      2     32      4    95%   52, 55->56, 55->exit, 57->exit, 114
+beidou_strategy/alpha/contracts.py                            140     12      8      0    86%   144-160
+beidou_strategy/alpha/extensions.py                            31     31      2      0     0%   3-50
+beidou_strategy/alpha/legacy_adapter.py                        91     59     40      5    31%   26, 34-41, 48-59, 83-93, 99-131, 137-143, 160-163, 174, 175->171, 177, 179-181
+beidou_strategy/alpha/mean_reversion.py                       110     51     34      8    49%   51-64, 68-88, 99-127, 163, 171->170, 180, 182, 192, 199, 205, 211
+beidou_strategy/alpha/model_registry.py                        82     10     28      8    80%   46, 50, 55->54, 61-63, 65, 70, 72->71, 74, 96, 101, 104->102
+beidou_strategy/alpha/signal_fusion.py                         53      4     14      4    88%   35, 45, 60, 69
+beidou_strategy/alpha/typed_graph.py                          246     42     86     19    77%   121, 124->126, 124->exit, 127, 147-148, 156-157, 161-162, 243-267, 292->291, 333-354, 367-368, 371-405, 438->432, 442->432, 487, 517, 566, 572, 574, 596, 615->618, 619->610, 624->622, 626->622, 629
+beidou_strategy/components/__init__.py                          0      0      0      0   100%
+beidou_strategy/components/mean_reversion_fixed.py             59      4     14      4    89%   67, 90, 126-128
+beidou_strategy/kernel_parity.py                              124     21     42     10    80%   58, 62-65, 70-76, 100, 106, 117->120, 134->136, 143, 176-183, 189->191, 199-206
+beidou_strategy/paper_shadow.py                               286     86     92     28    63%   91, 95, 103, 107, 150, 151->163, 153, 158-159, 161, 163->188, 178->188, 202, 204, 207, 211-212, 214, 218, 220, 223, 227, 244, 272->exit, 282-283, 300-374, 377, 381->384, 393-395, 400->414, 403-404, 410-411, 433->436, 491-508, 554, 559, 574-597, 600-605, 616, 619, 622, 625, 628, 632
+beidou_strategy/portfolio/__init__.py                          37      0      0      0   100%
+beidou_strategy/portfolio/constraints.py                       88     18     30      8    73%   68-73, 123-124, 128->131, 132-133, 138-140, 145-146, 153-155, 158
+beidou_strategy/portfolio/optimizer.py                         67      5     30      7    88%   32, 37-38, 52->55, 96, 127->141, 129->141, 142
+beidou_strategy/protection/__init__.py                          2      0      0      0   100%
+beidou_strategy/protection/adaptive.py                        137      8     44      4    93%   118-119, 121, 235, 239, 284-285, 287
+beidou_strategy/risk/__init__.py                                2      0      0      0   100%
+beidou_strategy/risk/manager.py                               245     55     62     13    74%   67-75, 103, 119-133, 138-141, 152, 195, 207, 219, 222->226, 268, 274->278, 286->304, 306->321, 333, 357, 365, 402, 408-412, 416-425, 444, 447
+beidou_strategy/state/__init__.py                               0      0      0      0   100%
+beidou_strategy/state/cost_model.py                            57     13      8      2    74%   37, 54, 96-107, 123
+beidou_strategy/state/market_state.py                          56     16      6      0    65%   51-55, 62-63, 66-70, 80, 83-85
+beidou_strategy/state/real_cost_model.py                       79      1      4      1    98%   110
+-------------------------------------------------------------------------------------------------------
+TOTAL                                                       27777   9179   7972   1523    63%
+FAIL Required test coverage of 85.0% not reached. Total coverage: 62.70%
+================= 1563 passed, 1 skipped, 2 warnings in 13.62s =================

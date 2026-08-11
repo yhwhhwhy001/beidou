@@ -1,0 +1,25 @@
+❌ beidou_launcher/supervisor.py:1  [network_bypass]  network/endpoint outside exchange adapter
+❌ beidou_launcher/preflight.py:56  [swallowed_exception]  except Exception:
+        pass
+❌ beidou_core/engine.py:3282  [swallowed_exception]  except Exception:
+                    pass
+❌ beidou_core/engine.py:6610  [swallowed_exception]  except Exception:
+                        continue
+❌ beidou_core/engine.py:7934  [swallowed_exception]  except Exception:
+                            pass
+❌ beidou_core/engine.py:1  [network_bypass]  network/endpoint outside exchange adapter
+❌ scripts/cleanup_stale_exchange_orders.py:1  [network_bypass]  network/endpoint outside exchange adapter
+❌ beidou_observability/monitoring/fact_bus.py:82  [swallowed_exception]  except Exception:
+                pass
+❌ tests/unit/test_market_data_dq.py:146  [swallowed_exception]  except Exception:
+            pass
+❌ tests/unit/test_operational_fact_bus.py:36  [swallowed_exception]  except Exception:
+            pass
+❌ beidou_exchange/binance_usdm/rest_client.py:567  [swallowed_exception]  except Exception:
+                pass
+❌ beidou_exchange/binance_usdm/rest_client.py:581  [swallowed_exception]  except Exception:
+                pass
+❌ beidou_exchange/binance_usdm/rest_client.py:589  [swallowed_exception]  except Exception:
+            pass
+
+13 forbidden pattern(s) found.  Delivery gate FAILED.

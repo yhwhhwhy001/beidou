@@ -1,0 +1,224 @@
+{
+  "task_id": "BD-CV00",
+  "title": "重新基线、冻结写交易与恢复 CI 证据",
+  "priority": "P0",
+  "wave": 0,
+  "status": "EVIDENCE_COLLECTED",
+  "baseline": "aeaa44700956eccba6e8fc5be7646ca42ce395d5",
+  "execution_head": "aeaa44700956eccba6e8fc5be7646ca42ce395d5",
+  "head_match": true,
+  "generated_at": "2026-08-12T03:29:00+08:00",
+  "environment": {
+    "os": "macOS 26.6.2 (Build 25G82)",
+    "python_version": "3.14.6",
+    "python_path": "/Users/maguannan/beidou/.venv/bin/python3",
+    "branch": "main",
+    "remote": "https://github.com/yhwhhwhy001/beidou.git",
+    "beidou_env": "testnet",
+    "working_directory": "/Users/maguannan/beidou"
+  },
+  "config_hashes": {
+    "pyproject_toml": "cd1dbf8cf6e1797983fe9b54c0340f5c7855a45ee3d9e910410efefb63eba01a",
+    "makefile": "56b5703352e9ae0d80c9676640bc989b3dee99855f7316b45ebd69cc87a902ce",
+    "ci_yml": "02e9ec2d7293a25d909201f8f4d327021d1abf1f4c4a1a0c6f36df2d806dce07",
+    "guard_py": "7748865fd5dc244c6d01a03860b78db595882a2faefc6c1a9b41fde810416163",
+    "plane_py": "a89a34041e656cd5bf39fcd69338a0a901fb84f4d19ea70ef76d4374fe2e98b5",
+    "environment_profile_py": "efc2a78de5cef7262f1f2c7abf3e2e117ef0f1e4f3c8f7909631a0bedcc60830"
+  },
+  "command_results": {
+    "compileall": {
+      "command": "python -m compileall -q beidou_* apps",
+      "exit_code": 0,
+      "verdict": "PASS",
+      "stdout_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pytest_collect": {
+      "command": "pytest --collect-only -q",
+      "exit_code": 0,
+      "verdict": "PASS",
+      "tests_collected": 1564,
+      "stdout_hash": "50527a4801dd77f63c9f719d107d8730cb210b1bb75b9dd340a206537e884626"
+    },
+    "ruff_check": {
+      "command": "ruff check beidou_* apps tests scripts",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "errors": 219,
+      "fixable": 86,
+      "stdout_hash": "85c33923101ad9eb11cabf15fe643b7910aae44d7f3af9d8e4b5e974d916faaa"
+    },
+    "ruff_format": {
+      "command": "ruff format --check beidou_* apps tests scripts",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "files_need_reformat": 53,
+      "files_already_formatted": 270,
+      "stdout_hash": "99241060e5cdfb9297a07f8c4655c1a6d91b019fc69b42a48be46354b234c120"
+    },
+    "mypy": {
+      "command": "mypy beidou_* apps --no-error-summary",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "errors": 7,
+      "stdout_hash": "19b841ca381cea56ea6037570948d5f08af6892b494b2bd91c5604dd704a0a3d"
+    },
+    "pytest_full": {
+      "command": "pytest tests -q",
+      "exit_code": 0,
+      "verdict": "PASS",
+      "passed": 1563,
+      "skipped": 1,
+      "failed": 0,
+      "duration_seconds": 9.97,
+      "stdout_hash": "38652b0b2bd2a0583dae0566d5289c7896359b6373deb0b995ef041653bb2491"
+    },
+    "coverage": {
+      "command": "pytest tests --cov --cov-branch --cov-report=term-missing -q",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "total_coverage_pct": 62.70,
+      "required_coverage_pct": 85.0,
+      "total_lines": 27777,
+      "missing_lines": 9179,
+      "stdout_hash": "4e609f3bf5622ded31b3492f1a2f036fc4e0c4767bc2b733191e4e22cee6b0fa"
+    },
+    "forbidden_patterns": {
+      "command": "python delivery/scripts/check_forbidden_patterns.py --repo .",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "violations": 13,
+      "stdout_hash": "58cdffc6ce7ec1cbcacc81883b0cfaced42e39a1333f21c07e3d510ec1656725"
+    },
+    "hardcoded_values": {
+      "command": "python scripts/scan_hardcoded.py beidou_*",
+      "exit_code": 1,
+      "verdict": "FAIL",
+      "violations": 7,
+      "stdout_hash": "136951f276fd2cd9757a06a6744e4ab0d6a77933e91ea3d89d279351cafbe3d3"
+    },
+    "package_validation": {
+      "command": "python delivery/scripts/validate_package.py",
+      "exit_code": 0,
+      "verdict": "PASS",
+      "stdout_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "ci_status": {
+    "github_actions_verify_job": "NOT_VERIFIABLE",
+    "github_actions_security_job": "NOT_VERIFIABLE",
+    "reason": "原始 GitHub Actions job logs 在包生成时无法通过 GitHub API 取回；本地等效命令已运行并保存证据，本地 HEAD 与基线一致。",
+    "local_equivalent_checks": {
+      "compileall": "PASS",
+      "ruff_check": "FAIL (219 errors)",
+      "ruff_format": "FAIL (53 files)",
+      "mypy": "FAIL (7 errors)",
+      "unit_tests": "PASS (local only)",
+      "integration_tests": "PASS (local only)",
+      "architecture_tests": "PASS (local only)",
+      "coverage": "FAIL (62.70% < 85%)",
+      "forbidden_patterns": "FAIL (13 violations)",
+      "hardcoded_values": "FAIL (7 violations)",
+      "package_validation": "PASS"
+    }
+  },
+  "write_trading_status": {
+    "mainnet": "PROHIBITED (guard.py blocks mainnet URLs)",
+    "testnet": "can_write=true (BEIDOU_ENV=testnet, environment_profile.py allows testnet writes)",
+    "paper": "can_write=false",
+    "shadow": "can_write=false",
+    "note": "Testnet write capability exists but no running instance. EnvironmentProfile.can_write returns True for TESTNET variant."
+  },
+  "control_authority": {
+    "default_state": "NO_NEW_RISK",
+    "current_state": "NO_NEW_RISK (system not running, plane.py defaults to NO_NEW_RISK)",
+    "risk_direction_matrix": "INCREASE blocked under NO_NEW_RISK"
+  },
+  "testnet_safety_bypasses_confirmed": [
+    {
+      "location": "beidou_core/engine.py:4131-4135",
+      "issue": "IOC/FOK 覆写为 GTC (testnet only)",
+      "commit": "f288fc3"
+    },
+    {
+      "location": "beidou_core/engine.py:5657-5661",
+      "issue": "用户流就绪检查放宽 (testnet)",
+      "commit": "5de72dd"
+    },
+    {
+      "location": "beidou_launcher/supervisor.py:509-510",
+      "issue": "算法探测 mask (testnet-bypass)",
+      "commit": "5ba52c8"
+    },
+    {
+      "location": "beidou_launcher/supervisor.py:244-246",
+      "issue": "NO_NEW_RISK action recovery on testnet",
+      "commit": "aeaa447"
+    }
+  ],
+  "acceptance_verification": {
+    "AC-00-01": {
+      "description": "当前执行 HEAD 与证据 manifest 一致；若 HEAD 变化已有差异审查。",
+      "verdict": "PASS",
+      "detail": "HEAD aeaa44700956eccba6e8fc5be7646ca42ce395d5 与基线完全一致，无需差异审查。"
+    },
+    "AC-00-02": {
+      "description": "compile/collect 可复现，所有 CI 失败有原始证据和分类。",
+      "verdict": "CONDITIONAL_PASS",
+      "detail": "compileall 和 pytest collect 通过。ruff(219)/format(53)/mypy(7)/coverage(62.7%)/forbidden(13)/hardcoded(7) 失败均有原始 stdout/stderr 和 SHA-256 证据。GitHub Actions 原始日志 NOT_VERIFIABLE。"
+    },
+    "AC-00-03": {
+      "description": "未降低任何质量阈值、断言或扫描规则。",
+      "verdict": "PASS",
+      "detail": "未修改任何测试、coverage 阈值或扫描规则。所有失败均为基线已有状态。"
+    },
+    "AC-00-04": {
+      "description": "运行 authority 保持 NO_NEW_RISK，任何写交易路径均不可达。",
+      "verdict": "CONDITIONAL_PASS",
+      "detail": "Mainnet 被 guard.py 阻断。Testnet 写权限在代码层面默认开启 (can_write=True)，但系统未运行。需 BD-CV01 清理 testnet bypass 后方可完全确认。"
+    }
+  },
+  "recent_commits": [
+    "aeaa447 fix(monitoring): keep P0 severity for stuck order traces on testnet",
+    "f288fc3 fix(engine): override IOC/FOK to GTC on testnet to prevent order expiry",
+    "5de72dd fix(engine): relax user stream readiness for testnet sequencer limitations",
+    "5ba52c8 fix(supervisor): mask failed algorithm probe on testnet to unblock trading",
+    "45fbe4c fix(execution): min_notional enforcement and NO_ACTION proposal hash fallback",
+    "fa88377 fix(engine): testnet risk rules, execution precision, and user stream resilience",
+    "d4231b5 fix(tests): update incident dedup test for new deduplication behavior",
+    "b9b71ed fix: populate exchange positions in opening projection and deduplicate incidents",
+    "9473696 fix(tests): update test assertions for testnet-mode WARN/DEGRADED semantics",
+    "723768d 添加 evidence JSONL 运行时产物到 .gitignore",
+    "fa73c95 修复低优先级P1 — 策略图/信号/执行/组合/退出恢复",
+    "f998370 修复最终遗漏项 — P1-011/015/032/033/037/048",
+    "86d3d95 修复全量遗漏项 — 残留bypass + P1-011/015/016/018/019/020/029/032/033/034/042/043/046/047/050/057/065",
+    "bd2ae3b 修复执行包遗漏项 — P0-005 + 高优 P1 (PKG07/22/25/26/28)",
+    "16c14ec 北斗 P1 批量修复 — 54/66 完成",
+    "9158866 Final P1 batch: all remaining 38 P1 issues covered",
+    "64f3962 北斗全系统审查与重构 — S0-S6 完整执行 (25 P0 + 28 P1 修复)",
+    "442742b Remaining P1: execution algorithms, strategy signals, portfolio constraints",
+    "a0f3ea1 High-priority P1: credential lifecycle, market data integrity",
+    "483aa3e P1 batch: RiskSnapshot immutability + hash + freshness gate"
+  ],
+  "evidence_files": [
+    "compileall_exit.txt",
+    "compileall_stderr.txt",
+    "coverage_exit.txt",
+    "coverage_stdout.txt",
+    "forbidden_patterns_exit.txt",
+    "forbidden_patterns_stdout.txt",
+    "hardcoded_exit.txt",
+    "hardcoded_stdout.txt",
+    "mypy_exit.txt",
+    "mypy_stdout.txt",
+    "package_validation_exit.txt",
+    "package_validation_stdout.txt",
+    "pytest_collect_exit.txt",
+    "pytest_collect_stdout.txt",
+    "pytest_full_exit.txt",
+    "pytest_full_stdout.txt",
+    "ruff_check_exit.txt",
+    "ruff_check_stdout.txt",
+    "ruff_format_exit.txt",
+    "ruff_format_stdout.txt"
+  ]
+}
