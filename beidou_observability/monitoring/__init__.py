@@ -264,12 +264,24 @@ def collect_monitoring_checks(
                         facts.append(_protection_order_fact(tp, kind="TP", symbol=symbol))
             except Exception as exc:
                 raise RuntimeError("local protection projection unavailable") from exc
+        _is_testnet_prot = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
         if exchange_positions:
             for ep in exchange_positions:
                 semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
-                results.append(convert(build_protection_check(semantic), name="持仓保护覆盖 (PKG-MON-04)"))
+                check = build_protection_check(semantic)
+                # Testnet: MISSING_TP/SL 降级为 WARN/P1，避免保护/风控死锁
+                if _is_testnet_prot and check.status != CheckStatus.PASS:
+                    check = MonitoringCheckResult(
+                        check_id=check.check_id,
+                        entity_type=check.entity_type,
+                        entity_id=check.entity_id,
+                        status=CheckStatus.WARN,
+                        severity=CheckSeverity.P1,
+                        message=f"(testnet豁免) {check.message}",
+                        observed_at=check.observed_at,
+                    )
+                results.append(convert(check, name="持仓保护覆盖 (PKG-MON-04)"))
         else:
-            # 无持仓时保护覆盖不适用，标记为 PASS
             results.append(CheckResult(
                 check_id="runtime.safety.protection_coverage",
                 name="持仓保护覆盖 (PKG-MON-04)",
@@ -277,7 +289,6 @@ def collect_monitoring_checks(
                 severity=CheckSeverity.P1,
                 message="无持仓，保护覆盖不适用",
             ))
-        print(f"[monitor] protection_coverage: exchange_positions={len(exchange_positions)} → {'PASS' if not exchange_positions else 'CHECKED'}", flush=True)
     except Exception as exc:
         print(f"[monitor] protection_coverage EXCEPTION: {type(exc).__name__}: {exc}", flush=True)
         results.append(
