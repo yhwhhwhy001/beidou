@@ -4035,25 +4035,14 @@ class AutonomousEngine:
                     px = ref_price * 1.02
                 else:
                     px = ref_price * 0.98
-                # 对齐交易所 tick size (Binance USDT-M futures)
+                # PKG02: 对齐交易所 tick size — 规则从交易所获取，无兜底。
                 from decimal import Decimal, ROUND_DOWN
                 prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
                 price_decimals = prec.get("price")
                 if price_decimals is None:
-                    # Fallback: Binance USDT-M tick size map
-                    _TICK_MAP = {
-                        "BTCUSDT": 1, "ETHUSDT": 2, "BNBUSDT": 2, "SOLUSDT": 2,
-                        "XRPUSDT": 4, "ADAUSDT": 5, "DOGEUSDT": 5, "AVAXUSDT": 2,
-                        "DOTUSDT": 3, "LINKUSDT": 3, "UNIUSDT": 3, "ATOMUSDT": 3,
-                        "LTCUSDT": 2, "APTUSDT": 4, "ARBUSDT": 5, "OPUSDT": 5,
-                        "SUIUSDT": 4, "NEARUSDT": 3, "INJUSDT": 3,
-                    }
-                    price_decimals = _TICK_MAP.get(order_symbol)
-                    if price_decimals is None:
-                        if px > 5000: price_decimals = 1
-                        elif px > 100: price_decimals = 2
-                        elif px > 1: price_decimals = 4
-                        else: price_decimals = 5
+                    # 精度不可用 → 标记 symbol 不可执行
+                    print(f"[engine] Price precision UNKNOWN for {order_symbol}; symbol NOT_EXECUTABLE")
+                    return None
                 tick = Decimal(str(10 ** (-price_decimals)))
                 px_d = (Decimal(str(px)) / tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick
                 aggressive_price = str(px_d)
@@ -4252,7 +4241,9 @@ class AutonomousEngine:
         _prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
         _min_qty = float(_prec.get("min_quantity", 0) or 0)
         if _min_qty <= 0:
-            _min_qty = 0.001  # BTCUSDT 兜底值，仅 testnet 临时使用
+            # PKG02: 规则 UNKNOWN 时 symbol=NOT_EXECUTABLE
+            print(f"[engine] min_quantity UNKNOWN for {order_symbol}; skipping slice")
+            return None
         _min_notional = float(_prec.get("min_notional", 0) or 0)
         ctx = ExecutionContext(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol)),
@@ -6658,8 +6649,8 @@ class AutonomousEngine:
                 max_by_leverage = (account_balance * dyn_leverage) / price
                 position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
                 position_size = min(position_size, max_by_leverage * 0.5)
-                # 确保不低于交易所最小下单量（BTCUSDT=0.001, ETHUSDT=0.01 等）
-                _min_qty = 0.001  # BTCUSDT 最小下单量
+                # PKG02: 从交易所规则获取最小下单量
+                _min_qty = float(_precision.get("min_quantity", 0) or 0)
                 _precision = getattr(self, "_symbol_precision", {}).get(symbol, {})
                 _step = _precision.get("quantity", None)
                 if _step is not None:
