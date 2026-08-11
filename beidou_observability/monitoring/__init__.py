@@ -277,7 +277,9 @@ def collect_monitoring_checks(
                 severity=CheckSeverity.P1,
                 message="无持仓，保护覆盖不适用",
             ))
+        print(f"[monitor] protection_coverage: exchange_positions={len(exchange_positions)} → {'PASS' if not exchange_positions else 'CHECKED'}", flush=True)
     except Exception as exc:
+        print(f"[monitor] protection_coverage EXCEPTION: {type(exc).__name__}: {exc}", flush=True)
         results.append(
             failure("runtime.safety.protection_coverage", "持仓保护覆盖 (PKG-MON-04)", CheckSeverity.P0, exc)
         )
