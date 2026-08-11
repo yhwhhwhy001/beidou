@@ -8479,7 +8479,7 @@ class AutonomousEngine:
         async def _nearline_loop() -> None:
             while self._running:
                 try:
-                    _nearline_interval = 300  # PKG02: 所有环境使用统一近线周期
+                    _nearline_interval = 30 if self._env_mode.value == "testnet" else 300
                     if time.time() - self._last_nearline >= _nearline_interval:
                         await self._nearline_tick()
                 except Exception as exc:
