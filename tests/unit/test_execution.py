@@ -3,6 +3,7 @@
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 
@@ -392,6 +393,7 @@ class TestImmutableLedger:
                     "",
                 ),
             ),
+            source_event_id="fill-unbalanced-001",
         )
         import pytest as _pytest
 
@@ -420,9 +422,9 @@ class TestImmutableLedger:
         assert reversal.reverses_transaction_id == "tx-001"
         ledger.post(reversal)
 
-        # 反转后余额归零
+        # 反转后余额归零 (PKG20: 使用 Decimal 比较)
         bal = ledger.get_balance(AccountId("main"), VenueId("BINANCE"))
-        assert abs(float(bal.amount)) < 1e-12
+        assert abs(Decimal(bal.amount)) < Decimal("1e-12")
 
     def test_trial_balance(self):
         """BD-T12: 试算表 — 所有账户余额汇总。"""
@@ -474,15 +476,20 @@ class TestImmutableLedger:
 
 
 class TestReconciliation:
-    def test_matched(self):
-        engine = ReconciliationEngine()
-        sf = AccountFactSnapshot(
+    def _complete_snapshot(self, balance: str = "10000") -> AccountFactSnapshot:
+        """Helper: create a complete (PKG20) snapshot."""
+        return AccountFactSnapshot(
             account_id=AccountId("test"),
             venue_id=VenueId("BINANCE"),
-            balance=MonetaryValue(amount="10000"),
+            balance=MonetaryValue(amount=balance),
             positions={},
             open_orders=[],
+            complete=True,  # PKG20: 显式标记完整
         )
+
+    def test_matched(self):
+        engine = ReconciliationEngine()
+        sf = self._complete_snapshot("10000")
         engine.update_system_facts(sf)
         engine.update_exchange_facts(sf)
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
@@ -490,24 +497,8 @@ class TestReconciliation:
 
     def test_balance_mismatch(self):
         engine = ReconciliationEngine()
-        engine.update_system_facts(
-            AccountFactSnapshot(
-                account_id=AccountId("test"),
-                venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount="10000"),
-                positions={},
-                open_orders=[],
-            )
-        )
-        engine.update_exchange_facts(
-            AccountFactSnapshot(
-                account_id=AccountId("test"),
-                venue_id=VenueId("BINANCE"),
-                balance=MonetaryValue(amount="9990"),
-                positions={},
-                open_orders=[],
-            )
-        )
+        engine.update_system_facts(self._complete_snapshot("10000"))
+        engine.update_exchange_facts(self._complete_snapshot("9990"))
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
         assert not result.matched
 

@@ -222,10 +222,11 @@ class ImmutableLedger:
             transaction_id=reversal_tx_id,
             transaction_type=LedgerTransactionType.REVERSAL,
             postings=tuple(reversed_postings),
+            source_event_id=f"reversal-{original_tx_id}",  # PKG20: 反转交易需要 source_event_id
             correlation_id=original.correlation_id,
             is_correction=True,
             reverses_transaction_id=original_tx_id,
-            metadata={"reason": reason, "original_type": original.transaction_type.value},
+            metadata=MappingProxyType({"reason": reason, "original_type": original.transaction_type.value}),
         )
 
     def get_balance(self, account_id: AccountId, venue_id: VenueId, currency: str = "USDT") -> MonetaryValue:
