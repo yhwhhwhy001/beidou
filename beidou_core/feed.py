@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from beidou_data.feature_store import FeatureStore, FeatureVector
+from beidou_data.canonical_bars import CanonicalBarBuilder, get_canonical_bar_builder  # BD-CV11
 from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
@@ -68,6 +69,8 @@ class MarketDataFeed:
 
         self._feature_store = FeatureStore()
         self._kline_generators: dict[str, KLineGenerator] = {}
+        # BD-CV11: 统一 CanonicalBarBuilder — 运行时/回测/replay 共用
+        self._canonical_builders: dict[str, CanonicalBarBuilder] = {}
         self._last_ticker: dict[str, dict] = {}
         self._last_orderbook: dict[str, dict] = {}
         self._error_count: dict[str, int] = {}
@@ -89,13 +92,25 @@ class MarketDataFeed:
         self._rest_url = getattr(client, "rest_url", self._rest_url)
 
     def _get_kline_generator(self, symbol: str, interval: str = "1h") -> KLineGenerator:
-        """按 symbol:interval 惰性创建 KLineGenerator（真实 tick → OHLCV 聚合）。"""
+        """按 symbol:interval 惰性创建 KLineGenerator（真实 tick → OHLCV 聚合）。
+
+        BD-CV11: 同时注册到 CanonicalBarBuilder 注册表。
+        """
         key = f"{symbol}:{interval}"
         gen = self._kline_generators.get(key)
         if gen is None:
             gen = KLineGenerator(interval=interval)
             self._kline_generators[key] = gen
+            # BD-CV11: 确保运行时使用共享 CanonicalBarBuilder
+        if interval not in self._canonical_builders:
+            self._canonical_builders[interval] = get_canonical_bar_builder(interval)
         return gen
+
+    def get_canonical_builder(self, interval: str = "5m") -> CanonicalBarBuilder:
+        """BD-CV11: 获取共享 CanonicalBarBuilder。回到/研究/replay 统一调用。"""
+        if interval not in self._canonical_builders:
+            self._canonical_builders[interval] = get_canonical_bar_builder(interval)
+        return self._canonical_builders[interval]
 
     def get_generated_klines(self, symbol: str, interval: str = "1h", *, include_current: bool = False) -> list[OHLCV]:
         """Return generated bars; research features use closed bars by default."""

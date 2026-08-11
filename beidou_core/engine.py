@@ -4505,16 +4505,30 @@ class AutonomousEngine:
         # BD-CV10: 量化精度从 adapter 的唯一 InstrumentRuleSnapshot 获取。
         if not hasattr(self, "_symbol_precision"):
             self._symbol_precision: dict[str, dict[str, int]] = {}
+        if not hasattr(self, "_rule_snapshot_hashes"):
+            self._rule_snapshot_hashes: dict[str, str] = {}
+        if not hasattr(self, "_rule_change_detected"):
+            self._rule_change_detected: set[str] = set()
         if order_symbol not in self._symbol_precision:
             rule = getattr(self, "_adapter", None)
             if rule is not None and hasattr(rule, "get_rule_snapshot"):
                 snap = rule.get_rule_snapshot(order_symbol)
                 if snap.is_known:
+                    snap_hash = snap.compute_hash()
+                    # BD-CV10 AC-10-04: 检测 exchangeInfo 变化
+                    prev_hash = self._rule_snapshot_hashes.get(order_symbol)
+                    if prev_hash and prev_hash != snap_hash:
+                        print(f"[order] {order_symbol}: rule changed! prev={prev_hash[:16]} new={snap_hash[:16]}")
+                        self._rule_change_detected.add(order_symbol)
+                    self._rule_snapshot_hashes[order_symbol] = snap_hash
+                    # AC-10-01: 所有可写订单绑定 InstrumentRuleSnapshot hash
                     self._symbol_precision[order_symbol] = {
                         "quantity": snap.qty_precision,
                         "price": snap.price_precision,
                         "min_quantity": float(snap.min_qty) if snap.min_qty else 0.0,
                         "min_notional": float(snap.min_notional) if snap.min_notional else 0.0,
+                        "rule_snapshot_hash": snap_hash,
+                        "rule_version": snap.rule_version,
                     }
                 else:
                     print(f"[order] {order_symbol}: rule snapshot UNKNOWN — symbol NOT_EXECUTABLE")
