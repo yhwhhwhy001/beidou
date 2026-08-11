@@ -3980,12 +3980,17 @@ class AutonomousEngine:
                 else:
                     px = ref_price * 0.98
                 # 对齐交易所 tick size
+                from decimal import Decimal, ROUND_DOWN
                 prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
-                price_decimals = prec.get("price", 2)
-                # 向下取整到 tick size 整数倍
-                tick = 10 ** (-price_decimals) if price_decimals > 0 else 0.01
-                px = round(px / tick) * tick
-                aggressive_price = str(round(px, price_decimals))
+                price_decimals = prec.get("price")
+                if price_decimals is None:
+                    if px > 5000: price_decimals = 1
+                    elif px > 100: price_decimals = 2
+                    elif px > 1: price_decimals = 3
+                    else: price_decimals = 5
+                tick = Decimal(str(10 ** (-price_decimals)))
+                px_d = (Decimal(str(px)) / tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick
+                aggressive_price = str(px_d)
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
             else:
