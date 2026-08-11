@@ -7773,8 +7773,13 @@ class AutonomousEngine:
                     self._persist_protection_order(p_order, status="PENDING")
                     prec_map = self._symbol_precision.get(symbol)
                     if prec_map is None:
-                        print(f"[startup] {symbol}: exchange precision UNKNOWN; recovery deferred")
-                        continue
+                        trigger_val = float(p_order.trigger_price.amount)
+                        if trigger_val > 5000: dec = 1
+                        elif trigger_val > 100: dec = 2
+                        elif trigger_val > 1: dec = 3
+                        else: dec = 5
+                        prec_map = {"price": dec, "quantity": dec}
+                        print(f"[startup] {symbol}: using fallback precision price={dec} qty={dec}")
                     qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"
                     price_str = f"{float(p_order.trigger_price.amount):.{prec_map['price']}f}"
                     pending_submissions.append(
