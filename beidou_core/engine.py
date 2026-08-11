@@ -8454,12 +8454,11 @@ class AutonomousEngine:
 
         # PKG02 (BDS-P0-001): 所有环境统一控制面启动行为
         # Testnet: 保持 RESUME 不降级，由 supervisor 监控循环管理
-        if self._env_mode.value != "testnet":
-            if self._control.get_status() != ControlAction.RESUME:
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
-                print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
-        else:
-            print("[beidou-autopilot] Control plane: RESUME (testnet startup)")
+        if self._env_mode.value == "testnet":
+            print("[beidou-autopilot] Control plane: RESUME (testnet startup — kept)")
+        elif self._control.get_status() != ControlAction.RESUME:
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         else:
             print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
         if self._adapter is None:
