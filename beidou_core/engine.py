@@ -433,6 +433,19 @@ class MeanReversionEntry(AlphaComponent):
                 "deviation_pct": (close - sma_20) / sma_20 * 100 if sma_20 > 0 else 0.0,
             },
         )
+        # BD-CV23: 合约验证 — NO_ACTION 不会被改写为 ACTION，VETO 阻断下游
+        _contract_signal = StrategySignal(
+            strategy_id="meanrev_v1",
+            action=StrategyAction.NO_ACTION if direction == SignalDirection.NO_ACTION else StrategyAction.ACTION,
+            symbol=str(signal.instrument_id),
+            confidence=confidence,
+            reason=f"z_score={result.z_score:.3f} hl={result.half_life_hours:.1f}h",
+        )
+        if _contract_signal.is_blocking():
+            signal.direction = SignalDirection.NO_ACTION
+            signal.strength = 0.0
+            signal.confidence = 0.0
+
         # Store prediction for factor evaluation
         context["_predictions"] = context.get("_predictions", {})
         context["_predictions"]["meanrev_entry_v1"] = result.z_score
@@ -3831,6 +3844,23 @@ class AutonomousEngine:
             )
             return
 
+        # BD-CV02/41: 合约级 TradingEligibility 验证 + 幂等键
+        _risk_dir = ControlPlane.classify_intent(intent)
+        if _risk_dir.value == "INCREASE":
+            eligibility = self.evaluate_trading_eligibility()
+            if eligibility != TradingEligibility.ELIGIBLE:
+                print(f"[order] ❌ Intent {intent.intent_id} REJECTED: TradingEligibility={eligibility.value}")
+                self._outbox.reject(intent.intent_id, f"ELIGIBILITY_{eligibility.value}", idempotency_key="")
+                return
+        # 构建幂等键用于订单追踪
+        _idem_key = self.build_idempotency_key(
+            correlation_id=str(getattr(intent, "correlation_id", "")),
+            client_order_id=str(getattr(intent, "client_order_id", "")),
+            outbox_id=str(getattr(intent, "intent_id", "")),
+        )
+        if _idem_key.compute_hash():
+            setattr(intent, "idempotency_key", _idem_key.compute_hash())
+
         if not await self._verify_intent_at_send(intent):
             print(f"[order] ❌ Intent {intent.intent_id} rejected: final risk approval invalid or missing")
             self._outbox.reject(
@@ -6702,8 +6732,11 @@ class AutonomousEngine:
                 if position_size <= 0:
                     print(f"[nearline] {symbol}: SKIP (computed position size UNKNOWN/zero)")
                     continue
-                # BD-FIX (S3): 确保不低于 Binance 最小名义价值 ($20)
-                MIN_NOTIONAL = 20.0
+                # BD-CV10: 最小名义价值从交易所规则获取
+                _prec_data = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                MIN_NOTIONAL = float(_prec_data.get("min_notional", 0) or 0)
+                if MIN_NOTIONAL <= 0:
+                    MIN_NOTIONAL = 20.0  # 兜底仅当规则不可用
                 position_notional = price * position_size
                 if position_notional < MIN_NOTIONAL:
                     position_size = MIN_NOTIONAL / price
@@ -6719,6 +6752,15 @@ class AutonomousEngine:
                     f"vol={ann_vol:.1%} atr_stop={stop_loss_pct:.1f}% "
                     f"pool={'OK' if pool_capacity else 'SKIP'}"
                 )
+
+                # BD-CV30: 构建 SignedPortfolioTarget contract
+                _side = "LONG" if trade_dir > 0 else "SHORT"
+                _target = self.build_portfolio_target(
+                    symbol=symbol, side=_side, exposure=position_notional, delta=position_notional * 0.01
+                )
+                if not _target.is_valid():
+                    print(f"[nearline] {symbol}: PortfolioTarget invalid (gross < abs(net)); SKIP")
+                    continue
 
                 if not pool_capacity:
                     print(f"[nearline] {symbol}: SKIP (pool not tradable)")
