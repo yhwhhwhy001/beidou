@@ -3,6 +3,8 @@
 每个订单 Intent 在提交 Outbox 前和 Executor 发送前各校验一次控制状态。
 控制状态带单调递增版本号，旧实例不得使用过期状态。
 每次拒绝记录 intent hash、状态版本、reason code。
+
+BD-CV02: 集成 TruthSnapshot 与 TradingEligibility — 唯一授权判定链。
 """
 
 from __future__ import annotations
@@ -13,7 +15,10 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from beidou_control.truth import TruthSnapshot, TradingEligibility
 
 
 class RiskDirection(str, Enum):
@@ -444,6 +449,46 @@ class ControlPlane:
 
     def update_account_overview(self, overview: AccountFactOverview) -> None:
         self._account_overview[f"{overview.account_id}:{overview.venue_id}"] = overview
+
+    # --- BD-CV02: TruthSnapshot-based eligibility ---
+
+    def authorize_resume(self, snapshot: TruthSnapshot) -> tuple[bool, str]:
+        """BD-CV02: 基于 TruthSnapshot 验证 RESUME 是否合法。
+
+        AC-02-04: RESUME 必须有新 TruthSnapshot + reconciliation + protection + risk 证据。
+        返回 (allowed, reason)。
+        """
+        from beidou_control.truth import derive_eligibility, TradingEligibility
+
+        eligibility = derive_eligibility(snapshot)
+
+        if eligibility != TradingEligibility.ELIGIBLE:
+            return False, (
+                f"RESUME rejected: TradingEligibility={eligibility.value}; "
+                f"requires MATCHED reconciliation + ACTIVE protection + NORMAL risk"
+            )
+
+        # 额外验证：快照必须在最近 300s 内
+        if snapshot.is_stale(max_age_seconds=300.0):
+            return False, "RESUME rejected: TruthSnapshot is stale (>300s)"
+
+        # 额外验证：关键组件不能为 UNKNOWN
+        unknown = snapshot.has_unknown_components()
+        if unknown:
+            return False, f"RESUME rejected: UNKNOWN components: {', '.join(unknown)}"
+
+        return True, "RESUME authorized: all evidence fresh and verified"
+
+    def evaluate_eligibility(self, snapshot: TruthSnapshot) -> TradingEligibility:
+        """BD-CV02: 评估当前快照的交易资格。
+
+        返回 TradingEligibility，可供 supervisor/monitor 使用。
+        这是系统中唯一可以从事实快照推导交易资格的 authority。
+        AC-02-01: 全仓仅一个 TradingEligibility authority。
+        """
+        from beidou_control.truth import derive_eligibility
+
+        return derive_eligibility(snapshot)
 
     def get_unknown_or_differences(self) -> list[str]:
         issues: list[str] = []
