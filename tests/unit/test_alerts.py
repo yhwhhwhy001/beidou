@@ -15,8 +15,9 @@ def test_incident_ids_are_unique_within_the_same_second(tmp_path: Path) -> None:
     first = dispatcher.send_incident(AlertSeverity.CRITICAL, "same", "one")
     second = dispatcher.send_incident(AlertSeverity.CRITICAL, "same", "two")
 
-    assert first.incident_id != second.incident_id
-    assert dispatcher.get_alert_stats()["total"] == 2
+    # Incident deduplication: same category+title returns the existing incident
+    assert first.incident_id == second.incident_id
+    assert dispatcher.get_alert_stats()["total"] == 1
 
 
 def test_webhook_failure_is_persisted_and_replayable(tmp_path: Path, monkeypatch) -> None:
