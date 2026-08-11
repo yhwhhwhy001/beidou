@@ -316,11 +316,13 @@ class TestOrderStateMachine:
         assert ts.status == OrderStatus.CANCELED
 
     def test_unknown_recovery(self):
+        """PKG14: RECOVERED 从 UNKNOWN 进入 PARTIALLY_FILLED（保留交易所事实）。"""
         ts = OrderStateTracker(order_id=OrderId("order-003"))
         ts.apply(OrderEvent.UNKNOWN)
         assert ts.status == OrderStatus.UNKNOWN
         ts.apply(OrderEvent.RECOVERED)
-        assert ts.status == OrderStatus.NEW
+        # PKG14: RECOVERED → PARTIALLY_FILLED (preserves exchange state, not blank NEW)
+        assert ts.status == OrderStatus.PARTIALLY_FILLED
 
 
 class TestImmutableLedger:

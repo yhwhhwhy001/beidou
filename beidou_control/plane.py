@@ -222,6 +222,36 @@ class ControlPlane:
 
     # --- Intent validation ---
 
+    def validate_leverage_change(self, symbol: str, new_leverage: float) -> ValidationResult:
+        """PKG23 (BDS-P0-023): 杠杆变更必须通过权限、Risk Gate、审计。
+
+        杠杆变更直接改变清算距离与保证金风险，属于 risk-increasing action。
+        在 LOCK/EMERGENCY_FLATTEN/NO_NEW_RISK 状态下被拒绝。
+        """
+        if self._action in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            return ValidationResult(
+                allowed=False,
+                reason_code=f"LEVERAGE_REJECTED_{self._action.value}",
+                state_version=self._version,
+                control_state=self._action.value,
+                risk_direction=RiskDirection.INCREASE,
+            )
+        if self._action == ControlAction.NO_NEW_RISK:
+            return ValidationResult(
+                allowed=False,
+                reason_code="LEVERAGE_REJECTED_NO_NEW_RISK",
+                state_version=self._version,
+                control_state=self._action.value,
+                risk_direction=RiskDirection.INCREASE,
+            )
+        return ValidationResult(
+            allowed=True,
+            reason_code="LEVERAGE_ALLOWED",
+            state_version=self._version,
+            control_state=self._action.value,
+            risk_direction=RiskDirection.INCREASE,
+        )
+
     def validate_intent(self, intent: Any) -> ValidationResult:
         """验证 Intent 是否在当前控制状态下被允许。
 
