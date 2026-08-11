@@ -432,16 +432,11 @@ class ProtectionManager:
                 raise ValueError("stop-loss trigger must be finite and positive") from exc
             if not isfinite(trigger_value) or trigger_value <= 0:
                 raise ValueError("stop-loss trigger must be finite and positive")
+            # PKG02 (BDS-P0-001): 移除 testnet 自动修正旁路 — 所有环境使用统一保护语义
             if side == OrderSide.BUY and trigger_value >= entry_value:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    trigger_value = entry_value * 0.99  # BD-FIX (S29): 自动修正
-                else:
-                    raise ValueError("long stop-loss must be strictly below entry price")
+                raise ValueError("long stop-loss must be strictly below entry price")
             if side == OrderSide.SELL and trigger_value <= entry_value:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    trigger_value = entry_value * 1.01  # BD-FIX (S29): 自动修正
-                else:
-                    raise ValueError("short stop-loss must be strictly above entry price")
+                raise ValueError("short stop-loss must be strictly above entry price")
             sl_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
             order_type = "STOP_LIMIT" if stop_loss_config.get("use_limit", False) else "STOP_MARKET"
             # STOP_LIMIT 限价：SELL(SHORT)需低于触发价；BUY(LONG)需高于触发价

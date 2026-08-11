@@ -323,8 +323,7 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
         return 0.0
     vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
-    _testnet = __import__("os").environ.get("BEIDOU_ENV") == "testnet"
-    _base_pct = 0.1 if _testnet else 0.02  # Testnet: 10% signal → 可见仓位
+    _base_pct = 0.02  # PKG02 (BDS-P0-001): 所有环境使用统一仓位计算
     base = strength * _base_pct
     return base * vol_penalty * spread_penalty
 
@@ -348,14 +347,13 @@ class MeanReversionEntry(AlphaComponent):
             component_id="meanrev_entry_v1",
             version=SchemaVersion("2.0.0"),
         )
-        # Testnet: 零阈值 + 免成本门控，确保信号触发
+        # PKG02 (BDS-P0-001): 移除 testnet 零阈值/免成本旁路 — 所有环境使用统一策略参数
         _z = 1.5
-        _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         self._engine = MeanReversionEngine(
             half_life_window=100,
             z_threshold=_z,
-            no_trade_band=0.0 if _testnet else _z,
-            cost_margin=0.0 if _testnet else 2.0,
+            no_trade_band=_z,
+            cost_margin=2.0,
         )
 
     async def generate(self, context: dict) -> Any:
@@ -377,8 +375,8 @@ class MeanReversionEntry(AlphaComponent):
         # no-trade band + regime gate + cost gate + volatility scaling
         state = context.get("state", {}) or {}
         regime = state.get("direction", "RANGING")
-        # Testnet: 降低交易成本让信号更容易触发
-        _extra_cost = 1.0 if os.environ.get("BEIDOU_ENV") == "testnet" else 6.0
+        # PKG02 (BDS-P0-001): 移除 testnet 降低交易成本旁路 — 所有环境使用统一成本模型
+        _extra_cost = 6.0
         result = self._engine.evaluate(
             price=close,
             prices=prices,
@@ -1252,10 +1250,8 @@ class AutonomousEngine:
         self._restore_durable_ledger()
         self._recon = ReconciliationEngine()
         self._user_stream_projector = UserStreamProjector(store=self._store)
-        # BD-FIX (S6): Testnet 允许无序列号事件。Binance 用户流事件的 `u` 字段
-        # 非所有事件类型都提供，SEQUENCE_UNAVAILABLE 会永久阻断 readiness。
-        if os.environ.get("BEIDOU_ENV") == "testnet":
-            self._user_stream_projector.sequencer.mark_replayed(None, allow_unsequenced=True)
+        # PKG02 (BDS-P0-001): 移除 testnet 允许无序列号事件旁路
+        # 所有环境必须通过序列完整性验证
         self._event_stream_facts: AccountFactSnapshot | None = None
         # A durable projector alone is not proof that a live user-data socket
         # is connected.  Writable readiness requires an explicit runtime
@@ -2367,39 +2363,20 @@ class AutonomousEngine:
         projector_status = str(getattr(raw_projector_status, "value", raw_projector_status)).upper()
         event_facts = getattr(self, "_event_stream_facts", None)
         projection_complete = bool(getattr(event_facts, "complete", False))
-        # BD-FIX (S31): Testnet 忽略 projector/transport 状态，始终 PASS
-        if os.environ.get("BEIDOU_ENV") == "testnet":
-            return True, {
-                "status": status, "event_age_seconds": event_age,
-                "threshold_seconds": 999.0, "projector_status": projector_status,
-                "projection_complete": projection_complete,
-                "listen_key_active": bool(runtime.get("listen_key_active", False)),
-                "last_error": str(runtime.get("last_error", "") or ""), "required": True,
-                "testnet_override": True,
-            }
-        # CONNECTED/UNKNOWN are acceptable startup states before the first event arrives
+        # PKG02 (BDS-P0-001): 移除 testnet 一直 PASS 和松弛阈值旁路
+        # 所有环境使用统一的生产就绪标准
         transport_ok = status in ("HEALTHY", "CONNECTED")
-        # BD-FIX (S3/S5/S8): Testnet 用户流事件稀疏，永久使用 300s 阈值。
-        # 生产环境维持 60s 标准阈值。
-        is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
         startup_elapsed = time.monotonic() - getattr(self, "_startup_mono", time.monotonic())
         if not hasattr(self, "_startup_mono"):
             self._startup_mono = time.monotonic()
             startup_elapsed = 0.0
         startup_grace = startup_elapsed < 600.0
-        if is_testnet:
-            effective_max_age = 600.0  # S26: 放宽到 10min，适应稀疏事件
-        elif status in ("CONNECTED", "UNKNOWN") or startup_grace:
+        if status in ("CONNECTED", "UNKNOWN") or startup_grace:
             effective_max_age = 300.0
         else:
             effective_max_age = max_event_age
-        # BD-FIX (S4): 启动阶段无事件时 projector 状态无关。
-        # ACCOUNT_UPDATE 可能缺少 `u` 字段导致 sequencer → SEQUENCE_UNAVAILABLE，
-        # 在没有足够事件构建投影时不应以此为据阻断 readiness。
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
-        # BD-FIX (S10): Testnet 不要求完整投影。事件稀疏导致 projection_complete
-        # 长期为 False，与 event_facts is not None 组合后阻断 readiness。
-        require_complete_projection = not is_testnet
+        require_complete_projection = True
         ready = (
             transport_ok
             and (event_age is None or event_age <= effective_max_age)
@@ -3054,11 +3031,9 @@ class AutonomousEngine:
         """Freeze new risk when venue protection ownership is unproven."""
 
         self._protection_owner_unknown = True
-        # BD-FIX (S19): Testnet 不因保护所有权未知而切换控制面。
-        # 残留保护记录已在 S2 中自动清理，testnet 不应阻断交易。
-        if os.environ.get("BEIDOU_ENV") != "testnet":
-            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
+        # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
+        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
         self._alerts.send_incident(
             AlertSeverity.CRITICAL,
             "Protection ownership unknown",
@@ -3476,13 +3451,12 @@ class AutonomousEngine:
         """Freeze execution truth after a durable fact write cannot be proven."""
         with contextlib.suppress(Exception):
             self._ledger.freeze()
-        # Testnet: 不因执行事实失败而降级控制面（API 不稳定导致误触发）
-        if os.environ.get("BEIDOU_ENV") != "testnet":
-            control = getattr(self, "_control", None)
-            if control is not None:
-                with contextlib.suppress(Exception):
-                    if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                        control.execute_action(ControlAction.NO_NEW_RISK)
+        # PKG02 (BDS-P0-001): 移除 testnet 执行事实失败旁路 — 所有环境统一降级控制面
+        control = getattr(self, "_control", None)
+        if control is not None:
+            with contextlib.suppress(Exception):
+                if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                    control.execute_action(ControlAction.NO_NEW_RISK)
         alerts = getattr(self, "_alerts", None)
         if alerts is not None:
             with contextlib.suppress(Exception):
@@ -3959,13 +3933,9 @@ class AutonomousEngine:
         # Testnet and production share the same market-fact, slippage and
         # slice-invariant gates.  The environment label changes the venue,
         # never the approved execution contract.
-        # BD-FIX (S13): Testnet 小数量跳过切片算法，直接 MARKET 成交。
-        is_testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+        # PKG02 (BDS-P0-001): 移除 testnet 小数量跳过切片旁路 — 所有环境使用统一执行算法
         total_qty = float(intent.quantity.amount)
-        # BD-FIX (S32): Testnet 用吃单 LIMIT 代替 MARKET 确保成交
-        # MARKET 订单在 testnet 无对手方流动性时无法成交。
-        # 改为 aggressive limit：BUY 挂 ask*1.005，SELL 挂 bid*0.995
-        is_small_order = is_testnet
+        is_small_order = False
         if is_small_order:
             # BD-FIX (S32): 用行情价吃单 LIMIT 代替 MARKET
             # MARKET 在 testnet 无流动性不成交。BUY=price*1.005, SELL=price*0.995
@@ -5434,11 +5404,10 @@ class AutonomousEngine:
         self._update_user_stream_runtime(status=status, last_error=str(reason)[:500], listen_key_active=False)
         if previous in {"FAILED", "DEGRADED"} and not terminal:
             return
-        # BD-FIX (S19): Testnet 用户流瞬时故障不切换控制面
-        if os.environ.get("BEIDOU_ENV") != "testnet":
-            with contextlib.suppress(Exception):
-                if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                    self._control.execute_action(ControlAction.NO_NEW_RISK)
+        # PKG02 (BDS-P0-001): 移除 testnet 用户流故障旁路 — 所有环境统一切换控制面
+        with contextlib.suppress(Exception):
+            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
         with contextlib.suppress(Exception):
             self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
         with contextlib.suppress(Exception):
@@ -5786,22 +5755,14 @@ class AutonomousEngine:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
         self._last_reconciliation_result = result
         self._last_account = account
+        # PKG02 (BDS-P0-001): 移除 testnet 仅仓位不匹配旁路 — 所有环境使用统一对账标准
         if not result.matched:
-            # Testnet: 仅仓位不匹配（非余额/订单）视为可接受，不阻塞交易
-            _testnet_pos_only = (
-                os.environ.get("BEIDOU_ENV") == "testnet"
-                and result.differences
-                and all("Position mismatch" in d for d in result.differences)
+            return self._record_reconciliation_failure(
+                result,
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                event_facts=event_facts,
             )
-            if _testnet_pos_only:
-                print("[recon] Position-only mismatch accepted for testnet — continuing")
-            else:
-                return self._record_reconciliation_failure(
-                    result,
-                    system_facts=system_facts,
-                    exchange_facts=exchange_facts,
-                    event_facts=event_facts,
-                )
 
         try:
             snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
@@ -6075,24 +6036,16 @@ class AutonomousEngine:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
             existing_algos = await self._get_open_algo_inventory()
             api_ok = isinstance(existing_algos, list)
+            # PKG02 (BDS-P0-001): 移除 testnet API 失败/未知状态旁路 — 所有环境统一保护语义
             if not api_ok:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    # BD-FIX (S36): Testnet API 失败时用空列表继续
-                    existing_algos = []
-                    api_ok = True
-                    print("[nearline] Algo inventory UNKNOWN — continuing with empty (testnet)")
-                else:
-                    self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
-                    print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
-                    return
+                self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
+                return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    print(f"[nearline] Protection semantics issues (testnet: non-blocking): {semantic_issues[:3]}")
-                else:
-                    self._block_unowned_protection_orders(semantic_issues)
-                    print("[nearline] Protection retry blocked: protection semantics UNKNOWN")
-                    return
+                self._block_unowned_protection_orders(semantic_issues)
+                print("[nearline] Protection retry blocked: protection semantics UNKNOWN")
+                return
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
@@ -6102,12 +6055,9 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    if os.environ.get("BEIDOU_ENV") == "testnet":
-                        print(f"[nearline] Unowned algo orders (testnet: non-blocking): {len(unowned_algo_ids)}")
-                    else:
-                        self._block_unowned_protection_orders(unowned_algo_ids)
-                        print("[nearline] Protection retry blocked: conditional-order ownership UNKNOWN")
-                        return
+                    self._block_unowned_protection_orders(unowned_algo_ids)
+                    print("[nearline] Protection retry blocked: conditional-order ownership UNKNOWN")
+                    return
                 for item in existing_algos:
                     sym = str(item.get("symbol", ""))
                     aid = str(item.get("algoId", ""))
@@ -6122,9 +6072,8 @@ class AutonomousEngine:
             )
             for pos_id, pp in positions:
                 symbol = str(pp.instrument_id)
-                # API 正常时仅处理有交易所仓位的品种；API 失败时处理所有
-                # BD-FIX (S35): Testnet 不跳过 protection 创建
-                if api_ok and symbol not in exchange_symbols and os.environ.get("BEIDOU_ENV") != "testnet":
+                # PKG02 (BDS-P0-001): 所有环境统一 protection 创建条件 — 不跳过符号检查
+                if api_ok and symbol not in exchange_symbols:
                     continue
                 existing_ids = exchange_algo_symbols.get(symbol, set())
                 owned_ids = existing_ids & self._active_algo_ids.get(pos_id, set())
@@ -6809,21 +6758,15 @@ class AutonomousEngine:
                     ),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
-                    "can_withdraw": (
-                        False if os.environ.get("BEIDOU_ENV") == "testnet" else self._can_withdraw
-                    ),  # Testnet 无真实提款，豁免 R9 检查
+                    "can_withdraw": self._can_withdraw,  # PKG02 (BDS-P0-001): 所有环境统一 R9 检查
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
-                # Evaluate all R0-R10 rules
-                # BD-FIX (S30): Testnet 跳过 R7(清算距离)和 R8(保护覆盖)
-                # R7 需要 liquidation_price 在 testnet 不可靠
-                # R8 需要已有保护单，但保护单在首次成交后才创建
-                _skip_rules = {"R7", "R8"} if os.environ.get("BEIDOU_ENV") == "testnet" else set()
+                # PKG02 (BDS-P0-001): 移除 testnet R7/R8 跳过旁路
+                # 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = {
                     rid: decision
                     for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()
-                    if rid not in _skip_rules
                 }
                 risk_approved = all(
                     d == RuleDecision.PASS for d in risk_results.values()
@@ -7983,19 +7926,12 @@ class AutonomousEngine:
             self._lifecycle.transition(ModuleState.ACTIVE)
             print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
-        # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
-        # BD-FIX: 仅当 Supervisor 尚未 RESUME 时才设置 NO_NEW_RISK，消除启动竞态。
-        # BD-FIX (S21): Testnet 不在此处覆盖 supervisor 授权的 RESUME。
-        # 引擎 bootstrap 与 supervisor RESUME 授权存在竞态 — supervisor
-        # 在 create_task(engine.run()) 之后才授权，引擎先到达此处。
-        if os.environ.get("BEIDOU_ENV") != "testnet":
-            if self._control.get_status() != ControlAction.RESUME:
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
-                print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
-            else:
-                print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
+        # PKG02 (BDS-P0-001): 所有环境统一控制面启动行为
+        if self._control.get_status() != ControlAction.RESUME:
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         else:
-            print("[beidou-autopilot] Control plane: managed by supervisor (testnet)")
+            print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
         if self._adapter is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 
