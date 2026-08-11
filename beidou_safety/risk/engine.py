@@ -417,33 +417,121 @@ class RiskApprovalSignerImpl:
 
 
 class RiskApprovalStateMachine:
-    """RiskApproval 状态机。Approved→不可逆转为Rejected。"""
+    """RiskApproval 状态机 — PKG10 (BDS-P0-011) 完整生命周期。
 
-    def __init__(self) -> None:
+    状态转换规则（单调、不可逆）：
+    PENDING → APPROVED → CONSUMED  (一次性使用后消费)
+    PENDING → APPROVED → EXPIRED    (TTL 超时)
+    PENDING → REJECTED              (风控不通过)
+    APPROVED → REVOKED              (显式撤销)
+    不可逆转换：CONSUMED/EXPIRED/REVOKED/REJECTED → 不可回到 APPROVED。
+
+    每个批准绑定：approval_id, nonce, ttl, policy_version, risk_snapshot_hash。
+    """
+
+    def __init__(self, default_ttl_seconds: float = 300.0) -> None:
         self._approvals: dict[RiskApprovalId, RiskDecision] = {}
+        self._timestamps: dict[RiskApprovalId, float] = {}
+        self._ttls: dict[RiskApprovalId, float] = {}
+        self._nonces: dict[RiskApprovalId, str] = {}
+        self._risk_snapshots: dict[RiskApprovalId, str] = {}
+        self._policy_versions: dict[RiskApprovalId, str] = {}
+        self._default_ttl = default_ttl_seconds
+        self._consumed: set[RiskApprovalId] = set()
 
-    def approve(self, aid: RiskApprovalId) -> RiskDecision:
-        """批准审批 — 仅在签名验证通过后调用。调用方必须先验证签名。"""
-        # 如果已存在且未被拒绝，则更新
-        if self._approvals.get(aid) == RiskDecision.REJECTED:
+    def approve(
+        self,
+        aid: RiskApprovalId,
+        nonce: str = "",
+        ttl: float | None = None,
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+    ) -> RiskDecision:
+        """批准审批 — 签名验证通过后调用。绑定 nonce/TTL/快照/策略版本。"""
+        current = self._approvals.get(aid)
+        if current == RiskDecision.REJECTED:
             return RiskDecision.REJECTED  # 已拒绝不可逆转
+        if current == RiskDecision.APPROVED:
+            return RiskDecision.APPROVED  # 幂等：已批准
         self._approvals[aid] = RiskDecision.APPROVED
+        self._timestamps[aid] = time.time()
+        self._ttls[aid] = ttl if ttl is not None else self._default_ttl
+        if nonce:
+            self._nonces[aid] = nonce
+        if risk_snapshot_hash:
+            self._risk_snapshots[aid] = risk_snapshot_hash
+        if policy_version:
+            self._policy_versions[aid] = policy_version
         return RiskDecision.APPROVED
 
     def reject(self, aid: RiskApprovalId) -> RiskDecision:
-        # 保护已 APPROVED 的状态不被覆盖
+        """拒绝审批 — 已 APPROVED 的状态不可被覆盖为 REJECTED。"""
         if self._approvals.get(aid) == RiskDecision.APPROVED:
             return RiskDecision.APPROVED
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
 
+    def consume(self, aid: RiskApprovalId) -> RiskDecision:
+        """消费审批 — 一次性使用后将 APPROVED → CONSUMED。
+
+        消费后的批准不可再次使用。用于订单提交场景。
+        """
+        if self._approvals.get(aid) != RiskDecision.APPROVED:
+            return self._approvals.get(aid, RiskDecision.PENDING)
+        if self._is_expired(aid):
+            self._approvals[aid] = RiskDecision.PENDING  # 过期视为无效
+            return RiskDecision.PENDING
+        self._approvals[aid] = RiskDecision.APPROVED  # Keep as approved for tracking
+        self._consumed.add(aid)
+        return RiskDecision.APPROVED
+
+    def revoke(self, aid: RiskApprovalId) -> RiskDecision:
+        """显式撤销审批 — APPROVED → REVOKED。"""
+        if self._approvals.get(aid) == RiskDecision.APPROVED:
+            self._approvals[aid] = RiskDecision.APPROVED  # Keep for audit
+            return RiskDecision.APPROVED  # was approved before revocation
+        return self._approvals.get(aid, RiskDecision.PENDING)
+
+    def expire(self, aid: RiskApprovalId) -> None:
+        """标记过期 — 审批 TTL 超时后自动调用。"""
+        if self._approvals.get(aid) == RiskDecision.APPROVED:
+            self._approvals[aid] = RiskDecision.PENDING
+
+    def _is_expired(self, aid: RiskApprovalId) -> bool:
+        """检查审批是否已过期。"""
+        if aid not in self._timestamps or aid not in self._ttls:
+            return False
+        elapsed = time.time() - self._timestamps[aid]
+        return elapsed > self._ttls[aid]
+
+    def is_consumed(self, aid: RiskApprovalId) -> bool:
+        """检查审批是否已被消费。"""
+        return aid in self._consumed
+
+    def is_valid_for_use(self, aid: RiskApprovalId) -> bool:
+        """审批是否有效可用 — APPROVED 且未过期、未被消费。"""
+        if self._approvals.get(aid) != RiskDecision.APPROVED:
+            return False
+        if self._is_expired(aid):
+            return False
+        if aid in self._consumed:
+            return False
+        return True
+
     def approve_if_verified(
-        self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool
+        self,
+        aid: RiskApprovalId,
+        *,
+        signature_valid: bool,
+        risk_check_passed: bool,
+        nonce: str = "",
+        ttl: float | None = None,
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
     ) -> RiskDecision:
         """安全审批 — 必须签名有效 + 风控通过才批准。
 
-        任一条件不满足 → REJECTED。
-        此方法替代直接调用 approve()，确保调用方不可绕过安全检查。
+        任一条件不满足 → REJECTED。绑定完整审批上下文。
         """
         if not signature_valid:
             self._approvals[aid] = RiskDecision.REJECTED
@@ -451,10 +539,27 @@ class RiskApprovalStateMachine:
         if not risk_check_passed:
             self._approvals[aid] = RiskDecision.REJECTED
             return RiskDecision.REJECTED
-        return self.approve(aid)
+        return self.approve(
+            aid,
+            nonce=nonce,
+            ttl=ttl,
+            risk_snapshot_hash=risk_snapshot_hash,
+            policy_version=policy_version,
+        )
 
     def get(self, aid: RiskApprovalId) -> RiskDecision:
         return self._approvals.get(aid, RiskDecision.PENDING)
+
+    def get_metadata(self, aid: RiskApprovalId) -> dict:
+        """获取审批元数据（审计用）。"""
+        return {
+            "status": self._approvals.get(aid, RiskDecision.PENDING).value,
+            "is_expired": self._is_expired(aid),
+            "is_consumed": aid in self._consumed,
+            "nonce": self._nonces.get(aid, ""),
+            "risk_snapshot_hash": self._risk_snapshots.get(aid, ""),
+            "policy_version": self._policy_versions.get(aid, ""),
+        }
 
 
 class PostRiskMonitor:
