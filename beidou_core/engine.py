@@ -3976,9 +3976,16 @@ class AutonomousEngine:
             aggressive_price = None
             if ref_price > 0:
                 if side == "BUY":
-                    aggressive_price = str(round(ref_price * 1.02, 2))  # S32: 2% 溢价吃单
+                    px = ref_price * 1.02
                 else:
-                    aggressive_price = str(round(ref_price * 0.98, 2))  # S32: 2% 折价吃单
+                    px = ref_price * 0.98
+                # 对齐 tick size（常见精度: BTC 0.1, ETH 0.01, <$1 用 4 位）
+                if px > 1000:
+                    aggressive_price = str(round(px, 1))
+                elif px > 10:
+                    aggressive_price = str(round(px, 2))
+                else:
+                    aggressive_price = str(round(px, 4))
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
             else:
