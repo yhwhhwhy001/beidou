@@ -404,14 +404,19 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
             )
 
         total_qty = float(ctx.total_quantity.amount)
+        # BD-FIX (S12): 确保每切片不低于交易所最小数量。
+        # 对于小数量订单（ETH 0.01, XRP 8 等），减少切片数避免归零。
+        _min_qty = max(0.001, float(getattr(ctx, "min_quantity", 0.001) or 0.001))
         slice_pct = self._determine_slice_pct(ctx)
         slice_qty = total_qty * slice_pct
         slice_count = max(1, int(1.0 / slice_pct))
-        # 小数量时减少切片数，避免每个切片低于交易所最小下单量
-        _min_slice_qty = 0.0005  # 低于此值合并为单个切片
-        if slice_qty < _min_slice_qty:
+        # 每切片低于最小量 → 合并为单切片
+        if slice_qty < _min_qty:
             slice_count = 1
             slice_qty = total_qty
+        # 限制切片数：不超出总数量可支持的最大切片
+        max_slices_by_qty = max(1, int(total_qty / _min_qty))
+        slice_count = min(slice_count, max_slices_by_qty)
 
         slices: list[OrderSlice] = []
         alpha_remaining = ctx.net_alpha_bps

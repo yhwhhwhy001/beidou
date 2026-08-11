@@ -28,17 +28,34 @@ class InstanceLock:
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
+        """Check the PID exists AND belongs to a beidou process.
+
+        PID reuse after crash/kill can assign a dead instance's PID to an
+        unrelated process.  Verifying the command name prevents a false
+        "already running" block.
+        """
         if pid <= 0:
             return False
         try:
             os.kill(pid, 0)
-            return True
         except ProcessLookupError:
             return False
         except PermissionError:
             return True
         except OSError:
             return False
+        # Verify the process is actually a beidou launcher, not a reused PID.
+        try:
+            import subprocess
+            cmdline = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "comm="],
+                capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+            return "beidou" in cmdline.lower() or "python" in cmdline.lower()
+        except Exception:
+            # On any error (missing ps, timeout, etc.) fall back to the
+            # signal check alone — fail closed rather than open.
+            return True
 
     def acquire(self) -> tuple[bool, str]:
         self.path.parent.mkdir(parents=True, exist_ok=True)

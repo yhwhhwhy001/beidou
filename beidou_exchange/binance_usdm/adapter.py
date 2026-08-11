@@ -296,6 +296,12 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         if self._rest_client is not None:
             self._rest_client.reset_circuit_breaker()
 
+    def is_circuit_breaker_open(self) -> bool:
+        """检查传输断路器是否打开。"""
+        if self._rest_client is None:
+            return False
+        return self._rest_client.is_circuit_breaker_open()
+
     async def create_user_listen_key(self) -> Result[dict[str, Any]]:
         """Create a user-data listen key through the adapter-owned transport.
 

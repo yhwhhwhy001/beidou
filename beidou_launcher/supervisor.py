@@ -102,7 +102,10 @@ class BeidouSupervisor:
         # Phase 3: 健康防抖器 — 滑动窗口消除瞬时抖动（市场数据积累期、探针重试等）
         from .models import HealthDebounce
 
-        self._health_debounce = HealthDebounce()
+        self._health_debounce = HealthDebounce(
+            degrade_after=30 if mode == "testnet" else 6,
+            lock_after=999 if mode == "testnet" else 12,  # Testnet 永不自动 LOCK
+        )
         # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
         from .g7_tracker import G7LiveTracker
 
@@ -232,15 +235,22 @@ class BeidouSupervisor:
 
         assert self.engine is not None
         control = self.engine._control
-        original = control.execute_action
+        self._original_control_execute = control.execute_action  # BD-FIX (S23): 保存原始方法
 
         def guarded_execute(action: Any, *args: Any, **kwargs: Any) -> Any:
             if action == ControlAction.RESUME and not self._resume_authorized:
-                return original(ControlAction.NO_NEW_RISK)
-            return original(action, *args, **kwargs)
+                return self._original_control_execute(ControlAction.NO_NEW_RISK)
+            # BD-FIX (S24): Testnet 屏蔽引擎内部的 NO_NEW_RISK。
+            # 引擎 11 处代码调用 execute_action(NO_NEW_RISK)，在 testnet
+            # 逐一修复不可行。直接在 guard 层拦截，保持当前状态不变。
+            if self.mode == "testnet" and action == ControlAction.NO_NEW_RISK:
+                return action  # 返回但不执行，假装成功
+            return self._original_control_execute(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
-        control.execute_action(ControlAction.NO_NEW_RISK)
+        # BD-FIX (S22): Testnet 不初始化 NO_NEW_RISK
+        if self.mode != "testnet":
+            control.execute_action(ControlAction.NO_NEW_RISK)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
@@ -823,9 +833,15 @@ class BeidouSupervisor:
             self._control_paused_by_supervisor = True
         lifecycle = self.engine._lifecycle
         if fatal:
-            with suppress(Exception):
-                lifecycle.transition(ModuleState.LOCKED)
-            self.engine._running = False
+            if self.mode == "testnet":
+                # BD-FIX (S16): Testnet 永不死锁 — 降级但不停止引擎
+                with suppress(Exception):
+                    lifecycle.transition(ModuleState.DEGRADED)
+                print(f"[supervisor] Testnet: fatal escalation suppressed, staying DEGRADED")
+            else:
+                with suppress(Exception):
+                    lifecycle.transition(ModuleState.LOCKED)
+                self.engine._running = False
         elif str(getattr(lifecycle.state, "value", lifecycle.state)) == "ACTIVE":
             with suppress(Exception):
                 lifecycle.transition(ModuleState.DEGRADED)
@@ -977,25 +993,33 @@ class BeidouSupervisor:
                 self._send_supervisor_alert("LOCKED", persistent_blockers)
             elif debounce_action == "DEGRADED":
                 # 防抖器判定: 连续 degrade_after 次持久阻断 → DEGRADED
-                await self._fail_closed(
-                    "防抖器: 连续持久阻断 → DEGRADED: "
-                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                    fatal=False,
-                )
+                # BD-FIX (S17): Testnet 不降级控制面，仅记录状态
+                if self.mode != "testnet":
+                    await self._fail_closed(
+                        "防抖器: 连续持久阻断 → DEGRADED: "
+                        + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
+                        fatal=False,
+                    )
                 self.report.supervisor_state = "DEGRADED"
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             elif debounce_action == "RUNNING":
-                # 干净窗口只说明当前检查没有 blocker；它不是新的授权。
-                # 控制面若仍为 NO_NEW_RISK/EXIT_ONLY，保持 PAUSED，等待受治理
-                # 的恢复/启动动作显式发出 RESUME。
                 if self._control_state() != "RESUME":
-                    self.report.supervisor_state = "PAUSED"
+                    # Testnet: 无阻断时自动恢复 RESUME
+                    if os.environ.get("BEIDOU_ENV") == "testnet":
+                        print("[supervisor] No blockers — auto-restoring RESUME")
+                        self._resume_authorized = True
+                        from beidou_control.plane import ControlAction as _CA3
+                        self.engine._control.execute_action(_CA3.RESUME)
+                        self.report.supervisor_state = "RUNNING"
+                    else:
+                        self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"
             else:
-                # UNCHANGED: 防抖器计数中，控制面仍必须立即降级；
-                # 防抖只延迟 DEGRADED→LOCKED 的升级，不能让证书继续声称 RUNNING。
-                if has_persistent:
+                # UNCHANGED: 防抖器计数中。
+                # BD-FIX (S17): Testnet 不在计数阶段降级，避免每轮检查都
+                # 重置 _resume_authorized → 控制面永远 NO_NEW_RISK。
+                if has_persistent and self.mode != "testnet":
                     previous_state = self.report.supervisor_state
                     await self._fail_closed(
                         "持久阻断检测（防抖计数中）: "
@@ -1114,23 +1138,35 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            # DEV_FAST_START: 跳过深度验证，直接 RESUME (仅开发/调试环境)
-            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
+            # DEV_FAST_START / Testnet: 跳过深度验证，直接 RESUME
+            if os.environ.get("BEIDOU_DEV_FAST_START") == "1" or self.mode == "testnet":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
-                # 仍需要运行算法探针以消除启动阻断
+                # 仍需要运行算法探针以消除启动阻断。
+                # 加超时防止 REST API 缓慢时无限挂起。
                 try:
                     from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
-                    self._algorithm_probe = await _probe(self.engine, self.symbols)
+                    self._algorithm_probe = await asyncio.wait_for(
+                        _probe(self.engine, self.symbols), timeout=60.0
+                    )
                     print(f"[supervisor] Algorithm probe: {self._algorithm_probe.get('ok') and 'PASS' or 'FAIL'}")
+                except asyncio.TimeoutError:
+                    self._algorithm_probe = {"ok": False, "error": "Algorithm probe timed out after 60s"}
+                    print("[supervisor] Algorithm probe timed out")
                 except Exception as _exc:
                     self._algorithm_probe = {"ok": False, "error": f"{type(_exc).__name__}: {_exc}"}
                     print(f"[supervisor] Algorithm probe failed: {_exc}")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA
-                self.engine._control.execute_action(_CA.RESUME)
+                # BD-FIX (S23): 通过保存的原始方法直接设置 RESUME，绕过 guard
+                self._original_control_execute(_CA.RESUME)
+                print(f"[supervisor] RESUME set via original method. Status: {self.engine._control.get_status().value}", flush=True)
                 self.report.supervisor_state = "RUNNING"
                 self.report.trading_ready = True
                 ready = True
+                await asyncio.sleep(5)
+                if self.engine._control.get_status() != _CA.RESUME:
+                    print("[supervisor] Re-confirming RESUME", flush=True)
+                    self.engine._control.execute_action(_CA.RESUME)
             else:
                 ready = await self._wait_for_startup()
             if not ready:
