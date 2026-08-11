@@ -6666,10 +6666,14 @@ class AutonomousEngine:
                     from beidou_strategy.alpha import AlphaSignal
                     direction = SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT
                     alpha_signal = AlphaSignal(
-                        component_id=f"{symbol}@{tf}",
+                        strategy_id=self._autopilot_strategy_id,
+                        component_type=AlphaComponentType.ENTRY,
                         direction=direction,
                         strength=float(getattr(proposal, "strength", 0)),
                         confidence=float(getattr(proposal, "confidence", 0)),
+                        instrument_id=instrument_id,
+                        venue_id=venue_id,
+                        model_version=SchemaVersion("2.0.0"),
                     )
                     fused_result = self._fuser.fuse([alpha_signal])
                     fused = SimpleNamespace(
@@ -6684,12 +6688,15 @@ class AutonomousEngine:
                         f"{getattr(signal_obj, 'direction', '?')} "
                         f"strength={getattr(signal_obj, 'strength', 0):.3f}"
                     )
-                    from beidou_strategy.alpha import AlphaSignal
                     alpha_signal = AlphaSignal(
-                        component_id=f"{symbol}@{tf}",
+                        strategy_id=self._autopilot_strategy_id,
+                        component_type=AlphaComponentType.ENTRY,
                         direction=getattr(signal_obj, "direction", SignalDirection.NO_ACTION),
                         strength=float(getattr(signal_obj, "strength", 0)),
                         confidence=float(getattr(signal_obj, "confidence", 0)),
+                        instrument_id=instrument_id,
+                        venue_id=venue_id,
+                        model_version=SchemaVersion("2.0.0"),
                     )
                     fused_result = self._fuser.fuse([alpha_signal])
                     fused = SimpleNamespace(
