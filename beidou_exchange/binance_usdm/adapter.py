@@ -27,6 +27,7 @@ from beidou_exchange.core.protocol import (
     UserPositionUpdate,
     UserStreamEvent,
 )
+from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
     AccountId,
@@ -209,6 +210,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         self._rest_client = rest_client  # BD-T18: 真实传输层
         self._health_monitor = BinanceHealthMonitor(venue_id)
         self._reference_data = BinanceReferenceData(venue_id=venue_id)
+        # BD-CV10: InstrumentRuleSnapshot 缓存 — adapter 是唯一规则来源
+        self._rule_snapshots: dict[str, InstrumentRuleSnapshot] = {}
+        self._rule_snapshot_version: int = 0
         self._capabilities = frozenset(
             {
                 Capability.FUTURES_USD_M,
@@ -353,6 +357,40 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             rate_limits=self._reference_data.rate_limits,
             supported_instruments=frozenset(self._reference_data.instruments.keys()),
         )
+
+    # --- BD-CV10: InstrumentRuleSnapshot — 唯一规则来源 ---
+
+    def get_rule_snapshot(self, symbol: str) -> InstrumentRuleSnapshot:
+        """BD-CV10: 获取交易对规则快照。
+
+        从 adapter 缓存返回；规则 UNKNOWN 时返回 InstrumentRuleSnapshot.unknown(symbol)。
+        AC-10-02: 未知规则无法产生可执行 OrderSlice/ProtectionOrder。
+        """
+        return self._rule_snapshots.get(symbol, InstrumentRuleSnapshot.unknown(symbol))
+
+    def sync_rule_snapshots(self) -> int:
+        """BD-CV10: 从 BinanceReferenceData 同步所有交易对规则快照。
+
+        支持 exchangeInfo 变更检测和原子版本切换。
+        返回新 snapshot_version。
+        """
+        snapshots: dict[str, InstrumentRuleSnapshot] = {}
+        for inst_id, raw_data in self._reference_data.instruments.items():
+            symbol = str(inst_id)
+            snapshots[symbol] = InstrumentRuleSnapshot.from_exchange_info(symbol, raw_data)
+        self._rule_snapshots = snapshots
+        self._rule_snapshot_version += 1
+        return self._rule_snapshot_version
+
+    @property
+    def rule_snapshot_version(self) -> int:
+        """BD-CV10: 当前规则快照版本号（单调递增）。"""
+        return self._rule_snapshot_version
+
+    @property
+    def rule_snapshot_count(self) -> int:
+        """BD-CV10: 已缓存的规则快照数量。"""
+        return len(self._rule_snapshots)
 
     async def check_health(self, venue_id: VenueId) -> HealthStatus:
         return self._health_monitor.venue_health

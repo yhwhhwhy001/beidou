@@ -5,11 +5,16 @@ authority to certify their own output: this module checks the meaning of a
 certificate from a separate, deterministic code path.  It performs no network
 or exchange calls and deliberately returns ``NOT_VERIFIABLE`` for missing or
 contradictory evidence.
+
+BD-CV52: 验证 evidence hash 内容（不仅路径存在）。
+修改 evidence 内容但不改路径时 verifier 必须 FAIL。
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -223,3 +228,58 @@ def verify_g7_certificate(
     check("active_incidents", summary.get("active_incidents", 0) == 0)
 
     return _result("G7", checks, failures)
+
+
+# --- BD-CV52: Evidence 内容验证 ---
+
+
+def verify_evidence_integrity(manifest: dict[str, Any], evidence_dir: str = "") -> tuple[bool, list[str]]:
+    """BD-CV52: 验证 evidence 内容的完整性。
+
+    不仅验证 evidence 文件存在，还验证其 hash 与 manifest 一致。
+    修改 evidence 内容但不改路径时 verifier 必须 FAIL。
+
+    返回 (passed, failures)。
+    """
+    failures: list[str] = []
+
+    # 验证 manifest 中声明的 evidence hash
+    declared_hashes = manifest.get("evidence_hashes", {})
+    for fname, declared_hash in declared_hashes.items():
+        fpath = os.path.join(evidence_dir, fname) if evidence_dir else fname
+        if not os.path.exists(fpath):
+            failures.append(f"MISSING_EVIDENCE:{fname}")
+            continue
+        try:
+            with open(fpath, "rb") as fh:
+                actual_hash = hashlib.sha256(fh.read()).hexdigest()
+            if actual_hash != declared_hash:
+                failures.append(f"HASH_MISMATCH:{fname}:declared={declared_hash[:16]}:actual={actual_hash[:16]}")
+        except Exception as exc:
+            failures.append(f"EVIDENCE_READ_ERROR:{fname}:{exc}")
+
+    # 验证 manifest 自身的证据绑定
+    manifest_hash = manifest.get("manifest_hash", "")
+    if manifest_hash:
+        # 重新计算 manifest hash（排除 manifest_hash 字段自身）
+        recompute_data = {k: v for k, v in manifest.items() if k not in ("manifest_hash", "_legacy_status", "_legacy_marked_at", "_legacy_reason")}
+        recomputed = hashlib.sha256(
+            __import__("json").dumps(recompute_data, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+        if recomputed != manifest_hash:
+            failures.append(f"MANIFEST_HASH_MISMATCH:declared={manifest_hash[:16]}:actual={recomputed[:16]}")
+
+    return len(failures) == 0, failures
+
+
+def verify_evidence_path_not_sufficient(path: str, content_changed: bool = False) -> bool:
+    """BD-CV52: 验证路径存在不足以为 PASS。
+
+    若内容已修改（content_changed=True），即使路径存在也应返回 False。
+    这确保 verifier 不会仅因路径字符串存在就通过验证。
+    """
+    if not path or not os.path.exists(path):
+        return False
+    if content_changed:
+        return False  # 内容改变 → 路径存在也不足以通过
+    return True

@@ -4466,52 +4466,64 @@ class AutonomousEngine:
         ack_outbox: bool,
     ) -> dict | None:
         """单个切片：量化精度修正 → 发送 → 记录。返回交易所响应或 None。"""
-        # 量化精度修正：查询交易所规则获取 stepSize 和 tickSize
+        # BD-CV10: 量化精度从 adapter 的唯一 InstrumentRuleSnapshot 获取。
         if not hasattr(self, "_symbol_precision"):
             self._symbol_precision: dict[str, dict[str, int]] = {}
         if order_symbol not in self._symbol_precision:
-            try:
-                exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
-                found = False
-                for s in exchange_info.get("symbols", []):
-                    sym = s.get("symbol", "")
-                    quantity_step: str | None = None
-                    price_tick: str | None = None
-                    min_qty: str | None = None
-                    min_notional_val: float = 0.0
-                    for f_item in s.get("filters", []):
-                        if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
-                            quantity_step = str(f_item.get("stepSize", "")) or quantity_step
-                            min_qty = str(f_item.get("minQty", "")) or min_qty
-                        if f_item.get("filterType") == "PRICE_FILTER":
-                            price_tick = str(f_item.get("tickSize", "")) or price_tick
-                        if f_item.get("filterType") == "MIN_NOTIONAL":
-                            try:
-                                min_notional_val = float(str(f_item.get("notional", "0")))
-                            except (TypeError, ValueError):
-                                pass
-                    if not quantity_step or not price_tick:
-                        continue
-                    try:
-                        quantity_decimals = max(0, -Decimal(quantity_step).as_tuple().exponent)
-                        price_decimals = max(0, -Decimal(price_tick).as_tuple().exponent)
-                        min_quantity = float(min_qty) if min_qty else float(quantity_step)
-                    except (InvalidOperation, ValueError):
-                        continue
-                    self._symbol_precision[sym] = {
-                        "quantity": quantity_decimals,
-                        "price": price_decimals,
-                        "min_quantity": min_quantity,
-                        "min_notional": min_notional_val,
+            rule = getattr(self, "_adapter", None)
+            if rule is not None and hasattr(rule, "get_rule_snapshot"):
+                snap = rule.get_rule_snapshot(order_symbol)
+                if snap.is_known:
+                    self._symbol_precision[order_symbol] = {
+                        "quantity": snap.qty_precision,
+                        "price": snap.price_precision,
+                        "min_quantity": float(snap.min_qty) if snap.min_qty else 0.0,
+                        "min_notional": float(snap.min_notional) if snap.min_notional else 0.0,
                     }
-                    if sym == order_symbol:
-                        found = True
-                if not found:
+                else:
+                    print(f"[order] {order_symbol}: rule snapshot UNKNOWN — symbol NOT_EXECUTABLE")
+                    return None
+            else:
+                # Fallback: 从 exchangeInfo API 加载并填充到 _symbol_precision
+                try:
+                    exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
+                    for s in exchange_info.get("symbols", []):
+                        sym = s.get("symbol", "")
+                        quantity_step: str | None = None
+                        price_tick: str | None = None
+                        min_qty: str | None = None
+                        min_notional_val: float = 0.0
+                        for f_item in s.get("filters", []):
+                            if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                                quantity_step = str(f_item.get("stepSize", "")) or quantity_step
+                                min_qty = str(f_item.get("minQty", "")) or min_qty
+                            if f_item.get("filterType") == "PRICE_FILTER":
+                                price_tick = str(f_item.get("tickSize", "")) or price_tick
+                            if f_item.get("filterType") == "MIN_NOTIONAL":
+                                try:
+                                    min_notional_val = float(str(f_item.get("notional", "0")))
+                                except (TypeError, ValueError):
+                                    pass
+                        if not quantity_step or not price_tick:
+                            continue
+                        try:
+                            quantity_decimals = max(0, -Decimal(quantity_step).as_tuple().exponent)
+                            price_decimals = max(0, -Decimal(price_tick).as_tuple().exponent)
+                            min_quantity = float(min_qty) if min_qty else float(quantity_step)
+                        except (InvalidOperation, ValueError):
+                            continue
+                        self._symbol_precision[sym] = {
+                            "quantity": quantity_decimals,
+                            "price": price_decimals,
+                            "min_quantity": min_quantity,
+                            "min_notional": min_notional_val,
+                        }
+                except Exception as exc:
+                    print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
+                    return None
+                if order_symbol not in self._symbol_precision:
                     print(f"[order] {order_symbol}: exchange precision UNKNOWN")
                     return None
-            except Exception as exc:
-                print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
-                return None
 
         prec = self._symbol_precision.get(order_symbol)
         if prec is None:
