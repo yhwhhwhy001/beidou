@@ -7731,8 +7731,8 @@ class AutonomousEngine:
                     f"positions={position_count} pending={pending}"
                 )
             if self._post_risk.recommend_degradation():
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
-                print(f"[post-risk] ⚠️ DEGRADATION recommended: {len(self._post_risk._violations)} violations")
+                # 交由 supervisor 监控循环处理降级决策，不在此处立即阻断
+                print(f"[post-risk] ⚠️ {len(self._post_risk._violations)} violations — supervisor will evaluate")
         except Exception as exc:
             logger.debug("post-risk safety check skipped: %s", type(exc).__name__)
 
