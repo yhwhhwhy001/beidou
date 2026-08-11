@@ -13,6 +13,7 @@ from beidou_observability.monitoring.evidence import (
     verify_evidence_integrity,
 )
 from beidou_observability.monitoring.fact_collector import CollectedFact, FactCollector, FactDomain
+from beidou_observability.monitoring.fact_bus import get_fact_bus  # P1-048: 操作事实总线
 from beidou_observability.monitoring.frequency_policy import (
     LEVEL_INTERVALS,
     PROMOTION_STREAK_REQUIRED,
@@ -316,7 +317,32 @@ def collect_monitoring_checks(
         # durable local projection and the authorized user-stream facts by
         # ``engine._reconcile``.  A matching REST/local position comparison
         # alone must never advertise PASS for a write-capable process.
-        if bool(getattr(engine, "_can_write", False)):
+        # P1-048: 优先从 FactBus 获取对账事实，fallback 到 engine 私有字段
+        bus = get_fact_bus()
+        recon_fact = bus.get_latest("reconciliation_result")
+        _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
+        _max_age = 300.0 if _testnet else 60.0
+
+        if recon_fact is not None and recon_fact.payload:
+            # P1-048: 使用 FactBus 数据
+            authority_ok = bool(recon_fact.payload.get("matched", False))
+            authority_status = str(recon_fact.payload.get("status", "UNKNOWN")).upper()
+            authority_age = time.time() - recon_fact.timestamp if recon_fact.timestamp > 0 else None
+            if not authority_ok or not authority_age or authority_age > _max_age:
+                _sev = CheckSeverity.P1 if _testnet else CheckSeverity.P0
+                results.append(
+                    CheckResult(
+                        check_id="runtime.safety.reconciliation",
+                        name="深度对账 (MON03 R1~R6)",
+                        status=CheckStatus.FAIL if not _testnet else CheckStatus.WARN,
+                        severity=_sev,
+                        message=f"Reconciliation via FactBus: status={authority_status}, age={authority_age}s",
+                        evidence={"source": "fact_bus", "status": authority_status, "age_seconds": authority_age},
+                    )
+                )
+            else:
+                results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
+        elif bool(getattr(engine, "_can_write", False)):
             authority = getattr(engine, "_last_reconciliation_result", None)
             authority_status = str(
                 getattr(getattr(authority, "status", None), "value", getattr(authority, "status", "UNKNOWN"))
@@ -332,8 +358,6 @@ def collect_monitoring_checks(
                     authority_age = max(0.0, time.time() - float(checked_at.timestamp()))
                 except (AttributeError, TypeError, ValueError, OverflowError):
                     authority_age = None
-            _testnet = os.environ.get("BEIDOU_ENV") == "testnet"
-            _max_age = 300.0 if _testnet else 60.0
             authority_ok = (
                 authority is not None
                 and bool(getattr(authority, "matched", False))

@@ -82,6 +82,7 @@ class StrategyRiskState:
     strategy_id: StrategyId
     current_drawdown_pct: float = 0.0
     peak_equity: float = 0.0
+    start_of_day_equity: float = 0.0  # P1-011: 日初权益，日损分母
     daily_pnl: float = 0.0
     daily_loss_pct: float = 0.0
     consecutive_losses: int = 0
@@ -130,6 +131,14 @@ class StrategyRiskState:
         except ValueError:
             s.risk_level = StrategyRiskLevel.NORMAL
         return s
+
+
+def _is_new_day(last_updated: datetime | None = None) -> bool:
+    """P1-011: 检查是否跨越了自然日。"""
+    if last_updated is None:
+        return True
+    now = datetime.now(timezone.utc)
+    return now.date() != last_updated.date()
 
 
 class DrawdownMonitor:
@@ -209,6 +218,10 @@ class StrategyRiskManager:
         if state is None or budget is None:
             return {"action": "NOOP", "reason": "no budget configured"}
 
+        # P1-011: 首次调用或日初时设置日初权益
+        if state.start_of_day_equity <= 0 or _is_new_day(state.last_updated):
+            state.start_of_day_equity = current_equity
+
         # 更新峰值
         if current_equity > state.peak_equity:
             state.peak_equity = current_equity
@@ -256,8 +269,10 @@ class StrategyRiskManager:
 
         # 单日亏损累计
         state.daily_pnl += pnl
-        if state.peak_equity > 0:
-            state.daily_loss_pct = abs(min(0, state.daily_pnl)) / state.peak_equity * 100
+        # P1-011: 日损使用日初权益，与回撤的 peak_equity 分离
+        denominator = state.start_of_day_equity if state.start_of_day_equity > 0 else state.peak_equity
+        if denominator > 0:
+            state.daily_loss_pct = abs(min(0, state.daily_pnl)) / denominator * 100
 
         # 连续亏损
         if is_win:

@@ -21,6 +21,12 @@ class PoolStatus(str, Enum):
     DELISTED = "DELISTED"  # 下架
 
 
+# P1-037: 默认评分权重 — 可被签名策略覆盖
+_DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
+    "spread": 0.25, "depth": 0.25, "volume": 0.20, "stability": 0.15, "capacity": 0.15,
+}
+
+
 @dataclass
 class InstrumentScore:
     """标的综合评分。"""
@@ -34,14 +40,15 @@ class InstrumentScore:
     overall: float = 0.0
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def compute_overall(self) -> float:
-        weights = {"spread": 0.25, "depth": 0.25, "volume": 0.20, "stability": 0.15, "capacity": 0.15}
+    def compute_overall(self, weights: dict[str, float] | None = None) -> float:
+        # P1-037: 默认权重 — 可被签名策略覆盖
+        w = weights or _DEFAULT_SCORE_WEIGHTS
         self.overall = (
-            self.spread_score * weights["spread"]
-            + self.depth_score * weights["depth"]
-            + self.volume_score * weights["volume"]
-            + self.stability_score * weights["stability"]
-            + self.capacity_score * weights["capacity"]
+            self.spread_score * w.get("spread", 0.25)
+            + self.depth_score * w.get("depth", 0.25)
+            + self.volume_score * w.get("volume", 0.20)
+            + self.stability_score * w.get("stability", 0.15)
+            + self.capacity_score * w.get("capacity", 0.15)
         )
         return self.overall
 
@@ -73,6 +80,7 @@ class TradingPool:
     PROMOTE_THRESHOLD = 0.6  # 综合评分 >= 0.6 才考虑晋级
     DEGRADE_THRESHOLD = 0.3  # 综合评分 < 0.3 触发降级
     DEGRADE_CONSECUTIVE = 3  # 连续3次低于阈值才降级（迟滞）
+    policy_version: str = ""  # P1-037: 签名策略版本
 
     def __init__(
         self,

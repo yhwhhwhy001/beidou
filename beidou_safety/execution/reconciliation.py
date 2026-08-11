@@ -70,6 +70,7 @@ class AccountFactSnapshot:
     source: str = "UNKNOWN"
     fact_version: str = ""
     complete: bool = False  # PKG20: 默认不完整 — 采集器必须显式证明
+    position_step_size: str = "1e-8"  # P1-033: venue stepSize 绑定
 
 
 class ReconciliationEngine:
@@ -282,13 +283,19 @@ class ReconciliationEngine:
                 checked_at=checked_at,
             )
         symbols = sorted(set(sys_pos) | set(ex_pos))
-        # PKG20 (BDS-P1-033): 仓位容差按 venue stepSize 绑定，非固定 1e-12
-        # 默认 stepSize = 1e-8（交易所最小数量精度），可配置
-        POSITION_STEP_SIZE = Decimal("1e-8")  # 通用 stepSize；可按 venue 覆盖
+        # PKG20 (BDS-P1-033): 仓位容差按 venue stepSize 绑定
+        # 优先使用从 ExchangeInfo/LOT_SIZE 获取的 stepSize，fallback 到 1e-8
+        position_step_size = (
+            Decimal(str(system_facts.position_step_size))
+            if getattr(system_facts, "position_step_size", None)
+            else Decimal(str(getattr(exchange_facts, "position_step_size", "1e-8")))
+        )
+        if position_step_size <= 0:
+            position_step_size = Decimal("1e-8")
         position_diffs = {
             symbol: (sys_pos.get(symbol, Decimal("0")), ex_pos.get(symbol, Decimal("0")))
             for symbol in symbols
-            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > POSITION_STEP_SIZE
+            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > position_step_size
         }
         if position_diffs:
             diffs.append(f"Position mismatch: {position_diffs}")

@@ -273,6 +273,9 @@ class RiskApprovalSignerImpl:
         self._signed_expiry: dict[str, float] = {}
         # BD-T01: 已撤销签名集合 — 显式吊销的签名不可再验证通过。
         self._revoked_sigs: set[str] = set()
+        # P1-015: 持久化日志路径 — 调用方显式恢复
+        self._nonce_log_path = "evidence/BD-01/approval_nonces.jsonl"
+        self._revocation_log_path = "evidence/BD-01/approval_revocations.jsonl"
 
     def _payload(
         self,
@@ -418,6 +421,7 @@ class RiskApprovalSignerImpl:
         ok = self._hmac.compare_digest(signature, expected)
         if ok and nonce and consume_nonce:
             self._nonces.add(nonce)
+            self._persist_nonce(nonce)  # P1-015: 持久化
         return ok
 
     @property
@@ -436,6 +440,7 @@ class RiskApprovalSignerImpl:
         """BD-T01: 吊销指定签名 — 将其加入撤销集，后续 verify() 将拒绝。"""
         self._revoked_sigs.add(signature)
         self._signed_expiry.pop(signature, None)
+        self._persist_revocation(signature)  # P1-015: 持久化
 
     def restore_signature(self, signature: str, expires_at: float) -> bool:
         """Restore non-secret signature metadata for an unresolved intent.
@@ -451,6 +456,56 @@ class RiskApprovalSignerImpl:
         self._signed_expiry[signature] = float(expires_at)
         return True
 
+    # ------------------------------------------------------------------
+    # P1-015: Durable nonce/revocation persistence
+    # ------------------------------------------------------------------
+
+    def _persist_nonce(self, nonce: str) -> None:
+        """P1-015: 持久化已消费 nonce 到 JSONL。"""
+        try:
+            import json, os
+            os.makedirs(os.path.dirname(self._nonce_log_path), exist_ok=True)
+            event = {"action": "consume_nonce", "nonce": nonce, "timestamp": time.time()}
+            with open(self._nonce_log_path, "a") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+        except OSError:
+            pass
+
+    def _persist_revocation(self, signature: str) -> None:
+        """P1-015: 持久化撤销到 JSONL。"""
+        try:
+            import json, os
+            os.makedirs(os.path.dirname(self._revocation_log_path), exist_ok=True)
+            event = {"action": "revoke", "signature": signature, "timestamp": time.time()}
+            with open(self._revocation_log_path, "a") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+        except OSError:
+            pass
+
+    def _restore_from_log(self) -> int:
+        """P1-015: 从 JSONL 恢复 nonce/revocation 状态。"""
+        restored = 0
+        for path, handler in [
+            (self._nonce_log_path, lambda e: self._nonces.add(e.get("nonce", ""))),
+            (self._revocation_log_path, lambda e: self._revoked_sigs.add(e.get("signature", ""))),
+        ]:
+            try:
+                import json, os
+                if os.path.exists(path):
+                    with open(path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                event = json.loads(line)
+                                handler(event)
+                                restored += 1
+                            except (json.JSONDecodeError, KeyError):
+                                pass
+            except OSError:
+                pass
+        return restored
 
 class RiskApprovalStateMachine:
     """RiskApproval 状态机 — PKG10 (BDS-P0-011) 完整生命周期。
