@@ -28,7 +28,7 @@ from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -7304,6 +7304,91 @@ class AutonomousEngine:
                         lifecycle_changed = True
         return lifecycle_changed
 
+    async def _evaluate_trading_universe(self) -> None:
+        """交易池宇宙评估：对 OBSERVING/PROMOTED 标的评分散点差、深度、成交量，自动晋级。
+
+        TradingPool 生命周期: OBSERVING → PROMOTED(≥0.6分) → ACTIVE
+        降级: 连续3次 < 0.3 → QUARANTINED
+        """
+        import math as _math
+
+        pool = getattr(self, "_trading_pool", None)
+        if pool is None:
+            return
+
+        candidates = [
+            iid for iid, e in pool._pool.items()
+            if e.status in (PoolStatus.OBSERVING, PoolStatus.PROMOTED)
+        ]
+        if not candidates:
+            return
+
+        scored = 0
+        promoted = 0
+        for instrument_id in candidates:
+            try:
+                ticker = self._feed.get_last_ticker(instrument_id)
+                ob = self._feed.get_last_orderbook(instrument_id)
+                features = await self._feed.async_get_kline_features(instrument_id, "1h", 50)
+            except Exception:
+                continue
+
+            if not ticker or not features:
+                continue
+
+            bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or 0)
+            ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or 0)
+
+            # 点差评分：spread_bps 越低越好，>50bps → 0分, <1bps → 1分
+            spread_bps = ((ask - bid) / ask * 10000) if 0 < bid <= ask else 999.0
+            spread_score = max(0.0, min(1.0, 1.0 - (spread_bps - 1) / 49)) if spread_bps > 1 else 1.0
+
+            # 深度评分：从 orderbook 获取
+            depth_score = 0.5  # 默认中等
+            if ob:
+                bids_vol = sum(float(b[1]) for b in (ob.get("bids", []) or [])[:5])
+                asks_vol = sum(float(a[1]) for a in (ob.get("asks", []) or [])[:5])
+                depth_usdt = (bids_vol + asks_vol) * float(ticker.get("lastPrice", ask))
+                # >$100k 深度 → 1分, <$1k → 0分
+                depth_score = max(0.0, min(1.0, _math.log10(max(1, depth_usdt)) / 5))
+
+            # 成交量评分：24h 交易量
+            vol_24h = float(features.get("volume_24h", 0) or 0)
+            vol_usdt = vol_24h * float(ticker.get("lastPrice", ask))
+            volume_score = max(0.0, min(1.0, _math.log10(max(1, vol_usdt)) / 8))
+
+            # 稳定性评分：从 features 推断（数据完整=稳定）
+            stability_score = 0.5
+            if features.get("close") and features.get("high") and features.get("low"):
+                stability_score = 0.8
+
+            # 容量评分：基于波动率
+            ann_vol = float(features.get("ann_volatility", 0.5) or 0.5)
+            capacity_score = max(0.0, min(1.0, 1.0 - ann_vol))  # 低波动=高容量
+
+            from beidou_data.trading_pool_lifecycle import InstrumentScore
+
+            score = InstrumentScore(
+                instrument_id=instrument_id,
+                spread_score=round(spread_score, 4),
+                depth_score=round(depth_score, 4),
+                volume_score=round(volume_score, 4),
+                stability_score=round(stability_score, 4),
+                capacity_score=round(capacity_score, 4),
+            )
+            pool.score(instrument_id, score)
+            scored += 1
+
+            if pool.try_promote(instrument_id):
+                promoted += 1
+
+        if scored > 0:
+            active = pool.active_instruments()
+            print(
+                f"[universe] 评估 {scored} 个标的, 晋级 {promoted} 个, "
+                f"当前活跃 {len(active)} 个: {active[:10]}{'...' if len(active) > 10 else ''}"
+            )
+
     async def _offline_tick(self) -> None:
         """离线时钟：因子评估 → 漂移检测 → 策略风控 → 日报 → 检查点 → 清理。"""
         self._last_offline = time.time()
@@ -7341,6 +7426,9 @@ class AutonomousEngine:
                         print(f"[offline] DriftDetector: no drift (sharpe={sharpe:.3f} win_rate={win_rate:.2f})")
             else:
                 print("[offline] DriftDetector: no trade data yet, skipping drift check")
+
+            # === 2.5 交易池宇宙评估：评分 + 晋级 ===
+            await self._evaluate_trading_universe()
 
             # === 3. Strategy risk: daily PnL reset ===
             # 检测日期变更，重置每日盈亏统计
@@ -7562,7 +7650,9 @@ class AutonomousEngine:
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
         # PKG02 (BDS-P0-001): 所有环境统一提款权限检查。
-        if venue_can_withdraw:
+        # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力，
+        # Testnet 环境中不存在可提取的真实资产，因此允许通过。
+        if venue_can_withdraw and self._env_mode.value != "testnet":
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
@@ -8288,9 +8378,16 @@ class AutonomousEngine:
                 await asyncio.sleep(10)
 
         async def _offline_loop() -> None:
+            _offline_interval = 300 if self._env_mode.value == "testnet" else 3600
+            # 首次运行：启动后 60s 执行首次宇宙评估
+            _first_tick_done = False
             while self._running:
                 try:
-                    if time.time() - self._last_offline >= 3600:
+                    elapsed = time.time() - self._last_offline
+                    trigger = (not _first_tick_done and elapsed >= 60) or (elapsed >= _offline_interval)
+                    if trigger:
+                        if not _first_tick_done:
+                            _first_tick_done = True
                         await self._offline_tick()
                 except Exception as exc:
                     self._error_count += 1

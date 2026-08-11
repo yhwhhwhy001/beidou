@@ -1145,6 +1145,13 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
+            # 等待行情数据加载后运行首次宇宙评估
+            await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
+            try:
+                from beidou_bootstrap.dev import bootstrap_universe
+                await bootstrap_universe(self.engine)
+            except Exception as _uni_exc:
+                print(f"[supervisor] 首次宇宙评估失败（非致命）: {_uni_exc}")
             # PKG02 (BDS-P0-001): 所有环境统一执行深度启动验证。
             if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
                 print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")

@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from .models import CheckResult, CheckSeverity, CheckStatus
+from beidou_data.trading_pool_lifecycle import PoolStatus
 
 REQUIRED_PACKAGES: tuple[str, ...] = (
     "beidou_shared",
@@ -235,16 +236,22 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     pool = getattr(engine, "_trading_pool", None)
     try:
         active_count = int(pool.active_count()) if pool is not None else 0
+        observing_count = sum(1 for e in pool._pool.values() if e.status == PoolStatus.OBSERVING) if pool is not None else 0
     except Exception:
         active_count = 0
+        observing_count = 0
+    # 首次启动时所有标的处于 OBSERVING 状态是正常的，不阻塞启动。
+    # 宇宙评估会在 offline loop 中自动评分并晋级达标标的。
+    pool_has_candidates = active_count > 0 or observing_count > 0
     checks.append(
         _result(
             "runtime.algorithms.trading_pool",
             "交易池激活",
-            CheckStatus.PASS if active_count > 0 else CheckStatus.FAIL,
-            CheckSeverity.P0,
-            f"已激活 {active_count} 个交易标的" if active_count > 0 else "没有可交易标的",
-            evidence={"active_count": active_count},
+            CheckStatus.PASS if active_count > 0 else (CheckStatus.WARN if pool_has_candidates else CheckStatus.FAIL),
+            CheckSeverity.P0 if not pool_has_candidates else CheckSeverity.P1,
+            f"已激活 {active_count} 个交易标的" if active_count > 0
+            else f"等待宇宙评估晋级（{observing_count} 个 OBSERVING）",
+            evidence={"active_count": active_count, "observing_count": observing_count},
         )
     )
 

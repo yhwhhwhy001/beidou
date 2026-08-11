@@ -52,19 +52,26 @@ def _make_promotion_decision(
 
 
 def patch_engine_for_dev(engine: Any, mode: str) -> None:
-    """在构造后、接线检查前，将因子和交易池激活到可运行状态。
+    """在构造后、接线检查前，将因子激活到可运行状态。
 
-    仅在 Paper 模式下执行。所有变更都有 DEV_BYPASS 标记。
+    仅激活因子（信号生成所需）。交易池标的由 TradingPool 真实生命周期算法管理：
+    OBSERVING → PROMOTED → ACTIVE，需要评分达标 + 观察期满。
+    设置 BEIDOU_SKIP_FACTOR_BYPASS=1 可同时跳过因子强制激活。
     """
+    import os as _os
+
     if mode not in ("paper", "research", "testnet"):
         print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
         return
 
-    if mode == "testnet":
-        print("[beidou-bootstrap] ⚠️  WARNING: Testnet 模式使用 DEV_BYPASS 激活因子/交易池")
-        print("[beidou-bootstrap] ⚠️  所有决策带有 DEV_BYPASS 标记 — 不可用于 Shadow/Mainnet")
+    skip_factor = _os.environ.get("BEIDOU_SKIP_FACTOR_BYPASS") == "1"
+    skip_pool = _os.environ.get("BEIDOU_SKIP_POOL_BYPASS", "1") == "1"  # 默认跳过交易池 bypass
 
-    print("[beidou-bootstrap] DEV_BYPASS: 开始快速激活因子和交易池...")
+    if mode == "testnet":
+        print("[beidou-bootstrap] Testnet 模式 — 因子激活，交易池由真实算法管理")
+        print("[beidou-bootstrap] TradingPool: OBSERVING → PROMOTED(≥0.6分) → ACTIVE")
+
+    print("[beidou-bootstrap] DEV_BYPASS: 开始激活因子...")
 
     commit = _get_commit()
 
@@ -171,35 +178,157 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
             engine._strategy_kernel.set_typed_graph(engine._typed_graph)
         print(f"[beidou-bootstrap] TypedGraph 已重建，组件数: {len(added_components)}")
 
-    # === 3. 激活交易池标的 ===
+    # === 3. 交易池：由真实 TradingPool 生命周期算法管理 ===
     pool = getattr(engine, "_trading_pool", None)
     if pool is not None:
-        from beidou_data.trading_pool_lifecycle import InstrumentScore, PoolStatus
-
-        pool_activated = 0
-        for instrument_id in list(pool._pool.keys()):
-            entry = pool._pool[instrument_id]
-            # 直接推进到 ACTIVE
-            entry.status = PoolStatus.ACTIVE
-
-            # 添加满分评分
-            score = InstrumentScore(
-                instrument_id=instrument_id,
-                spread_score=0.9,
-                depth_score=0.9,
-                volume_score=0.9,
-                stability_score=0.95,
-                capacity_score=0.9,
+        if skip_pool:
+            # 缩短观察期（testnet 快速验证），首次评估将使用已有行情数据
+            for instrument_id in list(pool._pool.keys()):
+                entry = pool._pool[instrument_id]
+                entry.min_observation_hours = 5.0 / 60.0  # 5 分钟观察期
+            print(
+                f"[beidou-bootstrap] 交易池: {len(pool._pool)} 个标的进入 OBSERVING "
+                f"(观察期={5}min, 阈值={pool.PROMOTE_THRESHOLD})"
             )
-            score.compute_overall()
-            entry.scores.append(score)
-            entry.promoted_at = datetime.now(timezone.utc)
-            pool_activated += 1
+            print("[beidou-bootstrap] 标的晋级将由评分算法自动决定")
+        else:
+            from beidou_data.trading_pool_lifecycle import InstrumentScore, PoolStatus
 
-        print(f"[beidou-bootstrap] 已激活 {pool_activated}/{len(pool._pool)} 个交易标的")
-        print(f"[beidou-bootstrap] 活跃标的: {pool.active_instruments()}")
+            pool_activated = 0
+            for instrument_id in list(pool._pool.keys()):
+                entry = pool._pool[instrument_id]
+                entry.status = PoolStatus.ACTIVE
+                score = InstrumentScore(
+                    instrument_id=instrument_id,
+                    spread_score=0.9,
+                    depth_score=0.9,
+                    volume_score=0.9,
+                    stability_score=0.95,
+                    capacity_score=0.9,
+                )
+                score.compute_overall()
+                entry.scores.append(score)
+                entry.promoted_at = datetime.now(timezone.utc)
+                pool_activated += 1
+            print(f"[beidou-bootstrap] 已激活 {pool_activated}/{len(pool._pool)} 个交易标的")
+            print(f"[beidou-bootstrap] 活跃标的: {pool.active_instruments()}")
 
     print("[beidou-bootstrap] DEV_BYPASS 完成")
+
+
+async def bootstrap_universe(engine: Any) -> None:
+    """启动时立即运行首次宇宙评估。
+
+    使用 REST API 的 kline 数据做评分（不依赖 WebSocket ticker）。
+    对 OBSERVING 标的评分后跳过观察期直接晋级达标标的。
+    """
+    import math as _math
+    import asyncio as _asyncio
+    from beidou_data.trading_pool_lifecycle import InstrumentScore, PoolStatus as _PoolStatus
+
+    pool = getattr(engine, "_trading_pool", None)
+    feed = getattr(engine, "_feed", None)
+    if pool is None or feed is None:
+        print("[beidou-bootstrap] 宇宙评估跳过：pool 或 feed 不可用", flush=True)
+        return
+
+    candidates = [iid for iid, e in pool._pool.items() if e.status == _PoolStatus.OBSERVING]
+    if not candidates:
+        active = pool.active_instruments()
+        print(f"[beidou-bootstrap] 宇宙评估：无 OBSERVING 候选（活跃 {len(active)} 个）", flush=True)
+        return
+
+    print(f"[beidou-bootstrap] 首次宇宙评估: {len(candidates)} 个候选标的...", flush=True)
+    scored = 0
+    promoted = 0
+    for instrument_id in candidates:
+        try:
+            # 用一个 REST 调用同时获取 ticker（价格/spread）和 kline（波动率/成交量）
+            updated = await feed.async_update_features(instrument_id)
+            ticker = feed.get_last_ticker(instrument_id)
+            features = await feed.async_get_kline_features(instrument_id, "1h", 50)
+
+            close = float((features or {}).get("close", 0) or 0)
+            if close <= 0:
+                continue
+
+            # 点差: 从 ticker bid/ask 获取，不可用时用 kline high-low 估算
+            bid = ask = close
+            if ticker:
+                bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or close)
+                ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or close)
+            if 0 < bid <= ask:
+                spread_bps = (ask - bid) / ask * 10000
+            else:
+                # 用 high-low 作为 spread 估计
+                high = float((features or {}).get("high", close) or close)
+                low = float((features or {}).get("low", close) or close)
+                spread_bps = max(0.1, (high - low) / close * 10000)
+            spread_score = max(0.0, min(1.0, 1.0 - (spread_bps - 1) / 49)) if spread_bps > 1 else 1.0
+
+            # 深度: 从 orderbook 获取，不可用时默认中位
+            depth_score = 0.5
+            try:
+                ob = feed.get_last_orderbook(instrument_id)
+                if ob:
+                    bids_vol = sum(float(b[1]) for b in (ob.get("bids", []) or [])[:5])
+                    asks_vol = sum(float(a[1]) for a in (ob.get("asks", []) or [])[:5])
+                    depth_usdt = (bids_vol + asks_vol) * close
+                    depth_score = max(0.0, min(1.0, _math.log10(max(1, depth_usdt)) / 5))
+            except Exception:
+                pass
+
+            # 成交量: 24h 量 × 价格
+            vol_24h = float((features or {}).get("volume_24h", 0) or 0)
+            vol_usdt = vol_24h * close if vol_24h > 0 else 0
+            volume_score = max(0.0, min(1.0, _math.log10(max(1, vol_usdt)) / 8)) if vol_usdt > 0 else 0.1
+
+            # 稳定性: 有 OHLC 数据 = 稳定
+            stability_score = 0.8 if (features and features.get("high") and features.get("low")) else 0.4
+
+            # 容量: 低波动 = 高容量
+            ann_vol = float((features or {}).get("ann_volatility", 0.5) or 0.5)
+            capacity_score = max(0.0, min(1.0, 1.0 - ann_vol))
+
+            overall_raw = (
+                spread_score * 0.25
+                + depth_score * 0.25
+                + volume_score * 0.20
+                + stability_score * 0.15
+                + capacity_score * 0.15
+            )
+
+            score = InstrumentScore(
+                instrument_id=instrument_id,
+                spread_score=round(spread_score, 4),
+                depth_score=round(depth_score, 4),
+                volume_score=round(volume_score, 4),
+                stability_score=round(stability_score, 4),
+                capacity_score=round(capacity_score, 4),
+            )
+            pool.score(instrument_id, score)
+            scored += 1
+
+            # 跳过观察期，直接尝试晋级
+            entry = pool._pool.get(instrument_id)
+            if entry is not None and entry.status == _PoolStatus.OBSERVING:
+                entry.observing_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
+                if pool.try_promote(instrument_id):
+                    pool.activate(instrument_id)
+                    promoted += 1
+                    print(f"  ✅ {instrument_id}: overall={overall_raw:.3f} spread={spread_bps:.1f}bps vol={vol_usdt/1e6:.1f}M", flush=True)
+
+            await _asyncio.sleep(0.05)  # 减少 API 压力
+
+        except Exception as exc:
+            continue
+
+    active = pool.active_instruments()
+    print(
+        f"[beidou-bootstrap] 首次评估完成: 评分 {scored} 个, 晋级 {promoted} 个, "
+        f"活跃 {len(active)} 个: {active[:10]}{'...' if len(active) > 10 else ''}",
+        flush=True,
+    )
 
 
 def _sync_opening_balance(engine: Any, commit: str) -> None:

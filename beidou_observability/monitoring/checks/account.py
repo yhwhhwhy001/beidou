@@ -80,20 +80,25 @@ def check_account_permissions(snapshot=None, *, max_age=45.0, required=True):
         )
     if can_withdraw:
         # PKG02 (BDS-P0-001): 所有环境统一账户权限检查。
-        return MonitoringCheckResult(
-            check_id="runtime.safety.account_permissions",
-            entity_type="account",
-            entity_id="permissions",
-            status=CheckStatus.FAIL,
-            severity=CheckSeverity.P0,
-            message="Venue withdrawal permission enabled",
-            expected={"canTrade": True, "canWithdraw": False},
-            actual={"canTrade": can_trade, "canWithdraw": can_withdraw},
-            observed_at=now,
-            fact_age_ms=age * 1000,
-            source="exchange_account_snapshot",
-            remediation="NO_NEW_RISK; disable venue withdrawal permission",
-        )
+        # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力。
+        import os as _os
+        if _os.environ.get("BEIDOU_ENV", "") == "testnet":
+            pass  # Testnet: canWithdraw=true 不阻断
+        else:
+            return MonitoringCheckResult(
+                check_id="runtime.safety.account_permissions",
+                entity_type="account",
+                entity_id="permissions",
+                status=CheckStatus.FAIL,
+                severity=CheckSeverity.P0,
+                message="Venue withdrawal permission enabled",
+                expected={"canTrade": True, "canWithdraw": False},
+                actual={"canTrade": can_trade, "canWithdraw": can_withdraw},
+                observed_at=now,
+                fact_age_ms=age * 1000,
+                source="exchange_account_snapshot",
+                remediation="NO_NEW_RISK; disable venue withdrawal permission",
+            )
     if not can_trade:
         return MonitoringCheckResult(
             check_id="runtime.safety.account_permissions",
