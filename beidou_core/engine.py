@@ -3869,7 +3869,10 @@ class AutonomousEngine:
             outbox_id=str(getattr(intent, "intent_id", "")),
         )
         if _idem_key.compute_hash():
-            intent.idempotency_key = _idem_key.compute_hash()
+            # OrderIntent 是 frozen dataclass，使用 object.__setattr__ 绕过
+            _key_hash = _idem_key.compute_hash()
+            if _key_hash:
+                object.__setattr__(intent, "idempotency_key", _key_hash)
 
         if not await self._verify_intent_at_send(intent):
             print(f"[order] ❌ Intent {intent.intent_id} rejected: final risk approval invalid or missing")
