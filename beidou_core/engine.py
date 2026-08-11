@@ -7497,6 +7497,17 @@ class AutonomousEngine:
         except Exception as exc:
             logger.warning("opening-balance projection sync failed: %s", type(exc).__name__)
 
+        # Start health server early so liveness is available during bootstrap.
+        # If the engine later exits DEGRADED, monitoring still sees a living
+        # process instead of a silent exit 0 with no HTTP endpoint.
+        if not getattr(self, "_health_started", False):
+            self._health.start()
+            self._health_started = True
+            print(
+                f"[beidou-autopilot] Health server: http://{self._settings.infrastructure.health_host}:"
+                f"{self._settings.infrastructure.health_port}"
+            )
+
         # Start WebSocket real-time market data stream
         print("[beidou-autopilot] Starting WebSocket market data...")
         ws_ok = await self._feed.start_ws(self._symbols, testnet=(self._env_mode.value == "testnet"))
@@ -7507,7 +7518,11 @@ class AutonomousEngine:
 
         # Writable environments require an authenticated user-data stream;
         # market-data REST fallback must never become an execution fallback.
-        user_stream_ok = await self._start_user_stream()
+        try:
+            user_stream_ok = await asyncio.wait_for(self._start_user_stream(), timeout=30.0)
+        except asyncio.TimeoutError:
+            print("[beidou-autopilot] User data stream start timed out after 30s")
+            user_stream_ok = False
         if not user_stream_ok and self._can_write:
             self._control.execute_action(ControlAction.NO_NEW_RISK)
             print("[beidou-autopilot] User data stream unavailable — writable authority remains blocked")
@@ -7594,9 +7609,14 @@ class AutonomousEngine:
                 print(f"[beidou-autopilot] Resolved {resolved_count} UNKNOWN intents")
 
         # BD-FIX: 启动时恢复交易所持仓的止盈止损保护
-        # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误
+        # 先获取 exchangeInfo 填充精度缓存，避免低价币种四舍五入错误。
+        # 断路器必须在 exchangeInfo 加载前复位，否则上一个 session 的
+        # 失败计数会阻挡精度加载 → 订单全部失败 → 断路器再次打开。
+        self._adapter.reset_circuit_breaker()
         try:
-            exchange_info, info_ok = await self._api_async_safe(Endpoint.EXCHANGE_INFO)
+            exchange_info, info_ok = await asyncio.wait_for(
+                self._api_async_safe(Endpoint.EXCHANGE_INFO), timeout=30.0
+            )
             if not info_ok or not isinstance(exchange_info, dict):
                 print("[beidou-autopilot] Warning: exchangeInfo unavailable; precision cache empty")
                 exchange_info = {}
@@ -7635,7 +7655,9 @@ class AutonomousEngine:
         # 认领所有权，造成 protection_owner_unknown 永久阻断。
         existing_algo_inventory: list[dict[str, Any]] | None = None
         try:
-            existing_algos = await self._get_open_algo_inventory()
+            existing_algos = await asyncio.wait_for(
+                self._get_open_algo_inventory(), timeout=30.0
+            )
             if isinstance(existing_algos, list):
                 existing_algo_inventory = existing_algos
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
@@ -7678,7 +7700,9 @@ class AutonomousEngine:
                                         f"{sym} Algo {algo_id}: {cancel_exc}"
                                     )
                         # Refresh inventory after cleanup
-                        existing_algos = await self._get_open_algo_inventory()
+                        existing_algos = await asyncio.wait_for(
+                            self._get_open_algo_inventory(), timeout=30.0
+                        )
                         existing_algo_inventory = (
                             existing_algos if isinstance(existing_algos, list) else None
                         )
@@ -7695,18 +7719,25 @@ class AutonomousEngine:
 
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
-            account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
+            account, ok = await asyncio.wait_for(
+                self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0
+            )
             if not ok or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
                 self._adapter.reset_circuit_breaker()
-                account, ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
+                account, ok = await asyncio.wait_for(
+                    self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0
+                )
                 if not ok:
                     # BD-FIX (S9): 账户 API 不可用时跳过恢复但不停止用户流。
                     # 停止用户流会导致整个 trading readiness 连锁失败 → LOCKED。
                     # Testnet API 不稳定不应影响系统持续运行能力。
                     print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable) — user stream kept alive")
                     self._lifecycle.transition(ModuleState.DEGRADED)
+                    if not getattr(self, "_health_started", False):
+                        self._health.start()
+                        self._health_started = True
                     return
             positions_list = account.get("positions", [])
             durable_projection_ok = self._restore_durable_protection_projection(account, existing_algo_inventory)
@@ -7944,13 +7975,6 @@ class AutonomousEngine:
         else:
             self._lifecycle.transition(ModuleState.ACTIVE)
             print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
-
-        # Start health server
-        self._health.start()
-        print(
-            f"[beidou-autopilot] Health server: http://{self._settings.infrastructure.health_host}:"
-            f"{self._settings.infrastructure.health_port}"
-        )
 
         # BD-T14: Startup 后短暂 NO_NEW_RISK，由 Supervisor 在深度验证通过后 RESUME。
         # BD-FIX: 仅当 Supervisor 尚未 RESUME 时才设置 NO_NEW_RISK，消除启动竞态。
