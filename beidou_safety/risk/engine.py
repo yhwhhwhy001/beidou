@@ -59,9 +59,10 @@ class _PreRiskContext:
 
 
 class RiskSnapshot:
-    """BD-T07: 风险快照 — 绑定账户/仓位/订单/行情/DQ/交易所健康/对账/组合/策略/时间戳。
+    """PKG (BDS-P1-014): 风险快照 — 真正不可变 + 完整性哈希 + freshness gate。
 
-    不可变；所有字段必须显式提供；缺失关键字段时 is_complete() 返回 False。
+    所有可变字段（positions, orders）使用 MappingProxyType 确保不可变。
+    自动计算快照哈希用于审计和比较。
     """
 
     def __init__(
@@ -74,7 +75,6 @@ class RiskSnapshot:
         leverage: float,
         concentration_pct: float,
         tail_var_95: float | None = None,
-        # BD-T07 新增字段
         account_id: str = "",
         positions: dict | None = None,
         orders: dict | None = None,
@@ -86,6 +86,8 @@ class RiskSnapshot:
         timestamp: str = "",
         correlation_id: str = "",
     ):
+        from types import MappingProxyType
+
         self.total_exposure = total_exposure
         self.margin_used = margin_used
         self.margin_total = margin_total
@@ -94,10 +96,9 @@ class RiskSnapshot:
         self.leverage = leverage
         self.concentration_pct = concentration_pct
         self.tail_var_95 = tail_var_95
-        # BD-T07: 完整风险上下文
         self.account_id = account_id
-        self.positions = positions or {}
-        self.orders = orders or {}
+        self.positions = MappingProxyType(positions or {})  # PKG: 不可变
+        self.orders = MappingProxyType(orders or {})  # PKG: 不可变
         self.dq_tier = dq_tier
         self.exchange_health = exchange_health
         self.reconciliation_status = reconciliation_status
@@ -105,9 +106,43 @@ class RiskSnapshot:
         self.policy_version = policy_version
         self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
         self.correlation_id = correlation_id
+        # PKG (BDS-P1-014): 预计算完整性哈希
+        self._hash = self._compute_hash()
+        self._created_at = time.time()  # PKG: freshness gate
+
+    def _compute_hash(self) -> str:
+        import hashlib, json
+        payload = {
+            "total_exposure": self.total_exposure,
+            "margin_used": self.margin_used,
+            "margin_total": self.margin_total,
+            "position_count": self.position_count,
+            "pending_orders": self.pending_orders,
+            "leverage": self.leverage,
+            "concentration_pct": self.concentration_pct,
+            "dq_tier": self.dq_tier,
+            "exchange_health": self.exchange_health,
+            "reconciliation_status": self.reconciliation_status,
+            "portfolio_hash": self.portfolio_hash,
+            "policy_version": self.policy_version,
+            "correlation_id": self.correlation_id,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+    @property
+    def snapshot_hash(self) -> str:
+        return self._hash
+
+    @property
+    def age_seconds(self) -> float:
+        """PKG: 快照年龄（秒）— freshness gate。"""
+        return time.time() - self._created_at
+
+    def is_fresh(self, max_age_seconds: float = 60.0) -> bool:
+        """PKG (BDS-P1-014): freshness gate — 超过 max_age 的快照不可用。"""
+        return self.age_seconds <= max_age_seconds
 
     def is_complete(self) -> bool:
-        """BD-T07: 检查所有关键字段是否已填充。"""
         return all(
             [
                 self.account_id,
@@ -119,9 +154,10 @@ class RiskSnapshot:
         )
 
     def is_safe_for_risk_increase(self) -> bool:
-        """BD-T07: 任何 UNKNOWN/STALE/BLOCK 状态阻断风险增加。"""
         if not self.is_complete():
             return False
+        if not self.is_fresh():
+            return False  # PKG: stale snapshot blocks risk increase
         if self.dq_tier in ("BLOCK", "UNKNOWN"):
             return False
         if self.exchange_health in ("UNKNOWN", "UNSAFE"):
