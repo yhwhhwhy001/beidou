@@ -264,9 +264,19 @@ def collect_monitoring_checks(
                         facts.append(_protection_order_fact(tp, kind="TP", symbol=symbol))
             except Exception as exc:
                 raise RuntimeError("local protection projection unavailable") from exc
-        for ep in exchange_positions:
-            semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
-            results.append(convert(build_protection_check(semantic), name="持仓保护覆盖 (PKG-MON-04)"))
+        if exchange_positions:
+            for ep in exchange_positions:
+                semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
+                results.append(convert(build_protection_check(semantic), name="持仓保护覆盖 (PKG-MON-04)"))
+        else:
+            # 无持仓时保护覆盖不适用，标记为 PASS
+            results.append(CheckResult(
+                check_id="runtime.safety.protection_coverage",
+                name="持仓保护覆盖 (PKG-MON-04)",
+                status=CheckStatus.PASS,
+                severity=CheckSeverity.P1,
+                message="无持仓，保护覆盖不适用",
+            ))
     except Exception as exc:
         results.append(
             failure("runtime.safety.protection_coverage", "持仓保护覆盖 (PKG-MON-04)", CheckSeverity.P0, exc)

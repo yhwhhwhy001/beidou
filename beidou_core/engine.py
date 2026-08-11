@@ -4080,7 +4080,7 @@ class AutonomousEngine:
                 else:
                     px = ref_price * 0.98
                 # PKG02: 对齐交易所 tick size — 规则从交易所获取，无兜底。
-                from decimal import ROUND_DOWN, Decimal
+                from decimal import ROUND_UP, ROUND_DOWN, Decimal
 
                 prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
                 price_decimals = prec.get("price")
@@ -4089,7 +4089,9 @@ class AutonomousEngine:
                     print(f"[engine] Price precision UNKNOWN for {order_symbol}; symbol NOT_EXECUTABLE")
                     return None
                 tick = Decimal(str(10 ** (-price_decimals)))
-                px_d = (Decimal(str(px)) / tick).quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
+                # BUY 向上取整确保达到 tick size 要求，SELL 向下取整
+                rounding = ROUND_UP if side == "BUY" else ROUND_DOWN
+                px_d = (Decimal(str(px)) / tick).quantize(Decimal("1"), rounding=rounding) * tick
                 aggressive_price = str(px_d)
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
@@ -6528,6 +6530,11 @@ class AutonomousEngine:
             # No active pool evidence means no proposal collection.  Falling
             # back to the configured feed universe would bypass the pool gate.
             active_symbols = self._trading_pool.active_instruments()
+            # Testnet: 每轮只处理 10 个标的，避免 REST 调用过多导致 monitor STALL
+            if self._env_mode.value == "testnet" and len(active_symbols) > 10:
+                _batch_start = (getattr(self, "_nearline_batch_idx", 0) % len(active_symbols))
+                active_symbols = active_symbols[_batch_start:_batch_start + 10]
+                self._nearline_batch_idx = (_batch_start + 10) % len(active_symbols) if hasattr(self, "_nearline_batch_idx") else 10
             # BD-FIX: 多时间框架 — 1m/5m/1h/1d 独立评估信号
             TIMEFRAMES = ("1m", "5m", "1h", "1d")
             # 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）

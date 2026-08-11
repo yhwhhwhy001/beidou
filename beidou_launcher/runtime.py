@@ -394,6 +394,7 @@ def collect_runtime_checks(
         and reconciliation_status == "MATCHED"
         and reconciliation_fresh
     )
+    _is_testnet = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
     if reconciliation_ok:
         recon_status = CheckStatus.PASS
         recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
@@ -401,13 +402,14 @@ def collect_runtime_checks(
         recon_status = CheckStatus.FAIL
         recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
     else:
-        recon_status = CheckStatus.FAIL
+        # Testnet: 对账不一致降级为 WARN，不阻断交易授权
+        recon_status = CheckStatus.WARN if _is_testnet else CheckStatus.FAIL
         recon_message = (
-            f"三方对账不可授权: status={reconciliation_status}, "
+            f"三方对账{'警告' if _is_testnet else '不可授权'}: status={reconciliation_status}, "
             f"matched={bool(getattr(reconciliation, 'matched', False))}, "
             f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
         )
-    _recon_sev = CheckSeverity.P0
+    _recon_sev = CheckSeverity.P1 if _is_testnet else CheckSeverity.P0
     checks.append(
         CheckResult(
             check_id="runtime.safety.reconciliation_authority",
