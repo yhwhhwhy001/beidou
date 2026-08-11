@@ -3862,17 +3862,8 @@ class AutonomousEngine:
                 return
             if _skip_eligibility:
                 print(f"[order] ⚠️ Intent {intent.intent_id} eligibility bypassed (testnet): {eligibility.value}")
-        # 构建幂等键用于订单追踪
-        _idem_key = self.build_idempotency_key(
-            correlation_id=str(getattr(intent, "correlation_id", "")),
-            client_order_id=str(getattr(intent, "client_order_id", "")),
-            outbox_id=str(getattr(intent, "intent_id", "")),
-        )
-        if _idem_key.compute_hash():
-            # OrderIntent 是 frozen dataclass，使用 object.__setattr__ 绕过
-            _key_hash = _idem_key.compute_hash()
-            if _key_hash:
-                object.__setattr__(intent, "idempotency_key", _key_hash)
+        # idempotency_key 已在 nearline OrderIntent 创建时设置，此处不再修改
+        # （修改 frozen dataclass 会导致 order_intent_binding_hash 不匹配）
 
         if not await self._verify_intent_at_send(intent):
             print(f"[order] ❌ Intent {intent.intent_id} rejected: final risk approval invalid or missing")
