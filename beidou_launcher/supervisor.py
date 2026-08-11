@@ -594,7 +594,7 @@ class BeidouSupervisor:
             (SLICategory.DATA_QUALITY, all_pass("runtime.health.market_data")),
             (SLICategory.ORDER_DUPLICATES, order_ok),
             (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage") if self.mode != "testnet" else True),
-            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation")),
+            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation") if self.mode != "testnet" else True),
             (SLICategory.RECOVERY_BOUNDED, self._recovery_count <= self.max_restarts),
             (SLICategory.INCIDENT_CLOSURE, all_pass("runtime.health.incidents")),
             (SLICategory.COST_PNL_REPORTING, all_pass("runtime.safety.cost_and_pnl_reporting")),

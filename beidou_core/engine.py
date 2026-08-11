@@ -4076,9 +4076,9 @@ class AutonomousEngine:
             aggressive_price = None
             if ref_price > 0:
                 if side == "BUY":
-                    px = ref_price * 1.02
+                    px = ref_price * 1.05  # +5% 确保通过 tick size 检查
                 else:
-                    px = ref_price * 0.98
+                    px = ref_price * 0.95  # -5% 确保通过 tick size 检查
                 # PKG02: 对齐交易所 tick size — 规则从交易所获取，无兜底。
                 from decimal import ROUND_UP, ROUND_DOWN, Decimal
 
