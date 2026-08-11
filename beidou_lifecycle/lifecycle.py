@@ -49,17 +49,30 @@ DEGRADATION_FROM_STATE: dict[ModuleState, DegradationLevel] = {
     ModuleState.FAILED: DegradationLevel.LOCKED,
 }
 
+# PKG24 (BDS-P1-045): 完整闭合的 FSM 转换矩阵
+# 所有状态定义合法入边/出边与终态
+# 终态: LOCKED (不可逆转)
 VALID_TRANSITIONS: dict[ModuleState, set[ModuleState]] = {
+    # 创建→初始化→启动中
+    ModuleState.CREATED: {ModuleState.INITIALIZING, ModuleState.FAILED},
+    ModuleState.INITIALIZING: {ModuleState.PROVISIONING, ModuleState.FAILED},
+    # 主线
     ModuleState.PROVISIONING: {ModuleState.BOOTSTRAPPING, ModuleState.FAILED},
     ModuleState.BOOTSTRAPPING: {ModuleState.WARMING, ModuleState.FAILED},
     ModuleState.WARMING: {ModuleState.VALIDATING, ModuleState.FAILED},
     ModuleState.VALIDATING: {ModuleState.ACTIVE, ModuleState.DEGRADED, ModuleState.FAILED},
-    ModuleState.ACTIVE: {ModuleState.DEGRADED, ModuleState.QUARANTINED, ModuleState.LOCKED},
+    ModuleState.ACTIVE: {ModuleState.DEGRADED, ModuleState.QUARANTINED, ModuleState.LOCKED, ModuleState.STOPPING},
+    # 降级路径
     ModuleState.DEGRADED: {ModuleState.ACTIVE, ModuleState.QUARANTINED, ModuleState.RECOVERING, ModuleState.LOCKED},
     ModuleState.QUARANTINED: {ModuleState.RECOVERING, ModuleState.LOCKED, ModuleState.FAILED},
     ModuleState.RECOVERING: {ModuleState.VALIDATING, ModuleState.FAILED},
-    ModuleState.FAILED: {ModuleState.PROVISIONING},
+    ModuleState.FAILED: {ModuleState.PROVISIONING, ModuleState.LOCKED},
+    # 终态
     ModuleState.LOCKED: set(),
+    # 暂停/停止路径
+    ModuleState.SUSPENDED: {ModuleState.ACTIVE, ModuleState.STOPPING, ModuleState.FAILED},
+    ModuleState.STOPPING: {ModuleState.STOPPED, ModuleState.FAILED},
+    ModuleState.STOPPED: {ModuleState.PROVISIONING, ModuleState.LOCKED},
 }
 
 
@@ -78,11 +91,29 @@ class HealthEvidence:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def is_healthy(self) -> bool:
+        """PKG24 (BDS-P1-044): 健康契约 — 所有字段参与判断。
+
+        新增: freshness/checkpoint/schema/leadership 全部成为健康契约的一部分。
+        修复前: 数据 stale 仍可返回 healthy。
+        """
         if not self.invariants_valid:
             return False
         if self.state != ModuleState.ACTIVE:
             return False
         if not all(self.dependencies_healthy.values()):
+            return False
+        # PKG24: 数据新鲜度检查 — 任何依赖数据超过 120s 视为不健康
+        max_freshness = max(self.data_freshness_seconds.values()) if self.data_freshness_seconds else 0.0
+        if max_freshness > 120.0:
+            return False
+        # PKG24: checkpoint 滞后检查 — 超过 1000 个事件视为不同步
+        if self.checkpoint_lag > 1000:
+            return False
+        # PKG24: schema 版本必须非空
+        if not self.schema_version:
+            return False
+        # PKG24: 领导权状态必须确认
+        if self.leadership_status not in ("LEADER", "STANDBY", "SOLO"):
             return False
         return not self.active_incidents
 
