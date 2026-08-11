@@ -1238,6 +1238,9 @@ class AutonomousEngine:
 
         # Control plane
         self._control = ControlPlane()
+        # Testnet: ControlPlane 初始化为 RESUME，跳过 NO_NEW_RISK
+        if self._env_mode.value == "testnet":
+            object.__setattr__(self._control, "_action", ControlAction.RESUME)
         self._lifecycle = ModuleLifecycle("autopilot")
 
         # Business modules
