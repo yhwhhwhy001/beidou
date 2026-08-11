@@ -158,9 +158,13 @@ class MultiPeriodMomentum:
         self._periods = periods or [5, 10, 20, 50]
 
     def evaluate(self, prices: list[float], volatility: float) -> MomentumResult:
-        """多周期动量评估。"""
+        """多周期动量评估 (P1-007: 波动率归一化)。"""
         if len(prices) < max(self._periods) + 1:
             return MomentumResult("FLAT", 0.0, 0.0, False, "VETO")
+
+        # P1-007: 使用波动率归一化阈值，替代绝对 0.1%
+        vol = max(volatility, 0.001)  # 最低日波动 0.1%
+        vol_threshold = vol * 0.3  # 0.3 倍日波动作为方向判定阈值
 
         returns_by_period = {}
         for period in self._periods:
@@ -168,9 +172,9 @@ class MultiPeriodMomentum:
                 ret = (prices[-1] / prices[-period - 1] - 1) if prices[-period - 1] > 0 else 0
                 returns_by_period[period] = ret
 
-        # Trend direction: majority vote
-        up_count = sum(1 for r in returns_by_period.values() if r > 0.001)
-        down_count = sum(1 for r in returns_by_period.values() if r < -0.001)
+        # P1-007: 波动率归一化方向判定（对称处理多空）
+        up_count = sum(1 for r in returns_by_period.values() if r > vol_threshold)
+        down_count = sum(1 for r in returns_by_period.values() if r < -vol_threshold)
 
         if up_count > down_count:
             direction = "UP"
@@ -179,12 +183,16 @@ class MultiPeriodMomentum:
         else:
             direction = "FLAT"
 
-        # Strength: average return across periods
+        # P1-007: 强度改为波动率归一化（不再用任意 *20 缩放）
         returns = list(returns_by_period.values())
-        strength = min(0.7, abs(sum(returns)) / len(returns) * 20 if returns else 0)
+        if returns and vol > 0:
+            avg_ret = sum(returns) / len(returns)
+            strength = min(0.7, abs(avg_ret) / vol)
+        else:
+            strength = 0.0
 
         # Persistence: consecutive same-direction periods
-        signs = [1 if r > 0 else -1 if r < 0 else 0 for r in returns]
+        signs = [1 if r > vol_threshold else -1 if r < -vol_threshold else 0 for r in returns]
         persistence = 0.0
         for i in range(1, len(signs)):
             if signs[i] == signs[i - 1] and signs[i] != 0:
@@ -197,7 +205,7 @@ class MultiPeriodMomentum:
             return MomentumResult(direction, strength, persistence, True, "VETO")
 
         # Filter decision
-        if strength < 0.01:
+        if strength < 0.1:  # P1-007: 归一化后的阈值
             return MomentumResult(direction, strength, persistence, False, "DEGRADE")
 
         return MomentumResult(direction, strength, persistence, False, "ACCEPT")

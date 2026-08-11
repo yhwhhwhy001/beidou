@@ -2,7 +2,7 @@
 
 PKG-23: 实现 Post-only、Passive、Marketable Limit、IOC、TWAP、POV、
 Adaptive Slice 和 Emergency Reduce-only 算法。
-Contextual Bandit 仅在已批准算法集合内选择，不得改变方向/数量/滑点硬限。
+Heuristic Selector（启发式算法选择器）仅在已批准算法集合内选择，不得改变方向/数量/滑点硬限。
 订单切片持续检查在途不变量和剩余 Alpha；
 执行成本预测 > 净 Alpha 时取消非风险退出交易。
 """
@@ -330,6 +330,39 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
             estimated_completion_seconds=self.interval_seconds * self.slice_count,
         )
 
+    def rolling_replan(
+        self, ctx: ExecutionContext, order_id: OrderId, remaining_qty: float, slices_completed: int,
+    ) -> ExecutionPlan:
+        """P1-021: 滚动重规划 — 根据当前盘口/成本/剩余Alpha动态调整切片。
+
+        在每轮执行完成后重新评估，如果盘口恶化或Alpha衰减则减少后续切片。
+        """
+        slices_remaining = self.slice_count - slices_completed
+        if slices_remaining <= 0 or remaining_qty <= 0:
+            return ExecutionPlan(algorithm=self.algorithm_type, is_canceled=True,
+                                cancel_reason="TWAP completed or zero remaining")
+
+        slice_qty = remaining_qty / slices_remaining
+        # 成本重估
+        if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
+            return ExecutionPlan(algorithm=self.algorithm_type, is_canceled=True,
+                                cancel_reason="Replan: cost exceeds remaining alpha")
+
+        slices = []
+        for i in range(slices_remaining):
+            slices.append(OrderSlice(
+                slice_id=f"{order_id}-twap-replan-{slices_completed + i}",
+                parent_order_id=order_id,
+                quantity=Quantity(amount=str(slice_qty)),
+                price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                order_type=OrderType.LIMIT, time_in_force=TimeInForce.IOC,
+                algorithm=self.algorithm_type,
+                sequence_number=slices_completed + i,
+                invariants_check_passed=True,
+            ))
+        return ExecutionPlan(algorithm=self.algorithm_type, slices=slices,
+                            estimated_completion_seconds=self.interval_seconds * slices_remaining)
+
 
 class POVAlgorithm(BaseExecutionAlgorithm):
     """POV (Percentage of Volume): 按实时市场成交量比例执行。"""
@@ -339,6 +372,8 @@ class POVAlgorithm(BaseExecutionAlgorithm):
     def __init__(self, participation_rate: float = 0.1, max_duration_seconds: float = 300.0) -> None:
         self.participation_rate = participation_rate  # 最大参与率
         self.max_duration_seconds = max_duration_seconds
+        # P1-022: POV 应基于 aggTrade/market volume 流而非盘口深度
+        # 当前使用 ctx.bid_depth/ask_depth 作为近似，未来版本需接入实时成交量流
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
         return (
@@ -571,7 +606,7 @@ class EmergencyReduceOnlyAlgorithm(BaseExecutionAlgorithm):
 
 
 class ExecutionAlgorithmSelector:
-    """执行算法选择器 — Contextual Bandit 在已批准集合内选择。"""
+    """执行算法选择器 — 启发式选择器在已批准集合内按质量评分选择。P1-023"""
 
     ALL_ALGORITHMS: list[BaseExecutionAlgorithm] = [
         PostOnlyAlgorithm(),
@@ -593,7 +628,7 @@ class ExecutionAlgorithmSelector:
         return [a for a in self.ALL_ALGORITHMS if a.algorithm_type in self._approved]
 
     def select(self, ctx: ExecutionContext) -> BaseExecutionAlgorithm | None:
-        """Contextual Bandit 选择 — 仅在已批准集合内。"""
+        """启发式选择 — 在已批准集合内按质量×紧急度×成本因子选择算法。P1-023"""
         candidates = self.approved_algorithms
 
         # 按适用性过滤

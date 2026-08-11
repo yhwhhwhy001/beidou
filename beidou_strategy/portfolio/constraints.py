@@ -47,11 +47,30 @@ class ConstraintOptimizer:
     """
 
     def __init__(
-        self, max_gross_leverage: float = 3.0, max_net_leverage: float = 1.0, max_per_symbol_pct: float = 50.0
+        self, max_gross_leverage: float = 3.0, max_net_leverage: float = 1.0, max_per_symbol_pct: float = 50.0,
+        covariance_matrix: dict[str, dict[str, float]] | None = None,  # P1-009
     ):
         self.max_gross_leverage = max_gross_leverage
         self.max_net_leverage = max_net_leverage
         self.max_per_symbol_pct = max_per_symbol_pct
+        self.covariance_matrix = covariance_matrix or {}
+        self._max_correlation_discount: float = 0.5  # 高相关性时最大折扣
+        self.turnover_cost_bps: float = 0.0  # P1-010: 换手成本(bps)
+        self.capacity_threshold: float = 0.0  # P1-010: 容量阈值
+
+    def _covariance_discount(self, symbol: str, active_symbols: set[str]) -> float:
+        """P1-009: 基于协方差的风险贡献折扣。
+
+        与已有仓位的相关性越高，新仓位折扣越大。
+        """
+        if not self.covariance_matrix or not active_symbols:
+            return 1.0
+        max_corr = 0.0
+        for active in active_symbols:
+            corr = self.covariance_matrix.get(symbol, {}).get(active, 0.0)
+            max_corr = max(max_corr, abs(corr))
+        # 相关性越高折扣越大，最多折扣到 50%
+        return 1.0 - max_corr * self._max_correlation_discount
 
     def optimize(
         self,
@@ -94,6 +113,9 @@ class ConstraintOptimizer:
 
             # 仓位大小：基于信号强度和账户权益
             raw_size = strength * account_equity * 0.01 / max(price, 0.01)
+            # P1-009: 协方差感知折扣
+            active = {s for s in targets if targets[s] != 0}
+            raw_size *= self._covariance_discount(symbol, active)
 
             # 最小名义价值检查
             min_not = min_notional.get(symbol, 5.0)

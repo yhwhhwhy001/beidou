@@ -24,6 +24,28 @@ class PortfolioOptimizerImpl:
     def __init__(self, max_total_leverage: float = 3.0) -> None:
         self.max_total_leverage = max_total_leverage
 
+    def _enforce_leverage_constraint(self, targets: list[PortfolioTarget]) -> list[PortfolioTarget]:
+        """P1-008: 强制杠杆约束 — 总杠杆超限时等比缩放。"""
+        total_notional = sum(float(t.target_notional.amount) for t in targets if t.target_notional)
+        total_capital = sum(float(t.capital_budget.amount) for t in targets if t.capital_budget)
+        if total_capital <= 0:
+            return targets
+        current_leverage = total_notional / total_capital
+        if current_leverage <= self.max_total_leverage:
+            return targets
+        # 等比缩放
+        scale = self.max_total_leverage / current_leverage
+        return [
+            PortfolioTarget(
+                strategy_id=t.strategy_id, instrument_id=t.instrument_id,
+                venue_id=t.venue_id,
+                target_notional=MonetaryValue(amount=str(float(t.target_notional.amount) * scale)),
+                target_quantity=Quantity(amount=str(float(t.target_quantity.amount) * scale)),
+                capital_budget=t.capital_budget, ownership=t.ownership,
+            )
+            for t in targets
+        ]
+
     def allocate_capital(
         self, strategies: list[StrategyId], total_capital: MonetaryValue, weights: dict[StrategyId, float] | None = None
     ) -> dict[StrategyId, MonetaryValue]:
@@ -91,6 +113,8 @@ class PortfolioOptimizerImpl:
                         )
                     )
 
+        # P1-008: 强制杠杆硬约束
+        resolved = self._enforce_leverage_constraint(resolved)
         return resolved, conflicts
 
     def exit_protection(

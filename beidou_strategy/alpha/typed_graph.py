@@ -79,6 +79,7 @@ class TypedNodeOutput:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def compute_hash(self) -> str:
+        """P1-002: 规范序列化 — 绑定 factor_version/model_version/schema。"""
         content = json.dumps(
             {
                 "node_id": self.node_id,
@@ -86,11 +87,14 @@ class TypedNodeOutput:
                 "data": str(self.data),
                 "dq_tier": self.dq_tier.value,
                 "policy_version": self.policy_version,
+                "factor_version": self.factor_version,
+                "model_version": self.model_version,
+                "schema_version": "2.0.0",
             },
             sort_keys=True,
             default=str,
         )
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()
 
 
 # ================================================================
@@ -246,6 +250,20 @@ class EntryNode(TypedGraphNode):
                     dq_tier=DataQualityTier.BLOCK,
                     metadata={"error": str(e)},
                 )
+            elif self.failure_policy == NodeFailurePolicy.SKIP:
+                return TypedNodeOutput(
+                    node_id=self.node_id, node_type=NodeType.ENTRY,
+                    output_hash="skipped", data=None,
+                    dq_tier=DataQualityTier.DEGRADED,
+                    metadata={"error": str(e), "skipped": True},
+                )
+            elif self.failure_policy == NodeFailurePolicy.DEGRADE:
+                return TypedNodeOutput(
+                    node_id=self.node_id, node_type=NodeType.ENTRY,
+                    output_hash="degraded", data=default_data if "default_data" in dir() else None,
+                    dq_tier=DataQualityTier.DEGRADED,
+                    metadata={"error": str(e), "degraded": True},
+                )
             raise
 
 
@@ -302,19 +320,36 @@ class FilterNode(TypedGraphNode):
             return output
         except Exception as e:
             if self.failure_policy == NodeFailurePolicy.FAIL_CLOSED:
-                # 过滤器失败 → VETO (safe default)
                 fail_result = FilterResult(
                     decision=FilterDecision.VETO,
                     reason_codes=[f"filter_error: {str(e)[:100]}"],
                     component_id=self.node_id,
                 )
                 return TypedNodeOutput(
-                    node_id=self.node_id,
-                    node_type=NodeType.FILTER,
-                    output_hash="error_veto",
-                    data=fail_result,
-                    dq_tier=DataQualityTier.BLOCK,
-                    metadata={"error": str(e)},
+                    node_id=self.node_id, node_type=NodeType.FILTER,
+                    output_hash="error_veto", data=fail_result,
+                    dq_tier=DataQualityTier.BLOCK, metadata={"error": str(e)},
+                )
+            elif self.failure_policy == NodeFailurePolicy.SKIP:
+                return TypedNodeOutput(
+                    node_id=self.node_id, node_type=NodeType.FILTER,
+                    output_hash="skipped", data=FilterResult(
+                        decision=FilterDecision.ACCEPT, component_id=self.node_id,
+                        reason_codes=["filter_skipped"],
+                    ),
+                    dq_tier=DataQualityTier.DEGRADED,
+                    metadata={"error": str(e), "skipped": True},
+                )
+            elif self.failure_policy == NodeFailurePolicy.DEGRADE:
+                return TypedNodeOutput(
+                    node_id=self.node_id, node_type=NodeType.FILTER,
+                    output_hash="degraded", data=FilterResult(
+                        decision=FilterDecision.DEGRADE, component_id=self.node_id,
+                        reason_codes=[f"filter_degraded: {str(e)[:100]}"],
+                        confidence_multiplier=0.5, size_multiplier=0.5,
+                    ),
+                    dq_tier=DataQualityTier.DEGRADED,
+                    metadata={"error": str(e), "degraded": True},
                 )
             raise
 
@@ -594,9 +629,14 @@ class TypedAlphaGraph:
         return {"proposal": None, "component_outputs": component_outputs}
 
     def compute_graph_hash(self) -> str:
-        """计算图结构的确定性哈希（用于 parity 验证）。"""
+        """P1-001: 图行为哈希绑定完整上下文 — 参数/模型/因子版本/代码SHA。"""
         nodes_info = sorted(
-            [{"id": nid, "type": node.node_type.value} for nid, node in self._nodes.items()], key=lambda x: x["id"]
+            [{
+                "id": nid,
+                "type": node.node_type.value,
+                "failure_policy": str(getattr(node, "failure_policy", "FAIL_CLOSED")),
+                "params": str(getattr(node, "_params", getattr(node, "params", {}))),
+            } for nid, node in self._nodes.items()], key=lambda x: x["id"]
         )
         edges_info = sorted(
             [{"from": src, "to": tgt} for src, tgts in self._edges.items() for tgt in tgts],
@@ -607,7 +647,10 @@ class TypedAlphaGraph:
                 "strategy_id": str(self.strategy_id),
                 "nodes": nodes_info,
                 "edges": edges_info,
+                "policy_version": getattr(self, "policy_version", ""),
+                "factor_version": getattr(self, "factor_version", ""),
+                "model_version": getattr(self, "model_version", ""),
             },
             sort_keys=True,
         )
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()

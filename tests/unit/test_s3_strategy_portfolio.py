@@ -135,7 +135,7 @@ class TestPortfolioOptimizer:
 
     def test_preserves_strategy_direction(self) -> None:
         """策略方向不被组合层篡改。"""
-        optimizer = PortfolioOptimizerImpl()
+        optimizer = PortfolioOptimizerImpl(max_total_leverage=10.0)  # P1-008: 允许测试杠杆
 
         long_target = PortfolioTarget(
             strategy_id=StrategyId("strategy_a"),
