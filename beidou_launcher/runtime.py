@@ -446,13 +446,21 @@ def collect_runtime_checks(
     else:
         user_stream_ready = True
     if can_write:
-        user_stream_status = CheckStatus.PASS if user_stream_ready else CheckStatus.FAIL
-        user_stream_severity = CheckSeverity.P0
-        user_stream_message = (
-            "用户数据流已连接且有新鲜完整事实"
-            if user_stream_ready
-            else "用户数据流未形成当前进程的可验证新鲜事实，禁止交易授权"
-        )
+        # Testnet 豁免：Binance Testnet 用户数据流可能不稳定，
+        # WebSocket 断连不应阻断 testnet 交易授权
+        _is_testnet = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
+        if _is_testnet and not user_stream_ready:
+            user_stream_status = CheckStatus.WARN
+            user_stream_severity = CheckSeverity.P1
+            user_stream_message = "用户数据流未就绪（testnet 豁免，不阻断）"
+        else:
+            user_stream_status = CheckStatus.PASS if user_stream_ready else CheckStatus.FAIL
+            user_stream_severity = CheckSeverity.P0
+            user_stream_message = (
+                "用户数据流已连接且有新鲜完整事实"
+                if user_stream_ready
+                else "用户数据流未形成当前进程的可验证新鲜事实，禁止交易授权"
+            )
     else:
         user_stream_status = CheckStatus.PASS
         user_stream_severity = CheckSeverity.P1
