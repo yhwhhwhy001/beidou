@@ -6163,6 +6163,11 @@ class AutonomousEngine:
                     prec = {"price": dec, "quantity": dec}
                 placed = 0
 
+                # BD-FIX (S41): 交易所已有 Algo 单 → 跳过
+                symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
+                if symbol_algo_count >= 2:
+                    continue  # 已有 SL+TP
+
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
                 if pp.stop_loss is None:
                     try:
@@ -7724,12 +7729,22 @@ class AutonomousEngine:
                     durable_projection_ok = True
                     print("[beidou-autopilot] Testnet: bypassed protection ownership check")
             # Phase 1: 本地创建所有保护单
+            # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建
+            existing_algo_count: dict[str, int] = {}
+            if isinstance(existing_algo_inventory, list):
+                for a in existing_algo_inventory:
+                    sym = str(a.get("symbol", "")).upper()
+                    existing_algo_count[sym] = existing_algo_count.get(sym, 0) + 1
             pending_submissions: list[dict] = []
             for p in positions_list if durable_projection_ok else []:
                 amt = float(p.get("positionAmt", 0))
                 if amt == 0:
                     continue
                 symbol = p["symbol"]
+                # 交易所已有 >=2 个 Algo 单 → 跳过
+                if existing_algo_count.get(symbol.upper(), 0) >= 2:
+                    print(f"[startup] {symbol}: already has {existing_algo_count[symbol.upper()]} Algo orders, skipping")
+                    continue
                 entry_price = float(p.get("entryPrice", 0))
                 if entry_price <= 0:
                     features = await self._feed.async_update_features(symbol)
