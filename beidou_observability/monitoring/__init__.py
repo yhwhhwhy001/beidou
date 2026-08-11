@@ -107,8 +107,14 @@ def collect_monitoring_checks(
         check_balance_sanity,
     )
     from beidou_observability.monitoring.checks.execution import OrderTraceState, check_order_trace
+    from beidou_observability.monitoring.checks.factors import check_factors, check_strategies as check_factor_strategies
     from beidou_observability.monitoring.checks.modules import check_algorithm_probe, check_module_progress
     from beidou_observability.monitoring.checks.monitor_self import check_component_health, check_monitor_loop_health
+    from beidou_observability.monitoring.checks.strategies import (
+        check_strategy_risk_drift,
+        check_strategy_signal_silence,
+        check_strategy_version_drift,
+    )
     from beidou_observability.monitoring.checks.protection import (
         ExchangeEconomicPosition,
         build_protection_check,
@@ -441,5 +447,33 @@ def collect_monitoring_checks(
                     results.append(convert(item, name="监控组件健康 (PKG-MON-10)"))
     except Exception as exc:
         results.append(failure("runtime.monitoring.self_health", "监控组件健康 (PKG-MON-10)", CheckSeverity.P1, exc))
+
+    # === 7. 因子与策略健康检查 ===
+    if engine is not None:
+        try:
+            factor_registry = getattr(engine, "_factor_registry", None)
+            if factor_registry is not None:
+                results.append(convert(check_factors(factor_registry), name="因子注册健康"))
+                results.append(convert(check_factor_strategies(factor_registry), name="因子策略关联"))
+        except Exception as exc:
+            results.append(failure("runtime.factors.health", "因子健康检查", CheckSeverity.P2, exc))
+        try:
+            strategy_risk = getattr(engine, "_strategy_risk", None)
+            autopilot_id = getattr(engine, "_autopilot_strategy_id", None)
+            if strategy_risk is not None and autopilot_id is not None:
+                results.append(convert(check_strategy_signal_silence(engine), name="策略信号沉默检测"))
+                results.append(convert(check_strategy_risk_drift(strategy_risk, autopilot_id), name="策略风险漂移"))
+                results.append(convert(check_strategy_version_drift(engine), name="策略版本漂移"))
+        except Exception as exc:
+            results.append(failure("runtime.strategies.health", "策略健康检查", CheckSeverity.P2, exc))
+
+    # === 8. ChaosEngine 周期性健康检查 ===
+    if engine is not None:
+        try:
+            chaos = getattr(engine, "_chaos_engine", None)
+            if chaos is not None:
+                chaos.run_chaos_cycle()  # 执行一轮故障注入/验证周期
+        except Exception:
+            pass
 
     return results

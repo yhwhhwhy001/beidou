@@ -72,7 +72,7 @@ REQUIRED_ENGINE_ATTRIBUTES: tuple[str, ...] = (
     "_trading_pool",
     "_strategy_risk",
     "_factor_registry",
-    "_factor_evaluator",
+    # "_factor_evaluator",  # 已移除：FactorEvaluator 仅使用静态方法
     "_alpha_graph",
     "_strategy_kernel",
 )

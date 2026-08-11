@@ -1389,7 +1389,8 @@ class AutonomousEngine:
 
         # === NEW: Factor Registry + Evaluator ===
         self._factor_registry = FactorRegistry()
-        self._factor_evaluator = FactorEvaluator()
+        # FactorEvaluator 仅使用静态方法 (compute_ic/compute_rank_ic 等)，实例无需保留
+        # self._factor_evaluator = FactorEvaluator()  # 已移除：实例方法从未被调用
 
         # ================================================================
         # Factor Registry — 8-factor suite
@@ -1569,8 +1570,7 @@ class AutonomousEngine:
         # ================================================================
         # Fix 1: 接线 Factor Registry → 控制面 API
         # ================================================================
-        if hasattr(self._control, "wire_factor_registry"):
-            self._control.wire_factor_registry(self._factor_registry)
+        # wire_factor_registry 已移除：ControlPlane 无此方法，hasattr 恒为 False
 
         # ================================================================
         # Fix 2: 启动 CertificationManager
@@ -6662,11 +6662,21 @@ class AutonomousEngine:
                         f"side={side.value if hasattr(side, 'value') else side} "
                         f"strength={getattr(proposal, 'strength', 0):.3f}"
                     )
-                    fused = SimpleNamespace(
-                        direction=SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT,
+                    # 使用 SignalFuser 融合多时间框架信号
+                    from beidou_strategy.alpha import AlphaSignal
+                    direction = SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT
+                    alpha_signal = AlphaSignal(
+                        component_id=f"{symbol}@{tf}",
+                        direction=direction,
                         strength=float(getattr(proposal, "strength", 0)),
                         confidence=float(getattr(proposal, "confidence", 0)),
-                        conflict_detected=bool(getattr(proposal, "conflict_detected", False)),
+                    )
+                    fused_result = self._fuser.fuse([alpha_signal])
+                    fused = SimpleNamespace(
+                        direction=fused_result.direction,
+                        strength=fused_result.strength,
+                        confidence=fused_result.confidence,
+                        conflict_detected=getattr(fused_result, "conflict_detected", False),
                     )
                 else:
                     print(
@@ -6674,11 +6684,19 @@ class AutonomousEngine:
                         f"{getattr(signal_obj, 'direction', '?')} "
                         f"strength={getattr(signal_obj, 'strength', 0):.3f}"
                     )
-                    fused = SimpleNamespace(
+                    from beidou_strategy.alpha import AlphaSignal
+                    alpha_signal = AlphaSignal(
+                        component_id=f"{symbol}@{tf}",
                         direction=getattr(signal_obj, "direction", SignalDirection.NO_ACTION),
                         strength=float(getattr(signal_obj, "strength", 0)),
                         confidence=float(getattr(signal_obj, "confidence", 0)),
-                        conflict_detected=False,
+                    )
+                    fused_result = self._fuser.fuse([alpha_signal])
+                    fused = SimpleNamespace(
+                        direction=fused_result.direction,
+                        strength=fused_result.strength,
+                        confidence=fused_result.confidence,
+                        conflict_detected=getattr(fused_result, "conflict_detected", False),
                     )
 
                 # === 5. Adaptive position sizing & leverage ===
@@ -6978,10 +6996,32 @@ class AutonomousEngine:
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
-                # PKG02 (BDS-P0-001): 移除 testnet R7/R8 跳过旁路
-                # 所有环境使用完整的 R0-R10 风险规则评估
+                # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = {rid: decision for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()}
                 risk_approved = all(d == RuleDecision.PASS for d in risk_results.values())
+                # RiskEngineImpl 辅助校验：快照级别的杠杆/集中度检查
+                if risk_approved:
+                    try:
+                        from beidou_safety.risk.engine import RiskSnapshot as _RiskSnapshot
+                        rules_cfg = {"max_leverage": risk_context["max_leverage"],
+                                     "max_concentration_pct": risk_context["max_concentration_pct"]}
+                        imp_snapshot = _RiskSnapshot(
+                            total_exposure=position_notional,
+                            margin_used=position_notional / max(dyn_leverage, 1),
+                            margin_total=account_balance,
+                            position_count=risk_context["total_positions"],
+                            pending_orders=len(self._active_order_ids),
+                            leverage=dyn_leverage,
+                            concentration_pct=risk_context["concentration_pct"],
+                            reconciliation_status="MATCHED" if self._fresh_matched_reconciliation() else "MISMATCHED",
+                            exchange_health="HEALTHY",
+                        )
+                        impl_results = await self._risk_engine.full_evaluate(imp_snapshot, rules_cfg)
+                        risk_approved = risk_approved and all(
+                            r.decision == RuleDecision.PASS for r in impl_results
+                        )
+                    except Exception:
+                        pass  # RiskEngineImpl 不可用时不影响现有评估链
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
@@ -7133,6 +7173,8 @@ class AutonomousEngine:
                         f"(optimizer_resolved={'YES' if f'{venue_id}:{instrument_id}' in resolved_qty else 'no'} "
                         f"outbox_id={id(self._outbox)} size={len(self._outbox._outbox)})"
                     )
+                    # PostRiskMonitor: 下单后校验仓位/保证金/风控安全性
+                    self._check_post_risk_safety(symbol, position_notional, dyn_leverage)
                 except ValueError:
                     print(f"[nearline] {symbol}: SKIP (duplicate intent in window)")
 
@@ -7381,9 +7423,19 @@ class AutonomousEngine:
 
             if pool.try_promote(instrument_id):
                 promoted += 1
+                pool.activate(instrument_id)  # PROMOTED → ACTIVE
 
         if scored > 0:
             active = pool.active_instruments()
+            # 降级检查：评分持续低 → quarantine
+            entry = pool._pool.get(instrument_id) if 'instrument_id' in dir() else None
+            if entry is not None and entry.status == PoolStatus.ACTIVE:
+                recent = entry.scores[-pool.DEGRADE_CONSECUTIVE:]
+                if len(recent) >= pool.DEGRADE_CONSECUTIVE and all(
+                    s.overall < pool.DEGRADE_THRESHOLD for s in recent
+                ):
+                    pool.quarantine(instrument_id, f"连续{pool.DEGRADE_CONSECUTIVE}次评分<{pool.DEGRADE_THRESHOLD}")
+                    print(f"[universe] ⚠️ {instrument_id} QUARANTINED: 评分持续低于阈值")
             print(
                 f"[universe] 评估 {scored} 个标的, 晋级 {promoted} 个, "
                 f"当前活跃 {len(active)} 个: {active[:10]}{'...' if len(active) > 10 else ''}"
@@ -7592,6 +7644,13 @@ class AutonomousEngine:
             elif days_left <= 30.0:
                 health["level"] = "WARNING"
                 health["remediation"] = "rotate_key"
+                # 触发密钥轮换
+                try:
+                    result = self._key_rotator.start_rotation(cred.credential_id)
+                    health["rotation_started"] = result.value
+                    print(f"[beidou-security] 🔄 Key rotation started for {cred.credential_id}: {result.value}")
+                except Exception:
+                    pass
                 self._alerts.send_incident(
                     AlertSeverity.WARNING,
                     f"Credential expiring in {days_left:.0f} days",
@@ -7602,6 +7661,15 @@ class AutonomousEngine:
             elif cred.status == KeyRotationStatus.ROTATING:
                 health["level"] = "WARNING"
                 health["remediation"] = "complete_rotation"
+                # 尝试完成轮换（如有新凭据）
+                try:
+                    if hasattr(self, "_pending_credential"):
+                        result = self._key_rotator.complete_rotation(
+                            cred.credential_id, self._pending_credential
+                        )
+                        health["rotation_completed"] = result.value
+                except Exception:
+                    pass
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
             else:
                 health["level"] = "OK"
@@ -7620,6 +7688,42 @@ class AutonomousEngine:
             health["error"] = f"{type(exc).__name__}: {exc}"
         self._credential_health = health
         return health
+
+    def _check_post_risk_safety(self, symbol: str, position_notional: float, leverage: float) -> None:
+        """PostRiskMonitor: 下单后校验风控安全性，不安全则记录违规并可能降级。"""
+        try:
+            account_balance = float(self._last_account.get("totalWalletBalance", 0))
+            margin_ratio = (position_notional / leverage) / max(account_balance, 1)
+            position_count = self._protection.position_count()
+            pending = len(self._active_order_ids)
+            concentration = position_notional / max(account_balance, 1) * 100
+
+            from beidou_safety.risk.engine import RiskSnapshot
+
+            snapshot = RiskSnapshot(
+                total_exposure=position_notional,
+                margin_used=position_notional / max(leverage, 1),
+                margin_total=account_balance,
+                position_count=position_count,
+                pending_orders=pending,
+                leverage=leverage,
+                concentration_pct=concentration,
+                account_id="default",
+                reconciliation_status="MATCHED" if self._fresh_matched_reconciliation() else "MISMATCHED",
+                exchange_health="HEALTHY",
+                dq_tier="OK",
+                policy_version=str(self._policy_version or "UNKNOWN"),
+            )
+            if not snapshot.is_safe_for_risk_increase():
+                self._post_risk.record_violation(
+                    f"{symbol}: margin_ratio={margin_ratio:.2%} conc={concentration:.1f}% "
+                    f"positions={position_count} pending={pending}"
+                )
+            if self._post_risk.recommend_degradation():
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                print(f"[post-risk] ⚠️ DEGRADATION recommended: {len(self._post_risk._violations)} violations")
+        except Exception as exc:
+            logger.debug("post-risk safety check skipped: %s", type(exc).__name__)
 
     def _apply_venue_account_permissions(self, account: Any) -> tuple[bool, str]:
         """Apply explicit venue permissions and return the writable gate.
@@ -7688,9 +7792,11 @@ class AutonomousEngine:
         snap = self.build_truth_snapshot()
         return derive_eligibility(snap)
 
+    @staticmethod
     def build_strategy_signal(
-        self, strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = ""
+        strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = ""
     ) -> StrategySignal:
+        """@deprecated: 信号构建当前由近线循环内联执行，此方法保留用于外部工具。"""
         """BD-CV23: 构造 Typed Strategy Signal。
 
         NO_ACTION 不会被当系统故障，VETO 在所有环境阻断下游。
