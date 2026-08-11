@@ -70,7 +70,9 @@ class StrategyKernelContract:
             try:
                 content = json.dumps(
                     {"_fallback": str(proposal)},
-                    sort_keys=True, separators=(",", ":"), allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
                 )
             except (TypeError, ValueError, OverflowError):
                 return ""
@@ -178,8 +180,12 @@ class StrategyKernel:
                 _component_outputs = _detailed.get("component_outputs", {})
                 # 诊断：打印拓扑顺序
                 _order = self._typed_graph.topological_order()
-                _types = {nid: self._typed_graph._nodes[nid].node_type.value for nid in _order if nid in self._typed_graph._nodes}
-                print(f"[kernel] DAG order: {list(zip(_order, [_types.get(n,'?') for n in _order]))}")
+                _types = {
+                    nid: self._typed_graph._nodes[nid].node_type.value
+                    for nid in _order
+                    if nid in self._typed_graph._nodes
+                }
+                print(f"[kernel] DAG order: {list(zip(_order, [_types.get(n, '?') for n in _order]))}")
                 print(f"[kernel] component outputs: {list(_component_outputs.keys())}")
             else:
                 _proposal = await self._typed_graph.execute(context)

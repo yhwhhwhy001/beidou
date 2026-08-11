@@ -9,19 +9,14 @@ S3 (PKG16-19): 策略、组合与资本分配安全测试。
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
-from beidou_shared.types import MonetaryValue, Quantity, StrategyId, VenueId
-from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
-from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 from beidou_data.trading_pool_lifecycle import (
     InstrumentScore,
-    PoolEntry,
     PoolStatus,
     TradingPool,
 )
+from beidou_shared.types import MonetaryValue, Quantity, StrategyId, VenueId
+from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
+from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 
 
 class TestNaNThresholdBypass:
@@ -51,9 +46,7 @@ class TestNaNThresholdBypass:
         pool.add("ETHUSDT")
         entry = pool._pool["ETHUSDT"]
         entry.status = PoolStatus.OBSERVING
-        entry.observing_since = __import__("datetime").datetime(
-            2020, 1, 1, tzinfo=__import__("datetime").timezone.utc
-        )
+        entry.observing_since = __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc)
 
         inf_score = InstrumentScore(instrument_id="ETHUSDT")
         inf_score.overall = float("inf")
@@ -68,9 +61,7 @@ class TestNaNThresholdBypass:
         pool.add("SOLUSDT")
         entry = pool._pool["SOLUSDT"]
         entry.status = PoolStatus.OBSERVING
-        entry.observing_since = __import__("datetime").datetime(
-            2020, 1, 1, tzinfo=__import__("datetime").timezone.utc
-        )
+        entry.observing_since = __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc)
 
         score = InstrumentScore(instrument_id="SOLUSDT")
         score.spread_score = float("nan")  # 子评分 NaN
@@ -90,9 +81,7 @@ class TestNaNThresholdBypass:
         pool.add("BNBUSDT")
         entry = pool._pool["BNBUSDT"]
         entry.status = PoolStatus.OBSERVING
-        entry.observing_since = __import__("datetime").datetime(
-            2020, 1, 1, tzinfo=__import__("datetime").timezone.utc
-        )
+        entry.observing_since = __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc)
 
         score = InstrumentScore(instrument_id="BNBUSDT")
         score.spread_score = 0.8
@@ -113,9 +102,7 @@ class TestNaNThresholdBypass:
         pool.add("ADAUSDT")
         entry = pool._pool["ADAUSDT"]
         entry.status = PoolStatus.OBSERVING
-        entry.observing_since = __import__("datetime").datetime(
-            2020, 1, 1, tzinfo=__import__("datetime").timezone.utc
-        )
+        entry.observing_since = __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc)
 
         score = InstrumentScore(instrument_id="ADAUSDT")
         score.spread_score = -1.0  # 不合法

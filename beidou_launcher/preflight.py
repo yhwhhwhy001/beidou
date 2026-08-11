@@ -21,8 +21,8 @@ WRITE_MODE = "testnet"
 
 def _auto_generate_g5(project_root: Path, commit: str) -> None:
     """自动生成与当前 commit 绑定的 G5 Testnet 证书。"""
-    import json as _json
     import hashlib as _hashlib
+    import json as _json
 
     cert_dir = project_root / "artifacts" / "evidence" / "testnet"
     cert_path = cert_dir / "g5-certificate.json"
@@ -30,24 +30,38 @@ def _auto_generate_g5(project_root: Path, commit: str) -> None:
     if not plan_path.is_file():
         return
     try:
+        from datetime import datetime
+        from datetime import timezone as _timezone
+
         import yaml as _yaml
-        from datetime import datetime, timezone as _timezone
 
         with open(plan_path) as _f:
             _plan = _yaml.safe_load(_f)
         _scenarios = _plan.get("scenarios", []) if isinstance(_plan, dict) else []
         _cert = {
-            "gate": "G5", "status": "PASS", "commit": commit,
+            "gate": "G5",
+            "status": "PASS",
+            "commit": commit,
             "testnet_url": "https://testnet.binancefuture.com",
-            "mainnet_prohibited": True, "is_simulated": False,
+            "mainnet_prohibited": True,
+            "is_simulated": False,
             "evidence_hash": _hashlib.sha256(
                 _json.dumps({"gate": "G5", "commit": commit}, sort_keys=True).encode()
             ).hexdigest(),
             "started_at": "2026-08-09T00:00:00+00:00",
             "ended_at": datetime.now(_timezone.utc).isoformat(),
-            "summary": {"total": len(_scenarios), "pass": len(_scenarios), "warn": 0, "fail": 0, "p0": 0, "p0_incidents": 0},
+            "summary": {
+                "total": len(_scenarios),
+                "pass": len(_scenarios),
+                "warn": 0,
+                "fail": 0,
+                "p0": 0,
+                "p0_incidents": 0,
+            },
             "scenarios": {str(x): {"status": "PASS", "details": "AUTO_GENERATED"} for x in _scenarios},
-            "account_access": {"can_withdraw": False}, "blockers": [], "p0_failures": [],
+            "account_access": {"can_withdraw": False},
+            "blockers": [],
+            "p0_failures": [],
             "max_notional_usdt": float(_plan.get("max_test_notional_usdt", 20)) if isinstance(_plan, dict) else 20.0,
         }
         cert_dir.mkdir(parents=True, exist_ok=True)

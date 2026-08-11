@@ -9,16 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import time
-from decimal import Decimal
 
 import pytest
-
 
 # ================================================================
 # P1-011, P1-012: 风险指标正确性
 # ================================================================
+
 
 class TestRiskMetrics:
     def test_daily_loss_uses_start_of_day_equity(self) -> None:
@@ -37,10 +35,12 @@ class TestRiskMetrics:
 
     def test_no_risk_state_semantic_conflict(self) -> None:
         """P1-012: Unknown 状态语义统一。"""
+
         def resolve_risk(is_trading_allowed: bool, risk_level: str) -> str:
             if risk_level == "UNKNOWN":
                 return "NO_NEW_RISK"  # Unknown = 安全优先
             return risk_level
+
         # NORMAL + is_trading_allowed=False 不应该出现
         assert resolve_risk(False, "NORMAL") == "NORMAL"
         assert resolve_risk(False, "UNKNOWN") == "NO_NEW_RISK"
@@ -49,6 +49,7 @@ class TestRiskMetrics:
 # ================================================================
 # P1-015, P1-016: 审批持久化 + Rate limit
 # ================================================================
+
 
 class TestApprovalPersistence:
     def test_nonce_consumption_must_be_persistable(self) -> None:
@@ -64,8 +65,10 @@ class TestRateLimit:
     def test_rate_limit_from_response_headers(self) -> None:
         """P1-016: Rate limit 从响应头解析。"""
         headers = {"X-MBX-USED-WEIGHT-1M": "800", "X-MBX-ORDER-COUNT-10S": "45"}
+
         def parse_weight(headers: dict) -> int:
             return int(headers.get("X-MBX-USED-WEIGHT-1M", "0"))
+
         assert parse_weight(headers) == 800
 
     def test_rate_limit_budget_remaining(self) -> None:
@@ -81,15 +84,18 @@ class TestRateLimit:
 # P1-020, P1-021, P1-022: 执行算法
 # ================================================================
 
+
 class TestExecutionAlgorithms:
     def test_twap_dynamic_replanning(self) -> None:
         """P1-021: TWAP 动态重估而非静态切片。深度不足自动缩减。"""
+
         def twap_replan(remaining_qty: float, remaining_time: float, depth: float) -> float:
             if remaining_time <= 0:
                 return remaining_qty
             slice_size = remaining_qty / max(remaining_time / 60, 1)
             max_by_depth = depth * 0.1
             return min(slice_size, max_by_depth, remaining_qty)
+
         # 低深度时切片受限
         shallow = twap_replan(10.0, 300, 2.0)  # depth=2 → max_by_depth=0.2
         deep = twap_replan(10.0, 300, 200.0)  # depth=200 → max_by_depth=20
@@ -97,13 +103,16 @@ class TestExecutionAlgorithms:
 
     def test_pov_uses_real_volume(self) -> None:
         """P1-022: POV 基于 aggTrade 成交量流。"""
+
         def pov_slice(recent_volume: float, participation_rate: float) -> float:
             return recent_volume * participation_rate
+
         assert pov_slice(100.0, 0.05) == 5.0
         assert pov_slice(1000.0, 0.10) == 100.0
 
     def test_contextual_bandit_is_heuristic(self) -> None:
         """P1-023: Contextual bandit 实为启发式，应改名或实现真 bandit。"""
+
         def heuristic_selector(scores: list[float]) -> str:
             if not scores:
                 return "UNKNOWN"
@@ -111,6 +120,7 @@ class TestExecutionAlgorithms:
             if best > 0.7:
                 return f"SELECT_{scores.index(best)}"
             return "FALLBACK"
+
         # 无探索/不确定性/regret → 不是真 bandit
         result = heuristic_selector([0.5, 0.6, 0.8])
         assert result == "SELECT_2"
@@ -120,14 +130,17 @@ class TestExecutionAlgorithms:
 # P1-034, P1-035: 保护安全
 # ================================================================
 
+
 class TestProtectionSafety:
     def test_trail_pct_missing_fail_closed(self) -> None:
         """P1-034: trail_pct 缺失时必须 fail closed。"""
+
         def resolve_trail_pct(config: dict) -> float:
             trail_pct = config.get("trail_pct")
             if trail_pct is None or trail_pct <= 0:
                 raise ValueError("PROTECTION_PARAM_MISSING: trail_pct required")
             return float(trail_pct)
+
         with pytest.raises(ValueError, match="PROTECTION_PARAM_MISSING"):
             resolve_trail_pct({})
         with pytest.raises(ValueError, match="PROTECTION_PARAM_MISSING"):
@@ -136,10 +149,12 @@ class TestProtectionSafety:
 
     def test_local_cancel_not_venue_cancel(self) -> None:
         """P1-035: 本地 cancel 不等于 venue 已取消。"""
+
         def is_cancelled(local_status: str, venue_ack: bool) -> bool:
             if not venue_ack:
                 return False  # 本地取消不代表 venue 已取消
             return local_status == "CANCELED"
+
         assert not is_cancelled("CANCELED", False)
         assert is_cancelled("CANCELED", True)
 
@@ -148,13 +163,16 @@ class TestProtectionSafety:
 # P1-042, P1-043: 控制面审计
 # ================================================================
 
+
 class TestControlPlaneAudit:
     def test_transition_cas(self) -> None:
         """P1-042: 状态转换需要 CAS (compare-and-swap)。"""
+
         def cas_transition(current_state: str, expected: str, target: str, identity: str) -> tuple[bool, str]:
             if current_state != expected:
                 return False, f"CAS_FAILED: expected {expected}, got {current_state}"
             return True, target
+
         ok, state = cas_transition("ACTIVE", "ACTIVE", "DEGRADED", "operator-1")
         assert ok
         fail, _ = cas_transition("LOCKED", "ACTIVE", "DEGRADED", "operator-2")
@@ -162,9 +180,11 @@ class TestControlPlaneAudit:
 
     def test_audit_hash_complete(self) -> None:
         """P1-043: 控制审计 hash 完整绑定所有执行字段。"""
+
         def audit_hash(action: str, reason: str, identity: str, timestamp: float, version: int) -> str:
             payload = f"{action}|{reason}|{identity}|{timestamp}|{version}"
             return hashlib.sha256(payload.encode()).hexdigest()
+
         h = audit_hash("NO_NEW_RISK", "margin_breach", "guard-1", time.time(), 3)
         assert len(h) == 64
 
@@ -173,9 +193,11 @@ class TestControlPlaneAudit:
 # P1-046: 自愈执行
 # ================================================================
 
+
 class TestSelfHealing:
     def test_mapek_recovery_must_execute_action(self) -> None:
         """P1-046: MAPE-K 恢复必须执行动作并产出证据。"""
+
         def execute_recovery(action: str, module: str) -> dict:
             evidence = {"action": action, "module": module, "timestamp": time.time()}
             if action == "RESTART":
@@ -186,6 +208,7 @@ class TestSelfHealing:
             else:
                 evidence["result"] = "NO_ACTION_TAKEN"
             return evidence
+
         result = execute_recovery("DEGRADE", "market-data")
         assert result["result"] != "NO_ACTION_TAKEN"
 
@@ -194,31 +217,38 @@ class TestSelfHealing:
 # P1-048, P1-049, P1-050: 监控
 # ================================================================
 
+
 class TestMonitoringBoundary:
     def test_monitor_no_private_field_access(self) -> None:
         """P1-048: 监控代码不得读取 Engine 私有字段。"""
+
         def is_private_access(attr_name: str) -> bool:
             return attr_name.startswith("_")
+
         assert is_private_access("_engine")
         assert is_private_access("_private_state")
         assert not is_private_access("public_api")
 
     def test_protection_conversion_uses_real_owner(self) -> None:
         """P1-049: Protection 转换使用真实 owner/generation/side。"""
+
         def convert_protection(venue_order: dict) -> dict:
             return {
                 "owner_id": venue_order.get("owner_id", "UNKNOWN"),
                 "generation": venue_order.get("generation", 0),
                 "side": venue_order.get("position_side", "UNKNOWN"),
             }
+
         result = convert_protection({"owner_id": "strategy-a", "generation": 5, "position_side": "LONG"})
         assert result["owner_id"] != "UNKNOWN"
 
     def test_monitoring_hash_binds_full_context(self) -> None:
         """P1-050: 监控 hash 绑定 entity/policy/correlation/remediation/provenance。"""
+
         def monitoring_hash(entity: str, policy: str, correlation: str, remediation: str) -> str:
             payload = f"{entity}|{policy}|{correlation}|{remediation}"
             return hashlib.sha256(payload.encode()).hexdigest()
+
         h = monitoring_hash("order-123", "policy-v2", "corr-456", "auto-cancel")
         assert len(h) == 64
 
@@ -227,9 +257,11 @@ class TestMonitoringBoundary:
 # P1-060, P1-061, P1-062: Paper 证据
 # ================================================================
 
+
 class TestPaperEvidence:
     def test_paper_write_failure_invalidates_run(self) -> None:
         """P1-060: Paper 执行证据写失败必须使 run INVALID。"""
+
         def record_paper_evidence(data: dict) -> str:
             try:
                 if not data:
@@ -237,17 +269,20 @@ class TestPaperEvidence:
                 return "VALID"
             except Exception:
                 return "INVALID"
+
         assert record_paper_evidence({"fill_id": "f1"}) == "VALID"
         assert record_paper_evidence({}) == "INVALID"
 
     def test_total_executed_naming_split(self) -> None:
         """P1-061: 拆分 prediction_outcomes / simulated_fills / venue_acks。"""
+
         def compute_metrics(predictions: list, simulated: list, venue: list) -> dict:
             return {
                 "prediction_outcomes": len(predictions),
                 "simulated_fills": len(simulated),
                 "venue_acks": len(venue),
             }
+
         m = compute_metrics([1, 2, 3], [1, 2], [1])
         assert m["prediction_outcomes"] == 3
         assert m["simulated_fills"] == 2
@@ -263,6 +298,7 @@ class TestPaperEvidence:
 # ================================================================
 # P1-063, P1-064: 认证 schema 一致性
 # ================================================================
+
 
 class TestCertificationSchema:
     def test_g5_helper_schema_matches_evidence(self) -> None:
@@ -282,14 +318,17 @@ class TestCertificationSchema:
 # P1-037, P1-038: 交易池 / P1-058: 类型安全
 # ================================================================
 
+
 class TestTradingPool:
     def test_weights_must_be_signed_policy(self) -> None:
         """P1-037: 权重/阈值迁移到签名 policy，禁止硬编码。"""
+
         def load_policy(policy_data: str) -> dict:
             policy = json.loads(policy_data)
             assert "weights" in policy
             assert "signature" in policy, "Policy must be signed"
             return policy
+
         policy = load_policy('{"weights": {"spread": 0.25}, "signature": "sig_abc"}')
         assert policy["weights"]["spread"] == 0.25
         with pytest.raises(AssertionError, match="signed"):
@@ -307,8 +346,10 @@ class TestTradingPool:
 class TestTypeSafety:
     def test_critical_path_mypy_zero_ignore_by_default(self) -> None:
         """P1-058: 关键模块不应默认添加 mypy ignore。"""
+
         def should_have_no_ignore(module_path: str) -> bool:
             critical_modules = {"beidou_safety.risk", "beidou_safety.protection", "beidou_exchange.core"}
             return module_path in critical_modules
+
         assert should_have_no_ignore("beidou_safety.risk")
         assert should_have_no_ignore("beidou_exchange.core")

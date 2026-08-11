@@ -69,6 +69,7 @@ class TestAccount:
     def test_withdrawal_permission_fails_closed(self):
         # Testnet 豁免提款检查，用 monkeypatch 清除豁免以验证 fail-closed 逻辑
         import os
+
         old_env = os.environ.pop("BEIDOU_ENV", None)
         try:
             result = check_account_permissions(

@@ -61,8 +61,7 @@ class SignalFuser:
 
         # P1-006: 权重 = confidence × strength × model_reliability × direction_sign
         weights = [
-            s.confidence * s.strength * getattr(s, "model_reliability", 1.0) * _direction_sign(s)
-            for s in signals
+            s.confidence * s.strength * getattr(s, "model_reliability", 1.0) * _direction_sign(s) for s in signals
         ]
         total_weight = sum(abs(w) for w in weights)
         if total_weight == 0:
@@ -78,17 +77,22 @@ class SignalFuser:
             )
 
         # P1-005: 冲突时检查 agreement ratio
-        agreement_ratio = max(
-            sum(1 for s in signals if _direction_sign(s) > 0) / len(signals),
-            sum(1 for s in signals if _direction_sign(s) < 0) / len(signals),
-        ) if signals else 0.0
+        agreement_ratio = (
+            max(
+                sum(1 for s in signals if _direction_sign(s) > 0) / len(signals),
+                sum(1 for s in signals if _direction_sign(s) < 0) / len(signals),
+            )
+            if signals
+            else 0.0
+        )
         if conflict and agreement_ratio < self.min_agreement_ratio:
             # 信号冲突且一致性不足 → NO_ACTION
             return FusedSignal(
                 instrument_id=signals[0].instrument_id,
                 venue_id=signals[0].venue_id,
                 direction=SignalDirection.NO_ACTION,
-                strength=0.0, confidence=0.0,
+                strength=0.0,
+                confidence=0.0,
                 contributing_signals=signals,
                 conflict_detected=True,
                 conflict_detail=f"Low agreement: {agreement_ratio:.0%} < {self.min_agreement_ratio:.0%}",
@@ -105,7 +109,9 @@ class SignalFuser:
         # P1-006: 使用 model_reliability 加权平均置信度
         rels = [getattr(s, "model_reliability", 1.0) for s in signals]
         avg_reliability = sum(rels) / len(rels) if rels else 1.0
-        confidence = sum(s.confidence * getattr(s, "model_reliability", 1.0) for s in signals) / len(signals) if signals else 0.0
+        confidence = (
+            sum(s.confidence * getattr(s, "model_reliability", 1.0) for s in signals) / len(signals) if signals else 0.0
+        )
         return FusedSignal(
             instrument_id=signals[0].instrument_id,
             venue_id=signals[0].venue_id,

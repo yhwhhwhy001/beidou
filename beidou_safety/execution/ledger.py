@@ -270,12 +270,8 @@ class ImmutableLedger:
             for p in tx.postings:
                 currencies.add(p.amount.currency or "USDT")
         for currency in currencies:
-            total_debit = sum(
-                (tx.total_debit(currency) for tx in self._transactions), Decimal("0")
-            )
-            total_credit = sum(
-                (tx.total_credit(currency) for tx in self._transactions), Decimal("0")
-            )
+            total_debit = sum((tx.total_debit(currency) for tx in self._transactions), Decimal("0"))
+            total_credit = sum((tx.total_credit(currency) for tx in self._transactions), Decimal("0"))
             if abs(total_debit - total_credit) >= Decimal("1e-12"):
                 return False
         return True

@@ -17,7 +17,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -256,10 +255,7 @@ class CapacityEvaluator:
         gross_return = _mean(returns) if returns else 0.0
         if gross_return <= 0:
             # 无正收益时，容量为0
-            empty_curve = [
-                CapacityCurvePoint(aum, gross_return, min(0.0, gross_return), 0.0, 0.0)
-                for aum in aum_range
-            ]
+            empty_curve = [CapacityCurvePoint(aum, gross_return, min(0.0, gross_return), 0.0, 0.0) for aum in aum_range]
             return SignalCapacityReport(
                 curve=empty_curve,
                 capacity_at_zero_return=0.0,
@@ -279,7 +275,10 @@ class CapacityEvaluator:
             vol = _compute_volatility(returns)
 
         avg_impact_bps, annual_turnover, warnings = self._impact_model.estimate_signal_impact(
-            predictions, returns, avg_daily_volume=adv, volatility=vol,
+            predictions,
+            returns,
+            avg_daily_volume=adv,
+            volatility=vol,
         )
 
         # 每笔交易的固定成本（fee + spread + slippage + funding）
@@ -299,13 +298,15 @@ class CapacityEvaluator:
             total_cost_decimal = total_cost_bps / 10000.0
             net_return = gross_return - total_cost_decimal * trades_per_period * annual_turnover
 
-            curve.append(CapacityCurvePoint(
-                aum_level=aum,
-                gross_return=round(gross_return, 8),
-                net_return=round(net_return, 8),
-                impact_bps=round(size_impact_bps, 4),
-                turnover_annual=round(annual_turnover, 2),
-            ))
+            curve.append(
+                CapacityCurvePoint(
+                    aum_level=aum,
+                    gross_return=round(gross_return, 8),
+                    net_return=round(net_return, 8),
+                    impact_bps=round(size_impact_bps, 4),
+                    turnover_annual=round(annual_turnover, 2),
+                )
+            )
 
         # 寻找关键容量点
         net_vals = [p.net_return for p in curve]
@@ -371,7 +372,8 @@ class CapacityEvaluator:
             (report, gate_passed, gate_reason)
         """
         report = self.evaluate_capacity_curve(
-            predictions, returns,
+            predictions,
+            returns,
             aum_range=aum_range,
             avg_daily_volume=avg_daily_volume,
         )
@@ -442,10 +444,7 @@ def _estimate_turnover_from_returns(returns: list[float]) -> float:
         return 1.0  # 默认每年换手1次
 
     # 通过收益符号变化频率估算换手
-    sign_changes = sum(
-        1 for i in range(1, len(finite))
-        if (finite[i] >= 0) != (finite[i - 1] >= 0)
-    )
+    sign_changes = sum(1 for i in range(1, len(finite)) if (finite[i] >= 0) != (finite[i - 1] >= 0))
     change_rate = sign_changes / (len(finite) - 1) if len(finite) > 1 else 0.0
 
     # 换手率 = 符号变化率 × 365（年化）

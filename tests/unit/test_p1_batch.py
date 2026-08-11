@@ -14,7 +14,6 @@ import time
 import pytest
 
 from beidou_safety.risk.engine import RiskSnapshot
-from beidou_shared.types import RiskDecision
 
 
 class TestRiskSnapshotImmutability:
@@ -23,11 +22,20 @@ class TestRiskSnapshotImmutability:
     def test_snapshot_is_immutable(self) -> None:
         """positions/orders 为 MappingProxyType 不可变。"""
         snap = RiskSnapshot(
-            total_exposure=10000, margin_used=2000, margin_total=10000,
-            position_count=2, pending_orders=1, leverage=2.0, concentration_pct=30,
-            account_id="test", dq_tier="OK", exchange_health="HEALTHY",
-            reconciliation_status="MATCHED", policy_version="v1",
-            positions={"BTC": {"qty": 1.0}}, orders={"order1": {"status": "NEW"}},
+            total_exposure=10000,
+            margin_used=2000,
+            margin_total=10000,
+            position_count=2,
+            pending_orders=1,
+            leverage=2.0,
+            concentration_pct=30,
+            account_id="test",
+            dq_tier="OK",
+            exchange_health="HEALTHY",
+            reconciliation_status="MATCHED",
+            policy_version="v1",
+            positions={"BTC": {"qty": 1.0}},
+            orders={"order1": {"status": "NEW"}},
         )
         with pytest.raises(TypeError):
             snap.positions["BTC"] = {"qty": 2.0}  # 不可变
@@ -54,9 +62,18 @@ class TestRiskSnapshotImmutability:
     def test_stale_snapshot_blocks_risk_increase(self) -> None:
         """过期快照阻断风险增加。"""
         snap = RiskSnapshot(
-            10000, 2000, 10000, 2, 1, 2.0, 30,
-            account_id="a", dq_tier="OK", exchange_health="HEALTHY",
-            reconciliation_status="MATCHED", policy_version="v1",
+            10000,
+            2000,
+            10000,
+            2,
+            1,
+            2.0,
+            30,
+            account_id="a",
+            dq_tier="OK",
+            exchange_health="HEALTHY",
+            reconciliation_status="MATCHED",
+            policy_version="v1",
         )
         # 手动设置更老的创建时间模拟过期
         snap._created_at = time.time() - 120  # 2 min old

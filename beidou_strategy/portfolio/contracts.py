@@ -10,8 +10,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
-
 
 # ============================================================================
 # BD-CV30: SignedPortfolioTarget 与多空暴露代数

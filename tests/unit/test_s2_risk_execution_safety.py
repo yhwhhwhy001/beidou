@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import pytest
 
+from beidou_safety.risk.engine import RiskApprovalStateMachine
 from beidou_safety.risk.risk_level import (
     BreakerScope,
     RiskLevel,
     RiskLevelManager,
-    RiskLevelState,
 )
-from beidou_safety.risk.engine import RiskApprovalStateMachine
 from beidou_shared.types import RiskApprovalId, RiskDecision
 
 
@@ -169,6 +168,7 @@ class TestApprovalLifecycle:
 
         sm.approve(aid, ttl=0.001)
         import time
+
         time.sleep(0.01)
         assert not sm.is_valid_for_use(aid)
 

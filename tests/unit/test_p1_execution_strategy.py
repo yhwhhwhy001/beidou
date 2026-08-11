@@ -21,6 +21,7 @@ class TestPostOnlyExecution:
 
     def test_post_only_uses_gtx_or_post_only(self) -> None:
         """PostOnly 必须使用 venue GTX/postOnly 语义。"""
+
         # 模拟 LIMIT+GTC vs 真正的 post-only
         def is_post_only(order_type: str, time_in_force: str, venue_flags: set[str]) -> bool:
             if "GTX" in venue_flags:
@@ -41,6 +42,7 @@ class TestTrendThreshold:
 
     def test_trend_threshold_uses_returns_not_absolute_price(self) -> None:
         """趋势阈值使用收益率/波动率标准化，非绝对价格。"""
+
         def compute_trend_signal(price: float, sma_20: float, ann_vol: float) -> dict:
             # P1-007: 改为收益率标准化
             return_pct = (price - sma_20) / sma_20
@@ -59,6 +61,7 @@ class TestTrendThreshold:
 
     def test_absolute_price_threshold_rejected(self) -> None:
         """绝对价格阈值对不同标的不一致（已被收益率标准化替代）。"""
+
         def old_broken(buy_threshold: float, sell_threshold: float) -> None:
             raise NotImplementedError("Absolute price thresholds replaced by return/vol normalized")
 
@@ -71,6 +74,7 @@ class TestNodeOutputHash:
 
     def test_node_hash_binds_all_metadata(self) -> None:
         """Node hash 绑定 version + metadata + schema。"""
+
         def compute_node_hash(node_id: str, value: float, version: str, metadata: dict) -> str:
             payload = {
                 "node_id": node_id,
@@ -91,7 +95,9 @@ class TestNodeOutputHash:
         str_hash = hashlib.sha256(str(obj).encode()).hexdigest()
         json_hash = hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()
         # JSON canonical 序列化是可重现的
-        assert json_hash == hashlib.sha256(json.dumps({"key": "value", "num": 1.0}, sort_keys=True).encode()).hexdigest()
+        assert (
+            json_hash == hashlib.sha256(json.dumps({"key": "value", "num": 1.0}, sort_keys=True).encode()).hexdigest()
+        )
 
 
 class TestPortfolioConstraints:
@@ -99,6 +105,7 @@ class TestPortfolioConstraints:
 
     def test_leverage_hard_constraint_enforced(self) -> None:
         """杠杆作为 solver hard constraint。"""
+
         def check_leverage(positions: list[float]) -> bool:
             total = sum(abs(p) for p in positions)
             max_leverage = 3.0
@@ -109,6 +116,7 @@ class TestPortfolioConstraints:
 
     def test_leverage_zero_exposure_when_over_limit(self) -> None:
         """超杠杆时组合不应放行。"""
+
         def allocate(weights: list[float], max_lev: float) -> list[float]:
             total_abs = sum(abs(w) for w in weights)
             if total_abs > max_lev:

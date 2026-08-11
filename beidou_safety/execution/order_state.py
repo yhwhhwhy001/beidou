@@ -117,9 +117,7 @@ class OrderStateTracker:
         return False
 
     def is_terminal(self) -> bool:
-        return self.status in (
-            OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED
-        )
+        return self.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
 
 
 class UnknownRecoveryHandler:

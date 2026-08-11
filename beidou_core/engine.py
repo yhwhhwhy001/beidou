@@ -123,7 +123,7 @@ from beidou_strategy.alpha.mean_reversion import MeanReversionEngine, MultiPerio
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRecord, ModelRegistry, ModelStatus
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, robust_zscore
-from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernel, StrategyKernelContract
+from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernel
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
 from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
@@ -2664,7 +2664,9 @@ class AutonomousEngine:
         bus.publish(facts["lifecycle"])
 
         # Risk fact
-        risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id) if hasattr(self, "_strategy_risk") else None
+        risk_state = (
+            self._strategy_risk.get_state(self._autopilot_strategy_id) if hasattr(self, "_strategy_risk") else None
+        )
         facts["risk"] = OperationalFact(
             fact_type="risk_state",
             domain=FactDomain.RISK,
@@ -3251,10 +3253,7 @@ class AutonomousEngine:
                                     f"protection pos={pos_id} algo={algo_id}: {exc}"
                                 )
                 if cleaned:
-                    print(
-                        f"[beidou-autopilot] Cleaned {cleaned} stale protection(s) "
-                        "(no longer on venue)"
-                    )
+                    print(f"[beidou-autopilot] Cleaned {cleaned} stale protection(s) (no longer on venue)")
                 # 重新加载
                 try:
                     rows = list(self._store.restore_protections())
@@ -4036,7 +4035,8 @@ class AutonomousEngine:
                 else:
                     px = ref_price * 0.98
                 # PKG02: 对齐交易所 tick size — 规则从交易所获取，无兜底。
-                from decimal import Decimal, ROUND_DOWN
+                from decimal import ROUND_DOWN, Decimal
+
                 prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
                 price_decimals = prec.get("price")
                 if price_decimals is None:
@@ -4044,7 +4044,7 @@ class AutonomousEngine:
                     print(f"[engine] Price precision UNKNOWN for {order_symbol}; symbol NOT_EXECUTABLE")
                     return None
                 tick = Decimal(str(10 ** (-price_decimals)))
-                px_d = (Decimal(str(px)) / tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick
+                px_d = (Decimal(str(px)) / tick).quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
                 aggressive_price = str(px_d)
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
@@ -5231,12 +5231,16 @@ class AutonomousEngine:
                 prec_map = self._symbol_precision.get(symbol)
                 if prec_map is None:
                     # S39: 用 tick map 备选精度
-                    from decimal import Decimal as _D
+
                     trigger_val = float(p_order.trigger_price.amount)
-                    if trigger_val > 5000: dec = 1
-                    elif trigger_val > 100: dec = 2
-                    elif trigger_val > 1: dec = 3
-                    else: dec = 5
+                    if trigger_val > 5000:
+                        dec = 1
+                    elif trigger_val > 100:
+                        dec = 2
+                    elif trigger_val > 1:
+                        dec = 3
+                    else:
+                        dec = 5
                     prec_map = {"price": dec, "quantity": dec}
                     print(f"[protection] {symbol}: using fallback precision price={dec} qty={dec}")
                 algo_params = self._protection_algo_params(
@@ -5451,6 +5455,7 @@ class AutonomousEngine:
         Returns True so the user-stream runtime stays HEALTHY.
         """
         import logging
+
         _logger = logging.getLogger(__name__)
 
         ac = data.get("ac") if isinstance(data, dict) else None
@@ -5610,7 +5615,9 @@ class AutonomousEngine:
                     # 接受但不处理 — 实际成交通过 ORDER_TRADE_UPDATE 接收。
                     accepted = True
                 elif event_type in (
-                    "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE",
+                    "MARGIN_CALL",
+                    "STRATEGY_UPDATE",
+                    "GRID_UPDATE",
                     "listenKeyExpired",  # already handled above, belt-and-suspenders
                 ):
                     # BD-FIX: 其他 Binance 信息性事件 — 接收但不处理，
@@ -5965,10 +5972,7 @@ class AutonomousEngine:
                                 await self._adapter.cancel_algo_order(sym, int(algo_id))
                                 print(f"[startup]   ✓ Cancelled {sym} Algo {algo_id}")
                             except Exception as cancel_exc:
-                                print(
-                                    f"[startup]   ⚠️  Failed to cancel "
-                                    f"{sym} Algo {algo_id}: {cancel_exc}"
-                                )
+                                print(f"[startup]   ⚠️  Failed to cancel {sym} Algo {algo_id}: {cancel_exc}")
                     # Refresh inventory
                     algos_resp = await self._get_open_algo_inventory()
                     if not isinstance(algos_resp, list):
@@ -6217,10 +6221,14 @@ class AutonomousEngine:
                 prec = self._symbol_precision.get(symbol)
                 if prec is None:
                     entry_val = float(pp.entry_price)
-                    if entry_val > 5000: dec = 1
-                    elif entry_val > 100: dec = 2
-                    elif entry_val > 1: dec = 3
-                    else: dec = 5
+                    if entry_val > 5000:
+                        dec = 1
+                    elif entry_val > 100:
+                        dec = 2
+                    elif entry_val > 1:
+                        dec = 3
+                    else:
+                        dec = 5
                     prec = {"price": dec, "quantity": dec}
                 placed = 0
 
@@ -6237,6 +6245,7 @@ class AutonomousEngine:
                             continue
                         kline_features = await self._feed.async_get_kline_features(symbol)
                         from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
+
                         adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features or {})
                         self._protection.create_protection(
                             position_id=pos_id,
@@ -6256,25 +6265,35 @@ class AutonomousEngine:
                         prec_map = self._symbol_precision.get(symbol)
                         if prec_map is None:
                             trigger_val = float(pp.entry_price)
-                            if trigger_val > 5000: dec = 1
-                            elif trigger_val > 100: dec = 2
-                            elif trigger_val > 1: dec = 3
-                            else: dec = 5
+                            if trigger_val > 5000:
+                                dec = 1
+                            elif trigger_val > 100:
+                                dec = 2
+                            elif trigger_val > 1:
+                                dec = 3
+                            else:
+                                dec = 5
                             prec_map = {"price": dec, "quantity": dec}
                         if prec_map:
                             for p_order in [pp.stop_loss] + list(pp.take_profits):
                                 if p_order is None:
                                     continue
                                 try:
-                                    algo_params = self._protection_algo_params(p_order, symbol=symbol, side=reduce_side, precision=prec_map)
+                                    algo_params = self._protection_algo_params(
+                                        p_order, symbol=symbol, side=reduce_side, precision=prec_map
+                                    )
                                     algo_resp = await self._create_algo_order(algo_params)
                                     if "algoId" in algo_resp:
                                         p_order.exchange_order_id = str(algo_resp["algoId"])
                                         p_order.status = ProtectionStatus.ACTIVE
                                         self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
-                                        print(f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}")
+                                        print(
+                                            f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}"
+                                        )
                                     else:
-                                        print(f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg','')[:80]}")
+                                        print(
+                                            f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg', '')[:80]}"
+                                        )
                                 except Exception as exc:
                                     print(f"[nearline] ⚠️ SL/TP error: {symbol} {exc}")
                         print(f"[nearline] Protection CREATED for {symbol}: SL+TP")
@@ -6532,7 +6551,8 @@ class AutonomousEngine:
                         typed_mode = kernel_result.get("kernel") == "typed_graph"
                         typed_proposal = kernel_result.get("proposal") if typed_mode else None
                         all_signals = (
-                            list(kernel_result.get("exit_signals", [])) if typed_mode
+                            list(kernel_result.get("exit_signals", []))
+                            if typed_mode
                             else list(kernel_result.get("signals", []))
                         )
                         if not typed_proposal and not all_signals:
@@ -6572,8 +6592,8 @@ class AutonomousEngine:
                         continue
                     print(
                         f"[nearline] {symbol}@{tf}: TypedGraph → "
-                        f"side={side.value if hasattr(side,'value') else side} "
-                        f"strength={getattr(proposal,'strength',0):.3f}"
+                        f"side={side.value if hasattr(side, 'value') else side} "
+                        f"strength={getattr(proposal, 'strength', 0):.3f}"
                     )
                     fused = SimpleNamespace(
                         direction=SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT,
@@ -6584,8 +6604,8 @@ class AutonomousEngine:
                 else:
                     print(
                         f"[nearline] {symbol}@{tf}: DAG → "
-                        f"{getattr(signal_obj,'direction','?')} "
-                        f"strength={getattr(signal_obj,'strength',0):.3f}"
+                        f"{getattr(signal_obj, 'direction', '?')} "
+                        f"strength={getattr(signal_obj, 'strength', 0):.3f}"
                     )
                     fused = SimpleNamespace(
                         direction=getattr(signal_obj, "direction", SignalDirection.NO_ACTION),
@@ -6881,13 +6901,8 @@ class AutonomousEngine:
 
                 # PKG02 (BDS-P0-001): 移除 testnet R7/R8 跳过旁路
                 # 所有环境使用完整的 R0-R10 风险规则评估
-                risk_results = {
-                    rid: decision
-                    for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()
-                }
-                risk_approved = all(
-                    d == RuleDecision.PASS for d in risk_results.values()
-                )
+                risk_results = {rid: decision for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()}
+                risk_approved = all(d == RuleDecision.PASS for d in risk_results.values())
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
@@ -7671,9 +7686,7 @@ class AutonomousEngine:
         # 失败计数会阻挡精度加载 → 订单全部失败 → 断路器再次打开。
         self._adapter.reset_circuit_breaker()
         try:
-            exchange_info, info_ok = await asyncio.wait_for(
-                self._api_async_safe(Endpoint.EXCHANGE_INFO), timeout=30.0
-            )
+            exchange_info, info_ok = await asyncio.wait_for(self._api_async_safe(Endpoint.EXCHANGE_INFO), timeout=30.0)
             if not info_ok or not isinstance(exchange_info, dict):
                 print("[beidou-autopilot] Warning: exchangeInfo unavailable; precision cache empty")
                 exchange_info = {}
@@ -7723,9 +7736,7 @@ class AutonomousEngine:
         # 认领所有权，造成 protection_owner_unknown 永久阻断。
         existing_algo_inventory: list[dict[str, Any]] | None = None
         try:
-            existing_algos = await asyncio.wait_for(
-                self._get_open_algo_inventory(), timeout=30.0
-            )
+            existing_algos = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=30.0)
             if isinstance(existing_algos, list):
                 existing_algo_inventory = existing_algos
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
@@ -7737,10 +7748,7 @@ class AutonomousEngine:
                 if unowned_algo_ids:
                     # PKG02 (BDS-P0-001): 所有环境统一处理 — 始终取消残留无主 Algo 订单。
                     # 无条件清理，后续 Phase 3 中会为持仓重新创建保护单。
-                    print(
-                        f"[beidou-autopilot] Cancelling {len(unowned_algo_ids)} "
-                        f"stale unowned Algo orders"
-                    )
+                    print(f"[beidou-autopilot] Cancelling {len(unowned_algo_ids)} stale unowned Algo orders")
                     for item in existing_algos:
                         algo_id = str(item.get("algoId"))
                         if algo_id not in known_algo_ids:
@@ -7749,20 +7757,15 @@ class AutonomousEngine:
                                 await self._adapter.cancel_algo_order(sym, int(algo_id))
                                 print(f"[beidou-autopilot]   ✓ Cancelled {sym} Algo {algo_id}")
                             except Exception as cancel_exc:
-                                print(
-                                    f"[beidou-autopilot]   ⚠️  Failed to cancel "
-                                    f"{sym} Algo {algo_id}: {cancel_exc}"
-                                )
+                                print(f"[beidou-autopilot]   ⚠️  Failed to cancel {sym} Algo {algo_id}: {cancel_exc}")
                     # Refresh inventory after cleanup
-                    existing_algos = await asyncio.wait_for(
-                        self._get_open_algo_inventory(), timeout=30.0
-                    )
-                    existing_algo_inventory = (
-                        existing_algos if isinstance(existing_algos, list) else None
-                    )
+                    existing_algos = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=30.0)
+                    existing_algo_inventory = existing_algos if isinstance(existing_algos, list) else None
                     remaining = (
-                        len(existing_algos) if isinstance(existing_algos, list)
-                        else len(existing_algo_inventory) if isinstance(existing_algo_inventory, list)
+                        len(existing_algos)
+                        if isinstance(existing_algos, list)
+                        else len(existing_algo_inventory)
+                        if isinstance(existing_algo_inventory, list)
                         else "?"
                     )
                     print(
@@ -7782,22 +7785,20 @@ class AutonomousEngine:
 
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
-            account, ok = await asyncio.wait_for(
-                self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0
-            )
+            account, ok = await asyncio.wait_for(self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0)
             if not ok or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
                 if self._adapter.is_circuit_breaker_open():
                     self._adapter.reset_circuit_breaker()
-                account, ok = await asyncio.wait_for(
-                    self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0
-                )
+                account, ok = await asyncio.wait_for(self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0)
                 if not ok:
                     # BD-FIX (S9): 账户 API 不可用时跳过恢复但不停止用户流。
                     # 停止用户流会导致整个 trading readiness 连锁失败 → LOCKED。
                     # Testnet API 不稳定不应影响系统持续运行能力。
-                    print("[beidou-autopilot] WARNING: Position recovery skipped (API unavailable) — user stream kept alive")
+                    print(
+                        "[beidou-autopilot] WARNING: Position recovery skipped (API unavailable) — user stream kept alive"
+                    )
                     self._lifecycle.transition(ModuleState.DEGRADED)
                     if not getattr(self, "_health_started", False):
                         self._health.start()
@@ -7840,7 +7841,9 @@ class AutonomousEngine:
                 symbol = p["symbol"]
                 # 交易所已有 >=2 个 Algo 单 → 跳过
                 if existing_algo_count.get(symbol.upper(), 0) >= 2:
-                    print(f"[startup] {symbol}: already has {existing_algo_count[symbol.upper()]} Algo orders, skipping")
+                    print(
+                        f"[startup] {symbol}: already has {existing_algo_count[symbol.upper()]} Algo orders, skipping"
+                    )
                     continue
                 entry_price = float(p.get("entryPrice", 0))
                 if entry_price <= 0:
@@ -7890,10 +7893,14 @@ class AutonomousEngine:
                     prec_map = self._symbol_precision.get(symbol)
                     if prec_map is None:
                         trigger_val = float(p_order.trigger_price.amount)
-                        if trigger_val > 5000: dec = 1
-                        elif trigger_val > 100: dec = 2
-                        elif trigger_val > 1: dec = 3
-                        else: dec = 5
+                        if trigger_val > 5000:
+                            dec = 1
+                        elif trigger_val > 100:
+                            dec = 2
+                        elif trigger_val > 1:
+                            dec = 3
+                        else:
+                            dec = 5
                         prec_map = {"price": dec, "quantity": dec}
                         print(f"[startup] {symbol}: using fallback precision price={dec} qty={dec}")
                     qty_str = f"{float(p_order.quantity.amount):.{prec_map['quantity']}f}"

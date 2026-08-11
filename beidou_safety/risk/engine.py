@@ -111,7 +111,9 @@ class RiskSnapshot:
         self._created_at = time.time()  # PKG: freshness gate
 
     def _compute_hash(self) -> str:
-        import hashlib, json
+        import hashlib
+        import json
+
         payload = {
             "total_exposure": self.total_exposure,
             "margin_used": self.margin_used,
@@ -463,7 +465,9 @@ class RiskApprovalSignerImpl:
     def _persist_nonce(self, nonce: str) -> None:
         """P1-015: 持久化已消费 nonce 到 JSONL。"""
         try:
-            import json, os
+            import json
+            import os
+
             os.makedirs(os.path.dirname(self._nonce_log_path), exist_ok=True)
             event = {"action": "consume_nonce", "nonce": nonce, "timestamp": time.time()}
             with open(self._nonce_log_path, "a") as f:
@@ -474,7 +478,9 @@ class RiskApprovalSignerImpl:
     def _persist_revocation(self, signature: str) -> None:
         """P1-015: 持久化撤销到 JSONL。"""
         try:
-            import json, os
+            import json
+            import os
+
             os.makedirs(os.path.dirname(self._revocation_log_path), exist_ok=True)
             event = {"action": "revoke", "signature": signature, "timestamp": time.time()}
             with open(self._revocation_log_path, "a") as f:
@@ -490,7 +496,9 @@ class RiskApprovalSignerImpl:
             (self._revocation_log_path, lambda e: self._revoked_sigs.add(e.get("signature", ""))),
         ]:
             try:
-                import json, os
+                import json
+                import os
+
                 if os.path.exists(path):
                     with open(path) as f:
                         for line in f:
@@ -499,13 +507,14 @@ class RiskApprovalSignerImpl:
                                 continue
                             try:
                                 event = json.loads(line)
-                                handler(event)
+                                handler(event)  # type: ignore[no-untyped-call]
                                 restored += 1
                             except (json.JSONDecodeError, KeyError):
                                 pass
             except OSError:
                 pass
         return restored
+
 
 class RiskApprovalStateMachine:
     """RiskApproval 状态机 — PKG10 (BDS-P0-011) 完整生命周期。

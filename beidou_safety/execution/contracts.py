@@ -6,11 +6,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
-
 
 # ============================================================================
 # BD-CV40: ExecutionPlan / PlanSlice
@@ -81,9 +78,7 @@ class OrderIdempotencyKey:
     outbox_id: str
 
     def compute_hash(self) -> str:
-        return hashlib.sha256(
-            f"{self.correlation_id}:{self.client_order_id}:{self.outbox_id}".encode()
-        ).hexdigest()
+        return hashlib.sha256(f"{self.correlation_id}:{self.client_order_id}:{self.outbox_id}".encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -179,11 +174,7 @@ class ProtectionAggregate:
         """Nonzero position 必须有有效 SL 且覆盖 100%。"""
         if self.position_qty == 0.0:
             return True
-        return (
-            self.stop_loss is not None
-            and self.stop_loss.is_active
-            and self.coverage_pct >= 100.0
-        )
+        return self.stop_loss is not None and self.stop_loss.is_active and self.coverage_pct >= 100.0
 
 
 # ============================================================================

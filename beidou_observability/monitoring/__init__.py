@@ -12,8 +12,8 @@ from beidou_observability.monitoring.evidence import (
     from_check_result,
     verify_evidence_integrity,
 )
-from beidou_observability.monitoring.fact_collector import CollectedFact, FactCollector, FactDomain
 from beidou_observability.monitoring.fact_bus import get_fact_bus  # P1-048: 操作事实总线
+from beidou_observability.monitoring.fact_collector import CollectedFact, FactCollector, FactDomain
 from beidou_observability.monitoring.frequency_policy import (
     LEVEL_INTERVALS,
     PROMOTION_STREAK_REQUIRED,

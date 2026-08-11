@@ -32,8 +32,12 @@ def _make_promotion_decision(
         factor_version="2.0.0-dev",
         commit=commit,
         dataset_hash=dataset_hash or hashlib.sha256(b"dev-bypass-dataset").hexdigest(),
-        evidence_ids=["dev_bypass_sealed_oos_verified", "dev_bypass_cost_capacity_verified",
-                       "dev_bypass_paper_shadow_verified", "dev_bypass_active_approval"],
+        evidence_ids=[
+            "dev_bypass_sealed_oos_verified",
+            "dev_bypass_cost_capacity_verified",
+            "dev_bypass_paper_shadow_verified",
+            "dev_bypass_active_approval",
+        ],
         policy_version=policy_version or "2.0.0",
         falsifier="beidou_bootstrap.dev",
         evidence_artifact_hash=hashlib.sha256(b"dev-bypass-evidence-bundle").hexdigest(),
@@ -116,14 +120,14 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     print(f"[beidou-bootstrap] 活跃因子: {active_ids}")
 
     factor_component_registry = getattr(engine, "_factor_component_registry", {})
-    entry_ids = getattr(engine, "_entry_ids", set())
-    filter_ids = getattr(engine, "_filter_ids", set())
-    exit_ids = getattr(engine, "_exit_ids", set())
+    entry_ids: set[str] = getattr(engine, "_entry_ids", set())
+    filter_ids: set[str] = getattr(engine, "_filter_ids", set())
+    exit_ids: set[str] = getattr(engine, "_exit_ids", set())
 
     if factor_component_registry and active_ids:
-        from beidou_strategy.alpha import AlphaGraph, AlphaComponent
-        from beidou_strategy.alpha.legacy_adapter import build_typed_graph
         from beidou_shared.types import StrategyId
+        from beidou_strategy.alpha import AlphaComponent, AlphaGraph
+        from beidou_strategy.alpha.legacy_adapter import build_typed_graph
 
         # 重建 AlphaGraph
         engine._alpha_graph = AlphaGraph(strategy_id=StrategyId("autopilot"))
@@ -200,7 +204,9 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
 
 def _sync_opening_balance(engine: Any, commit: str) -> None:
     """同步开盘投影余额为引擎实时获取的交易所余额，避免对账余额不匹配。"""
-    import json, hashlib, os, uuid
+    import hashlib
+    import json
+    import uuid
     from datetime import datetime, timezone
 
     try:
@@ -233,30 +239,49 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
         exchange_open_orders: list[str] = []
         open_orders_raw = getattr(engine, "_last_open_orders", None)
         if open_orders_raw and isinstance(open_orders_raw, list):
-            exchange_open_orders = [str(o.get("orderId", "")) for o in open_orders_raw if isinstance(o, dict) and o.get("orderId")]
+            exchange_open_orders = [
+                str(o.get("orderId", "")) for o in open_orders_raw if isinstance(o, dict) and o.get("orderId")
+            ]
 
         now = datetime.now(timezone.utc)
         projection_id = f"opening-sync-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
         evidence_data = {"balance": live_balance, "positions": exchange_positions, "open_orders": exchange_open_orders}
         payload = {
-            "projection_id": projection_id, "account_id": "default", "venue_id": "BINANCE",
-            "balance_amount": live_balance, "balance_currency": "USDT", "balance_decimals": 8,
-            "positions": exchange_positions, "open_orders": exchange_open_orders,
-            "captured_at": now.isoformat(), "source": "OPERATOR_AUTHORIZED_OPENING",
+            "projection_id": projection_id,
+            "account_id": "default",
+            "venue_id": "BINANCE",
+            "balance_amount": live_balance,
+            "balance_currency": "USDT",
+            "balance_decimals": 8,
+            "positions": exchange_positions,
+            "open_orders": exchange_open_orders,
+            "captured_at": now.isoformat(),
+            "source": "OPERATOR_AUTHORIZED_OPENING",
             "fact_version": str(int(now.timestamp())),
             "evidence_hash": hashlib.sha256(json.dumps(evidence_data, sort_keys=True).encode()).hexdigest(),
             "approval_id": f"opening-approval-{uuid.uuid4().hex[:12]}",
-            "complete": True, "created_at": now.isoformat(),
+            "complete": True,
+            "created_at": now.isoformat(),
         }
 
         import psycopg
+
         with psycopg.connect(dsn, connect_timeout=5) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO v3_runtime_records (record_type, record_id, payload, created_at, updated_at)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (record_type, record_id) DO UPDATE SET
                     payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
-            """, ("account_opening_projection", "default:BINANCE", json.dumps(payload), now.isoformat(), now.isoformat()))
+            """,
+                (
+                    "account_opening_projection",
+                    "default:BINANCE",
+                    json.dumps(payload),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
             conn.commit()
         print(f"[beidou-bootstrap] 开盘余额已同步: {live_balance} USDT")
     except Exception as exc:
@@ -265,10 +290,14 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
 
 def _get_commit() -> str:
     import subprocess
+
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            check=False, capture_output=True, text=True, timeout=5,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else "dev-bypass"
     except Exception:

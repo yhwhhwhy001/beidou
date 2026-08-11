@@ -178,14 +178,16 @@ class CertificationFramework:
             gate_result = GateResult.PASS
 
         # PKG28 (BDS-P1-065): 计算证据根哈希并签名证书
-        manifest_keys = sorted([
-            s.scenario.scenario_id for s in scenarios_completed
-        ])
+        manifest_keys = sorted([s.scenario.scenario_id for s in scenarios_completed])
         evidence_root = hashlib.sha256(
-            json.dumps([
-                {"id": s.scenario.scenario_id, "status": s.status.value, "evidence": dict(s.evidence)}
-                for s in scenarios_completed
-            ], sort_keys=True, default=str).encode()
+            json.dumps(
+                [
+                    {"id": s.scenario.scenario_id, "status": s.status.value, "evidence": dict(s.evidence)}
+                    for s in scenarios_completed
+                ],
+                sort_keys=True,
+                default=str,
+            ).encode()
         ).hexdigest()
 
         signer = _os.environ.get("BEIDOU_CERT_SIGNER", "beidou-certification-engine")
@@ -194,10 +196,9 @@ class CertificationFramework:
         degradation_reasons: list[str] = []  # P1-065
         if signing_key:
             import hmac
+
             sign_payload = f"{gate_result.value}|{evidence_root}|{manifest_keys}"
-            signature = hmac.new(
-                signing_key.encode(), sign_payload.encode(), hashlib.sha256
-            ).hexdigest()
+            signature = hmac.new(signing_key.encode(), sign_payload.encode(), hashlib.sha256).hexdigest()
         if gate_result == GateResult.PASS and not signature:
             # P1-065: 无签名的 PASS 证书标记为需额外验证
             degradation_reasons.append("UNSIGNED_CERTIFICATE")

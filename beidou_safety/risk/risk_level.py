@@ -16,7 +16,6 @@ PKG08 (BDS-P0-008, BDS-P0-009, BDS-P0-010): 风险等级单调严重性管理。
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -44,10 +43,10 @@ class RiskLevel(IntEnum):
 class BreakerScope(IntEnum):
     """断路器作用域。"""
 
-    INTRADAY = 0    # 日内 — 每日重置
-    DAILY = 1       # 每日 — 跨日持久
-    SESSION = 2     # 会话 — 重启重置
-    PERMANENT = 3   # 永久 — 手动恢复
+    INTRADAY = 0  # 日内 — 每日重置
+    DAILY = 1  # 每日 — 跨日持久
+    SESSION = 2  # 会话 — 重启重置
+    PERMANENT = 3  # 永久 — 手动恢复
 
 
 @dataclass(frozen=True)
@@ -88,7 +87,7 @@ class RiskLevelManager:
         self._state: RiskLevel | None = None
         self._state_history: list[RiskLevelState] = []
         self._intraday_breakers: dict[str, float] = {}  # breaker_name → trigger_time
-        self._daily_breakers: dict[str, float] = {}     # 跨日持久
+        self._daily_breakers: dict[str, float] = {}  # 跨日持久
         self._generation: int = 0
 
     @property
@@ -111,8 +110,7 @@ class RiskLevelManager:
         current = self.current_level
         if new_level < current:
             raise ValueError(
-                f"风险等级不可降级: {current.name} → {new_level.name}。"
-                f"请使用 recover() 进行显式恢复。原因: {reason}"
+                f"风险等级不可降级: {current.name} → {new_level.name}。请使用 recover() 进行显式恢复。原因: {reason}"
             )
 
         self._generation += 1
@@ -153,14 +151,12 @@ class RiskLevelManager:
         # 检查跨日 breaker — 未解决前禁止恢复到 NORMAL
         if new_level == RiskLevel.NORMAL:
             unresolved_daily = [
-                name for name, t in self._daily_breakers.items()
+                name
+                for name, t in self._daily_breakers.items()
                 if time.time() - t < 86400 * 7  # 7天内未重置
             ]
             if unresolved_daily:
-                raise ValueError(
-                    f"存在未解决的跨日断路器: {unresolved_daily}。"
-                    f"请先重置相关 breaker 再恢复。"
-                )
+                raise ValueError(f"存在未解决的跨日断路器: {unresolved_daily}。请先重置相关 breaker 再恢复。")
 
         current = self.current_level
         if new_level >= current:

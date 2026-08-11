@@ -27,10 +27,8 @@ from beidou_safety.execution.ledger import (
 )
 from beidou_safety.execution.reconciliation import (
     AccountFactSnapshot,
-    ReconciliationEngine,
-    ReconciliationStatus,
 )
-from beidou_shared.types import AccountId, MonetaryValue, Quantity, VenueId
+from beidou_shared.types import AccountId, MonetaryValue, VenueId
 
 
 class TestDecimalPrecision:
@@ -42,10 +40,24 @@ class TestDecimalPrecision:
             transaction_id="tx-001",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("cash"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="50000.12345678"), PostingSide.DEBIT),
-                Posting("p2", AccountId("position"), AccountType.POSITION_COST, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="50000.12345678"), PostingSide.CREDIT),
+                Posting(
+                    "p1",
+                    AccountId("cash"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="50000.12345678"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p2",
+                    AccountId("position"),
+                    AccountType.POSITION_COST,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="50000.12345678"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="fill-abc-123",
         )
@@ -63,10 +75,24 @@ class TestDecimalPrecision:
             transaction_id="tx-float-test",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("cash"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="0.12345678901234567890"), PostingSide.DEBIT),
-                Posting("p2", AccountId("pos"), AccountType.POSITION_COST, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="0.12345678901234567890"), PostingSide.CREDIT),
+                Posting(
+                    "p1",
+                    AccountId("cash"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="0.12345678901234567890"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p2",
+                    AccountId("pos"),
+                    AccountType.POSITION_COST,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="0.12345678901234567890"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="precision-test",
         )
@@ -77,16 +103,30 @@ class TestDecimalPrecision:
 
     def test_invalid_amount_raises_on_arithmetic(self) -> None:
         """无效金额在计算时抛出错误（Decimal 解析阶段）。"""
-        posting = Posting("p1", AccountId("test"), AccountType.CASH, VenueId("BINANCE"), None,
-                          MonetaryValue(amount="not_a_number"), PostingSide.DEBIT)
+        posting = Posting(
+            "p1",
+            AccountId("test"),
+            AccountType.CASH,
+            VenueId("BINANCE"),
+            None,
+            MonetaryValue(amount="not_a_number"),
+            PostingSide.DEBIT,
+        )
         # Posting 本身可以创建（MonetaryValue 接受字符串），但计算时 Decimal 解析失败
         tx = LedgerTransaction(
             transaction_id="tx-bad",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
                 posting,
-                Posting("p2", AccountId("b"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="100"), PostingSide.CREDIT),
+                Posting(
+                    "p2",
+                    AccountId("b"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="100"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="bad-amount-test",
         )
@@ -104,10 +144,24 @@ class TestSourceEventIdEnforcement:
                 transaction_id="tx-no-source",
                 transaction_type=LedgerTransactionType.FILL,
                 postings=(
-                    Posting("p1", AccountId("a"), AccountType.CASH, VenueId("BINANCE"), None,
-                            MonetaryValue(amount="100"), PostingSide.DEBIT),
-                    Posting("p2", AccountId("b"), AccountType.CASH, VenueId("BINANCE"), None,
-                            MonetaryValue(amount="100"), PostingSide.CREDIT),
+                    Posting(
+                        "p1",
+                        AccountId("a"),
+                        AccountType.CASH,
+                        VenueId("BINANCE"),
+                        None,
+                        MonetaryValue(amount="100"),
+                        PostingSide.DEBIT,
+                    ),
+                    Posting(
+                        "p2",
+                        AccountId("b"),
+                        AccountType.CASH,
+                        VenueId("BINANCE"),
+                        None,
+                        MonetaryValue(amount="100"),
+                        PostingSide.CREDIT,
+                    ),
                 ),
                 source_event_id="",  # 空字符串
             )
@@ -119,10 +173,24 @@ class TestSourceEventIdEnforcement:
                 transaction_id="tx-spaces",
                 transaction_type=LedgerTransactionType.FILL,
                 postings=(
-                    Posting("p1", AccountId("a"), AccountType.CASH, VenueId("BINANCE"), None,
-                            MonetaryValue(amount="100"), PostingSide.DEBIT),
-                    Posting("p2", AccountId("b"), AccountType.CASH, VenueId("BINANCE"), None,
-                            MonetaryValue(amount="100"), PostingSide.CREDIT),
+                    Posting(
+                        "p1",
+                        AccountId("a"),
+                        AccountType.CASH,
+                        VenueId("BINANCE"),
+                        None,
+                        MonetaryValue(amount="100"),
+                        PostingSide.DEBIT,
+                    ),
+                    Posting(
+                        "p2",
+                        AccountId("b"),
+                        AccountType.CASH,
+                        VenueId("BINANCE"),
+                        None,
+                        MonetaryValue(amount="100"),
+                        PostingSide.CREDIT,
+                    ),
                 ),
                 source_event_id="   ",
             )
@@ -140,10 +208,24 @@ class TestImmutableLedger:
             transaction_id="tx-usdt",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("cash"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="1000", currency="USDT"), PostingSide.DEBIT),
-                Posting("p2", AccountId("pos"), AccountType.POSITION_COST, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="1000", currency="USDT"), PostingSide.CREDIT),
+                Posting(
+                    "p1",
+                    AccountId("cash"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="1000", currency="USDT"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p2",
+                    AccountId("pos"),
+                    AccountType.POSITION_COST,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="1000", currency="USDT"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="evt-usdt-1",
         )
@@ -154,10 +236,24 @@ class TestImmutableLedger:
             transaction_id="tx-busd",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p3", AccountId("cash"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="500", currency="BUSD"), PostingSide.DEBIT),
-                Posting("p4", AccountId("pos"), AccountType.POSITION_COST, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="500", currency="BUSD"), PostingSide.CREDIT),
+                Posting(
+                    "p3",
+                    AccountId("cash"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="500", currency="BUSD"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p4",
+                    AccountId("pos"),
+                    AccountType.POSITION_COST,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="500", currency="BUSD"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="evt-busd-1",
         )
@@ -177,10 +273,24 @@ class TestImmutableLedger:
             transaction_id="tx-1",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("a"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="100"), PostingSide.DEBIT),
-                Posting("p2", AccountId("b"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="100"), PostingSide.CREDIT),
+                Posting(
+                    "p1",
+                    AccountId("a"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="100"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p2",
+                    AccountId("b"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="100"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="fill-same-id",
         )
@@ -190,10 +300,24 @@ class TestImmutableLedger:
             transaction_id="tx-2",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p3", AccountId("a"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="200"), PostingSide.DEBIT),
-                Posting("p4", AccountId("b"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="200"), PostingSide.CREDIT),
+                Posting(
+                    "p3",
+                    AccountId("a"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="200"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p4",
+                    AccountId("b"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="200"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="fill-same-id",  # 重复
         )
@@ -207,10 +331,24 @@ class TestImmutableLedger:
             transaction_id="tx-trial",
             transaction_type=LedgerTransactionType.FILL,
             postings=(
-                Posting("p1", AccountId("cash"), AccountType.CASH, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="999.99", currency="USDT"), PostingSide.DEBIT),
-                Posting("p2", AccountId("fees"), AccountType.FEES, VenueId("BINANCE"), None,
-                        MonetaryValue(amount="999.99", currency="USDT"), PostingSide.CREDIT),
+                Posting(
+                    "p1",
+                    AccountId("cash"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="999.99", currency="USDT"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "p2",
+                    AccountId("fees"),
+                    AccountType.FEES,
+                    VenueId("BINANCE"),
+                    None,
+                    MonetaryValue(amount="999.99", currency="USDT"),
+                    PostingSide.CREDIT,
+                ),
             ),
             source_event_id="evt-trial",
         )

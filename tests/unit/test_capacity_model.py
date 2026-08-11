@@ -23,7 +23,6 @@ from beidou_research.mining.evaluation.cost_capacity import (
     SignalCapacityReport,
 )
 
-
 # ---------------------------------------------------------------------------
 # CostModel — 信号感知冲击
 # ---------------------------------------------------------------------------
@@ -99,7 +98,9 @@ class TestSignalAwareImpactModel:
         strong_returns = [0.01, 0.015, 0.008, -0.012, 0.01]
 
         impact, turnover, warnings = model.estimate_signal_impact(
-            strong_signals, strong_returns, avg_daily_volume=50_000_000,
+            strong_signals,
+            strong_returns,
+            avg_daily_volume=50_000_000,
         )
         assert impact > 0
         assert turnover > 0
@@ -120,7 +121,8 @@ class TestSignalAwareImpactModel:
         model = SignalAwareImpactModel(cost)
 
         impact, turnover, warnings = model.estimate_signal_impact(
-            [0.5, 0.6], [0.01, 0.02],
+            [0.5, 0.6],
+            [0.01, 0.02],
         )
         assert "adv_unknown_using_legacy" in warnings
         assert turnover > 0  # 仍有换手估计
@@ -181,7 +183,7 @@ class TestCapacityEvaluatorSignalAware:
         # 净收益应对 AUM 单调递减
         for i in range(1, len(net_returns)):
             assert net_returns[i] <= net_returns[i - 1] + 1e-10, (
-                f"AUM={report.curve[i].aum_level}: net_return increased from {net_returns[i-1]} to {net_returns[i]}"
+                f"AUM={report.curve[i].aum_level}: net_return increased from {net_returns[i - 1]} to {net_returns[i]}"
             )
 
     def test_adv_unknown_does_not_crash(self) -> None:
@@ -212,8 +214,11 @@ class TestCapacityEvaluatorSignalAware:
     def test_breaking_point_found_in_curve(self) -> None:
         """收益归零点在曲线范围内被找到。"""
         model = CostModel(
-            adv_30d=10_000_000, volatility=0.02,
-            taker_fee_bps=4.0, avg_spread_bps=1.0, slippage_bps=1.0,
+            adv_30d=10_000_000,
+            volatility=0.02,
+            taker_fee_bps=4.0,
+            avg_spread_bps=1.0,
+            slippage_bps=1.0,
         )
         evaluator = CapacityEvaluator(model)
 
@@ -222,16 +227,15 @@ class TestCapacityEvaluatorSignalAware:
         returns = [0.0001] * 100  # 极低收益
 
         report = evaluator.evaluate_capacity_curve(
-            predictions, returns,
+            predictions,
+            returns,
             aum_range=[1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000],
         )
         # 在足够大的 AUM 处冲击会超过收益（net 变为负数）
         assert report.capacity_at_zero_return >= 0
         # 最后一个点（100M AUM）的净收益应为负
         last_net = report.curve[-1].net_return
-        assert last_net < 0, (
-            f"在 100M AUM 处净收益应为负（成本 > 收益），实际: {last_net}"
-        )
+        assert last_net < 0, f"在 100M AUM 处净收益应为负（成本 > 收益），实际: {last_net}"
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +269,8 @@ class TestCapacityGate:
         returns = [0.001] * 20  # 极薄收益
 
         report, gate_ok, reason = evaluator.evaluate_with_gate(
-            predictions, returns,
+            predictions,
+            returns,
         )
         # 小 ADV + 高换手 + 薄收益 → 应不通过
         # gate_ok 可能为 True（取决于参数），但至少 report 应反映高冲击

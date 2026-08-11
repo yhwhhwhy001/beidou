@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-
 # ============================================================================
 # BD-CV20: 统计验证内核
 # ============================================================================
@@ -112,11 +111,10 @@ class FactorEvidence:
     def can_promote(self) -> bool:
         """NaN score/空 evidence/旧 evidence 均不能 PROMOTED。"""
         import math
+
         if math.isnan(self.sharpe) or self.sharpe <= 0:
             return False
-        if not self.evidence_dag_hash:
-            return False
-        return True
+        return bool(self.evidence_dag_hash)
 
     def full_evidence_dag(self) -> dict[str, Any]:
         """每个 ACTIVE 因子都能反查完整证据 DAG。"""

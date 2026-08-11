@@ -11,11 +11,8 @@ PKG26 (BDS-P1-017/052/053/055/056): 安全与配置完整性测试。
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
-
-import pytest
 
 from beidou_security.credential_validator import (
     Credential,
@@ -31,7 +28,6 @@ from beidou_security.credential_validator import (
     sign_with_signer,
     verify_ip_whitelist,
 )
-
 
 # ---------------------------------------------------------------------------
 # BDS-P1-017: IP Whitelist CIDR
@@ -92,10 +88,14 @@ class TestRotationPersistence:
         """轮换事件持久化到 JSONL 文件。"""
         with tempfile.TemporaryDirectory() as tmp:
             registry = CredentialRegistry(evidence_dir=tmp)
-            registry.register(Credential(
-                credential_id="key-1", credential_type=CredentialType.SIGNING_KEY,
-                key_hash="hash1", status=CredentialStatus.ACTIVE,
-            ))
+            registry.register(
+                Credential(
+                    credential_id="key-1",
+                    credential_type=CredentialType.SIGNING_KEY,
+                    key_hash="hash1",
+                    status=CredentialStatus.ACTIVE,
+                )
+            )
 
             registry.rotate("key-1", "hash2")
 
@@ -113,19 +113,27 @@ class TestRotationPersistence:
         with tempfile.TemporaryDirectory() as tmp:
             # 创建并写入事件
             registry1 = CredentialRegistry(evidence_dir=tmp)
-            registry1.register(Credential(
-                credential_id="k1", credential_type=CredentialType.SIGNING_KEY,
-                key_hash="h1", status=CredentialStatus.ACTIVE,
-            ))
+            registry1.register(
+                Credential(
+                    credential_id="k1",
+                    credential_type=CredentialType.SIGNING_KEY,
+                    key_hash="h1",
+                    status=CredentialStatus.ACTIVE,
+                )
+            )
             registry1.rotate("k1", "h2")
             registry1.revoke("k1")
 
             # 新实例恢复
             registry2 = CredentialRegistry(evidence_dir=tmp)
-            registry2.register(Credential(
-                credential_id="k1", credential_type=CredentialType.SIGNING_KEY,
-                key_hash="h1", status=CredentialStatus.ROTATING,
-            ))
+            registry2.register(
+                Credential(
+                    credential_id="k1",
+                    credential_type=CredentialType.SIGNING_KEY,
+                    key_hash="h1",
+                    status=CredentialStatus.ROTATING,
+                )
+            )
             count = registry2.restore_from_log()
 
             assert count >= 1
@@ -134,16 +142,19 @@ class TestRotationPersistence:
     def test_rotate_with_evidence(self) -> None:
         """带证据哈希的轮换。"""
         registry = CredentialRegistry()
-        registry.register(Credential(
-            credential_id="cert-key",
-            credential_type=CredentialType.CERT_KEY,
-            key_hash="h1",
-            status=CredentialStatus.ACTIVE,
-            key_id="k1",
-        ))
+        registry.register(
+            Credential(
+                credential_id="cert-key",
+                credential_type=CredentialType.CERT_KEY,
+                key_hash="h1",
+                status=CredentialStatus.ACTIVE,
+                key_id="k1",
+            )
+        )
 
         new_cred, record = registry.rotate_with_evidence(
-            "cert-key", "h2",
+            "cert-key",
+            "h2",
             evidence={"reason": "scheduled", "operator": "auto"},
         )
 
@@ -164,13 +175,19 @@ class TestSigningDomainSplit:
     def test_credential_has_domain(self) -> None:
         """每种凭据类型映射到独立域。"""
         policy_key = Credential(
-            credential_id="pk", credential_type=CredentialType.POLICY_KEY, key_hash="h",
+            credential_id="pk",
+            credential_type=CredentialType.POLICY_KEY,
+            key_hash="h",
         )
         risk_key = Credential(
-            credential_id="rk", credential_type=CredentialType.RISK_KEY, key_hash="h",
+            credential_id="rk",
+            credential_type=CredentialType.RISK_KEY,
+            key_hash="h",
         )
         cert_key = Credential(
-            credential_id="ck", credential_type=CredentialType.CERT_KEY, key_hash="h",
+            credential_id="ck",
+            credential_type=CredentialType.CERT_KEY,
+            key_hash="h",
         )
 
         assert policy_key.signing_domain == SigningDomain.POLICY
@@ -195,18 +212,21 @@ class TestSigningDomainSplit:
     def test_validate_requires_domain_match(self) -> None:
         """验证时检查签名域匹配。"""
         registry = CredentialRegistry()
-        registry.register(Credential(
-            credential_id="policy-1",
-            credential_type=CredentialType.POLICY_KEY,
-            key_hash="h",
-            status=CredentialStatus.ACTIVE,
-        ))
+        registry.register(
+            Credential(
+                credential_id="policy-1",
+                credential_type=CredentialType.POLICY_KEY,
+                key_hash="h",
+                status=CredentialStatus.ACTIVE,
+            )
+        )
 
         # 正确的类型 + 域
         assert registry.validate("policy-1", CredentialType.POLICY_KEY)
         # 不正确的域
         assert not registry.validate(
-            "policy-1", CredentialType.POLICY_KEY,
+            "policy-1",
+            CredentialType.POLICY_KEY,
             required_domain=SigningDomain.RISK,
         )
 
@@ -335,8 +355,11 @@ class TestSignerInPayload:
     def test_sign_with_signer_includes_identity(self) -> None:
         """签名包含 signer/key_id/algorithm。"""
         sig = sign_with_signer(
-            "test-payload", b"my-key", signer="test-signer",
-            key_id="key-001", algorithm="HMAC-SHA256",
+            "test-payload",
+            b"my-key",
+            signer="test-signer",
+            key_id="key-001",
+            algorithm="HMAC-SHA256",
         )
         assert sig != ""
         assert len(sig) == 64  # SHA-256 hex

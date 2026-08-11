@@ -23,9 +23,7 @@ class TestEvidenceTamperDetection:
         return tmpdir
 
     def _compute_manifest_hash(self, content: dict) -> str:
-        return hashlib.sha256(
-            json.dumps(content, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def test_manifest_hash_changes_when_content_changes(self):
         """AC-03-04: 修改 manifest 后 hash 必须变化。"""
@@ -93,14 +91,10 @@ class TestEvidenceTamperDetection:
         }
         # 重新计算
         recomputed = hashlib.sha256(evidence_content).hexdigest()
-        assert manifest["evidence_hashes"]["test.txt"] == recomputed, (
-            "Manifest hash must match recomputed hash"
-        )
+        assert manifest["evidence_hashes"]["test.txt"] == recomputed, "Manifest hash must match recomputed hash"
         # 篡改后不匹配
         tampered = hashlib.sha256(b"tampered data").hexdigest()
-        assert manifest["evidence_hashes"]["test.txt"] != tampered, (
-            "Tampered data must not match manifest hash"
-        )
+        assert manifest["evidence_hashes"]["test.txt"] != tampered, "Tampered data must not match manifest hash"
 
 
 class TestEnvEvidenceSurvival:
@@ -119,12 +113,10 @@ class TestEnvEvidenceSurvival:
             "BEIDOU_SIGNING_KEY=beidou-testnet",
             "BEIDOU_POSTGRES_PASSWORD=beidou_dev",
         ]
-        for root, dirs, files in os.walk(evidence_dir):
+        for root, _dirs, files in os.walk(evidence_dir):
             for fname in files:
                 if fname.endswith(".txt") or fname.endswith(".json"):
                     fpath = Path(root) / fname
                     content = fpath.read_text(errors="replace")
                     for pattern in real_secrets:
-                        assert pattern not in content, (
-                            f"Real secret value found in evidence: {fpath}"
-                        )
+                        assert pattern not in content, f"Real secret value found in evidence: {fpath}"

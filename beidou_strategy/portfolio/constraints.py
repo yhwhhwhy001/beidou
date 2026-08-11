@@ -47,7 +47,10 @@ class ConstraintOptimizer:
     """
 
     def __init__(
-        self, max_gross_leverage: float = 3.0, max_net_leverage: float = 1.0, max_per_symbol_pct: float = 50.0,
+        self,
+        max_gross_leverage: float = 3.0,
+        max_net_leverage: float = 1.0,
+        max_per_symbol_pct: float = 50.0,
         covariance_matrix: dict[str, dict[str, float]] | None = None,  # P1-009
     ):
         self.max_gross_leverage = max_gross_leverage

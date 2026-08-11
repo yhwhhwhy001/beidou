@@ -1,6 +1,5 @@
 """PKG-MON-04: Protection Semantic Verifier。"""
 
-import os
 import time
 from dataclasses import dataclass, field
 

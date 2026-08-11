@@ -37,11 +37,13 @@ class PortfolioOptimizerImpl:
         scale = self.max_total_leverage / current_leverage
         return [
             PortfolioTarget(
-                strategy_id=t.strategy_id, instrument_id=t.instrument_id,
+                strategy_id=t.strategy_id,
+                instrument_id=t.instrument_id,
                 venue_id=t.venue_id,
                 target_notional=MonetaryValue(amount=str(float(t.target_notional.amount) * scale)),
                 target_quantity=Quantity(amount=str(float(t.target_quantity.amount) * scale)),
-                capital_budget=t.capital_budget, ownership=t.ownership,
+                capital_budget=t.capital_budget,
+                ownership=t.ownership,
             )
             for t in targets
         ]

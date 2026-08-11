@@ -140,7 +140,7 @@ class KLineGenerator:
         is_taker_buy: bool = False,
     ) -> OHLCV | None:
         """Convenience wrapper — accept raw floats, delegate to process_tick."""
-        from beidou_shared.types import VenueId, InstrumentId
+        from beidou_shared.types import InstrumentId, VenueId
 
         vi = VenueInstrument(
             venue_id=VenueId(venue_id),

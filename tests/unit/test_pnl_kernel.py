@@ -9,8 +9,6 @@ PKG04 (BDS-P0-003, BDS-P0-004): 统一策略 PnL 评估内核测试。
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from beidou_research.mining.evaluation.pnl_kernel import (

@@ -343,11 +343,14 @@ class ClosedBarNormalizer:
             # PKG22 (BDS-P1-041): 不再静默吞掉异常，记录 DQ 指标
             self._dq_incidents += 1
             import logging
+
             _logger = logging.getLogger(__name__)
             _logger.error(
                 "ClosedBar normalization failed for %s/%s: %s: %s",
                 getattr(venue_instrument, "instrument_id", "?"),
-                interval, type(e).__name__, str(e)[:200],
+                interval,
+                type(e).__name__,
+                str(e)[:200],
             )
             return ClosedBarResult(None, BarIntegrity.INVALID, f"Normalization failed: {e}", cid)
 

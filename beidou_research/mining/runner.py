@@ -45,7 +45,7 @@ from .contracts import (
     PriceType,
     ReturnType,
 )
-from .evaluation.cost_capacity import CapacityEvaluator, CostModel, SignalCapacityReport
+from .evaluation.cost_capacity import CapacityEvaluator, CostModel
 from .evaluation.cpcv import CPCVEvaluator
 from .evaluation.fast_screen import FastScreen, FastScreenConfig
 from .evaluation.multiple_testing import evaluate_multiple_testing
@@ -493,12 +493,10 @@ class MiningRunner:
                 self.config.cost_model.adv_30d = _adv
                 self.config.cost_model.volatility = _vol
                 self._capacity = CapacityEvaluator(self.config.cost_model)
-            capacity_result, capacity_gate_ok, capacity_gate_reason = (
-                self._capacity.evaluate_with_gate(
-                    valid_vals,
-                    valid_returns,
-                    avg_daily_volume=_adv if _adv > 0 else None,
-                )
+            capacity_result, capacity_gate_ok, capacity_gate_reason = self._capacity.evaluate_with_gate(
+                valid_vals,
+                valid_returns,
+                avg_daily_volume=_adv if _adv > 0 else None,
             )
             # Legacy compatibility
             legacy_capacity_result = capacity_result
@@ -1107,10 +1105,7 @@ def _estimate_adv_from_price_data(price_data: list[dict], symbol: str) -> float:
         return 0.0
 
     # 筛选该 symbol 的数据点
-    relevant = [
-        d for d in price_data
-        if d.get("symbol", symbol) == symbol or symbol in str(d.get("symbol", ""))
-    ]
+    relevant = [d for d in price_data if d.get("symbol", symbol) == symbol or symbol in str(d.get("symbol", ""))]
     if not relevant:
         relevant = price_data  # fallback: 使用全部数据
 

@@ -26,7 +26,7 @@ def test_domain_ports_module_exists() -> None:
     ports_file = ROOT / "beidou_core" / "ports.py"
     assert ports_file.exists(), "beidou_core/ports.py 不存在"
 
-    from beidou_core.ports import DOMAINS, DomainAuthorityRegistry
+    from beidou_core.ports import DOMAINS
 
     assert len(DOMAINS) == 8, f"期望 8 个域，实际 {len(DOMAINS)} 个"
     assert "Risk" in DOMAINS
@@ -70,8 +70,6 @@ def test_fact_models_are_immutable() -> None:
         MarketFact,
         RiskDecision,
         StrategyProposal,
-        OrderIntent,
-        LedgerEntry,
     )
 
     # 所有核心事实都是 frozen
@@ -162,9 +160,7 @@ def test_no_cross_domain_private_field_access() -> None:
     new_violations = [v for v in violations if not any(k in v for k in KNOWN_PRIVATE_ACCESS)]
 
     if new_violations:
-        raise AssertionError(
-            "跨域私有字段访问检测到新增违规:\n" + "\n".join(new_violations)
-        )
+        raise AssertionError("跨域私有字段访问检测到新增违规:\n" + "\n".join(new_violations))
 
 
 def test_known_private_access_list_is_up_to_date() -> None:

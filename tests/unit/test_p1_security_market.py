@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from beidou_security.credential_validator import (
     Credential,
     CredentialRegistry,
@@ -27,8 +25,10 @@ class TestCredentialLifecycle:
 
     def test_active_credential_validates(self) -> None:
         cred = Credential(
-            credential_id="key-001", credential_type=CredentialType.API_KEY,
-            key_hash="abc123", status=CredentialStatus.ACTIVE,
+            credential_id="key-001",
+            credential_type=CredentialType.API_KEY,
+            key_hash="abc123",
+            status=CredentialStatus.ACTIVE,
             expiry_time=time.time() + 86400,
         )
         registry = CredentialRegistry()
@@ -37,8 +37,10 @@ class TestCredentialLifecycle:
 
     def test_expired_credential_rejected(self) -> None:
         cred = Credential(
-            credential_id="key-expired", credential_type=CredentialType.API_KEY,
-            key_hash="old", status=CredentialStatus.ACTIVE,
+            credential_id="key-expired",
+            credential_type=CredentialType.API_KEY,
+            key_hash="old",
+            status=CredentialStatus.ACTIVE,
             expiry_time=time.time() - 1,  # 已过期
         )
         registry = CredentialRegistry()
@@ -53,8 +55,11 @@ class TestCredentialLifecycle:
 
     def test_ip_whitelist_enforced(self) -> None:
         cred = Credential(
-            "key-ip", CredentialType.API_KEY, "hash",
-            status=CredentialStatus.ACTIVE, allowed_ips=("10.0.0.1",),
+            "key-ip",
+            CredentialType.API_KEY,
+            "hash",
+            status=CredentialStatus.ACTIVE,
+            allowed_ips=("10.0.0.1",),
         )
         registry = CredentialRegistry()
         registry.register(cred)
@@ -101,6 +106,7 @@ class TestMarketDataIntegrity:
 
     def test_canonical_instrument_key_required(self) -> None:
         """P1-039: KLine key 必须统一使用 instrument+interval 格式。"""
+
         def canonical_key(symbol: str, interval: str) -> str:
             return f"{symbol}:{interval}"
 
@@ -112,13 +118,16 @@ class TestMarketDataIntegrity:
     def test_bar_volume_from_incremental_trades(self) -> None:
         """P1-040: bar volume 来自 trade/aggTrade 增量，非 24h volume。"""
         trades = [
-            {"qty": 1.0}, {"qty": 2.0}, {"qty": 0.5},
+            {"qty": 1.0},
+            {"qty": 2.0},
+            {"qty": 0.5},
         ]
         bar_volume = sum(t["qty"] for t in trades)
         assert bar_volume == 3.5
 
     def test_kline_anomaly_must_not_silent_pass(self) -> None:
         """P1-041: KLine 异常不能静默吞掉。"""
+
         def process_kline(data: dict) -> str:
             required = ("open", "high", "low", "close", "volume")
             missing = [k for k in required if k not in data or data[k] is None]

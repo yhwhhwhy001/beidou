@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -73,9 +73,7 @@ class InstrumentRuleSnapshot:
             "observed_at": self.observed_at,
             "source": self.source,
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     @classmethod
     def unknown(cls, symbol: str = "") -> InstrumentRuleSnapshot:
@@ -85,10 +83,10 @@ class InstrumentRuleSnapshot:
     @classmethod
     def from_exchange_info(cls, symbol: str, raw: dict[str, Any]) -> InstrumentRuleSnapshot:
         """从交易所 exchangeInfo 原始数据构造。"""
-        filters = raw.get("filters", [])
-        price_filter = next((f for f in filters if f.get("filterType") == "PRICE_FILTER"), {})
-        lot_filter = next((f for f in filters if f.get("filterType") == "LOT_SIZE"), {})
-        notional_filter = next((f for f in filters if f.get("filterType") == "MIN_NOTIONAL"), {})
+        filters: list[dict[str, Any]] = raw.get("filters", [])
+        price_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "PRICE_FILTER"), {})
+        lot_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "LOT_SIZE"), {})
+        notional_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "MIN_NOTIONAL"), {})
 
         tick_size = str(price_filter.get("tickSize", ""))
         step_size = str(lot_filter.get("stepSize", ""))

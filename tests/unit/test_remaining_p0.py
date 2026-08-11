@@ -18,16 +18,16 @@ from __future__ import annotations
 
 import pytest
 
+from beidou_control.plane import ControlAction, ControlPlane
+from beidou_safety.execution.algorithms import (
+    EmergencyReduceOnlyAlgorithm,
+    ExecutionAlgorithmType,
+)
 from beidou_safety.execution.order_state import (
     OrderEvent,
     OrderStateTracker,
     OrderStatus,
 )
-from beidou_safety.execution.algorithms import (
-    EmergencyReduceOnlyAlgorithm,
-    ExecutionAlgorithmType,
-)
-from beidou_control.plane import ControlPlane, ControlAction, RiskDirection
 
 
 class TestEmergencyReduceOnly:
@@ -38,6 +38,7 @@ class TestEmergencyReduceOnly:
         algo = EmergencyReduceOnlyAlgorithm()
         # 用 mock context 测试
         from unittest.mock import Mock
+
         ctx = Mock()
         ctx.urgency = 0.9
         ctx.side = "BUY"
@@ -49,6 +50,7 @@ class TestEmergencyReduceOnly:
     def test_can_handle_short_position(self) -> None:
         """SHORT 仓位可应急退出 (BUY reduce-only)。"""
         from unittest.mock import Mock
+
         algo = EmergencyReduceOnlyAlgorithm()
         ctx = Mock()
         ctx.urgency = 0.9
@@ -149,8 +151,8 @@ class TestQuantityConservation:
     def test_pov_plan_respects_conservation(self) -> None:
         """POV 计划必须守恒: sum(slices) == approved_qty。"""
         from beidou_safety.execution.algorithms import POVAlgorithm
-        from tests.unit.test_execution_algorithms import _make_ctx
         from beidou_shared.types import OrderId
+        from tests.unit.test_execution_algorithms import _make_ctx
 
         ctx = _make_ctx(urgency=0.3, bid_depth=10.0, ask_depth=10.0)
         algo = POVAlgorithm(participation_rate=0.1)
@@ -164,7 +166,7 @@ class TestProtectionPrecision:
 
     def test_close_pct_sum_exceeds_100_raises(self) -> None:
         """close_pct 总和超过 100% 必须报错。"""
-        from beidou_safety.protection.engine import TakeProfitCalculator, TakeProfitType
+        from beidou_safety.protection.engine import TakeProfitCalculator
 
         targets = [
             {"rr_ratio": 1.0, "close_pct": 40},
@@ -186,10 +188,11 @@ class TestProtectionPrecision:
 
     def test_protection_precision_configurable(self) -> None:
         """保护引擎使用可配置的精度。"""
-        from beidou_safety.protection.engine import PositionProtection
+
         # PositionProtection 是数据类，通过 ProtectionEngine 创建
         # 验证精度参数可以传入
         import beidou_safety.protection.engine as pe
+
         # 查找保护创建函数
         assert hasattr(pe, "TakeProfitCalculator")
         assert hasattr(pe, "StopLossCalculator")

@@ -127,7 +127,7 @@ class HealthDebounce:
     window: deque[tuple[float, bool]] = field(default_factory=deque)
     window_seconds: float = 60.0
     degrade_after: int = 6  # 启动期容忍更长的瞬态
-    lock_after: int = 12    # 给算法探针/用户流/对账充分的稳定时间
+    lock_after: int = 12  # 给算法探针/用户流/对账充分的稳定时间
     recover_after: int = 3
 
     def feed(self, has_persistent_blocker: bool, now: float | None = None) -> str | None:

@@ -28,10 +28,10 @@ class TestEnvironmentSemanticParity:
     def test_control_action_matrix_identical(self, env_name: str) -> None:
         """验证控制状态矩阵在所有环境下相同。"""
         from beidou_control.plane import (
-            ControlAction,
-            RiskDirection,
             CONTROL_ALLOW_MATRIX,
             CONTROL_TRANSITION_MATRIX,
+            ControlAction,
+            RiskDirection,
         )
 
         # NO_NEW_RISK 在所有环境必须阻断 INCREASE
@@ -54,7 +54,6 @@ class TestEnvironmentSemanticParity:
 
     def test_no_testnet_bypass_patterns_in_source(self) -> None:
         """BD-CV01 AC-01-02: 仓库无 testnet-bypass/testnet mask 代码。"""
-        import os
         from pathlib import Path
 
         from beidou_shared.environment_profile import detect_forbidden_bypass
@@ -63,7 +62,8 @@ class TestEnvironmentSemanticParity:
         forbidden_count = 0
         # Only scan source dirs (not tests or this file)
         source_dirs = [
-            d for d in project_root.iterdir()
+            d
+            for d in project_root.iterdir()
             if d.is_dir() and d.name.startswith("beidou_") and d.name != "beidou_shared"
         ]
 
@@ -75,7 +75,7 @@ class TestEnvironmentSemanticParity:
                     content = py_file.read_text()
                     violations = detect_forbidden_bypass(content, str(py_file))
                     forbidden_count += len(violations)
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
 
         # PKG02 自身模块允许包含 "BEIDOU_ENV" 引用（用于配置文件）
@@ -91,13 +91,6 @@ class TestEnvironmentSemanticParity:
         engine_path = Path(__file__).parent.parent.parent / "beidou_core" / "engine.py"
         content = engine_path.read_text()
 
-        # 禁止的模式
-        forbidden_in_engine = [
-            "is_testnet_tif",
-            "IOC", "FOK",
-        ]
         # IOC/FOK 作为 TIF 值是允许的；禁止的是 testnet + IOC/FOK + GTC 的组合覆写
         # 验证不存在 "testnet" + "IOC" + "GTC" 在同一逻辑块
-        assert "is_testnet_tif" not in content, (
-            "engine.py 中存在 testnet TIF 覆写变量，违反了语义同构要求"
-        )
+        assert "is_testnet_tif" not in content, "engine.py 中存在 testnet TIF 覆写变量，违反了语义同构要求"

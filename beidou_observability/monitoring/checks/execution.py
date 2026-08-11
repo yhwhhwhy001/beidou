@@ -1,6 +1,5 @@
 """PKG-MON-05: Order Trace Monitor — stage FSM, stuck/duplicate/timeout。"""
 
-import os
 import time
 from dataclasses import dataclass, field
 

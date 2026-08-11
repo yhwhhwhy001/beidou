@@ -11,12 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
-from beidou_data.klines import KLineGenerator, OHLCV
+from beidou_data.klines import KLineGenerator
 from beidou_data.market import BarIntegrity, BarSequenceValidator, ClosedBar, ClosedBarNormalizer
 from beidou_shared.types import InstrumentId, Price, Quantity, VenueId, VenueInstrument
-
 
 BTC_USDT = VenueInstrument(
     venue_id=VenueId("BINANCE_USDM"),
@@ -181,15 +178,14 @@ class TestVolumeSource:
         # 第一次 tick: qty=1
         gen.process_tick(BTC_USDT, Price(amount="50000"), Quantity(amount="1"), ts)
         # 第二次 tick: qty=2
-        gen.process_tick(BTC_USDT, Price(amount="50100"), Quantity(amount="2"),
-                         datetime(2026, 1, 1, 12, 1, 0, tzinfo=timezone.utc))
+        gen.process_tick(
+            BTC_USDT, Price(amount="50100"), Quantity(amount="2"), datetime(2026, 1, 1, 12, 1, 0, tzinfo=timezone.utc)
+        )
 
         current = gen.get_current_bar(BTC_USDT)
         assert current is not None
         # volume 应该是 1 + 2 = 3（累加），不是 24h 累计
-        assert float(current.volume.amount) == 3.0, (
-            f"volume 应为逐笔累加 (3.0)，而非 24h 累计: {current.volume.amount}"
-        )
+        assert float(current.volume.amount) == 3.0, f"volume 应为逐笔累加 (3.0)，而非 24h 累计: {current.volume.amount}"
 
     def test_closed_bar_has_is_closed_flag(self) -> None:
         """闭合 bar 必须有 is_closed=True。"""

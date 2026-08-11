@@ -17,12 +17,11 @@ import json
 import os
 import sys
 import time
-import urllib.request
 import urllib.error
-from pathlib import Path
-
+import urllib.request
 
 TESTNET_REST = "https://demo-fapi.binance.com"
+
 
 def _signed_request(api_key: str, api_secret: str, method: str, path: str, params: dict | None = None) -> dict:
     params = dict(params or {})
@@ -75,8 +74,7 @@ async def main() -> None:
             symbol = o["symbol"]
             oid = o["orderId"]
             try:
-                _signed_request(api_key, api_secret, "DELETE", "/fapi/v1/order",
-                                {"symbol": symbol, "orderId": oid})
+                _signed_request(api_key, api_secret, "DELETE", "/fapi/v1/order", {"symbol": symbol, "orderId": oid})
                 print(f"   ✅ 已取消 {symbol} 订单 {oid} ({o.get('side')} {o.get('origQty')})")
             except urllib.error.HTTPError as e:
                 print(f"   ⚠️  取消失败 {symbol} {oid}: HTTP {e.code}")
@@ -92,8 +90,9 @@ async def main() -> None:
             symbol = a["symbol"]
             algo_id = a["algoId"]
             try:
-                _signed_request(api_key, api_secret, "DELETE", "/fapi/v1/algoOrder",
-                                {"symbol": symbol, "algoId": algo_id})
+                _signed_request(
+                    api_key, api_secret, "DELETE", "/fapi/v1/algoOrder", {"symbol": symbol, "algoId": algo_id}
+                )
                 print(f"   ✅ 已取消 {symbol} Algo {algo_id} ({a.get('side')} {a.get('orderType')})")
             except urllib.error.HTTPError as e:
                 body = e.read().decode()[:200] if e.fp else ""

@@ -5,14 +5,12 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-import pytest
-
 from beidou_control.plane import ControlAction
 from beidou_control.truth import (
     ELIGIBILITY_TO_CONTROL,
     RESUME_REQUIRED_EVIDENCE,
-    TruthSnapshot,
     TradingEligibility,
+    TruthSnapshot,
     derive_eligibility,
     eligibility_to_control_action,
 )
@@ -83,19 +81,29 @@ class TestTruthSnapshot:
         fixed_ts = 1755590400.0  # fixed timestamp
         snap1 = _fresh_snapshot(
             created_at="2026-08-12T00:00:00+00:00",
-            market_freshness=fixed_ts, account_freshness=fixed_ts,
-            order_freshness=fixed_ts, position_freshness=fixed_ts,
-            ledger_freshness=fixed_ts, reconciliation_freshness=fixed_ts,
-            protection_freshness=fixed_ts, risk_freshness=fixed_ts,
-            config_freshness=fixed_ts, policy_freshness=fixed_ts,
+            market_freshness=fixed_ts,
+            account_freshness=fixed_ts,
+            order_freshness=fixed_ts,
+            position_freshness=fixed_ts,
+            ledger_freshness=fixed_ts,
+            reconciliation_freshness=fixed_ts,
+            protection_freshness=fixed_ts,
+            risk_freshness=fixed_ts,
+            config_freshness=fixed_ts,
+            policy_freshness=fixed_ts,
         )
         snap2 = _fresh_snapshot(
             created_at="2026-08-12T00:00:00+00:00",
-            market_freshness=fixed_ts, account_freshness=fixed_ts,
-            order_freshness=fixed_ts, position_freshness=fixed_ts,
-            ledger_freshness=fixed_ts, reconciliation_freshness=fixed_ts,
-            protection_freshness=fixed_ts, risk_freshness=fixed_ts,
-            config_freshness=fixed_ts, policy_freshness=fixed_ts,
+            market_freshness=fixed_ts,
+            account_freshness=fixed_ts,
+            order_freshness=fixed_ts,
+            position_freshness=fixed_ts,
+            ledger_freshness=fixed_ts,
+            reconciliation_freshness=fixed_ts,
+            protection_freshness=fixed_ts,
+            risk_freshness=fixed_ts,
+            config_freshness=fixed_ts,
+            policy_freshness=fixed_ts,
         )
         assert snap1.compute_hash() == snap2.compute_hash()
 

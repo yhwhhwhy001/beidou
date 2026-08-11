@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 from beidou_control.plane import ControlAction
 
@@ -93,9 +92,16 @@ class TruthSnapshot:
     def is_empty(self) -> bool:
         """检查是否为空快照（所有 hash 为空，freshness=0）。"""
         hash_fields = [
-            self.market_hash, self.account_hash, self.order_hash,
-            self.position_hash, self.ledger_hash, self.reconciliation_hash,
-            self.protection_hash, self.risk_hash, self.config_hash, self.policy_hash,
+            self.market_hash,
+            self.account_hash,
+            self.order_hash,
+            self.position_hash,
+            self.ledger_hash,
+            self.reconciliation_hash,
+            self.protection_hash,
+            self.risk_hash,
+            self.config_hash,
+            self.policy_hash,
         ]
         return all(h == "" for h in hash_fields)
 
@@ -111,7 +117,7 @@ class TruthSnapshot:
             ("protection", self.protection_freshness),
             ("risk", self.risk_freshness),
         ]
-        for name, freshness in critical_freshness:
+        for _name, freshness in critical_freshness:
             if freshness <= 0:
                 return True
             if now - freshness > max_age_seconds:
@@ -131,31 +137,35 @@ class TruthSnapshot:
 
     def compute_hash(self) -> str:
         """计算整个快照的 SHA-256。"""
-        data = json.dumps({
-            "market_hash": self.market_hash,
-            "account_hash": self.account_hash,
-            "order_hash": self.order_hash,
-            "position_hash": self.position_hash,
-            "ledger_hash": self.ledger_hash,
-            "reconciliation_hash": self.reconciliation_hash,
-            "protection_hash": self.protection_hash,
-            "risk_hash": self.risk_hash,
-            "config_hash": self.config_hash,
-            "policy_hash": self.policy_hash,
-            "market_freshness": self.market_freshness,
-            "account_freshness": self.account_freshness,
-            "order_freshness": self.order_freshness,
-            "position_freshness": self.position_freshness,
-            "ledger_freshness": self.ledger_freshness,
-            "reconciliation_freshness": self.reconciliation_freshness,
-            "protection_freshness": self.protection_freshness,
-            "risk_freshness": self.risk_freshness,
-            "config_freshness": self.config_freshness,
-            "policy_freshness": self.policy_freshness,
-            "reconciliation_status": self.reconciliation_status,
-            "protection_status": self.protection_status,
-            "risk_status": self.risk_status,
-        }, sort_keys=True, ensure_ascii=False)
+        data = json.dumps(
+            {
+                "market_hash": self.market_hash,
+                "account_hash": self.account_hash,
+                "order_hash": self.order_hash,
+                "position_hash": self.position_hash,
+                "ledger_hash": self.ledger_hash,
+                "reconciliation_hash": self.reconciliation_hash,
+                "protection_hash": self.protection_hash,
+                "risk_hash": self.risk_hash,
+                "config_hash": self.config_hash,
+                "policy_hash": self.policy_hash,
+                "market_freshness": self.market_freshness,
+                "account_freshness": self.account_freshness,
+                "order_freshness": self.order_freshness,
+                "position_freshness": self.position_freshness,
+                "ledger_freshness": self.ledger_freshness,
+                "reconciliation_freshness": self.reconciliation_freshness,
+                "protection_freshness": self.protection_freshness,
+                "risk_freshness": self.risk_freshness,
+                "config_freshness": self.config_freshness,
+                "policy_freshness": self.policy_freshness,
+                "reconciliation_status": self.reconciliation_status,
+                "protection_status": self.protection_status,
+                "risk_status": self.risk_status,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(data.encode()).hexdigest()
 
 
@@ -202,9 +212,11 @@ def derive_eligibility(
 
     # 8. 所有条件满足 → ELIGIBLE
     #    需要: reconciliation=MATCHED, protection=ACTIVE, risk=NORMAL
-    if (snapshot.reconciliation_status == "MATCHED"
-            and snapshot.protection_status == "ACTIVE"
-            and snapshot.risk_status == "NORMAL"):
+    if (
+        snapshot.reconciliation_status == "MATCHED"
+        and snapshot.protection_status == "ACTIVE"
+        and snapshot.risk_status == "NORMAL"
+    ):
         return TradingEligibility.ELIGIBLE
 
     # fallback: safe

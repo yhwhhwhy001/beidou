@@ -12,15 +12,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import pytest
-
+from beidou_autonomy.mapek import MAPEKController
 from beidou_lifecycle.lifecycle import (
+    VALID_TRANSITIONS,
     HealthEvidence,
     ModuleLifecycle,
     ModuleState,
-    VALID_TRANSITIONS,
 )
-from beidou_autonomy.mapek import MAPEKController
 
 
 class TestVerifyRecovery:

@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable
 
 
 class FactDomain(str, Enum):
     """事实域 — 对应执行包中的权威域。"""
+
     MARKET = "market"
     RESEARCH = "research"
     STRATEGY = "strategy"
@@ -73,7 +73,7 @@ class FactBus:
         """发布一个操作事实。"""
         self._facts.append(fact)
         if len(self._facts) > self._max_facts:
-            self._facts = self._facts[-self._max_facts:]
+            self._facts = self._facts[-self._max_facts :]
 
         # 通知订阅者
         for callback in self._subscribers.get(fact.fact_type, []):
@@ -89,7 +89,9 @@ class FactBus:
         self._subscribers[fact_type].append(callback)
 
     def query(
-        self, fact_type: str = "", domain: FactDomain | None = None,
+        self,
+        fact_type: str = "",
+        domain: FactDomain | None = None,
         limit: int = 10,
     ) -> list[OperationalFact]:
         """查询最近的事实。"""

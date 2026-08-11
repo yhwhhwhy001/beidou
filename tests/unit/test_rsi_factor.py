@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import math
 
-import pytest
-
 from beidou_research.factors.rsi import (
     RSIVerifiability,
-    compute_rsi_simple,
     compute_rsi_wilder,
     cross_validate_rsi,
 )

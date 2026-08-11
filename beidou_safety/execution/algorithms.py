@@ -333,7 +333,11 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
         )
 
     def rolling_replan(
-        self, ctx: ExecutionContext, order_id: OrderId, remaining_qty: float, slices_completed: int,
+        self,
+        ctx: ExecutionContext,
+        order_id: OrderId,
+        remaining_qty: float,
+        slices_completed: int,
     ) -> ExecutionPlan:
         """P1-021: 滚动重规划 — 根据当前盘口/成本/剩余Alpha动态调整切片。
 
@@ -341,29 +345,37 @@ class TWAPAlgorithm(BaseExecutionAlgorithm):
         """
         slices_remaining = self.slice_count - slices_completed
         if slices_remaining <= 0 or remaining_qty <= 0:
-            return ExecutionPlan(algorithm=self.algorithm_type, is_canceled=True,
-                                cancel_reason="TWAP completed or zero remaining")
+            return ExecutionPlan(
+                algorithm=self.algorithm_type, is_canceled=True, cancel_reason="TWAP completed or zero remaining"
+            )
 
         slice_qty = remaining_qty / slices_remaining
         # 成本重估
         if ctx.net_alpha_bps > 0 and ctx.predicted_cost_bps > ctx.net_alpha_bps:
-            return ExecutionPlan(algorithm=self.algorithm_type, is_canceled=True,
-                                cancel_reason="Replan: cost exceeds remaining alpha")
+            return ExecutionPlan(
+                algorithm=self.algorithm_type, is_canceled=True, cancel_reason="Replan: cost exceeds remaining alpha"
+            )
 
         slices = []
         for i in range(slices_remaining):
-            slices.append(OrderSlice(
-                slice_id=f"{order_id}-twap-replan-{slices_completed + i}",
-                parent_order_id=order_id,
-                quantity=Quantity(amount=str(slice_qty)),
-                price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
-                order_type=OrderType.LIMIT, time_in_force=TimeInForce.IOC,
-                algorithm=self.algorithm_type,
-                sequence_number=slices_completed + i,
-                invariants_check_passed=True,
-            ))
-        return ExecutionPlan(algorithm=self.algorithm_type, slices=slices,
-                            estimated_completion_seconds=self.interval_seconds * slices_remaining)
+            slices.append(
+                OrderSlice(
+                    slice_id=f"{order_id}-twap-replan-{slices_completed + i}",
+                    parent_order_id=order_id,
+                    quantity=Quantity(amount=str(slice_qty)),
+                    price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=self.algorithm_type,
+                    sequence_number=slices_completed + i,
+                    invariants_check_passed=True,
+                )
+            )
+        return ExecutionPlan(
+            algorithm=self.algorithm_type,
+            slices=slices,
+            estimated_completion_seconds=self.interval_seconds * slices_remaining,
+        )
 
 
 class POVAlgorithm(BaseExecutionAlgorithm):
@@ -442,8 +454,7 @@ class POVAlgorithm(BaseExecutionAlgorithm):
         planned_qty = sum(float(s.quantity.amount) for s in slices)
         if abs(planned_qty - total_qty) > 1e-12:
             raise RuntimeError(
-                f"POV plan violates quantity conservation: "
-                f"planned={planned_qty} != approved={total_qty}"
+                f"POV plan violates quantity conservation: planned={planned_qty} != approved={total_qty}"
             )
 
         return ExecutionPlan(

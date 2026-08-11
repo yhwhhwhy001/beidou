@@ -47,9 +47,12 @@ class InstanceLock:
         # Verify the process is actually a beidou launcher, not a reused PID.
         try:
             import subprocess
+
             cmdline = subprocess.run(
                 ["ps", "-p", str(pid), "-o", "comm="],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             ).stdout.strip()
             return "beidou" in cmdline.lower() or "python" in cmdline.lower()
         except Exception:

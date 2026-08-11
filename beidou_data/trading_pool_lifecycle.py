@@ -23,7 +23,11 @@ class PoolStatus(str, Enum):
 
 # P1-037: 默认评分权重 — 可被签名策略覆盖
 _DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
-    "spread": 0.25, "depth": 0.25, "volume": 0.20, "stability": 0.15, "capacity": 0.15,
+    "spread": 0.25,
+    "depth": 0.25,
+    "volume": 0.20,
+    "stability": 0.15,
+    "capacity": 0.15,
 }
 
 

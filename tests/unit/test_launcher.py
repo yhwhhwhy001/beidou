@@ -279,7 +279,7 @@ def test_authority_reconciliation_fact_is_required_and_fresh() -> None:
     )
     authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
     # Stale but MATCHED reconciliation may pass or warn depending on threshold strictness
-    assert authority.status.is_safe if hasattr(authority.status, 'is_safe') else True
+    assert authority.status.is_safe if hasattr(authority.status, "is_safe") else True
 
 
 def test_writable_runtime_requires_user_stream_fact_boundary() -> None:

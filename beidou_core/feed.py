@@ -176,7 +176,9 @@ class MarketDataFeed:
                         # PKG22 (BDS-P1-041): 不再静默跳过，记录错误
                         logger.warning(
                             "WS kline aggregation failed for %s: %s: %s",
-                            symbol, type(exc).__name__, str(exc)[:120],
+                            symbol,
+                            type(exc).__name__,
+                            str(exc)[:120],
                         )
                         self._error_count["kline_gen_ws"] = self._error_count.get("kline_gen_ws", 0) + 1
                         self._last_error_time = time.monotonic()

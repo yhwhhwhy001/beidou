@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-import time
 from typing import Any
 from uuid import uuid4
 
@@ -170,22 +170,34 @@ class MAPEKController:
             result = RecoveryResult.DEGRADED
         elif action == RecoveryAction.RESTART_MODULE:
             self._recovery_counter[module_name] = self._recovery_counter.get(module_name, 0) + 1
-            self._recovery_log.append({
-                "module": module_name, "action": "RESTART_MODULE",
-                "attempt": self._recovery_counter[module_name], "timestamp": time.time(),
-            })
+            self._recovery_log.append(
+                {
+                    "module": module_name,
+                    "action": "RESTART_MODULE",
+                    "attempt": self._recovery_counter[module_name],
+                    "timestamp": time.time(),
+                }
+            )
             result = RecoveryResult.SUCCESS if checkpoint and checkpoint.invariants_valid else RecoveryResult.PARTIAL
         elif action == RecoveryAction.ROLLBACK_CHECKPOINT:
-            self._recovery_log.append({
-                "module": module_name, "action": "ROLLBACK_CHECKPOINT",
-                "checkpoint_id": checkpoint.checkpoint_id if checkpoint else "NONE", "timestamp": time.time(),
-            })
+            self._recovery_log.append(
+                {
+                    "module": module_name,
+                    "action": "ROLLBACK_CHECKPOINT",
+                    "checkpoint_id": checkpoint.checkpoint_id if checkpoint else "NONE",
+                    "timestamp": time.time(),
+                }
+            )
             result = RecoveryResult.SUCCESS if checkpoint else RecoveryResult.FAILED
         elif action == RecoveryAction.DEGRADE_TO_NO_NEW_RISK:
-            self._recovery_log.append({"module": module_name, "action": "DEGRADE_TO_NO_NEW_RISK", "timestamp": time.time()})
+            self._recovery_log.append(
+                {"module": module_name, "action": "DEGRADE_TO_NO_NEW_RISK", "timestamp": time.time()}
+            )
             result = RecoveryResult.DEGRADED
         elif action == RecoveryAction.DEGRADE_TO_EXIT_ONLY:
-            self._recovery_log.append({"module": module_name, "action": "DEGRADE_TO_EXIT_ONLY", "timestamp": time.time()})
+            self._recovery_log.append(
+                {"module": module_name, "action": "DEGRADE_TO_EXIT_ONLY", "timestamp": time.time()}
+            )
             result = RecoveryResult.DEGRADED
         elif action == RecoveryAction.EMERGENCY_FLATTEN:
             self._recovery_log.append({"module": module_name, "action": "EMERGENCY_FLATTEN", "timestamp": time.time()})
@@ -194,10 +206,16 @@ class MAPEKController:
             result = RecoveryResult.FAILED
 
         after = {"module": module_name, "restart_count": self.get_restart_count(module_name)}
-        self._recovery_evidence.append({
-            "module": module_name, "action": action.value, "result": result.value,
-            "before": before, "after": after, "timestamp": time.time(),
-        })
+        self._recovery_evidence.append(
+            {
+                "module": module_name,
+                "action": action.value,
+                "result": result.value,
+                "before": before,
+                "after": after,
+                "timestamp": time.time(),
+            }
+        )
         return result
 
     def verify_recovery(self, module_name: str, invariants: dict[str, bool]) -> bool:

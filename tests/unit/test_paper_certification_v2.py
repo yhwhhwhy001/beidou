@@ -13,20 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from unittest.mock import MagicMock, patch
 
-import pytest
-
+from beidou_shared.types import StrategyId
 from beidou_strategy.paper_shadow import (
     PaperShadowRunner,
     ShadowConfig,
     ShadowMetrics,
-    ShadowMode,
-    ShadowReport,
     ShadowStatus,
 )
-from beidou_shared.types import GateResult, StrategyId
-
 
 # ---------------------------------------------------------------------------
 # BDS-P1-060: Paper write failure → INVALID
@@ -88,10 +82,8 @@ class TestMerkleManifest:
         )
         # 添加一些预测数据
         runner._predictions = [
-            {"tick": 1, "direction": "BUY", "strength": 0.5,
-             "outcome_recorded": True, "decision_timestamp": 1000.0},
-            {"tick": 2, "direction": "SELL", "strength": 0.3,
-             "outcome_recorded": False, "decision_timestamp": 1001.0},
+            {"tick": 1, "direction": "BUY", "strength": 0.5, "outcome_recorded": True, "decision_timestamp": 1000.0},
+            {"tick": 2, "direction": "SELL", "strength": 0.3, "outcome_recorded": False, "decision_timestamp": 1001.0},
         ]
 
         manifest = runner._build_merkle_manifest()
@@ -128,17 +120,13 @@ class TestG5G6SchemaAlignment:
         required = {"order_log", "exchange_response", "ledger_entries"}
         # 验证 helper 输出包含所有 required keys
         emitted = {"order_log", "exchange_response", "ledger_entries"}
-        assert required.issubset(emitted), (
-            f"G5 evidence 缺少 required keys: {required - emitted}"
-        )
+        assert required.issubset(emitted), f"G5 evidence 缺少 required keys: {required - emitted}"
 
     def test_g6_evidence_matches_required_keys(self) -> None:
         """G6 runtime helper 发出的 evidence 与 required_evidence 一致。"""
         required = {"runtime_duration", "policy_duration", "no_time_compression"}
         emitted = {"runtime_duration", "policy_duration", "no_time_compression"}
-        assert required == emitted, (
-            f"G6 evidence schema 不匹配: required={required} != emitted={emitted}"
-        )
+        assert required == emitted, f"G6 evidence schema 不匹配: required={required} != emitted={emitted}"
 
     def test_g6_keys_renamed_from_old_names(self) -> None:
         """旧 key 名 'actual_duration'/'required' 不再出现。"""

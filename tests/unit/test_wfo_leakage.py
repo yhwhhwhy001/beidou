@@ -9,10 +9,6 @@ PKG05: Purged WFO / Nested CV / CPCV 防泄漏测试。
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
 
 class TestPurgedWFOGuard:
     """PKG05: Purged WFO 防泄漏性质测试。"""
@@ -25,8 +21,8 @@ class TestPurgedWFOGuard:
         purge_days = 3
         embargo_days = 5
         fold_test_ranges = [
-            (0, 50),     # Fold 1
-            (55, 105),   # Fold 2: +5 embargo after fold 1
+            (0, 50),  # Fold 1
+            (55, 105),  # Fold 2: +5 embargo after fold 1
             (110, 160),  # Fold 3: +5 embargo after fold 2
             (165, 215),  # Fold 4: +5 embargo after fold 3
         ]
@@ -42,9 +38,7 @@ class TestPurgedWFOGuard:
 
                 # Embargo: 当前测试开始 >= 前一个测试结束 + embargo
                 prev_test_end = fold_test_ranges[i - 1][1]
-                assert test_start >= prev_test_end + embargo_days, (
-                    f"Fold {i}: embargo 间隔不足"
-                )
+                assert test_start >= prev_test_end + embargo_days, f"Fold {i}: embargo 间隔不足"
 
     def test_no_future_data_leakage(self) -> None:
         """训练集不包含测试集未来的任何数据。"""

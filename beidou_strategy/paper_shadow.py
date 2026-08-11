@@ -392,9 +392,7 @@ class PaperShadowRunner:
         if self.metrics.ledger_write_failures > 0:
             report.gate_result = GateResult.INVALID
             report.status = ShadowStatus.INVALID
-            report.discrepancies.append(
-                f"ledger_write_failures: {self.metrics.ledger_write_failures}"
-            )
+            report.discrepancies.append(f"ledger_write_failures: {self.metrics.ledger_write_failures}")
 
         # Gate 判定（仅在无 ledger 失败时）
         elif report.gate_result == GateResult.UNVERIFIABLE:
@@ -443,13 +441,16 @@ class PaperShadowRunner:
         """
         leaves = []
         for item in self._predictions:
-            leaf_content = json.dumps({
-                "tick": item.get("tick"),
-                "direction": item.get("direction"),
-                "strength": item.get("strength"),
-                "outcome_recorded": item.get("outcome_recorded", False),
-                "decision_timestamp": item.get("decision_timestamp"),
-            }, sort_keys=True)
+            leaf_content = json.dumps(
+                {
+                    "tick": item.get("tick"),
+                    "direction": item.get("direction"),
+                    "strength": item.get("strength"),
+                    "outcome_recorded": item.get("outcome_recorded", False),
+                    "decision_timestamp": item.get("decision_timestamp"),
+                },
+                sort_keys=True,
+            )
             leaf_hash = hashlib.sha256(leaf_content.encode()).hexdigest()
             leaves.append(leaf_hash)
 

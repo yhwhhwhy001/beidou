@@ -15,21 +15,19 @@ PKG04 (BDS-P0-003, BDS-P0-004): 统一策略 PnL 评估内核。
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
 from beidou_research.mining.evaluation.metrics import (
     _clean_series,
     _mean,
-    _std,
     _sharpe,
+    _std,
+    compute_hit_rate,
     compute_ic,
     compute_rank_ic,
-    compute_hit_rate,
     compute_turnover,
-    compute_cost_adjusted_metrics,
 )
-
 
 # ================================================================
 # 核心数据结构

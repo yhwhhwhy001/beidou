@@ -17,6 +17,7 @@ from enum import Enum
 
 class ExitPhase(str, Enum):
     """退出阶段。"""
+
     INTENT_RECORDED = "INTENT_RECORDED"  # 退出意图已记录
     CANCEL_PENDING = "CANCEL_PENDING"  # 取消进行中
     POSITIONS_CLOSING = "POSITIONS_CLOSING"  # 仓位平仓中
@@ -48,8 +49,10 @@ class ExitRecoveryContract:
     def is_blocking(self) -> bool:
         """退出期间阻止任何新风险。"""
         return self.phase in (
-            ExitPhase.INTENT_RECORDED, ExitPhase.CANCEL_PENDING,
-            ExitPhase.POSITIONS_CLOSING, ExitPhase.EXIT_FAILED,
+            ExitPhase.INTENT_RECORDED,
+            ExitPhase.CANCEL_PENDING,
+            ExitPhase.POSITIONS_CLOSING,
+            ExitPhase.EXIT_FAILED,
         )
 
     def record_failure(self, reason: str) -> None:

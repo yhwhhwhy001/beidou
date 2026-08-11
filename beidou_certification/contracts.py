@@ -5,12 +5,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
-
 
 # ============================================================================
 # BD-CV50: 监控状态代数
@@ -213,6 +209,4 @@ class StagedCertification:
         """Testnet safety decision 与 production parity 必须 100%。"""
         # G8 仍只允许 Mainnet Candidate，不自动启用 Mainnet
         g8 = self.stages.get("G8")
-        if g8 and g8.certified:
-            return True  # parity verified but Mainnet still requires explicit action
-        return False
+        return bool(g8 and g8.certified)

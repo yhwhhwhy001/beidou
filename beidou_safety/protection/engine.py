@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-import os
 from math import isfinite
 from typing import Any
 
@@ -158,7 +157,7 @@ class PositionProtection:
             return
         # P1-034: 关键保护参数缺失必须 fail closed，不静默降级
         if "trail_pct" not in self.trailing_config:
-            self.stop_loss.deactivate()
+            self.stop_loss.deactivate()  # type: ignore[attr-defined]
             self._missing_trail_pct = True
             return
         trail_pct = float(self.trailing_config["trail_pct"])

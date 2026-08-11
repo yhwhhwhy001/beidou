@@ -17,7 +17,6 @@ import pytest
 from beidou_shared.environment_profile import (
     EnvironmentProfile,
     EnvironmentVariant,
-    SafetyBypassViolation,
     detect_forbidden_bypass,
     get_environment_profile,
     reset_environment_profile,
@@ -117,9 +116,7 @@ class TestSemanticParity:
                     violations.append(f"{rel}: 发现禁止的 testnet 安全旁路模式 '{pattern}'")
 
         # PKG02 修复后，safety 模块中不应再有 bypass 模式
-        assert not violations, (
-            "安全模块 (beidou_safety/) 中发现 testnet 安全旁路模式:\n" + "\n".join(violations)
-        )
+        assert not violations, "安全模块 (beidou_safety/) 中发现 testnet 安全旁路模式:\n" + "\n".join(violations)
 
     def test_protection_engine_no_testnet_bypass(self) -> None:
         """保护引擎不得包含 testnet 旁路。"""
@@ -130,12 +127,8 @@ class TestSemanticParity:
 
         if protection_file.exists():
             content = protection_file.read_text(encoding="utf-8")
-            assert 'BEIDOU_ENV") == "testnet"' not in content, (
-                "protection/engine.py 中存在 testnet 安全旁路"
-            )
-            assert "testnet_override" not in content, (
-                "protection/engine.py 中存在 testnet_override 模式"
-            )
+            assert 'BEIDOU_ENV") == "testnet"' not in content, "protection/engine.py 中存在 testnet 安全旁路"
+            assert "testnet_override" not in content, "protection/engine.py 中存在 testnet_override 模式"
 
     def test_cost_model_identical_across_environments(self) -> None:
         """成本模型在所有环境中保持一致。
@@ -152,9 +145,9 @@ class TestSemanticParity:
         # 验证核心安全旁路已移除（不检查纯运维/指标差异）
         core_bypasses_removed = [
             # 信号/成本旁路
-            ('no_trade_band=0.0 if _testnet', False),
-            ('cost_margin=0.0 if _testnet', False),
-            ('_extra_cost = 1.0 if os.environ', False),
+            ("no_trade_band=0.0 if _testnet", False),
+            ("cost_margin=0.0 if _testnet", False),
+            ("_extra_cost = 1.0 if os.environ", False),
             # 保护旁路
             ('if os.environ.get("BEIDOU_ENV") == "testnet":\n                    trigger_value = entry_value', False),
             # 控制面旁路
@@ -167,8 +160,7 @@ class TestSemanticParity:
         for bypass, should_exist in core_bypasses_removed:
             exists = bypass in content
             assert exists == should_exist, (
-                f"核心安全旁路状态错误: '{bypass[:60]}...' "
-                f"期望存在={should_exist}, 实际存在={exists}"
+                f"核心安全旁路状态错误: '{bypass[:60]}...' 期望存在={should_exist}, 实际存在={exists}"
             )
 
     def test_control_plane_no_testnet_bypass(self) -> None:
@@ -193,9 +185,7 @@ class TestSemanticParity:
         engine_file = root / "beidou_core" / "engine.py"
         content = engine_file.read_text(encoding="utf-8")
 
-        assert "Position-only mismatch accepted for testnet" not in content, (
-            "engine.py 中仍存在 testnet 对账旁路"
-        )
+        assert "Position-only mismatch accepted for testnet" not in content, "engine.py 中仍存在 testnet 对账旁路"
 
 
 class TestForbiddenBypassDetection:

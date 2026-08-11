@@ -868,6 +868,7 @@ class PersistentStore:
 
     def save_strategy_risk_state(self, strategy_id: str, state: dict) -> None:
         import json
+
         conn = self._get_conn()
         conn.execute(
             "INSERT OR REPLACE INTO v3_runtime_records (record_type, record_id, payload, updated_at) VALUES (?,?,?,datetime('now'))",
@@ -877,6 +878,7 @@ class PersistentStore:
 
     def restore_strategy_risk_states(self) -> dict[str, dict]:
         import json
+
         conn = self._get_conn()
         rows = conn.execute(
             "SELECT record_id, payload FROM v3_runtime_records WHERE record_type='strategy_risk'"

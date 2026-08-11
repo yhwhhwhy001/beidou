@@ -15,10 +15,10 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from beidou_control.truth import TruthSnapshot, TradingEligibility
+    from beidou_control.truth import TradingEligibility, TruthSnapshot
 
 
 class RiskDirection(str, Enum):
@@ -81,22 +81,30 @@ CONTROL_ALLOW_MATRIX: dict[ControlAction, set[RiskDirection]] = {
 # LOCK/EMERGENCY_FLATTEN 不可自动恢复（需显式签名恢复）
 CONTROL_TRANSITION_MATRIX: dict[ControlAction, set[ControlAction]] = {
     ControlAction.NO_NEW_RISK: {
-        ControlAction.EXIT_ONLY, ControlAction.EMERGENCY_FLATTEN,
-        ControlAction.LOCK, ControlAction.RESUME, ControlAction.NO_NEW_RISK,
+        ControlAction.EXIT_ONLY,
+        ControlAction.EMERGENCY_FLATTEN,
+        ControlAction.LOCK,
+        ControlAction.RESUME,
+        ControlAction.NO_NEW_RISK,
     },
     ControlAction.EXIT_ONLY: {
-        ControlAction.EMERGENCY_FLATTEN, ControlAction.LOCK,
-        ControlAction.RESUME, ControlAction.EXIT_ONLY,
+        ControlAction.EMERGENCY_FLATTEN,
+        ControlAction.LOCK,
+        ControlAction.RESUME,
+        ControlAction.EXIT_ONLY,
     },
     ControlAction.EMERGENCY_FLATTEN: {
-        ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN,
+        ControlAction.LOCK,
+        ControlAction.EMERGENCY_FLATTEN,
     },
     ControlAction.LOCK: {
         ControlAction.LOCK,  # LOCK 是终态 — 仅允许显式恢复
     },
     ControlAction.RESUME: {
-        ControlAction.NO_NEW_RISK, ControlAction.EXIT_ONLY,
-        ControlAction.EMERGENCY_FLATTEN, ControlAction.LOCK,
+        ControlAction.NO_NEW_RISK,
+        ControlAction.EXIT_ONLY,
+        ControlAction.EMERGENCY_FLATTEN,
+        ControlAction.LOCK,
         ControlAction.RESUME,
     },
 }
@@ -172,9 +180,7 @@ class ControlPlane:
         """
         # CAS: 版本不匹配时拒绝（仅当显式传入 expected_version）
         if expected_version is not None and self._version != expected_version:
-            raise RuntimeError(
-                f"CAS rejected: expected version {expected_version}, actual {self._version}"
-            )
+            raise RuntimeError(f"CAS rejected: expected version {expected_version}, actual {self._version}")
 
         # 状态转换矩阵验证（仅当目标不同于当前状态）
         if action != self._action:
@@ -182,10 +188,12 @@ class ControlPlane:
             if action not in allowed_targets:
                 # P1-042: 非法转换被拒绝
                 import logging
+
                 _logger = logging.getLogger(__name__)
                 _logger.error(
                     "Invalid state transition blocked: %s → %s (allowed: %s)",
-                    self._action.value, action.value,
+                    self._action.value,
+                    action.value,
                     [a.value for a in allowed_targets],
                 )
                 raise RuntimeError(
@@ -458,7 +466,7 @@ class ControlPlane:
         AC-02-04: RESUME 必须有新 TruthSnapshot + reconciliation + protection + risk 证据。
         返回 (allowed, reason)。
         """
-        from beidou_control.truth import derive_eligibility, TradingEligibility
+        from beidou_control.truth import TradingEligibility, derive_eligibility
 
         eligibility = derive_eligibility(snapshot)
 

@@ -40,7 +40,9 @@ def _discover_packages() -> list[str]:
     with open(pyproject, "rb") as f:
         config = tomllib.load(f)
 
-    packages = config.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {}).get("wheel", {}).get("packages", [])
+    packages = (
+        config.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {}).get("wheel", {}).get("packages", [])
+    )
 
     if not packages:
         raise ValueError("pyproject.toml 中未找到 [tool.hatch.build.targets.wheel] packages 列表")
@@ -177,7 +179,7 @@ def test_empty_scan_fails_closed() -> None:
     # 模拟空目录场景：空目录应该没有 .py 文件
     pkg = ROOT / "beidou_shared"
     py_files = list(pkg.rglob("*.py"))
-    assert len(py_files) > 0, f"beidou_shared 意外没有 Python 文件"
+    assert len(py_files) > 0, "beidou_shared 意外没有 Python 文件"
 
 
 # ================================================================
@@ -279,8 +281,7 @@ def test_no_layer_crosses_clock_boundary() -> None:
                     violation_key = f"{rel}:{imp}"
                     if violation_key not in KNOWN_CROSS_LAYER_VIOLATIONS:
                         violations.append(
-                            f"{source_pkg} -> {imp}: 时钟层 {source_pkg} 不得导入 {imp} 的模块。"
-                            f"文件: {rel}"
+                            f"{source_pkg} -> {imp}: 时钟层 {source_pkg} 不得导入 {imp} 的模块。文件: {rel}"
                         )
 
     assert len(violations) == 0, "发现跨时钟层依赖:\n" + "\n".join(violations)
@@ -367,8 +368,7 @@ def test_no_hardcoded_secrets_or_production_defaults() -> None:
                 match = _NON_EMPTY_ASSIGN_RE.search(stripped)
                 if match:
                     violations.append(
-                        f"{pyfile.relative_to(ROOT)}:{lineno}: 包含禁止的硬编码模式 "
-                        f"'{match.group(1)} = <non-empty>'"
+                        f"{pyfile.relative_to(ROOT)}:{lineno}: 包含禁止的硬编码模式 '{match.group(1)} = <non-empty>'"
                     )
 
                 for pattern in unconditional_patterns:

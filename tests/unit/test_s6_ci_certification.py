@@ -9,8 +9,6 @@ S6 (PKG27-29): CI、测试、证据与认证晋级测试。
 
 from __future__ import annotations
 
-import hashlib
-
 from beidou_certification.engine import (
     CertificationFramework,
     CertificationGate,
@@ -40,10 +38,12 @@ class TestGateCertificateSigning:
             is_blocking=False,
         )
         framework.register_scenario(scenario)
-        framework.record_result(ScenarioResult(
-            scenario=scenario,
-            status=ScenarioStatus.PASS,
-        ))
+        framework.record_result(
+            ScenarioResult(
+                scenario=scenario,
+                status=ScenarioStatus.PASS,
+            )
+        )
 
         cert = framework.evaluate()
         assert cert.signature != "", "PASS 证书必须签名"
@@ -56,8 +56,12 @@ class TestGateCertificateSigning:
         os.environ["BEIDOU_SIGNING_KEY"] = "key-for-evidence-test"
 
         framework = CertificationFramework(CertificationGate.G6_SHADOW)
-        s1 = CertificationScenario("ev-1", "Evidence 1", "Evidence 1", CertificationGate.G6_SHADOW, "reconciliation", is_blocking=False)
-        s2 = CertificationScenario("ev-2", "Evidence 2", "Evidence 2", CertificationGate.G6_SHADOW, "reconciliation", is_blocking=False)
+        s1 = CertificationScenario(
+            "ev-1", "Evidence 1", "Evidence 1", CertificationGate.G6_SHADOW, "reconciliation", is_blocking=False
+        )
+        s2 = CertificationScenario(
+            "ev-2", "Evidence 2", "Evidence 2", CertificationGate.G6_SHADOW, "reconciliation", is_blocking=False
+        )
         framework.register_scenario(s1)
         framework.register_scenario(s2)
         framework.record_result(ScenarioResult(scenario=s1, status=ScenarioStatus.PASS))
@@ -74,13 +78,17 @@ class TestGateCertificateSigning:
 
         framework = CertificationFramework(CertificationGate.G5_TESTNET)
         scenario = CertificationScenario(
-            "fail-scenario", "Fail Scenario", "Will fail",
-            CertificationGate.G5_TESTNET, "recovery", is_blocking=True,
+            "fail-scenario",
+            "Fail Scenario",
+            "Will fail",
+            CertificationGate.G5_TESTNET,
+            "recovery",
+            is_blocking=True,
         )
         framework.register_scenario(scenario)
-        framework.record_result(ScenarioResult(
-            scenario=scenario, status=ScenarioStatus.FAIL, error_detail="Expected failure"
-        ))
+        framework.record_result(
+            ScenarioResult(scenario=scenario, status=ScenarioStatus.FAIL, error_detail="Expected failure")
+        )
 
         cert = framework.evaluate()
         assert cert.result.value == "FAIL"
@@ -146,9 +154,7 @@ class TestTypeSafety:
         for path_pattern, ignores in per_file_ignores.items():
             for critical_path in safety_critical_paths:
                 if critical_path in path_pattern:
-                    assert "F821" not in ignores, (
-                        f"安全关键文件 {path_pattern} 不应有 F821 ignore"
-                    )
+                    assert "F821" not in ignores, f"安全关键文件 {path_pattern} 不应有 F821 ignore"
 
     def test_f821_only_in_exchange_adapter(self) -> None:
         """F821 ignore 应仅限于 exchange adapter（外部 API 依赖）。"""
@@ -165,6 +171,4 @@ class TestTypeSafety:
         f821_files = [p for p, ignores in per_file_ignores.items() if "F821" in ignores]
         # 仅 exchange/adapter 允许 F821（外部 API 依赖不可控）
         for f in f821_files:
-            assert "exchange" in f or "adapter" in f, (
-                f"F821 ignore 应仅限于 exchange/adapter: {f}"
-            )
+            assert "exchange" in f or "adapter" in f, f"F821 ignore 应仅限于 exchange/adapter: {f}"

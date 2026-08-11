@@ -8,10 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
-
+from typing import ClassVar
 
 # ============================================================================
 # BD-CV11: Canonical Market Event & ClosedBar/KLine
@@ -60,9 +58,7 @@ class CanonicalMarketEvent:
             "close": self.close,
             "volume": self.volume,
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
     def floor_to_bucket(timestamp: float, interval_seconds: int = 300) -> float:
@@ -79,7 +75,7 @@ class CanonicalMarketEvent:
 
 
 class DQStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # noqa: S105
     FAIL = "FAIL"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     UNKNOWN = "UNKNOWN"
@@ -108,7 +104,7 @@ class DQSnapshot:
     warmup_complete: bool = False
     snapshot_hash: str = ""
 
-    REQUIRED_CHECKS = [
+    REQUIRED_CHECKS: ClassVar[list[str]] = [
         "dq.price.monotonic",
         "dq.volume.nonzero",
         "dq.timestamp.no_future",
@@ -129,14 +125,9 @@ class DQSnapshot:
             "symbol": self.symbol,
             "observed_at": self.observed_at,
             "warmup_complete": self.warmup_complete,
-            "checks": [
-                {"check_id": c.check_id, "status": c.status.value}
-                for c in self.checks
-            ],
+            "checks": [{"check_id": c.check_id, "status": c.status.value} for c in self.checks],
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 # ============================================================================
@@ -175,11 +166,7 @@ class PITUniverseSnapshot:
         return [e.symbol for e in self.entries if e.is_executable]
 
     def blocked_symbols(self) -> dict[str, str]:
-        return {
-            e.symbol: e.exclude_reason
-            for e in self.entries
-            if not e.is_executable and e.exclude_reason
-        }
+        return {e.symbol: e.exclude_reason for e in self.entries if not e.is_executable and e.exclude_reason}
 
     def any_unknown_critical(self) -> list[str]:
         """返回关键字段 UNKNOWN 的 symbol 列表。"""
@@ -210,6 +197,4 @@ class PITUniverseSnapshot:
                 for e in self.entries
             ],
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

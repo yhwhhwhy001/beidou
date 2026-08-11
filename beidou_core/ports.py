@@ -8,13 +8,11 @@ PKG03 (BDS-P1-066): Domain Ports — Engine 去 God Object 第一阶段。
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from beidou_shared.types import StrategyId, VenueId
-
 
 # ================================================================
 # 事实模型 — 不可变数据传输对象

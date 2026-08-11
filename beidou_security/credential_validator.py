@@ -45,6 +45,7 @@ class CredentialType(str, Enum):
 
 class SigningDomain(str, Enum):
     """P1-053: 签名密钥域隔离。"""
+
     POLICY = "policy"
     RISK = "risk"
     CERTIFICATION = "certification"
@@ -195,8 +196,11 @@ class CredentialRegistry:
         self._credentials[cred.credential_id] = cred
 
     def validate(
-        self, credential_id: str, required_type: CredentialType,
-        client_ip: str = "", required_domain: SigningDomain | None = None,
+        self,
+        credential_id: str,
+        required_type: CredentialType,
+        client_ip: str = "",
+        required_domain: SigningDomain | None = None,
     ) -> bool:
         """P1-051/053: 完整验证 — type + status + expiry + IP + domain。"""
         cred = self._credentials.get(credential_id)
@@ -234,14 +238,14 @@ class CredentialRegistry:
             signer=old.signer,
             allowed_ips=old.allowed_ips,
         )
-        self._credentials[credential_id] = Credential(
-            **{**old.__dict__, "status": CredentialStatus.ROTATING}
-        )
+        self._credentials[credential_id] = Credential(**{**old.__dict__, "status": CredentialStatus.ROTATING})
         self._credentials[new_cred.credential_id] = new_cred
 
         log_entry = {
-            "action": "rotate", "old_id": credential_id,
-            "new_id": new_cred.credential_id, "timestamp": time.time(),
+            "action": "rotate",
+            "old_id": credential_id,
+            "new_id": new_cred.credential_id,
+            "timestamp": time.time(),
         }
         self._generation_log.append(log_entry)
 
@@ -251,7 +255,10 @@ class CredentialRegistry:
         return new_cred
 
     def rotate_with_evidence(
-        self, credential_id: str, new_key_hash: str, evidence: dict | None = None,
+        self,
+        credential_id: str,
+        new_key_hash: str,
+        evidence: dict | None = None,
     ) -> tuple[Credential, RotationRecord]:
         """P1-052: 带证据哈希的轮换。"""
         new_cred = self.rotate(credential_id, new_key_hash)
@@ -261,9 +268,7 @@ class CredentialRegistry:
             old_key_id=self._credentials[credential_id].key_id,
             new_key_id=new_cred.key_id,
             rotated_at=time.time(),
-            evidence_hash=hashlib.sha256(
-                json.dumps(evidence or {}, sort_keys=True).encode()
-            ).hexdigest(),
+            evidence_hash=hashlib.sha256(json.dumps(evidence or {}, sort_keys=True).encode()).hexdigest(),
         )
         self._rotation_records.append(record)
         self._persist_rotation_event(record.__dict__)
@@ -272,11 +277,13 @@ class CredentialRegistry:
     def revoke(self, credential_id: str) -> None:
         """P1-052: 撤销凭据（持久化）。"""
         self._revoked.add(credential_id)
-        self._persist_revocation_event({
-            "action": "revoke",
-            "credential_id": credential_id,
-            "timestamp": time.time(),
-        })
+        self._persist_revocation_event(
+            {
+                "action": "revoke",
+                "credential_id": credential_id,
+                "timestamp": time.time(),
+            }
+        )
 
     def get_generation_log(self) -> list[dict]:
         return list(self._generation_log)
@@ -421,11 +428,23 @@ class PolicyRegistry:
 # Config Hash (BDS-P1-056)
 # ---------------------------------------------------------------------------
 
-_SENSITIVE_KEYS = frozenset({
-    "secrets", "api_key", "api_secret", "signing_key",
-    "secret", "password", "token", "private_key", "access_key",
-    "secret_key", "credential", "credentials", "key",
-})
+_SENSITIVE_KEYS = frozenset(
+    {
+        "secrets",
+        "api_key",
+        "api_secret",
+        "signing_key",
+        "secret",
+        "password",
+        "token",
+        "private_key",
+        "access_key",
+        "secret_key",
+        "credential",
+        "credentials",
+        "key",
+    }
+)
 
 
 def _deep_strip_secrets(obj: object, depth: int = 0) -> object:
@@ -438,11 +457,7 @@ def _deep_strip_secrets(obj: object, depth: int = 0) -> object:
     if depth > 10:
         return obj
     if isinstance(obj, dict):
-        return {
-            k: _deep_strip_secrets(v, depth + 1)
-            for k, v in obj.items()
-            if k not in _SENSITIVE_KEYS
-        }
+        return {k: _deep_strip_secrets(v, depth + 1) for k, v in obj.items() if k not in _SENSITIVE_KEYS}
     if isinstance(obj, list):
         return [_deep_strip_secrets(item, depth + 1) for item in obj]
     return obj
@@ -478,8 +493,12 @@ def compute_full_config_hash(
 
 
 def sign_with_signer(
-    payload: str, key: bytes, signer: str, key_id: str,
-    algorithm: str = "HMAC-SHA256", domain: str = "",
+    payload: str,
+    key: bytes,
+    signer: str,
+    key_id: str,
+    algorithm: str = "HMAC-SHA256",
+    domain: str = "",
 ) -> str:
     """P1-054: signer/key_id/algorithm 纳入签名 payload。
 

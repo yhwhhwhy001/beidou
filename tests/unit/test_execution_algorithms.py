@@ -198,7 +198,11 @@ class TestAdaptiveSliceAlgorithm:
 
     def test_plan_adapts_to_market(self):
         ctx = _make_ctx(
-            urgency=0.4, alpha_decay_seconds=3600.0, net_alpha_bps=15.0, predicted_cost_bps=3.0, spread_bps=3.0,
+            urgency=0.4,
+            alpha_decay_seconds=3600.0,
+            net_alpha_bps=15.0,
+            predicted_cost_bps=3.0,
+            spread_bps=3.0,
             min_quantity=0.001,
         )
         algo = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25)

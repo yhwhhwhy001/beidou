@@ -252,15 +252,19 @@ class EntryNode(TypedGraphNode):
                 )
             elif self.failure_policy == NodeFailurePolicy.SKIP:
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.ENTRY,
-                    output_hash="skipped", data=None,
+                    node_id=self.node_id,
+                    node_type=NodeType.ENTRY,
+                    output_hash="skipped",
+                    data=None,
                     dq_tier=DataQualityTier.DEGRADED,
                     metadata={"error": str(e), "skipped": True},
                 )
             elif self.failure_policy == NodeFailurePolicy.DEGRADE:
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.ENTRY,
-                    output_hash="degraded", data=default_data if "default_data" in dir() else None,
+                    node_id=self.node_id,
+                    node_type=NodeType.ENTRY,
+                    output_hash="degraded",
+                    data=default_data if "default_data" in dir() else None,
                     dq_tier=DataQualityTier.DEGRADED,
                     metadata={"error": str(e), "degraded": True},
                 )
@@ -326,15 +330,21 @@ class FilterNode(TypedGraphNode):
                     component_id=self.node_id,
                 )
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.FILTER,
-                    output_hash="error_veto", data=fail_result,
-                    dq_tier=DataQualityTier.BLOCK, metadata={"error": str(e)},
+                    node_id=self.node_id,
+                    node_type=NodeType.FILTER,
+                    output_hash="error_veto",
+                    data=fail_result,
+                    dq_tier=DataQualityTier.BLOCK,
+                    metadata={"error": str(e)},
                 )
             elif self.failure_policy == NodeFailurePolicy.SKIP:
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.FILTER,
-                    output_hash="skipped", data=FilterResult(
-                        decision=FilterDecision.ACCEPT, component_id=self.node_id,
+                    node_id=self.node_id,
+                    node_type=NodeType.FILTER,
+                    output_hash="skipped",
+                    data=FilterResult(
+                        decision=FilterDecision.ACCEPT,
+                        component_id=self.node_id,
                         reason_codes=["filter_skipped"],
                     ),
                     dq_tier=DataQualityTier.DEGRADED,
@@ -342,11 +352,15 @@ class FilterNode(TypedGraphNode):
                 )
             elif self.failure_policy == NodeFailurePolicy.DEGRADE:
                 return TypedNodeOutput(
-                    node_id=self.node_id, node_type=NodeType.FILTER,
-                    output_hash="degraded", data=FilterResult(
-                        decision=FilterDecision.DEGRADE, component_id=self.node_id,
+                    node_id=self.node_id,
+                    node_type=NodeType.FILTER,
+                    output_hash="degraded",
+                    data=FilterResult(
+                        decision=FilterDecision.DEGRADE,
+                        component_id=self.node_id,
                         reason_codes=[f"filter_degraded: {str(e)[:100]}"],
-                        confidence_multiplier=0.5, size_multiplier=0.5,
+                        confidence_multiplier=0.5,
+                        size_multiplier=0.5,
                     ),
                     dq_tier=DataQualityTier.DEGRADED,
                     metadata={"error": str(e), "degraded": True},
@@ -433,7 +447,9 @@ class FusionNode(TypedGraphNode):
             if inp.node_type == NodeType.ENTRY and inp.data is not None:
                 _ep = inp.data
                 # 诊断：打印每个入场提案
-                print(f"[fusion] ENTRY {inp.node_id}: side={getattr(_ep, 'side', '?')} strength={getattr(_ep, 'strength', '?')}")
+                print(
+                    f"[fusion] ENTRY {inp.node_id}: side={getattr(_ep, 'side', '?')} strength={getattr(_ep, 'strength', '?')}"
+                )
                 # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
                 if entry_proposal is None or (
                     getattr(_ep, "side", None) is not None and getattr(entry_proposal, "side", None) is None
@@ -631,12 +647,16 @@ class TypedAlphaGraph:
     def compute_graph_hash(self) -> str:
         """P1-001: 图行为哈希绑定完整上下文 — 参数/模型/因子版本/代码SHA。"""
         nodes_info = sorted(
-            [{
-                "id": nid,
-                "type": node.node_type.value,
-                "failure_policy": str(getattr(node, "failure_policy", "FAIL_CLOSED")),
-                "params": str(getattr(node, "_params", getattr(node, "params", {}))),
-            } for nid, node in self._nodes.items()], key=lambda x: x["id"]
+            [
+                {
+                    "id": nid,
+                    "type": node.node_type.value,
+                    "failure_policy": str(getattr(node, "failure_policy", "FAIL_CLOSED")),
+                    "params": str(getattr(node, "_params", getattr(node, "params", {}))),
+                }
+                for nid, node in self._nodes.items()
+            ],
+            key=lambda x: x["id"],
         )
         edges_info = sorted(
             [{"from": src, "to": tgt} for src, tgts in self._edges.items() for tgt in tgts],

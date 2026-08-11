@@ -11,7 +11,7 @@ Risk / Strategy / Protection / StateMachine 语义必须同构。
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
 
@@ -154,6 +154,7 @@ def reset_environment_profile() -> None:
 
 
 # --- PKG02: 禁止旁路检测 ---
+
 
 class SafetyBypassViolation(Exception):
     """检测到按环境区分安全语义的旁路。"""

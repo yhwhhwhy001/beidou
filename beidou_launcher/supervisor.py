@@ -181,7 +181,11 @@ class BeidouSupervisor:
         ) -> Any:
             # LEVERAGE 是配置操作，在任何状态下允许
             _is_config = "/fapi/v1/leverage" in str(path)
-            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config
+            _blocked = (
+                method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+                and not write_allowed(method, params)
+                and not _is_config
+            )
             if _blocked:
                 print(f"[supervisor] BLOCKED: {method} {path} is_config={_is_config}")
                 return record(path, method)
@@ -196,7 +200,11 @@ class BeidouSupervisor:
             params: dict[str, Any] | None = None,
         ) -> Any:
             _is_config = "/fapi/v1/leverage" in str(path)
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
+            if (
+                method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+                and not write_allowed(method, params)
+                and not _is_config
+            ):
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
@@ -220,7 +228,11 @@ class BeidouSupervisor:
                 params: dict[str, Any] | None = None,
             ) -> Any:
                 _is_config = "/fapi/v1/leverage" in str(path)
-                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params) and not _is_config:
+                if (
+                    method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+                    and not write_allowed(method, params)
+                    and not _is_config
+                ):
                     record(path, method)
                     return Result.failure(
                         "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
@@ -407,7 +419,12 @@ class BeidouSupervisor:
             # API 查询失败时，回退到引擎缓存的账户数据
             _cached = getattr(self.engine, "_last_account", None)
             if isinstance(_cached, dict) and "totalWalletBalance" in _cached:
-                self._exchange_account_snapshot = {"ok": True, "account": _cached, "observed_at": time.time(), "source": "cached_fallback"}
+                self._exchange_account_snapshot = {
+                    "ok": True,
+                    "account": _cached,
+                    "observed_at": time.time(),
+                    "source": "cached_fallback",
+                }
             else:
                 self._exchange_account_snapshot = {
                     "ok": False,
@@ -691,7 +708,7 @@ class BeidouSupervisor:
             open_p1 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
-            self._monitoring_scheduler.tick(scheduler_results, open_p0=open_p0, open_p1=open_p1)
+            self._monitoring_scheduler.tick(scheduler_results, open_p0=open_p0, open_p1=open_p1)  # type: ignore[no-untyped-call]
         except Exception as exc:
             logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
@@ -759,7 +776,10 @@ class BeidouSupervisor:
                 return False
             if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
                 if not self._algorithm_probe.get("ok"):
-                    if time.monotonic() - self._last_algorithm_probe_attempt >= 10.0 or self._last_algorithm_probe_attempt == 0.0:
+                    if (
+                        time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
+                        or self._last_algorithm_probe_attempt == 0.0
+                    ):
                         self._last_algorithm_probe_attempt = time.monotonic()
                         try:
                             self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
@@ -791,8 +811,10 @@ class BeidouSupervisor:
                 if all_blockers:
                     self._blocker_report_count = getattr(self, "_blocker_report_count", 0) + 1
                     if self._blocker_report_count % 10 == 1:
-                        print(f"[supervisor] Blockers ({len(all_blockers)}): "
-                              f"{[(b.check_id, b.message[:60]) for b in all_blockers[:5]]}")
+                        print(
+                            f"[supervisor] Blockers ({len(all_blockers)}): "
+                            f"{[(b.check_id, b.message[:60]) for b in all_blockers[:5]]}"
+                        )
                 if not startup_blockers and not self.report.blockers:
                     return True
             else:
@@ -867,6 +889,7 @@ class BeidouSupervisor:
                 print("[supervisor] All checks clear — re-authorizing RESUME")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA2
+
                 self.engine._control.execute_action(_CA2.RESUME)
                 self.report.supervisor_state = "RUNNING"
                 self.report.trading_ready = True
@@ -960,10 +983,7 @@ class BeidouSupervisor:
                 )
             self._last_monitor_loop_ts = time.monotonic()
 
-            if (
-                not any(item.is_blocking for item in checks)
-                and await self._recover_if_validated(checks)
-            ):
+            if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
                 # _fail_closed 后 _resume_authorized=False，不能由清洁窗口重置。
                 checks = self._runtime_checks()
@@ -1095,6 +1115,7 @@ class BeidouSupervisor:
             if self.mode in ("paper", "testnet", "research"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
+
                     patch_engine_for_dev(self.engine, self.mode)
                 except Exception as _bootstrap_exc:
                     print(f"[supervisor] 开发引导失败（非致命）: {_bootstrap_exc}")
@@ -1131,10 +1152,9 @@ class BeidouSupervisor:
                 # 加超时防止 REST API 缓慢时无限挂起。
                 try:
                     from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
-                    self._algorithm_probe = await asyncio.wait_for(
-                        _probe(self.engine, self.symbols), timeout=60.0
-                    )
-                    print(f"[supervisor] Algorithm probe: {self._algorithm_probe.get('ok') and 'PASS' or 'FAIL'}")
+
+                    self._algorithm_probe = await asyncio.wait_for(_probe(self.engine, self.symbols), timeout=60.0)
+                    print(f"[supervisor] Algorithm probe: {(self._algorithm_probe.get('ok') and 'PASS') or 'FAIL'}")
                 except asyncio.TimeoutError:
                     self._algorithm_probe = {"ok": False, "error": "Algorithm probe timed out after 60s"}
                     print("[supervisor] Algorithm probe timed out")
@@ -1143,9 +1163,13 @@ class BeidouSupervisor:
                     print(f"[supervisor] Algorithm probe failed: {_exc}")
                 self._resume_authorized = True
                 from beidou_control.plane import ControlAction as _CA
+
                 # BD-FIX (S23): 通过保存的原始方法直接设置 RESUME，绕过 guard
                 self._original_control_execute(_CA.RESUME)
-                print(f"[supervisor] RESUME set via original method. Status: {self.engine._control.get_status().value}", flush=True)
+                print(
+                    f"[supervisor] RESUME set via original method. Status: {self.engine._control.get_status().value}",
+                    flush=True,
+                )
                 self.report.supervisor_state = "RUNNING"
                 self.report.trading_ready = True
                 ready = True

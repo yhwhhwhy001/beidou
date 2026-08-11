@@ -349,10 +349,13 @@ class BinanceRESTClient:
             ratio = self._rate_state.weight_used / self._rate_state.weight_limit
             if ratio > 0.8:
                 import logging
+
                 _logger = logging.getLogger(__name__)
                 _logger.warning(
                     "Binance rate limit near capacity: %d/%d (%.0f%%)",
-                    self._rate_state.weight_used, self._rate_state.weight_limit, ratio * 100,
+                    self._rate_state.weight_used,
+                    self._rate_state.weight_limit,
+                    ratio * 100,
                 )
 
     async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
@@ -410,6 +413,7 @@ class BinanceRESTClient:
                 # P1-019: 使用持久 httpx session 避免每次新建连接
                 if self._session is None:
                     import httpx
+
                     self._session = httpx.Client(timeout=DEFAULT_HTTP_TIMEOUT, follow_redirects=False, http2=False)
                 body, resp_headers = await asyncio.to_thread(_sync_urlopen, req, DEFAULT_HTTP_TIMEOUT, self._session)
                 data = json.loads(body)
