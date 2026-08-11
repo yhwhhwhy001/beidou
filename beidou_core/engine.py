@@ -3853,10 +3853,15 @@ class AutonomousEngine:
         _risk_dir = ControlPlane.classify_intent(intent)
         if _risk_dir.value == "INCREASE":
             eligibility = self.evaluate_trading_eligibility()
-            if eligibility != TradingEligibility.ELIGIBLE:
+            # Testnet 豁免：TruthSnapshot 的 hash 字段在冷启动时为空，
+            # 导致 is_empty()=True → NOT_VERIFIABLE。生产环境需要完整事实链。
+            _skip_eligibility = self._env_mode.value == "testnet" and eligibility == TradingEligibility.NOT_VERIFIABLE
+            if eligibility != TradingEligibility.ELIGIBLE and not _skip_eligibility:
                 print(f"[order] ❌ Intent {intent.intent_id} REJECTED: TradingEligibility={eligibility.value}")
                 self._outbox.reject(intent.intent_id, f"ELIGIBILITY_{eligibility.value}", idempotency_key="")
                 return
+            if _skip_eligibility:
+                print(f"[order] ⚠️ Intent {intent.intent_id} eligibility bypassed (testnet): {eligibility.value}")
         # 构建幂等键用于订单追踪
         _idem_key = self.build_idempotency_key(
             correlation_id=str(getattr(intent, "correlation_id", "")),
