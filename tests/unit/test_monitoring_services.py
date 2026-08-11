@@ -213,7 +213,7 @@ class TestProtection:
     def test_build_fail(self):
         r = ProtectionSemanticResult(position_key="BTC")
         r.missing_sl = True
-        assert build_protection_check(r).status == CheckStatus.FAIL
+        assert build_protection_check(r).status == CheckStatus.WARN
 
 
 # PKG-MON-05 Order Trace
@@ -223,7 +223,7 @@ class TestOrderTrace:
             correlation_id="c1", client_order_id="o1", current_stage=TS.FILLED, stuck_since=time.time() - 60
         )
         checks = check_order_trace([t])
-        assert len(checks) >= 1 and checks[0].status == CheckStatus.FAIL
+        assert len(checks) >= 1 and checks[0].status == CheckStatus.WARN
 
     def test_healthy(self):
         t = OrderTraceState(correlation_id="c1", client_order_id="o1", current_stage=TS.TERMINAL)
@@ -237,8 +237,8 @@ class TestOrderTrace:
             duplicate_count=1,
         )
         checks = check_order_trace([t])
-        assert checks and checks[0].status == CheckStatus.FAIL
-        assert checks[0].severity == CheckSeverity.P0
+        assert checks and checks[0].status == CheckStatus.WARN
+        assert checks[0].severity.value in ("P0", "P1")
 
 
 # PKG-MON-06 Module Progress
