@@ -435,10 +435,16 @@ class BinanceRESTClient:
                     await asyncio.sleep(wait)
                     continue
 
-                self._rate_state.consecutive_failures += 1
-                if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
-                    self._rate_state.circuit_open = True
-                    self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
+                # Only count retryable / transport errors toward the circuit breaker.
+                # Application-level errors (-4014 tick size, -4024 price constraint,
+                # etc.) are permanent client errors and must never trigger a
+                # transport-level circuit that blocks unrelated API calls like
+                # exchangeInfo and precision loading.
+                if retryable:
+                    self._rate_state.consecutive_failures += 1
+                    if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                        self._rate_state.circuit_open = True
+                        self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
 
                 return Result.failure(
                     error_message or f"HTTP {http_status}",
