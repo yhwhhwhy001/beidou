@@ -4125,7 +4125,16 @@ class AutonomousEngine:
             }
             if order_type == "LIMIT" and price_str:
                 params["price"] = price_str
-                params["timeInForce"] = tif or "GTC"
+                # BD-FIX: Testnet 流动性极薄，IOC 限价单几乎全部 EXPIRED。
+                # 将 IOC/FOK 覆写为 GTC，让订单挂在订单簿上等待成交。
+                _tif = tif or "GTC"
+                _is_testnet_tif = (
+                    getattr(self, "_env_mode", None) is not None
+                    and str(self._env_mode.value) == "testnet"
+                )
+                if _is_testnet_tif and _tif in ("IOC", "FOK"):
+                    _tif = "GTC"
+                params["timeInForce"] = _tif
 
             order = await self._submit_order_slice(
                 intent,
