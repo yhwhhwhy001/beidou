@@ -5160,8 +5160,15 @@ class AutonomousEngine:
 
                 prec_map = self._symbol_precision.get(symbol)
                 if prec_map is None:
-                    print(f"[protection] {symbol}: exchange precision UNKNOWN; keeping protection PENDING")
-                    continue
+                    # S39: 用 tick map 备选精度
+                    from decimal import Decimal as _D
+                    trigger_val = float(p_order.trigger_price.amount)
+                    if trigger_val > 5000: dec = 1
+                    elif trigger_val > 100: dec = 2
+                    elif trigger_val > 1: dec = 3
+                    else: dec = 5
+                    prec_map = {"price": dec, "quantity": dec}
+                    print(f"[protection] {symbol}: using fallback precision price={dec} qty={dec}")
                 algo_params = self._protection_algo_params(
                     p_order,
                     symbol=symbol,
@@ -6177,6 +6184,13 @@ class AutonomousEngine:
                         # 立即提交到交易所
                         reduce_side = "SELL" if pp.side == OrderSide.BUY else "BUY"
                         prec_map = self._symbol_precision.get(symbol)
+                        if prec_map is None:
+                            trigger_val = float(pp.entry_price)
+                            if trigger_val > 5000: dec = 1
+                            elif trigger_val > 100: dec = 2
+                            elif trigger_val > 1: dec = 3
+                            else: dec = 5
+                            prec_map = {"price": dec, "quantity": dec}
                         if prec_map:
                             for p_order in [pp.stop_loss] + list(pp.take_profits):
                                 if p_order is None:
