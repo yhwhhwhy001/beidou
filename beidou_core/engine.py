@@ -3979,13 +3979,13 @@ class AutonomousEngine:
                     px = ref_price * 1.02
                 else:
                     px = ref_price * 0.98
-                # 对齐 tick size（常见精度: BTC 0.1, ETH 0.01, <$1 用 4 位）
-                if px > 1000:
-                    aggressive_price = str(round(px, 1))
-                elif px > 10:
-                    aggressive_price = str(round(px, 2))
-                else:
-                    aggressive_price = str(round(px, 4))
+                # 对齐交易所 tick size
+                prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
+                price_decimals = prec.get("price", 2)
+                # 向下取整到 tick size 整数倍
+                tick = 10 ** (-price_decimals) if price_decimals > 0 else 0.01
+                px = round(px / tick) * tick
+                aggressive_price = str(round(px, price_decimals))
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
             else:
