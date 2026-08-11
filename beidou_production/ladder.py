@@ -108,10 +108,12 @@ class ProductionLadder:
         )
 
     def certify(self, level: LadderLevel, result: GateResult, evidence: list[str]) -> GateCertificate:
-        if result == GateResult.PASS and (
-            not self._configuration_verified or not evidence or any(not str(e).strip() for e in evidence)
-        ):
-            result = GateResult.UNVERIFIABLE
+        # BD-CV52: 不可跳级 — 必须验证前置 gate 证书链
+        if result == GateResult.PASS:
+            if not self._configuration_verified or not evidence or any(not str(e).strip() for e in evidence):
+                result = GateResult.UNVERIFIABLE
+            elif not self.can_promote_to(level):
+                result = GateResult.UNVERIFIABLE
         cert = GateCertificate(
             gate=f"G{list(LadderLevel).index(level) + 4}",
             level=level,

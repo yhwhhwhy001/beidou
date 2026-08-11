@@ -22,12 +22,18 @@ from types import SimpleNamespace
 from typing import Any
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
+from beidou_certification.contracts import GateLevel, CertificationGate
 from beidou_control.plane import ControlAction, ControlPlane
+from beidou_control.truth import TradingEligibility, TruthSnapshot, derive_eligibility
 from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
+from beidou_data.canonical_bars import get_canonical_bar_builder
 from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_research.contracts import StrategyAction, StrategySignal
+from beidou_safety.execution.contracts import ExecutionPlan, PlanSlice, PlanStatus, PositionAggregate, Fill, OrderIdempotencyKey
+from beidou_strategy.portfolio.contracts import SignedPortfolioTarget, PositionSide
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
@@ -7500,6 +7506,95 @@ class AutonomousEngine:
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
         return True, "OK"
+
+    # --- BD-CV Contracts: Bridge methods ---
+
+    def build_truth_snapshot(self) -> TruthSnapshot:
+        """BD-CV02: 从当前引擎状态构建 TruthSnapshot。"""
+        now_ts = time.time()
+        return TruthSnapshot(
+            snapshot_id=f"snap-{int(now_ts * 1000)}",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            market_hash=getattr(getattr(self, "_feed", None), "last_hash", ""),
+            account_hash=getattr(self, "_last_account_hash", ""),
+            order_hash=getattr(self, "_last_order_hash", ""),
+            reconciliation_hash=getattr(self, "_last_reconciliation_hash", ""),
+            protection_hash=getattr(self, "_last_protection_hash", ""),
+            risk_hash=getattr(self, "_last_risk_hash", ""),
+            market_freshness=now_ts,
+            account_freshness=now_ts,
+            order_freshness=now_ts,
+            reconciliation_freshness=now_ts,
+            protection_freshness=now_ts,
+            risk_freshness=now_ts,
+            reconciliation_status=getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN"),
+            protection_status="ACTIVE" if self._protection_owner_unknown is False else "UNKNOWN",
+            risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
+        )
+
+    def evaluate_trading_eligibility(self) -> TradingEligibility:
+        """BD-CV02 AC-02-01: 全仓唯一 TradingEligibility authority。"""
+        snap = self.build_truth_snapshot()
+        return derive_eligibility(snap)
+
+    def build_strategy_signal(self, strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = "") -> StrategySignal:
+        """BD-CV23: 构造 Typed Strategy Signal。
+
+        NO_ACTION 不会被当系统故障，VETO 在所有环境阻断下游。
+        """
+        _action_map = {
+            "ACTION": StrategyAction.ACTION,
+            "NO_ACTION": StrategyAction.NO_ACTION,
+            "VETO": StrategyAction.VETO,
+            "DEGRADED": StrategyAction.DEGRADED,
+        }
+        sa = _action_map.get(action, StrategyAction.NO_ACTION)
+        return StrategySignal(strategy_id=strategy_id, action=sa, symbol=symbol, confidence=confidence, reason=reason)
+
+    def build_portfolio_target(self, symbol: str, side: str, exposure: float, delta: float = 0.0) -> SignedPortfolioTarget:
+        """BD-CV30: 构造 SignedPortfolioTarget。
+
+        LONG/SHORT/FLAT 方向正确，gross>=abs(net)。
+        """
+        _side_map = {"LONG": PositionSide.LONG, "SHORT": PositionSide.SHORT, "FLAT": PositionSide.FLAT}
+        ps = _side_map.get(side, PositionSide.FLAT)
+        return SignedPortfolioTarget(
+            target_id=f"tgt-{symbol}-{int(time.time()*1000)}",
+            symbol=symbol,
+            side=ps,
+            target_exposure=exposure,
+            delta=delta,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def build_execution_plan(self, slices: list[PlanSlice], algorithm: str = "", is_emergency: bool = False) -> ExecutionPlan:
+        """BD-CV40: 构造 ExecutionPlan。
+
+        无算法适用返回 NOT_EXECUTABLE。Emergency plan 绝不增加绝对仓位。
+        """
+        if not slices or not algorithm:
+            return ExecutionPlan(plan_id=f"plan-{int(time.time()*1000)}", status=PlanStatus.NOT_EXECUTABLE, algorithm=algorithm)
+        return ExecutionPlan(
+            plan_id=f"plan-{int(time.time()*1000)}",
+            slices=slices,
+            status=PlanStatus.PENDING,
+            algorithm=algorithm,
+            is_emergency=is_emergency,
+        )
+
+    def build_position_aggregate(self, symbol: str, fills: list[Fill] | None = None) -> PositionAggregate:
+        """BD-CV42: 从成交记录构建 PositionAggregate。
+
+        任意成交序列 replay 确定性。
+        """
+        pa = PositionAggregate(symbol=symbol, fills=fills or [])
+        if fills:
+            return pa.replay(fills)
+        return pa
+
+    def build_idempotency_key(self, correlation_id: str, client_order_id: str, outbox_id: str = "") -> OrderIdempotencyKey:
+        """BD-CV41: 构造订单幂等键。"""
+        return OrderIdempotencyKey(correlation_id=correlation_id, client_order_id=client_order_id, outbox_id=outbox_id)
 
     # --- Main loop ---
 

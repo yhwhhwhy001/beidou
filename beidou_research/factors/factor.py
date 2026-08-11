@@ -3,6 +3,8 @@
 PKG-14: 因子定义、IC/RankIC/ICIR、分层回测、衰减分析、换手率、
 成本后边际贡献、因子生命周期管理（IDEA→ACTIVE→DEGRADED→SUSPENDED→RETIRED）。
 退役证据永久保留；重新启用等同新 Challenger，必须重新经过完整 Gate。
+
+BD-CV22: 集成 FactorEvidence contract — NaN/空evidence/旧evidence不能PROMOTED。
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from beidou_research.contracts import FactorEvidence, FactorLifecycleState  # BD-CV22
 
 from beidou_shared.types import SchemaVersion, VenueId
 
@@ -791,3 +795,32 @@ class FactorRegistry:
         if len(signs) > 1:
             return False, "IC direction inconsistent across venues"
         return True, "Cross-venue stable"
+
+
+# --- BD-CV22: FactorEvidence 合约桥接 ---
+
+
+def bridge_to_factor_evidence(
+    factor_id: str,
+    state: str,
+    sharpe: float,
+    evidence_dag_hash: str = "",
+) -> FactorEvidence:
+    """BD-CV22: 将现有因子状态桥接到 FactorEvidence contract。
+
+    NaN score/空evidence 不能 PROMOTED。
+    """
+    _state_map = {
+        "ACTIVE": FactorLifecycleState.ACTIVE,
+        "DEGRADED": FactorLifecycleState.DEGRADED,
+        "RETIRED": FactorLifecycleState.RETIRED,
+        "CANDIDATE": FactorLifecycleState.CANDIDATE,
+    }
+    fs = _state_map.get(state, FactorLifecycleState.CANDIDATE)
+    return FactorEvidence(
+        factor_id=factor_id,
+        state=fs,
+        sharpe=sharpe,
+        evidence_dag_hash=evidence_dag_hash,
+        last_promotion_at=datetime.now(timezone.utc).isoformat(),
+    )

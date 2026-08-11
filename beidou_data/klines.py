@@ -1,10 +1,14 @@
-"""闭合 K 线生成、多周期隔离、修订与自动回补。"""
+"""闭合 K 线生成、多周期隔离、修订与自动回补。
+
+BD-CV11: 集成 CanonicalMarketEvent contract。
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from beidou_data.contracts import CanonicalMarketEvent, EventType  # BD-CV11
 from beidou_shared.types import Price, Quantity, VenueInstrument
 
 

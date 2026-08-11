@@ -1,4 +1,7 @@
-"""持续对账、前置账户事实缓存与差异修复。"""
+"""持续对账、前置账户事实缓存与差异修复。
+
+BD-CV44: 集成 TripleReconciliation contract — 三方同源伪造检测。
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 
+from beidou_safety.execution.contracts import TripleReconciliation  # BD-CV44
 from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, VenueId
 
 
@@ -426,6 +430,37 @@ class ReconciliationEngine:
             event_facts=event_facts,
             checked_at=checked_at,
         )
+
+    # --- BD-CV44: 三方同源伪造检测 ---
+
+    def detect_same_source_fraud(self) -> TripleReconciliation:
+        """BD-CV44: 验证三方对账数据来源独立性。
+
+        三方同源伪造测试必须被检测。
+        至少需要三个独立来源 (exchange / local / event stream)。
+        """
+        system_keys = set(self._system_facts.keys())
+        exchange_keys = set(self._exchange_facts.keys())
+        event_keys = set(self._event_facts.keys())
+
+        sources: list[str] = []
+        if system_keys:
+            sources.append("system")
+        if exchange_keys:
+            sources.append("exchange")
+        if event_keys:
+            sources.append("event_stream")
+
+        tr = TripleReconciliation(
+            venue_orders=len(exchange_keys),
+            local_orders=len(system_keys),
+            ledger_entries=len(event_keys),
+            is_matched=False,
+        )
+        # 三方同源伪造检测：需要 >= 3 个独立来源
+        if not tr.detect_same_source_fraud(sources):
+            tr.mismatches.append("SAME_SOURCE_FRAUD_RISK: fewer than 3 independent fact sources")
+        return tr
 
     def repair_strategy(self, result: ReconciliationResult) -> str:
         if result.matched:

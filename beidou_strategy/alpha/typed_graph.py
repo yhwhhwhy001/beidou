@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -674,3 +675,4 @@ class TypedAlphaGraph:
             sort_keys=True,
         )
         return hashlib.sha256(content.encode()).hexdigest()
+
