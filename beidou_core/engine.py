@@ -6174,6 +6174,25 @@ class AutonomousEngine:
                             position_generation=0,
                             session_id=str(getattr(self, "_session_id", "")),
                         )
+                        # 立即提交到交易所
+                        reduce_side = "SELL" if pp.side == OrderSide.BUY else "BUY"
+                        prec_map = self._symbol_precision.get(symbol)
+                        if prec_map:
+                            for p_order in [pp.stop_loss] + list(pp.take_profits):
+                                if p_order is None:
+                                    continue
+                                try:
+                                    algo_params = self._protection_algo_params(p_order, symbol=symbol, side=reduce_side, precision=prec_map)
+                                    algo_resp = await self._create_algo_order(algo_params)
+                                    if "algoId" in algo_resp:
+                                        p_order.exchange_order_id = str(algo_resp["algoId"])
+                                        p_order.status = ProtectionStatus.ACTIVE
+                                        self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
+                                        print(f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}")
+                                    else:
+                                        print(f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg','')[:80]}")
+                                except Exception as exc:
+                                    print(f"[nearline] ⚠️ SL/TP error: {symbol} {exc}")
                         print(f"[nearline] Protection CREATED for {symbol}: SL+TP")
                     except Exception as exc:
                         print(f"[nearline] Protection creation failed for {symbol}: {exc}")
