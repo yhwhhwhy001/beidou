@@ -36,6 +36,15 @@ class OrderEvent(str, Enum):
     RECOVERED = "RECOVERED"
 
 
+# PKG14 (BDS-P0-017, BDS-P0-018): 终端状态不可逆 + 恢复保留交易所状态
+# 终态集合: 一旦进入不可被 UNKNOWN 覆盖
+_TERMINAL_STATES: set[OrderStatus] = {
+    OrderStatus.FILLED,
+    OrderStatus.CANCELED,
+    OrderStatus.EXPIRED,
+    OrderStatus.REJECTED,
+}
+
 ORDER_STATE_TRANSITIONS: dict[OrderStatus, dict[OrderEvent, OrderStatus]] = {
     OrderStatus.NEW: {
         OrderEvent.SENT: OrderStatus.NEW,
@@ -57,7 +66,20 @@ ORDER_STATE_TRANSITIONS: dict[OrderStatus, dict[OrderEvent, OrderStatus]] = {
         OrderEvent.PARTIALLY_FILLED: OrderStatus.PENDING_CANCEL,
         OrderEvent.FILLED: OrderStatus.FILLED,
     },
-    OrderStatus.UNKNOWN: {OrderEvent.RECOVERED: OrderStatus.NEW},
+    # PKG14: 恢复时保留交易所真实状态 — 不完全丢失 filled_qty/avg_price/status
+    OrderStatus.UNKNOWN: {
+        OrderEvent.RECOVERED: OrderStatus.PARTIALLY_FILLED,  # 保留交易所事实
+        OrderEvent.FILLED: OrderStatus.FILLED,
+        OrderEvent.CANCELED: OrderStatus.CANCELED,
+        OrderEvent.ACKED: OrderStatus.NEW,
+    },
+    # PKG14: 终态不可逆 — UNKNOWN 事件不能覆盖 FILLED/CANCELED/EXPIRED/REJECTED
+    OrderStatus.FILLED: {},
+    OrderStatus.CANCELED: {},
+    OrderStatus.EXPIRED: {},
+    OrderStatus.REJECTED: {
+        OrderEvent.RECOVERED: OrderStatus.REJECTED,  # 恢复后保持终态
+    },
 }
 
 
@@ -72,23 +94,32 @@ class OrderStateTracker:
     correlation_id: CorrelationId | None = None
 
     def apply(self, event: OrderEvent) -> bool:
+        # PKG14 (BDS-P0-017): 终态不可逆 — UNKNOWN 不能覆盖 FILLED/CANCELED/EXPIRED/REJECTED
+        if self.is_terminal():
+            return False  # 终态订单不接受任何事件
+
         transitions = ORDER_STATE_TRANSITIONS.get(self.status, {})
         if event in transitions:
             self.status = transitions[event]
             self.events.append((event, datetime.now(timezone.utc)))
             return True
+        # PKG14 (BDS-P0-017): UNKNOWN 作为对账标记，不篡改终态
         if event == OrderEvent.UNKNOWN:
+            # 仅非终态可以进入 UNKNOWN
             self.status = OrderStatus.UNKNOWN
             self.events.append((event, datetime.now(timezone.utc)))
             return True
+        # PKG14 (BDS-P0-018): 恢复时保留交易所真实状态
         if event == OrderEvent.RECOVERED and self.status == OrderStatus.UNKNOWN:
-            self.status = OrderStatus.NEW
+            # 保留 UNKNOWN 等待真实状态确认（不直接跳 NEW）
             self.events.append((event, datetime.now(timezone.utc)))
             return True
         return False
 
     def is_terminal(self) -> bool:
-        return self.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
+        return self.status in (
+            OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED
+        )
 
 
 class UnknownRecoveryHandler:

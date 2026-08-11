@@ -460,6 +460,24 @@ class BinanceRESTClient:
                 )
 
             except Exception as e:
+                # PKG11 (BDS-P0-012): 写请求盲重试防护
+                # POST/DELETE 在超时/网络故障时不得盲重试 — 可能导致重复订单。
+                # 标记为 UNKNOWN 状态，调用方必须查询订单状态 (queryOrder) 后决定 adopt/retry。
+                is_write = method in ("POST", "DELETE")
+                if is_write and attempt >= 0:  # 写请求第一次失败即停止
+                    self._rate_state.consecutive_failures += 1
+                    return Result.failure(
+                        f"WRITE_UNKNOWN: {str(e)[:180]}",
+                        category=ErrorCategory.NETWORK,
+                        retryable=False,  # 写请求不自动重试 — 调用方先查询再决定
+                        raw={
+                            "exception_type": type(e).__name__,
+                            "method": method,
+                            "path": path,
+                            "write_safety": "QUERY_BEFORE_RETRY_REQUIRED",
+                        },
+                        source="binance_rest",
+                    )
                 if attempt < self._max_retries - 1:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue

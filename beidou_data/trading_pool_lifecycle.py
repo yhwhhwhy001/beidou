@@ -125,7 +125,13 @@ class TradingPool:
                     )
 
     def try_promote(self, instrument_id: str) -> bool:
-        """尝试晋级。需要观察期满 + 评分达标。"""
+        """尝试晋级。需要观察期满 + 评分达标。
+
+        PKG18 (BDS-P0-022): 三重验证 — finite + range + threshold。
+        NaN/Inf 评分不能绕过晋级阈值（NaN < threshold 在 Python 中为 False）。
+        """
+        import math as _math
+
         entry = self._pool.get(instrument_id)
         if not entry or entry.status != PoolStatus.OBSERVING:
             return False
@@ -135,10 +141,24 @@ class TradingPool:
         if elapsed < entry.min_observation_hours:
             return False
 
-        # 评分检查
+        # 评分检查 — PKG18: finite + range + threshold 三重验证
         if not entry.scores:
             return False
         latest = entry.scores[-1]
+
+        # Step 1: finite 检查 — NaN/Inf 绝不晋级
+        if not _math.isfinite(latest.overall):
+            return False
+        for score_attr in ("spread_score", "depth_score", "volume_score", "stability_score", "capacity_score"):
+            val = getattr(latest, score_attr, 0.0)
+            if not _math.isfinite(val):
+                return False
+
+        # Step 2: range 检查 — 评分必须在 [0, 1] 范围内
+        if not (0.0 <= latest.overall <= 1.0):
+            return False
+
+        # Step 3: threshold 检查
         if latest.overall < self.PROMOTE_THRESHOLD:
             return False
 

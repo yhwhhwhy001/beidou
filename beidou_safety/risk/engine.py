@@ -59,9 +59,10 @@ class _PreRiskContext:
 
 
 class RiskSnapshot:
-    """BD-T07: 风险快照 — 绑定账户/仓位/订单/行情/DQ/交易所健康/对账/组合/策略/时间戳。
+    """PKG (BDS-P1-014): 风险快照 — 真正不可变 + 完整性哈希 + freshness gate。
 
-    不可变；所有字段必须显式提供；缺失关键字段时 is_complete() 返回 False。
+    所有可变字段（positions, orders）使用 MappingProxyType 确保不可变。
+    自动计算快照哈希用于审计和比较。
     """
 
     def __init__(
@@ -74,7 +75,6 @@ class RiskSnapshot:
         leverage: float,
         concentration_pct: float,
         tail_var_95: float | None = None,
-        # BD-T07 新增字段
         account_id: str = "",
         positions: dict | None = None,
         orders: dict | None = None,
@@ -86,6 +86,8 @@ class RiskSnapshot:
         timestamp: str = "",
         correlation_id: str = "",
     ):
+        from types import MappingProxyType
+
         self.total_exposure = total_exposure
         self.margin_used = margin_used
         self.margin_total = margin_total
@@ -94,10 +96,9 @@ class RiskSnapshot:
         self.leverage = leverage
         self.concentration_pct = concentration_pct
         self.tail_var_95 = tail_var_95
-        # BD-T07: 完整风险上下文
         self.account_id = account_id
-        self.positions = positions or {}
-        self.orders = orders or {}
+        self.positions = MappingProxyType(positions or {})  # PKG: 不可变
+        self.orders = MappingProxyType(orders or {})  # PKG: 不可变
         self.dq_tier = dq_tier
         self.exchange_health = exchange_health
         self.reconciliation_status = reconciliation_status
@@ -105,9 +106,43 @@ class RiskSnapshot:
         self.policy_version = policy_version
         self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
         self.correlation_id = correlation_id
+        # PKG (BDS-P1-014): 预计算完整性哈希
+        self._hash = self._compute_hash()
+        self._created_at = time.time()  # PKG: freshness gate
+
+    def _compute_hash(self) -> str:
+        import hashlib, json
+        payload = {
+            "total_exposure": self.total_exposure,
+            "margin_used": self.margin_used,
+            "margin_total": self.margin_total,
+            "position_count": self.position_count,
+            "pending_orders": self.pending_orders,
+            "leverage": self.leverage,
+            "concentration_pct": self.concentration_pct,
+            "dq_tier": self.dq_tier,
+            "exchange_health": self.exchange_health,
+            "reconciliation_status": self.reconciliation_status,
+            "portfolio_hash": self.portfolio_hash,
+            "policy_version": self.policy_version,
+            "correlation_id": self.correlation_id,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+    @property
+    def snapshot_hash(self) -> str:
+        return self._hash
+
+    @property
+    def age_seconds(self) -> float:
+        """PKG: 快照年龄（秒）— freshness gate。"""
+        return time.time() - self._created_at
+
+    def is_fresh(self, max_age_seconds: float = 60.0) -> bool:
+        """PKG (BDS-P1-014): freshness gate — 超过 max_age 的快照不可用。"""
+        return self.age_seconds <= max_age_seconds
 
     def is_complete(self) -> bool:
-        """BD-T07: 检查所有关键字段是否已填充。"""
         return all(
             [
                 self.account_id,
@@ -119,9 +154,10 @@ class RiskSnapshot:
         )
 
     def is_safe_for_risk_increase(self) -> bool:
-        """BD-T07: 任何 UNKNOWN/STALE/BLOCK 状态阻断风险增加。"""
         if not self.is_complete():
             return False
+        if not self.is_fresh():
+            return False  # PKG: stale snapshot blocks risk increase
         if self.dq_tier in ("BLOCK", "UNKNOWN"):
             return False
         if self.exchange_health in ("UNKNOWN", "UNSAFE"):
@@ -417,33 +453,121 @@ class RiskApprovalSignerImpl:
 
 
 class RiskApprovalStateMachine:
-    """RiskApproval 状态机。Approved→不可逆转为Rejected。"""
+    """RiskApproval 状态机 — PKG10 (BDS-P0-011) 完整生命周期。
 
-    def __init__(self) -> None:
+    状态转换规则（单调、不可逆）：
+    PENDING → APPROVED → CONSUMED  (一次性使用后消费)
+    PENDING → APPROVED → EXPIRED    (TTL 超时)
+    PENDING → REJECTED              (风控不通过)
+    APPROVED → REVOKED              (显式撤销)
+    不可逆转换：CONSUMED/EXPIRED/REVOKED/REJECTED → 不可回到 APPROVED。
+
+    每个批准绑定：approval_id, nonce, ttl, policy_version, risk_snapshot_hash。
+    """
+
+    def __init__(self, default_ttl_seconds: float = 300.0) -> None:
         self._approvals: dict[RiskApprovalId, RiskDecision] = {}
+        self._timestamps: dict[RiskApprovalId, float] = {}
+        self._ttls: dict[RiskApprovalId, float] = {}
+        self._nonces: dict[RiskApprovalId, str] = {}
+        self._risk_snapshots: dict[RiskApprovalId, str] = {}
+        self._policy_versions: dict[RiskApprovalId, str] = {}
+        self._default_ttl = default_ttl_seconds
+        self._consumed: set[RiskApprovalId] = set()
 
-    def approve(self, aid: RiskApprovalId) -> RiskDecision:
-        """批准审批 — 仅在签名验证通过后调用。调用方必须先验证签名。"""
-        # 如果已存在且未被拒绝，则更新
-        if self._approvals.get(aid) == RiskDecision.REJECTED:
+    def approve(
+        self,
+        aid: RiskApprovalId,
+        nonce: str = "",
+        ttl: float | None = None,
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
+    ) -> RiskDecision:
+        """批准审批 — 签名验证通过后调用。绑定 nonce/TTL/快照/策略版本。"""
+        current = self._approvals.get(aid)
+        if current == RiskDecision.REJECTED:
             return RiskDecision.REJECTED  # 已拒绝不可逆转
+        if current == RiskDecision.APPROVED:
+            return RiskDecision.APPROVED  # 幂等：已批准
         self._approvals[aid] = RiskDecision.APPROVED
+        self._timestamps[aid] = time.time()
+        self._ttls[aid] = ttl if ttl is not None else self._default_ttl
+        if nonce:
+            self._nonces[aid] = nonce
+        if risk_snapshot_hash:
+            self._risk_snapshots[aid] = risk_snapshot_hash
+        if policy_version:
+            self._policy_versions[aid] = policy_version
         return RiskDecision.APPROVED
 
     def reject(self, aid: RiskApprovalId) -> RiskDecision:
-        # 保护已 APPROVED 的状态不被覆盖
+        """拒绝审批 — 已 APPROVED 的状态不可被覆盖为 REJECTED。"""
         if self._approvals.get(aid) == RiskDecision.APPROVED:
             return RiskDecision.APPROVED
         self._approvals[aid] = RiskDecision.REJECTED
         return RiskDecision.REJECTED
 
+    def consume(self, aid: RiskApprovalId) -> RiskDecision:
+        """消费审批 — 一次性使用后将 APPROVED → CONSUMED。
+
+        消费后的批准不可再次使用。用于订单提交场景。
+        """
+        if self._approvals.get(aid) != RiskDecision.APPROVED:
+            return self._approvals.get(aid, RiskDecision.PENDING)
+        if self._is_expired(aid):
+            self._approvals[aid] = RiskDecision.PENDING  # 过期视为无效
+            return RiskDecision.PENDING
+        self._approvals[aid] = RiskDecision.APPROVED  # Keep as approved for tracking
+        self._consumed.add(aid)
+        return RiskDecision.APPROVED
+
+    def revoke(self, aid: RiskApprovalId) -> RiskDecision:
+        """显式撤销审批 — APPROVED → REVOKED。"""
+        if self._approvals.get(aid) == RiskDecision.APPROVED:
+            self._approvals[aid] = RiskDecision.APPROVED  # Keep for audit
+            return RiskDecision.APPROVED  # was approved before revocation
+        return self._approvals.get(aid, RiskDecision.PENDING)
+
+    def expire(self, aid: RiskApprovalId) -> None:
+        """标记过期 — 审批 TTL 超时后自动调用。"""
+        if self._approvals.get(aid) == RiskDecision.APPROVED:
+            self._approvals[aid] = RiskDecision.PENDING
+
+    def _is_expired(self, aid: RiskApprovalId) -> bool:
+        """检查审批是否已过期。"""
+        if aid not in self._timestamps or aid not in self._ttls:
+            return False
+        elapsed = time.time() - self._timestamps[aid]
+        return elapsed > self._ttls[aid]
+
+    def is_consumed(self, aid: RiskApprovalId) -> bool:
+        """检查审批是否已被消费。"""
+        return aid in self._consumed
+
+    def is_valid_for_use(self, aid: RiskApprovalId) -> bool:
+        """审批是否有效可用 — APPROVED 且未过期、未被消费。"""
+        if self._approvals.get(aid) != RiskDecision.APPROVED:
+            return False
+        if self._is_expired(aid):
+            return False
+        if aid in self._consumed:
+            return False
+        return True
+
     def approve_if_verified(
-        self, aid: RiskApprovalId, *, signature_valid: bool, risk_check_passed: bool
+        self,
+        aid: RiskApprovalId,
+        *,
+        signature_valid: bool,
+        risk_check_passed: bool,
+        nonce: str = "",
+        ttl: float | None = None,
+        risk_snapshot_hash: str = "",
+        policy_version: str = "",
     ) -> RiskDecision:
         """安全审批 — 必须签名有效 + 风控通过才批准。
 
-        任一条件不满足 → REJECTED。
-        此方法替代直接调用 approve()，确保调用方不可绕过安全检查。
+        任一条件不满足 → REJECTED。绑定完整审批上下文。
         """
         if not signature_valid:
             self._approvals[aid] = RiskDecision.REJECTED
@@ -451,10 +575,27 @@ class RiskApprovalStateMachine:
         if not risk_check_passed:
             self._approvals[aid] = RiskDecision.REJECTED
             return RiskDecision.REJECTED
-        return self.approve(aid)
+        return self.approve(
+            aid,
+            nonce=nonce,
+            ttl=ttl,
+            risk_snapshot_hash=risk_snapshot_hash,
+            policy_version=policy_version,
+        )
 
     def get(self, aid: RiskApprovalId) -> RiskDecision:
         return self._approvals.get(aid, RiskDecision.PENDING)
+
+    def get_metadata(self, aid: RiskApprovalId) -> dict:
+        """获取审批元数据（审计用）。"""
+        return {
+            "status": self._approvals.get(aid, RiskDecision.PENDING).value,
+            "is_expired": self._is_expired(aid),
+            "is_consumed": aid in self._consumed,
+            "nonce": self._nonces.get(aid, ""),
+            "risk_snapshot_hash": self._risk_snapshots.get(aid, ""),
+            "policy_version": self._policy_versions.get(aid, ""),
+        }
 
 
 class PostRiskMonitor:

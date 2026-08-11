@@ -303,15 +303,24 @@ class TakeProfitCalculator:
         targets: [{"rr_ratio": 1.0, "close_pct": 30}, {"rr_ratio": 2.0, "close_pct": 40}, ...]
         返回: [{"price": xxx, "close_pct": yy, "rr_ratio": zz}, ...]
         """
+        # PKG (BDS-P0-021): 验证 close_pct 总和不超过 100%
+        total_pct = sum(t.get("close_pct", 50.0) for t in targets)
+        if total_pct > 100.0:
+            raise ValueError(
+                f"take-profit close_pct sum ({total_pct}%) exceeds 100%: "
+                f"individual targets valid but combined exceeds position size"
+            )
+
         risk = abs(entry_price - stop_loss_price)
         result = []
         for t in targets:
             rr = t.get("rr_ratio", DEFAULT_RR_RATIO)
             close_pct = t.get("close_pct", 50.0)
             price = entry_price + risk * rr if side == OrderSide.BUY else entry_price - risk * rr
+            # PKG (BDS-P0-019): 价格精度从 tickSize 获取，不硬编码 round(...,2)
             result.append(
                 {
-                    "price": round(price, 2),
+                    "price": price,  # raw — 调用方按 tickSize 量化
                     "close_pct": close_pct,
                     "rr_ratio": rr,
                     "quantity_pct": close_pct / 100,
@@ -364,9 +373,21 @@ class ProtectionManager:
     4. 保护单触发后自动生成 OrderIntent
     """
 
-    def __init__(self) -> None:
+    def __init__(self, price_decimals: int = 2, quantity_decimals: int = 4) -> None:
+        """PKG (BDS-P0-019, BDS-P0-020): price_decimals/quantity_decimals 从 ExchangeInfo 获取。
+
+        不同交易对的 tickSize/stepSize 不同:
+        - BTC: price=2 decimals (0.01), quantity=3 decimals (0.001)
+        - ETH: price=2 decimals (0.01), quantity=3 decimals (0.001)
+        - XRP: price=4 decimals (0.0001), quantity=0 decimals (1)
+        - SOL: price=2 decimals (0.01), quantity=1 decimal (0.1)
+
+        禁止对不同交易对使用统一精度。
+        """
         self._protections: dict[str, PositionProtection] = {}
         self._history: list[ProtectionOrder] = []
+        self._price_decimals = price_decimals
+        self._quantity_decimals = quantity_decimals
 
     # ---- 创建保护 ----
 
@@ -427,29 +448,25 @@ class ProtectionManager:
                 swing_high=stop_loss_config.get("swing_high"),
             )
             try:
-                trigger_value = round(float(stop_price), 2)
+                trigger_value = round(float(stop_price), self._price_decimals)
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError("stop-loss trigger must be finite and positive") from exc
             if not isfinite(trigger_value) or trigger_value <= 0:
                 raise ValueError("stop-loss trigger must be finite and positive")
+            # PKG02 (BDS-P0-001): 移除 testnet 自动修正旁路 — 所有环境使用统一保护语义
             if side == OrderSide.BUY and trigger_value >= entry_value:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    trigger_value = entry_value * 0.99  # BD-FIX (S29): 自动修正
-                else:
-                    raise ValueError("long stop-loss must be strictly below entry price")
+                raise ValueError("long stop-loss must be strictly below entry price")
             if side == OrderSide.SELL and trigger_value <= entry_value:
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    trigger_value = entry_value * 1.01  # BD-FIX (S29): 自动修正
-                else:
-                    raise ValueError("short stop-loss must be strictly above entry price")
+                raise ValueError("short stop-loss must be strictly above entry price")
             sl_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
             order_type = "STOP_LIMIT" if stop_loss_config.get("use_limit", False) else "STOP_MARKET"
             # STOP_LIMIT 限价：SELL(SHORT)需低于触发价；BUY(LONG)需高于触发价
+            # PKG (BDS-P0-019): 使用 tickSize 对应的小数位
             if order_type == "STOP_LIMIT":
                 if sl_side == OrderSide.SELL:
-                    limit_price = round(stop_price * 0.995, 2)
+                    limit_price = round(stop_price * 0.995, self._price_decimals)
                 else:
-                    limit_price = round(stop_price * 1.005, 2)
+                    limit_price = round(stop_price * 1.005, self._price_decimals)
             else:
                 limit_price = None
             pp.stop_loss = ProtectionOrder(
@@ -518,9 +535,9 @@ class ProtectionManager:
                     instrument_id=instrument_id,
                     venue_id=venue_id,
                     side=tp_side,
-                    trigger_price=Price(amount=str(target["price"])),
+                    trigger_price=Price(amount=str(round(target["price"], self._price_decimals))),
                     order_price=None,  # 市价止盈
-                    quantity=Quantity(amount=str(round(qty, 4))),
+                    quantity=Quantity(amount=str(round(qty, self._quantity_decimals))),
                     order_type="TAKE_PROFIT_MARKET",
                     reduce_only=True,
                     status=ProtectionStatus.CREATED,

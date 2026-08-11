@@ -170,7 +170,23 @@ class MAPEKController:
         return RecoveryResult.FAILED
 
     def verify_recovery(self, module_name: str, invariants: dict[str, bool]) -> bool:
+        """PKG24 (BDS-P0-024): 验证恢复 — 期望不变量非空且全部为 True。
+
+        修复前: all([]) == True → 空不变量可伪装恢复成功。
+        修复后: 必须至少有一个不变量且全部为 True。
+        """
+        if not invariants:
+            return False  # Empty invariants → UNKNOWN/FAIL
         return all(invariants.values())
 
     def reset_restart_counter(self, module_name: str) -> None:
         self._recovery_counter.pop(module_name, None)
+
+    def get_restart_count(self, module_name: str) -> int:
+        """PKG24 (BDS-P1-047): 获取重启计数（供持久化使用）。"""
+        return self._recovery_counter.get(module_name, 0)
+
+    def restore_restart_counter(self, module_name: str, count: int) -> None:
+        """PKG24 (BDS-P1-047): 从持久化存储恢复重启计数。"""
+        if count > 0:
+            self._recovery_counter[module_name] = count

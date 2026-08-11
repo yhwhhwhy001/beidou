@@ -55,6 +55,8 @@ class ExecutionContext:
     historical_execution_quality: dict[str, float] = field(default_factory=dict)
     alpha_decay_seconds: float = 60.0  # Alpha 衰减半衰期（秒）
     predicted_cost_bps: float = 0.0  # 预测执行成本(bps)
+    # PKG13 (BDS-P0-015): min_quantity from ExchangeInfo/venue rules (lotSize/stepSize/minQty)
+    min_quantity: float = 0.0
     net_alpha_bps: float = 0.0  # 净 Alpha(bps)
     hard_slippage_limit_bps: float = 50.0  # 硬滑点上限(bps)
     correlation_id: str | None = None
@@ -194,9 +196,26 @@ class MarketableLimitAlgorithm(BaseExecutionAlgorithm):
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
-        fill_price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
-        # 限价必须穿越价差
-        effective_price = fill_price if (ctx.side == OrderSide.BUY and fill_price) or fill_price else ctx.limit_price
+        # PKG (BDS-P0-013): 限价是硬约束 — 不得被市场价穿越
+        market_price = ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid
+        limit = float(ctx.limit_price.amount) if ctx.limit_price else 0.0
+
+        if limit <= 0:
+            return ExecutionPlan(
+                algorithm=self.algorithm_type,
+                slices=[],
+                is_canceled=True,
+                cancel_reason="MARKETABLE_LIMIT_MISSING_LIMIT_PRICE",
+                total_estimated_cost_bps=0,
+                estimated_completion_seconds=0,
+            )
+
+        # BUY:  effective = min(market, limit)  — 买价不能超过限价
+        # SELL: effective = max(market, limit) — 卖价不能低于限价
+        if ctx.side == OrderSide.BUY:
+            effective_price = min(float(market_price.amount) if market_price else limit, limit)
+        else:
+            effective_price = max(float(market_price.amount) if market_price else limit, limit)
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -343,6 +362,7 @@ class POVAlgorithm(BaseExecutionAlgorithm):
         slices: list[OrderSlice] = []
         seq = 0
 
+        # PKG (BDS-P0-014): 执行计划必须守恒 — sum(filled)+remaining+cancelled == approved_qty
         while remaining > 0:
             slice_qty = min(remaining, max_slice)
             slices.append(
@@ -361,8 +381,32 @@ class POVAlgorithm(BaseExecutionAlgorithm):
             )
             remaining -= slice_qty
             seq += 1
-            if seq > 50:  # 防止无限循环
+            if seq > 50:
+                # PKG (BDS-P0-014): 剩余量不丢失 — 最后一个切片吸收全部剩余
+                if remaining > 0:
+                    slices.append(
+                        OrderSlice(
+                            slice_id=f"{order_id}-pov-{seq}",
+                            parent_order_id=order_id,
+                            quantity=Quantity(amount=str(remaining)),
+                            price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                            order_type=OrderType.LIMIT,
+                            time_in_force=TimeInForce.IOC,
+                            algorithm=self.algorithm_type,
+                            sequence_number=seq,
+                            estimated_cost_bps=ctx.predicted_cost_bps * (remaining / total_qty),
+                            invariants_check_passed=invariant_ok,
+                        )
+                    )
                 break
+
+        # PKG (BDS-P0-014): 验证执行计划守恒
+        planned_qty = sum(float(s.quantity.amount) for s in slices)
+        if abs(planned_qty - total_qty) > 1e-12:
+            raise RuntimeError(
+                f"POV plan violates quantity conservation: "
+                f"planned={planned_qty} != approved={total_qty}"
+            )
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -404,9 +448,16 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
             )
 
         total_qty = float(ctx.total_quantity.amount)
-        # BD-FIX (S12): 确保每切片不低于交易所最小数量。
-        # 对于小数量订单（ETH 0.01, XRP 8 等），减少切片数避免归零。
-        _min_qty = max(0.001, float(getattr(ctx, "min_quantity", 0.001) or 0.001))
+        # PKG13 (BDS-P0-015): 唯一从 ExchangeInfo/venue rules 获取 lotSize/stepSize/minQty
+        # 禁止硬编码 fallback — 不同币种的最小数量不同，0.001 对 BTC 太大、对 SHIB 太小
+        _venue_min_qty = float(getattr(ctx, "min_quantity", 0) or 0)
+        if _venue_min_qty <= 0:
+            raise ValueError(
+                f"VENUE_RULES_UNKNOWN: min_quantity not available for "
+                f"{ctx.venue_instrument.instrument_id}. "
+                f"Cannot plan execution without venue precision rules."
+            )
+        _min_qty = _venue_min_qty
         slice_pct = self._determine_slice_pct(ctx)
         slice_qty = total_qty * slice_pct
         slice_count = max(1, int(1.0 / slice_pct))
@@ -476,17 +527,28 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
 
 
 class EmergencyReduceOnlyAlgorithm(BaseExecutionAlgorithm):
-    """Emergency Reduce-Only: 应急减仓 — 安全优先，不追求 Maker。"""
+    """Emergency Reduce-Only: 应急减仓 — 按持仓方向生成双向 reduce-only。
+
+    PKG13 (BDS-P0-016): 修复前只处理 SELL，SHORT 仓位无法应急退出。
+    修复后按 position side 生成 BUY reduce-only（平空）或 SELL reduce-only（平多）。
+    """
 
     algorithm_type = ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
-        return ctx.urgency >= 0.8 and ctx.side == OrderSide.SELL  # 减仓只能卖出
+        # PKG13: 多空双向应急 — LONG→SELL, SHORT→BUY
+        return ctx.urgency >= 0.8
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
 
-        # 应急减仓不因成本取消
+        # PKG13: 按持仓方向确定 reduce-only side
+        position_side = getattr(ctx, "position_side", None)
+        if position_side and str(position_side).upper() == "SHORT":
+            reduce_side = OrderSide.BUY
+        else:
+            reduce_side = OrderSide.SELL
+
         return ExecutionPlan(
             algorithm=self.algorithm_type,
             slices=[
@@ -494,7 +556,7 @@ class EmergencyReduceOnlyAlgorithm(BaseExecutionAlgorithm):
                     slice_id=f"{order_id}-emergency-0",
                     parent_order_id=order_id,
                     quantity=ctx.total_quantity,
-                    price=None,  # 市价成交
+                    price=None,
                     order_type=OrderType.MARKET,
                     time_in_force=TimeInForce.IOC,
                     algorithm=self.algorithm_type,

@@ -60,6 +60,7 @@ def _make_ctx(
         predicted_cost_bps=predicted_cost_bps,
         hard_slippage_limit_bps=kwargs.get("hard_slippage_limit_bps", 50.0),
         alpha_decay_seconds=kwargs.get("alpha_decay_seconds", 60.0),
+        min_quantity=kwargs.get("min_quantity", 0.001),  # PKG13: venue rules default
     )
 
 
@@ -197,7 +198,8 @@ class TestAdaptiveSliceAlgorithm:
 
     def test_plan_adapts_to_market(self):
         ctx = _make_ctx(
-            urgency=0.4, alpha_decay_seconds=3600.0, net_alpha_bps=15.0, predicted_cost_bps=3.0, spread_bps=3.0
+            urgency=0.4, alpha_decay_seconds=3600.0, net_alpha_bps=15.0, predicted_cost_bps=3.0, spread_bps=3.0,
+            min_quantity=0.001,
         )
         algo = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25)
         plan = algo.plan(ctx, FIXED_ORDER_ID)
@@ -222,10 +224,11 @@ class TestEmergencyReduceOnlyAlgorithm:
         algo = EmergencyReduceOnlyAlgorithm()
         assert not algo.can_handle(ctx)
 
-    def test_cannot_handle_buy(self):
+    def test_can_handle_buy_for_short_positions(self):
+        """PKG13: Emergency 现在也处理 BUY（SHORT 仓位需要 BUY reduce-only）。"""
         ctx = _make_ctx(side=OrderSide.BUY, urgency=0.9)
         algo = EmergencyReduceOnlyAlgorithm()
-        assert not algo.can_handle(ctx)
+        assert algo.can_handle(ctx)
 
     def test_plan_market_order(self):
         ctx = _make_ctx(side=OrderSide.SELL, urgency=0.95, predicted_cost_bps=50.0)
@@ -233,7 +236,7 @@ class TestEmergencyReduceOnlyAlgorithm:
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.algorithm == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
         assert plan.slices[0].order_type == OrderType.MARKET
-        assert not plan.is_canceled  # 应急减仓不因成本取消
+        assert not plan.is_canceled
 
 
 class TestExecutionAlgorithmSelector:
