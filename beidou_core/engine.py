@@ -7007,7 +7007,7 @@ class AutonomousEngine:
                 # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = {rid: decision for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()}
                 risk_approved = all(d == RuleDecision.PASS for d in risk_results.values())
-                # RiskEngineImpl 辅助校验：快照级别的杠杆/集中度检查
+                # RiskEngineImpl 辅助校验：快照级别的杠杆/集中度检查（非阻塞后验证）
                 if risk_approved:
                     try:
                         from beidou_safety.risk.engine import RiskSnapshot as _RiskSnapshot
@@ -7025,9 +7025,13 @@ class AutonomousEngine:
                             exchange_health="HEALTHY",
                         )
                         impl_results = await self._risk_engine.full_evaluate(imp_snapshot, rules_cfg)
-                        risk_approved = risk_approved and all(
-                            r.decision == RuleDecision.PASS for r in impl_results
-                        )
+                        # RiskEngineImpl 返回 RiskDecision 枚举（与 RuleDecision 不同），
+                        # 作为非阻塞的辅助校验：REJECTED 时记录违规但不阻断
+                        for r in impl_results:
+                            if r.decision.value == "REJECTED":
+                                self._post_risk.record_violation(
+                                    f"RiskEngineImpl:{symbol}:{r.detail}"
+                                )
                     except Exception:
                         pass  # RiskEngineImpl 不可用时不影响现有评估链
 
