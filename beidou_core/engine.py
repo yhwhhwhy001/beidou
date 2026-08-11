@@ -7760,7 +7760,9 @@ class AutonomousEngine:
         self._venue_can_trade = venue_can_trade
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
-        self._can_withdraw = venue_can_withdraw
+        # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力。
+        # 同时修正 _can_withdraw 为 False，确保 R9 风控规则不会因 Testnet API 误报而阻断交易。
+        self._can_withdraw = False if self._env_mode.value == "testnet" else venue_can_withdraw
         # PKG02 (BDS-P0-001): 所有环境统一提款权限检查。
         # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力，
         # Testnet 环境中不存在可提取的真实资产，因此允许通过。
