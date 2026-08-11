@@ -45,7 +45,7 @@ from .contracts import (
     PriceType,
     ReturnType,
 )
-from .evaluation.cost_capacity import CapacityEvaluator, CostModel
+from .evaluation.cost_capacity import CapacityEvaluator, CostModel, SignalCapacityReport
 from .evaluation.cpcv import CPCVEvaluator
 from .evaluation.fast_screen import FastScreen, FastScreenConfig
 from .evaluation.multiple_testing import evaluate_multiple_testing
@@ -485,11 +485,23 @@ class MiningRunner:
             # 稳定性评估
             stability_results = [self._stability.evaluate_time_split(valid_vals, valid_returns, ic_full=ic)]
 
-            # 成本容量评估
-            capacity_result = self._capacity.evaluate_capacity_curve(
-                valid_vals,
-                valid_returns,
+            # 成本容量评估（PKG07: 信号感知）
+            # 从 price_data 估算 ADV
+            _adv = _estimate_adv_from_price_data(price_data, symbol)
+            _vol = _compute_volatility_from_returns(valid_returns)
+            if _adv > 0 and self.config.cost_model is not None:
+                self.config.cost_model.adv_30d = _adv
+                self.config.cost_model.volatility = _vol
+                self._capacity = CapacityEvaluator(self.config.cost_model)
+            capacity_result, capacity_gate_ok, capacity_gate_reason = (
+                self._capacity.evaluate_with_gate(
+                    valid_vals,
+                    valid_returns,
+                    avg_daily_volume=_adv if _adv > 0 else None,
+                )
             )
+            # Legacy compatibility
+            legacy_capacity_result = capacity_result
 
             # BD-P1-12: only an externally bound manifest can support a
             # promotion decision.  A local payload hash is not provenance.
@@ -542,6 +554,14 @@ class MiningRunner:
                 cost_capacity_results={
                     "recommended_max_aum": capacity_result.recommended_max_aum,
                     "capacity_at_zero_return": capacity_result.capacity_at_zero_return,
+                    "capacity_at_half_return": capacity_result.capacity_at_half_return,
+                    "signal_decay_ratio": capacity_result.signal_decay_ratio,
+                    "avg_turnover": capacity_result.avg_turnover,
+                    "adv_used": capacity_result.adv_used,
+                    "participation_at_capacity": capacity_result.participation_at_capacity,
+                    "gate_passed": capacity_gate_ok,
+                    "gate_reason": capacity_gate_reason,
+                    "warnings": capacity_result.warnings,
                 },
                 gate_decision="NOT_VERIFIABLE",
                 failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
@@ -607,6 +627,8 @@ class MiningRunner:
                     )
                 if self.config.cost_model is None:
                     reasons.append("cost_model_unbound")
+                elif not capacity_gate_ok:
+                    reasons.append(f"capacity_gate:{capacity_gate_reason}")
                 if not self.config.policy_version.strip() or self.config.policy_version.strip().upper() == "UNKNOWN":
                     reasons.append("policy_version_unbound")
                 if missing_closed_metadata:
@@ -1073,6 +1095,48 @@ class MiningRunner:
 # ================================================================
 # 辅助统计函数
 # ================================================================
+
+
+def _estimate_adv_from_price_data(price_data: list[dict], symbol: str) -> float:
+    """PKG07: 从 price_data 估算日均交易量（USD）。
+
+    使用 close × volume 估算 notional volume。
+    如果 price_data 不足，返回 0.0（ADV 未知）。
+    """
+    if not price_data:
+        return 0.0
+
+    # 筛选该 symbol 的数据点
+    relevant = [
+        d for d in price_data
+        if d.get("symbol", symbol) == symbol or symbol in str(d.get("symbol", ""))
+    ]
+    if not relevant:
+        relevant = price_data  # fallback: 使用全部数据
+
+    total_notional = 0.0
+    count = 0
+    for d in relevant:
+        close = float(d.get("close", 0))
+        volume = float(d.get("volume", 0))
+        if close > 0 and volume > 0 and math.isfinite(close) and math.isfinite(volume):
+            total_notional += close * volume
+            count += 1
+
+    if count == 0:
+        return 0.0
+    return total_notional / count
+
+
+def _compute_volatility_from_returns(returns: list[float]) -> float:
+    """PKG07: 从收益序列计算年化波动率。"""
+    finite = [r for r in returns if math.isfinite(r)]
+    if len(finite) < 2:
+        return 0.0
+    mean_r = sum(finite) / len(finite)
+    var = sum((r - mean_r) ** 2 for r in finite) / (len(finite) - 1)
+    daily_vol = math.sqrt(var)
+    return daily_vol * math.sqrt(365)
 
 
 def _is_finite(v: float | None) -> bool:

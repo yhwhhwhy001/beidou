@@ -30,6 +30,7 @@ class ShadowStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    INVALID = "INVALID"  # PKG28 (BDS-P1-060): 证据写失败导致运行无效
 
 
 @dataclass
@@ -52,13 +53,18 @@ class ShadowMetrics:
     runtime_hours: float = 0.0
     total_ticks: int = 0
     total_signals: int = 0
-    total_executed: int = 0
+    # PKG28 (BDS-P1-061): 指标拆分
+    total_executed: int = 0  # backward-compat: 等同于 total_predictions_with_outcome
+    total_predictions_with_outcome: int = 0  # 有前向标签的预测数
+    total_simulated_fills: int = 0  # 真实模拟成交数
+    total_venue_acks: int = 0  # 交易所确认数（Paper 下为0）
     total_rejected: int = 0
     prediction_vs_simulation_mae: float = 0.0  # 预测vs模拟平均绝对误差
     cost_estimated_vs_actual_mae: float = 0.0  # 预测成本vs实际成本误差
     cost_observations: int = 0
     drift_events: int = 0
     p0_incidents: int = 0
+    ledger_write_failures: int = 0  # PKG28 (BDS-P1-060): 账本写失败计数
 
 
 @dataclass
@@ -71,6 +77,7 @@ class ShadowReport:
     gate_result: GateResult = GateResult.UNVERIFIABLE
     discrepancies: list[str] = field(default_factory=list)
     evidence_hash: str = ""
+    merkle_manifest: dict = field(default_factory=dict)  # PKG28 (BDS-P1-062)
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -222,7 +229,8 @@ class PaperShadowRunner:
         prediction["outcome_source"] = source
         prediction["outcome_available_at"] = available_at
         if direction != "NO_ACTION":
-            self.metrics.total_executed += 1
+            self.metrics.total_executed += 1  # backward-compat
+            self.metrics.total_predictions_with_outcome += 1  # PKG28 (BDS-P1-061)
             self._actuals.append(
                 {
                     "direction": direction,
@@ -356,15 +364,20 @@ class PaperShadowRunner:
             metadata={"paper": True, "spread_cost": spread_cost, "slippage_cost": slippage_cost},
         )
         try:
-            return ledger.post(tx)
+            result = ledger.post(tx)
+            self.metrics.total_simulated_fills += 1  # PKG28 (BDS-P1-061)
+            return result
         except Exception:
-            return None
+            # PKG28 (BDS-P1-060): 账本写失败必须记录，不可静默吞掉
+            self.metrics.ledger_write_failures += 1
+            self.record_incident("P0")
+            raise  # 重新抛出，让调用方知晓证据不可靠
 
     def record_drift(self) -> None:
         self.metrics.drift_events += 1
 
     def generate_report(self) -> ShadowReport:
-        """生成 Paper Shadow 报告。"""
+        """生成 Paper Shadow 报告（含 Merkle 证据 manifest）。"""
         if self._start_time is not None:
             self.metrics.runtime_hours = (time.time() - self._start_time) / 3600.0
 
@@ -375,37 +388,84 @@ class PaperShadowRunner:
             completed_at=datetime.now(timezone.utc),
         )
 
-        # Gate 判定
-        ready, reason = report.is_ready_for_testnet()
-        if ready:
-            report.gate_result = GateResult.PASS
-            report.status = ShadowStatus.COMPLETED
-        else:
-            if self.metrics.runtime_hours > 0:
-                report.gate_result = GateResult.UNVERIFIABLE
-                report.status = ShadowStatus.RUNNING
-            else:
-                report.gate_result = GateResult.UNVERIFIABLE
-                report.status = ShadowStatus.INITIALIZING
+        # PKG28 (BDS-P1-060): 账本写失败 → 运行无效
+        if self.metrics.ledger_write_failures > 0:
+            report.gate_result = GateResult.INVALID
+            report.status = ShadowStatus.INVALID
+            report.discrepancies.append(
+                f"ledger_write_failures: {self.metrics.ledger_write_failures}"
+            )
 
-        # 证据哈希
+        # Gate 判定（仅在无 ledger 失败时）
+        elif report.gate_result == GateResult.UNVERIFIABLE:
+            ready, reason = report.is_ready_for_testnet()
+            if ready:
+                report.gate_result = GateResult.PASS
+                report.status = ShadowStatus.COMPLETED
+            else:
+                if self.metrics.runtime_hours > 0:
+                    report.gate_result = GateResult.UNVERIFIABLE
+                    report.status = ShadowStatus.RUNNING
+                else:
+                    report.gate_result = GateResult.UNVERIFIABLE
+                    report.status = ShadowStatus.INITIALIZING
+
+        # 证据哈希 — 绑定新的拆分指标
         content = json.dumps(
             {
                 "strategy_id": str(self.config.strategy_id),
                 "runtime_hours": self.metrics.runtime_hours,
                 "total_executed": self.metrics.total_executed,
+                "total_predictions_with_outcome": self.metrics.total_predictions_with_outcome,
+                "total_simulated_fills": self.metrics.total_simulated_fills,
                 "deviation_pct": self.metrics.prediction_vs_simulation_mae,
                 "cost_observations": self.metrics.cost_observations,
                 "p0_incidents": self.metrics.p0_incidents,
+                "ledger_write_failures": self.metrics.ledger_write_failures,
             },
             sort_keys=True,
         )
         report.evidence_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
 
-        if not ready:
+        # PKG28 (BDS-P1-062): Merkle 证据 manifest
+        report.merkle_manifest = self._build_merkle_manifest()
+
+        if not ready and not self.metrics.ledger_write_failures:
             report.discrepancies.append(reason)
 
         return report
+
+    def _build_merkle_manifest(self) -> dict:
+        """PKG28 (BDS-P1-062): 构建 Merkle 证据 manifest。
+
+        对每个 tick prediction 计算 leaf hash，构建 manifest。
+        绑定全量预测→模拟→结果的证据链。
+        """
+        leaves = []
+        for item in self._predictions:
+            leaf_content = json.dumps({
+                "tick": item.get("tick"),
+                "direction": item.get("direction"),
+                "strength": item.get("strength"),
+                "outcome_recorded": item.get("outcome_recorded", False),
+                "decision_timestamp": item.get("decision_timestamp"),
+            }, sort_keys=True)
+            leaf_hash = hashlib.sha256(leaf_content.encode()).hexdigest()
+            leaves.append(leaf_hash)
+
+        # 构建 Merkle root（简化版：直接对所有 leaf hashes 做 SHA-256）
+        if not leaves:
+            return {"merkle_root": "", "leaf_count": 0}
+
+        combined = "|".join(leaves)
+        merkle_root = hashlib.sha256(combined.encode()).hexdigest()
+
+        return {
+            "merkle_root": merkle_root,
+            "leaf_count": len(leaves),
+            "algorithm": "SHA-256",
+            "leaf_hashes": leaves[:10],  # 仅包含前10个作为摘要
+        }
 
 
 class TestnetGate:

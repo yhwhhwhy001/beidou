@@ -2595,6 +2595,86 @@ class AutonomousEngine:
             },
         }
 
+    def collect_operational_facts(self) -> dict:
+        """PKG25 (BDS-P1-048): 公共操作事实采集 API。
+
+        替代监控模块中的 getattr(engine, "_field") 私有字段访问模式。
+        返回类型化的事实字典，可由 FactBus 和其他消费者使用。
+        """
+        from beidou_observability.monitoring.fact_bus import FactDomain, OperationalFact, get_fact_bus
+
+        bus = get_fact_bus()
+        facts: dict[str, OperationalFact] = {}
+
+        # Reconciliation fact
+        recon = getattr(self, "_last_reconciliation_result", None)
+        facts["reconciliation"] = OperationalFact(
+            fact_type="reconciliation_result",
+            domain=FactDomain.LEDGER,
+            payload={
+                "status": str(getattr(recon, "status", "UNKNOWN")),
+                "matched": bool(getattr(recon, "matched", False)),
+                "checked_at": str(getattr(recon, "checked_at", "")),
+                "differences": list(getattr(recon, "differences", [])),
+            },
+            source="engine._reconcile",
+        )
+        bus.publish(facts["reconciliation"])
+
+        # Control fact
+        ctrl = getattr(self, "_control", None)
+        facts["control"] = OperationalFact(
+            fact_type="control_state",
+            domain=FactDomain.CONTROL,
+            payload={
+                "status": str(getattr(ctrl, "get_status", lambda: "UNKNOWN")()),
+                "can_write": bool(getattr(self, "_can_write", False)),
+            },
+            source="engine._control",
+        )
+        bus.publish(facts["control"])
+
+        # Protection fact
+        prot = getattr(self, "_protection", None)
+        facts["protection"] = OperationalFact(
+            fact_type="protection_state",
+            domain=FactDomain.PROTECTION,
+            payload={
+                "owner_unknown": bool(getattr(self, "_protection_owner_unknown", False)),
+                "position_count": int(getattr(prot, "position_count", lambda: 0)()) if prot else 0,
+            },
+            source="engine._protection",
+        )
+        bus.publish(facts["protection"])
+
+        # Lifecycle fact
+        lc = getattr(self, "_lifecycle", None)
+        facts["lifecycle"] = OperationalFact(
+            fact_type="lifecycle_state",
+            domain=FactDomain.LIFECYCLE,
+            payload={
+                "state": str(getattr(lc, "state", "UNKNOWN")),
+                "mode": str(getattr(self, "_env_mode", "UNKNOWN")),
+            },
+            source="engine._lifecycle",
+        )
+        bus.publish(facts["lifecycle"])
+
+        # Risk fact
+        risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id) if hasattr(self, "_strategy_risk") else None
+        facts["risk"] = OperationalFact(
+            fact_type="risk_state",
+            domain=FactDomain.RISK,
+            payload={
+                "level": str(getattr(risk_state, "risk_level", "UNKNOWN")),
+                "drawdown_pct": round(float(getattr(risk_state, "current_drawdown_pct", 0)), 2),
+            },
+            source="engine._strategy_risk",
+        )
+        bus.publish(facts["risk"])
+
+        return {k: f.to_dict() for k, f in facts.items()}
+
     def _rebuild_alpha_graph(self) -> None:
         """BF-08: 从 FactorRegistry 重建 AlphaGraph。
 
@@ -3892,18 +3972,21 @@ class AutonomousEngine:
                 slippage_bps = max(0.0, actual_cost_bps - self._paper_matching.taker_fee_bps - spread_bps / 2.0)
                 slippage_amount = notional * slippage_bps / 10000.0
                 if self._shadow_runner is not None:
-                    ledger_tx_id = self._shadow_runner.record_fill_to_ledger(
-                        self._ledger,
-                        order_symbol,
-                        side,
-                        filled_qty,
-                        avg_price,
-                        fee=fee_amount,
-                        spread_cost=spread_amount,
-                        slippage_cost=slippage_amount,
-                    )
-                    if ledger_tx_id is None:
-                        self._shadow_runner.record_incident("P0")
+                    try:
+                        ledger_tx_id = self._shadow_runner.record_fill_to_ledger(
+                            self._ledger,
+                            order_symbol,
+                            side,
+                            filled_qty,
+                            avg_price,
+                            fee=fee_amount,
+                            spread_cost=spread_amount,
+                            slippage_cost=slippage_amount,
+                        )
+                    except Exception:
+                        # PKG28 (BDS-P1-060): 写失败已在 record_fill_to_ledger 内部
+                        # 记录为 P0 事件 + ledger_write_failures++
+                        ledger_tx_id = None
 
             # 记录成交明细（fill price / latency / status）
             self._paper_fills.append(

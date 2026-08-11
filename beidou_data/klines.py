@@ -45,6 +45,10 @@ class KLineGenerator:
         value = int(self.interval[:-1])
         return timedelta(**{unit: value})
 
+    def _make_key(self, venue_instrument: VenueInstrument) -> str:
+        """PKG22 (BDS-P1-039): key 包含 interval 以隔离多周期。"""
+        return f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}:{self.interval}"
+
     def process_tick(
         self,
         venue_instrument: VenueInstrument,
@@ -53,7 +57,7 @@ class KLineGenerator:
         timestamp: datetime,
         is_taker_buy: bool = False,
     ) -> OHLCV | None:
-        key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
+        key = self._make_key(venue_instrument)
         delta = self._interval_delta()
         interval_start = timestamp.replace(second=0, microsecond=0)
         if delta >= timedelta(hours=1):
@@ -151,16 +155,16 @@ class KLineGenerator:
         )
 
     def get_klines(self, venue_instrument: VenueInstrument) -> list[OHLCV]:
-        key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
+        key = self._make_key(venue_instrument)
         return self._klines.get(key, [])
 
     def get_current_bar(self, venue_instrument: VenueInstrument) -> OHLCV | None:
         """返回当前未闭合 K 线（实时 bar），无则 None。"""
-        key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
+        key = self._make_key(venue_instrument)
         return self._current.get(key)
 
     def revise(self, venue_instrument: VenueInstrument, open_time: datetime, new_ohlcv: OHLCV) -> OHLCV:
-        key = f"{venue_instrument.venue_id}:{venue_instrument.instrument_id}"
+        key = self._make_key(venue_instrument)
         klines = self._klines.get(key, [])
         for i, k in enumerate(klines):
             if k.open_time == open_time:

@@ -414,10 +414,11 @@ class TestCapacityEvaluator:
             aum_range=[10_000, 100_000, 500_000, 1_000_000],
             avg_holding_hours=4.0,
         )
-        assert len(result.aum_levels) == 4
-        assert len(result.net_returns) == 4
+        # PKG07: 新 API 返回 SignalCapacityReport
+        assert len(result.curve) == 4
         # Larger AUM → lower net return
-        assert result.net_returns[-1] <= result.net_returns[0]
+        net_returns = [p.net_return for p in result.curve]
+        assert net_returns[-1] <= net_returns[0]
 
     def test_cost_not_viable_when_unknown(self):
         evaluator = CapacityEvaluator(CostModel(taker_fee_bps=0, avg_spread_bps=0))

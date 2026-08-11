@@ -159,18 +159,27 @@ class MarketDataFeed:
                     # 用 WebSocket 实时 ticker 驱动 K 线生成
                     try:
                         last_price = float(data.get("c", 0))
-                        volume = float(data.get("v", 0))
-                        if last_price > 0:
-                            if symbol not in self._kline_generators:
-                                self._kline_generators[symbol] = KLineGenerator(interval="5m")
-                            self._kline_generators[symbol].update(
+                        # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量，
+                        # 而非 24h 累计 volume (data["v"])
+                        per_tick_volume = float(data.get("l", data.get("lastQty", 0)))
+                        if last_price > 0 and per_tick_volume > 0:
+                            kg_key = f"{symbol}:5m"
+                            if kg_key not in self._kline_generators:
+                                self._kline_generators[kg_key] = KLineGenerator(interval="5m")
+                            self._kline_generators[kg_key].update(
                                 price=last_price,
-                                volume=volume,
+                                volume=per_tick_volume,
                                 timestamp=datetime.now(timezone.utc),
                                 symbol=symbol,
                             )
-                    except Exception:
-                        pass  # 静默跳过，K 线生成失败不影响行情
+                    except Exception as exc:
+                        # PKG22 (BDS-P1-041): 不再静默跳过，记录错误
+                        logger.warning(
+                            "WS kline aggregation failed for %s: %s: %s",
+                            symbol, type(exc).__name__, str(exc)[:120],
+                        )
+                        self._error_count["kline_gen_ws"] = self._error_count.get("kline_gen_ws", 0) + 1
+                        self._last_error_time = time.monotonic()
 
             async def _on_depth(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
@@ -472,12 +481,15 @@ class MarketDataFeed:
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
         try:
             last_price = float(ticker["lastPrice"])
-            if symbol not in self._kline_generators:
-                self._kline_generators[symbol] = KLineGenerator(interval="5m")
-            kg = self._kline_generators[symbol]
+            # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量
+            per_tick_volume = float(ticker.get("lastQty", 0))
+            kg_key = f"{symbol}:5m"
+            if kg_key not in self._kline_generators:
+                self._kline_generators[kg_key] = KLineGenerator(interval="5m")
+            kg = self._kline_generators[kg_key]
             kg.update(
                 price=last_price,
-                volume=float(ticker.get("volume", 0)),
+                volume=per_tick_volume if per_tick_volume > 0 else float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
         except Exception as exc:
@@ -665,12 +677,15 @@ class MarketDataFeed:
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
         try:
             last_price = float(ticker["lastPrice"])
-            if symbol not in self._kline_generators:
-                self._kline_generators[symbol] = KLineGenerator(interval="5m")
-            kg = self._kline_generators[symbol]
+            # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量
+            per_tick_volume = float(ticker.get("lastQty", 0))
+            kg_key = f"{symbol}:5m"
+            if kg_key not in self._kline_generators:
+                self._kline_generators[kg_key] = KLineGenerator(interval="5m")
+            kg = self._kline_generators[kg_key]
             kg.update(
                 price=last_price,
-                volume=float(ticker.get("volume", 0)),
+                volume=per_tick_volume if per_tick_volume > 0 else float(ticker.get("volume", 0)),
                 timestamp=datetime.now(timezone.utc),
             )
         except Exception as exc:

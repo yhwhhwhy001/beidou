@@ -207,6 +207,7 @@ class ClosedBarNormalizer:
         self._revisions: dict[str, int] = {}  # audit_key → max revision
         self._hashlib = hashlib
         self._seq_counter: int = 0
+        self._dq_incidents: int = 0  # PKG22 (BDS-P1-041): DQ 异常计数
 
     def normalize(self, raw: dict, venue_instrument: VenueInstrument, interval: str = "1m") -> ClosedBarResult:
         """将原始 KLine 数据规范化为 ClosedBar。"""
@@ -339,6 +340,15 @@ class ClosedBarNormalizer:
             return ClosedBarResult(bar, BarIntegrity.OK, f"Normalized: {audit_key}", cid)
 
         except Exception as e:
+            # PKG22 (BDS-P1-041): 不再静默吞掉异常，记录 DQ 指标
+            self._dq_incidents += 1
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.error(
+                "ClosedBar normalization failed for %s/%s: %s: %s",
+                getattr(venue_instrument, "instrument_id", "?"),
+                interval, type(e).__name__, str(e)[:200],
+            )
             return ClosedBarResult(None, BarIntegrity.INVALID, f"Normalization failed: {e}", cid)
 
     def revise(self, bar: ClosedBar, updated_raw: dict) -> ClosedBarResult:
@@ -380,14 +390,18 @@ class BarSequenceValidator:
         self._max_gap = max_gap_seconds
         self._max_stale = max_stale_seconds
 
+    def _seq_key(self, bar: ClosedBar) -> str:
+        """PKG22 (BDS-P1-039): key 包含 interval 以隔离多周期。"""
+        return f"{bar.venue_instrument.instrument_id}:{bar.interval}"
+
     def validate(self, bar: ClosedBar, now: datetime | None = None) -> BarIntegrity:
         """验证 bar 序列完整性。
 
         Returns:
             BarIntegrity.OK / OUT_OF_ORDER / GAP_DETECTED / STALE
         """
-        symbol = str(bar.venue_instrument.instrument_id)
-        last = self._last_open_times.get(symbol)
+        key = self._seq_key(bar)
+        last = self._last_open_times.get(key)
 
         # Check staleness
         now = now or datetime.now(timezone.utc)
@@ -401,7 +415,7 @@ class BarSequenceValidator:
                 self._update(bar)
                 return BarIntegrity.OUT_OF_ORDER
             # Check for gaps
-            expected = self._expected_intervals.get(symbol, 60.0)
+            expected = self._expected_intervals.get(key, 60.0)
             gap = (bar.open_time - last).total_seconds()
             if gap > expected * 1.5:
                 self._update(bar)
@@ -411,14 +425,14 @@ class BarSequenceValidator:
         return BarIntegrity.OK
 
     def _update(self, bar: ClosedBar) -> None:
-        symbol = str(bar.venue_instrument.instrument_id)
-        self._last_open_times[symbol] = bar.open_time
+        key = self._seq_key(bar)
+        self._last_open_times[key] = bar.open_time
         if bar.interval == "1m":
-            self._expected_intervals[symbol] = 60.0
+            self._expected_intervals[key] = 60.0
         elif bar.interval == "5m":
-            self._expected_intervals[symbol] = 300.0
+            self._expected_intervals[key] = 300.0
         elif bar.interval == "1h":
-            self._expected_intervals[symbol] = 3600.0
+            self._expected_intervals[key] = 3600.0
 
 
 class RawLayer:

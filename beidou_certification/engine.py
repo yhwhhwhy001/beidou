@@ -297,9 +297,9 @@ class G5TestnetCertification(CertificationFramework):
         if duplicate_orders == 0 and order_count > 0:
             result.status = ScenarioStatus.PASS
             result.evidence = {
-                "client_order_id": client_order_id,
-                "order_count": order_count,
-                "duplicate_orders": duplicate_orders,
+                "order_log": [{"client_order_id": client_order_id, "order_count": order_count}],
+                "exchange_response": {"duplicate_orders": duplicate_orders},
+                "ledger_entries": [{"client_order_id": client_order_id, "order_count": order_count - duplicate_orders}],
             }
         elif duplicate_orders > 0:
             result.status = ScenarioStatus.FAIL
@@ -381,7 +381,11 @@ class G6ShadowCertification(CertificationFramework):
             result.error_detail = "Time compression detected — real elapsed time required"
         elif actual_duration_seconds >= policy_duration_seconds:
             result.status = ScenarioStatus.PASS
-            result.evidence = {"actual_duration": actual_duration_seconds, "required": policy_duration_seconds}
+            result.evidence = {
+                "runtime_duration": actual_duration_seconds,
+                "policy_duration": policy_duration_seconds,
+                "no_time_compression": not time_compressed,
+            }
         else:
             result.status = ScenarioStatus.NOT_VERIFIABLE
             result.error_detail = f"Only {actual_duration_seconds}s of required {policy_duration_seconds}s"
