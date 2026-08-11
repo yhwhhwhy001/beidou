@@ -33,7 +33,17 @@ class PortfolioOptimizerImpl:
         return {s: MonetaryValue(amount=str(float(total_capital.amount) * weights.get(s, 0))) for s in strategies}
 
     def resolve_conflicts(self, targets: list[PortfolioTarget]) -> tuple[list[PortfolioTarget], int]:
-        """仲裁策略冲突。同一净仓位中不同策略的贡献、退出义务和接管规则。"""
+        """仲裁策略冲突 — PKG18 (BDS-P0-007)。
+
+        修复前: total_qty / len(group) 可能改变策略方向（多空抵消→归零→方向丢失）。
+        修复后: 保持每个策略的原始方向、数量和归属，仅标记冲突和共享所有权。
+        组合层输出 target，不重写策略原始 proposal。
+
+        冲突仲裁规则:
+        1. 同方向: 按资本比例分配（保持方向和归属）
+        2. 反方向: 不净额抵消 — 各自保留原始目标，标记 SHARED
+        3. 始终保留 owner/generation/attribution
+        """
         resolved: list[PortfolioTarget] = []
         conflicts = 0
         seen: dict[str, list[PortfolioTarget]] = {}
@@ -48,19 +58,39 @@ class PortfolioOptimizerImpl:
                 resolved.extend(group)
                 continue
             conflicts += 1
-            total_qty = sum(float(t.target_quantity.amount) for t in group)
-            for t in group:
-                resolved.append(
-                    PortfolioTarget(
-                        strategy_id=t.strategy_id,
-                        instrument_id=t.instrument_id,
-                        venue_id=t.venue_id,
-                        target_quantity=Quantity(amount=str(total_qty / len(group))),
-                        target_notional=t.target_notional,
-                        capital_budget=t.capital_budget,
-                        ownership=PositionOwnership.SHARED if len(group) > 1 else t.ownership,
-                    )
+
+            # PKG18: 按方向分组，不净额抵消
+            long_targets = [t for t in group if float(t.target_quantity.amount) > 0]
+            short_targets = [t for t in group if float(t.target_quantity.amount) < 0]
+
+            # 同方向组内：按资本比例分配（保持方向和归属）
+            for direction_group in (long_targets, short_targets):
+                if not direction_group:
+                    continue
+                total_capital_in_group = sum(
+                    float(t.capital_budget.amount) for t in direction_group if t.capital_budget
                 )
+                if total_capital_in_group <= 0:
+                    total_capital_in_group = len(direction_group)
+
+                for t in direction_group:
+                    capital_share = (
+                        float(t.capital_budget.amount) / total_capital_in_group
+                        if t.capital_budget and total_capital_in_group > 0
+                        else 1.0 / len(direction_group)
+                    )
+                    resolved.append(
+                        PortfolioTarget(
+                            strategy_id=t.strategy_id,
+                            instrument_id=t.instrument_id,
+                            venue_id=t.venue_id,
+                            target_quantity=t.target_quantity,  # 保留原始数量和方向
+                            target_notional=t.target_notional,
+                            capital_budget=t.capital_budget,
+                            ownership=PositionOwnership.SHARED,
+                        )
+                    )
+
         return resolved, conflicts
 
     def exit_protection(
