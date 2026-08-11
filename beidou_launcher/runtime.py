@@ -540,13 +540,9 @@ def collect_runtime_checks(
             pending = int(delivery.get("pending", 0))
             configured = bool(delivery.get("configured", False))
             if critical_pending or dead_letter or unknown:
-                # Testnet 使用文件告警，critical_pending 是常态
-                if os.environ.get("BEIDOU_ENV") == "testnet":
-                    delivery_status = CheckStatus.WARN
-                    delivery_severity = CheckSeverity.P1
-                else:
-                    delivery_status = CheckStatus.FAIL
-                    delivery_severity = CheckSeverity.P0
+                # PKG02: 所有环境统一交付状态检查标准。
+                delivery_status = CheckStatus.FAIL
+                delivery_severity = CheckSeverity.P0
                 delivery_message = (
                     f"告警送达不可证明: critical_pending={critical_pending}, "
                     f"dead_letter={dead_letter}, unknown={unknown}"

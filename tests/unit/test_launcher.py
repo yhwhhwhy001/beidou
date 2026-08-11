@@ -192,9 +192,9 @@ def test_critical_alert_delivery_is_a_runtime_p0_blocker() -> None:
         last_error_count=0,
     )
     delivery = next(item for item in checks if item.check_id == "runtime.health.alert_delivery")
-    assert delivery.status is CheckStatus.WARN
-    assert delivery.severity.value in ("P0", "P1")
-    # In testnet mode, P1 WARN may not be blocking
+    # PKG02 (BDS-P0-001): 所有环境统一使用 FAIL + P0。
+    assert delivery.status is CheckStatus.FAIL
+    assert delivery.severity.value == "P0"
 
 
 def test_stopped_engine_loop_is_runtime_p0_after_resume_authorization() -> None:
