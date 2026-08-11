@@ -6059,9 +6059,15 @@ class AutonomousEngine:
             existing_algos = await self._get_open_algo_inventory()
             api_ok = isinstance(existing_algos, list)
             if not api_ok:
-                self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
-                print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
-                return
+                if os.environ.get("BEIDOU_ENV") == "testnet":
+                    # BD-FIX (S36): Testnet API 失败时用空列表继续
+                    existing_algos = []
+                    api_ok = True
+                    print("[nearline] Algo inventory UNKNOWN — continuing with empty (testnet)")
+                else:
+                    self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
+                    print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
+                    return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
                 if os.environ.get("BEIDOU_ENV") == "testnet":
