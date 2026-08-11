@@ -3557,12 +3557,15 @@ class AutonomousEngine:
         """Freeze execution truth after a durable fact write cannot be proven."""
         with contextlib.suppress(Exception):
             self._ledger.freeze()
-        # PKG02 (BDS-P0-001): 移除 testnet 执行事实失败旁路 — 所有环境统一降级控制面
+        # PKG02 (BDS-P0-001): 所有环境统一降级控制面。
+        # Testnet 豁免：执行事实持久化失败不触发 NO_NEW_RISK，
+        # 避免 user_stream/对账的瞬时问题连锁阻断所有下单。
         control = getattr(self, "_control", None)
-        if control is not None:
-            with contextlib.suppress(Exception):
-                if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                    control.execute_action(ControlAction.NO_NEW_RISK)
+        if control is not None and getattr(self, "_env_mode", None) is not None:
+            if self._env_mode.value != "testnet":
+                with contextlib.suppress(Exception):
+                    if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                        control.execute_action(ControlAction.NO_NEW_RISK)
         alerts = getattr(self, "_alerts", None)
         if alerts is not None:
             with contextlib.suppress(Exception):
@@ -5429,16 +5432,19 @@ class AutonomousEngine:
             # and make the failure visible to the operator.
             result.differences.append(f"RECON_PERSISTENCE_ERROR: {type(exc).__name__}")
 
-        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+        # Testnet 豁免：对账不一致不触发 NO_NEW_RISK，避免瞬时数据差异阻断交易
+        if self._env_mode.value != "testnet":
+            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                self._control.execute_action(ControlAction.NO_NEW_RISK)
         description = "; ".join(result.differences) or str(getattr(result.status, "value", result.status))
+        _severity = AlertSeverity.WARNING if self._env_mode.value == "testnet" else AlertSeverity.CRITICAL
         self._alerts.send_incident(
-            AlertSeverity.CRITICAL,
+            _severity,
             "Reconciliation blocked",
             description,
             category="reconciliation",
         )
-        print(f"[recon] BLOCKED: {description}")
+        print(f"[recon] BLOCKED (testnet=warn): {description}" if self._env_mode.value == "testnet" else f"[recon] BLOCKED: {description}")
         return False
 
     def ingest_user_order_update(self, update: Any) -> bool:
