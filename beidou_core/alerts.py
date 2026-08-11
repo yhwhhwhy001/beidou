@@ -68,7 +68,19 @@ class AlertDispatcher:
         auto_action: AutoAction | None = None,
         category: str = "runtime",
     ) -> Incident:
-        """创建并分发事故告警。"""
+        """创建并分发事故告警。相同 category+title 的事故自动去重，更新已有事故。"""
+        # Deduplicate: if an active incident with the same category+title exists,
+        # update it instead of creating a new one.
+        dedup_key = f"{category}:{title}"
+        with self._lock:
+            for existing_inc in list(self._active_incidents.values()):
+                existing_key = f"{getattr(existing_inc, 'root_cause_category', '')}:{existing_inc.title}"
+                if existing_key == dedup_key:
+                    # Update the existing incident in place
+                    existing_inc.description = description
+                    existing_inc._last_updated = datetime.now(timezone.utc)
+                    return existing_inc
+
         incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S%f')}-{category}"
 
         incident = Incident(

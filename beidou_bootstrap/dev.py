@@ -217,15 +217,34 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
             print("[beidou-bootstrap] 非 PostgreSQL 后端，跳过余额同步")
             return
 
+        # Fix: populate positions from the live exchange account snapshot
+        # so the opening projection reflects actual exchange state.
+        # Positions are keyed by symbol, value is the net position amount.
+        exchange_positions: dict[str, str] = {}
+        for pos in last_account.get("positions", []):
+            if not isinstance(pos, dict):
+                continue
+            symbol = str(pos.get("symbol", "")).strip()
+            amt = float(pos.get("positionAmt", 0) or 0)
+            if symbol and amt:
+                exchange_positions[symbol] = str(amt)
+
+        # Also populate open orders from the exchange snapshot
+        exchange_open_orders: list[str] = []
+        open_orders_raw = getattr(engine, "_last_open_orders", None)
+        if open_orders_raw and isinstance(open_orders_raw, list):
+            exchange_open_orders = [str(o.get("orderId", "")) for o in open_orders_raw if isinstance(o, dict) and o.get("orderId")]
+
         now = datetime.now(timezone.utc)
         projection_id = f"opening-sync-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+        evidence_data = {"balance": live_balance, "positions": exchange_positions, "open_orders": exchange_open_orders}
         payload = {
             "projection_id": projection_id, "account_id": "default", "venue_id": "BINANCE",
             "balance_amount": live_balance, "balance_currency": "USDT", "balance_decimals": 8,
-            "positions": {}, "open_orders": [],
+            "positions": exchange_positions, "open_orders": exchange_open_orders,
             "captured_at": now.isoformat(), "source": "OPERATOR_AUTHORIZED_OPENING",
             "fact_version": str(int(now.timestamp())),
-            "evidence_hash": hashlib.sha256(json.dumps({"balance": live_balance}, sort_keys=True).encode()).hexdigest(),
+            "evidence_hash": hashlib.sha256(json.dumps(evidence_data, sort_keys=True).encode()).hexdigest(),
             "approval_id": f"opening-approval-{uuid.uuid4().hex[:12]}",
             "complete": True, "created_at": now.isoformat(),
         }
