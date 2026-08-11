@@ -3976,9 +3976,9 @@ class AutonomousEngine:
             aggressive_price = None
             if ref_price > 0:
                 if side == "BUY":
-                    aggressive_price = str(round(ref_price * 1.005, 2))
+                    aggressive_price = str(round(ref_price * 1.02, 2))  # S32: 2% 溢价吃单
                 else:
-                    aggressive_price = str(round(ref_price * 0.995, 2))
+                    aggressive_price = str(round(ref_price * 0.98, 2))  # S32: 2% 折价吃单
                 slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
                 algo_type = "AGGRESSIVE_LIMIT"
             else:
