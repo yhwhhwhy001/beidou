@@ -6155,8 +6155,12 @@ class AutonomousEngine:
                 side = "SELL" if pp.side == OrderSide.BUY else "BUY"
                 prec = self._symbol_precision.get(symbol)
                 if prec is None:
-                    print(f"[protection] {symbol}: exchange precision UNKNOWN; retry deferred")
-                    continue
+                    entry_val = float(pp.entry_price)
+                    if entry_val > 5000: dec = 1
+                    elif entry_val > 100: dec = 2
+                    elif entry_val > 1: dec = 3
+                    else: dec = 5
+                    prec = {"price": dec, "quantity": dec}
                 placed = 0
 
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
