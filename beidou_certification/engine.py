@@ -127,7 +127,15 @@ class CertificationFramework:
         return all(scenario.scenario_id in self._results for scenario in self._scenarios)
 
     def evaluate(self) -> GateCertificate:
-        """评估所有场景并生成 Gate 证书。P0 立即 FAIL；NOT_RUN/NOT_VERIFIABLE 绝不 PASS。"""
+        """PKG28 (BDS-P1-065): 评估所有场景并生成签名的 Gate 证书。
+
+        P0 立即 FAIL；NOT_RUN/NOT_VERIFIABLE 绝不 PASS。
+        证书必须绑定证据根哈希并签名，才能作为资本晋级 authority。
+        """
+        import hashlib
+        import json
+        import os as _os
+
         scenarios_completed: list[ScenarioResult] = []
         blocking_p0 = False
         blocking_not_run = False
@@ -162,13 +170,33 @@ class CertificationFramework:
                 elif result.status == ScenarioStatus.NOT_VERIFIABLE:
                     has_not_verifiable = True
 
-        # BD-T18 修复: NOT_RUN/NOT_VERIFIABLE 绝不能作为 PASS
         if blocking_p0:
             gate_result = GateResult.FAIL
         elif blocking_not_run or has_not_verifiable:
             gate_result = GateResult.UNVERIFIABLE
         else:
             gate_result = GateResult.PASS
+
+        # PKG28 (BDS-P1-065): 计算证据根哈希并签名证书
+        manifest_keys = sorted([
+            s.scenario.scenario_id for s in scenarios_completed
+        ])
+        evidence_root = hashlib.sha256(
+            json.dumps([
+                {"id": s.scenario.scenario_id, "status": s.status.value, "evidence": dict(s.evidence)}
+                for s in scenarios_completed
+            ], sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+        signer = _os.environ.get("BEIDOU_CERT_SIGNER", "beidou-certification-engine")
+        signing_key = _os.environ.get("BEIDOU_SIGNING_KEY", "")
+        signature = ""
+        if signing_key:
+            import hmac
+            sign_payload = f"{gate_result.value}|{evidence_root}|{manifest_keys}"
+            signature = hmac.new(
+                signing_key.encode(), sign_payload.encode(), hashlib.sha256
+            ).hexdigest()
 
         cert = GateCertificate(
             certificate_id=f"cert-{self.gate.value}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
@@ -177,6 +205,9 @@ class CertificationFramework:
             scenarios=scenarios_completed,
             blocking_failures=blocking_failures,
             degradation_conditions=["P0_FAILURE"] if blocking_p0 else [],
+            signer=signer,
+            signature=signature,
+            evidence_manifest=manifest_keys,
         )
         self._certificates.append(cert)
         return cert
