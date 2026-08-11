@@ -77,19 +77,16 @@ class P0ImmediateTriggerSystem:
     def any_p0_triggered(self) -> bool:
         """BD-CV50 AC-50-02: P0 事件不等待。"""
         return any(
-            t.severity == TriggerSeverity.P0 and t.status == TriggerStatus.TRIGGERED
-            for t in self.triggers.values()
+            t.severity == TriggerSeverity.P0 and t.status == TriggerStatus.TRIGGERED for t in self.triggers.values()
         )
 
     def aggregate_state(self) -> str:
         """BD-CV50 AC-50-01: P1 FAIL + P0 FAIL → RED。"""
         p0_triggered = any(
-            t.severity == TriggerSeverity.P0 and t.status == TriggerStatus.TRIGGERED
-            for t in self.triggers.values()
+            t.severity == TriggerSeverity.P0 and t.status == TriggerStatus.TRIGGERED for t in self.triggers.values()
         )
         p1_triggered = any(
-            t.severity == TriggerSeverity.P1 and t.status == TriggerStatus.TRIGGERED
-            for t in self.triggers.values()
+            t.severity == TriggerSeverity.P1 and t.status == TriggerStatus.TRIGGERED for t in self.triggers.values()
         )
         if p0_triggered:
             return "RED"

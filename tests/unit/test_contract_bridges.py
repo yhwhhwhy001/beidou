@@ -2,35 +2,22 @@
 
 from __future__ import annotations
 
-import pytest
-
 from beidou_certification.contracts import CertificationGate, GateLevel, StagedCertification
-from beidou_control.truth import RESUME_REQUIRED_EVIDENCE, TruthSnapshot, TradingEligibility, derive_eligibility
-from beidou_research.contracts import FactorEvidence, FactorLifecycleState, StrategyAction, StrategySignal
+from beidou_control.truth import RESUME_REQUIRED_EVIDENCE
+from beidou_research.contracts import FactorEvidence, FactorLifecycleState
 from beidou_safety.execution.contracts import (
     ExecutionCostSnapshot,
-    ExecutionPlan,
     Fill,
-    LegType,
-    LedgerPosting,
-    LedgerTransaction,
     OrderIdempotencyKey,
-    PlanSlice,
-    PlanStatus,
     PositionAggregate,
-    ProtectionAggregate,
-    ProtectionOrder,
     TripleReconciliation,
 )
 from beidou_strategy.portfolio.contracts import (
     AdaptiveSizing,
     OptimizationResult,
-    PortfolioConstraints,
-    PositionSide,
     RiskApproval,
     RiskState,
     RiskStateAuthority,
-    SignedPortfolioTarget,
 )
 
 
@@ -90,15 +77,21 @@ class TestTripleReconciliation:
 
     def test_mismatch_tracking(self):
         tr = TripleReconciliation(
-            venue_orders=5, local_orders=5, ledger_entries=5,
-            is_matched=True, mismatches=[],
+            venue_orders=5,
+            local_orders=5,
+            ledger_entries=5,
+            is_matched=True,
+            mismatches=[],
         )
         assert tr.is_matched
 
     def test_unmatched_with_mismatches(self):
         tr = TripleReconciliation(
-            venue_orders=5, local_orders=4, ledger_entries=5,
-            is_matched=False, mismatches=["position_mismatch"],
+            venue_orders=5,
+            local_orders=4,
+            ledger_entries=5,
+            is_matched=False,
+            mismatches=["position_mismatch"],
         )
         assert not tr.is_matched
         assert len(tr.mismatches) == 1
@@ -157,7 +150,7 @@ class TestResumeEvidence:
 
 class TestFactorEvidenceBridge:
     def test_nan_sharpe_cannot_promote(self):
-        import math
+
         fe = FactorEvidence(factor_id="f1", sharpe=float("nan"))
         assert not fe.can_promote()
 
@@ -191,6 +184,7 @@ class TestRiskStateAuthority:
 
     def test_normal_with_valid_approval_can_create(self):
         from datetime import datetime, timedelta, timezone
+
         future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         approval = RiskApproval(approval_id="a1", max_exposure=10000.0, is_expired=False, expires_at=future)
         rsa = RiskStateAuthority(state=RiskState.NORMAL, active_approvals=[approval])

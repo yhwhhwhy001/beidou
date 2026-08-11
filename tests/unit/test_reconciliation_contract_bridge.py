@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from datetime import datetime, timezone
 
 from beidou_safety.execution.reconciliation import (
@@ -10,7 +9,7 @@ from beidou_safety.execution.reconciliation import (
     ReconciliationEngine,
     ReconciliationStatus,
 )
-from beidou_shared.types import AccountId, MonetaryValue, Quantity, VenueId
+from beidou_shared.types import AccountId, MonetaryValue, VenueId
 
 
 def _make_snapshot(account_id: str = "test", venue_id: str = "BINANCE", **overrides) -> AccountFactSnapshot:

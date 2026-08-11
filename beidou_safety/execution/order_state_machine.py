@@ -29,13 +29,32 @@ class OrderState(str, Enum):
 VALID_ORDER_TRANSITIONS: dict[OrderState, set[OrderState]] = {
     OrderState.CREATED: {OrderState.QUEUED, OrderState.REJECTED, OrderState.UNKNOWN},
     OrderState.QUEUED: {OrderState.EXCHANGE_ACKED, OrderState.REJECTED, OrderState.UNKNOWN},
-    OrderState.EXCHANGE_ACKED: {OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCELED, OrderState.EXPIRED, OrderState.UNKNOWN},
-    OrderState.PARTIALLY_FILLED: {OrderState.FILLED, OrderState.CANCELED, OrderState.EXPIRED, OrderState.PARTIALLY_FILLED, OrderState.UNKNOWN},
+    OrderState.EXCHANGE_ACKED: {
+        OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.EXPIRED,
+        OrderState.UNKNOWN,
+    },
+    OrderState.PARTIALLY_FILLED: {
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.EXPIRED,
+        OrderState.PARTIALLY_FILLED,
+        OrderState.UNKNOWN,
+    },
     OrderState.FILLED: set(),  # 终态
     OrderState.CANCELED: set(),  # 终态
     OrderState.REJECTED: set(),  # 终态
     OrderState.EXPIRED: set(),  # 终态
-    OrderState.UNKNOWN: {OrderState.EXCHANGE_ACKED, OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, OrderState.EXPIRED},
+    OrderState.UNKNOWN: {
+        OrderState.EXCHANGE_ACKED,
+        OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    },
 }
 
 

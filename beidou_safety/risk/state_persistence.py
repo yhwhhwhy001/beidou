@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -70,14 +69,18 @@ class RiskStatePersistence:
         try:
             snapshot.snapshot_hash = snapshot.compute_hash()
             with open(self._state_file, "w") as f:
-                json.dump({
-                    "snapshot_id": snapshot.snapshot_id,
-                    "aggregate_state": snapshot.aggregate_state,
-                    "reason": snapshot.reason,
-                    "expires_at": snapshot.expires_at,
-                    "snapshot_hash": snapshot.snapshot_hash,
-                    "saved_at": datetime.now(timezone.utc).isoformat(),
-                }, f, indent=2)
+                json.dump(
+                    {
+                        "snapshot_id": snapshot.snapshot_id,
+                        "aggregate_state": snapshot.aggregate_state,
+                        "reason": snapshot.reason,
+                        "expires_at": snapshot.expires_at,
+                        "snapshot_hash": snapshot.snapshot_hash,
+                        "saved_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
             return True
         except Exception:
             return False

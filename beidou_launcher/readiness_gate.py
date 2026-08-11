@@ -77,10 +77,7 @@ class ReadinessGate:
             StartupPhase.PROTECTION_VERIFY,
             StartupPhase.RISK_SNAPSHOT,
         ]
-        return all(
-            self.phases.get(p, PhaseResult(phase=p)).passed
-            for p in critical_phases
-        )
+        return all(self.phases.get(p, PhaseResult(phase=p)).passed for p in critical_phases)
 
     def can_resume(self) -> bool:
         """BD-CV53 AC-53-02: 启动失败不会自动 RESUME。"""

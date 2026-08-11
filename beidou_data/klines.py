@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from beidou_data.contracts import CanonicalMarketEvent, EventType  # BD-CV11
 from beidou_shared.types import Price, Quantity, VenueInstrument
 
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -61,7 +60,8 @@ def revalidate_factor(
     晋级不可跳级。
     """
     result = FactorRevalidationResult(
-        factor_id=factor_id, sharpe=sharpe,
+        factor_id=factor_id,
+        sharpe=sharpe,
         evidence_dag_hash=evidence_dag_hash,
         state=FactorState.REVALIDATION_REQUIRED,
     )

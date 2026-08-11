@@ -10,10 +10,9 @@ import os
 import signal
 import subprocess
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
-from beidou_chaos.fault_injection import FaultScenario, FaultInjectionResult, FaultScenarioDefinition, FAULT_SCENARIOS
+from beidou_chaos.fault_injection import FaultInjectionResult, FaultScenario
 
 
 @dataclass
@@ -50,7 +49,9 @@ class ProcessFaultInjector:
             # 验证进程确实被杀
             try:
                 os.kill(pid, 0)
-                return FaultInjectionResult(scenario=FaultScenario.KILL_9, passed=False, invariants_failed=["PROCESS_STILL_ALIVE"])
+                return FaultInjectionResult(
+                    scenario=FaultScenario.KILL_9, passed=False, invariants_failed=["PROCESS_STILL_ALIVE"]
+                )
             except OSError:
                 # 进程已死 — 预期结果
                 return FaultInjectionResult(
@@ -61,7 +62,9 @@ class ProcessFaultInjector:
                     evidence_collected=["kill_timestamp", "exit_code", "restart_attempt"],
                 )
         except OSError as exc:
-            return FaultInjectionResult(scenario=FaultScenario.KILL_9, passed=False, invariants_failed=[f"KILL_FAILED:{exc}"])
+            return FaultInjectionResult(
+                scenario=FaultScenario.KILL_9, passed=False, invariants_failed=[f"KILL_FAILED:{exc}"]
+            )
 
     def inject_db_crash(self) -> FaultInjectionResult:
         """BD-CV54: PostgreSQL SIGSTOP + SIGCONT — DB crash 模拟。"""
@@ -70,7 +73,9 @@ class ProcessFaultInjector:
             result = subprocess.run(["pgrep", "-f", db_name], capture_output=True, text=True, timeout=5)
             pids = result.stdout.strip().split("\n")
             if not pids or not pids[0]:
-                return FaultInjectionResult(scenario=FaultScenario.DB_CRASH, passed=False, invariants_failed=["DB_NOT_FOUND"])
+                return FaultInjectionResult(
+                    scenario=FaultScenario.DB_CRASH, passed=False, invariants_failed=["DB_NOT_FOUND"]
+                )
 
             pg_pid = int(pids[0])
             # SIGSTOP 暂停 DB
@@ -88,7 +93,9 @@ class ProcessFaultInjector:
                 evidence_collected=["db_pid", "stop_time", "recovery_wal_position"],
             )
         except Exception as exc:
-            return FaultInjectionResult(scenario=FaultScenario.DB_CRASH, passed=False, invariants_failed=[f"DB_CRASH_FAILED:{exc}"])
+            return FaultInjectionResult(
+                scenario=FaultScenario.DB_CRASH, passed=False, invariants_failed=[f"DB_CRASH_FAILED:{exc}"]
+            )
 
     def inject_dual_instance(self) -> FaultInjectionResult:
         """BD-CV54: 双实例检测 — fencing token。"""
@@ -117,16 +124,21 @@ class ProcessFaultInjector:
                     evidence_collected=["fencing_token", "instance_start_time"],
                 )
         except Exception as exc:
-            return FaultInjectionResult(scenario=FaultScenario.DUAL_INSTANCE, passed=False, invariants_failed=[str(exc)])
+            return FaultInjectionResult(
+                scenario=FaultScenario.DUAL_INSTANCE, passed=False, invariants_failed=[str(exc)]
+            )
 
     def inject_network_timeout(self, url: str = "", timeout_seconds: int = 5) -> FaultInjectionResult:
         """BD-CV54: HTTP 超时模拟 — 真实网络调用。"""
         target_url = url or self._config.testnet_url
         try:
             import urllib.request
+
             # 设置极短超时模拟 timeout
             urllib.request.urlopen(target_url, timeout=0.001)
-            return FaultInjectionResult(scenario=FaultScenario.TIMEOUT, passed=False, invariants_failed=["REQUEST_SHOULD_HAVE_TIMED_OUT"])
+            return FaultInjectionResult(
+                scenario=FaultScenario.TIMEOUT, passed=False, invariants_failed=["REQUEST_SHOULD_HAVE_TIMED_OUT"]
+            )
         except Exception:
             return FaultInjectionResult(
                 scenario=FaultScenario.TIMEOUT,

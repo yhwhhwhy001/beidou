@@ -282,12 +282,14 @@ class MAPEKController:
                 control_plane.execute_action(ctrl_action)
                 side_effect_observed = True
             except Exception as exc:
-                self._recovery_log.append({
-                    "module": module_name,
-                    "action": f"{action.value}_FAILED",
-                    "error": str(exc),
-                    "timestamp": time.time(),
-                })
+                self._recovery_log.append(
+                    {
+                        "module": module_name,
+                        "action": f"{action.value}_FAILED",
+                        "error": str(exc),
+                        "timestamp": time.time(),
+                    }
+                )
                 return RecoveryResult.FAILED
 
         if action == RecoveryAction.RESTART_MODULE:
@@ -312,26 +314,30 @@ class MAPEKController:
         else:
             result = RecoveryResult.FAILED
 
-        self._recovery_log.append({
-            "module": module_name,
-            "action": action.value,
-            "result": result.value,
-            "side_effect_observed": side_effect_observed,
-            "timestamp": time.time(),
-        })
+        self._recovery_log.append(
+            {
+                "module": module_name,
+                "action": action.value,
+                "result": result.value,
+                "side_effect_observed": side_effect_observed,
+                "timestamp": time.time(),
+            }
+        )
 
         after = {
             "module": module_name,
             "restart_count": self.get_restart_count(module_name),
             "side_effect": side_effect_observed,
         }
-        self._recovery_evidence.append({
-            "module": module_name,
-            "action": action.value,
-            "result": result.value,
-            "before": before,
-            "after": after,
-            "timestamp": time.time(),
-        })
+        self._recovery_evidence.append(
+            {
+                "module": module_name,
+                "action": action.value,
+                "result": result.value,
+                "before": before,
+                "after": after,
+                "timestamp": time.time(),
+            }
+        )
 
         return result

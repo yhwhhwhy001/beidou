@@ -46,8 +46,10 @@ class KernelInput:
 
     def compute_input_hash(self) -> str:
         data = {
-            "symbol": self.symbol, "market": self.market_data,
-            "features": self.features, "regime": self.regime,
+            "symbol": self.symbol,
+            "market": self.market_data,
+            "features": self.features,
+            "regime": self.regime,
             "position": self.current_position,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -68,8 +70,10 @@ class KernelOutput:
 
     def compute_output_hash(self) -> str:
         data = {
-            "symbol": self.symbol, "action": self.action.value,
-            "direction": self.direction, "confidence": self.confidence,
+            "symbol": self.symbol,
+            "action": self.action.value,
+            "direction": self.direction,
+            "confidence": self.confidence,
             "target_exposure": self.target_exposure,
             "bound_hashes": self.bound_hashes,
         }
@@ -125,8 +129,10 @@ class TypedStrategyKernel:
 
         if not direction:
             return KernelOutput(
-                symbol=inputs.symbol, action=StrategyAction.NO_ACTION,
-                reason="NO_ENTRY_SIGNAL", output_hash="",
+                symbol=inputs.symbol,
+                action=StrategyAction.NO_ACTION,
+                reason="NO_ENTRY_SIGNAL",
+                output_hash="",
             )
 
         # Filter phase: PASS/VETO/DEGRADE only
@@ -136,8 +142,11 @@ class TypedStrategyKernel:
                 filter_out = rule(inputs, direction)
                 if filter_out == FilterResult.VETO:
                     return KernelOutput(
-                        symbol=inputs.symbol, action=StrategyAction.VETO,
-                        direction=direction, reason="FILTER_VETO", output_hash="",
+                        symbol=inputs.symbol,
+                        action=StrategyAction.VETO,
+                        direction=direction,
+                        reason="FILTER_VETO",
+                        output_hash="",
                     )
                 if filter_out == FilterResult.DEGRADE:
                     confidence *= 0.5
@@ -152,17 +161,24 @@ class TypedStrategyKernel:
             try:
                 if rule(inputs):
                     return KernelOutput(
-                        symbol=inputs.symbol, action=StrategyAction.ACTION,
-                        direction="FLAT", confidence=1.0, target_exposure=0.0,
-                        reason="EXIT_SIGNAL", output_hash="",
+                        symbol=inputs.symbol,
+                        action=StrategyAction.ACTION,
+                        direction="FLAT",
+                        confidence=1.0,
+                        target_exposure=0.0,
+                        reason="EXIT_SIGNAL",
+                        output_hash="",
                     )
             except Exception:
                 continue
 
         output = KernelOutput(
-            symbol=inputs.symbol, action=current_action,
-            direction=direction, confidence=confidence,
-            target_exposure=target_exposure, reason=reason,
+            symbol=inputs.symbol,
+            action=current_action,
+            direction=direction,
+            confidence=confidence,
+            target_exposure=target_exposure,
+            reason=reason,
             bound_hashes={
                 "input_hash": input_hash,
                 "feature_hash": inputs.feature_hash,

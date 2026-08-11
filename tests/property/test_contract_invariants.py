@@ -8,28 +8,25 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis.strategies import floats, lists
 
-from beidou_certification.contracts import FaultScenario, FaultInjectionResult
+from beidou_certification.contracts import FaultInjectionResult, FaultScenario
 from beidou_research.contracts import StatisticalTest, StatisticalValidationResult
 from beidou_safety.execution.contracts import (
     ExecutionPlan,
     Fill,
-    LegType,
     LedgerPosting,
     LedgerTransaction,
+    LegType,
     PlanSlice,
     PlanStatus,
     PositionAggregate,
     ProtectionAggregate,
     ProtectionOrder,
-    TripleReconciliation,
 )
 from beidou_strategy.portfolio.contracts import (
     AdaptiveSizing,
-    PortfolioConstraints,
     PositionSide,
     SignedPortfolioTarget,
 )
-
 
 # ============================================================================
 # BD-CV30: Exposure Algebra — gross >= abs(net)
@@ -59,9 +56,11 @@ class TestExposureAlgebra:
         # delta is always a fraction of target_exposure, so gross >= abs(net)
         actual_delta = target * delta
         t = SignedPortfolioTarget(
-            target_id="test", symbol="BTCUSDT",
+            target_id="test",
+            symbol="BTCUSDT",
             side=PositionSide.LONG if target > 0 else PositionSide.SHORT,
-            target_exposure=target, delta=actual_delta,
+            target_exposure=target,
+            delta=actual_delta,
         )
         assert t.is_valid(), f"SignedPortfolioTarget invalid: gross={t.target_exposure}, delta={t.delta}"
 
@@ -78,9 +77,12 @@ class TestPositionDeterminism:
         seed_qty=floats(min_value=-100, max_value=100),
         fills1=lists(
             floats(min_value=-10, max_value=10).map(
-                lambda x: Fill(fill_id="f", symbol="BTCUSDT", side="BUY" if x > 0 else "SELL", quantity=abs(x), price=50000.0)
+                lambda x: Fill(
+                    fill_id="f", symbol="BTCUSDT", side="BUY" if x > 0 else "SELL", quantity=abs(x), price=50000.0
+                )
             ),
-            min_size=0, max_size=20,
+            min_size=0,
+            max_size=20,
         ),
     )
     def test_replay_deterministic(self, seed_qty, fills1):
@@ -103,14 +105,11 @@ class TestLedgerInvariants:
         amounts=lists(floats(min_value=0.01, max_value=10000), min_size=1, max_size=5),
     )
     def test_ledger_balanced(self, amounts):
-        postings = [
-            LedgerPosting(account="asset", leg_type=LegType.DEBIT, amount=a) for a in amounts
-        ] + [
+        postings = [LedgerPosting(account="asset", leg_type=LegType.DEBIT, amount=a) for a in amounts] + [
             LedgerPosting(account="liability", leg_type=LegType.CREDIT, amount=a) for a in amounts
         ]
         tx = LedgerTransaction(tx_id="test", postings=postings)
-        assert tx.is_balanced(), f"Ledger unbalanced"
-
+        assert tx.is_balanced(), "Ledger unbalanced"
 
     def test_unbalanced_detected(self):
         postings = [
@@ -164,7 +163,16 @@ class TestExecutionPlanInvariants:
     def test_with_slices_is_executable(self):
         plan = ExecutionPlan(
             plan_id="p1",
-            slices=[PlanSlice(slice_id="s1", symbol="BTCUSDT", quantity="0.001", price="50000", order_type="LIMIT", algorithm="TWAP")],
+            slices=[
+                PlanSlice(
+                    slice_id="s1",
+                    symbol="BTCUSDT",
+                    quantity="0.001",
+                    price="50000",
+                    order_type="LIMIT",
+                    algorithm="TWAP",
+                )
+            ],
             status=PlanStatus.PENDING,
             algorithm="TWAP",
         )
@@ -174,8 +182,22 @@ class TestExecutionPlanInvariants:
         plan = ExecutionPlan(
             plan_id="p1",
             slices=[
-                PlanSlice(slice_id="s1", symbol="BTCUSDT", quantity="0.5", price="50000", order_type="MARKET", algorithm="EMERGENCY"),
-                PlanSlice(slice_id="s2", symbol="BTCUSDT", quantity="0.3", price="50000", order_type="MARKET", algorithm="EMERGENCY"),
+                PlanSlice(
+                    slice_id="s1",
+                    symbol="BTCUSDT",
+                    quantity="0.5",
+                    price="50000",
+                    order_type="MARKET",
+                    algorithm="EMERGENCY",
+                ),
+                PlanSlice(
+                    slice_id="s2",
+                    symbol="BTCUSDT",
+                    quantity="0.3",
+                    price="50000",
+                    order_type="MARKET",
+                    algorithm="EMERGENCY",
+                ),
             ],
             is_emergency=True,
             algorithm="EMERGENCY",
@@ -240,7 +262,9 @@ class TestFaultInjectionInvariants:
             assert result.is_machine_decidable(), f"Scenario {scenario.value} not machine-decidable"
 
     def test_duplicate_orders_blocked_on_timeout(self):
-        result = FaultInjectionResult(scenario=FaultScenario.TIMEOUT, duplicate_orders_detected=0, risk_increase_detected=False, passed=True)
+        result = FaultInjectionResult(
+            scenario=FaultScenario.TIMEOUT, duplicate_orders_detected=0, risk_increase_detected=False, passed=True
+        )
         assert result.is_machine_decidable()
         assert result.duplicate_orders_detected == 0
 

@@ -82,10 +82,7 @@ class StagedCertificationLadder:
 
     def chain_complete(self) -> bool:
         """BD-CV55 AC-55-01: 证书链完整。"""
-        return all(
-            self.certificates.get(g, GateCertificate(gate=g)).certified
-            for g in GATE_ORDER
-        )
+        return all(self.certificates.get(g, GateCertificate(gate=g)).certified for g in GATE_ORDER)
 
     def start_gate_timer(self, gate: GateLevel) -> None:
         cert = self.certificates.get(gate)

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from beidou_autonomy.mapek import Checkpoint, FaultFingerprint, MAPEKController, RecoveryAction, RecoveryResult
+from beidou_autonomy.mapek import Checkpoint, MAPEKController, RecoveryAction, RecoveryResult
 
 
 class RecoveryPhase(str, Enum):

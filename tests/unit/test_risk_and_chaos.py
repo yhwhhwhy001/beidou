@@ -10,14 +10,13 @@ from beidou_certification.contracts import (
     FaultInjectionResult,
     FaultScenario,
 )
-from beidou_control.plane import ControlAction, ControlPlane, RiskDirection, ValidationResult
-from beidou_control.truth import TradingEligibility, derive_eligibility, eligibility_to_control_action
+from beidou_control.plane import ControlAction, ControlPlane, RiskDirection
+from beidou_control.truth import TradingEligibility, eligibility_to_control_action
 from beidou_strategy.portfolio.contracts import (
     RiskApproval,
     RiskState,
     RiskStateAuthority,
 )
-
 
 # ============================================================================
 # BD-CV33: RiskStateAuthority + Approval
@@ -161,42 +160,52 @@ class TestFaultInjectionScenarios:
     def test_timeout_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.TIMEOUT,
-            passed=True, duplicate_orders_detected=0, risk_increase_detected=False,
+            passed=True,
+            duplicate_orders_detected=0,
+            risk_increase_detected=False,
         )
         assert result.is_machine_decidable()
 
     def test_kill9_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.KILL_9,
-            passed=True, duplicate_orders_detected=0, risk_increase_detected=False,
+            passed=True,
+            duplicate_orders_detected=0,
+            risk_increase_detected=False,
         )
         assert result.is_machine_decidable()
 
     def test_dual_instance_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.DUAL_INSTANCE,
-            passed=False, duplicate_orders_detected=1, risk_increase_detected=True,
+            passed=False,
+            duplicate_orders_detected=1,
+            risk_increase_detected=True,
         )
         assert not result.is_machine_decidable()
 
     def test_user_stream_gap_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.USER_STREAM_GAP,
-            passed=False, risk_increase_detected=False,
+            passed=False,
+            risk_increase_detected=False,
         )
         assert result.is_machine_decidable()
 
     def test_db_crash_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.DB_CRASH,
-            passed=True, duplicate_orders_detected=0, risk_increase_detected=False,
+            passed=True,
+            duplicate_orders_detected=0,
+            risk_increase_detected=False,
         )
         assert result.is_machine_decidable()
 
     def test_exchange_rule_change_scenario(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.EXCHANGE_RULE_CHANGE,
-            passed=False, risk_increase_detected=True,
+            passed=False,
+            risk_increase_detected=True,
         )
         assert not result.is_machine_decidable()
 

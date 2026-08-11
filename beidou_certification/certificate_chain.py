@@ -140,8 +140,11 @@ class CertificateChain:
         try:
             data = {
                 gate: {
-                    "gate": c.gate, "subject": c.subject, "result": c.result.value,
-                    "revoked": c.revoked, "signature": c.signature[:16],
+                    "gate": c.gate,
+                    "subject": c.subject,
+                    "result": c.result.value,
+                    "revoked": c.revoked,
+                    "signature": c.signature[:16],
                     "elapsed_seconds": self.elapsed_time(gate),
                 }
                 for gate, c in self.certificates.items()

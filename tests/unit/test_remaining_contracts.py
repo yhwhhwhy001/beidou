@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -13,19 +11,14 @@ from beidou_certification.contracts import (
     FaultInjectionResult,
     FaultScenario,
     GateLevel,
-    RecoveryAction,
-    RecoveryCheckpoint,
-    RecoveryResult,
     StagedCertification,
 )
-from beidou_control.truth import TruthSnapshot, derive_eligibility
 from beidou_data.canonical_bars import (
     CanonicalBarBuilder,
     get_canonical_bar_builder,
     reset_bar_builders,
 )
 from beidou_data.contracts import (
-    CanonicalMarketEvent,
     DQCheck,
     DQSnapshot,
     DQStatus,
@@ -34,31 +27,15 @@ from beidou_data.contracts import (
 )
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_research.contracts import (
-    CostBreakdown,
     CapacityModel,
-    FactorEvidence,
-    FactorLifecycleState,
+    CostBreakdown,
     KernelParityResult,
     StatisticalTest,
     StatisticalValidationResult,
-    StrategyAction,
-    StrategySignal,
 )
 from beidou_safety.execution.contracts import (
     ExecutionCostSnapshot,
-    ExecutionPlan,
-    PlanSlice,
-    PlanStatus,
 )
-from beidou_strategy.portfolio.contracts import (
-    AdaptiveSizing,
-    OptimizationResult,
-    PortfolioConstraints,
-    RiskApproval,
-    RiskStateAuthority,
-    RiskState,
-)
-
 
 # ============================================================================
 # BD-CV10: InstrumentRuleSnapshot — UNKNOWN 规则
@@ -73,22 +50,53 @@ class TestInstrumentRuleSnapshot:
 
     def test_known_rule_is_known(self):
         snap = InstrumentRuleSnapshot(
-            symbol="BTCUSDT", tick_size="0.1", step_size="0.001",
-            min_qty="0.001", min_notional="20.0",
-            price_precision=1, qty_precision=3,
+            symbol="BTCUSDT",
+            tick_size="0.1",
+            step_size="0.001",
+            min_qty="0.001",
+            min_notional="20.0",
+            price_precision=1,
+            qty_precision=3,
             observed_at=datetime.now(timezone.utc).isoformat(),
         )
         assert snap.is_known
 
     def test_hash_consistent(self):
         now = datetime.now(timezone.utc).isoformat()
-        s1 = InstrumentRuleSnapshot(symbol="BTCUSDT", tick_size="0.1", step_size="0.001", min_qty="0.001", min_notional="20.0", price_precision=1, qty_precision=3, observed_at=now)
-        s2 = InstrumentRuleSnapshot(symbol="BTCUSDT", tick_size="0.1", step_size="0.001", min_qty="0.001", min_notional="20.0", price_precision=1, qty_precision=3, observed_at=now)
+        s1 = InstrumentRuleSnapshot(
+            symbol="BTCUSDT",
+            tick_size="0.1",
+            step_size="0.001",
+            min_qty="0.001",
+            min_notional="20.0",
+            price_precision=1,
+            qty_precision=3,
+            observed_at=now,
+        )
+        s2 = InstrumentRuleSnapshot(
+            symbol="BTCUSDT",
+            tick_size="0.1",
+            step_size="0.001",
+            min_qty="0.001",
+            min_notional="20.0",
+            price_precision=1,
+            qty_precision=3,
+            observed_at=now,
+        )
         assert s1.compute_hash() == s2.compute_hash()
 
     def test_unknown_hash_differs(self):
         s1 = InstrumentRuleSnapshot.unknown("BTCUSDT")
-        s2 = InstrumentRuleSnapshot(symbol="ETHUSDT", tick_size="0.01", step_size="0.001", min_qty="0.001", min_notional="10.0", price_precision=2, qty_precision=3, observed_at=datetime.now(timezone.utc).isoformat())
+        s2 = InstrumentRuleSnapshot(
+            symbol="ETHUSDT",
+            tick_size="0.01",
+            step_size="0.001",
+            min_qty="0.001",
+            min_notional="10.0",
+            price_precision=2,
+            qty_precision=3,
+            observed_at=datetime.now(timezone.utc).isoformat(),
+        )
         assert s1.compute_hash() != s2.compute_hash()
 
 
@@ -138,28 +146,19 @@ class TestDQSnapshot:
         assert not snap.all_required_pass()
 
     def test_all_required_pass_when_complete(self):
-        checks = [
-            DQCheck(check_id=cid, name=cid, status=DQStatus.PASS)
-            for cid in DQSnapshot.REQUIRED_CHECKS
-        ]
+        checks = [DQCheck(check_id=cid, name=cid, status=DQStatus.PASS) for cid in DQSnapshot.REQUIRED_CHECKS]
         snap = DQSnapshot(symbol="BTCUSDT", checks=checks, warmup_complete=True)
         assert snap.all_required_pass()
         assert snap.has_warmup_data()
 
     def test_one_fail_blocks_all(self):
-        checks = [
-            DQCheck(check_id=cid, name=cid, status=DQStatus.PASS)
-            for cid in DQSnapshot.REQUIRED_CHECKS
-        ]
+        checks = [DQCheck(check_id=cid, name=cid, status=DQStatus.PASS) for cid in DQSnapshot.REQUIRED_CHECKS]
         checks[0] = DQCheck(check_id=checks[0].check_id, name=checks[0].name, status=DQStatus.FAIL)
         snap = DQSnapshot(symbol="BTCUSDT", checks=checks)
         assert not snap.all_required_pass()
 
     def test_warmup_without_complete_fails(self):
-        checks = [
-            DQCheck(check_id=cid, name=cid, status=DQStatus.PASS)
-            for cid in DQSnapshot.REQUIRED_CHECKS
-        ]
+        checks = [DQCheck(check_id=cid, name=cid, status=DQStatus.PASS) for cid in DQSnapshot.REQUIRED_CHECKS]
         snap = DQSnapshot(symbol="BTCUSDT", checks=checks, warmup_complete=False)
         assert snap.all_required_pass()
         assert not snap.has_warmup_data()
@@ -311,13 +310,15 @@ class TestFaultInjection:
     def test_risk_increase_fails(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.DUAL_INSTANCE,
-            risk_increase_detected=True, passed=False,
+            risk_increase_detected=True,
+            passed=False,
         )
         assert not result.is_machine_decidable()
 
     def test_duplicate_orders_detected(self):
         result = FaultInjectionResult(
             scenario=FaultScenario.TIMEOUT,
-            duplicate_orders_detected=1, passed=False,
+            duplicate_orders_detected=1,
+            passed=False,
         )
         assert result.duplicate_orders_detected == 1

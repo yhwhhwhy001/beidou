@@ -15,7 +15,6 @@ from enum import Enum
 from typing import Any
 
 from beidou_research.contracts import FactorEvidence, FactorLifecycleState  # BD-CV22
-
 from beidou_shared.types import SchemaVersion, VenueId
 
 

@@ -7,8 +7,6 @@ Nonzero position 必须有 venue-acknowledged SL 100% 覆盖。
 
 from __future__ import annotations
 
-import hashlib
-import time
 from dataclasses import dataclass, field
 
 
@@ -53,7 +51,11 @@ class PositionAggregate:
             new_position -= fill.quantity
 
         # Update avg entry
-        if self.net_position == 0 or (self.net_position > 0 and fill.side == "SELL") or (self.net_position < 0 and fill.side == "BUY"):
+        if (
+            self.net_position == 0
+            or (self.net_position > 0 and fill.side == "SELL")
+            or (self.net_position < 0 and fill.side == "BUY")
+        ):
             new_avg = self.avg_entry_price
         elif abs(new_position) > 0:
             total_cost = self.avg_entry_price * abs(self.net_position) + fill.price * abs(fill.quantity)
@@ -129,11 +131,7 @@ class ProtectionAggregate:
         """BD-CV43 AC-43-01: nonzero position 有效 SL 覆盖率=100%。"""
         if self.position_qty == 0.0:
             return True
-        return (
-            self.stop_loss is not None
-            and self.stop_loss.is_active
-            and self.coverage_pct >= 100.0
-        )
+        return self.stop_loss is not None and self.stop_loss.is_active and self.coverage_pct >= 100.0
 
     def compute_coverage(self, rule_step_size: float = 0.001) -> float:
         """BD-CV43: 基于 InstrumentRuleSnapshot 的精度计算覆盖率。"""

@@ -9,40 +9,31 @@ import math
 import time
 from datetime import datetime, timezone
 
-import pytest
-
-from beidou_control.plane import ControlAction, ControlPlane
-from beidou_control.truth import TruthSnapshot, TradingEligibility, derive_eligibility
 from beidou_certification.contracts import (
-    FaultScenario,
-    FaultInjectionResult,
-    MonitorState,
     MonitoringAggregate,
+    MonitorState,
     RecoveryAction,
     RecoveryCheckpoint,
     RecoveryResult,
 )
+from beidou_control.plane import ControlAction, ControlPlane
+from beidou_control.truth import TradingEligibility, TruthSnapshot, derive_eligibility
 from beidou_research.contracts import FactorEvidence, FactorLifecycleState
 from beidou_safety.execution.contracts import (
-    ExecutionPlan,
     Fill,
-    LegType,
     LedgerPosting,
     LedgerTransaction,
-    PlanSlice,
-    PlanStatus,
+    LegType,
     PositionAggregate,
     ProtectionAggregate,
     ProtectionOrder,
     TripleReconciliation,
 )
 from beidou_strategy.portfolio.contracts import (
-    AdaptiveSizing,
     RiskApproval,
     RiskState,
     RiskStateAuthority,
 )
-
 
 # ============================================================================
 # BD-CV02: UNKNOWN/STALE/CORRUPT → NOT_VERIFIABLE/NO_NEW_RISK
@@ -61,12 +52,22 @@ class TestUnknownStaleCorruptMapping:
         snap = TruthSnapshot(
             snapshot_id="s1",
             created_at=datetime.now(timezone.utc).isoformat(),
-            market_hash="a", account_hash="a", order_hash="a",
-            position_hash="a", ledger_hash="a", reconciliation_hash="a",
-            protection_hash="a", risk_hash="a",
-            market_freshness=old, account_freshness=old,
-            reconciliation_freshness=old, protection_freshness=old, risk_freshness=old,
-            reconciliation_status="MATCHED", protection_status="ACTIVE", risk_status="NORMAL",
+            market_hash="a",
+            account_hash="a",
+            order_hash="a",
+            position_hash="a",
+            ledger_hash="a",
+            reconciliation_hash="a",
+            protection_hash="a",
+            risk_hash="a",
+            market_freshness=old,
+            account_freshness=old,
+            reconciliation_freshness=old,
+            protection_freshness=old,
+            risk_freshness=old,
+            reconciliation_status="MATCHED",
+            protection_status="ACTIVE",
+            risk_status="NORMAL",
         )
         assert derive_eligibility(snap, max_age_seconds=300.0) == TradingEligibility.NOT_VERIFIABLE
 
@@ -75,13 +76,27 @@ class TestUnknownStaleCorruptMapping:
         snap = TruthSnapshot(
             snapshot_id="s1",
             created_at=datetime.now(timezone.utc).isoformat(),
-            market_hash="a", account_hash="a", order_hash="a",
-            position_hash="a", ledger_hash="a", reconciliation_hash="a",
-            protection_hash="a", risk_hash="a", config_hash="a", policy_hash="a",
-            market_freshness=now, account_freshness=now, order_freshness=now,
-            position_freshness=now, ledger_freshness=now,
-            reconciliation_freshness=now, protection_freshness=now, risk_freshness=now,
-            reconciliation_status="UNKNOWN", protection_status="UNKNOWN", risk_status="NORMAL",
+            market_hash="a",
+            account_hash="a",
+            order_hash="a",
+            position_hash="a",
+            ledger_hash="a",
+            reconciliation_hash="a",
+            protection_hash="a",
+            risk_hash="a",
+            config_hash="a",
+            policy_hash="a",
+            market_freshness=now,
+            account_freshness=now,
+            order_freshness=now,
+            position_freshness=now,
+            ledger_freshness=now,
+            reconciliation_freshness=now,
+            protection_freshness=now,
+            risk_freshness=now,
+            reconciliation_status="UNKNOWN",
+            protection_status="UNKNOWN",
+            risk_status="NORMAL",
         )
         assert derive_eligibility(snap) == TradingEligibility.NO_NEW_RISK
 
@@ -143,6 +158,7 @@ class TestCorruptMissingState:
 
     def test_warning_allows_with_approval(self):
         from datetime import timedelta
+
         future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         approval = RiskApproval(approval_id="a1", is_expired=False, expires_at=future)
         rsa = RiskStateAuthority(state=RiskState.WARNING, active_approvals=[approval])
@@ -150,6 +166,7 @@ class TestCorruptMissingState:
 
     def test_expired_approval_blocks(self):
         from datetime import timedelta
+
         past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         approval = RiskApproval(approval_id="a1", is_expired=False, expires_at=past)
         rsa = RiskStateAuthority(state=RiskState.NORMAL, active_approvals=[approval])
@@ -210,14 +227,16 @@ class TestRecoveryInvariants:
     def test_no_checkpoint_with_side_effect(self):
         result = RecoveryResult(
             action=RecoveryAction.DEGRADE_TO_NO_NEW_RISK,
-            success=True, side_effect_observed=True,
+            success=True,
+            side_effect_observed=True,
         )
         assert result.is_valid_success()
 
     def test_no_checkpoint_no_side_effect_fails(self):
         result = RecoveryResult(
             action=RecoveryAction.DEGRADE_TO_NO_NEW_RISK,
-            success=True, side_effect_observed=False,
+            success=True,
+            side_effect_observed=False,
         )
         assert not result.is_valid_success()
 
@@ -327,21 +346,30 @@ class TestShortTargetNegative:
 
     def test_short_position_is_negative(self):
         from beidou_strategy.portfolio.contracts import PositionSide
+
         assert PositionSide.SHORT.value == "SHORT"
 
     def test_long_positive_exposure(self):
-        from beidou_strategy.portfolio.contracts import SignedPortfolioTarget, PositionSide
+        from beidou_strategy.portfolio.contracts import PositionSide, SignedPortfolioTarget
+
         t = SignedPortfolioTarget(
-            target_id="t1", symbol="BTCUSDT", side=PositionSide.LONG,
-            target_exposure=50000.0, delta=100.0,
+            target_id="t1",
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            target_exposure=50000.0,
+            delta=100.0,
         )
         assert t.is_valid()
 
     def test_flat_zero_delta(self):
-        from beidou_strategy.portfolio.contracts import SignedPortfolioTarget, PositionSide
+        from beidou_strategy.portfolio.contracts import PositionSide, SignedPortfolioTarget
+
         t = SignedPortfolioTarget(
-            target_id="t1", symbol="BTCUSDT", side=PositionSide.FLAT,
-            target_exposure=0.0, delta=0.0,
+            target_id="t1",
+            symbol="BTCUSDT",
+            side=PositionSide.FLAT,
+            target_exposure=0.0,
+            delta=0.0,
         )
         assert t.is_valid()
 

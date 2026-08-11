@@ -8,7 +8,6 @@ idempotency key 防重复。
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import time
 from dataclasses import dataclass, field

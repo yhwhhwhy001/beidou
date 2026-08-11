@@ -56,10 +56,7 @@ class LedgerTransaction:
     def compute_hash(self) -> str:
         data = {
             "tx_id": self.tx_id,
-            "postings": [
-                {"account": p.account, "type": p.leg_type.value, "amount": p.amount}
-                for p in self.postings
-            ],
+            "postings": [{"account": p.account, "type": p.leg_type.value, "amount": p.amount} for p in self.postings],
             "timestamp": self.timestamp,
         }
         return hashlib.sha256(str(data).encode()).hexdigest()[:16]

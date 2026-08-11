@@ -262,7 +262,11 @@ def verify_evidence_integrity(manifest: dict[str, Any], evidence_dir: str = "") 
     manifest_hash = manifest.get("manifest_hash", "")
     if manifest_hash:
         # 重新计算 manifest hash（排除 manifest_hash 字段自身）
-        recompute_data = {k: v for k, v in manifest.items() if k not in ("manifest_hash", "_legacy_status", "_legacy_marked_at", "_legacy_reason")}
+        recompute_data = {
+            k: v
+            for k, v in manifest.items()
+            if k not in ("manifest_hash", "_legacy_status", "_legacy_marked_at", "_legacy_reason")
+        }
         recomputed = hashlib.sha256(
             __import__("json").dumps(recompute_data, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()

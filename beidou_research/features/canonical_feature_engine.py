@@ -29,7 +29,8 @@ class FeatureSnapshot:
 
     def compute_hash(self) -> str:
         data = {
-            "symbol": self.symbol, "feature_name": self.feature_name,
+            "symbol": self.symbol,
+            "feature_name": self.feature_name,
             "values_count": len(self.values),
             "input_bar_hashes": self.input_bar_hashes,
             "dq_snapshot_id": self.dq_snapshot_id,
@@ -57,8 +58,11 @@ class CanonicalFeatureEngine:
         symbol = "default"
         if len(prices) < period + 1:
             return FeatureSnapshot(
-                symbol=symbol, feature_name="RSI", values=[],
-                input_bar_hashes=[], dq_snapshot_id="INSUFFICIENT_DATA",
+                symbol=symbol,
+                feature_name="RSI",
+                values=[],
+                input_bar_hashes=[],
+                dq_snapshot_id="INSUFFICIENT_DATA",
             )
 
         # Wilder's smoothing
@@ -114,7 +118,9 @@ class CanonicalFeatureEngine:
         cleaned = [0.0 if (math.isnan(v) or math.isinf(v)) else v for v in rsi_values]
 
         return FeatureSnapshot(
-            symbol=symbol, feature_name="RSI", values=cleaned,
+            symbol=symbol,
+            feature_name="RSI",
+            values=cleaned,
             input_bar_hashes=[f"bar-{i}" for i in range(len(prices))],
             available_at=datetime.now(timezone.utc).isoformat(),
             feature_version="1.0",
@@ -123,7 +129,9 @@ class CanonicalFeatureEngine:
     def compute_sma(self, prices: list[float], period: int = 20) -> FeatureSnapshot:
         """简单移动平均。"""
         if len(prices) < period:
-            return FeatureSnapshot(symbol="default", feature_name="SMA", values=[], input_bar_hashes=[], dq_snapshot_id="INSUFFICIENT_DATA")
+            return FeatureSnapshot(
+                symbol="default", feature_name="SMA", values=[], input_bar_hashes=[], dq_snapshot_id="INSUFFICIENT_DATA"
+            )
 
         sma = []
         for i in range(len(prices)):
@@ -136,7 +144,9 @@ class CanonicalFeatureEngine:
 
         cleaned = [0.0 if (math.isnan(v) or math.isinf(v)) else v for v in sma]
         return FeatureSnapshot(
-            symbol="default", feature_name="SMA", values=cleaned,
+            symbol="default",
+            feature_name="SMA",
+            values=cleaned,
             input_bar_hashes=[f"bar-{i}" for i in range(len(prices))],
             available_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -156,9 +166,12 @@ class CanonicalFeatureEngine:
             snap = FeatureSnapshot(symbol="default", feature_name=feature_name, dq_snapshot_id="UNSUPPORTED_FEATURE")
 
         snap = FeatureSnapshot(
-            symbol=snap.symbol, feature_name=snap.feature_name,
-            values=snap.values, input_bar_hashes=snap.input_bar_hashes,
-            dq_snapshot_id=snap.dq_snapshot_id, available_at=snap.available_at,
+            symbol=snap.symbol,
+            feature_name=snap.feature_name,
+            values=snap.values,
+            input_bar_hashes=snap.input_bar_hashes,
+            dq_snapshot_id=snap.dq_snapshot_id,
+            available_at=snap.available_at,
             feature_version=snap.feature_version,
         )
         snap_hash = snap.compute_hash()

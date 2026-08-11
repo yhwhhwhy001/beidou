@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 
-from beidou_data.klines import KLineGenerator, OHLCV
+from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_shared.types import Price, Quantity, VenueInstrument
 
 
@@ -99,7 +99,9 @@ class CanonicalBarBuilder:
             return None
 
         # 计算 bar hash
-        bar_hash_raw = f"{symbol}:{completed.open_time.isoformat()}:{completed.close_time.isoformat()}:{completed.close.amount}"
+        bar_hash_raw = (
+            f"{symbol}:{completed.open_time.isoformat()}:{completed.close_time.isoformat()}:{completed.close.amount}"
+        )
         bar_hash = hashlib.sha256(bar_hash_raw.encode()).hexdigest()
 
         # Duplicate detection
@@ -114,7 +116,9 @@ class CanonicalBarBuilder:
         event_type = BarEventType.CLOSED
         last_time = self._last_bar_time.get(symbol)
         if last_time is not None:
-            expected_next = self._generator._interval_delta() + last_time if hasattr(self._generator, "_interval_delta") else None
+            expected_next = (
+                self._generator._interval_delta() + last_time if hasattr(self._generator, "_interval_delta") else None
+            )
             gap = None
             if hasattr(self._generator, "_interval_delta"):
                 gap = completed.open_time - last_time
@@ -164,7 +168,9 @@ class CanonicalBarBuilder:
 
     def any_unclosed_or_gapped(self) -> bool:
         """BD-CV11: 任何未闭合、缺口 bar 不得进入增加风险的特征链。"""
-        return self._gap_events or any(e.event_type != BarEventType.CLOSED for e in self._events[-1:] if not e.bar.is_closed)
+        has_gaps = bool(self._gap_events)
+        has_unclosed = any(e.event_type != BarEventType.CLOSED for e in self._events[-1:] if not e.bar.is_closed)
+        return has_gaps or has_unclosed
 
 
 # 全局注册表 — 各子系统通过 interval 获取共享 builder

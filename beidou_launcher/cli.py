@@ -114,6 +114,7 @@ def main(
 
     # BD-CV53: 启动就绪门禁 — 进程启动默认 NO_NEW_RISK
     from beidou_launcher.readiness_gate import ReadinessGate, StartupPhase
+
     gate = ReadinessGate()
     gate.start()
     gate.complete_phase(StartupPhase.CONFIG, True, "CLI config loaded")

@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
-from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.canonical_bars import CanonicalBarBuilder, get_canonical_bar_builder  # BD-CV11
+from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter

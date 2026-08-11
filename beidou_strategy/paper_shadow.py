@@ -601,10 +601,15 @@ class PaperMatchingEngine:
 
         # BD-CV24: 撤单-成交竞态模拟
         if self._rng.random() < self._cancel_fill_race_probability:
-            self._race_events.append({
-                "symbol": symbol, "side": side, "quantity": quantity,
-                "resolution": "cancel_wins", "latency_ms": latency,
-            })
+            self._race_events.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "resolution": "cancel_wins",
+                    "latency_ms": latency,
+                }
+            )
             return (PaperOrderStatus.CANCELED.value, 0.0, 0.0, latency)
 
         return (PaperOrderStatus.FILLED.value, quantity, exec_price, latency)
@@ -618,26 +623,42 @@ class PaperMatchingEngine:
         roll = self._rng.random()
         if roll < 0.3:
             # 撤单先到 — 取消成功
-            self._race_events.append({
-                "order_id": order_id, "symbol": symbol, "side": side,
-                "quantity": quantity, "resolution": "cancel_wins",
-            })
+            self._race_events.append(
+                {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "resolution": "cancel_wins",
+                }
+            )
             return ("CANCEL_WINS", 0.0)
         elif roll < 0.7:
             # 成交先到 — 部分成交后取消剩余
             fill_pct = 0.3 + self._rng.random() * 0.5
             filled = quantity * fill_pct
-            self._race_events.append({
-                "order_id": order_id, "symbol": symbol, "side": side,
-                "quantity": quantity, "filled": filled, "resolution": "fill_then_cancel",
-            })
+            self._race_events.append(
+                {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "filled": filled,
+                    "resolution": "fill_then_cancel",
+                }
+            )
             return ("FILL_THEN_CANCEL", filled)
         else:
             # 全部成交 — cancel 到达时已全部成交
-            self._race_events.append({
-                "order_id": order_id, "symbol": symbol, "side": side,
-                "quantity": quantity, "resolution": "fill_wins",
-            })
+            self._race_events.append(
+                {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "resolution": "fill_wins",
+                }
+            )
             return ("FILL_WINS", quantity)
 
     def race_event_count(self) -> int:

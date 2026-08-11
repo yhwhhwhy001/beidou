@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -55,7 +55,9 @@ class BoundTarget:
     target_hash: str = ""
 
 
-def compute_hedge_netting(long_positions: dict[str, float], short_positions: dict[str, float]) -> dict[str, NettingResult]:
+def compute_hedge_netting(
+    long_positions: dict[str, float], short_positions: dict[str, float]
+) -> dict[str, NettingResult]:
     """BD-CV30: Hedge mode — LONG 和 SHORT 分别独立。
 
     BUY→增加 LONG 仓位, SELL→增加 SHORT 仓位（不互相抵消）。
@@ -117,12 +119,17 @@ def bind_portfolio_target(
     net = target_position
     margin = gross / max(leverage, 0.01)
 
-    import hashlib, json
+    import hashlib
+    import json
 
     hash_data = {
-        "symbol": symbol, "target": target_position, "current": current_position,
-        "universe": universe_snapshot_id, "rule": rule_snapshot_id,
-        "strategy": strategy_decision_id, "risk": risk_policy_id,
+        "symbol": symbol,
+        "target": target_position,
+        "current": current_position,
+        "universe": universe_snapshot_id,
+        "rule": rule_snapshot_id,
+        "strategy": strategy_decision_id,
+        "risk": risk_policy_id,
     }
     target_hash = hashlib.sha256(json.dumps(hash_data, sort_keys=True).encode()).hexdigest()[:16]
 

@@ -6,9 +6,7 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 
 @dataclass
@@ -96,7 +94,4 @@ class UniverseHysteresis:
 
         禁止 survivorship/look-ahead：返回 as_of 时间点之前的观测结果。
         """
-        return [
-            e for e in self.entries.values()
-            if e.observed_at <= as_of and e.is_executable
-        ]
+        return [e for e in self.entries.values() if e.observed_at <= as_of and e.is_executable]

@@ -22,24 +22,20 @@ from types import SimpleNamespace
 from typing import Any
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
-from beidou_certification.contracts import GateLevel, CertificationGate
 from beidou_control.plane import ControlAction, ControlPlane
 from beidou_control.truth import TradingEligibility, TruthSnapshot, derive_eligibility
 from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
-from beidou_data.canonical_bars import get_canonical_bar_builder
 from beidou_data.trading_pool_lifecycle import TradingPool
-from beidou_research.contracts import StrategyAction, StrategySignal
-from beidou_safety.execution.contracts import ExecutionPlan, PlanSlice, PlanStatus, PositionAggregate, Fill, OrderIdempotencyKey
-from beidou_strategy.portfolio.contracts import SignedPortfolioTarget, PositionSide
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
 from beidou_observability.telemetry import AlertSeverity
 from beidou_policy.loader import PolicyLoader
+from beidou_research.contracts import StrategyAction, StrategySignal
 from beidou_research.factors.factor import (
     FactorDefinition,
     FactorEvaluator,
@@ -53,6 +49,14 @@ from beidou_safety.execution.algorithms import (
     ExecutionAlgorithmType,
     ExecutionContext,
     SliceInvariantChecker,
+)
+from beidou_safety.execution.contracts import (
+    ExecutionPlan,
+    Fill,
+    OrderIdempotencyKey,
+    PlanSlice,
+    PlanStatus,
+    PositionAggregate,
 )
 from beidou_safety.execution.intent import IntentOutbox
 from beidou_safety.execution.ledger import (
@@ -132,6 +136,7 @@ from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, 
 from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernel
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
 from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
+from beidou_strategy.portfolio.contracts import PositionSide, SignedPortfolioTarget
 from beidou_strategy.portfolio.optimizer import PortfolioOptimizerImpl
 from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 from beidou_strategy.risk.manager import (
@@ -3859,7 +3864,7 @@ class AutonomousEngine:
             outbox_id=str(getattr(intent, "intent_id", "")),
         )
         if _idem_key.compute_hash():
-            setattr(intent, "idempotency_key", _idem_key.compute_hash())
+            intent.idempotency_key = _idem_key.compute_hash()
 
         if not await self._verify_intent_at_send(intent):
             print(f"[order] ❌ Intent {intent.intent_id} rejected: final risk approval invalid or missing")
@@ -7593,7 +7598,9 @@ class AutonomousEngine:
         snap = self.build_truth_snapshot()
         return derive_eligibility(snap)
 
-    def build_strategy_signal(self, strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = "") -> StrategySignal:
+    def build_strategy_signal(
+        self, strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = ""
+    ) -> StrategySignal:
         """BD-CV23: 构造 Typed Strategy Signal。
 
         NO_ACTION 不会被当系统故障，VETO 在所有环境阻断下游。
@@ -7607,7 +7614,9 @@ class AutonomousEngine:
         sa = _action_map.get(action, StrategyAction.NO_ACTION)
         return StrategySignal(strategy_id=strategy_id, action=sa, symbol=symbol, confidence=confidence, reason=reason)
 
-    def build_portfolio_target(self, symbol: str, side: str, exposure: float, delta: float = 0.0) -> SignedPortfolioTarget:
+    def build_portfolio_target(
+        self, symbol: str, side: str, exposure: float, delta: float = 0.0
+    ) -> SignedPortfolioTarget:
         """BD-CV30: 构造 SignedPortfolioTarget。
 
         LONG/SHORT/FLAT 方向正确，gross>=abs(net)。
@@ -7615,7 +7624,7 @@ class AutonomousEngine:
         _side_map = {"LONG": PositionSide.LONG, "SHORT": PositionSide.SHORT, "FLAT": PositionSide.FLAT}
         ps = _side_map.get(side, PositionSide.FLAT)
         return SignedPortfolioTarget(
-            target_id=f"tgt-{symbol}-{int(time.time()*1000)}",
+            target_id=f"tgt-{symbol}-{int(time.time() * 1000)}",
             symbol=symbol,
             side=ps,
             target_exposure=exposure,
@@ -7623,15 +7632,19 @@ class AutonomousEngine:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    def build_execution_plan(self, slices: list[PlanSlice], algorithm: str = "", is_emergency: bool = False) -> ExecutionPlan:
+    def build_execution_plan(
+        self, slices: list[PlanSlice], algorithm: str = "", is_emergency: bool = False
+    ) -> ExecutionPlan:
         """BD-CV40: 构造 ExecutionPlan。
 
         无算法适用返回 NOT_EXECUTABLE。Emergency plan 绝不增加绝对仓位。
         """
         if not slices or not algorithm:
-            return ExecutionPlan(plan_id=f"plan-{int(time.time()*1000)}", status=PlanStatus.NOT_EXECUTABLE, algorithm=algorithm)
+            return ExecutionPlan(
+                plan_id=f"plan-{int(time.time() * 1000)}", status=PlanStatus.NOT_EXECUTABLE, algorithm=algorithm
+            )
         return ExecutionPlan(
-            plan_id=f"plan-{int(time.time()*1000)}",
+            plan_id=f"plan-{int(time.time() * 1000)}",
             slices=slices,
             status=PlanStatus.PENDING,
             algorithm=algorithm,
@@ -7648,7 +7661,9 @@ class AutonomousEngine:
             return pa.replay(fills)
         return pa
 
-    def build_idempotency_key(self, correlation_id: str, client_order_id: str, outbox_id: str = "") -> OrderIdempotencyKey:
+    def build_idempotency_key(
+        self, correlation_id: str, client_order_id: str, outbox_id: str = ""
+    ) -> OrderIdempotencyKey:
         """BD-CV41: 构造订单幂等键。"""
         return OrderIdempotencyKey(correlation_id=correlation_id, client_order_id=client_order_id, outbox_id=outbox_id)
 

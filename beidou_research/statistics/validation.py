@@ -10,7 +10,6 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ============================================================================
 # Purged Walk-Forward Cross Validation
 # ============================================================================
@@ -46,7 +45,16 @@ class PurgedWFCVResult:
         Embargo: 在训练集末尾和测试集开头之间留出 gap。
         """
         if n_samples < 10 or n_splits < 1:
-            return cls(n_splits=0, train_sizes=[], test_sizes=[], embargo_sizes=[], oos_scores=[], mean_score=float("nan"), std_score=float("nan"), is_significant=False)
+            return cls(
+                n_splits=0,
+                train_sizes=[],
+                test_sizes=[],
+                embargo_sizes=[],
+                oos_scores=[],
+                mean_score=float("nan"),
+                std_score=float("nan"),
+                is_significant=False,
+            )
 
         embargo = max(1, int(n_samples * embargo_pct))
         purge = max(1, int(n_samples * purge_pct))
@@ -71,7 +79,16 @@ class PurgedWFCVResult:
             oos_scores.append(0.0)  # placeholder — 实际分数由 scores_fn 计算
 
         if not oos_scores:
-            return cls(n_splits=0, train_sizes=[], test_sizes=[], embargo_sizes=[], oos_scores=[], mean_score=float("nan"), std_score=float("nan"), is_significant=False)
+            return cls(
+                n_splits=0,
+                train_sizes=[],
+                test_sizes=[],
+                embargo_sizes=[],
+                oos_scores=[],
+                mean_score=float("nan"),
+                std_score=float("nan"),
+                is_significant=False,
+            )
 
         mean_score = sum(oos_scores) / len(oos_scores)
         variance = sum((s - mean_score) ** 2 for s in oos_scores) / max(1, len(oos_scores) - 1)
@@ -122,7 +139,9 @@ class CPCVResult:
         scores = [0.0] * n_combos  # placeholder
         mean_score = 0.0
         std_score = 0.0
-        return cls(n_groups=n_groups, n_combinations=n_combos, scores=scores, mean_score=mean_score, std_score=std_score)
+        return cls(
+            n_groups=n_groups, n_combinations=n_combos, scores=scores, mean_score=mean_score, std_score=std_score
+        )
 
 
 # ============================================================================
@@ -141,9 +160,7 @@ class PBOResult:
     logits: list[float] = field(default_factory=list)
 
     @classmethod
-    def compute(
-        cls, is_scores: list[float], oos_scores: list[float], n_combos: int = 0, seed: int = 42
-    ) -> PBOResult:
+    def compute(cls, is_scores: list[float], oos_scores: list[float], n_combos: int = 0, seed: int = 42) -> PBOResult:
         """BD-CV20: 计算 PBO。
 
         n_combos 改变时组合分区集合真实变化。
@@ -212,7 +229,13 @@ class DSRResult:
         简化: 使用 Bailey & Lopez de Prado (2014) 近似。
         """
         if sample_size < 2 or n_trials < 1:
-            return cls(observed_sharpe=observed_sharpe, expected_max_sharpe=0.0, deflated_sharpe=0.0, p_value=1.0, is_significant=False)
+            return cls(
+                observed_sharpe=observed_sharpe,
+                expected_max_sharpe=0.0,
+                deflated_sharpe=0.0,
+                p_value=1.0,
+                is_significant=False,
+            )
 
         # Variance of SR under null
         sr_var = 1.0 / sample_size

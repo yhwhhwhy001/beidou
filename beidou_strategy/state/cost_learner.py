@@ -7,7 +7,6 @@ Contextual Bandit: fill completeness + market regime + action + reward + freshne
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 
@@ -61,10 +60,7 @@ class CostLearner:
         if len(self.samples) < 50:
             return False
         # Check consistency across regimes
-        avg_rewards = {
-            algo: sum(rs) / max(len(rs), 1)
-            for algo, rs in self.algorithm_rewards.items()
-        }
+        avg_rewards = {algo: sum(rs) / max(len(rs), 1) for algo, rs in self.algorithm_rewards.items()}
         if not avg_rewards:
             return False
         best_algo = max(avg_rewards, key=avg_rewards.get)

@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from beidou_research.contracts import (
-    FactorEvidence,
-    FactorLifecycleState,
     KernelParityResult,
-    StatisticalTest,
-    StatisticalValidationResult,
     StrategyAction,
     StrategySignal,
 )
@@ -19,11 +13,8 @@ from beidou_strategy.portfolio.contracts import (
     PortfolioConstraints,
     PositionSide,
     RiskApproval,
-    RiskState,
-    RiskStateAuthority,
     SignedPortfolioTarget,
 )
-
 
 # ============================================================================
 # BD-CV23: StrategyAction semantics
@@ -79,29 +70,41 @@ class TestSignedPortfolioTargetValidation:
 
     def test_long_target_valid(self):
         t = SignedPortfolioTarget(
-            target_id="t1", symbol="BTCUSDT", side=PositionSide.LONG,
-            target_exposure=50000.0, delta=100.0,
+            target_id="t1",
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            target_exposure=50000.0,
+            delta=100.0,
         )
         assert t.is_valid()
 
     def test_short_target_valid(self):
         t = SignedPortfolioTarget(
-            target_id="t2", symbol="BTCUSDT", side=PositionSide.SHORT,
-            target_exposure=30000.0, delta=50.0,
+            target_id="t2",
+            symbol="BTCUSDT",
+            side=PositionSide.SHORT,
+            target_exposure=30000.0,
+            delta=50.0,
         )
         assert t.is_valid()
 
     def test_flat_target_valid(self):
         t = SignedPortfolioTarget(
-            target_id="t3", symbol="BTCUSDT", side=PositionSide.FLAT,
-            target_exposure=0.0, delta=0.0,
+            target_id="t3",
+            symbol="BTCUSDT",
+            side=PositionSide.FLAT,
+            target_exposure=0.0,
+            delta=0.0,
         )
         assert t.is_valid()
 
     def test_delta_exceeds_exposure_invalid(self):
         t = SignedPortfolioTarget(
-            target_id="t4", symbol="BTCUSDT", side=PositionSide.LONG,
-            target_exposure=100.0, delta=200.0,
+            target_id="t4",
+            symbol="BTCUSDT",
+            side=PositionSide.LONG,
+            target_exposure=100.0,
+            delta=200.0,
         )
         assert not t.is_valid()  # gross < abs(net)
 
@@ -190,14 +193,18 @@ class TestKernelParity:
 
     def test_all_same_hash_parity(self):
         kp = KernelParityResult(
-            paper_hash="abc", replay_hash="abc", backtest_hash="abc",
+            paper_hash="abc",
+            replay_hash="abc",
+            backtest_hash="abc",
             is_consistent=True,
         )
         assert kp.has_parity()
 
     def test_replay_differs_no_parity(self):
         kp = KernelParityResult(
-            paper_hash="abc", replay_hash="def", backtest_hash="abc",
+            paper_hash="abc",
+            replay_hash="def",
+            backtest_hash="abc",
             is_consistent=False,
         )
         assert not kp.has_parity()
@@ -213,8 +220,11 @@ class TestKernelParity:
 
     def test_inconsistencies_tracked(self):
         kp = KernelParityResult(
-            paper_hash="abc", replay_hash="abc", backtest_hash="abc",
-            is_consistent=True, events_count=100,
+            paper_hash="abc",
+            replay_hash="abc",
+            backtest_hash="abc",
+            is_consistent=True,
+            events_count=100,
             inconsistencies=[],
         )
         assert kp.has_parity()
@@ -240,6 +250,7 @@ class TestRiskApprovalLifecycle:
 
     def test_approval_valid_in_future(self):
         from datetime import datetime, timedelta, timezone
+
         future = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
         a = RiskApproval(approval_id="a1", is_expired=False, expires_at=future)
         assert a.is_valid()

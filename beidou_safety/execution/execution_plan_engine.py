@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -43,10 +43,14 @@ class BoundPlanSlice:
 
     def compute_hash(self) -> str:
         data = {
-            "slice_id": self.slice_id, "symbol": self.symbol,
-            "side": self.side, "quantity": self.quantity,
-            "limit_price": self.limit_price, "order_type": self.order_type,
-            "time_in_force": self.time_in_force, "reduce_only": self.reduce_only,
+            "slice_id": self.slice_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "quantity": self.quantity,
+            "limit_price": self.limit_price,
+            "order_type": self.order_type,
+            "time_in_force": self.time_in_force,
+            "reduce_only": self.reduce_only,
             "rule_snapshot_id": self.rule_snapshot_id,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()

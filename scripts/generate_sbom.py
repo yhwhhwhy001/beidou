@@ -18,7 +18,9 @@ def get_git_sha() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.stdout.strip() if result.returncode == 0 else "UNKNOWN"
     except Exception:
@@ -29,7 +31,9 @@ def get_pip_freeze(venv_python: str) -> list[dict]:
     try:
         result = subprocess.run(
             [venv_python, "-m", "pip", "freeze", "--all"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         packages = []
         for line in result.stdout.strip().split("\n"):
@@ -38,7 +42,13 @@ def get_pip_freeze(venv_python: str) -> list[dict]:
                 continue
             if "==" in line:
                 name, version = line.split("==", 1)
-                packages.append({"name": name.strip(), "version": version.strip(), "purl": f"pkg:pypi/{name.strip()}@{version.strip()}"})
+                packages.append(
+                    {
+                        "name": name.strip(),
+                        "version": version.strip(),
+                        "purl": f"pkg:pypi/{name.strip()}@{version.strip()}",
+                    }
+                )
             elif " @ " in line:
                 name = line.split(" @ ")[0].strip()
                 packages.append({"name": name, "version": "unknown", "purl": f"pkg:pypi/{name}"})
