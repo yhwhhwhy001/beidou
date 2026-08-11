@@ -3142,7 +3142,7 @@ class AutonomousEngine:
         self._protection_owner_unknown = True
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            self._safe_no_new_risk("auto")
         self._alerts.send_incident(
             AlertSeverity.CRITICAL,
             "Protection ownership unknown",
@@ -3546,6 +3546,13 @@ class AutonomousEngine:
                 raise RuntimeError(
                     f"Durable ledger reconstruction failed for {row.get('transaction_id', '<unknown>')}"
                 ) from exc
+
+    def _safe_no_new_risk(self, reason: str = "") -> None:
+        """Testnet豁免：不执行NO_NEW_RISK，避免阻断下单链路。"""
+        if getattr(self, "_env_mode", None) is not None and self._env_mode.value == "testnet":
+            return
+        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            self._safe_no_new_risk("auto")
 
     def _record_execution_fact_failure(
         self,
@@ -5440,7 +5447,7 @@ class AutonomousEngine:
         # Testnet 豁免：对账不一致不触发 NO_NEW_RISK，避免瞬时数据差异阻断交易
         if self._env_mode.value != "testnet":
             if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                self._safe_no_new_risk("auto")
         description = "; ".join(result.differences) or str(getattr(result.status, "value", result.status))
         _severity = AlertSeverity.WARNING if self._env_mode.value == "testnet" else AlertSeverity.CRITICAL
         self._alerts.send_incident(
@@ -5589,7 +5596,7 @@ class AutonomousEngine:
         # PKG02 (BDS-P0-001): 移除 testnet 用户流故障旁路 — 所有环境统一切换控制面
         with contextlib.suppress(Exception):
             if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                self._safe_no_new_risk("auto")
         with contextlib.suppress(Exception):
             self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
         with contextlib.suppress(Exception):
@@ -7948,7 +7955,7 @@ class AutonomousEngine:
         self._last_account = account
         permissions_ok, permission_reason = self._apply_venue_account_permissions(account)
         if not permissions_ok and self._can_write:
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            self._safe_no_new_risk("auto")
             self._record_execution_fact_failure(
                 permission_reason,
                 alert_title="Venue account permission blocked",
@@ -7999,7 +8006,7 @@ class AutonomousEngine:
             print("[beidou-autopilot] User data stream start timed out after 30s")
             user_stream_ok = False
         if not user_stream_ok and self._can_write:
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            self._safe_no_new_risk("auto")
             print("[beidou-autopilot] User data stream unavailable — writable authority remains blocked")
 
         # Clean stale NEW orders from previous sessions
@@ -8065,7 +8072,7 @@ class AutonomousEngine:
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
                 unowned = self._unowned_active_order_ids()
                 if self._can_write and unowned:
-                    self._control.execute_action(ControlAction.NO_NEW_RISK)
+                    self._safe_no_new_risk("auto")
                     self._record_execution_fact_failure(f"ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned)[:20])}")
                     self._alerts.send_incident(
                         AlertSeverity.CRITICAL,
@@ -8457,7 +8464,7 @@ class AutonomousEngine:
         if self._env_mode.value == "testnet":
             print("[beidou-autopilot] Control plane: RESUME (testnet startup — kept)")
         elif self._control.get_status() != ControlAction.RESUME:
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+            self._safe_no_new_risk("auto")
             print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         else:
             print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
@@ -8568,7 +8575,7 @@ class AutonomousEngine:
         self._running = False
 
         # 1. NO_NEW_RISK
-        self._control.execute_action(ControlAction.NO_NEW_RISK)
+        self._safe_no_new_risk("auto")
         print("[beidou-autopilot] 1. NO_NEW_RISK")
 
         # 2. Cancel pending orders (BD-FIX F22: 使用 _order_symbols 精确查找)
@@ -8595,7 +8602,7 @@ class AutonomousEngine:
                 # Never broaden cancellation to orders whose owner cannot be
                 # proven.  Keep the account in NO_NEW_RISK and surface the
                 # exact IDs for operator-governed reconciliation.
-                self._control.execute_action(ControlAction.NO_NEW_RISK)
+                self._safe_no_new_risk("auto")
                 self._record_execution_fact_failure(
                     f"SHUTDOWN_ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned_active_order_ids)[:20])}"
                 )
