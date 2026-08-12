@@ -1,1 +1,3 @@
-"""版本化数据集管理与 Lineage。"""
+"""研究数据层：历史 K 线存储与数据集清单。"""
+
+from .kline_store import KlineStore  # noqa: F401
