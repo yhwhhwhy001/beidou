@@ -78,6 +78,7 @@ from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
 from beidou_safety.execution.reconciliation import (
     AccountFactSnapshot,
     ReconciliationEngine,
+    ReconciliationResult,
     ReconciliationStatus,
 )
 from beidou_safety.execution.user_events import UserProjectionStatus, UserStreamProjector
@@ -5984,6 +5985,31 @@ class AutonomousEngine:
             complete=opening_complete,
         )
 
+    def _reconciliation_rule_steps(self, symbols: set[str]) -> tuple[dict[str, str], str]:
+        """Bind every reconciled position to a fresh venue rule snapshot."""
+
+        if not symbols:
+            return {}, "OK"
+        adapter = getattr(self, "_adapter", None)
+        get_rule_snapshot = getattr(adapter, "get_rule_snapshot", None)
+        if not callable(get_rule_snapshot):
+            return {}, "POSITION_RULE_AUTHORITY_UNAVAILABLE"
+
+        rule_steps: dict[str, str] = {}
+        for symbol in sorted(symbols):
+            snapshot = get_rule_snapshot(symbol)
+            if snapshot is None or not snapshot.is_known or snapshot.is_stale:
+                return {}, f"POSITION_RULE_UNKNOWN_OR_STALE:{symbol}"
+            step_size = str(snapshot.step_size).strip()
+            try:
+                step = Decimal(step_size)
+            except (InvalidOperation, TypeError, ValueError):
+                return {}, f"POSITION_RULE_STEP_INVALID:{symbol}"
+            if not step.is_finite() or step <= 0:
+                return {}, f"POSITION_RULE_STEP_INVALID:{symbol}"
+            rule_steps[symbol] = step_size
+        return rule_steps, "OK"
+
     async def _reconcile(self) -> bool:
         """Compare fresh independent facts; never self-heal in place."""
 
@@ -6039,9 +6065,33 @@ class AutonomousEngine:
             complete=True,
         )
         system_facts = self._build_system_reconciliation_facts()
+        event_facts = getattr(self, "_event_stream_facts", None)
+        position_symbols = {str(symbol) for symbol in system_facts.positions} | {
+            str(symbol) for symbol in exchange_facts.positions
+        }
+        if event_facts is not None:
+            position_symbols.update(str(symbol) for symbol in event_facts.positions)
+        rule_steps, rule_reason = self._reconciliation_rule_steps(position_symbols)
+        if rule_reason != "OK":
+            result = ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.INCOMPLETE,
+                differences=[rule_reason],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                event_facts=event_facts,
+            )
+            return self._record_reconciliation_failure(
+                result,
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                event_facts=event_facts,
+            )
+        for facts in (system_facts, exchange_facts, event_facts):
+            if facts is not None:
+                facts.position_step_sizes = dict(rule_steps)
         self._recon.update_system_facts(system_facts)
         self._recon.update_exchange_facts(exchange_facts)
-        event_facts = getattr(self, "_event_stream_facts", None)
         if event_facts is not None:
             self._recon.update_event_facts(event_facts)
         # 启动时事件流可能尚未就绪 — 先使用两方对账建立基线，

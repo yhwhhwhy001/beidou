@@ -23,3 +23,9 @@
 | 2026-08-12 | Remove remaining Testnet development bypasses | architecture and boundary tests | PASS; factor/pool bypass and development universe bootstrap restricted to Paper/Research |
 | 2026-08-12 | Enforce withdrawal-permission stop in every environment | venue permission contract tests | PASS; Testnet no longer bypasses the hard withdrawal-permission gate |
 | 2026-08-12 | Full repository regression after tranche 4 | 2,078 tests; `artifacts/coverage-p3-tranche4-fixed.json` | PASS; 23,919/31,232 = 76.5849%, 7,313 uncovered; full-coverage gate remains FAIL |
+| 2026-08-12 | Harden deterministic recovery | focused recovery tests; 65/65 statements | PASS at 100%; ACTIVE now requires valid invariants and all P0 differences resolved |
+| 2026-08-12 | Bind reconciliation to current venue rules | engine rule-authority contract tests | PASS; every reconciled position symbol requires a fresh known venue step size |
+| 2026-08-12 | Harden durable user-stream projection | focused user-event tests; 208/208 statements | PASS at 100%; invalid replay facts and unrecoverable persistence rejection freeze projection |
+| 2026-08-12 | Full repository regression after tranche 5 | 2,096 tests; `artifacts/coverage-p3-tranche5.json` | PASS; 24,015/31,285 = 76.7620%, 7,270 uncovered; full-coverage gate remains FAIL |
+| 2026-08-12 | Commit and push authorization | explicit user instruction | AUTHORIZED for the current scoped safety-fix batch; runtime restart and exchange permission mutation remain outside this Git handoff |
+| 2026-08-12 | Pre-push full repository regression | 2,101 tests; fresh terminal coverage report | PASS; 24,033/31,293 = 76.7999%, 7,260 uncovered; full-coverage gate remains FAIL |

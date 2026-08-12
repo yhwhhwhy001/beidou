@@ -158,7 +158,9 @@ class UserStreamProjector:
             or facts.venue_id != self._venue_id
             or not facts.complete
             or not str(facts.source).strip()
+            or str(facts.source).strip().upper() == "UNKNOWN"
             or not str(facts.fact_version).strip()
+            or str(facts.fact_version).strip().upper() == "UNKNOWN"
             or not str(evidence_hash).strip()
             or not str(approval_id).strip()
             or (last_sequence is None and not allow_unsequenced)
@@ -169,12 +171,24 @@ class UserStreamProjector:
                 reason="complete replay baseline, provenance, approval, and continuity mode are required",
             )
         try:
-            self._positions = {
+            if facts.timestamp.tzinfo is None or facts.timestamp > datetime.now(timezone.utc):
+                raise ValueError("replay baseline timestamp must be aware and not in the future")
+            positions = {
                 InstrumentId(str(symbol)): Decimal(str(quantity.amount)) for symbol, quantity in facts.positions.items()
             }
-            if any(not quantity.is_finite() for quantity in self._positions.values()):
+            if any(not str(symbol).strip() for symbol in positions):
+                raise ValueError("replay baseline contains empty position symbol")
+            if any(not quantity.is_finite() for quantity in positions.values()):
                 raise ValueError("replay baseline contains non-finite position")
-            self._open_orders = {str(order_id) for order_id in facts.open_orders}
+            balance_amount = Decimal(str(facts.balance.amount))
+            if not balance_amount.is_finite():
+                raise ValueError("replay baseline contains non-finite balance")
+            order_ids = [str(order_id).strip() for order_id in facts.open_orders]
+            if any(not order_id for order_id in order_ids) or len(set(order_ids)) != len(order_ids):
+                raise ValueError("replay baseline contains invalid open-order identity")
+
+            self._positions = positions
+            self._open_orders = set(order_ids)
             self._balances = {
                 str(facts.balance.currency): facts.balance,
             }
@@ -231,6 +245,8 @@ class UserStreamProjector:
                             observation=observation,
                             reason="event already durable and applied",
                         )
+                    if row is None or str(row.get("applied_state")) != "PENDING":
+                        raise RuntimeError("event insert rejected without a recoverable durable row")
 
             self._apply_order_update(update)
             self._last_event_time_ms = max(self._last_event_time_ms or 0, int(update.event.event_time_ms))
@@ -284,6 +300,8 @@ class UserStreamProjector:
                             observation=observation,
                             reason="event already durable and applied",
                         )
+                    if row is None or str(row.get("applied_state")) != "PENDING":
+                        raise RuntimeError("account event insert rejected without a recoverable durable row")
             for balance in update.balances:
                 self._balances[str(balance.asset)] = balance.wallet_balance
             for position in update.positions:

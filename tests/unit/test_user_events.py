@@ -185,3 +185,162 @@ def test_account_updates_require_explicit_replay_and_restore_fail_closed(tmp_pat
         restored.ingest_account_update(_account_update(event_time=3_000, wallet="1020", position="0.30")).status
         is UserProjectionStatus.ACCEPTED
     )
+
+
+def _baseline(**overrides) -> AccountFactSnapshot:
+    values = {
+        "account_id": AccountId("default"),
+        "venue_id": VenueId("BINANCE"),
+        "balance": MonetaryValue(amount="1000", currency="USDT"),
+        "positions": {InstrumentId("BTCUSDT"): Quantity(amount="0.1")},
+        "open_orders": ["order-1"],
+        "timestamp": datetime.fromtimestamp(1, tz=timezone.utc),
+        "source": "AUTHORIZED_REPLAY_REST_SNAPSHOT",
+        "fact_version": "replay-v1",
+        "complete": True,
+    }
+    values.update(overrides)
+    return AccountFactSnapshot(**values)
+
+
+def _authorize(projector: UserStreamProjector, facts: AccountFactSnapshot | None = None):
+    return projector.authorize_replay_baseline(
+        facts or _baseline(),
+        evidence_hash="sha256:evidence",
+        approval_id="approval-1",
+        allow_unsequenced=True,
+    )
+
+
+def test_projection_result_properties_and_replay_validation_are_fail_closed() -> None:
+    projector = UserStreamProjector()
+    accepted = _authorize(projector)
+    assert accepted.accepted
+    assert projector.replay_baseline_verified
+    assert projector.frozen_reason is None
+
+    blocked = UserStreamProjector().authorize_replay_baseline(
+        _baseline(source="UNKNOWN"),
+        evidence_hash="sha256:evidence",
+        approval_id="approval-1",
+        allow_unsequenced=True,
+    )
+    assert blocked.status is UserProjectionStatus.BLOCKED
+    assert not blocked.accepted
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        _baseline(timestamp=datetime.now(timezone.utc).replace(year=datetime.now(timezone.utc).year + 1)),
+        _baseline(positions={InstrumentId(""): Quantity(amount="1")}),
+        _baseline(positions={InstrumentId("BTCUSDT"): Quantity(amount="NaN")}),
+        _baseline(balance=MonetaryValue(amount="NaN", currency="USDT")),
+        _baseline(open_orders=["duplicate", "duplicate"]),
+    ],
+)
+def test_invalid_replay_economics_freeze_projection_atomically(facts) -> None:
+    projector = UserStreamProjector()
+    result = _authorize(projector, facts)
+    assert result.status is UserProjectionStatus.ERROR
+    assert projector.frozen_reason is not None
+    assert projector.fact_snapshot().complete is False
+
+    assert _authorize(projector).status is UserProjectionStatus.BLOCKED
+    assert projector.ingest(_update(sequence=1, update_id=1, cumulative="0.1")).status is UserProjectionStatus.BLOCKED
+    assert projector.ingest_account_update(_account_update(event_time=2_000)).status is UserProjectionStatus.BLOCKED
+
+
+def test_restore_marks_pending_event_already_in_projection_as_applied() -> None:
+    class Store:
+        def __init__(self) -> None:
+            self.marked: list[str] = []
+
+        def restore_user_stream_projection(self, _account, _venue):
+            return {
+                "positions": {"BTCUSDT": "0.1"},
+                "balance_amount": "1000",
+                "balance_currency": "USDT",
+                "open_orders": [],
+                "last_event_time_ms": 2_000,
+                "last_sequence": 2,
+            }
+
+        def restore_user_stream_events(self, *, applied_only=False):
+            assert not applied_only
+            return [
+                {
+                    "event_id": "event-1",
+                    "applied_state": "PENDING",
+                    "event_time_ms": 2_000,
+                    "sequence": 2,
+                    "order_id": "order-1",
+                    "cumulative_quantity": "0.1",
+                }
+            ]
+
+        def mark_user_stream_event_applied(self, event_id):
+            self.marked.append(event_id)
+
+    store = Store()
+    projector = UserStreamProjector(store=store)
+    assert store.marked == ["event-1"]
+    assert "event-1" in projector._applied_event_ids
+
+
+@pytest.mark.parametrize("durable_row", [{"applied_state": "APPLIED"}, None])
+def test_order_event_rejected_insert_requires_recoverable_durable_row(durable_row) -> None:
+    class Store:
+        def save_user_stream_event(self, *_args, **_kwargs):
+            return False
+
+        def get_user_stream_event(self, _event_id):
+            return durable_row
+
+    projector = UserStreamProjector()
+    projector._store = Store()
+    result = projector.ingest(_update(sequence=1, update_id=1, cumulative="0.1"))
+    expected = UserProjectionStatus.DUPLICATE if durable_row else UserProjectionStatus.ERROR
+    assert result.status is expected
+
+
+@pytest.mark.parametrize("durable_row", [{"applied_state": "APPLIED"}, None])
+def test_account_event_rejected_insert_requires_recoverable_durable_row(durable_row) -> None:
+    class Store:
+        def save_user_stream_event(self, *_args, **_kwargs):
+            return False
+
+        def get_user_stream_event(self, _event_id):
+            return durable_row
+
+    projector = UserStreamProjector()
+    assert _authorize(projector).accepted
+    projector._store = Store()
+    update = _account_update(event_time=2_000)
+    result = projector.ingest_account_update(update)
+    expected = UserProjectionStatus.DUPLICATE if durable_row else UserProjectionStatus.ERROR
+    assert result.status is expected
+
+
+def test_account_duplicate_gap_nonfinite_and_order_regression_are_blocked() -> None:
+    duplicate = UserStreamProjector()
+    assert _authorize(duplicate).accepted
+    update = _account_update(event_time=2_000)
+    assert duplicate.ingest_account_update(update).status is UserProjectionStatus.ACCEPTED
+    assert duplicate.ingest_account_update(update).status is UserProjectionStatus.DUPLICATE
+    assert duplicate.ingest_account_update(_account_update(event_time=1_999)).status is UserProjectionStatus.BLOCKED
+
+    nonfinite = UserStreamProjector()
+    assert _authorize(nonfinite).accepted
+    bad_position = replace(update.positions[0], position_amount=Quantity(amount="NaN"))
+    bad_update = replace(update, positions=(bad_position,))
+    assert nonfinite.ingest_account_update(bad_update).status is UserProjectionStatus.ERROR
+
+    regressed = UserStreamProjector()
+    assert regressed.ingest(_update(sequence=1, update_id=1, cumulative="0.2")).accepted
+    assert regressed.ingest(_update(sequence=2, update_id=2, cumulative="0.1")).status is UserProjectionStatus.ERROR
+
+    terminal = UserStreamProjector()
+    result = terminal.ingest(_update(sequence=1, update_id=3, cumulative="0", status="FILLED"))
+    assert result.accepted
+    assert terminal.fact_snapshot().open_orders == []

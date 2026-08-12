@@ -70,6 +70,8 @@ class RecoveryEngine:
         self._state = RecoveryState()
 
     def start_recovery(self, checkpoint_id: str) -> RecoveryState:
+        if not checkpoint_id.strip():
+            raise ValueError("Recovery requires a durable checkpoint id")
         self._state = RecoveryState(
             phase=RecoveryPhase.CHECKPOINT,
             checkpoint_id=checkpoint_id,
@@ -88,7 +90,11 @@ class RecoveryEngine:
         expected = transitions.get(self._state.phase)
         if next_phase != expected:
             return False
+        if next_phase is RecoveryPhase.ACTIVE and (not self._state.invariants_valid or self._state.has_blocking_diffs):
+            return False
         self._state.phase = next_phase
+        if next_phase is RecoveryPhase.ACTIVE:
+            self._state.completed_at = datetime.now(timezone.utc)
         return True
 
     def can_accept_new_risk(self) -> bool:
@@ -105,6 +111,7 @@ class RecoveryEngine:
 
     def fail(self, reason: str) -> None:
         self._state.phase = RecoveryPhase.FAILED
+        self._state.completed_at = datetime.now(timezone.utc)
         self._state.diffs.append(
             ReconciliationDiff(
                 field="recovery",

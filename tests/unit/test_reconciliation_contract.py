@@ -307,3 +307,25 @@ async def test_engine_reconciliation_failure_is_read_only_and_closes_gate(tmp_pa
     assert control.action.value == "NO_NEW_RISK"
     assert calls == [("GET", "/fapi/v2/account"), ("GET", "/fapi/v1/openOrders")]
     assert engine._last_reconciliation_result.status is ReconciliationStatus.INCOMPLETE
+
+
+def test_engine_reconciliation_rule_steps_require_fresh_venue_authority() -> None:
+    engine = object.__new__(AutonomousEngine)
+    assert engine._reconciliation_rule_steps(set()) == ({}, "OK")
+    assert engine._reconciliation_rule_steps({"BTCUSDT"}) == ({}, "POSITION_RULE_AUTHORITY_UNAVAILABLE")
+
+    engine._adapter = SimpleNamespace(
+        get_rule_snapshot=lambda symbol: SimpleNamespace(
+            is_known=symbol != "UNKNOWN",
+            is_stale=symbol == "STALE",
+            step_size="0.001",
+        )
+    )
+    assert engine._reconciliation_rule_steps({"BTCUSDT"}) == ({"BTCUSDT": "0.001"}, "OK")
+    assert engine._reconciliation_rule_steps({"UNKNOWN"}) == ({}, "POSITION_RULE_UNKNOWN_OR_STALE:UNKNOWN")
+    assert engine._reconciliation_rule_steps({"STALE"}) == ({}, "POSITION_RULE_UNKNOWN_OR_STALE:STALE")
+
+    engine._adapter = SimpleNamespace(
+        get_rule_snapshot=lambda _symbol: SimpleNamespace(is_known=True, is_stale=False, step_size="NaN")
+    )
+    assert engine._reconciliation_rule_steps({"BTCUSDT"}) == ({}, "POSITION_RULE_STEP_INVALID:BTCUSDT")
