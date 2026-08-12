@@ -158,6 +158,55 @@ def run(
 
 
 @cli.command()
+@click.option("--symbols", required=True, help="逗号分隔品种列表")
+@click.option("--intervals", default="1h,1d", show_default=True, help="逗号分隔 K 线粒度")
+@click.option("--start", required=True, help="起始日期 YYYY-MM-DD（UTC）")
+@click.option("--end", default=None, help="结束日期 YYYY-MM-DD（UTC），默认今天")
+@click.option("--max-pages", default=400, show_default=True, type=click.IntRange(1, 2000))
+@click.option("--data-root", default=".beidou/data/klines", show_default=True)
+@click.option("--dry-run", is_flag=True, help="仅打印计划，不拉取")
+def backfill(symbols: str, intervals: str, start: str, end: str | None, max_pages: int, data_root: str, dry_run: bool) -> None:
+    """批量回填历史 K 线到本地 parquet 存储。"""
+    from datetime import datetime, timezone
+
+    from beidou_core.feed import MarketDataFeed
+    from beidou_research.data.backfill import backfill_all
+    from beidou_research.data.kline_store import KlineStore
+
+    def _to_ms(date_str: str) -> int:
+        return int(datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+    symbols_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    intervals_list = [i.strip() for i in intervals.split(",") if i.strip()]
+    if not symbols_list or not intervals_list:
+        raise click.ClickException("--symbols 与 --intervals 不能为空")
+    start_ms = _to_ms(start)
+    end_ms = _to_ms(end) if end else int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_ms >= end_ms:
+        raise click.ClickException("--start 必须早于 --end")
+
+    if dry_run:
+        bar_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+        for symbol in symbols_list:
+            for interval in intervals_list:
+                span_ms = end_ms - start_ms
+                per_bar = bar_ms.get(interval, 3_600_000)
+                click.echo(f"  {symbol} {interval}: ~{span_ms // per_bar} 根 ≈ {span_ms // per_bar // 1000 + 1} 页")
+        return
+
+    os.environ.setdefault("BEIDOU_ENV", "testnet")
+    feed = MarketDataFeed()
+    store = KlineStore(root=data_root)
+    reports = backfill_all(feed, store, symbols_list, intervals_list, start_ms, end_ms, max_pages=max_pages)
+    failed = [r for r in reports if r["errors"]]
+    for r in reports:
+        state = "ERROR" if r["errors"] else "OK"
+        click.echo(f"  [{state}] {r['symbol']} {r['interval']}: pages={r['pages']} rows={r['rows']} manifest={r['manifest_hash'][:12]}")
+    if failed:
+        sys.exit(1)
+
+
+@cli.command()
 @click.option("--run-id", required=True, help="运行 ID")
 def resume(run_id: str) -> None:
     """从检查点恢复挖掘运行。"""
