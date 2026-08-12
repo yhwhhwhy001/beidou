@@ -1631,9 +1631,7 @@ def build_promotion_chain(
 `_closes_series`：候选循环外从 price_points 提取 `closes = [p.close or 0.0 for p in price_points]`，但 `valid_vals` 已过滤无效样本——replay 需要全序列对齐。简化：用 `samples` 的 index 重建：`indexed_closes = {sample[0]: sample[1] ...}`——不对，sample[1] 是 factor 值不是 close。修正：replay 输入用**全序列** `factor_values`（candidate["factor_values"]，全长度含 NaN 会被对齐跳过）与 `closes`（price_points 全序列）。改写：
 
 ```python
-            replay_result = None
-            if aux_price_data is None:  # replay 只用主粒度序列
-                pass
+            # replay 只用主粒度全序列（factor_values 含 NaN 由 simulate 内部对齐跳过）
             all_closes = [float(p.close or 0.0) for p in price_points]
             replay_result = simulate_paper_window(candidate["factor_values"], all_closes, cost_bps=8.0)
 ```
@@ -2234,10 +2232,28 @@ class EvidenceBridge:
                 return False
             if record.lifecycle == to_state:
                 continue
+            # 逐级复验必须强制 min_icir/min_sample 阈值（fail-closed）：
+            # 从链记录重建 FactorPerformance 传给门禁。
+            from beidou_research.factors.factor import FactorPerformance
+
+            step_icir = float(step.get("icir", 0.0))
+            step_samples = int(step.get("sample_count", 0))
+            performance = FactorPerformance(
+                factor_id=record.definition.factor_id,
+                evaluation_period="historical",
+                sample_count=step_samples,
+                ic_mean=float(step.get("ic", 0.0)),
+                ic_std=0.0,
+                icir=step_icir,
+                rank_ic_mean=0.0,
+                rank_ic_std=0.0,
+                rank_icir=step_icir,
+            )
             decision = gate.validate_evidence(
                 factor_id=record.definition.factor_id,
                 current_state=from_state,
                 target_state=to_state,
+                performance=performance,
                 evidence_ids=list(step.get("evidence_ids", [])),
                 factor_version=str(step.get("factor_version", "")),
                 commit=str(step.get("commit", "")),
