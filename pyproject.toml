@@ -267,6 +267,7 @@ module = [
     "beidou_research.mining.*",             # pandas/numpy / owner: research / expiry: 2026-10-31
     "beidou_research.factors.*",            # pandas/numpy / owner: research / expiry: 2026-10-31
     "beidou_research.backtest.*",           # pandas/numpy / owner: research / expiry: 2026-10-31
+    "beidou_research.data.*",               # pandas/pyarrow / owner: research / expiry: 2026-10-31
     "beidou_shared.serde.*",                # msgpack 无 stub / owner: infra / expiry: 2026-09-30
     "beidou_exchange.binance_usdm.*",       # ws/rest client / owner: exchange / expiry: 2026-10-31
     "beidou_infra.*",                        # Connection/redis stub / owner: infra / expiry: 2026-10-31
