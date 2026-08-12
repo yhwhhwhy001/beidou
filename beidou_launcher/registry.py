@@ -179,8 +179,10 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         lifecycle[factor_id] = str(getattr(raw_state, "value", raw_state))
     inactive_factor_ids = {fid for fid, state in lifecycle.items() if state != "ACTIVE"}
     unexpected_missing = sorted(set(missing_components) - inactive_factor_ids)
+    # 动态挖掘因子是合法扩展：extra_components 不再构成 FAIL，
+    # 仅进 evidence 供审计。核心 8 个组件缺失仍 FAIL。
     graph_failed = bool(
-        unexpected_missing or extra_components or invalid_components or graph_error or topology_mismatch
+        unexpected_missing or invalid_components or graph_error or topology_mismatch
     )
     graph_degraded = bool(missing_components and not graph_failed)
     graph_status = CheckStatus.FAIL if graph_failed else (CheckStatus.WARN if graph_degraded else CheckStatus.PASS)
@@ -191,7 +193,9 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             "Alpha DAG 完整性",
             graph_status,
             graph_severity,
-            "Alpha DAG 缺失、校验失败或存在拓扑错误" if graph_failed else "8 个 Alpha 组件均已接线且拓扑可排序",
+            f"Alpha DAG 缺失、校验失败或存在拓扑错误（extra={extra_components}）"
+            if graph_failed
+            else "8 个 Alpha 组件均已接线且拓扑可排序",
             evidence={
                 "expected": sorted(EXPECTED_ALPHA_COMPONENTS),
                 "actual": sorted(component_ids),
@@ -210,8 +214,9 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     extra_factors = sorted(factor_ids - EXPECTED_FACTORS)
     active = {factor_id for factor_id, state in lifecycle.items() if state in {"ACTIVE", "CHALLENGER"}}
     inactive_expected = sorted(EXPECTED_FACTORS - active)
-    # 仅因子缺失或注册异常为 P0 阻断；DEGRADED 为 P2 告警（可自动恢复）
-    truly_missing = bool(missing_factors or extra_factors)
+    # 仅因子缺失为 P0 阻断；DEGRADED 为 P2 告警（可自动恢复）
+    # 动态挖掘因子合法注册：extra_factors 不再 FAIL。
+    truly_missing = bool(missing_factors)
     degraded_only = bool(not truly_missing and inactive_expected)
     factor_status = CheckStatus.FAIL if truly_missing else (CheckStatus.WARN if degraded_only else CheckStatus.PASS)
     factor_severity = CheckSeverity.P0 if truly_missing else CheckSeverity.P2

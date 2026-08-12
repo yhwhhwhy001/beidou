@@ -1620,6 +1620,35 @@ class AutonomousEngine:
         self._exit_ids = {"trailing_exit_v1", "time_exit_v1"}
 
         # ================================================================
+        # 研究证据桥接：启动扫描 evidence/factors，逐级复验并推进生命周期。
+        # 任何失败只记录不阻断（fail-closed 但非阻塞）。
+        # ================================================================
+        try:
+            from beidou_core.evidence_bridge import EvidenceBridge
+
+            bridge_report = EvidenceBridge.load_and_apply(
+                registry=self._factor_registry,
+                gate=self._factor_gate,
+                env_mode=str(self._env_mode.value),
+                component_registry=self._factor_component_registry,
+                entry_ids=self._entry_ids,
+                filter_ids=self._filter_ids,
+                exit_ids=self._exit_ids,
+                evidence_dir="evidence/factors",
+            )
+            if bridge_report.applied:
+                print(f"[beidou-autopilot] Evidence bridge applied: {bridge_report.applied}")
+            for path, reason in bridge_report.rejected:
+                logger.warning("evidence bridge rejected %s: %s", path, reason)
+        except Exception as exc:
+            logger.warning("evidence bridge failed: %s", type(exc).__name__)
+
+        # 桥接后重算 active_factors（证据晋级的因子进入交易图）
+        active_factors = [
+            fid for fid, record in self._factor_registry._factors.items() if record.has_authorized_active_evidence()
+        ]
+
+        # ================================================================
         # Fix 1: 接线 Factor Registry → 控制面 API
         # ================================================================
         # wire_factor_registry 已移除：ControlPlane 无此方法，hasattr 恒为 False
@@ -6269,8 +6298,8 @@ class AutonomousEngine:
                     )
                     if isinstance(existing_algos, list):
                         existing_algo_inventory = existing_algos
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to refresh algo inventory after cancellation: %s", exc)
                 return [], existing_algo_inventory
             return unowned_algo_ids, existing_algo_inventory
 
