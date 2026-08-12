@@ -51,6 +51,12 @@ from beidou_safety.execution.algorithms import (
     ExecutionContext,
     SliceInvariantChecker,
 )
+from beidou_safety.execution.command_aggregate import (
+    ChildCommandState,
+    ExecutionChildCommand,
+    ParentExecutionState,
+    TargetDeltaPlan,
+)
 from beidou_safety.execution.contracts import (
     ExecutionPlan,
     Fill,
@@ -2932,43 +2938,6 @@ class AutonomousEngine:
             )
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
-            # 自测试单 — 严格仅限显式 opt-in，默认禁用。
-            # 启用: export BEIDOU_TEST_SELF_ORDER=1
-            if (
-                self._can_write
-                and self._tick_count == 20
-                and self._order_count == 0
-                and self._trading_pool.active_count() > 0
-                and os.environ.get("BEIDOU_TEST_SELF_ORDER") == "1"
-            ):
-                try:
-                    sym = self._trading_pool.active_instruments()[0]
-                    ticker = self._feed.get_last_ticker(sym)
-                    px = float(ticker.get("lastPrice", 0)) if ticker else 65000
-                    qty = "0.001"
-                    price_str = str(round(px * 0.98, 1))
-                    # 必须走完整风控链：PreRisk → RiskRules → Approval → Outbox
-                    from beidou_safety.execution import OrderIntent
-
-                    intent = OrderIntent(
-                        intent_id=f"test-self-order-{int(time.time())}",
-                        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
-                        instrument_id=InstrumentId(sym),
-                        side=OrderSide.BUY,
-                        order_type=OrderType.LIMIT,
-                        quantity=Quantity(amount=qty),
-                        price=Price(amount=price_str),
-                        time_in_force=TimeInForce.GTC,
-                        client_order_id=f"beidou-test-{int(time.time())}",
-                    )
-                    if await self._verify_intent_at_send(intent):
-                        await self._submit_order_slice(intent, qty, price_str, "LIMIT", "GTC", sym, "BUY")
-                        self._order_count += 1
-                        print(f"[realtime] 🧪 TEST ORDER (gated): {sym} BUY {qty} @ ~{price_str}")
-                    else:
-                        print("[realtime] 🧪 TEST ORDER REJECTED by risk gate")
-                except Exception as _te:
-                    print(f"[realtime] TEST ORDER FAILED: {type(_te).__name__}: {_te}")
             if self._tick_count % 5 == 0:
                 ob = self._outbox
                 raw_outbox = len(ob._outbox)
@@ -4073,15 +4042,43 @@ class AutonomousEngine:
             return
         slices, _algo_type, ctx = planned
 
+        # The complete immutable child plan is durable before any venue write.
+        rule_snapshot_hash = str(
+            getattr(self, "_symbol_precision", {}).get(order_symbol, {}).get("rule_snapshot_hash", "")
+        )
+        commands = [
+            ExecutionChildCommand.create(
+                parent_intent_id=str(intent.intent_id),
+                sequence=idx,
+                symbol=order_symbol,
+                side=side,
+                quantity=qty_str,
+                order_type=order_type,
+                time_in_force=tif or "GTC",
+                client_order_id=slice_client_id,
+                limit_price=price_str,
+                reduce_only=bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False)),
+                rule_snapshot_hash=rule_snapshot_hash,
+            )
+            for idx, (qty_str, price_str, order_type, tif, slice_client_id) in enumerate(slices)
+        ]
+        try:
+            execution_aggregate = self._outbox.persist_execution_plan(str(intent.intent_id), commands)
+        except Exception as exc:
+            self._outbox.mark_unknown(intent.intent_id, f"EXECUTION_PLAN_PERSISTENCE_FAILED:{type(exc).__name__}")
+            self._record_execution_fact_failure(
+                f"EXECUTION_PLAN_PERSISTENCE_FAILED:{intent.intent_id}:{type(exc).__name__}"
+            )
+            return
+
         # === 逐切片下发交易所 ===
-        # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
-        # TWAP 默认 60s 间隔，POV/Adaptive 按切片数均分 alpha_decay_seconds。
+        # Multi-slice algorithms are paced, but the parent remains in-flight
+        # until every durable child has an identity-bound venue acknowledgement.
         n_slices = len(slices)
         slice_interval = 0.0
         if n_slices > 1:
             default_interval = getattr(ctx, "alpha_decay_seconds", 60.0) / max(n_slices, 1)
             slice_interval = max(2.0, min(default_interval, 120.0))  # 2s~120s 范围
-        intent_acked = False
         for idx, (qty_str, price_str, order_type, tif, slice_client_id) in enumerate(slices):
             # P0 修复: 每切片前复检控制面状态，防止中途 NO_NEW_RISK/LOCK 后剩余切片照常发送
             if idx > 0 and not self._control.should_accept(intent):
@@ -4089,12 +4086,21 @@ class AutonomousEngine:
                     f"[order] ⚠️ TWAP ABORTED after {idx}/{n_slices} slices: "
                     f"control plane rejected (state={self._control.get_status().value} v{self._control.version})"
                 )
-                if not intent_acked:
+                for remaining_idx in range(idx, n_slices):
+                    execution_aggregate = self._outbox.transition_execution_child(
+                        intent.intent_id,
+                        remaining_idx,
+                        ChildCommandState.REJECTED,
+                        event_id=f"control-reject:{intent.intent_id}:{remaining_idx}",
+                    )
+                if idx == 0:
                     self._outbox.reject(
                         intent.intent_id,
                         f"CONTROL_GATE_{self._control.get_status().value}",
                         idempotency_key=getattr(intent, "idempotency_key", "") or "",
                     )
+                else:
+                    self._outbox.mark_unknown(intent.intent_id, "PARTIAL_PLAN_ABORTED_BY_CONTROL_GATE")
                 return  # 提前终止 TWAP，不再发送剩余切片
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
@@ -4114,32 +4120,125 @@ class AutonomousEngine:
                 _tif = tif or "GTC"
                 params["timeInForce"] = _tif
 
+            execution_aggregate = self._outbox.transition_execution_child(
+                intent.intent_id,
+                idx,
+                ChildCommandState.SENDING,
+                event_id=f"send:{intent.intent_id}:{idx}",
+            )
             order = await self._submit_order_slice(
                 intent,
                 params=params,
                 order_symbol=order_symbol,
                 side=side,
                 order_type=order_type,
-                ack_outbox=not intent_acked,
+                consume_approval=idx == 0,
             )
-            if order is not None:
-                intent_acked = True
-            elif intent_acked:
-                # 后续切片失败 — 记录证据，剩余批准量被静默丢弃
-                print(
-                    f"[order] ⚠️ TWAP slice {idx + 1}/{n_slices} FAILED after intent ACKed: "
-                    f"{order_symbol} {qty_str} — remaining approved quantity not executed"
+            outcome = str((order or {}).get("_submit_outcome", "ACKED" if order else "UNKNOWN"))
+            if outcome == "REJECTED":
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.REJECTED,
+                    event_id=f"reject:{intent.intent_id}:{idx}",
                 )
-
-        if not intent_acked:
-            # No venue acknowledgement is an ambiguous outcome.  Persist
-            # UNKNOWN and require a client-order-id query before any retry.
-            try:
+                self._outbox.reject(
+                    intent.intent_id,
+                    str((order or {}).get("reason", "EXECUTION_CHILD_REJECTED")),
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                return
+            if outcome == "UNKNOWN" or order is None or "orderId" not in order:
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.UNKNOWN,
+                    event_id=f"unknown:{intent.intent_id}:{idx}",
+                )
                 self._outbox.mark_unknown(intent.intent_id, "ORDER_ACK_UNKNOWN")
-            except Exception as exc:
-                self._record_execution_fact_failure(
-                    f"ORDER_ACK_UNKNOWN_PERSISTENCE_FAILED:{intent.intent_id}:{type(exc).__name__}"
+                return
+
+            exchange_order_id = str(order["orderId"])
+            actual_status = str(order.get("status", "NEW")).upper()
+            filled_text = str(order.get("executedQty") or (qty_str if actual_status == "FILLED" else "0"))
+            try:
+                cumulative_filled = Decimal(filled_text)
+                planned_quantity = Decimal(qty_str)
+                if not cumulative_filled.is_finite() or cumulative_filled < 0 or cumulative_filled > planned_quantity:
+                    raise ValueError("invalid cumulative fill")
+            except (InvalidOperation, TypeError, ValueError):
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.UNKNOWN,
+                    event_id=f"invalid-fill:{intent.intent_id}:{idx}:{exchange_order_id}",
+                    exchange_order_id=exchange_order_id,
                 )
+                self._outbox.mark_unknown(intent.intent_id, "CUMULATIVE_FILL_UNKNOWN")
+                return
+            if actual_status == "REJECTED":
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.REJECTED,
+                    event_id=f"venue-reject:{intent.intent_id}:{idx}:{exchange_order_id}",
+                    exchange_order_id=exchange_order_id,
+                )
+                self._outbox.reject(
+                    intent.intent_id,
+                    "VENUE_CHILD_REJECTED",
+                    idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                )
+                return
+            if actual_status in {"CANCELED", "EXPIRED"}:
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.CANCELED,
+                    event_id=f"cancel:{intent.intent_id}:{idx}:{exchange_order_id}:{filled_text}",
+                    exchange_order_id=exchange_order_id,
+                    cumulative_filled_quantity=filled_text,
+                )
+                continue
+            if actual_status not in {"NEW", "PENDING_NEW", "PENDING_CANCEL", "PARTIALLY_FILLED", "FILLED"}:
+                execution_aggregate = self._outbox.transition_execution_child(
+                    intent.intent_id,
+                    idx,
+                    ChildCommandState.UNKNOWN,
+                    event_id=f"unknown-status:{intent.intent_id}:{idx}:{exchange_order_id}:{actual_status}",
+                    exchange_order_id=exchange_order_id,
+                )
+                self._outbox.mark_unknown(intent.intent_id, f"ORDER_STATUS_UNKNOWN:{actual_status}")
+                return
+            child_state = (
+                ChildCommandState.FILLED
+                if actual_status == "FILLED"
+                else (
+                    ChildCommandState.PARTIALLY_FILLED
+                    if actual_status == "PARTIALLY_FILLED"
+                    or (actual_status == "PENDING_CANCEL" and cumulative_filled > 0)
+                    else ChildCommandState.ACKED
+                )
+            )
+            execution_aggregate = self._outbox.transition_execution_child(
+                intent.intent_id,
+                idx,
+                child_state,
+                event_id=f"venue-status:{intent.intent_id}:{idx}:{exchange_order_id}:{actual_status}:{filled_text}",
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=(
+                    filled_text
+                    if child_state in {ChildCommandState.PARTIALLY_FILLED, ChildCommandState.FILLED}
+                    else None
+                ),
+            )
+
+        if execution_aggregate.all_children_acknowledged:
+            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", "") or "")
+        elif execution_aggregate.state is ParentExecutionState.UNKNOWN:
+            self._outbox.mark_unknown(intent.intent_id, "EXECUTION_PLAN_INCOMPLETE_UNKNOWN")
+        else:
+            self._outbox.mark_unknown(intent.intent_id, "EXECUTION_PLAN_NOT_FULLY_ACKNOWLEDGED")
 
         # Execution quality is updated only from authoritative fills.  Planning
         # estimates are not relabelled as realized cost or slippage here.
@@ -4226,7 +4325,7 @@ class AutonomousEngine:
             self._cost_model.set_fee_tier(VenueId("BINANCE"), "vip1", 2.0, 4.0)
             est = self._cost_model.estimate_order(
                 vi,
-                Quantity(amount=str(float(intent.quantity.amount))),
+                Quantity(amount=str(intent.quantity.amount)),
                 Price(amount=str(price)) if price > 0 else Price(amount="0"),
                 intent.side,
                 urgency=urgency,
@@ -4256,7 +4355,7 @@ class AutonomousEngine:
         ctx = ExecutionContext(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol)),
             side=intent.side,
-            total_quantity=Quantity(amount=str(float(intent.quantity.amount))),
+            total_quantity=Quantity(amount=str(intent.quantity.amount)),
             limit_price=intent.price if intent.order_type == OrderType.LIMIT else None,
             urgency=urgency,
             best_bid=Price(amount=str(bid)) if bid else None,
@@ -4337,8 +4436,8 @@ class AutonomousEngine:
             if not slc.invariants_check_passed:
                 print(f"[order] {order_symbol}: skip slice {slc.slice_id} (invariants failed)")
                 continue
-            qty_str = str(float(slc.quantity.amount))
-            price_str = str(float(slc.price.amount)) if slc.price is not None else None
+            qty_str = str(slc.quantity.amount)
+            price_str = str(slc.price.amount) if slc.price is not None else None
             otype = "LIMIT" if slc.order_type == OrderType.LIMIT else "MARKET"
             slice_client_id = client_id if len(plan.slices) == 1 else f"{client_id}-{slc.sequence_number}"
             slices.append((qty_str, price_str, otype, slc.time_in_force.value, slice_client_id))
@@ -4472,9 +4571,16 @@ class AutonomousEngine:
         order_symbol: str,
         side: str,
         order_type: str,
-        ack_outbox: bool,
+        consume_approval: bool,
     ) -> dict | None:
         """单个切片：量化精度修正 → 发送 → 记录。返回交易所响应或 None。"""
+
+        def rejected(reason: str) -> dict[str, str]:
+            return {"_submit_outcome": "REJECTED", "reason": reason}
+
+        def unknown(reason: str) -> dict[str, str]:
+            return {"_submit_outcome": "UNKNOWN", "reason": reason}
+
         # BD-CV10: 量化精度从 adapter 的唯一 InstrumentRuleSnapshot 获取。
         if not hasattr(self, "_symbol_precision"):
             self._symbol_precision: dict[str, dict[str, int]] = {}
@@ -4488,13 +4594,13 @@ class AutonomousEngine:
             snap = rule.get_rule_snapshot(order_symbol)
             if not snap.is_known or snap.is_stale:
                 print(f"[order] {order_symbol}: rule snapshot UNKNOWN/STALE — symbol NOT_EXECUTABLE")
-                return None
+                return rejected("VENUE_RULE_SNAPSHOT_UNKNOWN_OR_STALE")
             snap_hash = snap.compute_hash()
             prev_hash = self._rule_snapshot_hashes.get(order_symbol)
             if prev_hash and prev_hash != snap_hash:
                 print(f"[order] {order_symbol}: rule changed! prev={prev_hash[:16]} new={snap_hash[:16]}")
                 self._rule_change_detected.add(order_symbol)
-                return None
+                return rejected("VENUE_RULE_SNAPSHOT_CHANGED")
             self._rule_snapshot_hashes[order_symbol] = snap_hash
             self._symbol_precision[order_symbol] = {
                 "quantity": snap.qty_precision,
@@ -4529,15 +4635,15 @@ class AutonomousEngine:
                         snap = fallback_snap
             except Exception as exc:
                 print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
-                return None
+                return rejected("EXCHANGE_INFO_UNKNOWN")
             if order_symbol not in self._symbol_precision:
                 print(f"[order] {order_symbol}: exchange precision UNKNOWN")
-                return None
+                return rejected("EXCHANGE_PRECISION_UNKNOWN")
 
         prec = self._symbol_precision.get(order_symbol)
         if prec is None:
             print(f"[order] {order_symbol}: exchange precision UNKNOWN")
-            return None
+            return rejected("EXCHANGE_PRECISION_UNKNOWN")
         if snap is None:
             snap = InstrumentRuleSnapshot(
                 symbol=order_symbol,
@@ -4551,45 +4657,47 @@ class AutonomousEngine:
             )
         if not snap.is_known:
             print(f"[order] {order_symbol}: exact venue increments UNKNOWN")
-            return None
+            return rejected("VENUE_INCREMENT_UNKNOWN")
         original_qty = Decimal(str(params["quantity"]))
         try:
             params["quantity"] = snap.quantize_quantity(str(original_qty))
         except ValueError as exc:
             print(f"[order] {order_symbol}: quantity quantization rejected ({exc})")
-            return None
+            return rejected("QUANTITY_QUANTIZATION_REJECTED")
         quantized_qty = Decimal(str(params["quantity"]))
         approved_qty = Decimal(str(getattr(getattr(intent, "quantity", None), "amount", "0")))
-        if quantized_qty > original_qty or quantized_qty > approved_qty or quantized_qty < Decimal(snap.min_qty):
+        if quantized_qty != original_qty:
+            print(f"[order] {order_symbol}: persisted child quantity is not venue-exact")
+            return rejected("PLANNED_QUANTITY_NOT_VENUE_EXACT")
+        if quantized_qty > approved_qty or quantized_qty < Decimal(snap.min_qty):
             print(f"[order] {order_symbol}: final quantity exceeds approval or violates minQty")
-            return None
+            return rejected("FINAL_QUANTITY_OUTSIDE_APPROVAL_OR_MIN_QTY")
         price_raw = params.get("price")
         if price_raw:
+            original_price = Decimal(str(price_raw))
             try:
                 params["price"] = snap.quantize_price(str(price_raw), side=side)
             except ValueError as exc:
                 print(f"[order] {order_symbol}: price quantization rejected ({exc})")
-                return None
+                return rejected("PRICE_QUANTIZATION_REJECTED")
+            if Decimal(str(params["price"])) != original_price:
+                print(f"[order] {order_symbol}: persisted child price is not venue-exact")
+                return rejected("PLANNED_PRICE_NOT_VENUE_EXACT")
             if getattr(intent, "order_type", None) == OrderType.LIMIT:
                 approved_price = Decimal(str(getattr(getattr(intent, "price", None), "amount", "0")))
                 if Decimal(str(params["price"])) != approved_price:
                     print(f"[order] {order_symbol}: final limit price differs from signed approval")
-                    return None
+                    return rejected("FINAL_LIMIT_PRICE_DIFFERS_FROM_APPROVAL")
             if quantized_qty * Decimal(str(params["price"])) < Decimal(snap.min_notional):
                 print(f"[order] {order_symbol}: final order violates minNotional")
-                return None
+                return rejected("FINAL_ORDER_BELOW_MIN_NOTIONAL")
 
         print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
         # Consume the one-shot approval after all local planning/quantization
         # and immediately before the first venue write.  An ambiguous response
         # must be reconciled by client id; the same approval cannot be replayed.
-        if ack_outbox and not await self._verify_intent_at_send(intent, consume_nonce=True):
-            self._outbox.reject(
-                intent.intent_id,
-                "FINAL_APPROVAL_CONSUMPTION_FAILED",
-                idempotency_key=getattr(intent, "idempotency_key", "") or "",
-            )
-            return None
+        if consume_approval and not await self._verify_intent_at_send(intent, consume_nonce=True):
+            return rejected("FINAL_APPROVAL_CONSUMPTION_FAILED")
         try:
             adapter_response = await self._adapter.create_order(
                 OrderRequest(
@@ -4610,9 +4718,13 @@ class AutonomousEngine:
             )
             order = adapter_response.raw_response or {}
             if not order and adapter_response.status in (OrderStatus.REJECTED, OrderStatus.UNKNOWN):
-                order = {"error": adapter_response.status.value, "msg": "adapter returned no order acknowledgement"}
+                if adapter_response.status is OrderStatus.REJECTED:
+                    return rejected("ADAPTER_REJECTED_WITHOUT_ACK")
+                return unknown("ADAPTER_ACK_UNKNOWN")
         except (TypeError, ValueError) as exc:
-            order = {"error": "ADAPTER_REQUEST_INVALID", "msg": str(exc)}
+            return rejected(f"ADAPTER_REQUEST_INVALID:{type(exc).__name__}")
+        except Exception as exc:
+            return unknown(f"ADAPTER_EXCEPTION:{type(exc).__name__}")
         print(f"[order] Exchange response: {str(order)[:200]}")
 
         if "orderId" in order:
@@ -4627,8 +4739,6 @@ class AutonomousEngine:
             tracker.apply(OrderEvent.ACKED)
             self._order_trackers[oid_str] = tracker
             self._order_symbols[oid_str] = order_symbol
-            if ack_outbox:
-                self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
             actual_status = order.get("status", "NEW")
             self._last_order_placed_at = time.time()
@@ -4689,8 +4799,6 @@ class AutonomousEngine:
                         tracker.apply(OrderEvent.ACKED)
                         self._order_trackers[oid_str] = tracker
                         self._order_symbols[oid_str] = order_symbol
-                        if ack_outbox:
-                            self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
                         self._order_count += 1
                         self._last_order_placed_at = time.time()
                         if actual_status == "FILLED":
@@ -4716,14 +4824,14 @@ class AutonomousEngine:
             except Exception as qe:
                 print(f"[order] -4141 recovery query failed: {qe}")
             # 恢复失败 → 保留 UNKNOWN，禁止盲目重发。
-            if ack_outbox:
-                self._outbox.mark_unknown(intent.intent_id, "DUPLICATE_QUERY_UNKNOWN")
-            return None
+            return unknown("DUPLICATE_QUERY_UNKNOWN")
 
         print(
             f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))} | raw={json.dumps(order, default=str)[:200]}"
         )
-        return None
+        if adapter_response.status is OrderStatus.REJECTED:
+            return rejected(str(order.get("msg", order.get("error", "ADAPTER_REJECTED"))))
+        return unknown(str(order.get("msg", order.get("error", "ORDER_ACK_UNKNOWN"))))
 
     async def _monitor_orders(self, symbol: str) -> None:
         """查询活跃订单状态并更新状态机/账本。"""
@@ -5456,6 +5564,14 @@ class AutonomousEngine:
             self._user_stream_projector = projector
         result = projector.ingest(update)
         if result.status in {UserProjectionStatus.ACCEPTED, UserProjectionStatus.DUPLICATE}:
+            try:
+                self._outbox.project_user_order_update(update)
+            except Exception as exc:
+                self._record_execution_fact_failure(
+                    f"user-stream child projection blocked for {result.event_id or '<unknown>'}: "
+                    f"{type(exc).__name__}:{exc}"
+                )
+                return False
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
@@ -6801,7 +6917,6 @@ class AutonomousEngine:
                     f"pool={'OK' if pool_capacity else 'SKIP'}"
                 )
 
-                # BD-CV30: 构建 SignedPortfolioTarget contract
                 trade_dir = (
                     1
                     if fused.direction == SignalDirection.LONG
@@ -6809,13 +6924,6 @@ class AutonomousEngine:
                 )
                 if trade_dir == 0:
                     print(f"[nearline] {symbol}: SKIP (NO_ACTION has no portfolio direction)")
-                    continue
-                _side = "LONG" if trade_dir > 0 else "SHORT"
-                _target = self.build_portfolio_target(
-                    symbol=symbol, side=_side, exposure=position_notional, delta=position_notional * 0.01
-                )
-                if not _target.is_valid():
-                    print(f"[nearline] {symbol}: PortfolioTarget invalid (gross < abs(net)); SKIP")
                     continue
 
                 if not pool_capacity:
@@ -6896,7 +7004,57 @@ class AutonomousEngine:
                 spread_bps = float(spread_bps_value)
                 # 使用优化器仲裁后的目标仓位；无冲突时保持原始 size
                 position_size = resolved_qty.get(f"{venue_id}:{instrument_id}", prop["position_size"])
-                position_notional = price * position_size
+                target_signed_quantity = (
+                    Decimal(str(position_size))
+                    if prop["direction"] == SignalDirection.LONG
+                    else -Decimal(str(position_size))
+                )
+                current_signed_quantity = self._signed_position_from_account(self._last_account, symbol)
+                if current_signed_quantity is None:
+                    print(f"[nearline] {symbol}: SKIP (current signed position UNKNOWN)")
+                    continue
+                try:
+                    inflight_signed_quantity = self._outbox.inflight_signed_quantity(symbol)
+                except Exception as exc:
+                    print(f"[nearline] {symbol}: SKIP (in-flight child exposure UNKNOWN: {type(exc).__name__})")
+                    continue
+                delta_plan = TargetDeltaPlan.compute(
+                    symbol=symbol,
+                    target_quantity=target_signed_quantity,
+                    current_quantity=current_signed_quantity,
+                    inflight_quantity=inflight_signed_quantity,
+                )
+                if delta_plan.side is None:
+                    print(f"[nearline] {symbol}: NO_ACTION (target already satisfied by current + in-flight exposure)")
+                    continue
+                position_size = delta_plan.order_quantity
+                side = OrderSide(delta_plan.side)
+                order_notional = float(Decimal(str(price)) * position_size)
+                target_position_notional = float(abs(target_signed_quantity * Decimal(str(price))))
+                execution_rules = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                execution_min_qty = Decimal(str(execution_rules.get("min_quantity", "0") or "0"))
+                execution_min_notional = Decimal(str(execution_rules.get("min_notional", "0") or "0"))
+                if execution_min_qty <= 0 or execution_min_notional <= 0:
+                    print(f"[nearline] {symbol}: SKIP (target-delta venue minimums UNKNOWN)")
+                    continue
+                if position_size < execution_min_qty or Decimal(str(order_notional)) < execution_min_notional:
+                    print(f"[nearline] {symbol}: NO_ACTION (remaining target delta below venue minimum)")
+                    continue
+                # Downstream position-risk checks evaluate the post-trade
+                # target exposure, while execution cost uses delta quantity.
+                position_notional = target_position_notional
+                target_side = "LONG" if target_signed_quantity > 0 else "SHORT"
+                target_contract = self.build_portfolio_target(
+                    symbol=symbol,
+                    side=target_side,
+                    exposure=target_position_notional,
+                    delta=float(delta_plan.delta_quantity * Decimal(str(price))),
+                    current_exposure=float(current_signed_quantity * Decimal(str(price))),
+                    inflight_exposure=float(inflight_signed_quantity * Decimal(str(price))),
+                )
+                if not target_contract.is_valid():
+                    print(f"[nearline] {symbol}: SKIP (signed target-delta contract invalid)")
+                    continue
 
                 # === 6. Cost estimation ===
                 vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
@@ -7821,8 +7979,33 @@ class AutonomousEngine:
         sa = _action_map.get(action, StrategyAction.NO_ACTION)
         return StrategySignal(strategy_id=strategy_id, action=sa, symbol=symbol, confidence=confidence, reason=reason)
 
+    @staticmethod
+    def _signed_position_from_account(account: dict[str, Any], symbol: str) -> Decimal | None:
+        """Read one exact signed venue position; incomplete facts stay UNKNOWN."""
+
+        positions = account.get("positions") if isinstance(account, dict) else None
+        if not isinstance(positions, list):
+            return None
+        matches = [row for row in positions if isinstance(row, dict) and str(row.get("symbol", "")) == symbol]
+        if len(matches) > 1:
+            return None
+        if not matches:
+            return Decimal("0")
+        try:
+            quantity = Decimal(str(matches[0].get("positionAmt")))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return quantity if quantity.is_finite() else None
+
     def build_portfolio_target(
-        self, symbol: str, side: str, exposure: float, delta: float = 0.0
+        self,
+        symbol: str,
+        side: str,
+        exposure: float,
+        delta: float = 0.0,
+        *,
+        current_exposure: float | None = None,
+        inflight_exposure: float | None = None,
     ) -> SignedPortfolioTarget:
         """BD-CV30: 构造 SignedPortfolioTarget。
 
@@ -7836,6 +8019,8 @@ class AutonomousEngine:
             side=ps,
             target_exposure=exposure,
             delta=delta,
+            current_exposure=current_exposure,
+            inflight_exposure=inflight_exposure,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 

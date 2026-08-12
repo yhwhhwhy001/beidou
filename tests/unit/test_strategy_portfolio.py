@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from beidou_research.contracts import (
     KernelParityResult,
     StrategyAction,
@@ -107,6 +109,21 @@ class TestSignedPortfolioTargetValidation:
             delta=200.0,
         )
         assert not t.is_valid()  # gross < abs(net)
+
+    def test_reversal_delta_is_valid_when_bound_to_current_and_inflight_exposure(self):
+        target = SignedPortfolioTarget(
+            target_id="reverse",
+            symbol="BTCUSDT",
+            side=PositionSide.SHORT,
+            target_exposure=400.0,
+            current_exposure=200.0,
+            inflight_exposure=0.0,
+            delta=-600.0,
+        )
+        assert target.is_valid()
+
+        mutated = replace(target, delta=-400.0)
+        assert not mutated.is_valid()
 
     def test_hash_deterministic(self):
         t1 = SignedPortfolioTarget(target_id="a", symbol="BTCUSDT", side=PositionSide.LONG, target_exposure=50000.0)

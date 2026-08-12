@@ -101,6 +101,20 @@ def test_runtime_records_migration_is_forward_only_and_append_audited() -> None:
     assert "DELETE FROM" not in sql.upper()
 
 
+def test_execution_children_migration_is_forward_only_and_replayable() -> None:
+    from pathlib import Path
+
+    sql = (Path(__file__).parents[2] / "migrations/006_execution_children.up.sql").read_text()
+    for table in ("v3_execution_commands", "v3_execution_command_events"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    assert "parent_intent_id" in sql
+    assert "command_hash" in sql
+    assert "client_order_id" in sql
+    assert "fencing_token" in sql
+    assert "DROP TABLE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+
+
 def test_migration_runner_bootstraps_schema_and_applies_forward_only(tmp_path, monkeypatch) -> None:
     migration = tmp_path / "001_test.up.sql"
     migration.write_text("CREATE TABLE test_fact (id INTEGER);")

@@ -7,10 +7,11 @@ import sqlite3
 import threading
 from contextlib import closing
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from beidou_shared.types import (
     AccountId,
@@ -64,6 +65,7 @@ class IntentOutbox:
         self._inbox: dict[str, OrderIntent] = {}
         self._processed: set[str] = set()
         self._states: dict[str, OutboxState] = {}
+        self._memory_execution_plans: dict[str, Any] = {}
         # P0 修复: 死信追踪 — _groom() 丢弃的 intent 计数
         self._dead_letter_count: int = 0
         self._dead_letter_ids: list[str] = []  # 最近 20 个丢弃的 intent_id
@@ -129,6 +131,35 @@ class IntentOutbox:
                 );
                 CREATE INDEX IF NOT EXISTS idx_risk_approvals_intent
                     ON risk_approvals(intent_id);
+                CREATE TABLE IF NOT EXISTS execution_commands (
+                    parent_intent_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    client_order_id TEXT NOT NULL UNIQUE,
+                    command_hash TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    exchange_order_id TEXT,
+                    filled_quantity TEXT NOT NULL DEFAULT '0',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (parent_intent_id, sequence),
+                    FOREIGN KEY (parent_intent_id) REFERENCES intent_outbox(intent_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_commands_parent_state
+                    ON execution_commands(parent_intent_id, state, sequence);
+                CREATE TABLE IF NOT EXISTS execution_command_events (
+                    event_id TEXT PRIMARY KEY NOT NULL,
+                    parent_intent_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    from_state TEXT,
+                    to_state TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    FOREIGN KEY (parent_intent_id, sequence)
+                        REFERENCES execution_commands(parent_intent_id, sequence)
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_command_events_parent
+                    ON execution_command_events(parent_intent_id, sequence, occurred_at, event_id);
                 """
             )
             approval_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(risk_approvals)").fetchall()}
@@ -231,6 +262,324 @@ class IntentOutbox:
                 "WHERE state IN (?, ?)",
                 (OutboxState.UNKNOWN.value, now, OutboxState.SENDING.value, OutboxState.SENT.value),
             )
+            rows = conn.execute(
+                "SELECT parent_intent_id,sequence,payload FROM execution_commands WHERE state=?",
+                ("SENDING",),
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(str(row["payload"]))
+                payload["state"] = "UNKNOWN"
+                event_id = f"restart-unknown:{row['parent_intent_id']}:{row['sequence']}"
+                event_ids = [str(value) for value in payload.get("event_ids", [])]
+                if event_id not in event_ids:
+                    event_ids.append(event_id)
+                payload["event_ids"] = event_ids
+                conn.execute(
+                    "UPDATE execution_commands SET state=?,payload=?,updated_at=? "
+                    "WHERE parent_intent_id=? AND sequence=? AND state=?",
+                    (
+                        "UNKNOWN",
+                        json.dumps(payload, sort_keys=True),
+                        now,
+                        str(row["parent_intent_id"]),
+                        int(row["sequence"]),
+                        "SENDING",
+                    ),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO execution_command_events "
+                    "(event_id,parent_intent_id,sequence,from_state,to_state,payload,occurred_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (
+                        event_id,
+                        str(row["parent_intent_id"]),
+                        int(row["sequence"]),
+                        "SENDING",
+                        "UNKNOWN",
+                        json.dumps({"reason": "PROCESS_RESTART_DURING_SEND"}, sort_keys=True),
+                        now,
+                    ),
+                )
+
+    @staticmethod
+    def _execution_aggregate_from_payloads(intent_id: str, payloads: list[str]) -> Any:
+        from beidou_safety.execution.command_aggregate import ExecutionChildCommand, ParentExecutionAggregate
+
+        children = [ExecutionChildCommand.from_payload(json.loads(payload)) for payload in payloads]
+        return ParentExecutionAggregate.create(str(intent_id), children)
+
+    def persist_execution_plan(self, intent_id: str, children: list[Any]) -> Any:
+        """Persist every immutable child before the first venue write."""
+
+        from beidou_safety.execution.command_aggregate import ParentExecutionAggregate
+
+        aggregate = ParentExecutionAggregate.create(str(intent_id), children)
+        if not self._db_path:
+            parent = next(
+                (intent for intent in self._memory_outbox if str(intent.intent_id) == str(intent_id)),
+                None,
+            )
+            parent_key = parent.idempotency_key or self._hash(parent) if parent is not None else ""
+            if parent is None or self._states.get(parent_key) is not OutboxState.SENDING:
+                raise ValueError("EXECUTION_PLAN_PARENT_NOT_CLAIMED")
+            existing = self._memory_execution_plans.get(str(intent_id))
+            if existing is not None:
+                if [child.command_hash for child in existing.children] != [
+                    child.command_hash for child in aggregate.children
+                ]:
+                    raise ValueError("EXECUTION_PLAN_CONFLICT")
+                return existing
+            self._memory_execution_plans[str(intent_id)] = aggregate
+            return aggregate
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db_lock, closing(self._connect()) as conn, conn:
+            parent = conn.execute(
+                "SELECT intent_id FROM intent_outbox WHERE intent_id=? AND state=?",
+                (str(intent_id), OutboxState.SENDING.value),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("EXECUTION_PLAN_PARENT_NOT_CLAIMED")
+            rows = conn.execute(
+                "SELECT command_hash,payload FROM execution_commands WHERE parent_intent_id=? ORDER BY sequence",
+                (str(intent_id),),
+            ).fetchall()
+            if rows:
+                existing_hashes = [str(row["command_hash"]) for row in rows]
+                requested_hashes = [child.command_hash for child in aggregate.children]
+                if existing_hashes != requested_hashes:
+                    raise ValueError("EXECUTION_PLAN_CONFLICT")
+                return self._execution_aggregate_from_payloads(str(intent_id), [str(row["payload"]) for row in rows])
+            for child in aggregate.children:
+                payload = json.dumps(child.to_payload(), sort_keys=True)
+                conn.execute(
+                    "INSERT INTO execution_commands "
+                    "(parent_intent_id,sequence,client_order_id,command_hash,payload,state,"
+                    "exchange_order_id,filled_quantity,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        str(intent_id),
+                        child.sequence,
+                        child.client_order_id,
+                        child.command_hash,
+                        payload,
+                        child.state.value,
+                        None,
+                        str(child.filled_quantity),
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    "INSERT INTO execution_command_events "
+                    "(event_id,parent_intent_id,sequence,from_state,to_state,payload,occurred_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (
+                        f"plan:{intent_id}:{child.sequence}",
+                        str(intent_id),
+                        child.sequence,
+                        None,
+                        child.state.value,
+                        json.dumps({"command_hash": child.command_hash}, sort_keys=True),
+                        now,
+                    ),
+                )
+        return aggregate
+
+    def restore_execution_plan(self, intent_id: str) -> Any | None:
+        if not self._db_path:
+            return self._memory_execution_plans.get(str(intent_id))
+        with self._db_lock, closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT payload FROM execution_commands WHERE parent_intent_id=? ORDER BY sequence",
+                (str(intent_id),),
+            ).fetchall()
+        if not rows:
+            return None
+        return self._execution_aggregate_from_payloads(str(intent_id), [str(row["payload"]) for row in rows])
+
+    def transition_execution_child(
+        self,
+        intent_id: str,
+        sequence: int,
+        state: Any,
+        *,
+        event_id: str,
+        exchange_order_id: str = "",
+        cumulative_filled_quantity: str | None = None,
+    ) -> Any:
+        """Apply one idempotent child event and return the rebuilt parent."""
+
+        if not self._db_path:
+            aggregate = self.restore_execution_plan(intent_id)
+            if aggregate is None:
+                raise ValueError("EXECUTION_PLAN_NOT_FOUND")
+            updated = aggregate.transition_child(
+                sequence,
+                state,
+                event_id=event_id,
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+            self._memory_execution_plans[str(intent_id)] = updated
+            return updated
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db_lock, closing(self._connect()) as conn, conn:
+            rows = conn.execute(
+                "SELECT payload FROM execution_commands WHERE parent_intent_id=? ORDER BY sequence",
+                (str(intent_id),),
+            ).fetchall()
+            if not rows:
+                raise ValueError("EXECUTION_PLAN_NOT_FOUND")
+            duplicate = conn.execute(
+                "SELECT event_id FROM execution_command_events WHERE event_id=?",
+                (str(event_id),),
+            ).fetchone()
+            aggregate = self._execution_aggregate_from_payloads(str(intent_id), [str(row["payload"]) for row in rows])
+            if duplicate is not None:
+                return aggregate
+            previous = aggregate.children[sequence].state.value if 0 <= sequence < len(aggregate.children) else ""
+            updated = aggregate.transition_child(
+                sequence,
+                state,
+                event_id=event_id,
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+            child = updated.children[sequence]
+            changed = conn.execute(
+                "UPDATE execution_commands SET payload=?,state=?,exchange_order_id=?,filled_quantity=?,updated_at=? "
+                "WHERE parent_intent_id=? AND sequence=? AND command_hash=?",
+                (
+                    json.dumps(child.to_payload(), sort_keys=True),
+                    child.state.value,
+                    child.exchange_order_id or None,
+                    str(child.filled_quantity),
+                    now,
+                    str(intent_id),
+                    sequence,
+                    child.command_hash,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("EXECUTION_COMMAND_CONCURRENT_CHANGE")
+            conn.execute(
+                "INSERT INTO execution_command_events "
+                "(event_id,parent_intent_id,sequence,from_state,to_state,payload,occurred_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    str(event_id),
+                    str(intent_id),
+                    sequence,
+                    previous or None,
+                    child.state.value,
+                    json.dumps(
+                        {
+                            "exchange_order_id": child.exchange_order_id,
+                            "cumulative_filled_quantity": str(child.filled_quantity),
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+        return updated
+
+    def project_user_order_update(self, update: Any) -> Any:
+        """Project one normalized venue order event into its exact child."""
+
+        from beidou_safety.execution.command_aggregate import ChildCommandState
+
+        client_order_id = str(getattr(update, "client_order_id", "") or "")
+        if not client_order_id:
+            raise ValueError("USER_ORDER_UPDATE_CLIENT_ID_MISSING")
+        if not self._db_path:
+            identity = next(
+                (
+                    (intent_id, child.sequence)
+                    for intent_id, aggregate in self._memory_execution_plans.items()
+                    for child in aggregate.children
+                    if child.client_order_id == client_order_id
+                ),
+                None,
+            )
+        else:
+            with self._db_lock, closing(self._connect()) as conn, conn:
+                row = conn.execute(
+                    "SELECT parent_intent_id,sequence FROM execution_commands WHERE client_order_id=?",
+                    (client_order_id,),
+                ).fetchone()
+            identity = (str(row["parent_intent_id"]), int(row["sequence"])) if row is not None else None
+        if identity is None:
+            # The account stream also contains protection orders, orders from
+            # older deployments and externally owned orders.  They still
+            # belong in the global durable projector, but must not mutate or
+            # invalidate an unrelated execution aggregate.
+            return None
+
+        raw_status = str(getattr(getattr(update, "order_status", None), "value", "UNKNOWN"))
+        cumulative = str(getattr(getattr(update, "cumulative_quantity", None), "amount", "0"))
+        state_map = {
+            "NEW": ChildCommandState.ACKED,
+            "PENDING_CANCEL": (
+                ChildCommandState.PARTIALLY_FILLED if Decimal(cumulative) > 0 else ChildCommandState.ACKED
+            ),
+            "PARTIALLY_FILLED": ChildCommandState.PARTIALLY_FILLED,
+            "FILLED": ChildCommandState.FILLED,
+            "CANCELED": ChildCommandState.CANCELED,
+            "EXPIRED": ChildCommandState.CANCELED,
+            "REJECTED": ChildCommandState.REJECTED,
+            "UNKNOWN": ChildCommandState.UNKNOWN,
+        }
+        target = state_map.get(raw_status, ChildCommandState.UNKNOWN)
+        return self.transition_execution_child(
+            identity[0],
+            identity[1],
+            target,
+            event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
+            exchange_order_id=str(getattr(update, "order_id", "") or ""),
+            cumulative_filled_quantity=(
+                cumulative
+                if target
+                in {
+                    ChildCommandState.PARTIALLY_FILLED,
+                    ChildCommandState.FILLED,
+                    ChildCommandState.CANCELED,
+                }
+                else None
+            ),
+        )
+
+    def inflight_signed_quantity(self, symbol: str) -> Decimal:
+        """Return signed remaining child exposure, including UNKNOWN."""
+
+        symbol_value = str(symbol).upper()
+        if not self._db_path:
+            aggregates = list(self._memory_execution_plans.values())
+        else:
+            with self._db_lock, closing(self._connect()) as conn, conn:
+                rows = conn.execute(
+                    "SELECT parent_intent_id,payload FROM execution_commands "
+                    "WHERE state IN ('PLANNED','SENDING','ACKED','PARTIALLY_FILLED','UNKNOWN') "
+                    "ORDER BY parent_intent_id,sequence"
+                ).fetchall()
+            by_parent: dict[str, list[str]] = {}
+            for row in rows:
+                by_parent.setdefault(str(row["parent_intent_id"]), []).append(str(row["payload"]))
+            aggregates = [
+                self._execution_aggregate_from_payloads(parent_id, payloads)
+                for parent_id, payloads in by_parent.items()
+            ]
+        return sum(
+            (
+                child.signed_remaining_quantity
+                for aggregate in aggregates
+                for child in aggregate.children
+                if child.symbol == symbol_value
+            ),
+            Decimal("0"),
+        )
 
     def _db_intents(self, states: tuple[str, ...]) -> list[OrderIntent]:
         if not self._db_path:

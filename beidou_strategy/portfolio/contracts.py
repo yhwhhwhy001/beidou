@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -35,11 +36,35 @@ class SignedPortfolioTarget:
     side: PositionSide = PositionSide.FLAT
     target_exposure: float = 0.0
     delta: float = 0.0
+    current_exposure: float | None = None
+    inflight_exposure: float | None = None
     signature: str = ""
     created_at: str = ""
 
     def is_valid(self) -> bool:
-        """验证 gross >= abs(net)。"""
+        """Validate either a legacy gross bound or an exact target delta.
+
+        A reversal can legitimately trade more than the final gross exposure
+        (for example +2 to -4 requires a -6 delta).  When current/in-flight
+        facts are supplied, the exact signed equation is authoritative.
+        """
+
+        values = [self.target_exposure, self.delta]
+        if self.current_exposure is not None:
+            values.append(self.current_exposure)
+        if self.inflight_exposure is not None:
+            values.append(self.inflight_exposure)
+        if not all(math.isfinite(value) for value in values) or self.target_exposure < 0:
+            return False
+        if self.current_exposure is not None or self.inflight_exposure is not None:
+            current = float(self.current_exposure or 0.0)
+            inflight = float(self.inflight_exposure or 0.0)
+            signed_target = (
+                self.target_exposure
+                if self.side is PositionSide.LONG
+                else (-self.target_exposure if self.side is PositionSide.SHORT else 0.0)
+            )
+            return math.isclose(self.delta, signed_target - current - inflight, rel_tol=1e-12, abs_tol=1e-12)
         return abs(self.target_exposure) >= abs(self.delta) if self.target_exposure != 0 else self.delta == 0.0
 
     def compute_hash(self) -> str:
@@ -49,6 +74,8 @@ class SignedPortfolioTarget:
             "side": self.side.value,
             "target_exposure": self.target_exposure,
             "delta": self.delta,
+            "current_exposure": self.current_exposure,
+            "inflight_exposure": self.inflight_exposure,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 

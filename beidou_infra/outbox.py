@@ -14,6 +14,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable, Iterator
 
@@ -172,6 +173,68 @@ def _json_payload(value: Any) -> dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
     raise ValueError("outbox payload is not a JSON object")
+
+
+def _recover_sending_execution_commands(
+    cursor: Any,
+    *,
+    lease_owner: str,
+    fencing_token: int,
+) -> None:
+    """Project crash-ambiguous child sends to UNKNOWN with durable evidence."""
+
+    from beidou_safety.execution.command_aggregate import (
+        ChildCommandState,
+        ExecutionChildCommand,
+    )
+
+    cursor.execute(
+        "SELECT c.parent_intent_id,c.sequence,c.state,c.payload::text "
+        "FROM v3_execution_commands AS c "
+        "JOIN v3_transactional_outbox AS o ON o.intent_id=c.parent_intent_id "
+        "WHERE c.state='SENDING' AND ("
+        "c.lease_owner IS DISTINCT FROM %s OR c.fencing_token<%s "
+        "OR o.status='UNKNOWN' OR o.lease_until IS NULL OR o.lease_until<CURRENT_TIMESTAMP"
+        ") FOR UPDATE OF c,o SKIP LOCKED",
+        (lease_owner, fencing_token),
+    )
+    rows = cursor.fetchall() or []
+    for row in rows:
+        parent_intent_id = str(_row_value(row, "parent_intent_id", 0))
+        sequence = int(_row_value(row, "sequence", 1))
+        previous = str(_row_value(row, "state", 2))
+        child = ExecutionChildCommand.from_payload(_json_payload(_row_value(row, "payload", 3)))
+        event_id = f"restart-recovery:{parent_intent_id}:{sequence}:{fencing_token}"
+        child = child.transition(ChildCommandState.UNKNOWN, event_id=event_id)
+        cursor.execute(
+            "UPDATE v3_execution_commands SET state='UNKNOWN',payload=CAST(%s AS jsonb),"
+            "lease_owner=%s,fencing_token=%s,updated_at=CURRENT_TIMESTAMP "
+            "WHERE parent_intent_id=%s AND sequence=%s AND state='SENDING'",
+            (
+                json.dumps(child.to_payload(), sort_keys=True, default=str),
+                lease_owner,
+                fencing_token,
+                parent_intent_id,
+                sequence,
+            ),
+        )
+        if getattr(cursor, "rowcount", 1) != 1:
+            continue
+        cursor.execute(
+            "INSERT INTO v3_execution_command_events "
+            "(event_id,parent_intent_id,sequence,from_state,to_state,payload,"
+            "lease_owner,fencing_token) "
+            "VALUES (%s,%s,%s,%s,'UNKNOWN',CAST(%s AS jsonb),%s,%s)",
+            (
+                event_id,
+                parent_intent_id,
+                sequence,
+                previous,
+                json.dumps({"reason": "FENCED_RECOVERY_UNKNOWN"}, sort_keys=True),
+                lease_owner,
+                fencing_token,
+            ),
+        )
 
 
 class OutboxWorker:
@@ -465,12 +528,18 @@ class OutboxWorker:
                 previous = str(_row_value(row, "status", 2))
                 cursor.execute(
                     "UPDATE v3_transactional_outbox SET status='UNKNOWN',lease_owner=NULL,lease_until=NULL, "
-                    "last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
+                    "fencing_token=%s,last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
                     "AND status IN ('SENDING','SENT') AND ("
                     "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
                     "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
                     ")",
-                    ("FENCED_OR_LEASE_EXPIRED", message_id, self._lease_owner, self._fencing_token),
+                    (
+                        self._fencing_token,
+                        "FENCED_OR_LEASE_EXPIRED",
+                        message_id,
+                        self._lease_owner,
+                        self._fencing_token,
+                    ),
                 )
                 if getattr(cursor, "rowcount", 1) != 1:
                     continue
@@ -490,6 +559,12 @@ class OutboxWorker:
                     fencing_token=self._fencing_token,
                 )
                 recovered += 1
+
+            _recover_sending_execution_commands(
+                cursor,
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
         return recovered
 
     async def mark_failed(self, message_id: str, reason: str) -> str:
@@ -809,6 +884,285 @@ class PostgresIntentOutbox:
             )
         return key
 
+    @staticmethod
+    def _execution_aggregate(intent_id: str, rows: list[Any]) -> Any:
+        from beidou_safety.execution.command_aggregate import ExecutionChildCommand, ParentExecutionAggregate
+
+        children = [ExecutionChildCommand.from_payload(_json_payload(_row_value(row, "payload", 0))) for row in rows]
+        return ParentExecutionAggregate.create(str(intent_id), children)
+
+    def persist_execution_plan(self, intent_id: str, children: list[Any]) -> Any:
+        """Atomically persist all child commands before the first venue write."""
+
+        from beidou_safety.execution.command_aggregate import ParentExecutionAggregate
+
+        if self._connection_factory is None or self._fencing_token <= 0:
+            raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        aggregate = ParentExecutionAggregate.create(str(intent_id), children)
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT i.intent_id FROM v3_order_intents AS i "
+                "JOIN v3_transactional_outbox AS o ON o.intent_id=i.intent_id "
+                "WHERE i.intent_id=%s AND o.status='SENDING' AND o.lease_owner=%s "
+                "AND o.fencing_token=%s AND o.lease_until>=CURRENT_TIMESTAMP "
+                "FOR UPDATE OF i,o",
+                (str(intent_id), self._lease_owner, self._fencing_token),
+            )
+            if cursor.fetchone() is None:
+                raise ValueError("EXECUTION_PLAN_PARENT_NOT_CLAIMED")
+            cursor.execute(
+                "SELECT payload::text FROM v3_execution_commands WHERE parent_intent_id=%s ORDER BY sequence",
+                (str(intent_id),),
+            )
+            existing_rows = cursor.fetchall() or []
+            if existing_rows:
+                existing = self._execution_aggregate(str(intent_id), existing_rows)
+                if [child.command_hash for child in existing.children] != [
+                    child.command_hash for child in aggregate.children
+                ]:
+                    raise ValueError("EXECUTION_PLAN_CONFLICT")
+                return existing
+            for child in aggregate.children:
+                payload = json.dumps(child.to_payload(), sort_keys=True, default=str)
+                cursor.execute(
+                    "INSERT INTO v3_execution_commands "
+                    "(parent_intent_id,sequence,client_order_id,command_hash,symbol,side,quantity,order_type,"
+                    "time_in_force,limit_price,reduce_only,rule_snapshot_hash,payload,state,exchange_order_id,"
+                    "filled_quantity,lease_owner,fencing_token) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CAST(%s AS jsonb),'PLANNED',NULL,%s,%s,%s)",
+                    (
+                        str(intent_id),
+                        child.sequence,
+                        child.client_order_id,
+                        child.command_hash,
+                        child.symbol,
+                        child.side,
+                        str(child.quantity),
+                        child.order_type,
+                        child.time_in_force,
+                        str(child.limit_price) if child.limit_price is not None else None,
+                        child.reduce_only,
+                        child.rule_snapshot_hash,
+                        payload,
+                        str(child.filled_quantity),
+                        self._lease_owner,
+                        self._fencing_token,
+                    ),
+                )
+                cursor.execute(
+                    "INSERT INTO v3_execution_command_events "
+                    "(event_id,parent_intent_id,sequence,from_state,to_state,payload,lease_owner,fencing_token) "
+                    "VALUES (%s,%s,%s,NULL,'PLANNED',CAST(%s AS jsonb),%s,%s)",
+                    (
+                        f"plan:{intent_id}:{child.sequence}",
+                        str(intent_id),
+                        child.sequence,
+                        json.dumps({"command_hash": child.command_hash}, sort_keys=True),
+                        self._lease_owner,
+                        self._fencing_token,
+                    ),
+                )
+        return aggregate
+
+    def restore_execution_plan(self, intent_id: str) -> Any | None:
+        if self._connection_factory is None:
+            return None
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT payload::text FROM v3_execution_commands WHERE parent_intent_id=%s ORDER BY sequence",
+                (str(intent_id),),
+            )
+            rows = cursor.fetchall() or []
+        return self._execution_aggregate(str(intent_id), rows) if rows else None
+
+    def transition_execution_child(
+        self,
+        intent_id: str,
+        sequence: int,
+        state: Any,
+        *,
+        event_id: str,
+        exchange_order_id: str = "",
+        cumulative_filled_quantity: str | None = None,
+    ) -> Any:
+        if self._connection_factory is None or self._fencing_token <= 0:
+            raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT payload::text FROM v3_execution_commands "
+                "WHERE parent_intent_id=%s ORDER BY sequence FOR UPDATE",
+                (str(intent_id),),
+            )
+            rows = cursor.fetchall() or []
+            if not rows:
+                raise ValueError("EXECUTION_PLAN_NOT_FOUND")
+            # Check idempotency only after locking the aggregate. Two workers
+            # racing on the same venue event then serialize before the unique
+            # event insert instead of turning a duplicate into a transaction
+            # error.
+            cursor.execute(
+                "SELECT event_id FROM v3_execution_command_events WHERE event_id=%s",
+                (str(event_id),),
+            )
+            duplicate = cursor.fetchone()
+            aggregate = self._execution_aggregate(str(intent_id), rows)
+            if duplicate is not None:
+                return aggregate
+            if sequence < 0 or sequence >= len(aggregate.children):
+                raise ValueError("UNKNOWN_CHILD_SEQUENCE")
+            previous = aggregate.children[sequence].state.value
+            updated = aggregate.transition_child(
+                sequence,
+                state,
+                event_id=event_id,
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+            child = updated.children[sequence]
+            cursor.execute(
+                "UPDATE v3_execution_commands SET payload=CAST(%s AS jsonb),state=%s,exchange_order_id=%s,"
+                "filled_quantity=%s,lease_owner=%s,fencing_token=%s,updated_at=CURRENT_TIMESTAMP "
+                "WHERE parent_intent_id=%s AND sequence=%s AND command_hash=%s AND ("
+                "(state IN ('PLANNED','SENDING') AND lease_owner=%s AND fencing_token=%s AND EXISTS ("
+                "SELECT 1 FROM v3_transactional_outbox AS o WHERE o.intent_id=%s "
+                "AND o.status='SENDING' AND o.lease_owner=%s AND o.fencing_token=%s "
+                "AND o.lease_until>=CURRENT_TIMESTAMP)) OR "
+                "(state IN ('ACKED','PARTIALLY_FILLED','UNKNOWN') AND fencing_token<=%s))",
+                (
+                    json.dumps(child.to_payload(), sort_keys=True, default=str),
+                    child.state.value,
+                    child.exchange_order_id or None,
+                    str(child.filled_quantity),
+                    self._lease_owner,
+                    self._fencing_token,
+                    str(intent_id),
+                    sequence,
+                    child.command_hash,
+                    self._lease_owner,
+                    self._fencing_token,
+                    str(intent_id),
+                    self._lease_owner,
+                    self._fencing_token,
+                    self._fencing_token,
+                ),
+            )
+            if getattr(cursor, "rowcount", 1) != 1:
+                raise ValueError("EXECUTION_COMMAND_FENCED_OR_CONCURRENT")
+            cursor.execute(
+                "INSERT INTO v3_execution_command_events "
+                "(event_id,parent_intent_id,sequence,from_state,to_state,payload,lease_owner,fencing_token) "
+                "VALUES (%s,%s,%s,%s,%s,CAST(%s AS jsonb),%s,%s)",
+                (
+                    str(event_id),
+                    str(intent_id),
+                    sequence,
+                    previous,
+                    child.state.value,
+                    json.dumps(
+                        {
+                            "exchange_order_id": child.exchange_order_id,
+                            "cumulative_filled_quantity": str(child.filled_quantity),
+                        },
+                        sort_keys=True,
+                    ),
+                    self._lease_owner,
+                    self._fencing_token,
+                ),
+            )
+        return updated
+
+    def project_user_order_update(self, update: Any) -> Any:
+        from beidou_safety.execution.command_aggregate import ChildCommandState
+
+        if self._connection_factory is None or self._fencing_token <= 0:
+            raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        client_order_id = str(getattr(update, "client_order_id", "") or "")
+        if not client_order_id:
+            raise ValueError("USER_ORDER_UPDATE_CLIENT_ID_MISSING")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT parent_intent_id,sequence FROM v3_execution_commands WHERE client_order_id=%s",
+                (client_order_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            # Account streams include non-aggregate protection/external
+            # orders.  Absence from this command store means no aggregate
+            # projection, not a corrupt venue event.
+            return None
+        raw_status = str(getattr(getattr(update, "order_status", None), "value", "UNKNOWN"))
+        cumulative = str(getattr(getattr(update, "cumulative_quantity", None), "amount", "0"))
+        state_map = {
+            "NEW": ChildCommandState.ACKED,
+            "PENDING_CANCEL": (
+                ChildCommandState.PARTIALLY_FILLED if Decimal(cumulative) > 0 else ChildCommandState.ACKED
+            ),
+            "PARTIALLY_FILLED": ChildCommandState.PARTIALLY_FILLED,
+            "FILLED": ChildCommandState.FILLED,
+            "CANCELED": ChildCommandState.CANCELED,
+            "EXPIRED": ChildCommandState.CANCELED,
+            "REJECTED": ChildCommandState.REJECTED,
+            "UNKNOWN": ChildCommandState.UNKNOWN,
+        }
+        target = state_map.get(raw_status, ChildCommandState.UNKNOWN)
+        return self.transition_execution_child(
+            str(_row_value(row, "parent_intent_id", 0)),
+            int(_row_value(row, "sequence", 1)),
+            target,
+            event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
+            exchange_order_id=str(getattr(update, "order_id", "") or ""),
+            cumulative_filled_quantity=(
+                cumulative
+                if target
+                in {
+                    ChildCommandState.PARTIALLY_FILLED,
+                    ChildCommandState.FILLED,
+                    ChildCommandState.CANCELED,
+                }
+                else None
+            ),
+        )
+
+    def inflight_signed_quantity(self, symbol: str) -> Decimal:
+        if self._connection_factory is None:
+            raise RuntimeError("EXECUTION_COMMAND_STORE_UNKNOWN")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT payload::text FROM v3_execution_commands WHERE symbol=%s "
+                "AND state IN ('PLANNED','SENDING','ACKED','PARTIALLY_FILLED','UNKNOWN') "
+                "ORDER BY parent_intent_id,sequence",
+                (str(symbol).upper(),),
+            )
+            rows = cursor.fetchall() or []
+        from beidou_safety.execution.command_aggregate import ExecutionChildCommand
+
+        return sum(
+            (
+                ExecutionChildCommand.from_payload(
+                    _json_payload(_row_value(row, "payload", 0))
+                ).signed_remaining_quantity
+                for row in rows
+            ),
+            Decimal("0"),
+        )
+
     @property
     def _outbox(self) -> list[Any]:
         """Compatibility view for diagnostics; never a writable local queue."""
@@ -937,12 +1291,18 @@ class PostgresIntentOutbox:
                 previous = str(_row_value(row, "status", 2))
                 cursor.execute(
                     "UPDATE v3_transactional_outbox SET status='UNKNOWN',lease_owner=NULL,lease_until=NULL,"
-                    "last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
+                    "fencing_token=%s,last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
                     "AND status IN ('SENDING','SENT') AND ("
                     "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
                     "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
                     ")",
-                    ("FENCED_OR_LEASE_EXPIRED", message_id, self._lease_owner, self._fencing_token),
+                    (
+                        self._fencing_token,
+                        "FENCED_OR_LEASE_EXPIRED",
+                        message_id,
+                        self._lease_owner,
+                        self._fencing_token,
+                    ),
                 )
                 if getattr(cursor, "rowcount", 1) != 1:
                     continue
@@ -959,6 +1319,12 @@ class PostgresIntentOutbox:
                     fencing_token=self._fencing_token,
                 )
                 recovered += 1
+
+            _recover_sending_execution_commands(
+                cursor,
+                lease_owner=self._lease_owner,
+                fencing_token=self._fencing_token,
+            )
         return recovered
 
     def duplicate_order_count_24h(self) -> int | None:

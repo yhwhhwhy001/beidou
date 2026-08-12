@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from beidou_infra.outbox import OutboxWorker, PostgresIntentOutbox
 from beidou_safety.execution import OrderIntent
+from beidou_safety.execution.command_aggregate import ChildCommandState, ExecutionChildCommand, ParentExecutionState
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -112,6 +114,110 @@ def _intent(*, approved: bool = True, intent_id: str = "intent-pg-1") -> OrderIn
         risk_nonce="nonce-pg-1" if approved else "",
         risk_expires_at=4102444800.0 if approved else None,
     )
+
+
+def _children() -> list[ExecutionChildCommand]:
+    return [
+        ExecutionChildCommand.create(
+            parent_intent_id="intent-pg-1",
+            sequence=sequence,
+            symbol="BTCUSDT",
+            side="BUY",
+            quantity="0.05",
+            order_type="LIMIT",
+            time_in_force="GTC",
+            client_order_id=f"cid-pg-1-{sequence}",
+            limit_price="50000",
+            rule_snapshot_hash="rule-1",
+        )
+        for sequence in range(2)
+    ]
+
+
+def test_postgres_execution_plan_persists_every_child_and_event_atomically() -> None:
+    conn = _RecordingConnection()
+    conn.cursor_state.fetchone_values.append(("intent-pg-1",))
+    conn.cursor_state.fetchall_values.append([])
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-1",
+        fencing_token=7,
+    )
+
+    aggregate = store.persist_execution_plan("intent-pg-1", _children())
+
+    assert aggregate.state is ParentExecutionState.PLANNED
+    assert conn.committed == 1
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert sql.count("INSERT INTO v3_execution_commands") == 2
+    assert sql.count("INSERT INTO v3_execution_command_events") == 2
+    assert "o.lease_owner=%s" in sql
+    assert "o.fencing_token=%s" in sql
+    assert "o.lease_until>=CURRENT_TIMESTAMP" in sql
+    assert "fencing_token" in sql
+
+
+def test_postgres_execution_plan_requires_current_parent_lease_and_fence() -> None:
+    conn = _RecordingConnection()
+    conn.cursor_state.fetchone_values.append(None)
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-stale",
+        fencing_token=6,
+    )
+
+    with pytest.raises(ValueError, match="EXECUTION_PLAN_PARENT_NOT_CLAIMED"):
+        store.persist_execution_plan("intent-pg-1", _children())
+
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert "o.lease_owner=%s" in sql
+    assert "o.fencing_token=%s" in sql
+    assert "INSERT INTO v3_execution_commands" not in sql
+
+
+def test_postgres_execution_child_transition_is_fenced_and_append_audited() -> None:
+    conn = _RecordingConnection()
+    payloads = [(json.dumps(child.to_payload()),) for child in _children()]
+    conn.cursor_state.fetchone_values.append(None)
+    conn.cursor_state.fetchall_values.append(payloads)
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-1",
+        fencing_token=7,
+    )
+
+    aggregate = store.transition_execution_child(
+        "intent-pg-1",
+        0,
+        ChildCommandState.SENDING,
+        event_id="send-0",
+    )
+
+    assert aggregate.state is ParentExecutionState.IN_FLIGHT
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert "UPDATE v3_execution_commands" in sql
+    assert "lease_owner=%s" in sql
+    assert "fencing_token=%s" in sql
+    assert "SELECT 1 FROM v3_transactional_outbox AS o" in sql
+    assert "o.lease_until>=CURRENT_TIMESTAMP" in sql
+    assert "INSERT INTO v3_execution_command_events" in sql
+
+
+def test_postgres_user_update_for_non_aggregate_order_is_not_projected() -> None:
+    conn = _RecordingConnection()
+    conn.cursor_state.fetchone_values.append(None)
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-1",
+        fencing_token=7,
+    )
+
+    result = store.project_user_order_update(SimpleNamespace(client_order_id="external-protection-order"))
+
+    assert result is None
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert "SELECT parent_intent_id,sequence FROM v3_execution_commands" in sql
+    assert "UPDATE v3_execution_commands" not in sql
 
 
 def test_postgres_intent_outbox_commits_approval_intent_and_event_atomically() -> None:
@@ -353,6 +459,9 @@ def test_postgres_worker_recovery_fences_prior_owner_even_with_same_live_lease()
 def test_postgres_intent_outbox_startup_recovery_marks_fenced_or_expired_unknown() -> None:
     conn = _RecordingConnection()
     conn.cursor_state.fetchall_values.append([("msg-1", "intent-1", "SENDING")])
+    child = _children()[0]
+    child = replace(child, state=ChildCommandState.SENDING, event_ids=("send-0",))
+    conn.cursor_state.fetchall_values.append([("intent-pg-1", 0, "SENDING", json.dumps(child.to_payload()))])
     store = PostgresIntentOutbox(
         connection_factory=lambda: conn,
         lease_owner="worker-current",
@@ -367,6 +476,13 @@ def test_postgres_intent_outbox_startup_recovery_marks_fenced_or_expired_unknown
     assert "lease_until<CURRENT_TIMESTAMP" in sql
     assert "fencing_token<%s" in sql
     assert "SET status='UNKNOWN'" in sql
+    assert "fencing_token=%s" in sql
+    assert "FROM v3_execution_commands" in sql
+    assert "JOIN v3_transactional_outbox" in sql
+    assert "o.status='UNKNOWN'" in sql
+    assert "o.lease_until<CURRENT_TIMESTAMP" in sql
+    assert "UPDATE v3_execution_commands SET state='UNKNOWN'" in sql
+    assert "INSERT INTO v3_execution_command_events" in sql
     assert any("FENCED_RECOVERY_UNKNOWN" in str(params) for _statement, params in conn.cursor_state.statements)
     assert "blind" not in sql.lower()
 

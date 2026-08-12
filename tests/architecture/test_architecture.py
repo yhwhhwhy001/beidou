@@ -564,6 +564,30 @@ def test_final_approval_is_consumed_before_first_exchange_write() -> None:
     assert "self._approval.consume_nonce" not in submit
 
 
+def test_complete_child_plan_is_durable_before_send_and_parent_ack_is_aggregate_only() -> None:
+    source = (ROOT / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    place_start = source.index("    async def _place_order(")
+    place_end = source.index("    async def _plan_execution(", place_start)
+    place_order = source[place_start:place_end]
+    submit_start = source.index("    async def _submit_order_slice(")
+    submit_end = source.index("    async def _monitor_orders(", submit_start)
+    submit = source[submit_start:submit_end]
+
+    persist_at = place_order.index("persist_execution_plan")
+    send_at = place_order.index("await self._submit_order_slice")
+    assert persist_at < send_at
+    assert "transition_execution_child" in place_order
+    assert "all_children_acknowledged" in place_order
+    assert "self._outbox.ack" in place_order
+    assert "self._outbox.ack" not in submit
+    assert "PLANNED_QUANTITY_NOT_VENUE_EXACT" in submit
+    assert "PLANNED_PRICE_NOT_VENUE_EXACT" in submit
+    assert 'unknown(f"ADAPTER_EXCEPTION:' in submit
+    assert 'actual_status == "REJECTED"' in place_order
+    assert 'actual_status in {"CANCELED", "EXPIRED"}' in place_order
+    assert "ORDER_STATUS_UNKNOWN" in place_order
+
+
 def test_order_submission_does_not_label_predictions_as_realized_execution_quality() -> None:
     root = ROOT
     source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
@@ -584,6 +608,9 @@ def test_user_stream_safety_events_cannot_be_ignored_or_reported_healthy() -> No
     assert 'last_error="soft_rejection"' not in boundary
     assert "ALGO_UPDATE_REVALIDATION_REQUIRED" in boundary
     assert "MARGIN_CALL" in boundary
+    ingest_start = source.index("    def ingest_user_order_update(")
+    ingest_end = source.index("    def authorize_user_stream_replay(", ingest_start)
+    assert "project_user_order_update" in source[ingest_start:ingest_end]
 
 
 def test_environment_labels_cannot_downgrade_safety_authority() -> None:
@@ -629,7 +656,10 @@ def test_environment_labels_cannot_downgrade_safety_authority() -> None:
 def test_dev_bypass_is_not_available_to_testnet() -> None:
     root = ROOT
     source = (root / "beidou_bootstrap" / "dev.py").read_text(encoding="utf-8")
+    supervisor = (root / "beidou_launcher" / "supervisor.py").read_text(encoding="utf-8")
     assert 'mode not in ("paper", "research", "testnet")' not in source
+    assert 'self.mode in ("paper", "research", "testnet")' not in supervisor
+    assert 'mode not in ("paper", "research")' in source
 
 
 def test_startup_recovery_is_read_only_for_ambiguous_execution_facts() -> None:
@@ -660,6 +690,17 @@ def test_signal_path_cannot_mutate_venue_leverage_or_boost_past_risk_size() -> N
     adapter = (root / "beidou_exchange" / "binance_usdm" / "adapter.py").read_text(encoding="utf-8")
     assert "_is_config" not in supervisor
     assert "_is_config" not in adapter
+
+
+def test_nearline_executes_signed_target_delta_including_inflight_children() -> None:
+    source = (ROOT / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _nearline_tick(")
+    end = source.index("\n    async def _sync_exchange_state", start)
+    nearline = source[start:end]
+    assert "TargetDeltaPlan.compute" in nearline
+    assert "inflight_signed_quantity" in nearline
+    assert "target_quantity - current_quantity - inflight_quantity" not in nearline  # centralized exact arithmetic
+    assert "position_size = delta_plan.order_quantity" in nearline
 
 
 def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() -> None:
