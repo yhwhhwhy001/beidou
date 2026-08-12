@@ -14,10 +14,45 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
+
+
+def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:
+    """Sort dotted/mixed versions numerically without executing packaging code."""
+
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.lower()) for part in re.findall(r"\d+|[A-Za-z]+", str(version))
+    )
+
+
+def _safe_relative_path(*components: str) -> str:
+    """Build a path from opaque identifiers without allowing directory escape."""
+
+    if not components:
+        raise ValueError("UNSAFE_STORAGE_KEY")
+    for component in components:
+        if (
+            not component
+            or os.path.isabs(component)
+            or component in {".", ".."}
+            or "/" in component
+            or "\\" in component
+            or "\x00" in component
+        ):
+            raise ValueError("UNSAFE_STORAGE_KEY")
+    return os.path.join(*components)
+
+
+def _safe_artifact_key(key: str) -> str:
+    if not key or key.startswith(("/", "\\")):
+        raise ValueError("UNSAFE_STORAGE_KEY")
+    components = tuple(part for part in key.replace("\\", "/").split("/") if part)
+    return _safe_relative_path(*components)
+
 
 # ================================================================
 # 存储接口
@@ -155,7 +190,7 @@ class PostgreSQLFactorStore:
                     "SELECT version FROM factor_versions WHERE factor_id=%s ORDER BY version",
                     (factor_id,),
                 )
-                return [r[0] for r in cur.fetchall()]
+                return sorted((str(r[0]) for r in cur.fetchall()), key=_version_key)
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             return []
@@ -298,7 +333,7 @@ class SQLiteFactorStore:
                     "SELECT version FROM factor_versions WHERE factor_id=? ORDER BY version",
                     (factor_id,),
                 ).fetchall()
-            return [r[0] for r in rows]
+            return sorted((str(r[0]) for r in rows), key=_version_key)
         except Exception:
             return []
 
@@ -364,9 +399,9 @@ class JSONFileFactorStore:
         os.makedirs(base_dir, exist_ok=True)
 
     def save_factor_version(self, factor_id: str, version: str, data: dict) -> bool:
-        factor_dir = os.path.join(self.base_dir, factor_id)
+        factor_dir = os.path.join(self.base_dir, _safe_relative_path(factor_id))
         os.makedirs(factor_dir, exist_ok=True)
-        path = os.path.join(factor_dir, f"{version}.json")
+        path = os.path.join(factor_dir, _safe_relative_path(f"{version}.json"))
         try:
             with open(path, "w") as f:
                 json.dump(
@@ -385,7 +420,10 @@ class JSONFileFactorStore:
             return False
 
     def get_factor_version(self, factor_id: str, version: str) -> dict | None:
-        path = os.path.join(self.base_dir, factor_id, f"{version}.json")
+        path = os.path.join(
+            self.base_dir,
+            _safe_relative_path(factor_id, f"{version}.json"),
+        )
         try:
             with open(path) as f:
                 return json.load(f).get("data")
@@ -393,15 +431,18 @@ class JSONFileFactorStore:
             return None
 
     def list_versions(self, factor_id: str) -> list[str]:
-        factor_dir = os.path.join(self.base_dir, factor_id)
+        factor_dir = os.path.join(self.base_dir, _safe_relative_path(factor_id))
         if not os.path.isdir(factor_dir):
             return []
-        return sorted([f[:-5] for f in os.listdir(factor_dir) if f.endswith(".json")])
+        return sorted(
+            [f[:-5] for f in os.listdir(factor_dir) if f.endswith(".json")],
+            key=_version_key,
+        )
 
     def save_gate_decision(self, factor_id: str, decision: dict) -> bool:
-        audit_dir = os.path.join(self.base_dir, factor_id, "audit")
+        audit_dir = os.path.join(self.base_dir, _safe_relative_path(factor_id, "audit"))
         os.makedirs(audit_dir, exist_ok=True)
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%f")
         path = os.path.join(audit_dir, f"gate-{ts}.json")
         try:
             with open(path, "w") as f:
@@ -411,7 +452,7 @@ class JSONFileFactorStore:
             return False
 
     def get_gate_history(self, factor_id: str) -> list[dict]:
-        audit_dir = os.path.join(self.base_dir, factor_id, "audit")
+        audit_dir = os.path.join(self.base_dir, _safe_relative_path(factor_id, "audit"))
         if not os.path.isdir(audit_dir):
             return []
         history = []
@@ -438,14 +479,17 @@ class LocalArtifactStore:
         os.makedirs(base_dir, exist_ok=True)
 
     def put(self, key: str, data: bytes) -> str:
-        path = os.path.join(self.base_dir, key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        relative = _safe_artifact_key(key)
+        path = os.path.join(self.base_dir, relative)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
         return hashlib.sha256(data).hexdigest()
 
     def get(self, key: str) -> bytes | None:
-        path = os.path.join(self.base_dir, key)
+        path = os.path.join(self.base_dir, _safe_artifact_key(key))
         try:
             with open(path, "rb") as f:
                 return f.read()
@@ -453,4 +497,4 @@ class LocalArtifactStore:
             return None
 
     def exists(self, key: str) -> bool:
-        return os.path.isfile(os.path.join(self.base_dir, key))
+        return os.path.isfile(os.path.join(self.base_dir, _safe_artifact_key(key)))

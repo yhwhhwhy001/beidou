@@ -529,7 +529,10 @@ class PostgresPersistentStore:
         }
         existing = self._get_record("fill_event", str(fill_event_id))
         if existing is not None:
-            if _json(existing) != _json(payload) and str(existing.get("processing_state")) != "COMMITTED":
+            comparable_existing = dict(existing)
+            comparable_existing["processing_state"] = "PENDING"
+            comparable_existing["committed_at"] = None
+            if _json(comparable_existing) != _json(payload):
                 raise RuntimeError(f"fill event identity conflict: {fill_event_id}")
             return False
         return self._write_record("fill_event", str(fill_event_id), payload, immutable=True, event_type="FILL_EVENT")
@@ -841,14 +844,21 @@ class PostgresPersistentStore:
 
     # --- Maintenance ---
 
-    def clean_stale_new_orders(self, max_age_hours: int = 1) -> int:
-        """删除超过 max_age_hours 的 NEW 状态滞留订单。
+    def clean_stale_new_orders(
+        self,
+        max_age_hours: int = 1,
+        *,
+        venue_terminal_statuses: dict[str, str] | None = None,
+    ) -> int:
+        """Resolve stale NEW facts only from explicit venue terminal readback.
 
-        与 SQLite 版本行为对齐：物理删除而非标记 UNKNOWN。
-        UNKNOWN 状态会阻塞 _durable_fact_status 的 DURABLE_ORDER_UNKNOWN 检查，
-        导致引擎永久 DEGRADED。直接删除避免了制造新的阻塞条件。
+        Age is diagnostic evidence, never proof that an exchange order vanished.
+        Records are retained for audit and transitioned only to a terminal state
+        confirmed by the venue.
         """
         cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+        terminal_statuses = venue_terminal_statuses or {}
+        allowed_terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
         changed = 0
         for row in self.get_active_orders():
             if str(row.get("status")) != "NEW":
@@ -858,20 +868,30 @@ class PostgresPersistentStore:
             except ValueError:
                 continue
             if updated < cutoff:
-                self._delete_record("order_state", str(row.get("order_id")))
-                changed += 1
+                order_id = str(row.get("order_id"))
+                terminal = str(terminal_statuses.get(order_id, "")).upper()
+                if terminal in allowed_terminal:
+                    row["status"] = terminal
+                    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    self._write_record(
+                        "order_state",
+                        order_id,
+                        row,
+                        event_type="VENUE_TERMINAL_RECONCILED",
+                    )
+                    changed += 1
         return changed
 
-    def clean_orders_not_in_universe(self, universe_symbols: list[str]) -> int:
-        """删除不属于当前交易池品种的所有 NEW/UNKNOWN 订单。
-
-        当引擎切换交易品种时，上一批品种的订单可能残留在数据库中。
-        这些订单不会被轮询状态更新，导致对账永远 MISMATCHED。
-        在启动时调用此方法，传入当前交易池品种列表，清理所有不在池中的
-        非终端状态订单（NEW, PARTIALLY_FILLED, PENDING_CANCEL, UNKNOWN）。
-        终端状态订单（FILLED, CANCELED, EXPIRED, REJECTED）保留用于审计。
-        """
+    def clean_orders_not_in_universe(
+        self,
+        universe_symbols: list[str],
+        *,
+        venue_terminal_statuses: dict[str, str] | None = None,
+    ) -> int:
+        """Reconcile out-of-universe orders without deleting audit history."""
         universe = {s.strip().upper() for s in universe_symbols}
+        terminal_statuses = venue_terminal_statuses or {}
+        allowed_terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
         changed = 0
         for row in self.restore_order_states():
             symbol = str(row.get("symbol", "")).strip().upper()
@@ -887,18 +907,30 @@ class PostgresPersistentStore:
                     "UNKNOWN",
                 }
             ):
-                self._delete_record("order_state", str(row.get("order_id")))
-                changed += 1
+                order_id = str(row.get("order_id"))
+                terminal = str(terminal_statuses.get(order_id, "")).upper()
+                if terminal in allowed_terminal:
+                    row["status"] = terminal
+                    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    self._write_record(
+                        "order_state",
+                        order_id,
+                        row,
+                        event_type="VENUE_TERMINAL_RECONCILED",
+                    )
+                    changed += 1
         return changed
 
-    def expire_stale_unknown_orders(self, max_age_hours: int = 8) -> int:
-        """将超过 max_age_hours 的 UNKNOWN 订单转为 EXPIRED。
-
-        UNKNOWN 订单会阻塞 _durable_fact_status 的 DURABLE_ORDER_UNKNOWN 检查。
-        一旦订单在 UNKNOWN 状态停留超过阈值且未被解析，即可安全过期。
-        终端状态（EXPIRED）不阻塞对账。
-        """
+    def expire_stale_unknown_orders(
+        self,
+        max_age_hours: int = 8,
+        *,
+        venue_terminal_statuses: dict[str, str] | None = None,
+    ) -> int:
+        """Resolve stale UNKNOWN only after a terminal venue readback."""
         cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+        terminal_statuses = venue_terminal_statuses or {}
+        allowed_terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
         changed = 0
         for row in self.restore_order_states():
             if str(row.get("status", "")).upper() != "UNKNOWN":
@@ -908,14 +940,18 @@ class PostgresPersistentStore:
             except ValueError:
                 continue
             if updated < cutoff:
-                row["status"] = "EXPIRED"
-                self._write_record(
-                    "order_state",
-                    str(row.get("order_id")),
-                    row,
-                    event_type="STALE_UNKNOWN_EXPIRED",
-                )
-                changed += 1
+                order_id = str(row.get("order_id"))
+                terminal = str(terminal_statuses.get(order_id, "")).upper()
+                if terminal in allowed_terminal:
+                    row["status"] = terminal
+                    row["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    self._write_record(
+                        "order_state",
+                        order_id,
+                        row,
+                        event_type="VENUE_TERMINAL_RECONCILED",
+                    )
+                    changed += 1
         return changed
 
     def cleanup_old_data(self, retention_days: int = 90) -> int:

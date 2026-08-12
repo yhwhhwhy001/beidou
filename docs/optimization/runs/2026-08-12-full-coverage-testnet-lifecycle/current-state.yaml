@@ -1,0 +1,28 @@
+run_id: 2026-08-12-full-coverage-testnet-lifecycle
+repository: /Users/maguannan/beidou
+baseline_commit: 68e8937f520c5959c591554d72bd7f065d3dc7ab
+authority:
+  local_source_changes: true
+  local_tests: true
+  exchange_testnet_order_lifecycle: true
+  mainnet_or_real_funds: false
+  transfers_or_permissions: false
+  restart_or_deploy: false
+  git_commit_or_push: true
+status: IN_PROGRESS
+coverage:
+  covered: 23063
+  statements: 31091
+  percent: 74.17902286835418
+  target: 100
+exchange:
+  host: demo-fapi.binance.com
+  symbol: BTCUSDT
+  can_trade: true
+  can_withdraw: true
+  position_mode: ONE_WAY
+  nonzero_position_count: 6
+  open_order_count: 0
+  open_algo_order_count: 0
+  mutation_performed: false
+  decision: BLOCKED_PRE_WRITE_UNKNOWN_EXISTING_EXPOSURE
