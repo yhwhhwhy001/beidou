@@ -8802,7 +8802,22 @@ class AutonomousEngine:
                             "complete": True,
                             "created_at": _now.isoformat(),
                         }
-                        self._store.save_account_opening_projection(_payload)
+                        self._store.save_account_opening_projection(
+                            projection_id=_payload["projection_id"],
+                            account_id=_payload["account_id"],
+                            venue_id=_payload["venue_id"],
+                            balance_amount=_payload["balance_amount"],
+                            balance_currency=_payload["balance_currency"],
+                            balance_decimals=_payload["balance_decimals"],
+                            positions=_payload["positions"],
+                            open_orders=_payload["open_orders"],
+                            captured_at=_payload["captured_at"],
+                            source=_payload["source"],
+                            fact_version=_payload["fact_version"],
+                            evidence_hash=_payload["evidence_hash"],
+                            approval_id=_payload["approval_id"],
+                            complete=_payload["complete"],
+                        )
                         print(
                             "[beidou-autopilot] Auto-created opening baseline "
                             f"(balance={_balance}, positions={len(_positions)})"
