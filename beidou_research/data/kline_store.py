@@ -78,3 +78,24 @@ class KlineStore:
         if not path.exists():
             return 0
         return len(pd.read_parquet(path, columns=["open_time"]))
+
+
+def frame_to_price_data(df: pd.DataFrame) -> list[dict]:
+    """parquet DataFrame → runner 期望的 price_data 字典列表。"""
+    from datetime import datetime, timezone
+
+    rows = []
+    for record in df.to_dict("records"):
+        rows.append(
+            {
+                "timestamp": datetime.fromtimestamp(int(record["open_time"]) / 1000, tz=timezone.utc),
+                "open_time": int(record["open_time"]),
+                "close": float(record["close"]),
+                "open": float(record["open"]),
+                "high": float(record["high"]),
+                "low": float(record["low"]),
+                "volume": float(record["volume"]),
+                "is_closed": bool(record["is_closed"]),
+            }
+        )
+    return rows

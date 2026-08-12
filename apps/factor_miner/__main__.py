@@ -18,6 +18,8 @@ import sys
 
 import click
 
+from beidou_research.data.dataset_manifest import DatasetManifest
+from beidou_research.data.kline_store import KlineStore, frame_to_price_data
 from beidou_research.mining.persistence import JSONFileFactorStore
 
 
@@ -47,6 +49,8 @@ def cli() -> None:
     help="K 线条数",
 )
 @click.option("--dry-run", is_flag=True, help="仅验证配置，不执行挖掘")
+@click.option("--from-store", is_flag=True, help="强制从本地 parquet 读取（缺失即报错）")
+@click.option("--data-root", default=".beidou/data/klines", show_default=True, help="本地 K 线数据根目录")
 def run(
     policy: str,
     config: str | None,
@@ -56,6 +60,8 @@ def run(
     interval: str,
     limit: int,
     dry_run: bool,
+    from_store: bool,
+    data_root: str,
 ) -> None:
     """执行因子挖掘运行。"""
     click.echo(f"[factor_miner] 启动挖掘运行 (policy={policy})")
@@ -102,27 +108,41 @@ def run(
 
         for sym in symbols_list:
             click.echo(f"\n--- {sym} ---")
-            klines = feed.fetch_klines(sym, interval=interval, limit=limit)
-            if len(klines) < 100:
-                click.echo(f"  跳过 (K线不足: {len(klines)} 条)")
-                continue
-
-            price_data = [
-                {
-                    "timestamp": k["open_time"],
-                    "close": k["close"],
-                    "open": k["open"],
-                    "high": k["high"],
-                    "low": k["low"],
-                    "volume": k["volume"],
-                    "is_closed": k.get("is_closed") is True,
-                }
-                for k in klines
-            ]
-            click.echo(f"  K线: {len(price_data)} 条")
+            store = KlineStore(root=data_root)
+            manifest_hash = ""
+            if from_store or store.has_data(sym, interval, min_rows=100):
+                if not store.has_data(sym, interval, min_rows=100):
+                    click.echo(f"  ERROR: 本地无 {sym}/{interval} 数据（--from-store 指定）", err=True)
+                    sys.exit(1)
+                frame = store.load(sym, interval)
+                price_data = frame_to_price_data(frame)
+                manifest = DatasetManifest.compute(frame, sym, interval)
+                manifest_hash = DatasetManifest.hash_of(manifest)
+                click.echo(f"  本地数据: {len(price_data)} 条 manifest={manifest_hash[:12]}")
+            else:
+                klines = feed.fetch_klines(sym, interval=interval, limit=limit)
+                if len(klines) < 100:
+                    click.echo(f"  跳过 (K线不足: {len(klines)} 条)")
+                    continue
+                price_data = [
+                    {
+                        "timestamp": k["open_time"],
+                        "close": k["close"],
+                        "open": k["open"],
+                        "high": k["high"],
+                        "low": k["low"],
+                        "volume": k["volume"],
+                        "is_closed": k.get("is_closed") is True,
+                    }
+                    for k in klines
+                ]
+                click.echo(f"  API K线: {len(price_data)} 条")
 
             pipeline_config = PipelineConfig.from_yaml(policy)
             pipeline_config.evidence_dir = output_dir
+            pipeline_config.dataset_manifest_hash = manifest_hash
+            if not manifest_hash:
+                click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）")
             runner = MiningRunner(pipeline_config)
 
             result = runner.run(
