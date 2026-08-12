@@ -1239,7 +1239,12 @@ class AutonomousEngine:
             except Exception as exc:
                 self._state_backend_supported = False
                 self._state_backend_error = type(exc).__name__
-                diagnostic_db_path = ".beidou/state.db"
+                # BD-FIX: 诊断回退库按环境模式隔离。此前 paper/testnet 共用
+                # .beidou/state.db：paper 的模拟订单/持仓/账本写入同一张表，
+                # testnet 启动恢复时被当作系统侧事实 → 对账永远 MISMATCHED
+                # （"Orders in system but not on exchange"）。零写环境的模拟
+                # 事实绝不能污染可写环境的对账基线。
+                diagnostic_db_path = f".beidou/state-{self._env_mode.value}.db"
                 self._store = PersistentStore.get_instance(diagnostic_db_path)
                 self._outbox = IntentOutbox(db_path=diagnostic_db_path)
                 from beidou_shared.config import redact_database_url
@@ -1250,7 +1255,9 @@ class AutonomousEngine:
                     f"error={type(exc).__name__}; trading/readiness remain BLOCKED"
                 )
         else:
-            durable_db_path = ".beidou/state.db"
+            # BD-FIX: 与诊断回退相同 — 按环境模式隔离，避免 paper 模拟
+            # 事实污染 testnet 对账基线。
+            durable_db_path = f".beidou/state-{self._env_mode.value}.db"
             self._state_backend_supported = False
             self._state_backend_error = "UNSUPPORTED_DATABASE_URL"
             self._store = PersistentStore.get_instance(durable_db_path)
