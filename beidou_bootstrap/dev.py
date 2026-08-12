@@ -177,7 +177,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     pool = getattr(engine, "_trading_pool", None)
     if pool is not None:
         if skip_pool:
-            # 缩短观察期（testnet 快速验证），首次评估将使用已有行情数据
+            # 缩短观察期（本地开发快速验证），首次评估将使用已有行情数据
             for instrument_id in list(pool._pool.keys()):
                 entry = pool._pool[instrument_id]
                 entry.min_observation_hours = 5.0 / 60.0  # 5 分钟观察期
@@ -211,15 +211,21 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     print("[beidou-bootstrap] DEV_BYPASS 完成")
 
 
-async def bootstrap_universe(engine: Any) -> None:
+async def bootstrap_universe(engine: Any, mode: str) -> None:
     """启动时立即运行首次宇宙评估。
 
     使用 REST API 的 kline 数据做评分（不依赖 WebSocket ticker）。
     对 OBSERVING 标的评分后跳过观察期直接晋级达标标的。
     """
-    import math as _math
     import asyncio as _asyncio
-    from beidou_data.trading_pool_lifecycle import InstrumentScore, PoolStatus as _PoolStatus
+    import math as _math
+
+    from beidou_data.trading_pool_lifecycle import InstrumentScore
+    from beidou_data.trading_pool_lifecycle import PoolStatus as _PoolStatus
+
+    if mode not in ("paper", "research", "testnet"):
+        print(f"[beidou-bootstrap] 模式 {mode} 不允许宇宙 DEV_BYPASS，跳过", flush=True)
+        return
 
     pool = getattr(engine, "_trading_pool", None)
     feed = getattr(engine, "_feed", None)
@@ -312,7 +318,8 @@ async def bootstrap_universe(engine: Any) -> None:
                     pool.activate(instrument_id)
                     promoted += 1
                     print(
-                        f"  ✅ {instrument_id}: overall={overall_raw:.3f} spread={spread_bps:.1f}bps vol={vol_usdt / 1e6:.1f}M",
+                        f"  ✅ {instrument_id}: overall={overall_raw:.3f} "
+                        f"spread={spread_bps:.1f}bps vol={vol_usdt / 1e6:.1f}M",
                         flush=True,
                     )
 
