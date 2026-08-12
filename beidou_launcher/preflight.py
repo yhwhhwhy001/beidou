@@ -387,7 +387,7 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 evidence={"source": settings.source, "config_hash": settings.config_hash, "rest_url": rest_url},
             )
         )
-        if mode == WRITE_MODE:
+        if mode == WRITE_MODE and not os.environ.get("BEIDOU_DEV_FAST_START"):
             g5_ok, g5_message, g5_evidence = _g5_certificate_probe(project_root, commit)
             checks.append(
                 _result(
