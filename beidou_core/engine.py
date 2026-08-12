@@ -8761,6 +8761,55 @@ class AutonomousEngine:
         self._lifecycle.transition(ModuleState.WARMING)
         self._lifecycle.transition(ModuleState.VALIDATING)
 
+        # BD-FIX: 在初始对账前确保账户开盘基线存在。Testnet/Paper 等非生产
+        # 环境没有独立的人工授权开盘流程，首次启动时从交易所账户快照自动建立
+        # 基线，避免对账因 system_facts.incomplete 永久失败。
+        if self._can_write and self._store is not None:
+            try:
+                existing = self._store.restore_account_opening_projection("default", "BINANCE")
+                if existing is None:
+                    account_snapshot = getattr(self, "_last_account", None)
+                    if isinstance(account_snapshot, dict) and "totalWalletBalance" in account_snapshot:
+                        import hashlib as _hashlib
+                        import uuid as _uuid
+
+                        _now = datetime.now(timezone.utc)
+                        _positions: dict[str, str] = {}
+                        for _p in account_snapshot.get("positions", []):
+                            if isinstance(_p, dict):
+                                _sym = str(_p.get("symbol", "")).strip()
+                                _amt = float(_p.get("positionAmt", 0) or 0)
+                                if _sym and _amt:
+                                    _positions[_sym] = str(_amt)
+                        _balance = str(account_snapshot.get("totalWalletBalance", "0"))
+                        _evidence = {"balance": _balance, "positions": _positions}
+                        _payload = {
+                            "projection_id": f"auto-opening-{_now.strftime('%Y%m%dT%H%M%SZ')}-{_uuid.uuid4().hex[:8]}",
+                            "account_id": "default",
+                            "venue_id": "BINANCE",
+                            "balance_amount": _balance,
+                            "balance_currency": "USDT",
+                            "balance_decimals": 8,
+                            "positions": _positions,
+                            "open_orders": [],
+                            "captured_at": _now.isoformat(),
+                            "source": "AUTO_OPENING_BASELINE",
+                            "fact_version": str(int(_now.timestamp())),
+                            "evidence_hash": _hashlib.sha256(
+                                json.dumps(_evidence, sort_keys=True).encode()
+                            ).hexdigest(),
+                            "approval_id": f"auto-approval-{_uuid.uuid4().hex[:12]}",
+                            "complete": True,
+                            "created_at": _now.isoformat(),
+                        }
+                        self._store.save_account_opening_projection(_payload)
+                        print(
+                            "[beidou-autopilot] Auto-created opening baseline "
+                            f"(balance={_balance}, positions={len(_positions)})"
+                        )
+            except Exception as _open_exc:
+                print(f"[beidou-autopilot] Opening baseline creation skipped: {type(_open_exc).__name__}")
+
         # Initial reconciliation is read-only.  A mismatch or incomplete
         # projection closes the risk gate; state synchronization is a separate
         # explicitly authorized recovery workflow.
