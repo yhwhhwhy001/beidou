@@ -358,6 +358,11 @@ class MiningRunner:
                 factor_id=FactorId("pipeline"),
                 factor_version=SchemaVersion("2.0.0"),
             )
+        # aux 特征列：与主数据同构但独立构建（纯函数），
+        # 保证表达式真正在 aux 价格序列上求值。
+        self._aux_feature_dict: dict[str, list[float]] = {}
+        if self._aux_price_points:
+            self._aux_feature_dict = self._build_feature_dict(self._aux_price_points)
 
         # ================================================================
         # Phase 2: 生成候选因子
@@ -367,7 +372,7 @@ class MiningRunner:
         candidates = self._generate_candidates(price_points, ven, sym, timeframe)
 
         # 预构建特征字典，供 Phase 3/4 中表达式求值使用
-        self._build_feature_dict(price_points)
+        self._feature_dict = self._build_feature_dict(price_points)
 
         # ================================================================
         # Phase 3: 快速预筛
@@ -546,7 +551,11 @@ class MiningRunner:
             # 多粒度稳健性：aux 数据（如 1d）上重算 IC，与主粒度同向且
             # 衰减 ≤ 50% 才稳定。aux 样本不足一律不稳（fail-closed）。
             if aux_price_data:
-                aux_values = self._evaluate_candidate(candidate, self._aux_price_points)
+                # 在 aux 序列构建的特征列上求值（与主数据同构、独立构建），
+                # 保证 aux 因子值与 aux 标签同源于 aux 价格序列。
+                aux_values = self._evaluate_candidate(
+                    candidate, self._aux_price_points, feature_dict=self._aux_feature_dict
+                )
                 aux_samples = _aligned_aux_samples(aux_values)
                 if len(aux_samples) < 200:
                     stability_results.append(
@@ -638,10 +647,12 @@ class MiningRunner:
                     "cpcv_failure_reasons": cpcv_result.failure_reasons,
                 },
                 stability_results=[
-                    {
-                        "dimension": r["dimension"] if isinstance(r, dict) else r.dimension,
-                        "degradation_pct": r["degradation_pct"] if isinstance(r, dict) else r.degradation_pct,
-                        "is_stable": r["is_stable"] if isinstance(r, dict) else r.is_stable,
+                    r
+                    if isinstance(r, dict)  # timeframe_robustness：透传完整 aux 评估 dict
+                    else {
+                        "dimension": r.dimension,
+                        "degradation_pct": r.degradation_pct,
+                        "is_stable": r.is_stable,
                     }
                     for r in stability_results
                 ],
@@ -936,6 +947,10 @@ class MiningRunner:
 
         Missing OHLCV columns become NaN and are removed by the quality gates;
         they are never inferred from close or zero.
+
+        纯函数：不修改实例状态，返回独立特征字典。主数据特征列由
+        Phase 2 显式赋值 self._feature_dict；aux 序列在 run() 内以同样
+        方式独立构建（保证表达式真正在 aux 价格序列上求值）。
         """
 
         def _finite_or_nan(value: float | None) -> float:
@@ -1017,7 +1032,7 @@ class MiningRunner:
         spread: list[float],
         rsi: list[float],
     ) -> dict[str, list[float]]:
-        self._feature_dict = {
+        return {
             "close": closes,
             "open": opens,
             "high": highs,
@@ -1027,7 +1042,6 @@ class MiningRunner:
             "spread": spread,
             "rsi": rsi,
         }
-        return self._feature_dict
 
     @staticmethod
     def _spec_to_expression(primitive: str, window: int, transform: str, normalization: str) -> str:
@@ -1146,11 +1160,15 @@ class MiningRunner:
         self,
         candidate: dict,
         price_points: list[PricePoint],
+        feature_dict: dict[str, list[float]] | None = None,
     ) -> list[float]:
         """使用表达式引擎计算候选因子值。
 
         通过 PrimitiveRegistry.parse() → Expression.evaluate_series() 求值，
         返回全长度序列（含 NaN warm-up 期），NaN 由 FastScreen 和 Phase 4 对齐处理。
+
+        feature_dict 缺省使用 self._feature_dict（主数据特征列）；传入 aux
+        特征列即可让同一表达式真正在 aux 价格序列上求值。
         """
         self._ensure_registry()
 
@@ -1164,8 +1182,9 @@ class MiningRunner:
             logger.warning("factor expression parse failed; candidate rejected: %s", type(exc).__name__)
             return []
 
+        eval_features = feature_dict if feature_dict is not None else self._feature_dict
         try:
-            values = expr.evaluate_series(self._feature_dict)
+            values = expr.evaluate_series(eval_features)
         except Exception as exc:
             logger.warning("factor expression evaluation failed; candidate rejected: %s", type(exc).__name__)
             return []
