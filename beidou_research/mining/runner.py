@@ -42,6 +42,8 @@ from beidou_shared.types import (
     VenueId,
 )
 
+from ..backtest.replay import PaperReplayResult, simulate_paper_window
+from ..factors.factor import PROMOTION_EVIDENCE_REQUIREMENTS, FactorLifecycle
 from .contracts import (
     LabelSpec,
     PriceType,
@@ -616,6 +618,11 @@ class MiningRunner:
             if failure_reasons_aux:
                 _initial_failures.append(failure_reasons_aux)
 
+            # replay 只用主粒度全序列（factor_values 含 NaN 由 simulate 内部对齐跳过）。
+            # 返回 None 时 promotion_chain 不产出（fail-closed）。
+            all_closes = [float(p.close or 0.0) for p in price_points]
+            replay_result = simulate_paper_window(candidate["factor_values"], all_closes, cost_bps=8.0)
+
             # 构造证据包
             bundle = EvidenceBundle(
                 bundle_id=f"{run_id}-{candidate['hash'][:8]}",
@@ -681,6 +688,12 @@ class MiningRunner:
                     "wfo": wfo_result,
                     "cpcv": cpcv_result,
                     "candidate": candidate,
+                    # 链构建所需逐候选值：多检验循环中闭包变量已是最后候选的值，
+                    # 必须从 record 读取以保证每个 bundle 绑定自己的证据。
+                    "ic": ic,
+                    "icir_cv": wfo_result.icir_cv,
+                    "sample_count": len(valid_returns),
+                    "replay_result": replay_result,
                 }
             )
             evidence_bundles.append(bundle)
@@ -741,10 +754,27 @@ class MiningRunner:
                 bundle.failure_reasons = list(dict.fromkeys(reasons))
                 bundle.gate_decision = "PASS" if not bundle.failure_reasons else "FAIL"
                 bundle.seal()
+                payload = bundle.to_dict()
+                if bundle.gate_decision == "PASS":
+                    chain = build_promotion_chain(
+                        bundle,
+                        ic=record["ic"],
+                        icir=record["icir_cv"],
+                        sample_count=record["sample_count"],
+                        replay=record["replay_result"],
+                        git_commit=_current_git_commit(),
+                        expression_string=record["candidate"].get("expression_string", ""),
+                        role=self._pipeline_role(),
+                    )
+                    if chain:
+                        payload["promotion_chain"] = chain
+                        payload["evidence_source"] = "historical_replay"
+                        payload["expression_string"] = record["candidate"].get("expression_string", "")
+                        payload["role"] = self._pipeline_role()
                 self._store.save_factor_version(
                     f"{symbol}:{bundle.candidate_id}",
                     "2.0.0",
-                    bundle.to_dict(),
+                    payload,
                 )
 
         # ================================================================
@@ -1204,6 +1234,21 @@ class MiningRunner:
             except Exception as exc:
                 logger.warning("mining progress callback failed: %s", type(exc).__name__)
 
+    def _pipeline_role(self) -> str:
+        """因子在 DAG 中的角色；从 policy generation.role 读取，默认 entry。"""
+        try:
+            import yaml
+
+            policy_path = self.config.policy_path or "config/factor_mining_policy.yaml"
+            with open(policy_path) as f:
+                policy = yaml.safe_load(f)
+            role = str((policy.get("generation", {}) or {}).get("role", "entry")).strip().lower()
+            if role in {"entry", "filter", "exit"}:
+                return role
+        except Exception:
+            pass
+        return "entry"
+
 
 # ================================================================
 # 辅助统计函数
@@ -1257,6 +1302,82 @@ def _is_finite(v: float | None) -> bool:
         return math.isfinite(float(v))
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+# ================================================================
+# 逐级证据链（promotion_chain）
+# ================================================================
+
+# IDEA→ACTIVE 的 8 级晋级路径；每级转换都须在 FACTOR_LIFECYCLE_TRANSITIONS 中合法。
+_PROMOTION_PATH: list[tuple[str, str]] = [
+    ("IDEA", "GENERATED"),
+    ("GENERATED", "SANITY_PASSED"),
+    ("SANITY_PASSED", "RESEARCH_VALIDATED"),
+    ("RESEARCH_VALIDATED", "OOS_VERIFIED"),
+    ("OOS_VERIFIED", "COST_CAPACITY_VERIFIED"),
+    ("COST_CAPACITY_VERIFIED", "PAPER_TRADING"),
+    ("PAPER_TRADING", "CHALLENGER"),
+    ("CHALLENGER", "ACTIVE"),
+]
+
+
+def build_promotion_chain(
+    bundle: EvidenceBundle,
+    *,
+    ic: float,
+    icir: float,
+    sample_count: int,
+    replay: PaperReplayResult | None,
+    git_commit: str,
+    expression_string: str,
+    role: str,
+) -> list[dict] | None:
+    """为 PASS bundle 构建 IDEA→ACTIVE 的完整逐级证据链。
+
+    PAPER_TRADING/CHALLENGER 两级依赖 replay 观察；replay 缺失时返回 None
+    （不产出可晋级证据链，fail-closed）。
+    """
+    if replay is None:
+        return None
+    chain: list[dict] = []
+    for from_state, to_state in _PROMOTION_PATH:
+        target = FactorLifecycle(to_state)
+        requirements = PROMOTION_EVIDENCE_REQUIREMENTS[target]
+        evidence_ids = list(requirements["required_evidence"])
+        step: dict = {
+            "from": from_state,
+            "to": to_state,
+            "approved": True,
+            "reason": f"research evidence for {to_state}",
+            "commit": git_commit,
+            "dataset_hash": bundle.dataset_manifest_hash,
+            "policy_version": bundle.policy_version,
+            "falsifier": "factor-miner",
+            "evidence_ids": evidence_ids,
+            "factor_version": bundle.factor_version,
+            "icir": round(icir, 6),
+            "ic": round(ic, 6),
+            "sample_count": int(sample_count),
+            "evidence_source": "historical_replay",
+        }
+        chain.append(step)
+    return chain
+
+
+def _current_git_commit() -> str:
+    """当前工作区 HEAD commit sha；无法获取时返回空串（链将因绑定缺失被门禁拒绝）。"""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return out.stdout.strip()
+    except Exception:
+        return ""
 
 
 def _compute_ic(predictions: list[float], returns: list[float]) -> float:
