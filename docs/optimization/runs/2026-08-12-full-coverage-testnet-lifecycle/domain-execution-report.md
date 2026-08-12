@@ -16,3 +16,10 @@
 - Six non-zero positions remained. BTCUSDT itself was flat, with zero ordinary orders and zero Algo orders account-wide.
 - Account-level unknown exposure still prevents a new risk-bearing lifecycle because shared margin and ownership/protection cannot be attributed to this validation run.
 - No order, cancellation, position, leverage, margin or protection mutation was performed.
+
+## Permission-gate correction — 2026-08-12
+
+- The Testnet account reports `canWithdraw=true`. The previous implementation incorrectly exempted Testnet from the withdrawal-permission hard stop.
+- The exemption has been removed: withdrawal permission now blocks writable execution in every environment, including Testnet.
+- The lifecycle remains `BLOCKED_PRE_WRITE` on two independent grounds: withdrawal permission is enabled, and six existing positions remain unattributable/unprotected.
+- No permission change was attempted because transfers/permission mutation is outside the current authorization.

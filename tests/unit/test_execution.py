@@ -478,7 +478,7 @@ class TestImmutableLedger:
 
 
 class TestReconciliation:
-    def _complete_snapshot(self, balance: str = "10000") -> AccountFactSnapshot:
+    def _complete_snapshot(self, balance: str = "10000", source: str = "SYSTEM") -> AccountFactSnapshot:
         """Helper: create a complete (PKG20) snapshot."""
         return AccountFactSnapshot(
             account_id=AccountId("test"),
@@ -486,21 +486,22 @@ class TestReconciliation:
             balance=MonetaryValue(amount=balance),
             positions={},
             open_orders=[],
+            source=source,
+            fact_version="v1",
             complete=True,  # PKG20: 显式标记完整
         )
 
     def test_matched(self):
         engine = ReconciliationEngine()
-        sf = self._complete_snapshot("10000")
-        engine.update_system_facts(sf)
-        engine.update_exchange_facts(sf)
+        engine.update_system_facts(self._complete_snapshot("10000"))
+        engine.update_exchange_facts(self._complete_snapshot("10000", "EXCHANGE"))
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
         assert result.matched
 
     def test_balance_mismatch(self):
         engine = ReconciliationEngine()
         engine.update_system_facts(self._complete_snapshot("10000"))
-        engine.update_exchange_facts(self._complete_snapshot("9990"))
+        engine.update_exchange_facts(self._complete_snapshot("9990", "EXCHANGE"))
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
         assert not result.matched
 

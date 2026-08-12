@@ -64,7 +64,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     """
     import os as _os
 
-    if mode not in ("paper", "research", "testnet"):
+    if mode not in ("paper", "research"):
         logger.warning("Mode %s is not eligible for DEV_BYPASS", mode)
         return
 
@@ -228,7 +228,7 @@ async def bootstrap_universe(engine: Any, mode: str) -> None:
     from beidou_data.trading_pool_lifecycle import InstrumentScore
     from beidou_data.trading_pool_lifecycle import PoolStatus as _PoolStatus
 
-    if mode not in ("paper", "research", "testnet"):
+    if mode not in ("paper", "research"):
         logger.warning("Mode %s is not eligible for universe DEV_BYPASS", mode)
         return
 

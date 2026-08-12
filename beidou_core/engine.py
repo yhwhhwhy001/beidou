@@ -7939,7 +7939,7 @@ class AutonomousEngine:
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
-        if venue_can_withdraw and self._env_mode.value != "testnet":
+        if venue_can_withdraw:
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"

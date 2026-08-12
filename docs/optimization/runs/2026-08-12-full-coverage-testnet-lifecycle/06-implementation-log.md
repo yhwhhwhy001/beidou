@@ -19,3 +19,7 @@
 | 2026-08-12 | Harden unified and legacy order state machines | focused order tests; unified aggregate 130/130 and legacy tracker 53/53 statements | PASS at 100%; invalid fills, overfills, economic-identity conflicts and unsafe legacy migration repaired |
 | 2026-08-12 | Harden emergency execution planning | focused conditional execution tests; 77/77 statements | PASS at 100%; missing governed executor, parse errors and enqueue failures remain fail closed |
 | 2026-08-12 | Full repository regression after tranche 3 | 2,069 tests; `artifacts/coverage-p3-tranche3.json` | PASS; 23,870/31,211 = 76.4794%, 7,341 uncovered; full-coverage gate remains FAIL |
+| 2026-08-12 | Harden reconciliation authority | focused adversarial reconciliation tests; 214/214 statements | PASS at 100%; missing lineage, copied sources, future facts and unbound/per-symbol rule steps fail closed |
+| 2026-08-12 | Remove remaining Testnet development bypasses | architecture and boundary tests | PASS; factor/pool bypass and development universe bootstrap restricted to Paper/Research |
+| 2026-08-12 | Enforce withdrawal-permission stop in every environment | venue permission contract tests | PASS; Testnet no longer bypasses the hard withdrawal-permission gate |
+| 2026-08-12 | Full repository regression after tranche 4 | 2,078 tests; `artifacts/coverage-p3-tranche4-fixed.json` | PASS; 23,919/31,232 = 76.5849%, 7,313 uncovered; full-coverage gate remains FAIL |
