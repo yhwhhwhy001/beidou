@@ -10,6 +10,7 @@ P1 批量修复测试 — 安全/行情/风险快照/控制面/保护。
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -54,7 +55,8 @@ class TestRiskSnapshotImmutability:
 
     def test_freshness_gate(self) -> None:
         """freshness gate 拒绝过期快照。"""
-        snap = RiskSnapshot(10000, 2000, 10000, 2, 1, 2.0, 30, account_id="a")
+        now = datetime.now(timezone.utc).isoformat()
+        snap = RiskSnapshot(10000, 2000, 10000, 2, 1, 2.0, 30, account_id="a", received_at=now)
         assert snap.is_fresh(max_age_seconds=3600)  # 1 hour
         # 直接检查年龄
         assert snap.age_seconds < 1.0
@@ -74,8 +76,11 @@ class TestRiskSnapshotImmutability:
             exchange_health="HEALTHY",
             reconciliation_status="MATCHED",
             policy_version="v1",
+            portfolio_hash="portfolio-1",
+            correlation_id="correlation-1",
+            source_timestamp=(datetime.now(timezone.utc) - timedelta(seconds=122)).isoformat(),
+            observed_at=(datetime.now(timezone.utc) - timedelta(seconds=121)).isoformat(),
+            received_at=(datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat(),
         )
-        # 手动设置更老的创建时间模拟过期
-        snap._created_at = time.time() - 120  # 2 min old
         assert not snap.is_fresh(max_age_seconds=60)
         assert not snap.is_safe_for_risk_increase()

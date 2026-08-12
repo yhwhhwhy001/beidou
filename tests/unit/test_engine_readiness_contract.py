@@ -586,7 +586,12 @@ def test_final_send_rejects_order_payload_mutation_after_approval() -> None:
     )
     intent = replace(base, risk_approval_signature=signature, risk_intent_hash=intent_hash)
     state_machine = RiskApprovalStateMachine()
-    state_machine.approve(approval_id)
+    state_machine.approve(
+        approval_id,
+        nonce=base.risk_nonce,
+        risk_snapshot_hash=base.risk_snapshot_hash,
+        policy_version=base.risk_policy_version,
+    )
     engine = AutonomousEngine.__new__(AutonomousEngine)
     engine._can_write = True
     engine._state_backend_supported = True

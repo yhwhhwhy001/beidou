@@ -43,6 +43,12 @@ class RiskRuleRegistry:
 
     @classmethod
     def register(cls, rule: RiskRule) -> None:
+        if not rule.rule_id or rule.rule_id not in {f"R{i}" for i in range(11)}:
+            raise ValueError("Risk rule_id must be one of R0-R10")
+        if not callable(rule.evaluate):
+            raise ValueError("Risk rule evaluate callback must be callable")
+        if rule.rule_id in cls.RULES:
+            raise ValueError(f"Risk rule already registered: {rule.rule_id}")
         cls.RULES[rule.rule_id] = rule
 
     @classmethod
@@ -51,7 +57,8 @@ class RiskRuleRegistry:
         results: dict[str, RuleDecision] = {}
         for rule in sorted(cls.RULES.values(), key=lambda r: r.priority):
             try:
-                results[rule.rule_id] = rule.evaluate(context)
+                decision = rule.evaluate(context)
+                results[rule.rule_id] = decision if isinstance(decision, RuleDecision) else RuleDecision.UNKNOWN
             except Exception:
                 results[rule.rule_id] = RuleDecision.UNKNOWN
         return results
@@ -59,7 +66,7 @@ class RiskRuleRegistry:
     @classmethod
     def is_approved(cls, results: dict[str, RuleDecision]) -> bool:
         """所有规则必须 PASS。UNKNOWN 不算通过。"""
-        return all(d == RuleDecision.PASS for d in results.values())
+        return set(results) == set(cls.RULES) and all(d is RuleDecision.PASS for d in results.values())
 
 
 # ================================================================
@@ -108,10 +115,11 @@ def _r2_drawdown(context: dict) -> RuleDecision:
     if max_dd is None:
         return RuleDecision.UNKNOWN
     try:
+        dd = float(dd)
         max_dd = float(max_dd)
     except (TypeError, ValueError):
         return RuleDecision.UNKNOWN
-    if not math.isfinite(max_dd) or max_dd < 0:
+    if not math.isfinite(dd) or not math.isfinite(max_dd) or dd < 0 or max_dd < 0:
         return RuleDecision.UNKNOWN
     return RuleDecision.PASS if dd < max_dd else RuleDecision.REJECT
 
@@ -125,10 +133,11 @@ def _r3_daily_loss(context: dict) -> RuleDecision:
     if max_daily is None:
         return RuleDecision.UNKNOWN
     try:
+        daily = float(daily)
         max_daily = float(max_daily)
     except (TypeError, ValueError):
         return RuleDecision.UNKNOWN
-    if not math.isfinite(max_daily) or max_daily < 0:
+    if not math.isfinite(daily) or not math.isfinite(max_daily) or daily < 0 or max_daily < 0:
         return RuleDecision.UNKNOWN
     return RuleDecision.PASS if daily < max_daily else RuleDecision.REJECT
 
@@ -142,11 +151,23 @@ def _r4_consecutive_losses(context: dict) -> RuleDecision:
     if max_cons is None:
         return RuleDecision.UNKNOWN
     try:
-        max_cons = int(max_cons)
+        if isinstance(consecutive, bool) or isinstance(max_cons, bool):
+            return RuleDecision.UNKNOWN
+        consecutive_float = float(consecutive)
+        max_cons_float = float(max_cons)
     except (TypeError, ValueError):
         return RuleDecision.UNKNOWN
-    if max_cons < 0:
+    if (
+        not math.isfinite(consecutive_float)
+        or not math.isfinite(max_cons_float)
+        or not consecutive_float.is_integer()
+        or not max_cons_float.is_integer()
+        or consecutive_float < 0
+        or max_cons_float < 0
+    ):
         return RuleDecision.UNKNOWN
+    consecutive = int(consecutive_float)
+    max_cons = int(max_cons_float)
     return RuleDecision.PASS if consecutive < max_cons else RuleDecision.REJECT
 
 
@@ -159,10 +180,11 @@ def _r5_sharpe(context: dict) -> RuleDecision:
     if min_sharpe is None:
         return RuleDecision.UNKNOWN
     try:
+        sharpe = float(sharpe)
         min_sharpe = float(min_sharpe)
     except (TypeError, ValueError):
         return RuleDecision.UNKNOWN
-    if not math.isfinite(min_sharpe):
+    if not math.isfinite(sharpe) or not math.isfinite(min_sharpe):
         return RuleDecision.UNKNOWN
     return RuleDecision.PASS if sharpe >= min_sharpe else RuleDecision.REJECT
 
@@ -201,7 +223,7 @@ def _r7_liquidation_distance(context: dict) -> RuleDecision:
         position_qty = float(position_qty)
     except (TypeError, ValueError):
         return RuleDecision.UNKNOWN
-    if not math.isfinite(position_qty) or position_qty < 0:
+    if not math.isfinite(position_qty):
         return RuleDecision.UNKNOWN
 
     liq_price = context.get("liquidation_price")
@@ -222,6 +244,8 @@ def _r7_liquidation_distance(context: dict) -> RuleDecision:
     if not math.isfinite(liq_price) or not math.isfinite(current_price):
         return RuleDecision.UNKNOWN
     if liq_price <= 0 or current_price <= 0:
+        return RuleDecision.UNKNOWN
+    if (position_qty > 0 and liq_price >= current_price) or (position_qty < 0 and liq_price <= current_price):
         return RuleDecision.UNKNOWN
     distance_pct = abs(current_price - liq_price) / current_price * 100
     minimum_distance_pct = context.get("min_liquidation_distance_pct")
@@ -276,6 +300,15 @@ def _r10_duplicate_order(context: dict) -> RuleDecision:
     duplicate_count = context.get("duplicate_orders_24h")
     if duplicate_count is None:
         return RuleDecision.UNKNOWN
+    if isinstance(duplicate_count, bool):
+        return RuleDecision.UNKNOWN
+    try:
+        duplicate_float = float(duplicate_count)
+    except (TypeError, ValueError):
+        return RuleDecision.UNKNOWN
+    if not math.isfinite(duplicate_float) or duplicate_float < 0 or not duplicate_float.is_integer():
+        return RuleDecision.UNKNOWN
+    duplicate_count = int(duplicate_float)
     return RuleDecision.PASS if duplicate_count == 0 else RuleDecision.REJECT
 
 

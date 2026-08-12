@@ -1344,7 +1344,13 @@ class AutonomousEngine:
                 signature = str(approval["signature"])
                 expires_at = float(approval["expires_at"])
                 if self._approval.restore_signature(signature, expires_at):
-                    self._risk_sm.approve(approval_id)
+                    self._risk_sm.approve(
+                        approval_id,
+                        nonce=str(approval["nonce"]),
+                        ttl=expires_at - time.time(),
+                        risk_snapshot_hash=str(approval["risk_snapshot_hash"]),
+                        policy_version=str(approval["policy_version"]),
+                    )
             except (KeyError, TypeError, ValueError):
                 # Malformed durable approval remains UNKNOWN and keeps the
                 # normal final-send verification gate closed.
@@ -2005,7 +2011,13 @@ class AutonomousEngine:
             return False
         if (
             self._risk_sm.approve_if_verified(
-                RiskApprovalId(approval_id), signature_valid=signature_valid, risk_check_passed=True
+                RiskApprovalId(approval_id),
+                signature_valid=signature_valid,
+                risk_check_passed=True,
+                nonce=approval_nonce,
+                ttl=expires_at - time.time(),
+                risk_snapshot_hash=risk_snapshot_hash,
+                policy_version=risk_policy_version,
             )
             != RiskDecision.APPROVED
         ):
@@ -3799,7 +3811,12 @@ class AutonomousEngine:
             # exact venue order must match the HMAC-bound canonical digest.
             return False
         approval_ref = RiskApprovalId(approval_id)
-        if not self._risk_sm.is_valid_for_use(approval_ref):
+        if not self._risk_sm.is_valid_for_use(
+            approval_ref,
+            nonce=str(getattr(intent, "risk_nonce", "")),
+            risk_snapshot_hash=str(getattr(intent, "risk_snapshot_hash", "")),
+            policy_version=str(getattr(intent, "risk_policy_version", "")),
+        ):
             return False
         try:
             verified = await self._approval.verify(
@@ -7166,7 +7183,7 @@ class AutonomousEngine:
                         if not math.isfinite(raw_qty):
                             position_qty = None
                             break
-                        position_qty = abs(raw_qty)
+                        position_qty = raw_qty
                         try:
                             raw_liquidation = account_position.get("liquidationPrice")
                             if raw_liquidation not in (None, ""):
@@ -7233,12 +7250,27 @@ class AutonomousEngine:
 
                 # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = dict(RiskRuleRegistry.evaluate_all(risk_context))
-                risk_approved = all(d == RuleDecision.PASS for d in risk_results.values())
-                # RiskEngineImpl 辅助校验：快照级别的杠杆/集中度检查（非阻塞后验证）
+                risk_approved = RiskRuleRegistry.is_approved(risk_results)
+                auxiliary_failed_rules: list[str] = []
+                # 快照风险校验是新增风险的第二道阻断门，不能降级为非阻塞告警。
                 if risk_approved:
                     try:
                         from beidou_safety.risk.engine import RiskSnapshot as _RiskSnapshot
 
+                        checked_at = getattr(self._last_reconciliation_result, "checked_at", None)
+                        if isinstance(checked_at, datetime) and checked_at.tzinfo is None:
+                            checked_at = checked_at.replace(tzinfo=timezone.utc)
+                        source_timestamp = checked_at.isoformat() if isinstance(checked_at, datetime) else ""
+                        evaluated_at = datetime.now(timezone.utc).isoformat()
+                        account_hash = hashlib.sha256(
+                            f"{account_balance}|{self._protection.position_count()}".encode()
+                        ).hexdigest()[:16]
+                        risk_hash = hashlib.sha256(
+                            f"{dyn_leverage}|{risk_context['concentration_pct']}|{risk_context['drawdown_pct']}".encode()
+                        ).hexdigest()[:16]
+                        risk_policy_version = (
+                            f"{self._policy_id_active or 'UNSIGNED'}:{self._policy_version or 'UNKNOWN'}"
+                        )
                         rules_cfg = {
                             "max_leverage": risk_context["max_leverage"],
                             "max_concentration_pct": risk_context["max_concentration_pct"],
@@ -7251,20 +7283,35 @@ class AutonomousEngine:
                             pending_orders=len(self._active_order_ids),
                             leverage=dyn_leverage,
                             concentration_pct=risk_context["concentration_pct"],
+                            account_id="default",
+                            dq_tier="PASS",
                             reconciliation_status="MATCHED" if self._fresh_matched_reconciliation() else "MISMATCHED",
-                            exchange_health="HEALTHY",
+                            exchange_health=("HEALTHY" if self._check_liveness() is HealthState.HEALTHY else "UNSAFE"),
+                            portfolio_hash=account_hash,
+                            policy_version=risk_policy_version,
+                            correlation_id=f"risk-eval-{symbol}-{source_timestamp}",
+                            source_timestamp=source_timestamp,
+                            observed_at=evaluated_at,
+                            received_at=evaluated_at,
                         )
                         impl_results = await self._risk_engine.full_evaluate(imp_snapshot, rules_cfg)
-                        # RiskEngineImpl 返回 RiskDecision 枚举（与 RuleDecision 不同），
-                        # 作为非阻塞的辅助校验：REJECTED 时记录违规但不阻断
-                        for r in impl_results:
-                            if r.decision.value == "REJECTED":
-                                self._post_risk.record_violation(f"RiskEngineImpl:{symbol}:{r.detail}")
+                        auxiliary_failed_rules = [
+                            f"AUX-{result.rule_level.value}"
+                            for result in impl_results
+                            if result.decision != RiskDecision.APPROVED
+                        ]
+                        risk_approved = bool(impl_results) and not auxiliary_failed_rules
+                        for result in impl_results:
+                            if result.decision != RiskDecision.APPROVED:
+                                self._post_risk.record_violation(f"RiskEngineImpl:{symbol}:{result.reason}")
                     except Exception as exc:
-                        logger.warning("Auxiliary RiskEngineImpl unavailable for %s: %s", symbol, type(exc).__name__)
+                        risk_approved = False
+                        auxiliary_failed_rules = [f"AUX-UNAVAILABLE:{type(exc).__name__}"]
+                        logger.warning("Blocking RiskEngineImpl unavailable for %s: %s", symbol, type(exc).__name__)
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
+                    failed_rules.extend(auxiliary_failed_rules)
                     print(f"[nearline] {symbol}: SKIP (risk rules failed: {failed_rules})")
                     continue
 
@@ -7273,20 +7320,10 @@ class AutonomousEngine:
                     continue
 
                 # === 8. Approval with proper signing ===
-                import hashlib
-
                 # Compute proper hashes for approval binding
                 proposal_payload = f"{prop['direction'].value}|{prop['fused_strength']}|{prop['fused_confidence']}|{symbol}|{position_size}"
                 proposal_hash = hashlib.sha256(proposal_payload.encode()).hexdigest()[:16]
-                account_hash = hashlib.sha256(
-                    f"{account_balance}|{self._protection.position_count()}".encode()
-                ).hexdigest()[:16]
-                risk_hash = hashlib.sha256(
-                    f"{dyn_leverage}|{risk_context['concentration_pct']}|{risk_context['drawdown_pct']}".encode()
-                ).hexdigest()[:16]
                 import secrets
-
-                risk_policy_version = f"{self._policy_id_active or 'UNSIGNED'}:{self._policy_version or 'UNKNOWN'}"
 
                 nonce = secrets.token_hex(8)
 
@@ -7347,6 +7384,10 @@ class AutonomousEngine:
                         approval_id,
                         signature_valid=True,
                         risk_check_passed=risk_approved,
+                        nonce=nonce,
+                        ttl=approval_expires_at - time.time(),
+                        risk_snapshot_hash=risk_hash,
+                        policy_version=risk_policy_version,
                     )
                     != RiskDecision.APPROVED
                 ):
@@ -7933,6 +7974,14 @@ class AutonomousEngine:
             position_count = self._protection.position_count()
             pending = len(self._active_order_ids)
             concentration = position_notional / max(account_balance, 1) * 100
+            checked_at = getattr(self._last_reconciliation_result, "checked_at", None)
+            if isinstance(checked_at, datetime) and checked_at.tzinfo is None:
+                checked_at = checked_at.replace(tzinfo=timezone.utc)
+            source_timestamp = checked_at.isoformat() if isinstance(checked_at, datetime) else ""
+            evaluated_at = datetime.now(timezone.utc).isoformat()
+            portfolio_hash = hashlib.sha256(
+                f"{account_balance}|{position_count}|{pending}|{position_notional}".encode()
+            ).hexdigest()
 
             from beidou_safety.risk.engine import RiskSnapshot
 
@@ -7946,9 +7995,14 @@ class AutonomousEngine:
                 concentration_pct=concentration,
                 account_id="default",
                 reconciliation_status="MATCHED" if self._fresh_matched_reconciliation() else "MISMATCHED",
-                exchange_health="HEALTHY",
-                dq_tier="OK",
+                exchange_health="HEALTHY" if self._check_liveness() is HealthState.HEALTHY else "UNSAFE",
+                dq_tier="PASS",
+                portfolio_hash=portfolio_hash,
                 policy_version=str(self._policy_version or "UNKNOWN"),
+                correlation_id=f"post-risk-{symbol}-{source_timestamp}",
+                source_timestamp=source_timestamp,
+                observed_at=evaluated_at,
+                received_at=evaluated_at,
             )
             if not snapshot.is_safe_for_risk_increase():
                 self._post_risk.record_violation(

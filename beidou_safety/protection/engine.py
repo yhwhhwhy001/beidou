@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
-from typing import Any
+from typing import Any, cast
 
 from beidou_shared.types import (
     CorrelationId,
@@ -139,6 +139,7 @@ class PositionProtection:
 
     def update_price_extremes(self, current_price: float) -> None:
         """更新跟踪中的最高/最低价（用于移动止损）。"""
+        current_price = StopLossCalculator._finite_positive(current_price, "current_price")
         if self.is_long():
             if self.highest_price is None or current_price > self.highest_price:
                 self.highest_price = current_price
@@ -157,10 +158,14 @@ class PositionProtection:
             return
         # P1-034: 关键保护参数缺失必须 fail closed，不静默降级
         if "trail_pct" not in self.trailing_config:
-            self.stop_loss.deactivate()  # type: ignore[attr-defined]
-            self._missing_trail_pct = True
+            self.stop_loss.status = ProtectionStatus.FAILED
+            self.stop_loss.reason = "Trailing stop configuration is unavailable"
             return
-        trail_pct = float(self.trailing_config["trail_pct"])
+        trail_pct = StopLossCalculator._finite_positive(self.trailing_config["trail_pct"], "trail_pct")
+        if trail_pct >= 100:
+            self.stop_loss.status = ProtectionStatus.FAILED
+            self.stop_loss.reason = "Trailing stop percentage is outside safe bounds"
+            return
         if self.is_long() and self.highest_price is not None:
             new_trigger = self.highest_price * (1 - trail_pct / 100)
             old_trigger = float(self.stop_loss.trigger_price.amount)
@@ -290,10 +295,8 @@ class TakeProfitCalculator:
         risk = abs(entry_price - stop_loss_price)
         if risk <= 0:
             raise ValueError("take-profit requires a non-zero stop distance")
-        if side == OrderSide.BUY:
-            return entry_price + risk * rr_ratio
-        else:
-            return entry_price - risk * rr_ratio
+        take_profit = entry_price + risk * rr_ratio if side == OrderSide.BUY else entry_price - risk * rr_ratio
+        return StopLossCalculator._finite_positive(take_profit, "take_profit_price")
 
     @staticmethod
     def multi_target(
@@ -307,8 +310,20 @@ class TakeProfitCalculator:
         targets: [{"rr_ratio": 1.0, "close_pct": 30}, {"rr_ratio": 2.0, "close_pct": 40}, ...]
         返回: [{"price": xxx, "close_pct": yy, "rr_ratio": zz}, ...]
         """
-        # PKG (BDS-P0-021): 验证 close_pct 总和不超过 100%
-        total_pct = sum(t.get("close_pct", 50.0) for t in targets)
+        entry_price = StopLossCalculator._finite_positive(entry_price, "entry_price")
+        stop_loss_price = StopLossCalculator._finite_positive(stop_loss_price, "stop_loss_price")
+        if not targets:
+            raise ValueError("take-profit targets are required")
+        normalized_targets: list[tuple[float, float]] = []
+        for target in targets:
+            if not isinstance(target, dict):
+                raise ValueError("take-profit target must be a mapping")
+            rr = StopLossCalculator._finite_positive(target.get("rr_ratio", DEFAULT_RR_RATIO), "rr_ratio")
+            close_pct = StopLossCalculator._finite_positive(target.get("close_pct", 50.0), "close_pct")
+            if close_pct > 100:
+                raise ValueError("take-profit close_pct must not exceed 100%")
+            normalized_targets.append((rr, close_pct))
+        total_pct = sum(close_pct for _, close_pct in normalized_targets)
         if total_pct > 100.0:
             raise ValueError(
                 f"take-profit close_pct sum ({total_pct}%) exceeds 100%: "
@@ -316,11 +331,12 @@ class TakeProfitCalculator:
             )
 
         risk = abs(entry_price - stop_loss_price)
+        if risk <= 0:
+            raise ValueError("take-profit requires a non-zero stop distance")
         result = []
-        for t in targets:
-            rr = t.get("rr_ratio", DEFAULT_RR_RATIO)
-            close_pct = t.get("close_pct", 50.0)
+        for rr, close_pct in normalized_targets:
             price = entry_price + risk * rr if side == OrderSide.BUY else entry_price - risk * rr
+            price = StopLossCalculator._finite_positive(price, "take_profit_price")
             # PKG (BDS-P0-019): 价格精度从 tickSize 获取，不硬编码 round(...,2)
             result.append(
                 {
@@ -377,7 +393,7 @@ class ProtectionManager:
     4. 保护单触发后自动生成 OrderIntent
     """
 
-    def __init__(self, price_decimals: int = 0, quantity_decimals: int = 0) -> None:
+    def __init__(self, price_decimals: int | None = None, quantity_decimals: int | None = None) -> None:
         """BD-CV43: price_decimals/quantity_decimals 从 InstrumentRuleSnapshot 获取。
 
         默认值 0 表示未从规则快照获取，调用时必须提供有效规则。
@@ -385,14 +401,31 @@ class ProtectionManager:
         """
         self._protections: dict[str, PositionProtection] = {}
         self._history: list[ProtectionOrder] = []
+        self._price_decimals = 0
+        self._quantity_decimals = 0
+        self._precision_verified = False
+        if price_decimals is not None or quantity_decimals is not None:
+            self._set_precision(price_decimals, quantity_decimals)
+
+    def _set_precision(self, price_decimals: Any, quantity_decimals: Any) -> None:
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (price_decimals, quantity_decimals)
+        ):
+            raise ValueError("price and quantity precision must be non-negative integers")
         self._price_decimals = price_decimals
         self._quantity_decimals = quantity_decimals
+        self._precision_verified = True
 
     def set_precision_from_rule(self, rule_snapshot: Any) -> None:
         """BD-CV43: 从 InstrumentRuleSnapshot 设置精度。"""
-        if rule_snapshot is not None:
-            self._price_decimals = getattr(rule_snapshot, "price_precision", 0)
-            self._quantity_decimals = getattr(rule_snapshot, "qty_precision", 0)
+        if rule_snapshot is None:
+            self._precision_verified = False
+            raise ValueError("instrument precision snapshot is required")
+        self._set_precision(
+            getattr(rule_snapshot, "price_precision", None),
+            getattr(rule_snapshot, "qty_precision", None),
+        )
 
     # ---- 创建保护 ----
 
@@ -412,6 +445,18 @@ class ProtectionManager:
         session_id: str = "",
     ) -> PositionProtection:
         """为一笔新仓位创建完整的保护方案。"""
+        if not self._precision_verified:
+            raise ValueError("verified instrument precision is required")
+        if not str(position_id).strip():
+            raise ValueError("position identity is required")
+        if not isinstance(side, OrderSide):
+            raise ValueError("position side must be BUY or SELL")
+        if position_id in self._protections:
+            raise ValueError(f"position protection already exists: {position_id}")
+        if not stop_loss_config:
+            raise ValueError("an explicit stop-loss is required")
+        if not isinstance(position_generation, int) or isinstance(position_generation, bool) or position_generation < 0:
+            raise ValueError("position_generation must be a non-negative integer")
         try:
             entry_value = float(entry_price)
             quantity_value = float(quantity)
@@ -421,9 +466,6 @@ class ProtectionManager:
             raise ValueError("entry_price must be finite and positive")
         if not isfinite(quantity_value) or quantity_value <= 0:
             raise ValueError("quantity must be finite and positive")
-        if take_profit_config and not stop_loss_config:
-            raise ValueError("take-profit protection requires an explicit stop-loss")
-
         pp = PositionProtection(
             position_id=position_id,
             instrument_id=instrument_id,
@@ -441,6 +483,10 @@ class ProtectionManager:
         # 止损
         if stop_loss_config:
             sl_type = StopLossType(stop_loss_config.get("type", "FIXED_PERCENT"))
+            if sl_type is StopLossType.TRAILING:
+                trail_pct = StopLossCalculator._finite_positive((trailing_config or {}).get("trail_pct"), "trail_pct")
+                if trail_pct >= 100:
+                    raise ValueError("trail_pct must be below 100")
             stop_price = StopLossCalculator.calculate(
                 sl_type,
                 entry_price,
@@ -500,10 +546,9 @@ class ProtectionManager:
 
         # 止盈
         if take_profit_config:
-            if pp.stop_loss is None:
-                raise ValueError("take-profit protection requires an explicit stop-loss")
+            stop_loss = cast(ProtectionOrder, pp.stop_loss)
             tp_type = TakeProfitType(take_profit_config.get("type", "FIXED_RR"))
-            stop_price_for_rr = float(pp.stop_loss.trigger_price.amount)
+            stop_price_for_rr = float(stop_loss.trigger_price.amount)
             tp_targets = TakeProfitCalculator.calculate(
                 tp_type,
                 entry_price,
@@ -532,17 +577,23 @@ class ProtectionManager:
                 if side == OrderSide.SELL and target_price >= entry_value:
                     raise ValueError("short take-profit must be below entry price")
                 qty = quantity_value * quantity_pct
-                if qty <= 0:
-                    continue
+                rounded_target = round(target_price, self._price_decimals)
+                rounded_quantity = round(qty, self._quantity_decimals)
+                if rounded_target <= 0 or rounded_quantity <= 0:
+                    raise ValueError("take-profit target collapses at venue precision")
+                if side == OrderSide.BUY and rounded_target <= entry_value:
+                    raise ValueError("rounded long take-profit must be above entry price")
+                if side == OrderSide.SELL and rounded_target >= entry_value:
+                    raise ValueError("rounded short take-profit must be below entry price")
                 tp_order = ProtectionOrder(
                     protection_id=f"tp-{position_id}-{i}",
                     position_id=position_id,
                     instrument_id=instrument_id,
                     venue_id=venue_id,
                     side=tp_side,
-                    trigger_price=Price(amount=str(round(target["price"], self._price_decimals))),
+                    trigger_price=Price(amount=str(rounded_target)),
                     order_price=None,  # 市价止盈
-                    quantity=Quantity(amount=str(round(qty, self._quantity_decimals))),
+                    quantity=Quantity(amount=str(rounded_quantity)),
                     order_type="TAKE_PROFIT_MARKET",
                     reduce_only=True,
                     status=ProtectionStatus.CREATED,
@@ -580,9 +631,16 @@ class ProtectionManager:
             raise TypeError("position protection projection must be PositionProtection")
         if not protection.position_id or not str(protection.instrument_id):
             raise ValueError("position protection identity is incomplete")
-        if not isfinite(float(protection.entry_price)) or protection.entry_price <= 0:
+        if protection.position_id in self._protections:
+            raise ValueError(f"position protection already exists: {protection.position_id}")
+        try:
+            entry_price = float(protection.entry_price)
+            quantity = float(protection.quantity)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("position protection economics are invalid") from exc
+        if not isfinite(entry_price) or entry_price <= 0:
             raise ValueError("position protection entry price must be finite and positive")
-        if not isfinite(float(protection.quantity)) or protection.quantity <= 0:
+        if not isfinite(quantity) or quantity <= 0:
             raise ValueError("position protection quantity must be finite and positive")
         orders = ([protection.stop_loss] if protection.stop_loss is not None else []) + list(protection.take_profits)
         if not orders:

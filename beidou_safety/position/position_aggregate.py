@@ -8,6 +8,7 @@ Nonzero position 必须有 venue-acknowledged SL 100% 覆盖。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
 
 @dataclass(frozen=True)
@@ -40,12 +41,34 @@ class PositionAggregate:
 
     def apply_fill(self, fill: FillEvent) -> PositionAggregate:
         """BD-CV42: 应用单笔成交。reduce-only 不跨零。"""
+        if not fill.fill_id.strip():
+            raise ValueError("Fill identity is required")
+        if not fill.symbol.strip():
+            raise ValueError("Fill symbol is required")
         if fill.symbol != self.symbol and self.symbol:
             raise ValueError(f"Symbol mismatch: {fill.symbol} != {self.symbol}")
         if fill.side not in {"BUY", "SELL"}:
             raise ValueError(f"Invalid fill side: {fill.side}")
-        if fill.quantity <= 0 or fill.price <= 0:
+        if not isfinite(fill.quantity) or not isfinite(fill.price) or fill.quantity <= 0 or fill.price <= 0:
             raise ValueError("Fill quantity and price must be positive")
+        if not isfinite(fill.commission) or fill.commission < 0:
+            raise ValueError("Fill commission must be finite and non-negative")
+        if not isfinite(fill.timestamp):
+            raise ValueError("Fill timestamp must be finite")
+        if (
+            not isfinite(self.net_position)
+            or not isfinite(self.avg_entry_price)
+            or not isfinite(self.realized_pnl)
+            or self.avg_entry_price < 0
+        ):
+            raise ValueError("Position state must contain finite economic facts")
+
+        for existing in self.fills:
+            if existing.fill_id != fill.fill_id:
+                continue
+            if existing == fill:
+                return self
+            raise ValueError(f"Conflicting fill identity: {fill.fill_id}")
 
         # Reduce-only guard: 不跨零反向开仓
         new_position = self.net_position
@@ -95,7 +118,12 @@ class PositionAggregate:
 
     def is_reduce_only_compliant(self, new_fill: FillEvent) -> bool:
         """BD-CV42 AC-42-02: reduce-only 永不跨零反向开仓。"""
-        if new_fill.quantity <= 0:
+        if (
+            not new_fill.symbol.strip()
+            or (self.symbol and new_fill.symbol != self.symbol)
+            or not isfinite(new_fill.quantity)
+            or new_fill.quantity <= 0
+        ):
             return False
         if new_fill.side == "SELL":
             return self.net_position > 0 and new_fill.quantity <= self.net_position

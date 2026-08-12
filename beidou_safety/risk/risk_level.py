@@ -19,6 +19,7 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
+from math import isfinite
 from typing import ClassVar
 
 
@@ -62,7 +63,10 @@ class RiskLevelState:
 
     def compute_evidence_hash(self) -> str:
         """计算状态证据哈希。"""
-        payload = f"{self.level.name}|{self.reason}|{self.timestamp}|{self.generation}|{self.breaker_scope.name}"
+        payload = (
+            f"{self.level.name}|{self.reason}|{self.timestamp}|{self.generation}|"
+            f"{self.breaker_scope.name}|{self.evidence_hash}"
+        )
         return hashlib.sha256(payload.encode()).hexdigest()
 
     @property
@@ -87,7 +91,7 @@ class RiskLevelManager:
         self._state: RiskLevel | None = None
         self._state_history: list[RiskLevelState] = []
         self._intraday_breakers: dict[str, float] = {}  # breaker_name → trigger_time
-        self._daily_breakers: dict[str, float] = {}  # 跨日持久
+        self._daily_breakers: dict[str, tuple[BreakerScope, float]] = {}  # 只能显式带证据重置
         self._generation: int = 0
 
     @property
@@ -107,6 +111,12 @@ class RiskLevelManager:
         Raises:
             ValueError: 尝试降级风险等级。
         """
+        if not isinstance(new_level, RiskLevel):
+            raise ValueError("风险等级必须是已知 RiskLevel")
+        if not isinstance(breaker_scope, BreakerScope):
+            raise ValueError("断路器作用域必须是已知 BreakerScope")
+        if not reason.strip():
+            raise ValueError("风险升级必须提供非空原因")
         current = self.current_level
         if new_level < current:
             raise ValueError(
@@ -127,7 +137,7 @@ class RiskLevelManager:
         if breaker_scope == BreakerScope.INTRADAY:
             self._intraday_breakers[reason] = time.time()
         elif breaker_scope in (BreakerScope.DAILY, BreakerScope.PERMANENT):
-            self._daily_breakers[reason] = time.time()
+            self._daily_breakers[reason] = (breaker_scope, time.time())
 
         return state
 
@@ -142,7 +152,9 @@ class RiskLevelManager:
         Raises:
             ValueError: 恢复条件不满足。
         """
-        if not recovery_evidence:
+        if not isinstance(new_level, RiskLevel):
+            raise ValueError("恢复风险等级必须是已知 RiskLevel")
+        if not recovery_evidence.strip():
             raise ValueError("恢复必须提供签名证据")
 
         if new_level not in (RiskLevel.NORMAL, RiskLevel.NO_NEW_RISK):
@@ -150,11 +162,7 @@ class RiskLevelManager:
 
         # 检查跨日 breaker — 未解决前禁止恢复到 NORMAL
         if new_level == RiskLevel.NORMAL:
-            unresolved_daily = [
-                name
-                for name, t in self._daily_breakers.items()
-                if time.time() - t < 86400 * 7  # 7天内未重置
-            ]
+            unresolved_daily = sorted(self._daily_breakers)
             if unresolved_daily:
                 raise ValueError(f"存在未解决的跨日断路器: {unresolved_daily}。请先重置相关 breaker 再恢复。")
 
@@ -180,14 +188,14 @@ class RiskLevelManager:
         PKG08 (BDS-P0-009): 不会清除 Drawdown breaker（跨日持久）。
         """
         self._intraday_breakers.clear()
-        # 如果当前状态仅由日内 breaker 触发，考虑降级
-        if self.current_level >= RiskLevel.NO_NEW_RISK and not self._daily_breakers:
-            # 仅日内触发 → 可重置到 NORMAL
-            self._state = RiskLevel.NORMAL
 
-    def reset_daily_breaker(self, breaker_name: str) -> None:
-        """手动重置跨日断路器。"""
-        self._daily_breakers.pop(breaker_name, None)
+    def reset_daily_breaker(self, breaker_name: str, recovery_evidence: str) -> None:
+        """用显式签名恢复证据手动重置跨日断路器。"""
+        if not recovery_evidence.strip():
+            raise ValueError("重置跨日断路器必须提供签名证据")
+        if breaker_name not in self._daily_breakers:
+            raise ValueError(f"跨日断路器不存在: {breaker_name}")
+        self._daily_breakers.pop(breaker_name)
 
     @classmethod
     def from_corrupted_state(cls, recovery_data: dict | None) -> RiskLevelManager:
@@ -195,24 +203,71 @@ class RiskLevelManager:
 
         PKG08 (BDS-P0-010): 损坏/缺失的风险状态绝不 fallback NORMAL。
         """
-        manager = cls()
-        if recovery_data is None:
-            manager._state = RiskLevel.LOCKED
-            manager._state_history.append(
-                RiskLevelState(
-                    level=RiskLevel.LOCKED,
-                    reason="CORRUPTED_STATE_FALLBACK_LOCKED",
-                    breaker_scope=BreakerScope.SESSION,
-                )
+
+        def lock(reason: str) -> RiskLevelManager:
+            manager = cls()
+            manager._generation = 1
+            state = RiskLevelState(
+                level=RiskLevel.LOCKED,
+                reason=f"CORRUPTED_STATE:{reason}",
+                generation=manager._generation,
+                breaker_scope=BreakerScope.SESSION,
             )
+            manager._state = state.level
+            manager._state_history.append(state)
             return manager
 
-        try:
-            level_str = recovery_data.get("level", "LOCKED")
-            manager._state = RiskLevel.from_string(level_str)
-        except Exception:
-            manager._state = RiskLevel.LOCKED
+        if not isinstance(recovery_data, dict):
+            return lock("MISSING_OR_INVALID_PAYLOAD")
 
+        try:
+            level_raw = recovery_data["level"]
+            reason = recovery_data["reason"]
+            timestamp = float(recovery_data["timestamp"])
+            generation_raw = recovery_data["generation"]
+            scope_raw = recovery_data["breaker_scope"]
+            evidence_hash = recovery_data["evidence_hash"]
+            state_hash = recovery_data["state_hash"]
+            if not isinstance(level_raw, str) or level_raw.upper() not in RiskLevel.__members__:
+                raise ValueError("unknown level")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError("empty reason")
+            if not isfinite(timestamp) or timestamp <= 0 or timestamp > time.time() + 300:
+                raise ValueError("invalid timestamp")
+            if not isinstance(generation_raw, int) or isinstance(generation_raw, bool) or generation_raw <= 0:
+                raise ValueError("invalid generation")
+            if not isinstance(scope_raw, str) or scope_raw.upper() not in BreakerScope.__members__:
+                raise ValueError("unknown breaker scope")
+            if (
+                not isinstance(evidence_hash, str)
+                or len(evidence_hash) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in evidence_hash)
+            ):
+                raise ValueError("invalid evidence hash")
+            if not isinstance(state_hash, str):
+                raise ValueError("invalid state hash")
+
+            state = RiskLevelState(
+                level=RiskLevel[level_raw.upper()],
+                reason=reason,
+                timestamp=timestamp,
+                generation=generation_raw,
+                breaker_scope=BreakerScope[scope_raw.upper()],
+                evidence_hash=evidence_hash,
+            )
+            if state.compute_evidence_hash() != state_hash:
+                raise ValueError("state hash mismatch")
+        except (KeyError, TypeError, ValueError):
+            return lock("INCOMPLETE_OR_TAMPERED_PAYLOAD")
+
+        manager = cls()
+        manager._state = state.level
+        manager._state_history.append(state)
+        manager._generation = state.generation
+        if state.breaker_scope is BreakerScope.INTRADAY:
+            manager._intraday_breakers[state.reason] = state.timestamp
+        elif state.breaker_scope in {BreakerScope.DAILY, BreakerScope.PERMANENT}:
+            manager._daily_breakers[state.reason] = (state.breaker_scope, state.timestamp)
         return manager
 
     def get_history(self) -> list[RiskLevelState]:

@@ -81,7 +81,16 @@ class TestRiskApproval:
         with pytest.raises(RuntimeError, match="RISK_NOT_APPROVED"):
             signer.issue_for_approved_risk(aid, risk_approved=False)
 
-        signature = signer.issue_for_approved_risk(aid, risk_approved=True, nonce="nonce-approved-boundary")
+        signature = signer.issue_for_approved_risk(
+            aid,
+            risk_approved=True,
+            proposal_hash="proposal",
+            intent_hash="intent",
+            account_snapshot_hash="account",
+            risk_snapshot_hash="risk",
+            policy_version="policy-1",
+            nonce="nonce-approved-boundary",
+        )
         assert signature
 
     def test_verify_denied_without_signature(self):

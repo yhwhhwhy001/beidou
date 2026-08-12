@@ -100,12 +100,14 @@ class TestRiskLevelMonotonic:
         # 由于跨日 breaker 还在，等级应保持（从 LOCKED 降级需要显式恢复）
         # reset_intraday 在无 daily breaker 时才会降级
 
-    def test_intraday_only_resets_to_normal(self) -> None:
-        """仅日内 breaker 触发时，重置后回到 NORMAL。"""
+    def test_intraday_reset_requires_explicit_recovery_to_normal(self) -> None:
+        """日内 breaker 清除后仍需显式恢复证据，不能直接降级。"""
         mgr = RiskLevelManager()
         mgr.escalate(RiskLevel.NO_NEW_RISK, "Intraday volatility", breaker_scope=BreakerScope.INTRADAY)
 
         mgr.reset_intraday()
+        assert mgr.current_level == RiskLevel.NO_NEW_RISK
+        mgr.recover(RiskLevel.NORMAL, "signed-recovery-evidence")
         assert mgr.current_level == RiskLevel.NORMAL
 
 

@@ -244,10 +244,10 @@ def test_position_projection_replay_reverse_and_reconcile() -> None:
     assert position.is_reduce_only_safe(1.0) is True
     assert position.is_reduce_only_safe(1.01) is False
     assert projection.fill_count == 4
-    assert projection.reconcile_against({"BTCUSDT:BINANCE": 1.0}) == (True, [])
-    ok, diffs = projection.reconcile_against({"BTCUSDT:BINANCE": 2.0})
+    assert projection.reconcile_against({"BTCUSDT:BINANCE": -1.0}) == (True, [])
+    ok, diffs = projection.reconcile_against({"BTCUSDT:BINANCE": -2.0})
     assert ok is False
-    assert diffs and "system=1.0" in diffs[0]
+    assert diffs and "system=-1.0" in diffs[0]
 
 
 def test_liquidation_calculator_handles_long_short_invalid_and_critical() -> None:

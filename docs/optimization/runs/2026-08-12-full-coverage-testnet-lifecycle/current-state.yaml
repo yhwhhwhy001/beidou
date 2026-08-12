@@ -11,10 +11,10 @@ authority:
   git_commit_or_push: true
 status: IN_PROGRESS
 coverage:
-  covered: 24033
-  statements: 31293
-  missing: 7260
-  percent: 76.79992330553159
+  covered: 24669
+  statements: 31742
+  missing: 7073
+  percent: 77.71722008695104
   target: 100
 exchange:
   host: demo-fapi.binance.com

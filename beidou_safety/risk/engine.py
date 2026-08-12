@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from inspect import isawaitable
+from math import isfinite
+from types import MappingProxyType
 from typing import Any
 
 from beidou_shared.types import (
@@ -65,6 +69,30 @@ class RiskSnapshot:
     自动计算快照哈希用于审计和比较。
     """
 
+    total_exposure: float
+    margin_used: float
+    margin_total: float
+    position_count: int
+    pending_orders: int
+    leverage: float
+    concentration_pct: float
+    tail_var_95: float | None
+    account_id: str
+    positions: Mapping[str, Any]
+    orders: Mapping[str, Any]
+    dq_tier: str
+    exchange_health: str
+    reconciliation_status: str
+    portfolio_hash: str
+    policy_version: str
+    source_timestamp: str
+    observed_at: str
+    received_at: str
+    timestamp: str
+    correlation_id: str
+    _hash: str
+    _sealed: bool
+
     def __init__(
         self,
         total_exposure: float,
@@ -85,30 +113,100 @@ class RiskSnapshot:
         policy_version: str = "",
         timestamp: str = "",
         correlation_id: str = "",
-    ):
-        from types import MappingProxyType
+        source_timestamp: str = "",
+        observed_at: str = "",
+        received_at: str = "",
+    ) -> None:
+        if timestamp and source_timestamp and timestamp != source_timestamp:
+            raise ValueError("Conflicting source timestamps")
+        source_timestamp = source_timestamp or timestamp
+        numeric_values = {
+            "total_exposure": total_exposure,
+            "margin_used": margin_used,
+            "margin_total": margin_total,
+            "leverage": leverage,
+            "concentration_pct": concentration_pct,
+        }
+        normalized_numeric: dict[str, float] = {}
+        for name, value in numeric_values.items():
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be a finite number")
+            try:
+                normalized = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be a finite number") from exc
+            if not isfinite(normalized) or normalized < 0 or (name == "leverage" and normalized <= 0):
+                raise ValueError(f"{name} contains invalid economic data")
+            normalized_numeric[name] = normalized
+        if not isinstance(position_count, int) or isinstance(position_count, bool) or position_count < 0:
+            raise ValueError("position_count must be a non-negative integer")
+        if not isinstance(pending_orders, int) or isinstance(pending_orders, bool) or pending_orders < 0:
+            raise ValueError("pending_orders must be a non-negative integer")
+        if tail_var_95 is not None:
+            if isinstance(tail_var_95, bool):
+                raise ValueError("tail_var_95 must be finite and non-negative")
+            try:
+                normalized_tail_var = float(tail_var_95)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("tail_var_95 must be finite and non-negative") from exc
+            if not isfinite(normalized_tail_var) or normalized_tail_var < 0:
+                raise ValueError("tail_var_95 must be finite and non-negative")
+        else:
+            normalized_tail_var = None
+        if positions is not None and not isinstance(positions, dict):
+            raise ValueError("positions must be a dictionary")
+        if orders is not None and not isinstance(orders, dict):
+            raise ValueError("orders must be a dictionary")
 
-        self.total_exposure = total_exposure
-        self.margin_used = margin_used
-        self.margin_total = margin_total
-        self.position_count = position_count
-        self.pending_orders = pending_orders
-        self.leverage = leverage
-        self.concentration_pct = concentration_pct
-        self.tail_var_95 = tail_var_95
-        self.account_id = account_id
-        self.positions = MappingProxyType(positions or {})  # PKG: 不可变
-        self.orders = MappingProxyType(orders or {})  # PKG: 不可变
-        self.dq_tier = dq_tier
-        self.exchange_health = exchange_health
-        self.reconciliation_status = reconciliation_status
-        self.portfolio_hash = portfolio_hash
-        self.policy_version = policy_version
-        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
-        self.correlation_id = correlation_id
+        object.__setattr__(self, "total_exposure", normalized_numeric["total_exposure"])
+        object.__setattr__(self, "margin_used", normalized_numeric["margin_used"])
+        object.__setattr__(self, "margin_total", normalized_numeric["margin_total"])
+        object.__setattr__(self, "position_count", position_count)
+        object.__setattr__(self, "pending_orders", pending_orders)
+        object.__setattr__(self, "leverage", normalized_numeric["leverage"])
+        object.__setattr__(self, "concentration_pct", normalized_numeric["concentration_pct"])
+        object.__setattr__(self, "tail_var_95", normalized_tail_var)
+        object.__setattr__(self, "account_id", str(account_id))
+        object.__setattr__(self, "positions", self._deep_freeze(positions or {}))
+        object.__setattr__(self, "orders", self._deep_freeze(orders or {}))
+        object.__setattr__(self, "dq_tier", str(dq_tier).upper())
+        object.__setattr__(self, "exchange_health", str(exchange_health).upper())
+        object.__setattr__(self, "reconciliation_status", str(reconciliation_status).upper())
+        object.__setattr__(self, "portfolio_hash", str(portfolio_hash))
+        object.__setattr__(self, "policy_version", str(policy_version))
+        object.__setattr__(self, "source_timestamp", str(source_timestamp))
+        object.__setattr__(self, "observed_at", str(observed_at))
+        object.__setattr__(self, "received_at", str(received_at))
+        object.__setattr__(self, "timestamp", str(source_timestamp))
+        object.__setattr__(self, "correlation_id", str(correlation_id))
         # PKG (BDS-P1-014): 预计算完整性哈希
-        self._hash = self._compute_hash()
-        self._created_at = time.time()  # PKG: freshness gate
+        object.__setattr__(self, "_hash", self._compute_hash())
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"RiskSnapshot is immutable: {name}")
+
+    @classmethod
+    def _deep_freeze(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return MappingProxyType({key: cls._deep_freeze(item) for key, item in value.items()})
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._deep_freeze(item) for item in value)
+        if isinstance(value, (set, frozenset)):
+            return frozenset(cls._deep_freeze(item) for item in value)
+        return value
+
+    @classmethod
+    def _canonicalize(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._canonicalize(item) for key, item in sorted(value.items(), key=lambda row: str(row[0]))
+            }
+        if isinstance(value, tuple):
+            return [cls._canonicalize(item) for item in value]
+        if isinstance(value, frozenset):
+            return sorted((cls._canonicalize(item) for item in value), key=repr)
+        return value
 
     def _compute_hash(self) -> str:
         import hashlib
@@ -122,11 +220,18 @@ class RiskSnapshot:
             "pending_orders": self.pending_orders,
             "leverage": self.leverage,
             "concentration_pct": self.concentration_pct,
+            "tail_var_95": self.tail_var_95,
+            "account_id": self.account_id,
+            "positions": self._canonicalize(self.positions),
+            "orders": self._canonicalize(self.orders),
             "dq_tier": self.dq_tier,
             "exchange_health": self.exchange_health,
             "reconciliation_status": self.reconciliation_status,
             "portfolio_hash": self.portfolio_hash,
             "policy_version": self.policy_version,
+            "source_timestamp": self.source_timestamp,
+            "observed_at": self.observed_at,
+            "received_at": self.received_at,
             "correlation_id": self.correlation_id,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -138,21 +243,46 @@ class RiskSnapshot:
     @property
     def age_seconds(self) -> float:
         """PKG: 快照年龄（秒）— freshness gate。"""
-        return time.time() - self._created_at
+        received = self._parse_time(self.received_at)
+        if received is None:
+            return float("inf")
+        return (datetime.now(timezone.utc) - received).total_seconds()
 
     def is_fresh(self, max_age_seconds: float = 60.0) -> bool:
         """PKG (BDS-P1-014): freshness gate — 超过 max_age 的快照不可用。"""
-        return self.age_seconds <= max_age_seconds
+        if not isfinite(max_age_seconds) or max_age_seconds <= 0:
+            return False
+        age = self.age_seconds
+        return isfinite(age) and 0 <= age <= max_age_seconds
+
+    @staticmethod
+    def _parse_time(value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
 
     def is_complete(self) -> bool:
-        return all(
-            [
-                self.account_id,
-                self.dq_tier != "UNKNOWN",
-                self.exchange_health != "UNKNOWN",
-                self.reconciliation_status != "UNKNOWN",
-                self.policy_version,
-            ]
+        source = self._parse_time(self.source_timestamp)
+        observed = self._parse_time(self.observed_at)
+        received = self._parse_time(self.received_at)
+        return bool(
+            self.account_id
+            and self.portfolio_hash
+            and self.policy_version
+            and self.correlation_id
+            and self.dq_tier in {"OK", "PASS", "CONDITIONAL", "BLOCK"}
+            and self.exchange_health in {"HEALTHY", "DEGRADED", "UNSAFE"}
+            and self.reconciliation_status in {"MATCHED", "MISMATCHED", "INCOMPLETE", "ERROR"}
+            and source is not None
+            and observed is not None
+            and received is not None
+            and source <= observed <= received
         )
 
     def is_safe_for_risk_increase(self) -> bool:
@@ -160,11 +290,11 @@ class RiskSnapshot:
             return False
         if not self.is_fresh():
             return False  # PKG: stale snapshot blocks risk increase
-        if self.dq_tier in ("BLOCK", "UNKNOWN"):
-            return False
-        if self.exchange_health in ("UNKNOWN", "UNSAFE"):
-            return False
-        return self.reconciliation_status == "MATCHED"
+        return (
+            self.dq_tier in {"OK", "PASS"}
+            and self.exchange_health == "HEALTHY"
+            and self.reconciliation_status == "MATCHED"
+        )
 
 
 class PreRiskCheckerImpl:
@@ -180,28 +310,40 @@ class PreRiskCheckerImpl:
     async def check(self, context: _PreRiskContext) -> list[_RiskCheckResult]:
         results: list[_RiskCheckResult] = []
         cid = context.correlation_id or CorrelationId("unknown")
-        if context.leverage and context.leverage > self.max_leverage:
+        try:
+            leverage = float(context.leverage) if context.leverage is not None else float("nan")
+            quantity = float(context.order_quantity.amount)
+            price = float(context.order_price.amount) if context.order_price is not None else float("nan")
+        except (AttributeError, TypeError, ValueError):
+            leverage = quantity = price = float("nan")
+        if not all(isfinite(value) and value > 0 for value in (leverage, quantity, price)):
+            return [
+                _RiskCheckResult(
+                    RiskRuleLevel.R0,
+                    RiskDecision.REJECTED,
+                    "Order economics are missing, non-finite, or non-positive",
+                    cid,
+                )
+            ]
+        if leverage > self.max_leverage:
             results.append(
                 _RiskCheckResult(
                     RiskRuleLevel.R4,
                     RiskDecision.REJECTED,
-                    f"Leverage {context.leverage} exceeds max {self.max_leverage}",
+                    f"Leverage {leverage} exceeds max {self.max_leverage}",
                     cid,
                 )
             )
-        if context.current_margin and context.current_position:
-            notional = float(context.order_quantity.amount) * (
-                float(context.order_price.amount) if context.order_price else 0
-            )
-            if notional > self.max_position_notional:
-                results.append(
-                    _RiskCheckResult(
-                        RiskRuleLevel.R2,
-                        RiskDecision.REJECTED,
-                        f"Position notional {notional} exceeds max {self.max_position_notional}",
-                        cid,
-                    )
+        notional = quantity * price
+        if notional > self.max_position_notional:
+            results.append(
+                _RiskCheckResult(
+                    RiskRuleLevel.R2,
+                    RiskDecision.REJECTED,
+                    f"Position notional {notional} exceeds max {self.max_position_notional}",
+                    cid,
                 )
+            )
         if not results:
             results.append(_RiskCheckResult(RiskRuleLevel.R0, RiskDecision.APPROVED, "Pre-Risk invariants passed", cid))
         return results
@@ -214,12 +356,14 @@ class RiskEngineImpl:
         self._rules: dict[RiskRuleLevel, list] = {}
 
     def add_rule(self, level: RiskRuleLevel, check_fn: Any) -> None:
+        if not callable(check_fn):
+            raise TypeError("Risk rule must be callable")
         if level not in self._rules:
             self._rules[level] = []
         self._rules[level].append(check_fn)
 
     async def evaluate(self, pre_risk_passed: bool, results: list[_RiskCheckResult]) -> RiskDecision:
-        if not pre_risk_passed:
+        if not pre_risk_passed or not results:
             return RiskDecision.REJECTED
         for r in results:
             if r.decision == RiskDecision.REJECTED:
@@ -229,16 +373,62 @@ class RiskEngineImpl:
     async def full_evaluate(self, snapshot: RiskSnapshot, rules_config: dict) -> list[_RiskCheckResult]:
         results: list[_RiskCheckResult] = []
         cid = CorrelationId("risk-eval")
-        if snapshot.leverage > rules_config.get("max_leverage", 3.0):
+        if not snapshot.is_safe_for_risk_increase():
+            return [
+                _RiskCheckResult(
+                    RiskRuleLevel.R0,
+                    RiskDecision.REJECTED,
+                    "Risk snapshot is incomplete, stale, unhealthy, or unreconciled",
+                    cid,
+                )
+            ]
+        try:
+            max_leverage = float(rules_config["max_leverage"])
+            max_concentration_pct = float(rules_config["max_concentration_pct"])
+        except (KeyError, TypeError, ValueError):
+            return [
+                _RiskCheckResult(
+                    RiskRuleLevel.R0,
+                    RiskDecision.REJECTED,
+                    "Risk policy limits are missing or invalid",
+                    cid,
+                )
+            ]
+        if not all(isfinite(value) and value > 0 for value in (max_leverage, max_concentration_pct)):
+            return [
+                _RiskCheckResult(
+                    RiskRuleLevel.R0,
+                    RiskDecision.REJECTED,
+                    "Risk policy limits are missing or invalid",
+                    cid,
+                )
+            ]
+        if snapshot.leverage > max_leverage:
             results.append(
                 _RiskCheckResult(RiskRuleLevel.R4, RiskDecision.REJECTED, f"Leverage {snapshot.leverage}", cid)
             )
-        if snapshot.concentration_pct > rules_config.get("max_concentration_pct", 50.0):
+        if snapshot.concentration_pct > max_concentration_pct:
             results.append(
                 _RiskCheckResult(
                     RiskRuleLevel.R5, RiskDecision.REJECTED, f"Concentration {snapshot.concentration_pct}%", cid
                 )
             )
+        for level, callbacks in sorted(self._rules.items(), key=lambda item: item[0].value):
+            for callback in callbacks:
+                try:
+                    result = callback(snapshot, rules_config)
+                    if isawaitable(result):
+                        result = await result
+                    if not isinstance(result, _RiskCheckResult) or result.rule_level is not level:
+                        raise TypeError("Risk rule returned invalid evidence")
+                except Exception as exc:
+                    result = _RiskCheckResult(
+                        level,
+                        RiskDecision.REJECTED,
+                        f"Risk rule unavailable: {type(exc).__name__}",
+                        cid,
+                    )
+                results.append(result)
         if not results:
             results.append(_RiskCheckResult(RiskRuleLevel.R0, RiskDecision.APPROVED, "All risk checks passed", cid))
         return results
@@ -320,8 +510,14 @@ class RiskApprovalSignerImpl:
         """
         if not self._signing_available:
             raise RuntimeError("SIGNING_UNAVAILABLE: no signing key configured — risk increase denied")
+        if not str(approval_id).strip():
+            raise ValueError("Approval identity is required")
+        if not nonce.strip():
+            raise ValueError("Approval nonce is required")
         if expires_at is None:
             expires_at = time.time() + DEFAULT_APPROVAL_TTL_SECONDS
+        if not isfinite(expires_at) or expires_at <= time.time():
+            raise ValueError("Approval expiry must be finite and in the future")
         payload = self._payload(
             approval_id,
             proposal_hash,
@@ -357,6 +553,16 @@ class RiskApprovalSignerImpl:
 
         if not risk_approved:
             raise RuntimeError("RISK_NOT_APPROVED: approval signature not issued")
+        binding = (
+            proposal_hash,
+            intent_hash,
+            account_snapshot_hash,
+            risk_snapshot_hash,
+            policy_version,
+            nonce,
+        )
+        if any(not value.strip() for value in binding):
+            raise ValueError("Complete approval binding is required")
         return self.sign(
             approval_id,
             proposal_hash=proposal_hash,
@@ -400,14 +606,14 @@ class RiskApprovalSignerImpl:
         if stored_expiry is None:
             return False  # 未知签名 — 未由本签名器签发
         if expires_at is not None:
-            if expires_at < time.time():
+            if not isfinite(expires_at) or expires_at <= time.time() or expires_at != stored_expiry:
                 return False  # 过期拒绝 (BD-T01)
             effective_expiry = expires_at
         else:
-            if stored_expiry < time.time():
+            if stored_expiry <= time.time():
                 return False  # 过期拒绝 (BD-T01)
             effective_expiry = stored_expiry
-        if nonce and nonce in self._nonces:
+        if not nonce or nonce in self._nonces:
             return False  # 重放攻击拒绝
         payload = self._payload(
             approval_id,
@@ -421,9 +627,10 @@ class RiskApprovalSignerImpl:
         )
         expected = self._compute_signature(payload)
         ok = self._hmac.compare_digest(signature, expected)
-        if ok and nonce and consume_nonce:
+        if ok and consume_nonce:
+            if not self._persist_nonce(nonce):
+                return False
             self._nonces.add(nonce)
-            self._persist_nonce(nonce)  # P1-015: 持久化
         return ok
 
     @property
@@ -438,11 +645,13 @@ class RiskApprovalSignerImpl:
         """
         return False
 
-    def revoke(self, signature: str) -> None:
+    def revoke(self, signature: str) -> bool:
         """BD-T01: 吊销指定签名 — 将其加入撤销集，后续 verify() 将拒绝。"""
+        if not signature:
+            return False
         self._revoked_sigs.add(signature)
         self._signed_expiry.pop(signature, None)
-        self._persist_revocation(signature)  # P1-015: 持久化
+        return self._persist_revocation(signature)
 
     def restore_signature(self, signature: str, expires_at: float) -> bool:
         """Restore non-secret signature metadata for an unresolved intent.
@@ -453,7 +662,13 @@ class RiskApprovalSignerImpl:
         index required by the fail-closed verifier.
         """
 
-        if not self._signing_available or not signature or expires_at <= time.time():
+        if (
+            not self._signing_available
+            or not signature
+            or signature in self._revoked_sigs
+            or not isfinite(expires_at)
+            or expires_at <= time.time()
+        ):
             return False
         self._signed_expiry[signature] = float(expires_at)
         return True
@@ -462,58 +677,84 @@ class RiskApprovalSignerImpl:
     # P1-015: Durable nonce/revocation persistence
     # ------------------------------------------------------------------
 
-    def _persist_nonce(self, nonce: str) -> None:
+    def _persist_nonce(self, nonce: str) -> bool:
         """P1-015: 持久化已消费 nonce 到 JSONL。"""
         try:
             import json
             import os
 
-            os.makedirs(os.path.dirname(self._nonce_log_path), exist_ok=True)
+            directory = os.path.dirname(self._nonce_log_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
             event = {"action": "consume_nonce", "nonce": nonce, "timestamp": time.time()}
-            with open(self._nonce_log_path, "a") as f:
+            with open(self._nonce_log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            return True
         except OSError:
-            pass
+            return False
 
-    def _persist_revocation(self, signature: str) -> None:
+    def _persist_revocation(self, signature: str) -> bool:
         """P1-015: 持久化撤销到 JSONL。"""
         try:
             import json
             import os
 
-            os.makedirs(os.path.dirname(self._revocation_log_path), exist_ok=True)
+            directory = os.path.dirname(self._revocation_log_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
             event = {"action": "revoke", "signature": signature, "timestamp": time.time()}
-            with open(self._revocation_log_path, "a") as f:
+            with open(self._revocation_log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            return True
         except OSError:
-            pass
+            return False
 
     def _restore_from_log(self) -> int:
         """P1-015: 从 JSONL 恢复 nonce/revocation 状态。"""
         restored = 0
-        for path, handler in [
-            (self._nonce_log_path, lambda e: self._nonces.add(e.get("nonce", ""))),
-            (self._revocation_log_path, lambda e: self._revoked_sigs.add(e.get("signature", ""))),
+        for path, expected_action, identity_field, target in [
+            (self._nonce_log_path, "consume_nonce", "nonce", self._nonces),
+            (self._revocation_log_path, "revoke", "signature", self._revoked_sigs),
         ]:
             try:
                 import json
                 import os
 
                 if os.path.exists(path):
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if not line:
                                 continue
                             try:
                                 event = json.loads(line)
-                                handler(event)  # type: ignore[no-untyped-call]
+                                identity = event.get(identity_field) if isinstance(event, dict) else None
+                                if (
+                                    event.get("action") != expected_action
+                                    or not isinstance(identity, str)
+                                    or not identity
+                                ):
+                                    continue
+                                target.add(identity)
                                 restored += 1
-                            except (json.JSONDecodeError, KeyError):
+                            except (json.JSONDecodeError, AttributeError, KeyError):
                                 pass
             except OSError:
                 pass
         return restored
+
+
+class ApprovalLifecycleState(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    CONSUMED = "CONSUMED"
+    EXPIRED = "EXPIRED"
+    REVOKED = "REVOKED"
+    REJECTED = "REJECTED"
 
 
 class RiskApprovalStateMachine:
@@ -530,7 +771,9 @@ class RiskApprovalStateMachine:
     """
 
     def __init__(self, default_ttl_seconds: float = 300.0) -> None:
-        self._approvals: dict[RiskApprovalId, RiskDecision] = {}
+        if not isfinite(default_ttl_seconds) or default_ttl_seconds <= 0:
+            raise ValueError("Default approval TTL must be finite and positive")
+        self._approvals: dict[RiskApprovalId, ApprovalLifecycleState] = {}
         self._timestamps: dict[RiskApprovalId, float] = {}
         self._ttls: dict[RiskApprovalId, float] = {}
         self._nonces: dict[RiskApprovalId, str] = {}
@@ -548,14 +791,33 @@ class RiskApprovalStateMachine:
         policy_version: str = "",
     ) -> RiskDecision:
         """批准审批 — 签名验证通过后调用。绑定 nonce/TTL/快照/策略版本。"""
+        if not str(aid).strip():
+            raise ValueError("Approval identity is required")
+        effective_ttl = ttl if ttl is not None else self._default_ttl
+        if not isfinite(effective_ttl) or effective_ttl <= 0:
+            raise ValueError("Approval TTL must be finite and positive")
         current = self._approvals.get(aid)
-        if current == RiskDecision.REJECTED:
+        if current in {
+            ApprovalLifecycleState.CONSUMED,
+            ApprovalLifecycleState.EXPIRED,
+            ApprovalLifecycleState.REVOKED,
+            ApprovalLifecycleState.REJECTED,
+        }:
             return RiskDecision.REJECTED  # 已拒绝不可逆转
-        if current == RiskDecision.APPROVED:
+        if current is ApprovalLifecycleState.APPROVED:
+            existing_context = (
+                self._nonces.get(aid, ""),
+                self._ttls.get(aid),
+                self._risk_snapshots.get(aid, ""),
+                self._policy_versions.get(aid, ""),
+            )
+            requested_context = (nonce, effective_ttl, risk_snapshot_hash, policy_version)
+            if existing_context != requested_context:
+                raise ValueError("Approval identity has conflicting bound context")
             return RiskDecision.APPROVED  # 幂等：已批准
-        self._approvals[aid] = RiskDecision.APPROVED
+        self._approvals[aid] = ApprovalLifecycleState.APPROVED
         self._timestamps[aid] = time.time()
-        self._ttls[aid] = ttl if ttl is not None else self._default_ttl
+        self._ttls[aid] = effective_ttl
         if nonce:
             self._nonces[aid] = nonce
         if risk_snapshot_hash:
@@ -566,9 +828,9 @@ class RiskApprovalStateMachine:
 
     def reject(self, aid: RiskApprovalId) -> RiskDecision:
         """拒绝审批 — 已 APPROVED 的状态不可被覆盖为 REJECTED。"""
-        if self._approvals.get(aid) == RiskDecision.APPROVED:
+        if self._approvals.get(aid) is ApprovalLifecycleState.APPROVED:
             return RiskDecision.APPROVED
-        self._approvals[aid] = RiskDecision.REJECTED
+        self._approvals[aid] = ApprovalLifecycleState.REJECTED
         return RiskDecision.REJECTED
 
     def consume(self, aid: RiskApprovalId) -> RiskDecision:
@@ -576,43 +838,60 @@ class RiskApprovalStateMachine:
 
         消费后的批准不可再次使用。用于订单提交场景。
         """
-        if self._approvals.get(aid) != RiskDecision.APPROVED:
-            return self._approvals.get(aid, RiskDecision.PENDING)
+        if self._approvals.get(aid) is not ApprovalLifecycleState.APPROVED:
+            return self.get(aid)
         if self._is_expired(aid):
-            self._approvals[aid] = RiskDecision.PENDING  # 过期视为无效
+            self._approvals[aid] = ApprovalLifecycleState.EXPIRED
             return RiskDecision.PENDING
-        self._approvals[aid] = RiskDecision.APPROVED  # Keep as approved for tracking
+        self._approvals[aid] = ApprovalLifecycleState.CONSUMED
         self._consumed.add(aid)
         return RiskDecision.APPROVED
 
     def revoke(self, aid: RiskApprovalId) -> RiskDecision:
         """显式撤销审批 — APPROVED → REVOKED。"""
-        if self._approvals.get(aid) == RiskDecision.APPROVED:
-            self._approvals[aid] = RiskDecision.APPROVED  # Keep for audit
+        if self._approvals.get(aid) is ApprovalLifecycleState.APPROVED:
+            self._approvals[aid] = ApprovalLifecycleState.REVOKED
             return RiskDecision.APPROVED  # was approved before revocation
-        return self._approvals.get(aid, RiskDecision.PENDING)
+        return self.get(aid)
 
     def expire(self, aid: RiskApprovalId) -> None:
         """标记过期 — 审批 TTL 超时后自动调用。"""
-        if self._approvals.get(aid) == RiskDecision.APPROVED:
-            self._approvals[aid] = RiskDecision.PENDING
+        if self._approvals.get(aid) is ApprovalLifecycleState.APPROVED:
+            self._approvals[aid] = ApprovalLifecycleState.EXPIRED
 
     def _is_expired(self, aid: RiskApprovalId) -> bool:
         """检查审批是否已过期。"""
-        if aid not in self._timestamps or aid not in self._ttls:
+        if self._approvals.get(aid) is ApprovalLifecycleState.EXPIRED:
+            return True
+        if self._approvals.get(aid) is not ApprovalLifecycleState.APPROVED:
             return False
         elapsed = time.time() - self._timestamps[aid]
         return elapsed > self._ttls[aid]
 
     def is_consumed(self, aid: RiskApprovalId) -> bool:
         """检查审批是否已被消费。"""
-        return aid in self._consumed
+        return self._approvals.get(aid) is ApprovalLifecycleState.CONSUMED
 
-    def is_valid_for_use(self, aid: RiskApprovalId) -> bool:
+    def is_valid_for_use(
+        self,
+        aid: RiskApprovalId,
+        *,
+        nonce: str | None = None,
+        risk_snapshot_hash: str | None = None,
+        policy_version: str | None = None,
+    ) -> bool:
         """审批是否有效可用 — APPROVED 且未过期、未被消费。"""
-        if self._approvals.get(aid) != RiskDecision.APPROVED:
+        if self._approvals.get(aid) is not ApprovalLifecycleState.APPROVED:
             return False
         if self._is_expired(aid):
+            self._approvals[aid] = ApprovalLifecycleState.EXPIRED
+            return False
+        expected_context = (
+            (nonce, self._nonces.get(aid, "")),
+            (risk_snapshot_hash, self._risk_snapshots.get(aid, "")),
+            (policy_version, self._policy_versions.get(aid, "")),
+        )
+        if any(expected is not None and expected != stored for expected, stored in expected_context):
             return False
         return aid not in self._consumed
 
@@ -632,10 +911,10 @@ class RiskApprovalStateMachine:
         任一条件不满足 → REJECTED。绑定完整审批上下文。
         """
         if not signature_valid:
-            self._approvals[aid] = RiskDecision.REJECTED
+            self._approvals[aid] = ApprovalLifecycleState.REJECTED
             return RiskDecision.REJECTED
         if not risk_check_passed:
-            self._approvals[aid] = RiskDecision.REJECTED
+            self._approvals[aid] = ApprovalLifecycleState.REJECTED
             return RiskDecision.REJECTED
         return self.approve(
             aid,
@@ -646,12 +925,19 @@ class RiskApprovalStateMachine:
         )
 
     def get(self, aid: RiskApprovalId) -> RiskDecision:
-        return self._approvals.get(aid, RiskDecision.PENDING)
+        state = self._approvals.get(aid, ApprovalLifecycleState.PENDING)
+        if state is ApprovalLifecycleState.APPROVED:
+            return RiskDecision.APPROVED
+        if state in {ApprovalLifecycleState.REJECTED, ApprovalLifecycleState.REVOKED}:
+            return RiskDecision.REJECTED
+        return RiskDecision.PENDING
 
     def get_metadata(self, aid: RiskApprovalId) -> dict:
         """获取审批元数据（审计用）。"""
+        if self._approvals.get(aid) is ApprovalLifecycleState.APPROVED and self._is_expired(aid):
+            self._approvals[aid] = ApprovalLifecycleState.EXPIRED
         return {
-            "status": self._approvals.get(aid, RiskDecision.PENDING).value,
+            "status": self._approvals.get(aid, ApprovalLifecycleState.PENDING).value,
             "is_expired": self._is_expired(aid),
             "is_consumed": aid in self._consumed,
             "nonce": self._nonces.get(aid, ""),
