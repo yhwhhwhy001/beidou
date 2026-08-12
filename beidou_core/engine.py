@@ -8494,6 +8494,8 @@ class AutonomousEngine:
                     self._symbol_precision[sym] = {
                         "quantity": max(0, -Decimal(quantity_step).as_tuple().exponent),
                         "price": max(0, -Decimal(price_tick).as_tuple().exponent),
+                        "step_size": quantity_step,
+                        "tick_size": price_tick,
                         "min_quantity": min_quantity,
                         "min_notional": min_notional_val,
                     }
