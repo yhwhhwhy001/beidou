@@ -64,3 +64,109 @@ class ReplayValidator:
 
     def all_checks_pass(self, result: ReplayResult) -> bool:
         return all(result.cheat_checks.values())
+
+"""历史 replay 模拟：为 PAPER_TRADING/CHALLENGER 级提供证据（仅 testnet 语义）。"""
+
+
+@dataclass
+class PaperReplayResult:
+    paper_sharpe: float = 0.0
+    paper_drawdown_pct: float = 0.0
+    signal_consistency: float = 0.0
+    challenger_icir: float = 0.0
+    window_bars: int = 0
+    n_trades: int = 0
+    evidence_source: str = "historical_replay"
+
+
+def simulate_paper_window(
+    factor_values: list[float],
+    closes: list[float],
+    cost_bps: float,
+    *,
+    min_window_bars: int = 500,
+) -> PaperReplayResult | None:
+    """历史窗口 paper 模拟。
+
+    无前视：bar i 收盘出信号，bar i+1 开盘执行。
+    换仓时扣 cost_bps/10000 名义成本。有效 bar 不足 min_window_bars 返回 None。
+    """
+    import math
+
+    n = min(len(factor_values), len(closes))
+    if n < min_window_bars + 1:
+        return None
+    equity = 1.0
+    returns: list[float] = []
+    positions: list[float] = [0.0] * n
+    for i in range(n):
+        value = factor_values[i]
+        positions[i] = 1.0 if value > 1e-9 else (-1.0 if value < -1e-9 else 0.0)
+    trades = 0
+    equity_curve: list[float] = [1.0]
+    peak = 1.0
+    max_dd = 0.0
+    prev_pos = 0.0  # 窗口起点持有现金：首次建仓同样按换仓扣费
+    for i in range(n - 1):
+        pos = positions[i]
+        if pos != prev_pos:
+            trades += 1
+            ret_cost = -cost_bps / 10000.0
+            returns.append(ret_cost)
+            equity *= 1.0 + ret_cost
+            equity_curve.append(equity)
+            peak = max(peak, equity)
+            dd = (equity - peak) / peak
+            max_dd = min(max_dd, dd)
+        prev_pos = pos
+        if closes[i] <= 0:
+            continue
+        ret = pos * (closes[i + 1] - closes[i]) / closes[i]
+        returns.append(ret)
+        equity *= 1.0 + ret
+        equity_curve.append(equity)
+        peak = max(peak, equity)
+        dd = (equity - peak) / peak
+        max_dd = min(max_dd, dd)
+
+    mean_ret = sum(returns) / len(returns) if returns else 0.0
+    var_ret = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1) if len(returns) > 1 else 0.0
+    std_ret = math.sqrt(max(var_ret, 0.0))
+    sharpe = (mean_ret / std_ret) * math.sqrt(24) if std_ret > 0 else 0.0
+
+    consistency = 0.0
+    forward_bars = 4
+    hits = 0
+    denom = 0
+    for i in range(n - forward_bars):
+        if abs(factor_values[i]) <= 1e-9:
+            continue
+        fwd = (closes[i + forward_bars] - closes[i]) / closes[i] if closes[i] > 0 else 0.0
+        denom += 1
+        if fwd * factor_values[i] > 0:
+            hits += 1
+    if denom:
+        consistency = hits / denom
+
+    # challenger ICIR：窗口内 factor 值 vs 1-bar forward return 的 IC 序列
+    ic_series: list[float] = []
+    for i in range(n - 1):
+        if closes[i] <= 0:
+            continue
+        ic_series.append(factor_values[i] * ((closes[i + 1] - closes[i]) / closes[i]))
+    mean_ic = sum(ic_series) / len(ic_series) if ic_series else 0.0
+    std_ic = (
+        math.sqrt(sum((v - mean_ic) ** 2 for v in ic_series) / (len(ic_series) - 1))
+        if len(ic_series) > 1
+        else 0.0
+    )
+    icir = mean_ic / std_ic if std_ic > 0 else 0.0
+
+    return PaperReplayResult(
+        paper_sharpe=round(sharpe, 6),
+        paper_drawdown_pct=round(max_dd * 100, 6),
+        signal_consistency=round(consistency, 6),
+        challenger_icir=round(icir, 6),
+        window_bars=n,
+        n_trades=trades,
+    )
