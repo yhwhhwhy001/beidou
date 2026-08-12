@@ -1082,8 +1082,7 @@ class BeidouSupervisor:
             self._install_resume_interlock()
             self._install_health_callbacks()
 
-            # DEV_BYPASS: 在构造后、接线检查前激活因子。
-            # testnet 模式需要因子可用才能通过 Alpha DAG 接线检查。
+            # DEV_BYPASS: 仅在本地研究/Paper 环境激活因子。
             if self.mode in ("paper", "research", "testnet"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
@@ -1117,14 +1116,15 @@ class BeidouSupervisor:
                     loop.add_signal_handler(sig, request_shutdown)
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
-            # 等待行情数据加载后运行首次宇宙评估
-            await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
-            try:
-                from beidou_bootstrap.dev import bootstrap_universe
+            # 本地研究/Paper 可使用开发宇宙评估；Testnet 必须走真实生命周期证据。
+            if self.mode in ("paper", "research", "testnet"):
+                await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
+                try:
+                    from beidou_bootstrap.dev import bootstrap_universe
 
-                await bootstrap_universe(self.engine)
-            except Exception as _uni_exc:
-                print(f"[supervisor] 首次宇宙评估失败（非致命）: {_uni_exc}")
+                    await bootstrap_universe(self.engine, self.mode)
+                except Exception as _uni_exc:
+                    print(f"[supervisor] 首次宇宙评估失败（非致命）: {_uni_exc}")
             ready = await self._wait_for_startup()
             if not ready:
                 if self._shutdown_requested:
