@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import numpy as np
+
 from beidou_shared.types import (
     FactorId,
     GateResult,
@@ -436,10 +438,18 @@ class MiningRunner:
             ) -> FoldResult:
                 fold_id = _fold_counter[0]
                 _fold_counter[0] += 1
-                train_preds = [_valid_vals[i] for i in train_indices if i < len(_valid_vals)]
-                train_rets = [_valid_returns[i] for i in train_indices if i < len(_valid_returns)]
-                test_preds = [_valid_vals[i] for i in test_indices if i < len(_valid_vals)]
-                test_rets = [_valid_returns[i] for i in test_indices if i < len(_valid_returns)]
+                train_preds = np.asarray(
+                    [_valid_vals[i] for i in train_indices if i < len(_valid_vals)], dtype=np.float64
+                )
+                train_rets = np.asarray(
+                    [_valid_returns[i] for i in train_indices if i < len(_valid_returns)], dtype=np.float64
+                )
+                test_preds = np.asarray(
+                    [_valid_vals[i] for i in test_indices if i < len(_valid_vals)], dtype=np.float64
+                )
+                test_rets = np.asarray(
+                    [_valid_returns[i] for i in test_indices if i < len(_valid_returns)], dtype=np.float64
+                )
                 if len(test_preds) < 3 or len(train_preds) < 3:
                     return FoldResult(
                         fold_id=fold_id,
@@ -447,8 +457,8 @@ class MiningRunner:
                         test_samples=len(test_preds),
                         failure_reason="insufficient_fold_samples",
                     )
-                test_ic = _compute_ic(test_preds, test_rets)
-                train_ic = _compute_ic(train_preds, train_rets)
+                test_ic = _compute_ic_np(test_preds, test_rets)
+                train_ic = _compute_ic_np(train_preds, train_rets)
                 return FoldResult(
                     fold_id=fold_id,
                     train_samples=len(train_preds),
@@ -456,12 +466,12 @@ class MiningRunner:
                     ic_mean=test_ic,
                     ic_std=abs(train_ic - test_ic),
                     icir=test_ic,
-                    sharpe=_compute_sharpe(test_rets),
-                    cost_adjusted_return=sum(test_rets) / len(test_rets),
+                    sharpe=_compute_sharpe_np(test_rets),
+                    cost_adjusted_return=float(test_rets.mean()),
                     metrics={
                         "train_ic": train_ic,
                         "test_ic": test_ic,
-                        "train_sharpe": _compute_sharpe(train_rets),
+                        "train_sharpe": _compute_sharpe_np(train_rets),
                     },
                 )
 
@@ -1167,6 +1177,35 @@ def _compute_sharpe(returns: list[float]) -> float:
     if std == 0:
         return 0.0
     return mean / std
+
+
+def _compute_ic_np(preds: np.ndarray, rets: np.ndarray) -> float:
+    """numpy 版 Pearson IC；与 _compute_ic 数值等价（对拍测试固化）。"""
+    n = min(len(preds), len(rets))
+    if n < 3:
+        return 0.0
+    p = preds[:n].astype(np.float64, copy=False)
+    r = rets[:n].astype(np.float64, copy=False)
+    mean_p = p.mean()
+    mean_r = r.mean()
+    cov = float(((p - mean_p) * (r - mean_r)).sum() / (n - 1))
+    std_p = float(np.sqrt(((p - mean_p) ** 2).sum() / (n - 1)))
+    std_r = float(np.sqrt(((r - mean_r) ** 2).sum() / (n - 1)))
+    if std_p == 0 or std_r == 0:
+        return 0.0
+    return cov / (std_p * std_r)
+
+
+def _compute_sharpe_np(rets: np.ndarray) -> float:
+    """numpy 版 Sharpe；与 _compute_sharpe 数值等价。"""
+    n = len(rets)
+    if n < 2:
+        return 0.0
+    r = rets[:n].astype(np.float64, copy=False)
+    std = float(np.std(r, ddof=1))
+    if std == 0:
+        return 0.0
+    return float(np.mean(r) / std)
 
 
 def _timeframe_to_hours(timeframe: str) -> float:
