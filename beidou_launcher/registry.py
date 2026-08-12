@@ -166,15 +166,19 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
         except Exception as exc:
             graph_error = f"{type(exc).__name__}: {exc}"
     topology_mismatch = set(topological_order) != component_ids or len(topological_order) != len(component_ids)
-    # DEGRADED 因子从图中移除是预期行为，不应阻断
+    # 未授权因子 (IDEA/CHALLENGER/DEGRADED) 从图中移除是预期行为，
+    # 不应阻断。Testnet 走真实证据门禁：因子在取得 EvidenceBundle 晋级
+    # ACTIVE 之前不进执行图，空 DAG 是合法的 HOLD 状态而非接线错误；
+    # 此前只豁免 DEGRADED，导致 testnet 启动被 "Alpha DAG 完整性" P0
+    # 阻断（因子恒 IDEA → DAG 恒空 → 无法启动 → 无法做 G5 认证）。
     factor_registry = getattr(engine, "_factor_registry", None)
     factor_map = getattr(factor_registry, "_factors", {}) if factor_registry is not None else {}
     lifecycle: dict[str, str] = {}
     for factor_id, record in factor_map.items():
         raw_state = getattr(record, "lifecycle", "UNKNOWN")
         lifecycle[factor_id] = str(getattr(raw_state, "value", raw_state))
-    degraded_factor_ids = {fid for fid, state in lifecycle.items() if state == "DEGRADED"}
-    unexpected_missing = sorted(set(missing_components) - degraded_factor_ids)
+    inactive_factor_ids = {fid for fid, state in lifecycle.items() if state != "ACTIVE"}
+    unexpected_missing = sorted(set(missing_components) - inactive_factor_ids)
     graph_failed = bool(
         unexpected_missing or extra_components or invalid_components or graph_error or topology_mismatch
     )
