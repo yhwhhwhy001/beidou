@@ -31,3 +31,8 @@
   Testnet restart and venue identity queries were not authorized and remain NOT_VERIFIABLE.
 
 The P1 code slice can be committed, but overall trading/release readiness remains HOLD.
+
+## Git evidence
+
+- P1 implementation commit: `630a9fc94155702eb11a1713f1dc6738ac5d9a4b`.
+- Direct push to `origin/main`: succeeded; final documentation commit records the completed run.

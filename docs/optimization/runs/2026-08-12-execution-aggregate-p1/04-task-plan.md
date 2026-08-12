@@ -6,4 +6,4 @@
 4. [COMPLETE] Add exact signed target-delta planning that accounts for current and in-flight exposure.
 5. [COMPLETE] Project user-stream order updates into the same aggregate contract and verify restart replay/idempotency.
 6. [COMPLETE] Run focused and full controlled verification; record remaining environment evidence as NOT_VERIFIABLE.
-7. [PENDING] Commit and push the verified P1 slice to `origin/main`, then verify the remote SHA.
+7. [COMPLETE] Commit and push the verified P1 slice to `origin/main`, then verify the remote SHA.

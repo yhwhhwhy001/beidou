@@ -8,7 +8,7 @@ authority:
   git_commit_or_push: true
   exchange_writes: false
   restart_or_deploy: false
-status: VALIDATED_PENDING_PUSH
+status: COMPLETE_LOCAL_P1
 gates:
   G0: {progress: COMPLETE, decision: READY}
   G1: {progress: COMPLETE, decision: APPROVED}
@@ -19,6 +19,7 @@ gates:
   G6: {progress: COMPLETE, decision: PASS_CONTROLLED}
   G7: {progress: COMPLETE, decision: HOLD_REPOSITORY_GATES}
   G8: {progress: COMPLETE, decision: NOT_AUTHORIZED}
-  G9: {progress: IN_PROGRESS, decision: PENDING_PUSH}
+  G9: {progress: COMPLETE, decision: PUSHED_MAIN}
   G10: {progress: COMPLETE, decision: NOT_AUTHORIZED}
 trading_readiness: HOLD_NOT_VERIFIABLE
+implementation_commit: 630a9fc94155702eb11a1713f1dc6738ac5d9a4b
