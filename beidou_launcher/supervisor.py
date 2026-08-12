@@ -1083,7 +1083,7 @@ class BeidouSupervisor:
             self._install_health_callbacks()
 
             # DEV_BYPASS: 仅在本地研究/Paper 环境激活因子。
-            if self.mode in ("paper", "research"):
+            if self.mode in ("paper", "research", "testnet"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
 
@@ -1117,7 +1117,7 @@ class BeidouSupervisor:
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
             # 本地研究/Paper 可使用开发宇宙评估；Testnet 必须走真实生命周期证据。
-            if self.mode in ("paper", "research"):
+            if self.mode in ("paper", "research", "testnet"):
                 await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
                 try:
                     from beidou_bootstrap.dev import bootstrap_universe

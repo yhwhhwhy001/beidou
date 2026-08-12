@@ -60,7 +60,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     """
     import os as _os
 
-    if mode not in ("paper", "research"):
+    if mode not in ("paper", "research", "testnet"):
         print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
         return
 
@@ -223,7 +223,7 @@ async def bootstrap_universe(engine: Any, mode: str) -> None:
     from beidou_data.trading_pool_lifecycle import InstrumentScore
     from beidou_data.trading_pool_lifecycle import PoolStatus as _PoolStatus
 
-    if mode not in ("paper", "research"):
+    if mode not in ("paper", "research", "testnet"):
         print(f"[beidou-bootstrap] 模式 {mode} 不允许宇宙 DEV_BYPASS，跳过", flush=True)
         return
 
