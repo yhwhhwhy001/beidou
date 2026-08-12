@@ -60,7 +60,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     """
     import os as _os
 
-    if mode not in ("paper", "research"):
+    if mode not in ("paper", "research", "testnet"):
         print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
         return
 
