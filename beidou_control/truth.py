@@ -105,6 +105,23 @@ class TruthSnapshot:
         ]
         return all(h == "" for h in hash_fields)
 
+    def missing_hashes(self) -> list[str]:
+        """Return every required component whose immutable digest is absent."""
+
+        hashes = {
+            "market": self.market_hash,
+            "account": self.account_hash,
+            "order": self.order_hash,
+            "position": self.position_hash,
+            "ledger": self.ledger_hash,
+            "reconciliation": self.reconciliation_hash,
+            "protection": self.protection_hash,
+            "risk": self.risk_hash,
+            "config": self.config_hash,
+            "policy": self.policy_hash,
+        }
+        return [name for name, digest in hashes.items() if not str(digest).strip()]
+
     def is_stale(self, max_age_seconds: float = 300.0) -> bool:
         """检查是否有任何关键组件超过最大年龄。"""
         now = datetime.now(timezone.utc).timestamp()
@@ -183,6 +200,12 @@ def derive_eligibility(
 
     # 1. 空快照 → NOT_VERIFIABLE
     if snapshot.is_empty():
+        return TradingEligibility.NOT_VERIFIABLE
+
+    # A partially populated snapshot is not authority.  Requiring every
+    # digest prevents one fresh market hash from masking absent account,
+    # ledger, policy, position, or protection evidence.
+    if snapshot.missing_hashes():
         return TradingEligibility.NOT_VERIFIABLE
 
     # 2. 陈旧快照 → NOT_VERIFIABLE

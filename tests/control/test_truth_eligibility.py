@@ -131,6 +131,10 @@ class TestTradingEligibility:
         snap = TruthSnapshot()
         assert derive_eligibility(snap) == TradingEligibility.NOT_VERIFIABLE
 
+    def test_missing_any_required_component_hash_is_not_verifiable(self):
+        snap = _fresh_snapshot(position_hash="")
+        assert derive_eligibility(snap) == TradingEligibility.NOT_VERIFIABLE
+
     def test_stale_snapshot_not_eligible(self):
         """AC-02-02: 陈旧快照不能得到 ELIGIBLE。"""
         old = time.time() - 400

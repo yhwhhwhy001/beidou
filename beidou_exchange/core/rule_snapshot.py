@@ -9,8 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from datetime import datetime, timezone
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, InvalidOperation
 from typing import Any
 
 
@@ -40,8 +40,7 @@ class InstrumentRuleSnapshot:
         """规则是否已知且可用。"""
         try:
             values = tuple(
-                Decimal(value)
-                for value in (self.tick_size, self.step_size, self.min_qty, self.min_notional)
+                Decimal(value) for value in (self.tick_size, self.step_size, self.min_qty, self.min_notional)
             )
         except (InvalidOperation, TypeError, ValueError):
             return False
@@ -54,7 +53,10 @@ class InstrumentRuleSnapshot:
         decimal_value = Decimal(value)
         if not decimal_value.is_finite() or decimal_value <= 0:
             raise ValueError("venue increment must be finite and positive")
-        return max(0, -decimal_value.normalize().as_tuple().exponent)
+        exponent = decimal_value.normalize().as_tuple().exponent
+        if not isinstance(exponent, int):
+            raise ValueError("venue increment exponent is invalid")
+        return max(0, -exponent)
 
     def quantize_quantity(self, quantity: str) -> str:
         """Round a positive quantity down to the exact venue step.

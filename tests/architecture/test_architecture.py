@@ -564,6 +564,28 @@ def test_final_approval_is_consumed_before_first_exchange_write() -> None:
     assert "self._approval.consume_nonce" not in submit
 
 
+def test_order_submission_does_not_label_predictions_as_realized_execution_quality() -> None:
+    root = ROOT
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _place_order(")
+    end = source.index("    async def _plan_execution(", start)
+    place_order = source[start:end]
+    assert "realized_cost_bps = ctx.predicted_cost_bps" not in place_order
+    assert "self._exec_selector.update_quality" not in place_order
+
+
+def test_user_stream_safety_events_cannot_be_ignored_or_reported_healthy() -> None:
+    root = ROOT
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _start_user_stream(")
+    end = source.index("    async def _user_stream_keepalive_loop", start)
+    boundary = source[start:end]
+    assert "accepted = True" not in boundary
+    assert 'last_error="soft_rejection"' not in boundary
+    assert "ALGO_UPDATE_REVALIDATION_REQUIRED" in boundary
+    assert "MARGIN_CALL" in boundary
+
+
 def test_environment_labels_cannot_downgrade_safety_authority() -> None:
     """Current bypass spellings must not evade the semantic-parity gate."""
 
@@ -623,6 +645,21 @@ def test_startup_recovery_is_read_only_for_ambiguous_execution_facts() -> None:
     assert "cancel_algo_order" not in startup
     assert "store.remove_protection" not in startup
     assert "_protection_owner_unknown = False" not in startup
+
+
+def test_signal_path_cannot_mutate_venue_leverage_or_boost_past_risk_size() -> None:
+    root = ROOT
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    start = source.index("    async def _nearline_tick(")
+    end = source.index("\n    async def _sync_exchange_state", start)
+    nearline = source[start:end]
+    assert "await self._ensure_leverage" not in nearline
+    assert "MIN_NOTIONAL = 20.0" not in nearline
+    assert "Boosted size" not in nearline
+    supervisor = (root / "beidou_launcher" / "supervisor.py").read_text(encoding="utf-8")
+    adapter = (root / "beidou_exchange" / "binance_usdm" / "adapter.py").read_text(encoding="utf-8")
+    assert "_is_config" not in supervisor
+    assert "_is_config" not in adapter
 
 
 def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() -> None:

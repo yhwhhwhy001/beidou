@@ -6,17 +6,19 @@ authority:
   local_tests: true
   exchange_writes: false
   restart_or_deploy: false
-  git_commit_or_push: false
-status: IN_PROGRESS
+  git_commit_or_push: true
+status: COMPLETE_WITH_BLOCKERS
 gates:
   G0: {progress: COMPLETE, decision: READY}
   G1: {progress: COMPLETE, decision: APPROVED}
   G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS}
   G3: {progress: COMPLETE, decision: READY}
-  G4: {progress: IN_PROGRESS, decision: NOT_STARTED}
-  G5: {progress: IN_PROGRESS, decision: NOT_STARTED}
-  G6: {progress: NOT_STARTED, decision: NOT_STARTED}
-  G7: {progress: NOT_STARTED, decision: NOT_STARTED}
-  G8: {progress: NOT_STARTED, decision: NOT_STARTED}
-  G9: {progress: COMPLETE, decision: NOT_APPLICABLE, reason: no release or Git authority}
+  G4: {progress: COMPLETE, decision: PASS, scope: local OFR-001 through OFR-008 implementation}
+  G5: {progress: COMPLETE, decision: RESOLVED, scope: critical order-flow findings}
+  G6: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, reason: local verification only}
+  G7: {progress: COMPLETE, decision: FAIL, reason: coverage 64.25 percent below 85 percent and repository quality gates fail}
+  G8: {progress: COMPLETE, decision: BLOCKED, reason: no PostgreSQL user-stream Testnet or deployed-runtime acceptance evidence}
+  G9: {progress: BLOCKED, decision: BLOCKED, reason: Git handoff authorized but release gate remains HOLD}
   G10: {progress: COMPLETE, decision: NOT_AUTHORIZED}
+trading_readiness: HOLD_NOT_VERIFIABLE
+release_readiness: HOLD

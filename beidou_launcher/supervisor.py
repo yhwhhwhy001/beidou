@@ -179,18 +179,10 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            # LEVERAGE 是配置操作，在任何状态下允许
-            _is_config = "/fapi/v1/leverage" in str(path)
-            _blocked = (
-                method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-                and not write_allowed(method, params)
-                and not _is_config
-            )
+            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params)
             if _blocked:
-                print(f"[supervisor] BLOCKED: {method} {path} is_config={_is_config}")
+                print(f"[supervisor] BLOCKED: {method} {path}")
                 return record(path, method)
-            if _is_config:
-                print(f"[supervisor] ALLOWED config: {method} {path}")
             return await original_async(path, method=method, signed=signed, params=params)
 
         def guarded_sync(
@@ -199,12 +191,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            _is_config = "/fapi/v1/leverage" in str(path)
-            if (
-                method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-                and not write_allowed(method, params)
-                and not _is_config
-            ):
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
@@ -227,12 +214,7 @@ class BeidouSupervisor:
                 signed: bool = False,
                 params: dict[str, Any] | None = None,
             ) -> Any:
-                _is_config = "/fapi/v1/leverage" in str(path)
-                if (
-                    method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-                    and not write_allowed(method, params)
-                    and not _is_config
-                ):
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                     record(path, method)
                     return Result.failure(
                         "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
@@ -1139,6 +1121,7 @@ class BeidouSupervisor:
             await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
             try:
                 from beidou_bootstrap.dev import bootstrap_universe
+
                 await bootstrap_universe(self.engine)
             except Exception as _uni_exc:
                 print(f"[supervisor] 首次宇宙评估失败（非致命）: {_uni_exc}")

@@ -64,7 +64,6 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
         return
 
-    skip_factor = _os.environ.get("BEIDOU_SKIP_FACTOR_BYPASS") == "1"
     skip_pool = _os.environ.get("BEIDOU_SKIP_POOL_BYPASS", "1") == "1"  # 默认跳过交易池 bypass
 
     print("[beidou-bootstrap] DEV_BYPASS: 开始激活因子...")
@@ -240,7 +239,7 @@ async def bootstrap_universe(engine: Any) -> None:
     for instrument_id in candidates:
         try:
             # 用一个 REST 调用同时获取 ticker（价格/spread）和 kline（波动率/成交量）
-            updated = await feed.async_update_features(instrument_id)
+            await feed.async_update_features(instrument_id)
             ticker = feed.get_last_ticker(instrument_id)
             features = await feed.async_get_kline_features(instrument_id, "1h", 50)
 
@@ -312,11 +311,14 @@ async def bootstrap_universe(engine: Any) -> None:
                 if pool.try_promote(instrument_id):
                     pool.activate(instrument_id)
                     promoted += 1
-                    print(f"  ✅ {instrument_id}: overall={overall_raw:.3f} spread={spread_bps:.1f}bps vol={vol_usdt/1e6:.1f}M", flush=True)
+                    print(
+                        f"  ✅ {instrument_id}: overall={overall_raw:.3f} spread={spread_bps:.1f}bps vol={vol_usdt / 1e6:.1f}M",
+                        flush=True,
+                    )
 
             await _asyncio.sleep(0.05)  # 减少 API 压力
 
-        except Exception as exc:
+        except Exception:
             continue
 
     active = pool.active_instruments()

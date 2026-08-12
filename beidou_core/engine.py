@@ -4025,7 +4025,7 @@ class AutonomousEngine:
                 slippage_amount = notional * slippage_bps / 10000.0
                 if self._shadow_runner is not None:
                     try:
-                        ledger_tx_id = self._shadow_runner.record_fill_to_ledger(
+                        self._shadow_runner.record_fill_to_ledger(
                             self._ledger,
                             order_symbol,
                             side,
@@ -4038,7 +4038,7 @@ class AutonomousEngine:
                     except Exception:
                         # PKG28 (BDS-P1-060): 写失败已在 record_fill_to_ledger 内部
                         # 记录为 P0 事件 + ledger_write_failures++
-                        ledger_tx_id = None
+                        pass
 
             # 记录成交明细（fill price / latency / status）
             self._paper_fills.append(
@@ -4071,7 +4071,7 @@ class AutonomousEngine:
         planned = await self._plan_execution(intent, order_symbol, client_id)
         if planned is None:
             return
-        slices, algo_type, ctx = planned
+        slices, _algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
         # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
@@ -4141,15 +4141,8 @@ class AutonomousEngine:
                     f"ORDER_ACK_UNKNOWN_PERSISTENCE_FAILED:{intent.intent_id}:{type(exc).__name__}"
                 )
 
-        # === 执行质量反馈：Contextual Bandit 学习实际执行成本 ===
-        if algo_type is not None and slices:
-            realized_cost_bps = ctx.predicted_cost_bps
-            slippage_bps = max(0.0, ctx.spread_bps - 1.0)
-            self._exec_selector.update_quality(algo_type, realized_cost_bps, slippage_bps)
-            print(
-                f"[order] {order_symbol}: quality updated for {algo_type.value} "
-                f"(realized_cost={realized_cost_bps:.1f}bps slippage={slippage_bps:.1f}bps)"
-            )
+        # Execution quality is updated only from authoritative fills.  Planning
+        # estimates are not relabelled as realized cost or slippage here.
 
     async def _plan_execution(self, intent, order_symbol: str, client_id: str):
         """构建 ExecutionContext → 选择执行算法 → 生成切片计划。
@@ -4514,32 +4507,32 @@ class AutonomousEngine:
                 "rule_version": snap.rule_version,
             }
         elif order_symbol not in self._symbol_precision:
-                # Fallback: 从 exchangeInfo API 加载并填充到 _symbol_precision
-                try:
-                    exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
-                    for s in exchange_info.get("symbols", []):
-                        sym = s.get("symbol", "")
-                        fallback_snap = InstrumentRuleSnapshot.from_exchange_info(sym, s)
-                        if not fallback_snap.is_known:
-                            continue
-                        self._symbol_precision[sym] = {
-                            "quantity": fallback_snap.qty_precision,
-                            "price": fallback_snap.price_precision,
-                            "step_size": fallback_snap.step_size,
-                            "tick_size": fallback_snap.tick_size,
-                            "min_quantity": fallback_snap.min_qty,
-                            "min_notional": fallback_snap.min_notional,
-                            "rule_snapshot_hash": fallback_snap.compute_hash(),
-                            "rule_version": fallback_snap.rule_version,
-                        }
-                        if sym == order_symbol:
-                            snap = fallback_snap
-                except Exception as exc:
-                    print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
-                    return None
-                if order_symbol not in self._symbol_precision:
-                    print(f"[order] {order_symbol}: exchange precision UNKNOWN")
-                    return None
+            # Fallback: 从 exchangeInfo API 加载并填充到 _symbol_precision
+            try:
+                exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
+                for s in exchange_info.get("symbols", []):
+                    sym = s.get("symbol", "")
+                    fallback_snap = InstrumentRuleSnapshot.from_exchange_info(sym, s)
+                    if not fallback_snap.is_known:
+                        continue
+                    self._symbol_precision[sym] = {
+                        "quantity": fallback_snap.qty_precision,
+                        "price": fallback_snap.price_precision,
+                        "step_size": fallback_snap.step_size,
+                        "tick_size": fallback_snap.tick_size,
+                        "min_quantity": fallback_snap.min_qty,
+                        "min_notional": fallback_snap.min_notional,
+                        "rule_snapshot_hash": fallback_snap.compute_hash(),
+                        "rule_version": fallback_snap.rule_version,
+                    }
+                    if sym == order_symbol:
+                        snap = fallback_snap
+            except Exception as exc:
+                print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
+                return None
+            if order_symbol not in self._symbol_precision:
+                print(f"[order] {order_symbol}: exchange precision UNKNOWN")
+                return None
 
         prec = self._symbol_precision.get(order_symbol)
         if prec is None:
@@ -5225,10 +5218,14 @@ class AutonomousEngine:
             _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
             if _prec:
                 self._protection.set_precision_from_rule(
-                    type("_PrecisionRule", (), {
-                        "price_precision": _prec.get("price", 0),
-                        "qty_precision": _prec.get("quantity", 0),
-                    })()
+                    type(
+                        "_PrecisionRule",
+                        (),
+                        {
+                            "price_precision": _prec.get("price", 0),
+                            "qty_precision": _prec.get("quantity", 0),
+                        },
+                    )()
                 )
             pp = self._protection.create_protection(
                 position_id=pos_id,
@@ -5514,16 +5511,7 @@ class AutonomousEngine:
         return False
 
     def _ingest_account_config_update(self, data: dict[str, Any]) -> bool:
-        """Ingest a Binance ACCOUNT_CONFIG_UPDATE event without faulting.
-
-        Binance pushes ACCOUNT_CONFIG_UPDATE when leverage or margin mode
-        changes (including through the UI or another session).  This is an
-        informational event — rejecting it as UNSUPPORTED causes a self-
-        reinforcing failure loop where every config change resets the
-        control plane to NO_NEW_RISK.
-
-        Returns True so the user-stream runtime stays HEALTHY.
-        """
+        """Record an account configuration change and revoke stale authority."""
         import logging
 
         _logger = logging.getLogger(__name__)
@@ -5551,14 +5539,10 @@ class AutonomousEngine:
             leverage,
             is_joint,
         )
-
-        # ACCOUNT_CONFIG_UPDATE carries symbol-level leverage changes and
-        # account-wide margin-mode facts.  The position mode (ONE_WAY/HEDGE)
-        # is governed by the positionSide/dual endpoint rather than this
-        # event, so we log the config change without overwriting the
-        # independently verified position-mode evidence.
-
-        return True
+        if symbol:
+            getattr(self, "_leverage_cache", {}).pop(symbol, None)
+        self._record_execution_fact_failure("ACCOUNT_CONFIG_UPDATE_REVALIDATION_REQUIRED")
+        return False
 
     def _update_user_stream_runtime(self, **updates: Any) -> None:
         """Update redacted live user-stream evidence without storing secrets."""
@@ -5680,19 +5664,14 @@ class AutonomousEngine:
                     # 故障。接收并更新账户配置事实，保持流健康。
                     accepted = self._ingest_account_config_update(data)
                 elif event_type == "ALGO_UPDATE":
-                    # BD-FIX: ALGO_UPDATE 是 Binance 推送的条件单状态变更事件
-                    # （止损/止盈单的状态变化），信息性事件，不影响账户余额。
-                    # 接受但不处理 — 实际成交通过 ORDER_TRADE_UPDATE 接收。
-                    accepted = True
-                elif event_type in (
-                    "MARGIN_CALL",
-                    "STRATEGY_UPDATE",
-                    "GRID_UPDATE",
-                    "listenKeyExpired",  # already handled above, belt-and-suspenders
-                ):
-                    # BD-FIX: 其他 Binance 信息性事件 — 接收但不处理，
-                    # 避免 UNSUPPORTED_USER_EVENT 导致流 DEGRADED。
-                    accepted = True
+                    self._user_stream_fault("ALGO_UPDATE_REVALIDATION_REQUIRED")
+                    return
+                elif event_type == "MARGIN_CALL":
+                    self._user_stream_fault("MARGIN_CALL", terminal=True)
+                    return
+                elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
+                    self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type}")
+                    return
                 else:
                     # PKG02 (BDS-P0-001): 所有环境统一 fail-closed。
                     self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
@@ -5705,15 +5684,7 @@ class AutonomousEngine:
                         last_error="",
                     )
                 else:
-                    # BD-FIX (S7): 非致命拒绝（DUPLICATE/BLOCKED）不降级。
-                    # 仅在真正故障（GAP/SEQUENCE_UNAVAILABLE）时才标记 DEGRADED。
-                    # Testnet 的 sequencer allow_unsequenced 模式可能因重复时间戳
-                    # 产生 DUPLICATE → BLOCKED → 不应以此为据关闭交易授权。
-                    self._update_user_stream_runtime(
-                        status="HEALTHY",
-                        listen_key_active=True,
-                        last_error="soft_rejection",
-                    )
+                    self._user_stream_fault(f"USER_EVENT_REJECTED:{event_type or 'UNKNOWN'}")
 
             await websocket.subscribe(listen_key, _on_user_event)
             self._update_user_stream_runtime(status="CONNECTED", listen_key_active=True)
@@ -6093,7 +6064,7 @@ class AutonomousEngine:
             # 有 PENDING 保护订单的持仓视为"已尝试保护"。
             # 启动时 supervisor 可能未授权写入，导致保护订单无法提交到交易所，
             # 但本地 PENDING 记录证明系统已经尝试保护。不应因此阻塞就绪检查。
-            for row in (store.restore_protections() if (store := getattr(self, "_store", None)) else []):
+            for row in store.restore_protections() if (store := getattr(self, "_store", None)) else []:
                 if str(row.get("status", "")).upper() == "PENDING":
                     pending_sym = str(row.get("symbol", "")).strip().upper()
                     if pending_sym:
@@ -6329,10 +6300,14 @@ class AutonomousEngine:
                         _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
                         if _prec:
                             self._protection.set_precision_from_rule(
-                                type("_PrecisionRule", (), {
-                                    "price_precision": _prec.get("price", 0),
-                                    "qty_precision": _prec.get("quantity", 0),
-                                })()
+                                type(
+                                    "_PrecisionRule",
+                                    (),
+                                    {
+                                        "price_precision": _prec.get("price", 0),
+                                        "qty_precision": _prec.get("quantity", 0),
+                                    },
+                                )()
                             )
                         self._protection.create_protection(
                             position_id=pos_id,
@@ -6543,9 +6518,11 @@ class AutonomousEngine:
             active_symbols = self._trading_pool.active_instruments()
             # Testnet: 每轮只处理 10 个标的，避免 REST 调用过多导致 monitor STALL
             if self._env_mode.value == "testnet" and len(active_symbols) > 10:
-                _batch_start = (getattr(self, "_nearline_batch_idx", 0) % len(active_symbols))
-                active_symbols = active_symbols[_batch_start:_batch_start + 10]
-                self._nearline_batch_idx = (_batch_start + 10) % len(active_symbols) if hasattr(self, "_nearline_batch_idx") else 10
+                _batch_start = getattr(self, "_nearline_batch_idx", 0) % len(active_symbols)
+                active_symbols = active_symbols[_batch_start : _batch_start + 10]
+                self._nearline_batch_idx = (
+                    (_batch_start + 10) % len(active_symbols) if hasattr(self, "_nearline_batch_idx") else 10
+                )
             # BD-FIX: 多时间框架 — 1m/5m/1h/1d 独立评估信号
             TIMEFRAMES = ("1m", "5m", "1h", "1d")
             # 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）
@@ -6689,6 +6666,7 @@ class AutonomousEngine:
                     )
                     # 使用 SignalFuser 融合多时间框架信号
                     from beidou_strategy.alpha import AlphaSignal
+
                     direction = SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT
                     alpha_signal = AlphaSignal(
                         strategy_id=self._autopilot_strategy_id,
@@ -6796,24 +6774,25 @@ class AutonomousEngine:
                         _min_qty = max(_min_qty, _step_size)
                     except (ValueError, TypeError):
                         pass
-                if position_size < _min_qty:
-                    position_size = _min_qty
-                if position_size <= 0:
-                    print(f"[nearline] {symbol}: SKIP (computed position size UNKNOWN/zero)")
+                if _min_qty <= 0:
+                    print(f"[nearline] {symbol}: SKIP (venue minQty UNKNOWN)")
+                    continue
+                if position_size <= 0 or position_size < _min_qty:
+                    print(f"[nearline] {symbol}: SKIP (risk-sized quantity below venue minQty)")
                     continue
                 # BD-CV10: 最小名义价值从交易所规则获取
                 _prec_data = getattr(self, "_symbol_precision", {}).get(symbol, {})
                 MIN_NOTIONAL = float(_prec_data.get("min_notional", 0) or 0)
                 if MIN_NOTIONAL <= 0:
-                    MIN_NOTIONAL = 20.0  # 兜底仅当规则不可用
+                    print(f"[nearline] {symbol}: SKIP (venue minNotional UNKNOWN)")
+                    continue
                 position_notional = price * position_size
                 if position_notional < MIN_NOTIONAL:
-                    position_size = MIN_NOTIONAL / price
-                    position_notional = MIN_NOTIONAL
                     print(
-                        f"[nearline] {symbol}: Boosted size to {position_size:.4f} "
-                        f"to meet min notional ${MIN_NOTIONAL} (was ${price * _min_qty:.2f})"
+                        f"[nearline] {symbol}: SKIP (risk-sized notional ${position_notional:.2f} "
+                        f"below venue minimum ${MIN_NOTIONAL:.2f})"
                     )
+                    continue
 
                 print(
                     f"[nearline] {symbol}: Adaptive → size={position_size:.4f} "
@@ -6823,7 +6802,14 @@ class AutonomousEngine:
                 )
 
                 # BD-CV30: 构建 SignedPortfolioTarget contract
-                trade_dir = 1 if fused.direction == SignalDirection.LONG else (-1 if fused.direction == SignalDirection.SHORT else 0)
+                trade_dir = (
+                    1
+                    if fused.direction == SignalDirection.LONG
+                    else (-1 if fused.direction == SignalDirection.SHORT else 0)
+                )
+                if trade_dir == 0:
+                    print(f"[nearline] {symbol}: SKIP (NO_ACTION has no portfolio direction)")
+                    continue
                 _side = "LONG" if trade_dir > 0 else "SHORT"
                 _target = self.build_portfolio_target(
                     symbol=symbol, side=_side, exposure=position_notional, delta=position_notional * 0.01
@@ -6835,20 +6821,6 @@ class AutonomousEngine:
                 if not pool_capacity:
                     print(f"[nearline] {symbol}: SKIP (pool not tradable)")
                     continue
-
-                # === 5.5 下发自适应杠杆到交易所，获取实际生效值 ===
-                exchange_leverage = max(1, int(dyn_leverage))  # Binance 最低 1x
-                if self._can_write:
-                    actual_lev = await self._ensure_leverage(symbol, exchange_leverage)
-                    if actual_lev != dyn_leverage:
-                        dyn_leverage = float(actual_lev)  # 使用实际杠杆重新计算仓位
-                        max_by_leverage = (account_balance * dyn_leverage) / price
-                        position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
-                        position_size = min(position_size, max_by_leverage * 0.5)
-                        if position_size <= 0:
-                            print(f"[nearline] {symbol}: SKIP (recomputed position size UNKNOWN/zero)")
-                            continue
-                        position_notional = price * position_size
 
                 # === 5.7 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）===
                 proposals.append(
@@ -7036,8 +7008,11 @@ class AutonomousEngine:
                 if risk_approved:
                     try:
                         from beidou_safety.risk.engine import RiskSnapshot as _RiskSnapshot
-                        rules_cfg = {"max_leverage": risk_context["max_leverage"],
-                                     "max_concentration_pct": risk_context["max_concentration_pct"]}
+
+                        rules_cfg = {
+                            "max_leverage": risk_context["max_leverage"],
+                            "max_concentration_pct": risk_context["max_concentration_pct"],
+                        }
                         imp_snapshot = _RiskSnapshot(
                             total_exposure=position_notional,
                             margin_used=position_notional / max(dyn_leverage, 1),
@@ -7054,9 +7029,7 @@ class AutonomousEngine:
                         # 作为非阻塞的辅助校验：REJECTED 时记录违规但不阻断
                         for r in impl_results:
                             if r.decision.value == "REJECTED":
-                                self._post_risk.record_violation(
-                                    f"RiskEngineImpl:{symbol}:{r.detail}"
-                                )
+                                self._post_risk.record_violation(f"RiskEngineImpl:{symbol}:{r.detail}")
                     except Exception:
                         pass  # RiskEngineImpl 不可用时不影响现有评估链
 
@@ -7395,10 +7368,7 @@ class AutonomousEngine:
         if pool is None:
             return
 
-        candidates = [
-            iid for iid, e in pool._pool.items()
-            if e.status in (PoolStatus.OBSERVING, PoolStatus.PROMOTED)
-        ]
+        candidates = [iid for iid, e in pool._pool.items() if e.status in (PoolStatus.OBSERVING, PoolStatus.PROMOTED)]
         if not candidates:
             return
 
@@ -7465,12 +7435,10 @@ class AutonomousEngine:
         if scored > 0:
             active = pool.active_instruments()
             # 降级检查：评分持续低 → quarantine
-            entry = pool._pool.get(instrument_id) if 'instrument_id' in dir() else None
+            entry = pool._pool.get(instrument_id) if "instrument_id" in dir() else None
             if entry is not None and entry.status == PoolStatus.ACTIVE:
-                recent = entry.scores[-pool.DEGRADE_CONSECUTIVE:]
-                if len(recent) >= pool.DEGRADE_CONSECUTIVE and all(
-                    s.overall < pool.DEGRADE_THRESHOLD for s in recent
-                ):
+                recent = entry.scores[-pool.DEGRADE_CONSECUTIVE :]
+                if len(recent) >= pool.DEGRADE_CONSECUTIVE and all(s.overall < pool.DEGRADE_THRESHOLD for s in recent):
                     pool.quarantine(instrument_id, f"连续{pool.DEGRADE_CONSECUTIVE}次评分<{pool.DEGRADE_THRESHOLD}")
                     print(f"[universe] ⚠️ {instrument_id} QUARANTINED: 评分持续低于阈值")
             print(
@@ -7701,9 +7669,7 @@ class AutonomousEngine:
                 # 尝试完成轮换（如有新凭据）
                 try:
                     if hasattr(self, "_pending_credential"):
-                        result = self._key_rotator.complete_rotation(
-                            cred.credential_id, self._pending_credential
-                        )
+                        result = self._key_rotator.complete_rotation(cred.credential_id, self._pending_credential)
                         health["rotation_completed"] = result.value
                 except Exception:
                     pass
@@ -7799,26 +7765,37 @@ class AutonomousEngine:
     # --- BD-CV Contracts: Bridge methods ---
 
     def build_truth_snapshot(self) -> TruthSnapshot:
-        """BD-CV02: 从当前引擎状态构建 TruthSnapshot。"""
+        """Build a snapshot only from recorded facts, never call-time freshness."""
         now_ts = time.time()
+        recon_status = getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN")
         return TruthSnapshot(
             snapshot_id=f"snap-{int(now_ts * 1000)}",
             created_at=datetime.now(timezone.utc).isoformat(),
             market_hash=getattr(getattr(self, "_feed", None), "last_hash", ""),
             account_hash=getattr(self, "_last_account_hash", ""),
             order_hash=getattr(self, "_last_order_hash", ""),
+            position_hash=getattr(self, "_last_position_hash", ""),
+            ledger_hash=getattr(self, "_last_ledger_hash", ""),
             reconciliation_hash=getattr(self, "_last_reconciliation_hash", ""),
             protection_hash=getattr(self, "_last_protection_hash", ""),
             risk_hash=getattr(self, "_last_risk_hash", ""),
-            market_freshness=now_ts,
-            account_freshness=now_ts,
-            order_freshness=now_ts,
-            reconciliation_freshness=now_ts,
-            protection_freshness=now_ts,
-            risk_freshness=now_ts,
-            reconciliation_status=getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN"),
+            config_hash=getattr(self, "_config_hash", ""),
+            policy_hash=getattr(self, "_policy_hash", ""),
+            market_freshness=float(getattr(self, "_last_market_fact_at", 0.0) or 0.0),
+            account_freshness=float(getattr(self, "_last_account_fact_at", 0.0) or 0.0),
+            order_freshness=float(getattr(self, "_last_order_fact_at", 0.0) or 0.0),
+            position_freshness=float(getattr(self, "_last_position_fact_at", 0.0) or 0.0),
+            ledger_freshness=float(getattr(self, "_last_ledger_fact_at", 0.0) or 0.0),
+            reconciliation_freshness=float(getattr(self, "_last_reconciliation_fact_at", 0.0) or 0.0),
+            protection_freshness=float(getattr(self, "_last_protection_fact_at", 0.0) or 0.0),
+            risk_freshness=float(getattr(self, "_last_risk_fact_at", 0.0) or 0.0),
+            config_freshness=float(getattr(self, "_config_observed_at", 0.0) or 0.0),
+            policy_freshness=float(getattr(self, "_policy_observed_at", 0.0) or 0.0),
+            reconciliation_status=str(getattr(recon_status, "value", recon_status)),
             protection_status="ACTIVE" if self._protection_owner_unknown is False else "UNKNOWN",
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
+            env_mode=str(getattr(getattr(self, "_env_mode", None), "value", "")),
+            control_action=str(getattr(getattr(self._control, "_action", None), "value", "NO_NEW_RISK")),
         )
 
     def evaluate_trading_eligibility(self) -> TradingEligibility:
@@ -8224,10 +8201,14 @@ class AutonomousEngine:
                 _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
                 if _prec:
                     self._protection.set_precision_from_rule(
-                        type("_PrecisionRule", (), {
-                            "price_precision": _prec.get("price", 0),
-                            "qty_precision": _prec.get("quantity", 0),
-                        })()
+                        type(
+                            "_PrecisionRule",
+                            (),
+                            {
+                                "price_precision": _prec.get("price", 0),
+                                "qty_precision": _prec.get("quantity", 0),
+                            },
+                        )()
                     )
                 pp = self._protection.create_protection(
                     position_id=pos_id,
