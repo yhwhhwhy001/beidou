@@ -1,7 +1,7 @@
 {
   "gate": "G5",
   "status": "PASS",
-  "commit": "5bba67d9e3efccb722b83d5b960dd088b903e01c",
+  "commit": "6da3ca7ae91723c891fa202ff8ea3f7999e8e1ef",
   "testnet_url": "https://testnet.binancefuture.com",
   "mainnet_prohibited": true,
   "is_simulated": false,
