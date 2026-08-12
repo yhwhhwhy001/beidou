@@ -8038,15 +8038,12 @@ class AutonomousEngine:
             else:
                 health["level"] = "OK"
             # PKG02 (BDS-P0-001): R9 提款权限在所有环境统一检查。
-            # BD-FIX: Testnet 模式下提款权限通常由交易所默认开启（测试资金），
-            # 与 writable gate 保持一致：testnet 降级为 WARNING，其他环境保持 CRITICAL。
+            # BD-FIX: Testnet 模式下提款权限由交易所默认开启（测试资金），
+            # 不产生告警。非 testnet 环境保持 CRITICAL 阻断。
             if self._can_withdraw:
                 _env_mode = getattr(self, "_env_mode", None)
                 is_testnet = _env_mode is not None and _env_mode.value == "testnet"
-                if is_testnet:
-                    health["level"] = "WARNING"
-                    health["r9_notice"] = "WITHDRAW_ENABLED_TESTNET_OK"
-                else:
+                if not is_testnet:
                     health["level"] = "CRITICAL"
                     health["r9_violation"] = "WITHDRAW_ENABLED"
                     self._alerts.send_incident(
