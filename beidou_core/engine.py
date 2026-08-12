@@ -32,6 +32,7 @@ from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
+from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
 from beidou_observability.telemetry import AlertSeverity
 from beidou_policy.loader import PolicyLoader
@@ -1238,9 +1239,6 @@ class AutonomousEngine:
 
         # Control plane
         self._control = ControlPlane()
-        # Testnet: ControlPlane 初始化为 RESUME，跳过 NO_NEW_RISK
-        if self._env_mode.value == "testnet":
-            object.__setattr__(self._control, "_action", ControlAction.RESUME)
         self._lifecycle = ModuleLifecycle("autopilot")
 
         # Business modules
@@ -2176,17 +2174,8 @@ class AutonomousEngine:
                 row
                 for row in protections
                 if str(row.get("owner_id", "")) == str(self._protection_owner_id)
-                and (
-                    # ACTIVE: must have venue-ACKed exchange_order_id
-                    str(row.get("status", "")).upper() == "ACTIVE"
-                    and bool(str(row.get("exchange_order_id", "")).strip())
-                ) or (
-                    # PENDING: locally staged but not yet submitted — transient
-                    # startup state when supervisor hasn't authorized writes yet.
-                    # Count these to avoid blocking durable-fact gate on
-                    # protections that are queued for nearline retry.
-                    str(row.get("status", "")).upper() == "PENDING"
-                )
+                and str(row.get("status", "")).upper() == "ACTIVE"
+                and bool(str(row.get("exchange_order_id", "")).strip())
             ]
             local_positions = (
                 self._protection.all_positions()
@@ -2317,15 +2306,6 @@ class AutonomousEngine:
             position_quantity = abs(position_amount)
             if position_quantity <= Decimal("1e-12"):
                 continue
-            # 豁免微量持仓：名义价值 < $100 的仓位不阻塞保护覆盖检查。
-            # 微量残余持仓（如 $50 级别）的保护订单不完整不应锁死整个系统。
-            try:
-                entry_price = Decimal(str(position.get("entryPrice", "0") or "0"))
-                if entry_price > 0 and position_quantity * entry_price < Decimal("100"):
-                    continue
-            except (InvalidOperation, ValueError, TypeError):
-                pass  # entryPrice 不可用，走正常检查路径
-
             expected_side = "SELL" if position_amount > 0 else "BUY"
             projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
             try:
@@ -2339,6 +2319,12 @@ class AutonomousEngine:
             symbol_protections: list[dict[str, Any]] = []
             for row in active_protections:
                 if str(row.get("symbol", "")).strip() != symbol:
+                    continue
+                if str(row.get("status", "")).upper() != "ACTIVE":
+                    continue
+                if not str(row.get("exchange_order_id", "")).strip():
+                    continue
+                if str(row.get("owner_id", "")) != str(getattr(self, "_protection_owner_id", "")):
                     continue
                 row_side = getattr(row.get("side"), "value", row.get("side", ""))
                 if str(row_side).upper() != expected_side:
@@ -3568,13 +3554,7 @@ class AutonomousEngine:
                 ) from exc
 
     def _safe_no_new_risk(self, reason: str = "") -> None:
-        """安全降级控制面到 NO_NEW_RISK。
-
-        Testnet 豁免：testnet 环境不执行 NO_NEW_RISK，避免 user_stream/对账
-        瞬时问题连锁阻断所有下单。生产环境直接调用 execute_action 而非递归。
-        """
-        if getattr(self, "_env_mode", None) is not None and self._env_mode.value == "testnet":
-            return
+        """安全降级控制面到 NO_NEW_RISK；环境标签不得改变语义。"""
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._control.execute_action(ControlAction.NO_NEW_RISK)
 
@@ -3588,15 +3568,11 @@ class AutonomousEngine:
         """Freeze execution truth after a durable fact write cannot be proven."""
         with contextlib.suppress(Exception):
             self._ledger.freeze()
-        # PKG02 (BDS-P0-001): 所有环境统一降级控制面。
-        # Testnet 豁免：执行事实持久化失败不触发 NO_NEW_RISK，
-        # 避免 user_stream/对账的瞬时问题连锁阻断所有下单。
         control = getattr(self, "_control", None)
-        if control is not None and getattr(self, "_env_mode", None) is not None:
-            if self._env_mode.value != "testnet":
-                with contextlib.suppress(Exception):
-                    if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                        control.execute_action(ControlAction.NO_NEW_RISK)
+        if control is not None:
+            with contextlib.suppress(Exception):
+                if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                    control.execute_action(ControlAction.NO_NEW_RISK)
         alerts = getattr(self, "_alerts", None)
         if alerts is not None:
             with contextlib.suppress(Exception):
@@ -3799,7 +3775,7 @@ class AutonomousEngine:
             )
             raise
 
-    async def _verify_intent_at_send(self, intent) -> bool:
+    async def _verify_intent_at_send(self, intent, *, consume_nonce: bool = False) -> bool:
         """最终写边界复核审批、nonce、策略版本和风险下降语义。"""
 
         if not self._can_write:
@@ -3832,13 +3808,12 @@ class AutonomousEngine:
             # otherwise mutate quantity/side/client-id after approval.  The
             # exact venue order must match the HMAC-bound canonical digest.
             return False
-        if self._risk_sm.get(RiskApprovalId(approval_id)) != RiskDecision.APPROVED:
+        approval_ref = RiskApprovalId(approval_id)
+        if not self._risk_sm.is_valid_for_use(approval_ref):
             return False
         try:
-            # consume_nonce=False: 签名验证通过但不消费 nonce
-            # nonce 在交易所确认订单后才消费，确保发送失败可重试
-            return await self._approval.verify(
-                RiskApprovalId(approval_id),
+            verified = await self._approval.verify(
+                approval_ref,
                 signature=str(intent.risk_approval_signature),
                 proposal_hash=str(getattr(intent, "risk_proposal_hash", "")),
                 intent_hash=intent_hash,
@@ -3847,8 +3822,14 @@ class AutonomousEngine:
                 policy_version=str(getattr(intent, "risk_policy_version", "")),
                 nonce=str(getattr(intent, "risk_nonce", "")),
                 expires_at=getattr(intent, "risk_expires_at", None),
-                consume_nonce=False,
+                consume_nonce=consume_nonce,
             )
+            if not verified:
+                return False
+            if consume_nonce:
+                self._risk_sm.consume(approval_ref)
+                return self._risk_sm.is_consumed(approval_ref)
+            return True
         except (RuntimeError, TypeError, ValueError):
             return False
 
@@ -3887,15 +3868,10 @@ class AutonomousEngine:
         _risk_dir = ControlPlane.classify_intent(intent)
         if _risk_dir.value == "INCREASE":
             eligibility = self.evaluate_trading_eligibility()
-            # Testnet 豁免：TruthSnapshot 的 hash 字段在冷启动时为空，
-            # 导致 is_empty()=True → NOT_VERIFIABLE。生产环境需要完整事实链。
-            _skip_eligibility = self._env_mode.value == "testnet" and eligibility == TradingEligibility.NOT_VERIFIABLE
-            if eligibility != TradingEligibility.ELIGIBLE and not _skip_eligibility:
+            if eligibility != TradingEligibility.ELIGIBLE:
                 print(f"[order] ❌ Intent {intent.intent_id} REJECTED: TradingEligibility={eligibility.value}")
                 self._outbox.reject(intent.intent_id, f"ELIGIBILITY_{eligibility.value}", idempotency_key="")
                 return
-            if _skip_eligibility:
-                print(f"[order] ⚠️ Intent {intent.intent_id} eligibility bypassed (testnet): {eligibility.value}")
         # idempotency_key 已在 nearline OrderIntent 创建时设置，此处不再修改
         # （修改 frozen dataclass 会导致 order_intent_binding_hash 不匹配）
 
@@ -4092,50 +4068,10 @@ class AutonomousEngine:
         # Testnet and production share the same market-fact, slippage and
         # slice-invariant gates.  The environment label changes the venue,
         # never the approved execution contract.
-        # PKG02 (BDS-P0-001): 移除 testnet 小数量跳过切片旁路 — 所有环境使用统一执行算法
-        total_qty = float(intent.quantity.amount)
-        # Testnet: MARKET_DIRECT — 避免 LIMIT 价格修正的一切问题
-        if self._env_mode.value == "testnet":
-            slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
-            slices, algo_type, ctx = slices, "MARKET_DIRECT", SimpleNamespace(alpha_decay_seconds=60.0)
-        elif False:  # is_small_order — 已禁用
-            # BD-FIX (S32): 用行情价吃单 LIMIT 代替 MARKET
-            # MARKET 在 testnet 无流动性不成交。BUY=price*1.005, SELL=price*0.995
-            ref_price = float(getattr(intent.price, "amount", 0) if intent.price else 0)
-            if ref_price <= 0:
-                features = await self._feed.async_update_features(order_symbol)
-                ref_price = float(features.get("price", 0)) if features else 0
-            aggressive_price = None
-            if ref_price > 0:
-                if side == "BUY":
-                    px = ref_price * 1.05  # +5% 确保通过 tick size 检查
-                else:
-                    px = ref_price * 0.95  # -5% 确保通过 tick size 检查
-                # PKG02: 对齐交易所 tick size — 规则从交易所获取，无兜底。
-                from decimal import ROUND_UP, ROUND_DOWN, Decimal
-
-                prec = getattr(self, "_symbol_precision", {}).get(order_symbol, {})
-                price_decimals = prec.get("price")
-                if price_decimals is None:
-                    # 精度不可用 → 标记 symbol 不可执行
-                    print(f"[engine] Price precision UNKNOWN for {order_symbol}; symbol NOT_EXECUTABLE")
-                    return None
-                tick = Decimal(str(10 ** (-price_decimals)))
-                # BUY 向上取整确保达到 tick size 要求，SELL 向下取整
-                rounding = ROUND_UP if side == "BUY" else ROUND_DOWN
-                px_d = (Decimal(str(px)) / tick).quantize(Decimal("1"), rounding=rounding) * tick
-                aggressive_price = str(px_d)
-                slices = [(str(total_qty), aggressive_price, "LIMIT", "GTC", client_id)]
-                algo_type = "AGGRESSIVE_LIMIT"
-            else:
-                slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
-                algo_type = "MARKET_DIRECT"
-            ctx = SimpleNamespace(alpha_decay_seconds=60.0)
-        else:
-            planned = await self._plan_execution(intent, order_symbol, client_id)
-            if planned is None:
-                return
-            slices, algo_type, ctx = planned
+        planned = await self._plan_execution(intent, order_symbol, client_id)
+        if planned is None:
+            return
+        slices, algo_type, ctx = planned
 
         # === 逐切片下发交易所 ===
         # BD-FIX: 多切片算法按间隔分批发送，而非一次性全部下发。
@@ -4342,6 +4278,7 @@ class AutonomousEngine:
             hard_slippage_limit_bps=50.0,
             min_quantity=_min_qty,
             min_notional=_min_notional,
+            reduce_only=is_reduce_only,
             correlation_id=str(intent.correlation_id) if intent.correlation_id else None,
         )
 
@@ -4552,65 +4489,51 @@ class AutonomousEngine:
             self._rule_snapshot_hashes: dict[str, str] = {}
         if not hasattr(self, "_rule_change_detected"):
             self._rule_change_detected: set[str] = set()
-        if order_symbol not in self._symbol_precision:
-            rule = getattr(self, "_adapter", None)
-            if rule is not None and hasattr(rule, "get_rule_snapshot"):
-                snap = rule.get_rule_snapshot(order_symbol)
-                if snap.is_known:
-                    snap_hash = snap.compute_hash()
-                    # BD-CV10 AC-10-04: 检测 exchangeInfo 变化
-                    prev_hash = self._rule_snapshot_hashes.get(order_symbol)
-                    if prev_hash and prev_hash != snap_hash:
-                        print(f"[order] {order_symbol}: rule changed! prev={prev_hash[:16]} new={snap_hash[:16]}")
-                        self._rule_change_detected.add(order_symbol)
-                    self._rule_snapshot_hashes[order_symbol] = snap_hash
-                    # AC-10-01: 所有可写订单绑定 InstrumentRuleSnapshot hash
-                    self._symbol_precision[order_symbol] = {
-                        "quantity": snap.qty_precision,
-                        "price": snap.price_precision,
-                        "min_quantity": float(snap.min_qty) if snap.min_qty else 0.0,
-                        "min_notional": float(snap.min_notional) if snap.min_notional else 0.0,
-                        "rule_snapshot_hash": snap_hash,
-                        "rule_version": snap.rule_version,
-                    }
-                else:
-                    print(f"[order] {order_symbol}: rule snapshot UNKNOWN — symbol NOT_EXECUTABLE")
-                    return None
-            else:
+        snap: InstrumentRuleSnapshot | None = None
+        rule = getattr(self, "_adapter", None)
+        if rule is not None and hasattr(rule, "get_rule_snapshot"):
+            snap = rule.get_rule_snapshot(order_symbol)
+            if not snap.is_known or snap.is_stale:
+                print(f"[order] {order_symbol}: rule snapshot UNKNOWN/STALE — symbol NOT_EXECUTABLE")
+                return None
+            snap_hash = snap.compute_hash()
+            prev_hash = self._rule_snapshot_hashes.get(order_symbol)
+            if prev_hash and prev_hash != snap_hash:
+                print(f"[order] {order_symbol}: rule changed! prev={prev_hash[:16]} new={snap_hash[:16]}")
+                self._rule_change_detected.add(order_symbol)
+                return None
+            self._rule_snapshot_hashes[order_symbol] = snap_hash
+            self._symbol_precision[order_symbol] = {
+                "quantity": snap.qty_precision,
+                "price": snap.price_precision,
+                "step_size": snap.step_size,
+                "tick_size": snap.tick_size,
+                "min_quantity": snap.min_qty,
+                "min_notional": snap.min_notional,
+                "rule_snapshot_hash": snap_hash,
+                "rule_version": snap.rule_version,
+            }
+        elif order_symbol not in self._symbol_precision:
                 # Fallback: 从 exchangeInfo API 加载并填充到 _symbol_precision
                 try:
                     exchange_info = await self._api_async(Endpoint.EXCHANGE_INFO)
                     for s in exchange_info.get("symbols", []):
                         sym = s.get("symbol", "")
-                        quantity_step: str | None = None
-                        price_tick: str | None = None
-                        min_qty: str | None = None
-                        min_notional_val: float = 0.0
-                        for f_item in s.get("filters", []):
-                            if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
-                                quantity_step = str(f_item.get("stepSize", "")) or quantity_step
-                                min_qty = str(f_item.get("minQty", "")) or min_qty
-                            if f_item.get("filterType") == "PRICE_FILTER":
-                                price_tick = str(f_item.get("tickSize", "")) or price_tick
-                            if f_item.get("filterType") == "MIN_NOTIONAL":
-                                try:
-                                    min_notional_val = float(str(f_item.get("notional", "0")))
-                                except (TypeError, ValueError):
-                                    pass
-                        if not quantity_step or not price_tick:
-                            continue
-                        try:
-                            quantity_decimals = max(0, -Decimal(quantity_step).as_tuple().exponent)
-                            price_decimals = max(0, -Decimal(price_tick).as_tuple().exponent)
-                            min_quantity = float(min_qty) if min_qty else float(quantity_step)
-                        except (InvalidOperation, ValueError):
+                        fallback_snap = InstrumentRuleSnapshot.from_exchange_info(sym, s)
+                        if not fallback_snap.is_known:
                             continue
                         self._symbol_precision[sym] = {
-                            "quantity": quantity_decimals,
-                            "price": price_decimals,
-                            "min_quantity": min_quantity,
-                            "min_notional": min_notional_val,
+                            "quantity": fallback_snap.qty_precision,
+                            "price": fallback_snap.price_precision,
+                            "step_size": fallback_snap.step_size,
+                            "tick_size": fallback_snap.tick_size,
+                            "min_quantity": fallback_snap.min_qty,
+                            "min_notional": fallback_snap.min_notional,
+                            "rule_snapshot_hash": fallback_snap.compute_hash(),
+                            "rule_version": fallback_snap.rule_version,
                         }
+                        if sym == order_symbol:
+                            snap = fallback_snap
                 except Exception as exc:
                     print(f"[order] {order_symbol}: exchangeInfo unavailable ({exc})")
                     return None
@@ -4622,13 +4545,58 @@ class AutonomousEngine:
         if prec is None:
             print(f"[order] {order_symbol}: exchange precision UNKNOWN")
             return None
-        qty = float(params["quantity"])
-        params["quantity"] = f"{qty:.{prec['quantity']}f}"
+        if snap is None:
+            snap = InstrumentRuleSnapshot(
+                symbol=order_symbol,
+                tick_size=str(prec.get("tick_size", "")),
+                step_size=str(prec.get("step_size", "")),
+                min_qty=str(prec.get("min_quantity", "")),
+                min_notional=str(prec.get("min_notional", "")),
+                price_precision=int(prec.get("price", -1)),
+                qty_precision=int(prec.get("quantity", -1)),
+                observed_at=datetime.now(timezone.utc).isoformat(),
+            )
+        if not snap.is_known:
+            print(f"[order] {order_symbol}: exact venue increments UNKNOWN")
+            return None
+        original_qty = Decimal(str(params["quantity"]))
+        try:
+            params["quantity"] = snap.quantize_quantity(str(original_qty))
+        except ValueError as exc:
+            print(f"[order] {order_symbol}: quantity quantization rejected ({exc})")
+            return None
+        quantized_qty = Decimal(str(params["quantity"]))
+        approved_qty = Decimal(str(getattr(getattr(intent, "quantity", None), "amount", "0")))
+        if quantized_qty > original_qty or quantized_qty > approved_qty or quantized_qty < Decimal(snap.min_qty):
+            print(f"[order] {order_symbol}: final quantity exceeds approval or violates minQty")
+            return None
         price_raw = params.get("price")
         if price_raw:
-            params["price"] = f"{float(price_raw):.{prec['price']}f}"
+            try:
+                params["price"] = snap.quantize_price(str(price_raw), side=side)
+            except ValueError as exc:
+                print(f"[order] {order_symbol}: price quantization rejected ({exc})")
+                return None
+            if getattr(intent, "order_type", None) == OrderType.LIMIT:
+                approved_price = Decimal(str(getattr(getattr(intent, "price", None), "amount", "0")))
+                if Decimal(str(params["price"])) != approved_price:
+                    print(f"[order] {order_symbol}: final limit price differs from signed approval")
+                    return None
+            if quantized_qty * Decimal(str(params["price"])) < Decimal(snap.min_notional):
+                print(f"[order] {order_symbol}: final order violates minNotional")
+                return None
 
         print(f"[order] Sending to exchange: {order_symbol} {side} {params['quantity']} @ {params.get('price', 'MKT')}")
+        # Consume the one-shot approval after all local planning/quantization
+        # and immediately before the first venue write.  An ambiguous response
+        # must be reconciled by client id; the same approval cannot be replayed.
+        if ack_outbox and not await self._verify_intent_at_send(intent, consume_nonce=True):
+            self._outbox.reject(
+                intent.intent_id,
+                "FINAL_APPROVAL_CONSUMPTION_FAILED",
+                idempotency_key=getattr(intent, "idempotency_key", "") or "",
+            )
+            return None
         try:
             adapter_response = await self._adapter.create_order(
                 OrderRequest(
@@ -4669,17 +4637,6 @@ class AutonomousEngine:
             if ack_outbox:
                 self._outbox.ack(intent.intent_id, idempotency_key=getattr(intent, "idempotency_key", ""))
             self._order_count += 1
-            # 订单成功后消费 nonce（确保发送失败可重试）
-            try:
-                nonce_val = str(getattr(intent, "risk_nonce", ""))
-                approval_id_val = str(getattr(intent, "risk_approval_id", ""))
-                if nonce_val and approval_id_val:
-                    await self._approval.consume_nonce(RiskApprovalId(approval_id_val), nonce_val)
-            except Exception as exc:
-                self._record_execution_fact_failure(
-                    f"RISK_NONCE_CONSUMPTION_FAILED:{intent.intent_id}:{type(exc).__name__}"
-                )
-
             actual_status = order.get("status", "NEW")
             self._last_order_placed_at = time.time()
             print(
@@ -5476,19 +5433,16 @@ class AutonomousEngine:
             # and make the failure visible to the operator.
             result.differences.append(f"RECON_PERSISTENCE_ERROR: {type(exc).__name__}")
 
-        # Testnet 豁免：对账不一致不触发 NO_NEW_RISK，避免瞬时数据差异阻断交易
-        if self._env_mode.value != "testnet":
-            if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-                self._safe_no_new_risk("auto")
+        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+            self._safe_no_new_risk("auto")
         description = "; ".join(result.differences) or str(getattr(result.status, "value", result.status))
-        _severity = AlertSeverity.WARNING if self._env_mode.value == "testnet" else AlertSeverity.CRITICAL
         self._alerts.send_incident(
-            _severity,
+            AlertSeverity.CRITICAL,
             "Reconciliation blocked",
             description,
             category="reconciliation",
         )
-        print(f"[recon] BLOCKED (testnet=warn): {description}" if self._env_mode.value == "testnet" else f"[recon] BLOCKED: {description}")
+        print(f"[recon] BLOCKED: {description}")
         return False
 
     def ingest_user_order_update(self, update: Any) -> bool:
@@ -7835,13 +7789,8 @@ class AutonomousEngine:
         self._venue_can_trade = venue_can_trade
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
-        # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力。
-        # 同时修正 _can_withdraw 为 False，确保 R9 风控规则不会因 Testnet API 误报而阻断交易。
-        self._can_withdraw = False if self._env_mode.value == "testnet" else venue_can_withdraw
-        # PKG02 (BDS-P0-001): 所有环境统一提款权限检查。
-        # Testnet 豁免：Binance Testnet API 的 canWithdraw 字段不代表真实提现能力，
-        # Testnet 环境中不存在可提取的真实资产，因此允许通过。
-        if venue_can_withdraw and self._env_mode.value != "testnet":
+        self._can_withdraw = venue_can_withdraw
+        if venue_can_withdraw:
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
@@ -8020,14 +7969,6 @@ class AutonomousEngine:
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
 
-        # 同步开盘投影余额，避免对账余额不匹配
-        try:
-            from beidou_bootstrap.dev import _sync_opening_balance as _sync_bal
-
-            _sync_bal(self, "")
-        except Exception as exc:
-            logger.warning("opening-balance projection sync failed: %s", type(exc).__name__)
-
         # Start health server early so liveness is available during bootstrap.
         # If the engine later exits DEGRADED, monitoring still sees a living
         # process instead of a silent exit 0 with no HTTP endpoint.
@@ -8057,47 +7998,6 @@ class AutonomousEngine:
         if not user_stream_ok and self._can_write:
             self._safe_no_new_risk("auto")
             print("[beidou-autopilot] User data stream unavailable — writable authority remains blocked")
-
-        # Clean stale NEW orders from previous sessions
-        print("[beidou-autopilot] Cleaning stale orders from previous sessions...")
-        try:
-            stale_deleted = self._store.clean_stale_new_orders()
-            if stale_deleted:
-                print(
-                    f"[beidou-autopilot] Deleted {stale_deleted} stale NEW orders "
-                    "(>1h old, from previous sessions)"
-                )
-        except Exception as e:
-            print(f"[beidou-autopilot] Warning: stale order cleanup failed: {e}")
-
-        # Clean orders for symbols NOT in the current trading universe.
-        # Orders on de-pooled symbols can never be polled for status updates,
-        # so they permanently block reconciliation.  Delete them proactively.
-        try:
-            universe = [str(s) for s in getattr(self, "_configured_symbols", [])]
-            if universe:
-                removed = getattr(self._store, "clean_orders_not_in_universe", lambda _u: 0)(universe)
-                if removed:
-                    print(
-                        f"[beidou-autopilot] Removed {removed} orders for symbols "
-                        f"not in current universe {universe}"
-                    )
-        except Exception as e:
-            print(f"[beidou-autopilot] Warning: universe order cleanup failed: {e}")
-
-        # Expire stale UNKNOWN orders (>8h) to prevent them from permanently
-        # blocking _durable_fact_status via DURABLE_ORDER_UNKNOWN.
-        try:
-            expire_fn = getattr(self._store, "expire_stale_unknown_orders", None)
-            if callable(expire_fn):
-                expired = expire_fn()
-                if expired:
-                    print(
-                        f"[beidou-autopilot] Expired {expired} stale UNKNOWN orders "
-                        "(>8h, blocking durable fact gate)"
-                    )
-        except Exception as e:
-            print(f"[beidou-autopilot] Warning: UNKNOWN order expiry failed: {e}")
 
         # Restore state from persistence
         print("[beidou-autopilot] Restoring state...")
@@ -8235,31 +8135,10 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    # PKG02 (BDS-P0-001): 所有环境统一处理 — 始终取消残留无主 Algo 订单。
-                    # 无条件清理，后续 Phase 3 中会为持仓重新创建保护单。
-                    print(f"[beidou-autopilot] Cancelling {len(unowned_algo_ids)} stale unowned Algo orders")
-                    for item in existing_algos:
-                        algo_id = str(item.get("algoId"))
-                        if algo_id not in known_algo_ids:
-                            sym = str(item.get("symbol", ""))
-                            try:
-                                await self._adapter.cancel_algo_order(sym, int(algo_id))
-                                print(f"[beidou-autopilot]   ✓ Cancelled {sym} Algo {algo_id}")
-                            except Exception as cancel_exc:
-                                print(f"[beidou-autopilot]   ⚠️  Failed to cancel {sym} Algo {algo_id}: {cancel_exc}")
-                    # Refresh inventory after cleanup
-                    existing_algos = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=30.0)
-                    existing_algo_inventory = existing_algos if isinstance(existing_algos, list) else None
-                    remaining = (
-                        len(existing_algos)
-                        if isinstance(existing_algos, list)
-                        else len(existing_algo_inventory)
-                        if isinstance(existing_algo_inventory, list)
-                        else "?"
-                    )
+                    self._block_unowned_protection_orders(unowned_algo_ids)
                     print(
-                        f"[beidou-autopilot] Testnet Algo cleanup complete; "
-                        f"{remaining} conditional orders remaining — will re-protect in next phase"
+                        f"[beidou-autopilot] {len(unowned_algo_ids)} unowned Algo orders remain UNKNOWN; "
+                        "startup recovery is read-only"
                     )
         except Exception as exc:
             print(f"[beidou-autopilot] Conditional-order inventory UNKNOWN: {exc}")
@@ -8299,22 +8178,6 @@ class AutonomousEngine:
                 print(
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"
                 )
-                # BD-FIX (S28): 残留保护记录清理后重试恢复。
-                # 旧保护记录指向已不存在的交易所 Algo 订单 → ownership UNKNOWN。
-                # PKG02 (BDS-P0-001): 不再按环境区分 — 所有环境使用统一清理+验证语义。
-                if durable_projection_ok is False:
-                    store = getattr(self, "_store", None)
-                    if store:
-                        try:
-                            for row in list(store.restore_protections()):
-                                store.remove_protection(str(row.get("position_id", "")))
-                            print("[beidou-autopilot] Cleaned stale protection records")
-                        except Exception:
-                            pass
-                    # 清理后仍需通过所有权验证，不跳过
-                    self._protection_owner_unknown = False
-                    durable_projection_ok = True
-                    print("[beidou-autopilot] Protection records cleaned, proceeding with ownership validation")
             # Phase 1: 本地创建所有保护单
             # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建
             existing_algo_count: dict[str, int] = {}
@@ -8549,15 +8412,8 @@ class AutonomousEngine:
             self._lifecycle.transition(ModuleState.ACTIVE)
             print(f"[beidou-autopilot] State: {self._lifecycle.state.value}")
 
-        # PKG02 (BDS-P0-001): 所有环境统一控制面启动行为
-        # Testnet: 保持 RESUME 不降级，由 supervisor 监控循环管理
-        if self._env_mode.value == "testnet":
-            print("[beidou-autopilot] Control plane: RESUME (testnet startup — kept)")
-        elif self._control.get_status() != ControlAction.RESUME:
-            self._safe_no_new_risk("auto")
-            print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
-        else:
-            print("[beidou-autopilot] Control plane: already RESUME (supervisor authorized)")
+        self._safe_no_new_risk("startup_validation")
+        print("[beidou-autopilot] Control plane: NO_NEW_RISK (awaiting supervisor validation)")
         if self._adapter is None:
             print("[beidou-autopilot] WARNING: Exchange not ready — supervisor will block RESUME")
 

@@ -61,6 +61,7 @@ def _make_ctx(
         hard_slippage_limit_bps=kwargs.get("hard_slippage_limit_bps", 50.0),
         alpha_decay_seconds=kwargs.get("alpha_decay_seconds", 60.0),
         min_quantity=kwargs.get("min_quantity", 0.001),  # PKG13: venue rules default
+        reduce_only=kwargs.get("reduce_only", False),
     )
 
 
@@ -111,6 +112,8 @@ class TestMarketableLimitAlgorithm:
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.algorithm == ExecutionAlgorithmType.MARKETABLE_LIMIT
         assert plan.slices[0].time_in_force == TimeInForce.IOC
+        assert isinstance(plan.slices[0].price, Price)
+        assert plan.slices[0].price.amount == "50005.0"
 
 
 class TestIOCAlgorithm:
@@ -219,7 +222,7 @@ class TestAdaptiveSliceAlgorithm:
 
 class TestEmergencyReduceOnlyAlgorithm:
     def test_can_handle_high_urgency_sell(self):
-        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.9)
+        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.9, reduce_only=True)
         algo = EmergencyReduceOnlyAlgorithm()
         assert algo.can_handle(ctx)
 
@@ -230,12 +233,17 @@ class TestEmergencyReduceOnlyAlgorithm:
 
     def test_can_handle_buy_for_short_positions(self):
         """PKG13: Emergency 现在也处理 BUY（SHORT 仓位需要 BUY reduce-only）。"""
-        ctx = _make_ctx(side=OrderSide.BUY, urgency=0.9)
+        ctx = _make_ctx(side=OrderSide.BUY, urgency=0.9, reduce_only=True)
         algo = EmergencyReduceOnlyAlgorithm()
         assert algo.can_handle(ctx)
 
+    def test_cannot_handle_risk_increasing_order_even_when_urgent(self):
+        ctx = _make_ctx(side=OrderSide.BUY, urgency=0.99, reduce_only=False)
+        algo = EmergencyReduceOnlyAlgorithm()
+        assert not algo.can_handle(ctx)
+
     def test_plan_market_order(self):
-        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.95, predicted_cost_bps=50.0)
+        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.95, predicted_cost_bps=50.0, reduce_only=True)
         algo = EmergencyReduceOnlyAlgorithm()
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.algorithm == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
@@ -259,10 +267,17 @@ class TestExecutionAlgorithmSelector:
 
     def test_selects_emergency_for_critical(self):
         sel = ExecutionAlgorithmSelector()
-        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.95)
+        ctx = _make_ctx(side=OrderSide.SELL, urgency=0.95, reduce_only=True)
         algo = sel.select(ctx)
         assert algo is not None
         assert algo.algorithm_type == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
+
+    def test_never_falls_back_to_emergency_for_risk_increase(self):
+        sel = ExecutionAlgorithmSelector(
+            approved_algorithm_types={ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY}
+        )
+        ctx = _make_ctx(side=OrderSide.BUY, urgency=0.99, reduce_only=False)
+        assert sel.select(ctx) is None
 
     def test_restricted_to_approved_set(self):
         sel = ExecutionAlgorithmSelector(approved_algorithm_types={ExecutionAlgorithmType.TWAP})

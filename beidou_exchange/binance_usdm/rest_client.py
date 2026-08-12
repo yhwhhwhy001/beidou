@@ -360,8 +360,8 @@ class BinanceRESTClient:
 
     async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
         """发送 HTTP 请求并返回 Result[T]。HTTP 调用在线程池中执行，不阻塞事件循环。"""
-        if params is None:
-            params = {}
+        base_params = dict(params or {})
+        method = str(method).upper()
 
         # A writable Testnet request has the same ambiguity and rate-limit
         # semantics as any other venue write.  Environment labels must never
@@ -380,32 +380,30 @@ class BinanceRESTClient:
 
         url = self._rest_url + path
 
-        if signed:
-            params["timestamp"] = int(time.time() * 1000) + self._clock_offset_ms
-            params["recvWindow"] = self._recv_window
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-            params["signature"] = hmac.new(
-                self._api_secret.encode(),
-                qs.encode(),
-                hashlib.sha256,
-            ).hexdigest()
-
-        qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-
         for attempt in range(self._max_retries):
             try:
                 import urllib.error
                 import urllib.request
 
-                if method == "POST":
-                    req = urllib.request.Request(url, data=qs.encode())
-                elif method == "DELETE":
-                    full_url = url + "?" + qs if qs else url
-                    req = urllib.request.Request(full_url)
-                    req.method = "DELETE"
+                # Rebuild and re-sign every attempt.  A timestamp/signature is
+                # a per-attempt venue fact and must not be reused after backoff.
+                request_params = dict(base_params)
+                if signed:
+                    request_params["timestamp"] = int(time.time() * 1000) + self._clock_offset_ms
+                    request_params["recvWindow"] = self._recv_window
+                    signing_qs = "&".join(f"{k}={v}" for k, v in sorted(request_params.items()))
+                    request_params["signature"] = hmac.new(
+                        self._api_secret.encode(),
+                        signing_qs.encode(),
+                        hashlib.sha256,
+                    ).hexdigest()
+                qs = "&".join(f"{k}={v}" for k, v in sorted(request_params.items()))
+
+                if method in {"POST", "PUT"}:
+                    req = urllib.request.Request(url, data=qs.encode(), method=method)
                 else:
                     full_url = url + "?" + qs if qs else url
-                    req = urllib.request.Request(full_url)
+                    req = urllib.request.Request(full_url, method=method)
 
                 req.add_header("X-MBX-APIKEY", self._api_key)
 
@@ -463,6 +461,28 @@ class BinanceRESTClient:
 
                 category, retryable = classify_http_error(http_status, "", binance_code)
 
+                # A generic venue 5xx on a write is not a confirmed failure:
+                # the request may already have reached the matching engine.
+                # Preserve UNKNOWN and require an exact client-id/readback
+                # reconciliation before any new write attempt.
+                if method in {"POST", "PUT", "DELETE"} and http_status >= 500:
+                    raw_error.update(
+                        {
+                            "method": method,
+                            "path": path,
+                            "write_safety": "QUERY_BEFORE_RETRY_REQUIRED",
+                        }
+                    )
+                    self._rate_state.consecutive_failures += 1
+                    return Result.failure(
+                        f"WRITE_UNKNOWN: {error_message or f'HTTP {http_status}'}",
+                        http_status=http_status,
+                        category=ErrorCategory.UNKNOWN,
+                        retryable=False,
+                        raw=raw_error,
+                        source="binance_rest",
+                    )
+
                 if category == ErrorCategory.RATE_LIMIT:
                     # Retry-After is advisory; malformed values must not turn
                     # a venue rate-limit response into a generic NETWORK
@@ -511,7 +531,7 @@ class BinanceRESTClient:
                 # PKG11 (BDS-P0-012): 写请求盲重试防护
                 # POST/DELETE 在超时/网络故障时不得盲重试 — 可能导致重复订单。
                 # 标记为 UNKNOWN 状态，调用方必须查询订单状态 (queryOrder) 后决定 adopt/retry。
-                is_write = method in ("POST", "DELETE")
+                is_write = method in ("POST", "PUT", "DELETE")
                 if is_write and attempt >= 0:  # 写请求第一次失败即停止
                     self._rate_state.consecutive_failures += 1
                     return Result.failure(

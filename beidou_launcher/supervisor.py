@@ -257,10 +257,7 @@ class BeidouSupervisor:
             return self._original_control_execute(action, *args, **kwargs)
 
         control.execute_action = guarded_execute
-        # PKG02 (BDS-P0-001): 所有环境统一初始化 NO_NEW_RISK。
-        # Testnet: 跳过，引擎已初始化为 RESUME
-        if self.mode != "testnet":
-            control.execute_action(ControlAction.NO_NEW_RISK)
+        control.execute_action(ControlAction.NO_NEW_RISK)
         self._control_paused_by_supervisor = True
 
     def _control_state(self) -> str:
@@ -595,8 +592,8 @@ class BeidouSupervisor:
         samples = [
             (SLICategory.DATA_QUALITY, all_pass("runtime.health.market_data")),
             (SLICategory.ORDER_DUPLICATES, order_ok),
-            (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage") if self.mode != "testnet" else True),
-            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation") if self.mode != "testnet" else True),
+            (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage")),
+            (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation")),
             (SLICategory.RECOVERY_BOUNDED, self._recovery_count <= self.max_restarts),
             (SLICategory.INCIDENT_CLOSURE, all_pass("runtime.health.incidents")),
             (SLICategory.COST_PNL_REPORTING, all_pass("runtime.safety.cost_and_pnl_reporting")),
@@ -886,21 +883,6 @@ class BeidouSupervisor:
         if self.engine is None:
             return False
         if not self._resume_authorized:
-            has_blockers = any(item.is_blocking for item in checks)
-            # Testnet: 忽略所有阻断，无条件 RESUME
-            if self.mode == "testnet" and has_blockers:
-                _blockers = [c.check_id for c in checks if c.is_blocking]
-                print(f"[supervisor] testnet豁免: 忽略 {len(_blockers)} 个阻断 → 强制RESUME")
-                has_blockers = False
-            if not has_blockers and self.report.supervisor_state in ("DEGRADED", "PAUSED"):
-                print("[supervisor] All checks clear — re-authorizing RESUME")
-                self._resume_authorized = True
-                from beidou_control.plane import ControlAction as _CA2
-
-                self.engine._control.execute_action(_CA2.RESUME)
-                self.report.supervisor_state = "RUNNING"
-                self.report.trading_ready = True
-                return True
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
@@ -1118,8 +1100,9 @@ class BeidouSupervisor:
             self._install_resume_interlock()
             self._install_health_callbacks()
 
-            # DEV_BYPASS: Paper/Testnet 模式下自动激活因子和交易池
-            if self.mode in ("paper", "testnet", "research"):
+            # DEV_BYPASS: 在构造后、接线检查前激活因子。
+            # testnet 模式需要因子可用才能通过 Alpha DAG 接线检查。
+            if self.mode in ("paper", "research", "testnet"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
 
@@ -1159,40 +1142,7 @@ class BeidouSupervisor:
                 await bootstrap_universe(self.engine)
             except Exception as _uni_exc:
                 print(f"[supervisor] 首次宇宙评估失败（非致命）: {_uni_exc}")
-            # PKG02 (BDS-P0-001): 所有环境统一执行深度启动验证。
-            if os.environ.get("BEIDOU_DEV_FAST_START") == "1":
-                print("[supervisor] DEV_FAST_START: 跳过深度启动验证，直接授权 RESUME")
-                # 仍需要运行算法探针以消除启动阻断。
-                # 加超时防止 REST API 缓慢时无限挂起。
-                try:
-                    from beidou_launcher.runtime import run_read_only_algorithm_probe as _probe
-
-                    self._algorithm_probe = await asyncio.wait_for(_probe(self.engine, self.symbols), timeout=60.0)
-                    print(f"[supervisor] Algorithm probe: {(self._algorithm_probe.get('ok') and 'PASS') or 'FAIL'}")
-                except asyncio.TimeoutError:
-                    self._algorithm_probe = {"ok": False, "error": "Algorithm probe timed out after 60s"}
-                    print("[supervisor] Algorithm probe timed out")
-                except Exception as _exc:
-                    self._algorithm_probe = {"ok": False, "error": f"{type(_exc).__name__}: {_exc}"}
-                    print(f"[supervisor] Algorithm probe failed: {_exc}")
-                self._resume_authorized = True
-                from beidou_control.plane import ControlAction as _CA
-
-                # BD-FIX (S23): 通过保存的原始方法直接设置 RESUME，绕过 guard
-                self._original_control_execute(_CA.RESUME)
-                print(
-                    f"[supervisor] RESUME set via original method. Status: {self.engine._control.get_status().value}",
-                    flush=True,
-                )
-                self.report.supervisor_state = "RUNNING"
-                self.report.trading_ready = True
-                ready = True
-                await asyncio.sleep(5)
-                if self.engine._control.get_status() != _CA.RESUME:
-                    print("[supervisor] Re-confirming RESUME", flush=True)
-                    self.engine._control.execute_action(_CA.RESUME)
-            else:
-                ready = await self._wait_for_startup()
+            ready = await self._wait_for_startup()
             if not ready:
                 if self._shutdown_requested:
                     self.report.supervisor_state = "STOPPED"

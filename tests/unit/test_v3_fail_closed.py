@@ -438,6 +438,7 @@ def test_unsupported_state_backend_rejects_live_risk_increase_at_executor() -> N
 
 def test_durable_protection_coverage_is_per_position_side_quantity_and_generation() -> None:
     engine = object.__new__(AutonomousEngine)
+    engine._protection_owner_id = "owner-1"
     engine._position_generation = {"BTCUSDT": 7}
     engine._position_projection = {"BTCUSDT": {"position_generation": 7}}
     positions = [{"symbol": "BTCUSDT", "positionAmt": "1.0"}]
@@ -450,6 +451,8 @@ def test_durable_protection_coverage_is_per_position_side_quantity_and_generatio
             "stop_type": "FIXED_PERCENT",
             "position_generation": 7,
             "exchange_order_id": "algo-sl-7",
+            "owner_id": "owner-1",
+            "status": "ACTIVE",
         },
         {
             "symbol": "BTCUSDT",
@@ -459,6 +462,8 @@ def test_durable_protection_coverage_is_per_position_side_quantity_and_generatio
             "take_profit_type": "FIXED_RR",
             "position_generation": 7,
             "exchange_order_id": "algo-tp-7",
+            "owner_id": "owner-1",
+            "status": "ACTIVE",
         },
     ]
 
@@ -478,6 +483,7 @@ def test_durable_protection_coverage_is_per_position_side_quantity_and_generatio
 
 def test_durable_protection_coverage_rejects_partial_stop_even_when_total_quantity_matches() -> None:
     engine = object.__new__(AutonomousEngine)
+    engine._protection_owner_id = "owner-1"
     engine._position_generation = {"ETHUSDT": 2}
     engine._position_projection = {"ETHUSDT": {"position_generation": 2}}
     positions = [{"symbol": "ETHUSDT", "positionAmt": "2"}]
@@ -490,6 +496,8 @@ def test_durable_protection_coverage_rejects_partial_stop_even_when_total_quanti
             "stop_type": "FIXED_PERCENT",
             "position_generation": 2,
             "exchange_order_id": "algo-sl-2",
+            "owner_id": "owner-1",
+            "status": "ACTIVE",
         },
         {
             "symbol": "ETHUSDT",
@@ -499,6 +507,8 @@ def test_durable_protection_coverage_rejects_partial_stop_even_when_total_quanti
             "take_profit_type": "FIXED_RR",
             "position_generation": 2,
             "exchange_order_id": "algo-tp-2",
+            "owner_id": "owner-1",
+            "status": "ACTIVE",
         },
     ]
 

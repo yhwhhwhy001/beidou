@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,14 +38,55 @@ class InstrumentRuleSnapshot:
     @property
     def is_known(self) -> bool:
         """规则是否已知且可用。"""
-        return (
-            self.tick_size != ""
-            and self.step_size != ""
-            and self.min_qty != ""
-            and self.min_notional != ""
-            and self.price_precision > 0
-            and self.qty_precision > 0
+        try:
+            values = tuple(
+                Decimal(value)
+                for value in (self.tick_size, self.step_size, self.min_qty, self.min_notional)
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+        return all(value.is_finite() and value > 0 for value in values) and (
+            self.price_precision >= 0 and self.qty_precision >= 0
         )
+
+    @staticmethod
+    def _precision(value: str) -> int:
+        decimal_value = Decimal(value)
+        if not decimal_value.is_finite() or decimal_value <= 0:
+            raise ValueError("venue increment must be finite and positive")
+        return max(0, -decimal_value.normalize().as_tuple().exponent)
+
+    def quantize_quantity(self, quantity: str) -> str:
+        """Round a positive quantity down to the exact venue step.
+
+        Quantity rounding is deliberately one-way: quantization may reduce an
+        approved amount, but must never create additional approved risk.
+        """
+
+        value = Decimal(str(quantity))
+        step = Decimal(self.step_size)
+        if not value.is_finite() or value <= 0 or not step.is_finite() or step <= 0:
+            raise ValueError("quantity or step is invalid")
+        quantized = (value / step).to_integral_value(rounding=ROUND_DOWN) * step
+        if quantized <= 0:
+            raise ValueError("quantity rounds to zero")
+        return f"{quantized:.{self.qty_precision}f}"
+
+    def quantize_price(self, price: str, *, side: str) -> str:
+        """Quantize without violating the approved limit-price direction."""
+
+        value = Decimal(str(price))
+        tick = Decimal(self.tick_size)
+        if not value.is_finite() or value <= 0 or not tick.is_finite() or tick <= 0:
+            raise ValueError("price or tick is invalid")
+        side_upper = str(side).upper()
+        if side_upper not in {"BUY", "SELL"}:
+            raise ValueError("side must be BUY or SELL")
+        rounding = ROUND_DOWN if side_upper == "BUY" else ROUND_UP
+        quantized = (value / tick).to_integral_value(rounding=rounding) * tick
+        if quantized <= 0:
+            raise ValueError("price rounds to zero")
+        return f"{quantized:.{self.price_precision}f}"
 
     @property
     def is_stale(self, max_age_seconds: float = 3600.0) -> bool:
@@ -93,22 +135,14 @@ class InstrumentRuleSnapshot:
         min_qty = str(lot_filter.get("minQty", ""))
         min_notional = str(notional_filter.get("notional", ""))
 
-        # 从 tick_size 推导精度
-        price_precision = 0
-        if tick_size and tick_size != "0":
-            try:
-                tick_val = float(tick_size)
-                price_precision = max(0, len(str(tick_val).rstrip("0").split(".")[-1]) if "." in str(tick_val) else 0)
-            except ValueError:
-                pass
-
-        qty_precision = 0
-        if step_size and step_size != "0":
-            try:
-                step_val = float(step_size)
-                qty_precision = max(0, len(str(step_val).rstrip("0").split(".")[-1]) if "." in str(step_val) else 0)
-            except ValueError:
-                pass
+        try:
+            price_precision = cls._precision(tick_size)
+        except (InvalidOperation, TypeError, ValueError):
+            price_precision = -1
+        try:
+            qty_precision = cls._precision(step_size)
+        except (InvalidOperation, TypeError, ValueError):
+            qty_precision = -1
 
         return cls(
             symbol=symbol,

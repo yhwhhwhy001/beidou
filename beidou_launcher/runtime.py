@@ -394,7 +394,6 @@ def collect_runtime_checks(
         and reconciliation_status == "MATCHED"
         and reconciliation_fresh
     )
-    _is_testnet = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
     if reconciliation_ok:
         recon_status = CheckStatus.PASS
         recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
@@ -402,20 +401,18 @@ def collect_runtime_checks(
         recon_status = CheckStatus.FAIL
         recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
     else:
-        # Testnet: 对账不一致降级为 WARN，不阻断交易授权
-        recon_status = CheckStatus.WARN if _is_testnet else CheckStatus.FAIL
+        recon_status = CheckStatus.FAIL
         recon_message = (
-            f"三方对账{'警告' if _is_testnet else '不可授权'}: status={reconciliation_status}, "
+            f"三方对账不可授权: status={reconciliation_status}, "
             f"matched={bool(getattr(reconciliation, 'matched', False))}, "
             f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
         )
-    _recon_sev = CheckSeverity.P1 if _is_testnet else CheckSeverity.P0
     checks.append(
         CheckResult(
             check_id="runtime.safety.reconciliation_authority",
             name="权威三方对账事实",
             status=recon_status,
-            severity=_recon_sev,
+            severity=CheckSeverity.P0,
             message=recon_message,
             evidence={
                 "status": reconciliation_status,
@@ -448,21 +445,13 @@ def collect_runtime_checks(
     else:
         user_stream_ready = True
     if can_write:
-        # Testnet 豁免：Binance Testnet 用户数据流可能不稳定，
-        # WebSocket 断连不应阻断 testnet 交易授权
-        _is_testnet = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
-        if _is_testnet and not user_stream_ready:
-            user_stream_status = CheckStatus.WARN
-            user_stream_severity = CheckSeverity.P1
-            user_stream_message = "用户数据流未就绪（testnet 豁免，不阻断）"
-        else:
-            user_stream_status = CheckStatus.PASS if user_stream_ready else CheckStatus.FAIL
-            user_stream_severity = CheckSeverity.P0
-            user_stream_message = (
-                "用户数据流已连接且有新鲜完整事实"
-                if user_stream_ready
-                else "用户数据流未形成当前进程的可验证新鲜事实，禁止交易授权"
-            )
+        user_stream_status = CheckStatus.PASS if user_stream_ready else CheckStatus.FAIL
+        user_stream_severity = CheckSeverity.P0
+        user_stream_message = (
+            "用户数据流已连接且有新鲜完整事实"
+            if user_stream_ready
+            else "用户数据流未形成当前进程的可验证新鲜事实，禁止交易授权"
+        )
     else:
         user_stream_status = CheckStatus.PASS
         user_stream_severity = CheckSeverity.P1

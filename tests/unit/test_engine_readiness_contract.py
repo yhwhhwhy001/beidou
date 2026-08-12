@@ -593,7 +593,13 @@ def test_final_send_rejects_order_payload_mutation_after_approval() -> None:
     engine._risk_sm = state_machine
     engine._approval = signer
 
+    # Preflight is repeatable and does not consume the one-shot approval.
     assert asyncio.run(engine._verify_intent_at_send(intent)) is True
+    assert asyncio.run(engine._verify_intent_at_send(intent)) is True
+    # The final send boundary consumes both signer nonce and approval state.
+    assert asyncio.run(engine._verify_intent_at_send(intent, consume_nonce=True)) is True
+    assert state_machine.is_consumed(approval_id)
+    assert asyncio.run(engine._verify_intent_at_send(intent, consume_nonce=True)) is False
     tampered = replace(intent, quantity=Quantity(amount="0.2"))
     assert asyncio.run(engine._verify_intent_at_send(tampered)) is False
 
@@ -718,6 +724,37 @@ def test_protection_coverage_requires_exact_side_generation_and_quantity() -> No
     assert ok is False
     assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
 
+
+def test_pending_or_unacked_protection_never_counts_as_coverage() -> None:
+    engine = _engine()
+    engine._position_projection = {"BTCUSDT": {"position_generation": 1}}
+    engine._position_generation = {"BTCUSDT": 1}
+    position = [{"symbol": "BTCUSDT", "positionAmt": "0.01", "entryPrice": "50000"}]
+    pending = [
+        {
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "position_generation": 1,
+            "quantity": "0.01",
+            "order_type": "STOP_MARKET",
+            "owner_id": "owner-1",
+            "exchange_order_id": "",
+            "status": "PENDING",
+        }
+    ]
+    ok, evidence = engine._assess_protection_coverage(position, pending)
+    assert ok is False
+    assert evidence["unprotected_symbols"]
+
+
+def test_small_position_is_not_exempt_from_protection() -> None:
+    engine = _engine()
+    engine._position_projection = {"ETHUSDT": {"position_generation": 1}}
+    engine._position_generation = {"ETHUSDT": 1}
+    position = [{"symbol": "ETHUSDT", "positionAmt": "0.01", "entryPrice": "2000"}]
+    ok, evidence = engine._assess_protection_coverage(position, [])
+    assert ok is False
+    assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
 
 def test_protection_coverage_rejects_orphans_and_local_position_without_venue_fact() -> None:
     engine = _engine()

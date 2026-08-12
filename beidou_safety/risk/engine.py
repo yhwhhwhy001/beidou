@@ -672,7 +672,7 @@ class PostRiskMonitor:
         self._violations.append({"detail": detail, "timestamp": datetime.now(timezone.utc)})
 
     def recommend_degradation(self) -> bool:
-        return len(self._violations) > 50  # 提高阈值，避免初始批量订单触发误降级
+        return len(self._violations) >= 6
 
     def cannot_approve(self) -> bool:
         return True  # Post-Risk 永远不能追认

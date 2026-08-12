@@ -61,6 +61,39 @@ class TestInstrumentRuleSnapshot:
         )
         assert snap.is_known
 
+    def test_integer_tick_and_step_are_valid_zero_precision_rules(self):
+        snap = InstrumentRuleSnapshot.from_exchange_info(
+            "INTEGERUSDT",
+            {
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "1"},
+                    {"filterType": "LOT_SIZE", "stepSize": "1", "minQty": "1"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                ]
+            },
+        )
+        assert snap.is_known
+        assert snap.price_precision == 0
+        assert snap.qty_precision == 0
+
+    def test_scientific_notation_precision_and_conservative_quantization(self):
+        snap = InstrumentRuleSnapshot.from_exchange_info(
+            "MICROUSDT",
+            {
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "1E-8"},
+                    {"filterType": "LOT_SIZE", "stepSize": "1E-7", "minQty": "1E-7"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "0.01"},
+                ]
+            },
+        )
+        assert snap.is_known
+        assert snap.price_precision == 8
+        assert snap.qty_precision == 7
+        assert snap.quantize_quantity("0.00000015") == "0.0000001"
+        assert snap.quantize_price("1.234567899", side="BUY") == "1.23456789"
+        assert snap.quantize_price("1.234567891", side="SELL") == "1.23456790"
+
     def test_hash_consistent(self):
         now = datetime.now(timezone.utc).isoformat()
         s1 = InstrumentRuleSnapshot(

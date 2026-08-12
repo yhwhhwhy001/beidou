@@ -61,6 +61,7 @@ class ExecutionContext:
     min_notional: float = 0.0
     net_alpha_bps: float = 0.0  # 净 Alpha(bps)
     hard_slippage_limit_bps: float = 50.0  # 硬滑点上限(bps)
+    reduce_only: bool = False  # 必须由已签名意图显式提供
     correlation_id: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -227,7 +228,7 @@ class MarketableLimitAlgorithm(BaseExecutionAlgorithm):
                     slice_id=f"{order_id}-mktlimit-0",
                     parent_order_id=order_id,
                     quantity=ctx.total_quantity,
-                    price=effective_price,
+                    price=Price(amount=str(effective_price)),
                     order_type=OrderType.LIMIT,
                     time_in_force=TimeInForce.IOC,
                     algorithm=self.algorithm_type,
@@ -606,18 +607,12 @@ class EmergencyReduceOnlyAlgorithm(BaseExecutionAlgorithm):
     algorithm_type = ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
 
     def can_handle(self, ctx: ExecutionContext) -> bool:
-        # PKG13: 多空双向应急 — LONG→SELL, SHORT→BUY
-        return ctx.urgency >= 0.8
+        # Urgency alone never grants reduce-only authority.  Direction and
+        # reduction semantics are already bound into the signed intent.
+        return ctx.reduce_only and ctx.urgency >= 0.8
 
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         invariant_ok, _msg = self.check_invariants(ctx)
-
-        # PKG13: 按持仓方向确定 reduce-only side
-        position_side = getattr(ctx, "position_side", None)
-        if position_side and str(position_side).upper() == "SHORT":
-            reduce_side = OrderSide.BUY
-        else:
-            reduce_side = OrderSide.SELL
 
         return ExecutionPlan(
             algorithm=self.algorithm_type,
@@ -654,7 +649,7 @@ class ExecutionAlgorithmSelector:
     ]
 
     def __init__(self, approved_algorithm_types: set[ExecutionAlgorithmType] | None = None) -> None:
-        self._approved = approved_algorithm_types or set(ExecutionAlgorithmType)
+        self._approved = set(ExecutionAlgorithmType) if approved_algorithm_types is None else approved_algorithm_types
         self._quality_scores: dict[ExecutionAlgorithmType, float] = dict.fromkeys(ExecutionAlgorithmType, 0.5)
 
     @property
@@ -669,18 +664,10 @@ class ExecutionAlgorithmSelector:
         applicable = [a for a in candidates if a.can_handle(ctx)]
 
         if not applicable:
-            # 无适用算法时回退到已批准确定性策略
-            safe_fallbacks = [
-                a for a in candidates if a.algorithm_type in (ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY,)
-            ]
-            if safe_fallbacks:
-                return safe_fallbacks[0]
-            # 最后回退到 IOC（快速退出）
-            ioc_fallback = [a for a in candidates if a.algorithm_type == ExecutionAlgorithmType.IOC]
-            return ioc_fallback[0] if ioc_fallback else None
+            return None
 
         # 应急减仓优先 — 安全完成，不追求 maker
-        if ctx.urgency >= 0.8:
+        if ctx.reduce_only and ctx.urgency >= 0.8:
             emergency = [a for a in applicable if a.algorithm_type == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY]
             if emergency:
                 return emergency[0]

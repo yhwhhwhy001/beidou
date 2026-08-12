@@ -151,10 +151,10 @@ def _r4_consecutive_losses(context: dict) -> RuleDecision:
 
 
 def _r5_sharpe(context: dict) -> RuleDecision:
-    """R5: Sharpe 比率下限。未校准或缺失返回 PASS（初始宽限期）。"""
+    """R5: Sharpe 比率下限。未校准或缺失保持 UNKNOWN。"""
     sharpe = context.get("rolling_sharpe")
     if sharpe is None:
-        return RuleDecision.PASS  # 无交易历史 → 允许初始交易
+        return RuleDecision.UNKNOWN
     min_sharpe = context.get("min_sharpe_rolling")
     if min_sharpe is None:
         return RuleDecision.UNKNOWN

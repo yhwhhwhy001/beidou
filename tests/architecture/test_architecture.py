@@ -547,7 +547,82 @@ def test_testnet_market_orders_cannot_bypass_execution_plan() -> None:
     end = source.index("    async def _plan_execution(", start)
     place_order = source[start:end]
     assert "_testnet_market" not in place_order
+    assert 'self._env_mode.value == "testnet"' not in place_order
+    assert "MARKET_DIRECT" not in place_order
     assert "planned = await self._plan_execution" in place_order
+
+
+def test_final_approval_is_consumed_before_first_exchange_write() -> None:
+    root = ROOT
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    submit_start = source.index("    async def _submit_order_slice(")
+    submit_end = source.index("\n    async def ", submit_start + 1)
+    submit = source[submit_start:submit_end]
+    verify_at = submit.index("consume_nonce=True")
+    write_at = submit.index("self._adapter.create_order")
+    assert verify_at < write_at
+    assert "self._approval.consume_nonce" not in submit
+
+
+def test_environment_labels_cannot_downgrade_safety_authority() -> None:
+    """Current bypass spellings must not evade the semantic-parity gate."""
+
+    root = ROOT
+    import ast
+
+    guarded_functions = {
+        root / "beidou_core" / "engine.py": {
+            "_safe_no_new_risk",
+            "_record_execution_fact_failure",
+            "_place_order",
+            "_record_reconciliation_failure",
+        },
+        root / "beidou_launcher" / "supervisor.py": {
+            "_install_resume_interlock",
+            "_record_sli_samples",
+            "_recover_if_validated",
+        },
+        root / "beidou_launcher" / "runtime.py": {"collect_runtime_checks"},
+    }
+    violations: list[str] = []
+    for path, function_names in guarded_functions.items():
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in function_names:
+                for child in ast.walk(node):
+                    if isinstance(child, (ast.If, ast.IfExp)) and "testnet" in ast.unparse(child.test).lower():
+                        violations.append(f"{path.name}:{node.name}")
+                        break
+
+    engine_source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    supervisor_source = (root / "beidou_launcher" / "supervisor.py").read_text(encoding="utf-8")
+    if 'object.__setattr__(self._control, "_action", ControlAction.RESUME)' in engine_source:
+        violations.append("engine.py:forced_control_resume")
+    if "BEIDOU_DEV_FAST_START" in supervisor_source:
+        violations.append("supervisor.py:dev_fast_start")
+    assert violations == []
+
+
+def test_dev_bypass_is_not_available_to_testnet() -> None:
+    root = ROOT
+    source = (root / "beidou_bootstrap" / "dev.py").read_text(encoding="utf-8")
+    assert 'mode not in ("paper", "research", "testnet")' not in source
+
+
+def test_startup_recovery_is_read_only_for_ambiguous_execution_facts() -> None:
+    root = ROOT
+    source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    run_start = source.index("    async def run(self) -> None:")
+    run_end = source.index("\n    async def _shutdown", run_start)
+    startup = source[run_start:run_end]
+    assert "_sync_opening_balance" not in startup
+    assert "clean_stale_new_orders" not in startup
+    assert "clean_orders_not_in_universe" not in startup
+    assert "expire_stale_unknown_orders" not in startup
+    assert "cancel_algo_order" not in startup
+    assert "store.remove_protection" not in startup
+    assert "_protection_owner_unknown = False" not in startup
 
 
 def test_engine_risk_boundary_has_no_synthetic_market_or_precision_fallback() -> None:

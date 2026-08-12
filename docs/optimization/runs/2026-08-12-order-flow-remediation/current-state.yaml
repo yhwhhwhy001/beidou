@@ -1,0 +1,22 @@
+run_id: 2026-08-12-order-flow-remediation
+repository: /Users/maguannan/beidou
+baseline_commit: 893c81dfabc4063f1428c85b844838cda4c32baf
+authority:
+  local_source_changes: true
+  local_tests: true
+  exchange_writes: false
+  restart_or_deploy: false
+  git_commit_or_push: false
+status: IN_PROGRESS
+gates:
+  G0: {progress: COMPLETE, decision: READY}
+  G1: {progress: COMPLETE, decision: APPROVED}
+  G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS}
+  G3: {progress: COMPLETE, decision: READY}
+  G4: {progress: IN_PROGRESS, decision: NOT_STARTED}
+  G5: {progress: IN_PROGRESS, decision: NOT_STARTED}
+  G6: {progress: NOT_STARTED, decision: NOT_STARTED}
+  G7: {progress: NOT_STARTED, decision: NOT_STARTED}
+  G8: {progress: NOT_STARTED, decision: NOT_STARTED}
+  G9: {progress: COMPLETE, decision: NOT_APPLICABLE, reason: no release or Git authority}
+  G10: {progress: COMPLETE, decision: NOT_AUTHORIZED}

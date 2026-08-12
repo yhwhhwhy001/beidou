@@ -106,6 +106,28 @@ def test_convenience_methods_share_one_request_boundary(monkeypatch: pytest.Monk
     assert calls[-1][1] == Endpoint.TICKER_24HR
 
 
+def test_keepalive_transport_preserves_put_method(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The convenience boundary is insufficient: the actual transport must send PUT."""
+
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    methods: list[str] = []
+
+    def fake_urlopen(request, timeout, _session=None):
+        methods.append(request.get_method())
+        return b'{"listenKey":"listen-key-1"}', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    result = asyncio.run(client.keepalive_listen_key("listen-key-1"))
+
+    assert result.is_success() is True
+    assert methods == ["PUT"]
+
+
 def test_signed_success_adds_timestamp_signature_and_auth_header(monkeypatch: pytest.MonkeyPatch) -> None:
     client = BinanceRESTClient(
         "https://demo.example",
@@ -228,6 +250,42 @@ def test_http_5xx_retryable_error_and_business_rejection(monkeypatch: pytest.Mon
     assert result.error is not None
     assert result.error.category is ErrorCategory.EXCHANGE_UNAVAILABLE
     assert calls == 2
+
+
+def test_ambiguous_order_503_is_unknown_and_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A venue write may have succeeded despite a generic 503; query by client id first."""
+
+    client = BinanceRESTClient("https://demo.example", api_secret="secret", max_retries=3)  # noqa: S106
+    calls = 0
+
+    def unavailable(request, timeout, _session=None):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            request.full_url,
+            503,
+            "unknown execution status",
+            {},
+            BytesIO(b'{"msg":"Unknown error, please check your request or try again later."}'),
+        )
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", unavailable)
+    result = asyncio.run(
+        client.create_order(
+            "BTCUSDT",
+            "BUY",
+            "MARKET",
+            "0.001",
+            client_order_id="beidou-ambiguous-1",
+        )
+    )
+
+    assert result.is_success() is False
+    assert result.error is not None
+    assert result.error.category is ErrorCategory.UNKNOWN
+    assert result.error.retryable is False
+    assert result.error.raw["write_safety"] == "QUERY_BEFORE_RETRY_REQUIRED"
+    assert calls == 1
 
 
 def test_account_capability_requires_all_independent_facts(monkeypatch: pytest.MonkeyPatch) -> None:

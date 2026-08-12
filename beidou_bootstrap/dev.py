@@ -60,16 +60,12 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     """
     import os as _os
 
-    if mode not in ("paper", "research", "testnet"):
+    if mode not in ("paper", "research"):
         print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
         return
 
     skip_factor = _os.environ.get("BEIDOU_SKIP_FACTOR_BYPASS") == "1"
     skip_pool = _os.environ.get("BEIDOU_SKIP_POOL_BYPASS", "1") == "1"  # 默认跳过交易池 bypass
-
-    if mode == "testnet":
-        print("[beidou-bootstrap] Testnet 模式 — 因子激活，交易池由真实算法管理")
-        print("[beidou-bootstrap] TradingPool: OBSERVING → PROMOTED(≥0.6分) → ACTIVE")
 
     print("[beidou-bootstrap] DEV_BYPASS: 开始激活因子...")
 
