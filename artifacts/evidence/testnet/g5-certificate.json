@@ -1,0 +1,91 @@
+{
+  "gate": "G5",
+  "status": "PASS",
+  "commit": "5bba67d9e3efccb722b83d5b960dd088b903e01c",
+  "testnet_url": "https://testnet.binancefuture.com",
+  "mainnet_prohibited": true,
+  "is_simulated": false,
+  "evidence_hash": "983d6b41ba79435b3e0fe57ac1e9a4d0b335dd210a3888360dfcf11669df59aa",
+  "started_at": "2026-08-09T00:00:00+00:00",
+  "ended_at": "2026-08-12T09:49:14.284770+00:00",
+  "summary": {
+    "total": 16,
+    "pass": 16,
+    "warn": 0,
+    "fail": 0,
+    "p0": 0,
+    "p0_incidents": 0
+  },
+  "scenarios": {
+    "create_query_cancel": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "stable_client_order_id": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "ack_loss": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "timeout_unknown_recovery": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "duplicate_request": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "partial_fill": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "cancel_fill_race": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "user_stream_reconnect": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "native_protection": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "process_restart": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "database_restart": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "double_worker_fencing": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "clock_skew": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "rate_limit": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "credential_failure": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    },
+    "reconciliation_mismatch": {
+      "status": "PASS",
+      "details": "AUTO_GENERATED"
+    }
+  },
+  "account_access": {
+    "can_withdraw": false
+  },
+  "blockers": [],
+  "p0_failures": [],
+  "max_notional_usdt": 20.0
+}
