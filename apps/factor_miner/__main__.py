@@ -101,7 +101,11 @@ def run(
 
     try:
         from beidou_core.feed import MarketDataFeed
-        from beidou_research.mining.runner import MiningRunner, PipelineConfig
+        from beidou_research.mining.runner import (
+            MiningRunner,
+            PipelineConfig,
+            compute_feature_manifest_hash,
+        )
 
         feed = MarketDataFeed()
         all_results: list[dict] = []
@@ -141,6 +145,9 @@ def run(
             pipeline_config = PipelineConfig.from_yaml(policy)
             pipeline_config.evidence_dir = output_dir
             pipeline_config.dataset_manifest_hash = manifest_hash
+            # GAP-1: 特征 schema manifest 必须独立于 dataset payload 绑定。
+            # 本地数据与 API 拉取两条路径共用此处配置构造，均注入。
+            pipeline_config.feature_manifest_hash = compute_feature_manifest_hash()
             if not manifest_hash:
                 click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）")
             runner = MiningRunner(pipeline_config)
@@ -185,7 +192,9 @@ def run(
 @click.option("--max-pages", default=400, show_default=True, type=click.IntRange(1, 2000))
 @click.option("--data-root", default=".beidou/data/klines", show_default=True)
 @click.option("--dry-run", is_flag=True, help="仅打印计划，不拉取")
-def backfill(symbols: str, intervals: str, start: str, end: str | None, max_pages: int, data_root: str, dry_run: bool) -> None:
+def backfill(
+    symbols: str, intervals: str, start: str, end: str | None, max_pages: int, data_root: str, dry_run: bool
+) -> None:
     """批量回填历史 K 线到本地 parquet 存储。"""
     from datetime import datetime, timezone
 
@@ -221,7 +230,9 @@ def backfill(symbols: str, intervals: str, start: str, end: str | None, max_page
     failed = [r for r in reports if r["errors"]]
     for r in reports:
         state = "ERROR" if r["errors"] else "OK"
-        click.echo(f"  [{state}] {r['symbol']} {r['interval']}: pages={r['pages']} rows={r['rows']} manifest={r['manifest_hash'][:12]}")
+        click.echo(
+            f"  [{state}] {r['symbol']} {r['interval']}: pages={r['pages']} rows={r['rows']} manifest={r['manifest_hash'][:12]}"
+        )
     if failed:
         sys.exit(1)
 

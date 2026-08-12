@@ -66,6 +66,35 @@ from .persistence import JSONFileFactorStore
 logger = logging.getLogger(__name__)
 
 # ================================================================
+# 特征 schema manifest（GAP-1）
+# ================================================================
+
+# 与 _build_feature_dict() 的实际输出键完全一致（排序后）。
+# feature_manifest_hash 必须独立于 dataset payload 绑定特征 schema：
+# 候选在特征定义变更后重放时，旧证据 hash 立即失效。
+FEATURE_SCHEMA_COLUMNS: tuple[str, ...] = (
+    "close",
+    "high",
+    "log_return",
+    "low",
+    "open",
+    "rsi",
+    "spread",
+    "volume",
+)
+
+
+def compute_feature_manifest_hash() -> str:
+    """特征 schema 的确定性 manifest hash（64 hex）。
+
+    只依赖 FEATURE_SCHEMA_COLUMNS 常量，与 _build_feature_dict 输出键
+    严格一致（排序后序列化），保证调用方注入的 feature_manifest_hash
+    可被 _validated_manifest_hash 接受（64 位 hex）。
+    """
+    return hashlib.sha256(json.dumps(sorted(FEATURE_SCHEMA_COLUMNS)).encode()).hexdigest()
+
+
+# ================================================================
 # 流水线配置
 # ================================================================
 
@@ -475,6 +504,25 @@ class MiningRunner:
             if len(valid_returns) < 50:
                 continue
 
+            # ============================================================
+            # GAP-2: 短期反转信号方向翻转
+            # 真实数据上反转类因子（如 tmpl_close_w50_pct_change_none_h4）
+            # 的原始 IC 为负；门禁只接受 ic > 0.02，负方向永不晋级。
+            # 因子值取负后重算 IC，后续 WFO/CPCV/稳定性/容量评估与
+            # replay 一律使用翻转后的信号；bundle 表达式与 hash 同步
+            # 绑定为 -(expr) 形式（PrimitiveRegistry 可解析 Neg 节点）。
+            # ============================================================
+            ic = _compute_ic(valid_vals, valid_returns)
+            flipped = ic < 0
+            if flipped:
+                # NaN 取负仍为 NaN，安全；此处 valid_vals 已无 NaN（对齐时过滤）
+                valid_vals = [-v for v in valid_vals]
+                ic = _compute_ic(valid_vals, valid_returns)
+            expr_string = f"-({candidate['expression_string']})" if flipped else candidate["expression_string"]
+            expr_hash = (
+                hashlib.sha256(expr_string.encode()).hexdigest()[:16] if flipped else candidate["expression_hash"]
+            )
+
             # Bind every usable observation to its own prediction/label
             # interval.  The WFO evaluator below must never infer time from
             # array position after warm-up/quality filtering.
@@ -543,8 +591,7 @@ class MiningRunner:
             )
             cpcv_result = self._cpcv.evaluate(valid_vals, valid_returns)
 
-            # 快速 IC 评估
-            ic = _compute_ic(valid_vals, valid_returns)
+            # 快速 IC 评估（ic 已在候选循环开头翻转后重算，此处不再重复）
             sharpe = _compute_sharpe(valid_returns)
 
             # 稳定性评估
@@ -558,6 +605,10 @@ class MiningRunner:
                 aux_values = self._evaluate_candidate(
                     candidate, self._aux_price_points, feature_dict=self._aux_feature_dict
                 )
+                # 翻转的候选：aux 信号同样取负，与主粒度同向可比
+                # （timeframe_robustness 的 ic*ic_aux>0 判据基于翻转后信号）。
+                if flipped:
+                    aux_values = [-v for v in aux_values]
                 aux_samples = _aligned_aux_samples(aux_values)
                 if len(aux_samples) < 200:
                     stability_results.append(
@@ -619,9 +670,11 @@ class MiningRunner:
                 _initial_failures.append(failure_reasons_aux)
 
             # replay 只用主粒度全序列（factor_values 含 NaN 由 simulate 内部对齐跳过）。
+            # 翻转候选必须重放翻转后的全序列（NaN 取负仍 NaN，simulate 内部跳过）。
             # 返回 None 时 promotion_chain 不产出（fail-closed）。
             all_closes = [float(p.close or 0.0) for p in price_points]
-            replay_result = simulate_paper_window(candidate["factor_values"], all_closes, cost_bps=8.0)
+            replay_vals = [-v for v in candidate["factor_values"]] if flipped else candidate["factor_values"]
+            replay_result = simulate_paper_window(replay_vals, all_closes, cost_bps=8.0)
 
             # 构造证据包
             bundle = EvidenceBundle(
@@ -630,7 +683,7 @@ class MiningRunner:
                 factor_id=candidate.get("factor_id", "unknown"),
                 factor_version="2.0.0",
                 candidate_hash=candidate["hash"],
-                factor_expression_hash=candidate.get("expression_hash", ""),
+                factor_expression_hash=expr_hash,
                 dataset_manifest_hash=dataset_manifest_hash,
                 feature_manifest_hash=feature_manifest_hash,
                 label_spec_hash=label_spec.to_hash(),
@@ -694,6 +747,8 @@ class MiningRunner:
                     "icir_cv": wfo_result.icir_cv,
                     "sample_count": len(valid_returns),
                     "replay_result": replay_result,
+                    # 翻转候选绑定 -(expr) 形式的表达式（hash 与之一致）
+                    "expression_string": expr_string,
                 }
             )
             evidence_bundles.append(bundle)
@@ -755,6 +810,9 @@ class MiningRunner:
                 bundle.gate_decision = "PASS" if not bundle.failure_reasons else "FAIL"
                 bundle.seal()
                 payload = bundle.to_dict()
+                # 所有 bundle 的 payload 都绑定（可能翻转后的）表达式，
+                # 供消费方按表达式对拍，而不仅限于 PASS 晋级路径。
+                payload["expression_string"] = record["expression_string"]
                 if bundle.gate_decision == "PASS":
                     chain = build_promotion_chain(
                         bundle,
@@ -763,7 +821,7 @@ class MiningRunner:
                         sample_count=record["sample_count"],
                         replay=record["replay_result"],
                         git_commit=_current_git_commit(),
-                        expression_string=record["candidate"].get("expression_string", ""),
+                        expression_string=record["expression_string"],
                         role=self._pipeline_role(),
                     )
                     if chain:
@@ -775,7 +833,6 @@ class MiningRunner:
                             json.dumps(chain, sort_keys=True, default=str).encode()
                         ).hexdigest()
                         payload["evidence_source"] = "historical_replay"
-                        payload["expression_string"] = record["candidate"].get("expression_string", "")
                         payload["role"] = self._pipeline_role()
                 self._store.save_factor_version(
                     f"{symbol}:{bundle.candidate_id}",
