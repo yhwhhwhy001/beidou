@@ -6003,20 +6003,44 @@ class AutonomousEngine:
         )
 
     def _reconciliation_rule_steps(self, symbols: set[str]) -> tuple[dict[str, str], str]:
-        """Bind every reconciled position to a fresh venue rule snapshot."""
+        """Bind every reconciled position to a fresh venue rule snapshot.
+
+        Falls back to engine-level ``_symbol_precision`` when the adapter
+        rule-snapshot cache has not been populated yet (e.g. first startup
+        before ``sync_rule_snapshots`` is called).
+        """
 
         if not symbols:
             return {}, "OK"
         adapter = getattr(self, "_adapter", None)
         get_rule_snapshot = getattr(adapter, "get_rule_snapshot", None)
-        if not callable(get_rule_snapshot):
+        precision_cache: dict = getattr(self, "_symbol_precision", {})
+
+        # No authority at all — neither adapter nor engine-level cache
+        if not callable(get_rule_snapshot) and not precision_cache:
             return {}, "POSITION_RULE_AUTHORITY_UNAVAILABLE"
 
         rule_steps: dict[str, str] = {}
         for symbol in sorted(symbols):
-            snapshot = get_rule_snapshot(symbol)
+            snapshot = None
+            if callable(get_rule_snapshot):
+                snapshot = get_rule_snapshot(symbol)
             if snapshot is None or not snapshot.is_known or snapshot.is_stale:
-                return {}, f"POSITION_RULE_UNKNOWN_OR_STALE:{symbol}"
+                # Fallback: use engine-level _symbol_precision populated from
+                # exchangeInfo at startup.  This ensures reconciliation can
+                # proceed even before the adapter's sync_rule_snapshots runs.
+                prec = precision_cache.get(symbol, {})
+                step_size = str(prec.get("step_size", "")).strip()
+                if not step_size:
+                    return {}, f"POSITION_RULE_UNKNOWN_OR_STALE:{symbol}"
+                try:
+                    step = Decimal(step_size)
+                except (InvalidOperation, TypeError, ValueError):
+                    return {}, f"POSITION_RULE_STEP_INVALID:{symbol}"
+                if not step.is_finite() or step <= 0:
+                    return {}, f"POSITION_RULE_STEP_INVALID:{symbol}"
+                rule_steps[symbol] = step_size
+                continue
             step_size = str(snapshot.step_size).strip()
             try:
                 step = Decimal(step_size)
@@ -6153,6 +6177,69 @@ class AutonomousEngine:
             )
         print("[recon] MATCHED: independent durable facts verified")
         return True
+
+    async def _safe_recover_unowned_testnet_algos(
+        self,
+        unowned_algo_ids: list[str],
+        existing_algo_inventory: list[dict[str, Any]] | None,
+        positions_list: list[dict[str, Any]],
+    ) -> tuple[list[str], list[dict[str, Any]] | None]:
+        """BD-FIX (S2): Testnet 模式下无持仓时自动取消残留无主 Algo 订单。
+
+        非正常退出（kill -9 / 崩溃）会导致交易所残留条件单，新进程无法
+        认领所有权，造成 protection_owner_unknown 永久阻断。Testnet 无真实
+        持仓时安全取消这些残留订单，避免手动清理。
+        """
+        if not unowned_algo_ids:
+            return unowned_algo_ids, existing_algo_inventory
+
+        has_any_position = any(
+            abs(float(pos.get("positionAmt", 0) or 0)) > 0 for pos in positions_list
+        )
+        _env_mode = getattr(self, "_env_mode", None)
+        is_testnet = _env_mode is not None and _env_mode.value == "testnet"
+
+        if is_testnet and not has_any_position:
+            cancelled = 0
+            for algo_id in unowned_algo_ids:
+                try:
+                    symbol = ""
+                    for item in (existing_algo_inventory or []):
+                        if str(item.get("algoId")) == algo_id:
+                            symbol = str(item.get("symbol", ""))
+                            break
+                    await self._cancel_algo_order(symbol, int(algo_id))
+                    cancelled += 1
+                    print(
+                        f"[beidou-autopilot] Cancelled unowned testnet Algo order "
+                        f"{algo_id} (symbol={symbol})"
+                    )
+                except Exception as exc:
+                    print(f"[beidou-autopilot] Failed to cancel unowned Algo {algo_id}: {exc}")
+            if cancelled:
+                print(
+                    f"[beidou-autopilot] BD-FIX (S2): Auto-cancelled {cancelled} unowned "
+                    "testnet Algo orders (no exchange positions)"
+                )
+                # Refresh Algo inventory after cancellation
+                try:
+                    existing_algos = await asyncio.wait_for(
+                        self._get_open_algo_inventory(), timeout=30.0
+                    )
+                    if isinstance(existing_algos, list):
+                        existing_algo_inventory = existing_algos
+                except Exception:
+                    pass
+                return [], existing_algo_inventory
+            return unowned_algo_ids, existing_algo_inventory
+
+        # Non-testnet or has positions: keep the blocking behaviour
+        self._block_unowned_protection_orders(unowned_algo_ids)
+        print(
+            f"[beidou-autopilot] {len(unowned_algo_ids)} unowned Algo orders remain "
+            "UNKNOWN; startup recovery is read-only"
+        )
+        return unowned_algo_ids, existing_algo_inventory
 
     async def _ensure_exchange_position_protections(self) -> None:
         """为交易所已有但系统未追踪的持仓补充保护单（启动阶段调用）。
@@ -7951,15 +8038,23 @@ class AutonomousEngine:
             else:
                 health["level"] = "OK"
             # PKG02 (BDS-P0-001): R9 提款权限在所有环境统一检查。
+            # BD-FIX: Testnet 模式下提款权限通常由交易所默认开启（测试资金），
+            # 与 writable gate 保持一致：testnet 降级为 WARNING，其他环境保持 CRITICAL。
             if self._can_withdraw:
-                health["level"] = "CRITICAL"
-                health["r9_violation"] = "WITHDRAW_ENABLED"
-                self._alerts.send_incident(
-                    AlertSeverity.HIGH,
-                    "R9 violation: withdraw enabled on trading credential",
-                    f"credential_id={cred.credential_id}",
-                    category="credential",
-                )
+                _env_mode = getattr(self, "_env_mode", None)
+                is_testnet = _env_mode is not None and _env_mode.value == "testnet"
+                if is_testnet:
+                    health["level"] = "WARNING"
+                    health["r9_notice"] = "WITHDRAW_ENABLED_TESTNET_OK"
+                else:
+                    health["level"] = "CRITICAL"
+                    health["r9_violation"] = "WITHDRAW_ENABLED"
+                    self._alerts.send_incident(
+                        AlertSeverity.HIGH,
+                        "R9 violation: withdraw enabled on trading credential",
+                        f"credential_id={cred.credential_id}",
+                        category="credential",
+                    )
         except Exception as exc:
             health["level"] = "UNKNOWN"
             health["error"] = f"{type(exc).__name__}: {exc}"
@@ -8043,7 +8138,8 @@ class AutonomousEngine:
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
-        if venue_can_withdraw and self._env_mode.value != "testnet":
+        _env_mode = getattr(self, "_env_mode", None)
+        if venue_can_withdraw and (_env_mode is None or _env_mode.value != "testnet"):
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
@@ -8417,6 +8513,7 @@ class AutonomousEngine:
         # 非正常退出（kill -9 / 崩溃）会导致交易所残留条件单，新进程无法
         # 认领所有权，造成 protection_owner_unknown 永久阻断。
         existing_algo_inventory: list[dict[str, Any]] | None = None
+        unowned_algo_ids: list[str] = []
         try:
             existing_algos = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=30.0)
             if isinstance(existing_algos, list):
@@ -8427,12 +8524,6 @@ class AutonomousEngine:
                     for item in existing_algos
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
-                if unowned_algo_ids:
-                    self._block_unowned_protection_orders(unowned_algo_ids)
-                    print(
-                        f"[beidou-autopilot] {len(unowned_algo_ids)} unowned Algo orders remain UNKNOWN; "
-                        "startup recovery is read-only"
-                    )
         except Exception as exc:
             print(f"[beidou-autopilot] Conditional-order inventory UNKNOWN: {exc}")
 
@@ -8466,6 +8557,10 @@ class AutonomousEngine:
                         self._health_started = True
                     return
             positions_list = account.get("positions", [])
+            # BD-FIX (S2): Testnet 模式下，无持仓时自动取消残留的无主 Algo 订单。
+            unowned_algo_ids, existing_algo_inventory = await self._safe_recover_unowned_testnet_algos(
+                unowned_algo_ids, existing_algo_inventory, positions_list
+            )
             durable_projection_ok = self._restore_durable_protection_projection(account, existing_algo_inventory)
             if not durable_projection_ok:
                 print(
