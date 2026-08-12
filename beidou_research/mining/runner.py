@@ -264,6 +264,7 @@ class MiningRunner:
         symbol: str = "BTCUSDT",
         timeframe: str = "1h",
         *,
+        aux_price_data: list[dict] | None = None,
         progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> MiningResult:
         """执行完整的因子挖掘周期。
@@ -273,6 +274,7 @@ class MiningRunner:
             venue: 交易所
             symbol: 交易品种
             timeframe: K线粒度
+            aux_price_data: 辅助粒度价格数据（如 1d），用于多粒度稳健性评估
             progress_callback: 进度回调 (stage, current, total)
 
         Returns:
@@ -321,6 +323,41 @@ class MiningRunner:
             factor_id=FactorId("pipeline"),
             factor_version=SchemaVersion("2.0.0"),
         )
+
+        # 多粒度稳健性：aux 数据（如 1d）的 PricePoint 与标签。
+        # 与主粒度同用 label_spec，按 index 对齐后评估 aux IC。
+        self._aux_price_points: list[PricePoint] = []
+        if aux_price_data:
+            self._aux_price_points = [
+                PricePoint(
+                    venue=ven,
+                    symbol=sym,
+                    timeframe=timeframe,
+                    timestamp=d["timestamp"],
+                    close=d["close"],
+                    mark=d.get("mark"),
+                    mid=d.get("mid"),
+                    vwap=d.get("vwap"),
+                    open=d.get("open"),
+                    high=d.get("high"),
+                    low=d.get("low"),
+                    volume=d.get("volume"),
+                    is_closed=bool(d.get("is_closed", False)),
+                )
+                for d in aux_price_data
+            ]
+
+        self._aux_labels = []
+        if self._aux_price_points:
+            self._aux_labels = self._label_builder.build_labels(
+                price_series=self._aux_price_points,
+                label_spec=label_spec,
+                venue=ven,
+                symbol=sym,
+                timeframe=timeframe,
+                factor_id=FactorId("pipeline"),
+                factor_version=SchemaVersion("2.0.0"),
+            )
 
         # ================================================================
         # Phase 2: 生成候选因子
@@ -407,6 +444,17 @@ class MiningRunner:
                     )
                 )
             return samples
+
+        def _aligned_aux_samples(factor_values: list[float]) -> list[tuple[int, float, float]]:
+            out: list[tuple[int, float, float]] = []
+            for index, label in enumerate(self._aux_labels):
+                if index >= len(factor_values) or not label.is_valid_for_evaluation():
+                    continue
+                value = factor_values[index]
+                if not _is_finite(value) or not _is_finite(label.label_value):
+                    continue
+                out.append((index, float(value), float(label.label_value)))
+            return out
 
         for candidate in screened[:50]:  # 限制评估数量
             factor_vals = candidate["factor_values"]
@@ -495,6 +543,43 @@ class MiningRunner:
             # 稳定性评估
             stability_results = [self._stability.evaluate_time_split(valid_vals, valid_returns, ic_full=ic)]
 
+            # 多粒度稳健性：aux 数据（如 1d）上重算 IC，与主粒度同向且
+            # 衰减 ≤ 50% 才稳定。aux 样本不足一律不稳（fail-closed）。
+            if aux_price_data:
+                aux_values = self._evaluate_candidate(candidate, self._aux_price_points)
+                aux_samples = _aligned_aux_samples(aux_values)
+                if len(aux_samples) < 200:
+                    stability_results.append(
+                        {
+                            "dimension": "timeframe_robustness",
+                            "ic_primary": ic,
+                            "ic_aux": 0.0,
+                            "degradation_pct": 1.0,
+                            "is_stable": False,
+                            "aux_samples": len(aux_samples),
+                        }
+                    )
+                    failure_reasons_aux = "aux_insufficient_samples"
+                else:
+                    aux_vals = [s[1] for s in aux_samples]
+                    aux_rets = [s[2] for s in aux_samples]
+                    ic_aux = _compute_ic(aux_vals, aux_rets)
+                    degradation = abs(ic - ic_aux) / max(abs(ic), 1e-9)
+                    stable_aux = (ic * ic_aux > 0) and degradation <= 0.5
+                    stability_results.append(
+                        {
+                            "dimension": "timeframe_robustness",
+                            "ic_primary": ic,
+                            "ic_aux": ic_aux,
+                            "degradation_pct": degradation,
+                            "is_stable": stable_aux,
+                            "aux_samples": len(aux_samples),
+                        }
+                    )
+                    failure_reasons_aux = "" if stable_aux else "timeframe_unstable"
+            else:
+                failure_reasons_aux = ""
+
             # 成本容量评估（PKG07: 信号感知）
             # 从 price_data 估算 ADV
             _adv = _estimate_adv_from_price_data(price_data, symbol)
@@ -517,6 +602,10 @@ class MiningRunner:
             ]
             wfo_test_sharpes = [r.sharpe for r in wfo_result.fold_results if not r.failure_reason]
             p_value = _correlation_p_value(ic, len(valid_returns))
+
+            _initial_failures = [] if ic > 0.02 else ["ic_below_threshold"]
+            if failure_reasons_aux:
+                _initial_failures.append(failure_reasons_aux)
 
             # 构造证据包
             bundle = EvidenceBundle(
@@ -550,9 +639,9 @@ class MiningRunner:
                 },
                 stability_results=[
                     {
-                        "dimension": r.dimension,
-                        "degradation_pct": r.degradation_pct,
-                        "is_stable": r.is_stable,
+                        "dimension": r["dimension"] if isinstance(r, dict) else r.dimension,
+                        "degradation_pct": r["degradation_pct"] if isinstance(r, dict) else r.degradation_pct,
+                        "is_stable": r["is_stable"] if isinstance(r, dict) else r.is_stable,
                     }
                     for r in stability_results
                 ],
@@ -569,7 +658,7 @@ class MiningRunner:
                     "warnings": capacity_result.warnings,
                 },
                 gate_decision="NOT_VERIFIABLE",
-                failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"],
+                failure_reasons=_initial_failures,
             )
             evaluation_records.append(
                 {
