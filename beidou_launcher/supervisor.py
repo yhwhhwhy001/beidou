@@ -801,6 +801,11 @@ class BeidouSupervisor:
                 self.report.phase = "ENGINE_STARTING"
                 self.report.supervisor_state = "STARTING"
                 self.writer.write(self.report)
+            # BD-FIX: 启动验证循环本身就是监督器存活的证据。此前
+            # _last_monitor_loop_ts 只在 _monitor() 循环更新，启动验证
+            # 期间 (可能长达 startup_timeout) 恒为构造时刻，导致
+            # monitor_self 检查误报 "Main loop STALL" P0 blocker。
+            self._last_monitor_loop_ts = time.monotonic()
             await asyncio.sleep(1)
         return False
 

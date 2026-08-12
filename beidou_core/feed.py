@@ -207,19 +207,23 @@ class MarketDataFeed:
 
             async def _on_depth(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
-                if symbol and "bids" in data:
+                if not symbol:
+                    return
+                # BD-FIX: fstream depthUpdate 原生字段是 "b"/"a"（不是 REST 风格
+                # 的 "bids"/"asks"）。旧代码只检查 "bids" → 恒 False → depth
+                # 流数据从未进入缓存，paper 撮合读不到可执行 bid/ask。
+                bids = data.get("bids") or data.get("b") or []
+                asks = data.get("asks") or data.get("a") or []
+                if bids and asks:
                     self._last_orderbook[symbol] = {
-                        "bids": [[b[0], b[1]] for b in data.get("bids", [])],
-                        "asks": [[a[0], a[1]] for a in data.get("asks", [])],
+                        "bids": [[b[0], b[1]] for b in bids],
+                        "asks": [[a[0], a[1]] for a in asks],
                     }
                     # BD-FIX: depth 流携带真实 best bid/ask，同步进 ticker 缓存，
                     # 供 _validated_ws_quote / 点差计算 / 宇宙评估使用。
-                    bids = data.get("bids", [])
-                    asks = data.get("asks", [])
-                    if bids and asks:
-                        ticker = self._last_ticker.setdefault(symbol, {})
-                        ticker["bid"] = str(bids[0][0])
-                        ticker["ask"] = str(asks[0][0])
+                    ticker = self._last_ticker.setdefault(symbol, {})
+                    ticker["bid"] = str(bids[0][0])
+                    ticker["ask"] = str(asks[0][0])
                     self._ws_last_update[symbol] = time.monotonic()
 
             async def _on_mark_price(stream: str, data: dict) -> None:

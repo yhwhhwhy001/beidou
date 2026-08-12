@@ -80,6 +80,92 @@ def _map_trace_stage(order_status: str) -> TraceStage:
     return mapping.get(order_status, TraceStage.UNKNOWN)
 
 
+def _factor_state_snapshots(factor_registry) -> list:
+    """BD-FIX: FactorRegistry → FactorState 快照列表。
+
+    监控检查函数契约要求可迭代的 FactorState 快照（fs.value/fs.lifecycle/
+    fs.last_evaluation 属性访问），此前直接传入 FactorRegistry 对象导致
+    ``'FactorRegistry' object is not iterable``。
+    """
+    from beidou_observability.monitoring.checks.factors import FactorState
+
+    states: list = []
+    records = getattr(factor_registry, "_factors", None)
+    if not isinstance(records, dict):
+        return states
+    for fid, record in records.items():
+        try:
+            lifecycle = str(getattr(getattr(record, "lifecycle", None), "value", "UNKNOWN"))
+            performance = getattr(record, "performance", None) or []
+            value = 0.0
+            if performance:
+                value = float(getattr(performance[-1], "ic_mean", 0.0) or 0.0)
+            # last_evaluation=0 跳过 stale 检查：FactorPerformance 无时间戳，
+            # 不能把"无时间证据"包装成"刚评估过"。
+            states.append(
+                FactorState(
+                    factor_id=str(fid),
+                    value=value,
+                    lifecycle=lifecycle,
+                    last_evaluation=0.0,
+                )
+            )
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return states
+
+
+def _strategy_snapshots(engine) -> list[dict]:
+    """BD-FIX: 引擎 → 策略健康快照 dict 列表。
+
+    监控检查函数契约要求可迭代的策略快照 dict（s.get("strategy_id")/
+    s.get("signal_silence_seconds")/s.get("risk_budget_drift_pct")/
+    s.get("stale_factor_count")），此前直接传入 AutonomousEngine /
+    StrategyRiskManager 对象导致 ``object is not iterable``。
+    """
+    if engine is None:
+        return []
+    strategy_id = str(getattr(engine, "_autopilot_strategy_id", "autopilot"))
+    last_nearline = float(getattr(engine, "_last_nearline", 0.0) or 0.0)
+    silence = max(0.0, time.time() - last_nearline) if last_nearline > 0 else 0.0
+    drift = 0.0
+    stale = 0
+    try:
+        risk = getattr(engine, "_strategy_risk", None)
+        if risk is not None:
+            sid = getattr(engine, "_autopilot_strategy_id", None)
+            budget = risk.get_budget(sid)
+            state = risk.get_state(sid)
+            if budget is not None and state is not None:
+                max_dd = float(getattr(budget, "max_drawdown_pct", 0.0) or 0.0)
+                current_dd = float(getattr(state, "current_drawdown_pct", 0.0) or 0.0)
+                drift = max(0.0, current_dd - max_dd)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("beidou.monitoring").debug("strategy risk snapshot skipped: %s", type(exc).__name__)
+    try:
+        registry = getattr(engine, "_factor_registry", None)
+        records = getattr(registry, "_factors", None)
+        if isinstance(records, dict):
+            for record in records.values():
+                check = getattr(record, "has_authorized_active_evidence", None)
+                if not (callable(check) and check()):
+                    stale += 1
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("beidou.monitoring").debug("factor staleness snapshot skipped: %s", type(exc).__name__)
+    return [
+        {
+            "strategy_id": strategy_id,
+            "signal_silence_seconds": silence,
+            "risk_budget_drift_pct": drift,
+            "stale_factor_count": stale,
+        }
+    ]
+
+
 def collect_monitoring_checks(
     engine=None,
     *,
@@ -486,12 +572,16 @@ def collect_monitoring_checks(
     try:
         factor_registry = getattr(engine, "_factor_registry", None) if engine is not None else None
         if factor_registry is not None:
+            # BD-FIX: 检查函数契约要求快照列表，此前直接传 FactorRegistry /
+            # AutonomousEngine / StrategyRiskManager 对象导致 TypeError。
+            factor_states = _factor_state_snapshots(factor_registry)
+            strategy_states = _strategy_snapshots(engine)
             try:
-                results.append(convert(check_factors(factor_registry), name="因子注册健康"))
+                results.append(convert(check_factors(factor_states), name="因子注册健康"))
             except Exception as exc:
                 results.append(failure("runtime.factors.health", "因子注册健康", CheckSeverity.P2, exc))
             try:
-                results.append(convert(check_factor_strategies(factor_registry), name="因子策略关联"))
+                results.append(convert(check_factor_strategies(strategy_states), name="因子策略关联"))
             except Exception as exc:
                 results.append(failure("runtime.factors.strategies", "因子策略关联", CheckSeverity.P2, exc))
     except Exception as exc:
@@ -501,16 +591,17 @@ def collect_monitoring_checks(
             strategy_risk = getattr(engine, "_strategy_risk", None)
             autopilot_id = getattr(engine, "_autopilot_strategy_id", None)
             if strategy_risk is not None and autopilot_id is not None:
+                strategy_states = _strategy_snapshots(engine)
                 try:
-                    results.append(convert(check_strategy_signal_silence(engine), name="策略信号沉默检测"))
+                    results.append(convert(check_strategy_signal_silence(strategy_states), name="策略信号沉默检测"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.silence", "策略信号沉默检测", CheckSeverity.P2, exc))
                 try:
-                    results.append(convert(check_strategy_risk_drift(strategy_risk, autopilot_id), name="策略风险漂移"))
+                    results.append(convert(check_strategy_risk_drift(strategy_states), name="策略风险漂移"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.risk_drift", "策略风险漂移", CheckSeverity.P2, exc))
                 try:
-                    results.append(convert(check_strategy_version_drift(engine), name="策略版本漂移"))
+                    results.append(convert(check_strategy_version_drift(strategy_states), name="策略版本漂移"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.version_drift", "策略版本漂移", CheckSeverity.P2, exc))
     except Exception as exc:

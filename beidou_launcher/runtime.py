@@ -372,6 +372,14 @@ def collect_runtime_checks(
     # disagree (or while the event stream is missing).  The supervisor uses
     # this check during startup and every runtime cycle, so the old
     # ``/health=HEALTHY + RESUME`` false certificate cannot recur.
+    #
+    # BD-FIX: 零写模式 (paper/shadow/research) 的引擎在 _reconcile() 中
+    # 按设计跳过三方对账 (模拟订单与交易所订单必然不一致)，因此
+    # _last_reconciliation_result 恒为 None。旧逻辑让启动验证永远卡在
+    # "三方对账尚未产生结果" P0 blocker，直到 startup_timeout 失败退出。
+    # 零写模式没有交易写能力，对账是写环境保护，按 user_stream 检查的
+    # 同一模式豁免 (PASS/P1)，不得阻塞零写模式启动。
+    zero_write_mode = str(mode).lower() in ("paper", "shadow", "research", "safety_only")
     reconciliation = getattr(engine, "_last_reconciliation_result", None)
     reconciliation_status = str(
         getattr(getattr(reconciliation, "status", None), "value", getattr(reconciliation, "status", "UNKNOWN"))
@@ -387,45 +395,84 @@ def collect_runtime_checks(
             reconciliation_age = None
     # PKG02 (BDS-P0-001): 所有环境统一对账标准和严重级别。
     _max_age = 60.0
-    reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= _max_age
-    reconciliation_ok = (
-        reconciliation is not None
-        and bool(getattr(reconciliation, "matched", False))
-        and reconciliation_status == "MATCHED"
-        and reconciliation_fresh
-    )
-    if reconciliation_ok:
-        recon_status = CheckStatus.PASS
-        recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
+    if zero_write_mode:
+        # BD-FIX: 零写模式 (paper/shadow/research) 的引擎在 _reconcile() 中
+        # 按设计跳过三方对账 (模拟订单与交易所订单必然不一致)，因此
+        # _last_reconciliation_result 恒为 None。旧逻辑让启动验证永远卡在
+        # "三方对账尚未产生结果" P0 blocker，直到 startup_timeout 失败退出。
+        # 零写模式没有交易写能力，对账是写环境保护，按 user_stream 检查的
+        # 同一模式豁免 (PASS/P1)，不得阻塞零写模式启动。
+        checks.append(
+            CheckResult(
+                check_id="runtime.safety.reconciliation_authority",
+                name="权威三方对账事实",
+                status=CheckStatus.PASS,
+                severity=CheckSeverity.P1,
+                message="写能力关闭；三方对账不参与本模式授权",
+                evidence={
+                    "status": reconciliation_status,
+                    "matched": False,
+                    "age_seconds": None,
+                    "threshold_seconds": 60.0,
+                    "differences": ["RECONCILIATION_EXEMPT_ZERO_WRITE_MODE"],
+                    "source": "engine._last_reconciliation_result",
+                },
+            )
+        )
     elif reconciliation is None:
-        recon_status = CheckStatus.FAIL
-        recon_message = "三方对账尚未产生结果；账户/订单事实 UNKNOWN"
+        checks.append(
+            CheckResult(
+                check_id="runtime.safety.reconciliation_authority",
+                name="权威三方对账事实",
+                status=CheckStatus.FAIL,
+                severity=CheckSeverity.P0,
+                message="三方对账尚未产生结果；账户/订单事实 UNKNOWN",
+                evidence={
+                    "status": reconciliation_status,
+                    "matched": False,
+                    "age_seconds": None,
+                    "threshold_seconds": 60.0,
+                    "differences": ["NO_RECONCILIATION_RESULT"],
+                    "source": "engine._last_reconciliation_result",
+                },
+            )
+        )
     else:
-        recon_status = CheckStatus.FAIL
-        recon_message = (
-            f"三方对账不可授权: status={reconciliation_status}, "
-            f"matched={bool(getattr(reconciliation, 'matched', False))}, "
-            f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
+        reconciliation_fresh = reconciliation_age is not None and reconciliation_age <= _max_age
+        reconciliation_ok = (
+            bool(getattr(reconciliation, "matched", False))
+            and reconciliation_status == "MATCHED"
+            and reconciliation_fresh
         )
-    checks.append(
-        CheckResult(
-            check_id="runtime.safety.reconciliation_authority",
-            name="权威三方对账事实",
-            status=recon_status,
-            severity=CheckSeverity.P0,
-            message=recon_message,
-            evidence={
-                "status": reconciliation_status,
-                "matched": bool(getattr(reconciliation, "matched", False)) if reconciliation else False,
-                "age_seconds": round(reconciliation_age, 3) if reconciliation_age is not None else None,
-                "threshold_seconds": 60.0,
-                "differences": list(getattr(reconciliation, "differences", []) or [])[:20]
-                if reconciliation is not None
-                else ["NO_RECONCILIATION_RESULT"],
-                "source": "engine._last_reconciliation_result",
-            },
+        if reconciliation_ok:
+            recon_status = CheckStatus.PASS
+            recon_message = f"三方对账 MATCHED，事实年龄 {reconciliation_age:.1f}s"
+        else:
+            recon_status = CheckStatus.FAIL
+            recon_message = (
+                f"三方对账不可授权: status={reconciliation_status}, "
+                f"matched={bool(getattr(reconciliation, 'matched', False))}, "
+                f"age={reconciliation_age if reconciliation_age is not None else 'UNKNOWN'}s"
+            )
+        checks.append(
+            CheckResult(
+                check_id="runtime.safety.reconciliation_authority",
+                name="权威三方对账事实",
+                status=recon_status,
+                severity=CheckSeverity.P0,
+                message=recon_message,
+                evidence={
+                    "status": reconciliation_status,
+                    "matched": bool(getattr(reconciliation, "matched", False)) if reconciliation else False,
+                    "age_seconds": round(reconciliation_age, 3) if reconciliation_age is not None else None,
+                    "threshold_seconds": 60.0,
+                    "differences": list(getattr(reconciliation, "differences", []) or [])[:20]
+                    if reconciliation is not None
+                    else ["NO_RECONCILIATION_RESULT"],
+                    "source": "engine._last_reconciliation_result",
+                },
+            )
         )
-    )
 
     # A durable projector or REST snapshot cannot prove that this process is
     # still receiving venue user-data events.  Writable engines therefore

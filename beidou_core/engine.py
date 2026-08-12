@@ -1126,6 +1126,13 @@ class AutonomousEngine:
         self._can_withdraw = True  # UNKNOWN/true both fail closed; venue false is applied after account read
         self._venue_can_trade: bool | None = None
         self._venue_can_withdraw: bool | None = None
+        # BD-FIX: 风险规则视角的提款权限。账户权限门禁对 testnet 豁免
+        # 提款权限（demo 账户默认开启，无真实资金风险），但 R9 规则直接
+        # 读 _can_withdraw 恒 REJECT，导致 testnet/paper 所有提案被风控
+        # 拦截、无订单成交。风险视角值由权限门禁结算后写入：
+        # testnet → False（豁免）；非写环境由调用方按 False 处理；
+        # 其他可写环境 → venue 原始值（fail-closed）。
+        self._risk_can_withdraw: bool = True
         # 凭据到期预警（30 天内提醒轮换）
         _days_to_expiry = (self._credential.expires_at - datetime.now(timezone.utc)).total_seconds() / 86400.0
         if _days_to_expiry <= 30.0:
@@ -1369,6 +1376,9 @@ class AutonomousEngine:
         self._drift_detector = DriftDetector(
             threshold=self._policy_float("drift_threshold", self._settings.production.drift_threshold)
         )
+        # BD-FIX: 冷启动基线标志 — 无交易数据时的中性 sharpe=0 校准在
+        # 第一笔真实交易数据到达后必须被真实基线替换。
+        self._cold_start_baseline = False
         self._mapek = MAPEKController()
 
         # === 交易池 — 动态标的管理 ===
@@ -2160,10 +2170,22 @@ class AutonomousEngine:
             return HealthState.UNHEALTHY
         if self._running and self._realtime_age_seconds() > 15.0:
             return HealthState.UNHEALTHY
-        if (
-            self._control.get_status() != ControlAction.RESUME
-            or self._last_reconciliation_result is None
-            or not self._last_reconciliation_result.matched
+        # BD-FIX: 零写模式按设计跳过对账（_reconcile 直接返回），
+        # _last_reconciliation_result 恒 None。旧逻辑让 paper/shadow 的
+        # liveness 恒 DEGRADED → 快照风控 exchange_health=UNSAFE →
+        # AUX-R0 恒拒。零写模式以 RESUME + realtime 活跃为健康标准，
+        # 与 supervisor 的对账豁免同语义；可写环境保持严格对账要求。
+        _env_mode = getattr(self, "_env_mode", None)
+        zero_write_mode = _env_mode is not None and str(getattr(_env_mode, "value", _env_mode)).lower() in (
+            "paper",
+            "shadow",
+            "research",
+            "safety_only",
+        )
+        if self._control.get_status() != ControlAction.RESUME:
+            return HealthState.DEGRADED
+        if not zero_write_mode and (
+            self._last_reconciliation_result is None or not self._last_reconciliation_result.matched
         ):
             return HealthState.DEGRADED
         return HealthState.HEALTHY
@@ -3872,8 +3894,20 @@ class AutonomousEngine:
             return
 
         # BD-CV02/41: 合约级 TradingEligibility 验证 + 幂等键
+        # BD-FIX: 零写模式按设计跳过对账/保护/用户流事实（模拟订单与
+        # 交易所事实必然不一致），TruthSnapshot 恒 NOT_VERIFIABLE，旧逻辑
+        # 让 paper/shadow 的每个 intent 在发送边界被拒 → 模拟成交无法
+        # 产生 → Paper 证据永远无法积累（死锁）。零写模式撮合无真实
+        # 资金风险，资格门按与其他对账豁免相同的语义跳过。
+        _env_mode_zw = getattr(self, "_env_mode", None)
+        zero_write_mode = _env_mode_zw is not None and str(getattr(_env_mode_zw, "value", _env_mode_zw)).lower() in (
+            "paper",
+            "shadow",
+            "research",
+            "safety_only",
+        )
         _risk_dir = ControlPlane.classify_intent(intent)
-        if _risk_dir.value == "INCREASE":
+        if _risk_dir.value == "INCREASE" and not zero_write_mode:
             eligibility = self.evaluate_trading_eligibility()
             if eligibility != TradingEligibility.ELIGIBLE:
                 print(f"[order] ❌ Intent {intent.intent_id} REJECTED: TradingEligibility={eligibility.value}")
@@ -7339,7 +7373,9 @@ class AutonomousEngine:
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
                     # PKG02 (BDS-P0-001): 使用交易所实际返回的 canWithdraw。
-                    "can_withdraw": self._can_withdraw,
+                    # BD-FIX: R9 使用风险视角值 — 零写环境提款权限不构成
+                    # 风险；testnet 由权限门禁豁免结算为 False。
+                    "can_withdraw": self._risk_can_withdraw if self._can_write else False,
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
@@ -7357,6 +7393,23 @@ class AutonomousEngine:
                             checked_at = checked_at.replace(tzinfo=timezone.utc)
                         source_timestamp = checked_at.isoformat() if isinstance(checked_at, datetime) else ""
                         evaluated_at = datetime.now(timezone.utc).isoformat()
+                        # BD-FIX: 零写模式按设计跳过对账（_reconcile 直接返回），
+                        # _last_reconciliation_result 恒 None。快照风控的
+                        # is_complete() 要求非空 source_timestamp 与 MATCHED
+                        # 对账状态，旧逻辑让 paper/shadow 的 AUX-R0 恒拒。
+                        # 零写模式用评估时刻作为来源时间、对账按豁免处理，
+                        # 与 supervisor 的 reconciliation_authority 豁免同语义。
+                        _snapshot_env_mode = getattr(self, "_env_mode", None)
+                        zero_write_snapshot = _snapshot_env_mode is not None and str(
+                            getattr(_snapshot_env_mode, "value", _snapshot_env_mode)
+                        ).lower() in ("paper", "shadow", "research", "safety_only")
+                        if zero_write_snapshot:
+                            source_timestamp = evaluated_at
+                        snapshot_reconciliation_status = (
+                            "MATCHED"
+                            if self._fresh_matched_reconciliation() or zero_write_snapshot
+                            else "MISMATCHED"
+                        )
                         account_hash = hashlib.sha256(
                             f"{account_balance}|{self._protection.position_count()}".encode()
                         ).hexdigest()[:16]
@@ -7380,7 +7433,7 @@ class AutonomousEngine:
                             concentration_pct=risk_context["concentration_pct"],
                             account_id="default",
                             dq_tier="PASS",
-                            reconciliation_status="MATCHED" if self._fresh_matched_reconciliation() else "MISMATCHED",
+                            reconciliation_status=snapshot_reconciliation_status,
                             exchange_health=("HEALTHY" if self._check_liveness() is HealthState.HEALTHY else "UNSAFE"),
                             portfolio_hash=account_hash,
                             policy_version=risk_policy_version,
@@ -7840,9 +7893,12 @@ class AutonomousEngine:
                 std_pnl = (sum((p - avg_pnl) ** 2 for p in self._trade_pnls) / max(1, len(self._trade_pnls))) ** 0.5
                 sharpe = avg_pnl / std_pnl if std_pnl > 0 else 0.0
 
-                if not self._drift_detector.is_calibrated():
+                # BD-FIX: 冷启动基线被真实交易数据替换。此前冷启动 sharpe=0
+                # 校准后 is_calibrated() 恒 True，真实基线永远无法写入。
+                if not self._drift_detector.is_calibrated() or self._cold_start_baseline:
                     # First calibration — set baseline from live performance
                     self._drift_detector.set_baseline({"sharpe": max(0.5, sharpe), "win_rate": max(0.4, win_rate)})
+                    self._cold_start_baseline = False
                     print("[offline] DriftDetector baseline calibrated")
                 else:
                     drift = self._drift_detector.detect({"sharpe": sharpe, "win_rate": win_rate})
@@ -7856,6 +7912,16 @@ class AutonomousEngine:
                         print(f"[offline] ⚠️ Model drift: {drift}")
                     else:
                         print(f"[offline] DriftDetector: no drift (sharpe={sharpe:.3f} win_rate={win_rate:.2f})")
+            elif not self._drift_detector.is_calibrated():
+                # BD-FIX: 冷启动中性校准 — 无交易证据时 sharpe=0 是中性事实，
+                # 不是负收益证据。此前不校准导致 R5 恒 UNKNOWN → REJECT，
+                # 首单被风控永久拦截（无交易 → 无 PnL → 无法校准 → 死锁）。
+                # 中性 0 基线配合默认 min_sharpe_rolling=0.0 放行首单；
+                # operator 若配置正值下限，冷启动仍会被拒（保守语义保留）；
+                # 真实亏损后 sharpe<0 会被 R5 拒绝。
+                self._drift_detector.set_baseline({"sharpe": 0.0, "win_rate": 0.0})
+                self._cold_start_baseline = True
+                print("[offline] DriftDetector cold-start baseline: sharpe=0.0 (neutral, no trade evidence)")
             else:
                 print("[offline] DriftDetector: no trade data yet, skipping drift check")
 
@@ -8156,6 +8222,9 @@ class AutonomousEngine:
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
         if not venue_can_trade:
             return False, "VENUE_TRADING_DISABLED"
+        # BD-FIX: R9 风险视角 — testnet 豁免后不再把 venue 提款权限
+        # 原样传给风险规则（否则 R9 恒 REJECT 阻塞 testnet 交易）。
+        self._risk_can_withdraw = bool(venue_can_withdraw) and _env_mode is not None and _env_mode.value != "testnet"
         return True, "OK"
 
     # --- BD-CV Contracts: Bridge methods ---
