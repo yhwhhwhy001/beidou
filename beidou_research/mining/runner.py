@@ -768,6 +768,12 @@ class MiningRunner:
                     )
                     if chain:
                         payload["promotion_chain"] = chain
+                        # 链完整性对拍：promotion_chain 不在 bundle artifact_hash 覆盖内，
+                        # 单独哈希绑定（与 bundle hash 同模型：防意外损坏/格式漂移，
+                        # 非密钥化签名）。桥接侧（EvidenceBridge）逐字节重算对拍。
+                        payload["promotion_chain_hash"] = hashlib.sha256(
+                            json.dumps(chain, sort_keys=True, default=str).encode()
+                        ).hexdigest()
                         payload["evidence_source"] = "historical_replay"
                         payload["expression_string"] = record["candidate"].get("expression_string", "")
                         payload["role"] = self._pipeline_role()

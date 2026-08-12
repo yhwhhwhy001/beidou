@@ -6,15 +6,22 @@ historical_replay），随后按 promotion_chain 逐级调用
 FactorPromotionGate.validate_evidence 复验并推进生命周期。
 
 任何失败只记录并跳过该文件，不阻断启动（fail-closed 但非阻塞）。
+每个文件从解析到组件注册的整段处理均被异常隔离：单个文件异常
+（含非 dict payload 等未预期形态）只产生一条 rejected，不终止扫描。
 
 NaN 处理：研究侧链上的 icir/ic 可能为 NaN（factor 序列 NaN 传播）。
 复验前将非有限值归一为 0.0 — 门禁的 ICIR 阈值比较将拒绝该级
 （fail-closed），绝不把 NaN 传给门禁（NaN < 阈值 恒为 False，
 会让阈值检查静默通过）。
+
+威胁模型：promotion_chain_hash 与 bundle artifact_hash 同一模型 —
+防意外损坏/格式漂移的确定性对拍，非密钥化签名；有写入链权限的
+攻击者可同时改写两处哈希，此处不做防伪承诺。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass, field
@@ -68,70 +75,91 @@ class EvidenceBridge:
             except (OSError, json.JSONDecodeError) as exc:
                 report.rejected.append((str(path), f"unreadable:{type(exc).__name__}"))
                 continue
-            data = payload.get("data")
-            if not isinstance(data, dict):
-                report.rejected.append((str(path), "missing_bundle_data"))
-                continue
-            chain = payload.get("promotion_chain")
-            if not isinstance(chain, list) or not chain:
-                report.rejected.append((str(path), "missing_promotion_chain"))
-                continue
+            # F1: 每文件处理体整段异常隔离 — 非 dict payload、未预期形态等
+            # 任何异常只记一条 rejected，绝不终止整个扫描。
             try:
-                bundle = EvidenceBundle(**{k: v for k, v in data.items() if k != "created_at"})
-            except TypeError as exc:
-                report.rejected.append((str(path), f"bundle_construct:{exc}"))
-                continue
-            recomputed = bundle.compute_bundle_hash()
-            stored_hash = str(data.get("artifact_hash", ""))
-            if recomputed != stored_hash:
-                report.rejected.append((str(path), "artifact_hash_mismatch"))
-                continue
-            promotable, reason = bundle.can_promote()
-            if not promotable:
-                report.rejected.append((str(path), f"bundle:{reason}"))
-                continue
-            evidence_source = str(payload.get("evidence_source", "")).strip()
-            if evidence_source == "historical_replay" and env_mode in REPLAY_REJECTED_ENV_MODES:
-                report.rejected.append((str(path), "replay_evidence_rejected_in_production"))
-                continue
-            expression_string = str(payload.get("expression_string", "")).strip()
-            role = str(payload.get("role", "entry")).strip().lower() or "entry"
-            if not expression_string:
-                report.rejected.append((str(path), "missing_expression_string"))
-                continue
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    report.rejected.append((str(path), "missing_bundle_data"))
+                    continue
+                chain = payload.get("promotion_chain")
+                if not isinstance(chain, list) or not chain:
+                    report.rejected.append((str(path), "missing_promotion_chain"))
+                    continue
+                # F2: 链完整性对拍（与 bundle artifact_hash 同模型）—
+                # 逐字节重算 sha256 与写入时绑定哈希比对，链篡改不晋级。
+                chain_hash = hashlib.sha256(json.dumps(chain, sort_keys=True, default=str).encode()).hexdigest()
+                stored_chain_hash = str(payload.get("promotion_chain_hash", ""))
+                if chain_hash != stored_chain_hash:
+                    report.rejected.append((str(path), "promotion_chain_hash_mismatch"))
+                    continue
+                try:
+                    bundle = EvidenceBundle(**{k: v for k, v in data.items() if k != "created_at"})
+                except TypeError as exc:
+                    report.rejected.append((str(path), f"bundle_construct:{exc}"))
+                    continue
+                recomputed = bundle.compute_bundle_hash()
+                stored_hash = str(data.get("artifact_hash", ""))
+                if recomputed != stored_hash:
+                    report.rejected.append((str(path), "artifact_hash_mismatch"))
+                    continue
+                promotable, reason = bundle.can_promote()
+                if not promotable:
+                    report.rejected.append((str(path), f"bundle:{reason}"))
+                    continue
+                evidence_source = str(payload.get("evidence_source", "")).strip()
+                if evidence_source == "historical_replay" and env_mode in REPLAY_REJECTED_ENV_MODES:
+                    report.rejected.append((str(path), "replay_evidence_rejected_in_production"))
+                    continue
+                expression_string = str(payload.get("expression_string", "")).strip()
+                role = str(payload.get("role", "entry")).strip().lower() or "entry"
+                if not expression_string:
+                    report.rejected.append((str(path), "missing_expression_string"))
+                    continue
 
-            factor_id = str(bundle.factor_id)
-            if factor_id in handled_factor_ids:
-                continue  # 同因子多品种 bundle：确定性取第一个
-            handled_factor_ids.add(factor_id)
+                factor_id = str(bundle.factor_id)
+                if factor_id in handled_factor_ids:
+                    continue  # 同因子多品种 bundle：确定性取第一个
+                handled_factor_ids.add(factor_id)
 
-            record = registry.get(factor_id)
-            if record is None:
-                definition = FactorDefinition(
-                    factor_id=factor_id,
-                    name=f"mined-{factor_id}",
-                    version=SchemaVersion(bundle.factor_version or "2.0.0"),
-                    description=f"Mined factor {factor_id} (evidence {bundle.artifact_hash[:12]})",
-                    author="factor-miner",
-                    category="mined",
-                    universe=frozenset({VenueId("BINANCE")}),
-                    instrument_types=frozenset({"perpetual"}),
-                    economic_rationale=payload.get("economic_rationale", "mined factor"),
-                    lookback_period="1h",
-                    rebalance_interval="1h",
-                )
-                record = registry.register(definition)
-            elif record.has_authorized_active_evidence():
-                report.applied.append(factor_id)  # 已 ACTIVE：幂等跳过
+                record = registry.get(factor_id)
+                if record is None:
+                    definition = FactorDefinition(
+                        factor_id=factor_id,
+                        name=f"mined-{factor_id}",
+                        version=SchemaVersion(bundle.factor_version or "2.0.0"),
+                        description=f"Mined factor {factor_id} (evidence {bundle.artifact_hash[:12]})",
+                        author="factor-miner",
+                        category="mined",
+                        universe=frozenset({VenueId("BINANCE")}),
+                        instrument_types=frozenset({"perpetual"}),
+                        economic_rationale=payload.get("economic_rationale", "mined factor"),
+                        lookback_period="1h",
+                        rebalance_interval="1h",
+                    )
+                    record = registry.register(definition)
+
+                # F4: 组件注册在"已 ACTIVE 幂等跳过"分支之前 —
+                # skip 与晋级两条路径都注册 ExpressionComponent，
+                # 否则重启后已 ACTIVE 因子不再可交易。
+                if record.has_authorized_active_evidence():
+                    EvidenceBridge._register_expression_component(
+                        factor_id, expression_string, role,
+                        component_registry, entry_ids, filter_ids, exit_ids,
+                    )
+                    report.applied.append(factor_id)  # 已 ACTIVE：幂等跳过
+                    continue
+
+                # 逐级复验：不可直接采信文件内 approved 字段
+                applied = EvidenceBridge._apply_chain(record, gate, chain, bundle, path, report)
+                if applied:
+                    EvidenceBridge._register_expression_component(
+                        factor_id, expression_string, role,
+                        component_registry, entry_ids, filter_ids, exit_ids,
+                    )
+            except Exception as exc:  # F1 隔离网：任何未预期异常只跳过该文件，不终止扫描
+                report.rejected.append((str(path), f"unhandled:{type(exc).__name__}"))
                 continue
-
-            # 逐级复验：不可直接采信文件内 approved 字段
-            applied = EvidenceBridge._apply_chain(record, gate, chain, bundle, path, report)
-            if applied:
-                EvidenceBridge._register_expression_component(
-                    factor_id, expression_string, role,
-                    component_registry, entry_ids, filter_ids, exit_ids,
-                )
         return report
 
     @staticmethod
