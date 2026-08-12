@@ -6806,6 +6806,14 @@ class AutonomousEngine:
             # No active pool evidence means no proposal collection.  Falling
             # back to the configured feed universe would bypass the pool gate.
             active_symbols = self._trading_pool.active_instruments()
+            # BD-FIX: 可观测性 — 无 ACTIVE 标的时说明宇宙晋级未完成
+            # (需 ≥24h 观察期 + 评分 ≥0.6)，此前静默跳过导致"无成交"
+            # 无法定位。打印一次状态而非每轮刷屏。
+            if not active_symbols and self._tick_count % 10 == 0:
+                print(
+                    "[nearline] No ACTIVE trading-pool instruments — "
+                    "universe promotion pending (≥24h observation + score ≥0.6 required)"
+                )
             # Testnet: 每轮只处理 10 个标的，避免 REST 调用过多导致 monitor STALL
             if self._env_mode.value == "testnet" and len(active_symbols) > 10:
                 active_symbols, self._nearline_batch_idx = _rotating_symbol_batch(
@@ -7726,7 +7734,15 @@ class AutonomousEngine:
         if pool is None:
             return
 
-        candidates = [iid for iid, e in pool._pool.items() if e.status in (PoolStatus.OBSERVING, PoolStatus.PROMOTED)]
+        # BD-FIX: ACTIVE 标的也必须参与评分——pool.score() 内的连续低分
+        # 降级检查 (连续 3 次 < 0.3 → QUARANTINED) 只有 ACTIVE 标的被评分
+        # 才会触发。try_promote/activate 内部已有状态前置检查，ACTIVE 标的
+        # 不会被重复晋级。
+        candidates = [
+            iid
+            for iid, e in pool._pool.items()
+            if e.status in (PoolStatus.OBSERVING, PoolStatus.PROMOTED, PoolStatus.ACTIVE)
+        ]
         if not candidates:
             return
 
@@ -7761,7 +7777,11 @@ class AutonomousEngine:
                 depth_score = max(0.0, min(1.0, _math.log10(max(1, depth_usdt)) / 5))
 
             # 成交量评分：24h 交易量
-            vol_24h = float(features.get("volume_24h", 0) or 0)
+            # BD-FIX: kline features 不含 volume_24h 字段（只有 async_update_features
+            # 的实时快照有），旧代码恒取 0 → volume_score 恒 0（权重 0.20），
+            # 叠加 spread_score 异常时总分上限低于晋级阈值，标的永远无法 ACTIVE。
+            # ticker 缓存 (WS/REST 两路径) 都携带 24h base 成交量 "volume"。
+            vol_24h = float(ticker.get("volume", 0) or 0)
             vol_usdt = vol_24h * float(ticker.get("lastPrice", ask))
             volume_score = max(0.0, min(1.0, _math.log10(max(1, vol_usdt)) / 8))
 
@@ -7793,13 +7813,9 @@ class AutonomousEngine:
 
         if scored > 0:
             active = pool.active_instruments()
-            # 降级检查：评分持续低 → quarantine
-            entry = pool._pool.get(instrument_id) if "instrument_id" in dir() else None
-            if entry is not None and entry.status == PoolStatus.ACTIVE:
-                recent = entry.scores[-pool.DEGRADE_CONSECUTIVE :]
-                if len(recent) >= pool.DEGRADE_CONSECUTIVE and all(s.overall < pool.DEGRADE_THRESHOLD for s in recent):
-                    pool.quarantine(instrument_id, f"连续{pool.DEGRADE_CONSECUTIVE}次评分<{pool.DEGRADE_THRESHOLD}")
-                    print(f"[universe] ⚠️ {instrument_id} QUARANTINED: 评分持续低于阈值")
+            # BD-FIX: 降级检查由 pool.score() 内部执行（连续 3 次低分 →
+            # QUARANTINED）。旧代码用 for 循环泄漏的最后一个 instrument_id
+            # 取 entry，且 ACTIVE 标的从未被评分，降级路径永远不触发。
             print(
                 f"[universe] 评估 {scored} 个标的, 晋级 {promoted} 个, "
                 f"当前活跃 {len(active)} 个: {active[:10]}{'...' if len(active) > 10 else ''}"

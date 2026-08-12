@@ -161,14 +161,19 @@ class MarketDataFeed:
             async def _on_ticker(stream: str, data: dict) -> None:
                 symbol = data.get("s", "")
                 if symbol:
+                    existing = self._last_ticker.get(symbol, {})
+                    # BD-FIX: 24hrTicker 流没有 best bid/ask 字段（bookTicker 流才有）。
+                    # 保留 depth 流 / REST 快照已写入的真实买一卖一，
+                    # 不能每次覆盖成 "0"（否则 _validated_ws_quote 恒失败、
+                    # 宇宙评估 spread_score 恒 0）。
                     self._last_ticker[symbol] = {
                         "lastPrice": data.get("c", "0"),
                         "priceChangePercent": data.get("P", "0"),
                         "volume": data.get("v", "0"),
                         "highPrice": data.get("h", "0"),
                         "lowPrice": data.get("l", "0"),
-                        "bid": data.get("b", "0"),
-                        "ask": data.get("a", "0"),
+                        "bid": existing.get("bid", existing.get("bidPrice", "0")),
+                        "ask": existing.get("ask", existing.get("askPrice", "0")),
                     }
                     self._ws_last_update[symbol] = time.monotonic()
                     # 用 WebSocket 实时 ticker 驱动 K 线生成
@@ -176,7 +181,9 @@ class MarketDataFeed:
                         last_price = float(data.get("c", 0))
                         # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量，
                         # 而非 24h 累计 volume (data["v"])
-                        per_tick_volume = float(data.get("l", data.get("lastQty", 0)))
+                        # BD-FIX: 24hrTicker 流中 "Q" 才是 lastQty；"l" 是 24h
+                        # 最低价 (lowPrice)，误用会把价格数值累计进 bar volume。
+                        per_tick_volume = float(data.get("Q", data.get("lastQty", 0)))
                         if last_price > 0 and per_tick_volume > 0:
                             kg_key = f"{symbol}:5m"
                             if kg_key not in self._kline_generators:
@@ -205,6 +212,14 @@ class MarketDataFeed:
                         "bids": [[b[0], b[1]] for b in data.get("bids", [])],
                         "asks": [[a[0], a[1]] for a in data.get("asks", [])],
                     }
+                    # BD-FIX: depth 流携带真实 best bid/ask，同步进 ticker 缓存，
+                    # 供 _validated_ws_quote / 点差计算 / 宇宙评估使用。
+                    bids = data.get("bids", [])
+                    asks = data.get("asks", [])
+                    if bids and asks:
+                        ticker = self._last_ticker.setdefault(symbol, {})
+                        ticker["bid"] = str(bids[0][0])
+                        ticker["ask"] = str(asks[0][0])
                     self._ws_last_update[symbol] = time.monotonic()
 
             async def _on_mark_price(stream: str, data: dict) -> None:
@@ -379,8 +394,22 @@ class MarketDataFeed:
             "quote_volume": quote_volume,
             "trades": raw[8],
         }
-        if include_closed:
-            parsed_row["is_closed"] = True
+        # BD-FIX: Binance kline 第 12 字段 (index 11, "x") 是该 bar 的闭合标志。
+        # REST 返回的最后一条往往是正在形成的未闭合 bar；把它盲目标记为闭合
+        # 会让未闭合价格进入策略决策（违反 closed-bar-only 不变量）。
+        is_closed_flag: bool | None = None
+        if len(raw) > 11:
+            raw_flag = raw[11]
+            if raw_flag not in (None, ""):
+                try:
+                    is_closed_flag = bool(raw_flag)
+                except (TypeError, ValueError):
+                    is_closed_flag = None
+        if include_closed and is_closed_flag is None:
+            # 无标志的兼容响应：按调用方声明处理（保留旧行为）
+            is_closed_flag = True
+        if is_closed_flag is not None:
+            parsed_row["is_closed"] = is_closed_flag
         return parsed_row
 
     @staticmethod

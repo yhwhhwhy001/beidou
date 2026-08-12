@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -111,6 +112,42 @@ class TradingPool:
                     entry.status = PoolStatus(raw_status)
                 except ValueError:
                     entry.status = PoolStatus.OBSERVING
+                # BD-FIX: 恢复观察期起点与最近评分，否则每次重启
+                # observing_since 重置为 now，24h 观察期重新计时，
+                # 标的可能永远无法晋级 ACTIVE。
+                detail = state.get("score_detail")
+                if isinstance(detail, dict):
+                    raw_observing = detail.get("observing_since")
+                    if raw_observing:
+                        try:
+                            parsed_observing = datetime.fromisoformat(str(raw_observing))
+                            if parsed_observing.tzinfo is None:
+                                parsed_observing = parsed_observing.replace(tzinfo=timezone.utc)
+                            entry.observing_since = parsed_observing
+                        except (TypeError, ValueError):
+                            pass
+                    raw_promoted = detail.get("promoted_at")
+                    if raw_promoted:
+                        try:
+                            parsed_promoted = datetime.fromisoformat(str(raw_promoted))
+                            if parsed_promoted.tzinfo is None:
+                                parsed_promoted = parsed_promoted.replace(tzinfo=timezone.utc)
+                            entry.promoted_at = parsed_promoted
+                        except (TypeError, ValueError):
+                            pass
+                    if detail.get("quarantine_reason"):
+                        entry.quarantine_reason = str(detail["quarantine_reason"])
+                    raw_scores = detail.get("scores")
+                    if isinstance(raw_scores, list):
+                        restored_scores: list[InstrumentScore] = []
+                        for raw_score in raw_scores:
+                            try:
+                                restored_scores.append(
+                                    InstrumentScore(instrument_id=inst_id, overall=float(raw_score))
+                                )
+                            except (TypeError, ValueError):
+                                continue
+                        entry.scores = restored_scores
                 self._pool[inst_id] = entry
 
     def add(self, instrument_id: str) -> PoolEntry:
@@ -118,6 +155,35 @@ class TradingPool:
             entry = PoolEntry(instrument_id=instrument_id)
             self._pool[instrument_id] = entry
         return self._pool[instrument_id]
+
+    def _persist(self, entry: PoolEntry) -> None:
+        """BD-FIX: 持久化标的生命周期状态（含观察期起点与最近评分）。
+
+        此前 event_sink 只被存储从不被调用，trading_pool_events 表永远为空：
+        每次重启所有标的回到 OBSERVING 且观察期重置，宇宙无法晋级。
+        持久化失败只记录告警，不得阻断评分流程本身。
+        """
+        if self._event_sink is None:
+            return
+        try:
+            detail: dict[str, Any] = {
+                "observing_since": entry.observing_since.isoformat(),
+                "promoted_at": entry.promoted_at.isoformat() if entry.promoted_at else None,
+                "quarantine_reason": entry.quarantine_reason,
+                "scores": [float(s.overall) for s in entry.scores[-20:]],
+            }
+            self._event_sink(
+                {
+                    "instrument_id": entry.instrument_id,
+                    "status": entry.status.value,
+                    "score": float(entry.scores[-1].overall) if entry.scores else 0.0,
+                    "score_detail": detail,
+                }
+            )
+        except Exception as exc:
+            logging.getLogger("beidou.trading_pool").warning(
+                "trading-pool persistence failed for %s: %s", entry.instrument_id, type(exc).__name__
+            )
 
     def score(self, instrument_id: str, score: InstrumentScore) -> None:
         entry = self._pool.get(instrument_id)
@@ -135,6 +201,7 @@ class TradingPool:
                     entry.quarantine_reason = (
                         f"Score below {self.DEGRADE_THRESHOLD} for {self.DEGRADE_CONSECUTIVE} consecutive evaluations"
                     )
+        self._persist(entry)
 
     def try_promote(self, instrument_id: str) -> bool:
         """尝试晋级。需要观察期满 + 评分达标。
@@ -176,6 +243,7 @@ class TradingPool:
 
         entry.status = PoolStatus.PROMOTED
         entry.promoted_at = datetime.now(timezone.utc)
+        self._persist(entry)
         return True
 
     def activate(self, instrument_id: str) -> bool:
@@ -185,6 +253,7 @@ class TradingPool:
         if self.active_count() >= self._max_instruments:
             return False
         entry.status = PoolStatus.ACTIVE
+        self._persist(entry)
         return True
 
     def quarantine(self, instrument_id: str, reason: str) -> None:
@@ -192,6 +261,7 @@ class TradingPool:
         if entry:
             entry.status = PoolStatus.QUARANTINED
             entry.quarantine_reason = reason
+            self._persist(entry)
 
     def active_instruments(self) -> list[str]:
         return [iid for iid, e in self._pool.items() if e.status == PoolStatus.ACTIVE]
