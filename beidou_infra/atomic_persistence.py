@@ -39,7 +39,7 @@ class AtomicIntent:
     outbox_id: str = ""
 
     def compute_idempotency_key(self) -> str:
-        key = f"{self.intent_id}:{self.client_order_id}:{self.symbol}:{self.created_at}"
+        key = f"{self.intent_id}:{self.client_order_id}:{self.symbol}:{self.side}:{self.quantity}:{self.order_type}"
         self.idempotency_key = hashlib.sha256(key.encode()).hexdigest()[:16]
         return self.idempotency_key
 
@@ -99,8 +99,7 @@ class AtomicPersistence:
         # 幂等检查 — 防止重复
         if intent.idempotency_key in self._intents:
             existing = self._intents[intent.idempotency_key]
-            if existing.status == PersistStatus.COMMITTED:
-                return False, f"DUPLICATE:{intent.intent_id}"
+            return False, f"DUPLICATE:{intent.intent_id}:{existing.status.value}"
 
         # 原子写入
         try:
@@ -126,7 +125,7 @@ class AtomicPersistence:
 
         UNKNOWN → 首先 query-by-client-id，不得直接重发。
         """
-        for key, intent in self._intents.items():
+        for intent in self._intents.values():
             if intent.intent_id == intent_id:
                 intent.status = PersistStatus.UNKNOWN
                 return f"UNKNOWN:{intent.client_order_id}"

@@ -756,6 +756,7 @@ def test_small_position_is_not_exempt_from_protection() -> None:
     assert ok is False
     assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
 
+
 def test_protection_coverage_rejects_orphans_and_local_position_without_venue_fact() -> None:
     engine = _engine()
     local = SimpleNamespace(instrument_id="ETHUSDT")

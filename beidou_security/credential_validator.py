@@ -94,10 +94,7 @@ def verify_ip_whitelist(ip: str, allowed_ips: tuple[str, ...]) -> bool:
     """
     if not allowed_ips:
         return True
-    for allowed in allowed_ips:
-        if _is_ip_in_cidr(ip, allowed) or ip == allowed:
-            return True
-    return False
+    return any(_is_ip_in_cidr(ip, allowed) or ip == allowed for allowed in allowed_ips)
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +129,7 @@ class Credential:
         """P1-051: 综合验证 status + expiry。"""
         if self.status != CredentialStatus.ACTIVE:
             return False
-        if self.expiry_time > 0 and time.time() > self.expiry_time:
-            return False
-        return True
+        return not (self.expiry_time > 0 and time.time() > self.expiry_time)
 
     def is_allowed_ip(self, ip: str) -> bool:
         """P1-017: IP 白名单检查（CIDR 支持）。"""
@@ -215,9 +210,7 @@ class CredentialRegistry:
         if credential_id in self._revoked:
             return False
         # P1-053: 签名域验证
-        if required_domain is not None and cred.signing_domain != required_domain:
-            return False
-        return True
+        return not (required_domain is not None and cred.signing_domain != required_domain)
 
     # ------------------------------------------------------------------
     # Rotation (BDS-P1-052)

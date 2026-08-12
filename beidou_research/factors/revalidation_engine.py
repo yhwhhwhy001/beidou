@@ -95,6 +95,18 @@ def revalidate_factor(
     if not statistics_verified:
         blocking.append("STATISTICS_NOT_VERIFIED")
 
+    # 8. Promotion must bind all point-in-time inputs and policies.
+    promotion_hashes = {
+        "universe_hash": universe_hash,
+        "feature_hash": feature_hash,
+        "code_hash": code_hash,
+        "config_hash": config_hash,
+        "policy_hash": policy_hash,
+    }
+    for name, value in promotion_hashes.items():
+        if not value:
+            blocking.append(f"MISSING_PROMOTION_HASH:{name}")
+
     if blocking:
         result.blocking_reasons = blocking
         result.can_promote = False
@@ -104,13 +116,7 @@ def revalidate_factor(
         result.state = FactorState.ACTIVE
 
     # Bind promotion hashes
-    result.promotion_hashes = {
-        "universe_hash": universe_hash,
-        "feature_hash": feature_hash,
-        "code_hash": code_hash,
-        "config_hash": config_hash,
-        "policy_hash": policy_hash,
-    }
+    result.promotion_hashes = promotion_hashes
 
     return result
 

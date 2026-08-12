@@ -64,10 +64,24 @@ class SymbolicGPGenerator:
         self._population: list[GPIndividual] = []
         self._generation: int = 0
         self._seen_hashes: set[str] = set()
+        self._offspring_serial: int = 0
 
     def initialize_population(self, primitives: list[str]) -> list[GPIndividual]:
         """随机初始化种群。"""
         cfg = self.config
+        if not primitives:
+            raise ValueError("primitives must not be empty")
+        if cfg.population_size <= 0:
+            raise ValueError("population_size must be positive")
+        if cfg.max_tree_depth <= 0 or cfg.max_node_count <= 0:
+            raise ValueError("tree and node limits must be positive")
+        if cfg.max_search_budget < cfg.population_size:
+            raise ValueError("max_search_budget must cover the initial population")
+
+        self._rng = random.Random(cfg.random_seed)
+        self._seen_hashes.clear()
+        self._offspring_serial = 0
+        self._generation = 0
         population = []
 
         for i in range(cfg.population_size):
@@ -114,18 +128,24 @@ class SymbolicGPGenerator:
 
     def select_parent(self, population: list[GPIndividual]) -> GPIndividual:
         """锦标赛选择。"""
+        if not population:
+            raise ValueError("cannot select a parent from an empty population")
         cfg = self.config
         candidates = self._rng.sample(population, min(cfg.tournament_size, len(population)))
         return max(candidates, key=lambda ind: ind.fitness.get("sharpe", -999))
 
     def crossover(self, parent1: GPIndividual, parent2: GPIndividual) -> GPIndividual:
         """类型化子树交叉。"""
+        self._offspring_serial += 1
         new_hash = hashlib.sha256(
-            f"cx:{parent1.expression_hash[:8]}:{parent2.expression_hash[:8]}:g{self._generation}".encode()
+            (
+                f"cx:{parent1.expression_hash[:8]}:{parent2.expression_hash[:8]}:"
+                f"g{self._generation}:n{self._offspring_serial}"
+            ).encode()
         ).hexdigest()[:20]
 
         return GPIndividual(
-            individual_id=f"gp_g{self._generation}_cx",
+            individual_id=f"gp_g{self._generation}_cx_{self._offspring_serial}",
             expression_hash=new_hash,
             tree_depth=max(parent1.tree_depth, parent2.tree_depth),
             node_count=parent1.node_count + parent2.node_count,
@@ -136,13 +156,16 @@ class SymbolicGPGenerator:
 
     def mutate(self, individual: GPIndividual) -> GPIndividual:
         """点突变。"""
-        new_hash = hashlib.sha256(f"mut:{individual.expression_hash[:8]}:g{self._generation}".encode()).hexdigest()[:20]
+        self._offspring_serial += 1
+        new_hash = hashlib.sha256(
+            (f"mut:{individual.expression_hash[:8]}:g{self._generation}:n{self._offspring_serial}").encode()
+        ).hexdigest()[:20]
 
         return GPIndividual(
-            individual_id=f"gp_g{self._generation}_mut",
+            individual_id=f"gp_g{self._generation}_mut_{self._offspring_serial}",
             expression_hash=new_hash,
             tree_depth=individual.tree_depth,
-            node_count=individual.node_count + self._rng.choice([-1, 0, 1]),
+            node_count=max(1, individual.node_count + self._rng.choice([-1, 0, 1])),
             complexity_score=individual.complexity_score * self._rng.uniform(0.8, 1.2),
             generation=self._generation,
             parent_ids=[individual.individual_id],
@@ -156,6 +179,8 @@ class SymbolicGPGenerator:
         cfg = self.config
         self._generation += 1
         pop = self._population
+        if not pop:
+            raise ValueError("population is not initialized")
 
         new_pop = []
         # Elitism
@@ -164,7 +189,14 @@ class SymbolicGPGenerator:
         new_pop.extend(evaluated[: cfg.elitism_count])
 
         # Generate offspring
-        while len(new_pop) < cfg.population_size:
+        max_attempts = max(cfg.population_size * 20, 20)
+        attempts = 0
+        while (
+            len(new_pop) < cfg.population_size
+            and len(self._seen_hashes) < cfg.max_search_budget
+            and attempts < max_attempts
+        ):
+            attempts += 1
             if self._rng.random() < cfg.crossover_prob and len(pop) >= 2:
                 p1 = self.select_parent(pop)
                 p2 = self.select_parent(pop)
@@ -173,7 +205,8 @@ class SymbolicGPGenerator:
                 parent = self.select_parent(pop)
                 child = self.mutate(parent)
 
-            if child.expression_hash not in self._seen_hashes:
+            within_limits = child.tree_depth <= cfg.max_tree_depth and child.node_count <= cfg.max_node_count
+            if within_limits and child.expression_hash not in self._seen_hashes:
                 self._seen_hashes.add(child.expression_hash)
                 new_pop.append(child)
 
@@ -199,6 +232,9 @@ class SymbolicGPGenerator:
         """
         cfg = self.config
 
+        if cfg.generations < 0:
+            raise ValueError("generations must not be negative")
+
         # 初始化
         if not self._population:
             self.initialize_population(primitives)
@@ -219,6 +255,9 @@ class SymbolicGPGenerator:
             if len(self._seen_hashes) >= cfg.max_search_budget:
                 break
 
+        # The last generation's offspring have not participated in the next
+        # generation, so evaluate them before computing the final frontier.
+        self.evaluate_fitness(self._population, evaluator)
         return self.get_pareto_front()
 
     def get_pareto_front(self) -> list[GPIndividual]:

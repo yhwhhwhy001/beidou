@@ -98,6 +98,7 @@ class TestNodeOutputHash:
         assert (
             json_hash == hashlib.sha256(json.dumps({"key": "value", "num": 1.0}, sort_keys=True).encode()).hexdigest()
         )
+        assert str_hash != json_hash
 
 
 class TestPortfolioConstraints:
@@ -127,4 +128,4 @@ class TestPortfolioConstraints:
         result = allocate([1.0, 2.0, 2.0], 3.0)  # total=5 > 3
         assert sum(abs(r) for r in result) <= 3.0
         # 方向保持不变
-        assert all(r * w >= 0 for r, w in zip(result, [1.0, 2.0, 2.0]))
+        assert all(r * w >= 0 for r, w in zip(result, [1.0, 2.0, 2.0], strict=True))

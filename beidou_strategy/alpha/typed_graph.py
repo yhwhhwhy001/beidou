@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -35,6 +36,8 @@ from beidou_strategy.alpha.contracts import (
     FilterResult,
     StrategyProposal,
 )
+
+logger = logging.getLogger(__name__)
 
 # ================================================================
 # 节点类型
@@ -264,7 +267,7 @@ class EntryNode(TypedGraphNode):
                     node_id=self.node_id,
                     node_type=NodeType.ENTRY,
                     output_hash="degraded",
-                    data=default_data if "default_data" in dir() else None,
+                    data=None,
                     dq_tier=DataQualityTier.DEGRADED,
                     metadata={"error": str(e), "degraded": True},
                 )
@@ -387,13 +390,14 @@ class ExitNode(TypedGraphNode):
                 proposal = await self._exit_fn(context)
             else:
                 proposal = None
-        except Exception:
+        except Exception as exc:
             return TypedNodeOutput(
                 node_id=self.node_id,
                 node_type=NodeType.EXIT,
                 output_hash="exit_error",
                 data=None,
-                dq_tier=DataQualityTier.DEGRADED,
+                dq_tier=DataQualityTier.BLOCK,
+                metadata={"error": str(exc)},
             )
 
         if proposal is None:
@@ -446,9 +450,11 @@ class FusionNode(TypedGraphNode):
         for inp in inputs.values():
             if inp.node_type == NodeType.ENTRY and inp.data is not None:
                 _ep = inp.data
-                # 诊断：打印每个入场提案
-                print(
-                    f"[fusion] ENTRY {inp.node_id}: side={getattr(_ep, 'side', '?')} strength={getattr(_ep, 'strength', '?')}"
+                logger.debug(
+                    "Fusion entry %s side=%s strength=%s",
+                    inp.node_id,
+                    getattr(_ep, "side", "?"),
+                    getattr(_ep, "strength", "?"),
                 )
                 # 优先采用第一个有方向的入场提案，不覆盖为弱/零信号
                 if entry_proposal is None or (

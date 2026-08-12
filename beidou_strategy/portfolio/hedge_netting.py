@@ -114,10 +114,18 @@ def bind_portfolio_target(
     空头 target_position 必须为负。
     gross >= abs(net) 始终成立。
     """
+    if direction == Direction.SHORT and target_position >= 0:
+        raise ValueError("SHORT target_position must be negative")
+    if direction == Direction.LONG and target_position <= 0:
+        raise ValueError("LONG target_position must be positive")
+    if direction == Direction.FLAT and target_position != 0:
+        raise ValueError("FLAT target_position must be zero")
+    if leverage <= 0:
+        raise ValueError("leverage must be positive")
     delta = target_position - current_position
     gross = abs(target_position)
     net = target_position
-    margin = gross / max(leverage, 0.01)
+    margin = gross / leverage
 
     import hashlib
     import json

@@ -242,10 +242,7 @@ class DSRResult:
 
         # Expected max SR under multiple testing
         # E[max] ≈ sqrt(2 * Var(SR) * log(N))
-        if n_trials == 1:
-            expected_max = 0.0
-        else:
-            expected_max = math.sqrt(2.0 * sr_var * math.log(n_trials))
+        expected_max = 0.0 if n_trials == 1 else math.sqrt(2.0 * sr_var * math.log(n_trials))
 
         # Skewness adjustment (optional)
         if skewness is not None and math.isfinite(skewness):
@@ -309,8 +306,6 @@ class HolmResult:
         # Sort by p-value ascending, keep original indices
         indexed = sorted(enumerate(clean), key=lambda x: x[1])
         sorted_indices = [idx for idx, _ in indexed]
-        sorted_p = [p for _, p in indexed]
-
         # Holm step-down: adj_p[i] = min(1, max(prev_adj, p[i] * (n - i)))
         adjusted = [0.0] * n
         for rank, (orig_idx, p) in enumerate(indexed):

@@ -83,6 +83,18 @@ class BayesianParameterSearch:
         param_space: list[ParameterSpace],
     ) -> list[ParameterSpace]:
         """定义搜索空间。"""
+        for parameter in param_space:
+            if parameter.type not in {"float", "int", "categorical"}:
+                raise ValueError(f"unsupported parameter type: {parameter.type}")
+            if parameter.type in {"float", "int"}:
+                if parameter.low is None or parameter.high is None:
+                    raise ValueError(f"numeric parameter {parameter.name} requires bounds")
+                if parameter.low > parameter.high:
+                    raise ValueError(f"invalid bounds for parameter {parameter.name}")
+                if parameter.log_scale and parameter.low <= 0:
+                    raise ValueError(f"log-scale parameter {parameter.name} requires low > 0")
+            if parameter.type == "categorical" and not parameter.choices:
+                raise ValueError(f"categorical parameter {parameter.name} requires choices")
         return param_space
 
     def sample_parameters(
@@ -96,6 +108,7 @@ class BayesianParameterSearch:
         """
         import random
 
+        param_space = self.define_search_space(param_space)
         rng = random.Random(self.config.random_seed + trial_id)
 
         params = {}
@@ -111,9 +124,6 @@ class BayesianParameterSearch:
                 params[ps.name] = rng.randint(int(ps.low), int(ps.high))
             elif ps.type == "categorical" and ps.choices:
                 params[ps.name] = rng.choice(ps.choices)
-            else:
-                params[ps.name] = None
-
         return params
 
     def compute_objective(
@@ -199,6 +209,10 @@ class BayesianParameterSearch:
     ) -> BayesianResult:
         """执行贝叶斯参数搜索。"""
         cfg = self.config
+        if cfg.n_trials <= 0 or cfg.n_inner_folds <= 0:
+            raise ValueError("n_trials and n_inner_folds must be positive")
+        self.define_search_space(param_space)
+        self._trials = []
         best_trial = None
         best_objective = float("-inf")
 
@@ -207,7 +221,7 @@ class BayesianParameterSearch:
             trial = self.compute_objective(params, inner_evaluator)
             self._trials.append(trial)
 
-            if trial.objective_value > best_objective:
+            if trial.status == "completed" and trial.objective_value > best_objective:
                 best_objective = trial.objective_value
                 best_trial = trial
 

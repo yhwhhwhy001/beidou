@@ -282,8 +282,4 @@ def verify_evidence_path_not_sufficient(path: str, content_changed: bool = False
     若内容已修改（content_changed=True），即使路径存在也应返回 False。
     这确保 verifier 不会仅因路径字符串存在就通过验证。
     """
-    if not path or not os.path.exists(path):
-        return False
-    if content_changed:
-        return False  # 内容改变 → 路径存在也不足以通过
-    return True
+    return bool(path) and os.path.exists(path) and not content_changed

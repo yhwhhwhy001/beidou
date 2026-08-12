@@ -7,9 +7,13 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _make_promotion_decision(
@@ -60,13 +64,13 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
     """
     import os as _os
 
-    if mode not in ("paper", "research", "testnet"):
-        print(f"[beidou-bootstrap] 模式 {mode} 不允许 DEV_BYPASS，跳过")
+    if mode not in ("paper", "research"):
+        logger.warning("Mode %s is not eligible for DEV_BYPASS", mode)
         return
 
     skip_pool = _os.environ.get("BEIDOU_SKIP_POOL_BYPASS", "1") == "1"  # 默认跳过交易池 bypass
 
-    print("[beidou-bootstrap] DEV_BYPASS: 开始激活因子...")
+    logger.info("DEV_BYPASS factor activation started")
 
     commit = _get_commit()
 
@@ -75,7 +79,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
 
     registry = getattr(engine, "_factor_registry", None)
     if registry is None:
-        print("[beidou-bootstrap] 因子注册表不存在，跳过")
+        logger.info("DEV_BYPASS skipped because factor registry is unavailable")
         return
 
     activated = 0
@@ -114,12 +118,12 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         record.performance.append(perf)
         activated += 1
 
-    print(f"[beidou-bootstrap] 已激活 {activated}/{len(registry._factors)} 个因子")
+    logger.info("DEV_BYPASS activated %d/%d factors", activated, len(registry._factors))
 
     # === 2. 重新构建 AlphaGraph ===
     active_factors = registry.get_active()
     active_ids = [f.definition.factor_id for f in active_factors]
-    print(f"[beidou-bootstrap] 活跃因子: {active_ids}")
+    logger.info("DEV_BYPASS active factor count: %d", len(active_ids))
 
     factor_component_registry = getattr(engine, "_factor_component_registry", {})
     entry_ids: set[str] = getattr(engine, "_entry_ids", set())
@@ -159,7 +163,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
                         engine._alpha_graph.connect(flt_id, ext_id)
 
         order = engine._alpha_graph.topological_order()
-        print(f"[beidou-bootstrap] DAG order: {order}")
+        logger.debug("DEV_BYPASS DAG order: %s", order)
 
         # 重建 TypedGraph 并同步到内核
         engine._typed_graph = build_typed_graph(
@@ -171,7 +175,7 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
         )
         if hasattr(engine, "_strategy_kernel"):
             engine._strategy_kernel.set_typed_graph(engine._typed_graph)
-        print(f"[beidou-bootstrap] TypedGraph 已重建，组件数: {len(added_components)}")
+        logger.info("DEV_BYPASS rebuilt TypedGraph with %d components", len(added_components))
 
     # === 3. 交易池：由真实 TradingPool 生命周期算法管理 ===
     pool = getattr(engine, "_trading_pool", None)
@@ -181,11 +185,12 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
             for instrument_id in list(pool._pool.keys()):
                 entry = pool._pool[instrument_id]
                 entry.min_observation_hours = 5.0 / 60.0  # 5 分钟观察期
-            print(
-                f"[beidou-bootstrap] 交易池: {len(pool._pool)} 个标的进入 OBSERVING "
-                f"(观察期={5}min, 阈值={pool.PROMOTE_THRESHOLD})"
+            logger.info(
+                "DEV_BYPASS pool has %d OBSERVING instruments (window=%dmin, threshold=%s)",
+                len(pool._pool),
+                5,
+                pool.PROMOTE_THRESHOLD,
             )
-            print("[beidou-bootstrap] 标的晋级将由评分算法自动决定")
         else:
             from beidou_data.trading_pool_lifecycle import InstrumentScore, PoolStatus
 
@@ -205,10 +210,10 @@ def patch_engine_for_dev(engine: Any, mode: str) -> None:
                 entry.scores.append(score)
                 entry.promoted_at = datetime.now(timezone.utc)
                 pool_activated += 1
-            print(f"[beidou-bootstrap] 已激活 {pool_activated}/{len(pool._pool)} 个交易标的")
-            print(f"[beidou-bootstrap] 活跃标的: {pool.active_instruments()}")
+            logger.info("DEV_BYPASS activated %d/%d pool instruments", pool_activated, len(pool._pool))
+            logger.debug("DEV_BYPASS active instruments: %s", pool.active_instruments())
 
-    print("[beidou-bootstrap] DEV_BYPASS 完成")
+    logger.info("DEV_BYPASS completed")
 
 
 async def bootstrap_universe(engine: Any, mode: str) -> None:
@@ -223,23 +228,23 @@ async def bootstrap_universe(engine: Any, mode: str) -> None:
     from beidou_data.trading_pool_lifecycle import InstrumentScore
     from beidou_data.trading_pool_lifecycle import PoolStatus as _PoolStatus
 
-    if mode not in ("paper", "research", "testnet"):
-        print(f"[beidou-bootstrap] 模式 {mode} 不允许宇宙 DEV_BYPASS，跳过", flush=True)
+    if mode not in ("paper", "research"):
+        logger.warning("Mode %s is not eligible for universe DEV_BYPASS", mode)
         return
 
     pool = getattr(engine, "_trading_pool", None)
     feed = getattr(engine, "_feed", None)
     if pool is None or feed is None:
-        print("[beidou-bootstrap] 宇宙评估跳过：pool 或 feed 不可用", flush=True)
+        logger.info("Universe DEV_BYPASS skipped because pool or feed is unavailable")
         return
 
     candidates = [iid for iid, e in pool._pool.items() if e.status == _PoolStatus.OBSERVING]
     if not candidates:
         active = pool.active_instruments()
-        print(f"[beidou-bootstrap] 宇宙评估：无 OBSERVING 候选（活跃 {len(active)} 个）", flush=True)
+        logger.info("Universe DEV_BYPASS has no candidates; active=%d", len(active))
         return
 
-    print(f"[beidou-bootstrap] 首次宇宙评估: {len(candidates)} 个候选标的...", flush=True)
+    logger.info("Universe DEV_BYPASS evaluating %d candidates", len(candidates))
     scored = 0
     promoted = 0
     for instrument_id in candidates:
@@ -276,8 +281,8 @@ async def bootstrap_universe(engine: Any, mode: str) -> None:
                     asks_vol = sum(float(a[1]) for a in (ob.get("asks", []) or [])[:5])
                     depth_usdt = (bids_vol + asks_vol) * close
                     depth_score = max(0.0, min(1.0, _math.log10(max(1, depth_usdt)) / 5))
-            except Exception:
-                pass
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                logger.warning("DEV_BYPASS depth estimate unavailable for %s: %s", instrument_id, type(exc).__name__)
 
             # 成交量: 24h 量 × 价格
             vol_24h = float((features or {}).get("volume_24h", 0) or 0)
@@ -317,22 +322,26 @@ async def bootstrap_universe(engine: Any, mode: str) -> None:
                 if pool.try_promote(instrument_id):
                     pool.activate(instrument_id)
                     promoted += 1
-                    print(
-                        f"  ✅ {instrument_id}: overall={overall_raw:.3f} "
-                        f"spread={spread_bps:.1f}bps vol={vol_usdt / 1e6:.1f}M",
-                        flush=True,
+                    logger.info(
+                        "Universe DEV_BYPASS promoted %s: overall=%.3f spread=%.1fbps volume=%.1fM",
+                        instrument_id,
+                        overall_raw,
+                        spread_bps,
+                        vol_usdt / 1e6,
                     )
 
             await _asyncio.sleep(0.05)  # 减少 API 压力
 
-        except Exception:
+        except Exception as exc:
+            logger.warning("DEV_BYPASS universe evaluation failed for %s: %s", instrument_id, type(exc).__name__)
             continue
 
     active = pool.active_instruments()
-    print(
-        f"[beidou-bootstrap] 首次评估完成: 评分 {scored} 个, 晋级 {promoted} 个, "
-        f"活跃 {len(active)} 个: {active[:10]}{'...' if len(active) > 10 else ''}",
-        flush=True,
+    logger.info(
+        "Universe DEV_BYPASS completed: scored=%d promoted=%d active=%d",
+        scored,
+        promoted,
+        len(active),
     )
 
 
@@ -346,7 +355,7 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
     try:
         last_account = getattr(engine, "_last_account", None)
         if not last_account or "totalWalletBalance" not in last_account:
-            print("[beidou-bootstrap] 无账户快照，跳过余额同步")
+            logger.info("Opening balance sync skipped: account snapshot unavailable")
             return
 
         live_balance = str(last_account.get("totalWalletBalance", "0"))
@@ -354,7 +363,7 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
         dsn = getattr(database_url, "url", "") if database_url else ""
 
         if not dsn or not dsn.startswith("postgres"):
-            print("[beidou-bootstrap] 非 PostgreSQL 后端，跳过余额同步")
+            logger.info("Opening balance sync skipped: non-PostgreSQL backend")
             return
 
         # Fix: populate positions from the live exchange account snapshot
@@ -417,22 +426,13 @@ def _sync_opening_balance(engine: Any, commit: str) -> None:
                 ),
             )
             conn.commit()
-        print(f"[beidou-bootstrap] 开盘余额已同步: {live_balance} USDT")
+        logger.info("Opening balance projection synchronized")
     except Exception as exc:
-        print(f"[beidou-bootstrap] 余额同步失败 (非致命): {exc}")
+        logger.warning("Opening balance projection synchronization failed: %s", type(exc).__name__)
 
 
 def _get_commit() -> str:
-    import subprocess
+    from beidou_launcher.preflight import current_commit
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.stdout.strip() if result.returncode == 0 else "dev-bypass"
-    except Exception:
-        return "dev-bypass"
+    commit = current_commit(Path(__file__).resolve().parents[1])
+    return commit if commit != "UNKNOWN" else "dev-bypass"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from beidou_research.contracts import (
     KernelParityResult,
@@ -275,7 +276,3 @@ class TestRiskApprovalLifecycle:
     def test_approval_without_expiry_invalid(self):
         a = RiskApproval(approval_id="a1", is_expired=False, expires_at="")
         assert not a.is_valid()
-
-
-# Helpers for datetime in last test
-from datetime import datetime, timedelta, timezone

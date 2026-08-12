@@ -10,6 +10,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar
 
 from beidou_data.klines import OHLCV, KLineGenerator
 from beidou_shared.types import Price, Quantity, VenueInstrument
@@ -61,7 +62,9 @@ class CanonicalBarBuilder:
     - 运行时/回测/research/replay 统一调用
     """
 
-    VALID_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"}
+    VALID_INTERVALS: ClassVar[frozenset[str]] = frozenset(
+        {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"}
+    )
 
     def __init__(self, interval: str = "5m") -> None:
         if interval not in self.VALID_INTERVALS:
@@ -116,9 +119,6 @@ class CanonicalBarBuilder:
         event_type = BarEventType.CLOSED
         last_time = self._last_bar_time.get(symbol)
         if last_time is not None:
-            expected_next = (
-                self._generator._interval_delta() + last_time if hasattr(self._generator, "_interval_delta") else None
-            )
             gap = None
             if hasattr(self._generator, "_interval_delta"):
                 gap = completed.open_time - last_time

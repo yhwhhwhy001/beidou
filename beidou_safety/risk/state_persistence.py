@@ -29,11 +29,14 @@ class RiskSnapshot:
 
     def compute_hash(self) -> str:
         data = {
+            "snapshot_id": self.snapshot_id,
             "input_fact_hashes": self.input_fact_hashes,
             "rule_outcomes": self.rule_outcomes,
             "aggregate_state": self.aggregate_state,
+            "reason": self.reason,
             "expires_at": self.expires_at,
             "policy_version": self.policy_version,
+            "config_version": self.config_version,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
@@ -72,9 +75,13 @@ class RiskStatePersistence:
                 json.dump(
                     {
                         "snapshot_id": snapshot.snapshot_id,
+                        "input_fact_hashes": snapshot.input_fact_hashes,
+                        "rule_outcomes": snapshot.rule_outcomes,
                         "aggregate_state": snapshot.aggregate_state,
                         "reason": snapshot.reason,
                         "expires_at": snapshot.expires_at,
+                        "policy_version": snapshot.policy_version,
+                        "config_version": snapshot.config_version,
                         "snapshot_hash": snapshot.snapshot_hash,
                         "saved_at": datetime.now(timezone.utc).isoformat(),
                     },
@@ -93,9 +100,13 @@ class RiskStatePersistence:
                 data = json.load(f)
             snap = RiskSnapshot(
                 snapshot_id=data.get("snapshot_id", ""),
+                input_fact_hashes=data.get("input_fact_hashes", {}),
+                rule_outcomes=data.get("rule_outcomes", {}),
                 aggregate_state=data.get("aggregate_state", "CORRUPT"),
                 reason=data.get("reason", ""),
                 expires_at=data.get("expires_at", ""),
+                policy_version=data.get("policy_version", ""),
+                config_version=data.get("config_version", ""),
                 snapshot_hash=data.get("snapshot_hash", ""),
             )
             if not snap.is_valid() or snap.is_expired():

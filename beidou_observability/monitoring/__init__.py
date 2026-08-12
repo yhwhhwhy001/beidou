@@ -107,14 +107,10 @@ def collect_monitoring_checks(
         check_balance_sanity,
     )
     from beidou_observability.monitoring.checks.execution import OrderTraceState, check_order_trace
-    from beidou_observability.monitoring.checks.factors import check_factors, check_strategies as check_factor_strategies
+    from beidou_observability.monitoring.checks.factors import check_factors
+    from beidou_observability.monitoring.checks.factors import check_strategies as check_factor_strategies
     from beidou_observability.monitoring.checks.modules import check_algorithm_probe, check_module_progress
     from beidou_observability.monitoring.checks.monitor_self import check_component_health, check_monitor_loop_health
-    from beidou_observability.monitoring.checks.strategies import (
-        check_strategy_risk_drift,
-        check_strategy_signal_silence,
-        check_strategy_version_drift,
-    )
     from beidou_observability.monitoring.checks.protection import (
         ExchangeEconomicPosition,
         build_protection_check,
@@ -123,6 +119,11 @@ def collect_monitoring_checks(
     from beidou_observability.monitoring.checks.reconciliation import (
         build_reconciliation_check,
         perform_reconciliation,
+    )
+    from beidou_observability.monitoring.checks.strategies import (
+        check_strategy_risk_drift,
+        check_strategy_signal_silence,
+        check_strategy_version_drift,
     )
     from beidou_observability.monitoring.contracts import AccountPositionMode as MonAccountPositionMode
     from beidou_observability.monitoring.contracts import CheckSeverity as MonCheckSeverity
@@ -264,31 +265,21 @@ def collect_monitoring_checks(
                         facts.append(_protection_order_fact(tp, kind="TP", symbol=symbol))
             except Exception as exc:
                 raise RuntimeError("local protection projection unavailable") from exc
-        _is_testnet_prot = getattr(getattr(engine, "_env_mode", None), "value", "") == "testnet"
         if exchange_positions:
             for ep in exchange_positions:
                 semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
                 check = build_protection_check(semantic)
-                # Testnet: MISSING_TP/SL 降级为 WARN/P1，避免保护/风控死锁
-                if _is_testnet_prot and check.status != CheckStatus.PASS:
-                    check = MonitoringCheckResult(
-                        check_id=check.check_id,
-                        entity_type=check.entity_type,
-                        entity_id=check.entity_id,
-                        status=CheckStatus.WARN,
-                        severity=CheckSeverity.P1,
-                        message=f"(testnet豁免) {check.message}",
-                        observed_at=check.observed_at,
-                    )
                 results.append(convert(check, name="持仓保护覆盖 (PKG-MON-04)"))
         else:
-            results.append(CheckResult(
-                check_id="runtime.safety.protection_coverage",
-                name="持仓保护覆盖 (PKG-MON-04)",
-                status=CheckStatus.PASS,
-                severity=CheckSeverity.P1,
-                message="无持仓，保护覆盖不适用",
-            ))
+            results.append(
+                CheckResult(
+                    check_id="runtime.safety.protection_coverage",
+                    name="持仓保护覆盖 (PKG-MON-04)",
+                    status=CheckStatus.PASS,
+                    severity=CheckSeverity.P1,
+                    message="无持仓，保护覆盖不适用",
+                )
+            )
     except Exception as exc:
         print(f"[monitor] protection_coverage EXCEPTION: {type(exc).__name__}: {exc}", flush=True)
         results.append(
@@ -423,7 +414,11 @@ def collect_monitoring_checks(
                         status=CheckStatus.PASS,
                         severity=CheckSeverity.P0,
                         message=f"Recon: {recon.matched} matched",
-                        evidence={"source": "engine._last_reconciliation_result", "status": authority_status, "age_seconds": authority_age},
+                        evidence={
+                            "source": "engine._last_reconciliation_result",
+                            "status": authority_status,
+                            "age_seconds": authority_age,
+                        },
                     )
                 )
         else:
@@ -487,14 +482,14 @@ def collect_monitoring_checks(
         if factor_registry is not None:
             try:
                 results.append(convert(check_factors(factor_registry), name="因子注册健康"))
-            except Exception:
-                pass
+            except Exception as exc:
+                results.append(failure("runtime.factors.health", "因子注册健康", CheckSeverity.P2, exc))
             try:
                 results.append(convert(check_factor_strategies(factor_registry), name="因子策略关联"))
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                results.append(failure("runtime.factors.strategies", "因子策略关联", CheckSeverity.P2, exc))
+    except Exception as exc:
+        results.append(failure("runtime.factors.discovery", "因子健康发现", CheckSeverity.P2, exc))
     try:
         if engine is not None:
             strategy_risk = getattr(engine, "_strategy_risk", None)
@@ -502,18 +497,18 @@ def collect_monitoring_checks(
             if strategy_risk is not None and autopilot_id is not None:
                 try:
                     results.append(convert(check_strategy_signal_silence(engine), name="策略信号沉默检测"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    results.append(failure("runtime.strategy.silence", "策略信号沉默检测", CheckSeverity.P2, exc))
                 try:
                     results.append(convert(check_strategy_risk_drift(strategy_risk, autopilot_id), name="策略风险漂移"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    results.append(failure("runtime.strategy.risk_drift", "策略风险漂移", CheckSeverity.P2, exc))
                 try:
                     results.append(convert(check_strategy_version_drift(engine), name="策略版本漂移"))
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as exc:
+                    results.append(failure("runtime.strategy.version_drift", "策略版本漂移", CheckSeverity.P2, exc))
+    except Exception as exc:
+        results.append(failure("runtime.strategy.discovery", "策略健康发现", CheckSeverity.P2, exc))
 
     # === 8. ChaosEngine 周期性健康检查 ===
     if engine is not None:
@@ -521,7 +516,7 @@ def collect_monitoring_checks(
             chaos = getattr(engine, "_chaos_engine", None)
             if chaos is not None:
                 chaos.run_chaos_cycle()  # 执行一轮故障注入/验证周期
-        except Exception:
-            pass
+        except Exception as exc:
+            results.append(failure("runtime.chaos.health", "ChaosEngine 健康", CheckSeverity.P2, exc))
 
     return results

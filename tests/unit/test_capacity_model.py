@@ -97,7 +97,7 @@ class TestSignalAwareImpactModel:
         strong_signals = [0.8, 0.9, 0.7, -0.85, 0.75]
         strong_returns = [0.01, 0.015, 0.008, -0.012, 0.01]
 
-        impact, turnover, warnings = model.estimate_signal_impact(
+        impact, turnover, _warnings = model.estimate_signal_impact(
             strong_signals,
             strong_returns,
             avg_daily_volume=50_000_000,
@@ -120,7 +120,7 @@ class TestSignalAwareImpactModel:
         cost = CostModel(adv_30d=0.0)
         model = SignalAwareImpactModel(cost)
 
-        impact, turnover, warnings = model.estimate_signal_impact(
+        _impact, turnover, warnings = model.estimate_signal_impact(
             [0.5, 0.6],
             [0.01, 0.02],
         )
@@ -132,7 +132,7 @@ class TestSignalAwareImpactModel:
         cost = CostModel(adv_30d=50_000_000, volatility=0.02)
         model = SignalAwareImpactModel(cost)
 
-        impact, turnover, warnings = model.estimate_signal_impact(
+        impact, turnover, _warnings = model.estimate_signal_impact(
             [0.5, float("nan"), 0.6, float("inf"), -0.3],
             [0.01, 0.02, 0.01, 0.03, -0.01],
         )
@@ -275,6 +275,8 @@ class TestCapacityGate:
         # 小 ADV + 高换手 + 薄收益 → 应不通过
         # gate_ok 可能为 True（取决于参数），但至少 report 应反映高冲击
         assert report.participation_at_capacity >= 0
+        assert isinstance(gate_ok, bool)
+        assert isinstance(reason, str) and reason
 
     def test_cost_model_unknown_blocks_gate(self) -> None:
         """未知成本模型阻止 gate。"""
@@ -359,3 +361,4 @@ class TestMutationCapacityModel:
         # 但不强制要求（取决于参数）
         assert aware_report.adv_used > 0, "Aware 模型应有 ADV"
         assert legacy_report.adv_used == 0.0, "Legacy 模型应无 ADV"
+        assert aware_range >= legacy_range

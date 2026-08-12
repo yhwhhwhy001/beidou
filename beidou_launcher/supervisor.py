@@ -756,17 +756,16 @@ class BeidouSupervisor:
                 self.engine._running = False
                 return False
             if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
-                if not self._algorithm_probe.get("ok"):
-                    if (
-                        time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
-                        or self._last_algorithm_probe_attempt == 0.0
-                    ):
-                        self._last_algorithm_probe_attempt = time.monotonic()
-                        try:
-                            self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
-                        except Exception as exc:
-                            self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                            print(f"[supervisor] Algorithm probe failed: {exc}")
+                if not self._algorithm_probe.get("ok") and (
+                    time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
+                    or self._last_algorithm_probe_attempt == 0.0
+                ):
+                    self._last_algorithm_probe_attempt = time.monotonic()
+                    try:
+                        self._algorithm_probe = await run_read_only_algorithm_probe(self.engine, self.symbols)
+                    except Exception as exc:
+                        self._algorithm_probe = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        print(f"[supervisor] Algorithm probe failed: {exc}")
                 await asyncio.gather(
                     self._refresh_exchange_account_snapshot(),
                     self._refresh_position_mode(),
@@ -1083,7 +1082,7 @@ class BeidouSupervisor:
             self._install_health_callbacks()
 
             # DEV_BYPASS: 仅在本地研究/Paper 环境激活因子。
-            if self.mode in ("paper", "research", "testnet"):
+            if self.mode in ("paper", "research"):
                 try:
                     from beidou_bootstrap.dev import patch_engine_for_dev
 
@@ -1117,7 +1116,7 @@ class BeidouSupervisor:
 
             self._engine_task = asyncio.create_task(self.engine.run(), name="beidou-engine")
             # 本地研究/Paper 可使用开发宇宙评估；Testnet 必须走真实生命周期证据。
-            if self.mode in ("paper", "research", "testnet"):
+            if self.mode in ("paper", "research"):
                 await asyncio.sleep(8)  # 等待 WebSocket 连接和首批 ticker 数据
                 try:
                     from beidou_bootstrap.dev import bootstrap_universe

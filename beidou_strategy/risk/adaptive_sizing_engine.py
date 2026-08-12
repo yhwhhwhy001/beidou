@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 
@@ -42,6 +43,24 @@ def compute_adaptive_sizing(inputs: SizingInput, previous: SizingDecision | None
     """
     reasons: list[str] = []
     is_safe = True
+
+    numeric_inputs = (
+        inputs.equity,
+        inputs.available_margin,
+        inputs.portfolio_risk_pct,
+        inputs.volatility,
+        inputs.capacity_utilization,
+        inputs.regime_confidence,
+        inputs.funding_rate,
+        inputs.liquidation_distance_pct,
+    )
+    if not all(math.isfinite(value) for value in numeric_inputs) or inputs.equity <= 0 or inputs.available_margin < 0:
+        return SizingDecision(
+            leverage=0.0,
+            position_size_pct=0.0,
+            reason_vector=["INVALID_OR_UNKNOWN_INPUT"],
+            is_safe=False,
+        )
 
     # 1. Base leverage from risk budget
     if inputs.portfolio_risk_pct <= 0:
@@ -81,10 +100,9 @@ def compute_adaptive_sizing(inputs: SizingInput, previous: SizingDecision | None
     adjusted_leverage = base_leverage * vol_scalar * cap_scalar * regime_scalar * funding_penalty * liq_scalar
 
     # 7. Monotonic safety: risk worsening → sizing must not increase
-    if previous is not None and previous.leverage > 0:
-        if not is_safe and adjusted_leverage > previous.leverage:
-            adjusted_leverage = previous.leverage
-            reasons.append("MONOTONIC_CLAMP: risk worsening, sizing frozen at previous level")
+    if previous is not None and previous.leverage > 0 and not is_safe and adjusted_leverage > previous.leverage:
+        adjusted_leverage = previous.leverage
+        reasons.append("MONOTONIC_CLAMP: risk worsening, sizing frozen at previous level")
 
     # 8. Position size as % of equity
     position_size_pct = min(adjusted_leverage * inputs.portfolio_risk_pct, 0.95)

@@ -64,7 +64,7 @@ class PortfolioOptimizerImpl:
         组合层输出 target，不重写策略原始 proposal。
 
         冲突仲裁规则:
-        1. 同方向: 按资本比例分配（保持方向和归属）
+        1. 同方向: 保留每个策略已完成资本预算后的目标，不二次缩放
         2. 反方向: 不净额抵消 — 各自保留原始目标，标记 SHARED
         3. 始终保留 owner/generation/attribution
         """
@@ -87,22 +87,13 @@ class PortfolioOptimizerImpl:
             long_targets = [t for t in group if float(t.target_quantity.amount) > 0]
             short_targets = [t for t in group if float(t.target_quantity.amount) < 0]
 
-            # 同方向组内：按资本比例分配（保持方向和归属）
+            # 资本预算已经体现在各策略 target 中；组合层只标记共享
+            # ownership，不得在此处二次缩放或净额化策略原意。
             for direction_group in (long_targets, short_targets):
                 if not direction_group:
                     continue
-                total_capital_in_group = sum(
-                    float(t.capital_budget.amount) for t in direction_group if t.capital_budget
-                )
-                if total_capital_in_group <= 0:
-                    total_capital_in_group = len(direction_group)
 
                 for t in direction_group:
-                    capital_share = (
-                        float(t.capital_budget.amount) / total_capital_in_group
-                        if t.capital_budget and total_capital_in_group > 0
-                        else 1.0 / len(direction_group)
-                    )
                     resolved.append(
                         PortfolioTarget(
                             strategy_id=t.strategy_id,

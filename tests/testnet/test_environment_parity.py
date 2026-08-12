@@ -67,6 +67,7 @@ class TestEnvironmentSemanticParity:
             if d.is_dir() and d.name.startswith("beidou_") and d.name != "beidou_shared"
         ]
 
+        read_errors: list[str] = []
         for src_dir in source_dirs:
             for py_file in src_dir.rglob("*.py"):
                 if "test_" in py_file.name or py_file.name == "__pycache__":
@@ -75,11 +76,12 @@ class TestEnvironmentSemanticParity:
                     content = py_file.read_text()
                     violations = detect_forbidden_bypass(content, str(py_file))
                     forbidden_count += len(violations)
-                except Exception:  # noqa: S110
-                    pass
+                except (OSError, UnicodeError) as exc:
+                    read_errors.append(f"{py_file}: {type(exc).__name__}")
 
         # PKG02 自身模块允许包含 "BEIDOU_ENV" 引用（用于配置文件）
         # 其他模块应使用 EnvironmentProfile 而非裸 os.environ 检查
+        assert not read_errors, "环境旁路扫描无法读取源码: " + ", ".join(read_errors)
         if forbidden_count > 0:
             pytest.fail(f"发现 {forbidden_count} 处禁止的环境旁路模式")
 

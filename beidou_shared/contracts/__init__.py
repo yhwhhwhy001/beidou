@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -46,7 +47,7 @@ class ContractRegistry:
         entries = self._contracts.get(contract_name, [])
         if not entries:
             return None
-        return max(entries, key=lambda r: r.schema_version)
+        return max(entries, key=lambda r: _schema_version_key(r.schema_version))
 
     def get_version(self, contract_name: str, version: SchemaVersion) -> ContractRegistration | None:
         for entry in self._contracts.get(contract_name, []):
@@ -55,7 +56,19 @@ class ContractRegistry:
         return None
 
     def list_contracts(self) -> dict[str, list[SchemaVersion]]:
-        return {name: sorted([r.schema_version for r in regs]) for name, regs in self._contracts.items()}
+        return {
+            name: sorted(
+                [r.schema_version for r in regs],
+                key=_schema_version_key,
+            )
+            for name, regs in self._contracts.items()
+        }
+
+
+def _schema_version_key(version: SchemaVersion) -> tuple[tuple[int, int | str], ...]:
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.lower()) for part in re.findall(r"\d+|[A-Za-z]+", str(version))
+    )
 
 
 _global_registry: ContractRegistry | None = None

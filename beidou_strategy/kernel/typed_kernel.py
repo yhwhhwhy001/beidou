@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyAction(str, Enum):
@@ -23,7 +26,7 @@ class StrategyAction(str, Enum):
 
 
 class FilterResult(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # noqa: S105 - filter decision, not a credential
     VETO = "VETO"
     DEGRADE = "DEGRADE"
 
@@ -124,8 +127,14 @@ class TypedStrategyKernel:
                     target_exposure = getattr(result, "target_exposure", 0.0)
                     reason = f"ENTRY:{getattr(result, 'reason', 'signal')}"
                     break
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.error("Entry rule failed for %s: %s", inputs.symbol, type(exc).__name__)
+                return KernelOutput(
+                    symbol=inputs.symbol,
+                    action=StrategyAction.NOT_VERIFIABLE,
+                    reason=f"ENTRY_RULE_ERROR:{type(exc).__name__}",
+                    output_hash="",
+                )
 
         if not direction:
             return KernelOutput(
@@ -153,8 +162,15 @@ class TypedStrategyKernel:
                     target_exposure *= 0.5
                     current_action = StrategyAction.DEGRADED
                     reason = "FILTER_DEGRADE"
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.error("Filter rule failed for %s: %s", inputs.symbol, type(exc).__name__)
+                return KernelOutput(
+                    symbol=inputs.symbol,
+                    action=StrategyAction.NOT_VERIFIABLE,
+                    direction=direction,
+                    reason=f"FILTER_RULE_ERROR:{type(exc).__name__}",
+                    output_hash="",
+                )
 
         # Exit phase: check if we should exit
         for rule in self._exit_rules:
@@ -169,8 +185,15 @@ class TypedStrategyKernel:
                         reason="EXIT_SIGNAL",
                         output_hash="",
                     )
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.error("Exit rule failed for %s: %s", inputs.symbol, type(exc).__name__)
+                return KernelOutput(
+                    symbol=inputs.symbol,
+                    action=StrategyAction.NOT_VERIFIABLE,
+                    direction=direction,
+                    reason=f"EXIT_RULE_ERROR:{type(exc).__name__}",
+                    output_hash="",
+                )
 
         output = KernelOutput(
             symbol=inputs.symbol,

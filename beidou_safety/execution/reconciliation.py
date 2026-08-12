@@ -243,9 +243,9 @@ class ReconciliationEngine:
             )
         # PKG20 (BDS-P1-030): 绝对+相对+可解释差值组合容差
         # 固定 5 USDT 对大小账户语义失真
-        ABS_TOLERANCE = Decimal("0.01")  # 0.01 USDT 绝对容差
-        REL_TOLERANCE = Decimal("0.0001")  # 0.01% 相对容差
-        max_tolerance = max(ABS_TOLERANCE, REL_TOLERANCE * max(system_balance, exchange_balance))
+        abs_tolerance = Decimal("0.01")  # 0.01 USDT 绝对容差
+        rel_tolerance = Decimal("0.0001")  # 0.01% 相对容差
+        max_tolerance = max(abs_tolerance, rel_tolerance * max(system_balance, exchange_balance))
         if bal_diff > max_tolerance:
             diffs.append(
                 f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount} "

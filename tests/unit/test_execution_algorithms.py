@@ -273,9 +273,7 @@ class TestExecutionAlgorithmSelector:
         assert algo.algorithm_type == ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY
 
     def test_never_falls_back_to_emergency_for_risk_increase(self):
-        sel = ExecutionAlgorithmSelector(
-            approved_algorithm_types={ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY}
-        )
+        sel = ExecutionAlgorithmSelector(approved_algorithm_types={ExecutionAlgorithmType.EMERGENCY_REDUCE_ONLY})
         ctx = _make_ctx(side=OrderSide.BUY, urgency=0.99, reduce_only=False)
         assert sel.select(ctx) is None
 

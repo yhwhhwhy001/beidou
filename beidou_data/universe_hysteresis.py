@@ -29,9 +29,7 @@ class UniverseEntry:
             return False
         if self.capacity_score <= 0.0:
             return False
-        if not self.dq_ok:
-            return False
-        return True
+        return self.dq_ok
 
 
 @dataclass

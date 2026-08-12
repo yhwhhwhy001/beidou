@@ -386,10 +386,10 @@ class TestReconciliationTolerance:
 
     def test_position_tolerance_uses_step_size(self) -> None:
         """仓位容差使用 venue stepSize 而非固定 1e-12。"""
-        POSITION_STEP_SIZE = Decimal("1e-8")
+        position_step_size = Decimal("1e-8")
         # 差值小于 stepSize → 视为相等
         diff = Decimal("1e-9")
-        assert diff <= POSITION_STEP_SIZE
+        assert diff <= position_step_size
         # 差值大于 stepSize → 标记为不匹配
         big_diff = Decimal("1e-5")
-        assert big_diff > POSITION_STEP_SIZE
+        assert big_diff > position_step_size

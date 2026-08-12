@@ -6,8 +6,6 @@ import json
 import os
 import tempfile
 
-import pytest
-
 from beidou_core.guard import (
     EnvironmentGuard,
     EnvironmentMode,
@@ -360,7 +358,6 @@ class TestNoAutoResume:
         # 任意时间后仍为 NO_NEW_RISK
         assert cp.get_status() != ControlAction.RESUME
 
-    @pytest.mark.skip(reason="testnet mode requires auto-RESUME for 24h unattended operation")
     def test_engine_code_has_no_sleep_resume(self):
         """engine.py 源码中不得存在 asyncio.sleep(N) 后跟 RESUME 的模式。"""
         from pathlib import Path

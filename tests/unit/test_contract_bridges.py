@@ -127,6 +127,7 @@ class TestStagedCertification:
         sc = StagedCertification(stages={"G0": g0, "G2": g2})
         g0_can_skip = g0.can_skip_to(GateLevel.G2)
         assert not g0_can_skip  # 不可跳 G1
+        assert set(sc.stages) == {"G0", "G2"}
 
     def test_production_parity_not_verified_without_g8(self):
         sc = StagedCertification()

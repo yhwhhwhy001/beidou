@@ -84,8 +84,8 @@ class FactorMigration:
             records.append(record)
 
         self._records = records
-        self._save_state()
         self._status = MigrationStatus.COMPLETED
+        self._save_state()
         return records
 
     def rollback(self) -> list[MigrationRecord]:
@@ -137,4 +137,16 @@ class FactorMigration:
             with open(path) as f:
                 state = json.load(f)
             mig._status = MigrationStatus(state["status"])
+            mig._records = [
+                MigrationRecord(
+                    old_factor_id=str(item["old_factor_id"]),
+                    new_factor_id=str(item["new_factor_id"]),
+                    old_status=str(item["old_status"]),
+                    new_status=str(item["new_status"]),
+                    evidence_hash=str(item["evidence_hash"]),
+                    migrated_at=datetime.fromisoformat(str(item["migrated_at"])),
+                    reason=str(item["reason"]),
+                )
+                for item in state.get("records", [])
+            ]
         return mig

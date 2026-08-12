@@ -10,6 +10,10 @@ PKG25 (BDS-P1-048/049): 操作事实总线测试。
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
+import pytest
+
 from beidou_observability.monitoring.fact_bus import (
     FactBus,
     FactDomain,
@@ -29,12 +33,8 @@ class TestOperationalFact:
             domain=FactDomain.RISK,
             payload={"key": "value"},
         )
-        # FrozenInstanceError on mutation
-        try:
+        with pytest.raises(FrozenInstanceError):
             fact.payload = {}  # type: ignore[misc]
-            assert False, "应该抛出异常"
-        except Exception:
-            pass
 
     def test_fact_to_dict(self) -> None:
         """to_dict 返回完整字典。"""

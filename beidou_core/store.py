@@ -1037,9 +1037,7 @@ class PersistentStore:
 
     def restore_protections(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM protection_orders WHERE status='ACTIVE'"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM protection_orders WHERE status='ACTIVE'").fetchall()
         return [dict(r) for r in rows]
 
     def remove_protection(self, position_id: str) -> None:

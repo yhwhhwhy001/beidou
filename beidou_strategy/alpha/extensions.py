@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,6 +20,12 @@ class FundingRateSignal:
     confidence: float = 0.5
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.predicted_rate) or not math.isfinite(self.annualized_rate_pct):
+            raise ValueError("funding rates must be finite")
+        if not math.isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
+
 
 @dataclass(frozen=True, slots=True)
 class LiquidationCascadeRisk:
@@ -28,6 +35,13 @@ class LiquidationCascadeRisk:
     short_liq_cluster_notional: float = 0.0
     cascade_probability: float = 0.0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def __post_init__(self) -> None:
+        notionals = (self.long_liq_cluster_notional, self.short_liq_cluster_notional)
+        if any(not math.isfinite(value) or value < 0 for value in notionals):
+            raise ValueError("liquidation notionals must be finite and non-negative")
+        if not math.isfinite(self.cascade_probability) or not 0.0 <= self.cascade_probability <= 1.0:
+            raise ValueError("cascade_probability must be between 0 and 1")
 
 
 class ContractExtension(ABC):

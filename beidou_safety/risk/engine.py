@@ -614,9 +614,7 @@ class RiskApprovalStateMachine:
             return False
         if self._is_expired(aid):
             return False
-        if aid in self._consumed:
-            return False
-        return True
+        return aid not in self._consumed
 
     def approve_if_verified(
         self,

@@ -108,8 +108,8 @@ class LedgerTransaction:
             bal = balances.get(currency, Decimal("0"))
             try:
                 amt = Decimal(str(p.amount.amount))
-            except (InvalidOperation, ValueError, TypeError):
-                raise ValueError(f"Invalid monetary amount in posting {p.posting_id}: {p.amount.amount}")
+            except (InvalidOperation, ValueError, TypeError) as exc:
+                raise ValueError(f"Invalid monetary amount in posting {p.posting_id}: {p.amount.amount}") from exc
             if p.side == PostingSide.DEBIT:
                 bal += amt
             else:
@@ -124,8 +124,8 @@ class LedgerTransaction:
             if p.side == PostingSide.DEBIT and (currency is None or p.amount.currency == currency):
                 try:
                     total += Decimal(str(p.amount.amount))
-                except (InvalidOperation, ValueError, TypeError):
-                    raise ValueError(f"Invalid amount in posting {p.posting_id}")
+                except (InvalidOperation, ValueError, TypeError) as exc:
+                    raise ValueError(f"Invalid amount in posting {p.posting_id}") from exc
         return total
 
     def total_credit(self, currency: str | None = None) -> Decimal:
@@ -135,8 +135,8 @@ class LedgerTransaction:
             if p.side == PostingSide.CREDIT and (currency is None or p.amount.currency == currency):
                 try:
                     total += Decimal(str(p.amount.amount))
-                except (InvalidOperation, ValueError, TypeError):
-                    raise ValueError(f"Invalid amount in posting {p.posting_id}")
+                except (InvalidOperation, ValueError, TypeError) as exc:
+                    raise ValueError(f"Invalid amount in posting {p.posting_id}") from exc
         return total
 
 

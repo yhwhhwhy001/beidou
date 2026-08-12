@@ -73,11 +73,11 @@ class TestRateLimit:
 
     def test_rate_limit_budget_remaining(self) -> None:
         """预算耗尽前可继续，耗尽后阻塞。"""
-        LIMIT = 1200
+        limit = 1200
         used = 1100
-        assert (LIMIT - used) > 0
+        assert (limit - used) > 0
         used = 1200
-        assert (LIMIT - used) <= 0
+        assert (limit - used) <= 0
 
 
 # ================================================================
@@ -175,6 +175,7 @@ class TestControlPlaneAudit:
 
         ok, state = cas_transition("ACTIVE", "ACTIVE", "DEGRADED", "operator-1")
         assert ok
+        assert state == "DEGRADED"
         fail, _ = cas_transition("LOCKED", "ACTIVE", "DEGRADED", "operator-2")
         assert not fail
 

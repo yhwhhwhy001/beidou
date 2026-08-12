@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +33,8 @@ from beidou_exchange.core.error_taxonomy import (
     Result,
     classify_http_error,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,6 +95,13 @@ class BinanceRESTClient:
         if not self._rate_state.circuit_open:
             return False
         return time.monotonic() < self._rate_state.circuit_open_until
+
+    def close(self) -> None:
+        """Release the persistent HTTP client, if one was created."""
+        if self._session is None:
+            return
+        session, self._session = self._session, None
+        session.close()
 
     # === 公共查询（无需签名）===
 
@@ -334,7 +344,7 @@ class BinanceRESTClient:
                 try:
                     self._rate_state.weight_used = int(value)
                 except (TypeError, ValueError):
-                    pass
+                    logger.warning("Invalid exchange rate-limit header %s", key)
             elif key_lower == "x-mbx-order-count-1m":
                 try:
                     parts = value.split(";")
@@ -588,8 +598,8 @@ def _sync_urlopen(req: urllib.request.Request, timeout: int, _session: Any = Non
         if close_after and client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                logger.warning("Temporary HTTP client close failed after request error: %s", type(close_exc).__name__)
         raise
     if response.status_code >= 400:
         err = urllib.error.HTTPError(
@@ -602,14 +612,14 @@ def _sync_urlopen(req: urllib.request.Request, timeout: int, _session: Any = Non
         if close_after and client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                logger.warning("Temporary HTTP client close failed after HTTP error: %s", type(close_exc).__name__)
         raise err
     content = response.content
     resp_headers = dict(response.headers)
     if close_after and client is not None:
         try:
             client.close()
-        except Exception:
-            pass
+        except Exception as close_exc:
+            logger.warning("Temporary HTTP client close failed: %s", type(close_exc).__name__)
     return content, resp_headers

@@ -9,10 +9,13 @@ PKG25 (BDS-P1-048/049): 操作事实总线。
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 class FactDomain(str, Enum):
@@ -79,8 +82,12 @@ class FactBus:
         for callback in self._subscribers.get(fact.fact_type, []):
             try:
                 callback(fact)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Operational fact subscriber failed for %s: %s",
+                    fact.fact_type,
+                    type(exc).__name__,
+                )
 
     def subscribe(self, fact_type: str, callback) -> None:
         """订阅特定类型的事实。"""

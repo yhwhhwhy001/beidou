@@ -89,7 +89,10 @@ class RegimeConditionedGenerator:
         specs = []
         seen: set[str] = set()
 
-        regimes = regime_labels if regime_labels else [r.value for r in cfg.regimes]
+        regimes = regime_labels if regime_labels is not None else [r.value for r in cfg.regimes]
+        invalid_regimes = [regime for regime in regimes if regime not in RegimeType._value2member_map_]
+        if invalid_regimes:
+            raise ValueError(f"unsupported regimes: {', '.join(invalid_regimes)}")
 
         for candidate in candidates:
             fid = candidate.get("factor_id", "unknown")
@@ -104,9 +107,7 @@ class RegimeConditionedGenerator:
                         RegimeSpec(
                             regime_id=regime_id,
                             base_factor=fid,
-                            regime=RegimeType(regime)
-                            if regime in RegimeType._value2member_map_
-                            else RegimeType(regime),
+                            regime=RegimeType(regime),
                             expression_hash=expr_hash,
                             complexity_score=candidate.get("complexity_score", 1.0) + 1.0,
                             expected_behavior=self._expected_behavior(fid, regime),

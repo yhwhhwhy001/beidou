@@ -58,6 +58,8 @@ class ReadinessGate:
         result = self.phases.get(phase)
         if result is None:
             return False
+        if phase != self.current_phase():
+            return False
         result.passed = passed
         result.details = details
         result.completed_at = now

@@ -86,6 +86,9 @@ class InteractionGenerator:
         interactions = []
         seen: set[str] = set()
 
+        if cfg.max_order < 2:
+            return interactions
+
         # 一阶交互（两个因子的组合）
         for f1, f2 in itertools.combinations(base_factors, 2):
             for itype in ["multiplicative"]:  # 后续可扩展 ratio, difference
@@ -127,7 +130,6 @@ class InteractionGenerator:
         interaction_type: str,
     ) -> InteractionSpec:
         """构造交互规格。"""
-        " × ".join(factors)
         complexity = self.config.complexity_penalty_per_order * order
 
         # 生成经济逻辑
@@ -146,16 +148,16 @@ class InteractionGenerator:
     def _rationale_for(self, factors: tuple[str, ...]) -> str:
         """根据因子组合生成经济假设。"""
         rationale_map = {
-            ("momentum", "liquidity"): "趋势在高流动性环境下更可靠",
-            ("momentum", "volatility"): "动量在高波动中可能过度延伸",
-            ("mean_reversion", "volatility"): "均值回归在适度波动中最有效",
-            ("mean_reversion", "liquidity"): "回归效应在低流动性时减弱",
-            ("funding", "basis"): "资金费率与基差共同反映市场情绪",
-            ("orderbook_imbalance", "spread"): "挂单失衡+价差反映短期方向",
-            ("oi_change", "volume_surprise"): "持仓变化+成交量异动确认趋势",
-            ("volatility", "liquidity"): "高波动+低流动性=风险积聚信号",
+            frozenset(("momentum", "liquidity")): "趋势在高流动性环境下更可靠",
+            frozenset(("momentum", "volatility")): "动量在高波动中可能过度延伸",
+            frozenset(("mean_reversion", "volatility")): "均值回归在适度波动中最有效",
+            frozenset(("mean_reversion", "liquidity")): "回归效应在低流动性时减弱",
+            frozenset(("funding", "basis")): "资金费率与基差共同反映市场情绪",
+            frozenset(("orderbook_imbalance", "spread")): "挂单失衡+价差反映短期方向",
+            frozenset(("oi_change", "volume_surprise")): "持仓变化+成交量异动确认趋势",
+            frozenset(("volatility", "liquidity")): "高波动+低流动性=风险积聚信号",
         }
         return rationale_map.get(
-            tuple(sorted(factors)),
+            frozenset(factors),
             f"交互效应：{' × '.join(factors)}",
         )

@@ -6,8 +6,9 @@ import importlib
 import time
 from typing import Any
 
-from .models import CheckResult, CheckSeverity, CheckStatus
 from beidou_data.trading_pool_lifecycle import PoolStatus
+
+from .models import CheckResult, CheckSeverity, CheckStatus
 
 REQUIRED_PACKAGES: tuple[str, ...] = (
     "beidou_shared",
@@ -236,7 +237,9 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     pool = getattr(engine, "_trading_pool", None)
     try:
         active_count = int(pool.active_count()) if pool is not None else 0
-        observing_count = sum(1 for e in pool._pool.values() if e.status == PoolStatus.OBSERVING) if pool is not None else 0
+        observing_count = (
+            sum(1 for e in pool._pool.values() if e.status == PoolStatus.OBSERVING) if pool is not None else 0
+        )
     except Exception:
         active_count = 0
         observing_count = 0
@@ -249,7 +252,8 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             "交易池激活",
             CheckStatus.PASS if active_count > 0 else (CheckStatus.WARN if pool_has_candidates else CheckStatus.FAIL),
             CheckSeverity.P0 if not pool_has_candidates else CheckSeverity.P1,
-            f"已激活 {active_count} 个交易标的" if active_count > 0
+            f"已激活 {active_count} 个交易标的"
+            if active_count > 0
             else f"等待宇宙评估晋级（{observing_count} 个 OBSERVING）",
             evidence={"active_count": active_count, "observing_count": observing_count},
         )

@@ -104,9 +104,10 @@ def optimize_portfolio(inputs: OptimizerInput) -> OptimizerOutput:
         if abs(weights[i]) > inputs.max_concentration:
             violations.append(f"CONCENTRATION:{symbols[i]}")
             # Clip to max concentration
+            excess = abs(weights[i]) - inputs.max_concentration
             sign = 1.0 if weights[i] > 0 else -1.0
             weights[i] = sign * inputs.max_concentration
-            shadows[symbols[i]] = abs(weights[i]) - inputs.max_concentration
+            shadows[symbols[i]] = excess
 
     # Apply leverage constraint
     total_abs_after = sum(abs(w) for w in weights)

@@ -98,7 +98,9 @@ class OrderStateMachine:
 
         UNKNOWN → 首先 query-by-client-id，不得直接重发。
         """
-        self.transition(OrderState.UNKNOWN)
+        transitioned, message = self.transition(OrderState.UNKNOWN)
+        if not transitioned:
+            return f"NO_QUERY:{message}"
         return f"QUERY_BY_CLIENT_ID:{self.client_order_id}"
 
     def compute_idempotency_key(self) -> str:

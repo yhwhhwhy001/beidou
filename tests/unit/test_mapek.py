@@ -72,8 +72,10 @@ class TestMAPEKController:
             approved_runbook="runbook-001",
         )
         ctrl.register_fingerprint(fp)
+        checkpoint = ctrl.save_checkpoint("test_module", {}, True)
         for _ in range(3):
-            ctrl.decide_action({"crash": 1.0}, "test_module")
+            action, _ = ctrl.decide_action({"crash": 1.0}, "test_module")
+            ctrl.execute_recovery(action, "test_module", checkpoint)
         action, _ = ctrl.decide_action({"crash": 1.0}, "test_module")
         assert action == RecoveryAction.LOCK
 

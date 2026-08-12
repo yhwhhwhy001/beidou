@@ -21,7 +21,6 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
 
-import pytest
 
 # --- 包自动发现 (PKG01) ---
 
@@ -331,7 +330,7 @@ def test_no_hardcoded_secrets_or_production_defaults() -> None:
 
     # 匹配变量赋值 pattern = "NON_EMPTY" 或 pattern = 'NON_EMPTY'
     # 使用负向后顾排除 dict key: "token": "value" 不匹配，但 token = "value" 匹配
-    _NON_EMPTY_ASSIGN_RE = re.compile(
+    non_empty_assign_re = re.compile(
         r"""(?<!["'])(?:^|\s)(api_key|api_secret|private_key|password|secret|token)\s*=\s*["'](?!["']\s*#)[^"']+""",
     )
     # 这些模式在任何上下文中都不可接受
@@ -365,7 +364,7 @@ def test_no_hardcoded_secrets_or_production_defaults() -> None:
                 if stripped.startswith("#"):
                     continue
 
-                match = _NON_EMPTY_ASSIGN_RE.search(stripped)
+                match = non_empty_assign_re.search(stripped)
                 if match:
                     violations.append(
                         f"{pyfile.relative_to(ROOT)}:{lineno}: 包含禁止的硬编码模式 '{match.group(1)} = <non-empty>'"
@@ -814,6 +813,7 @@ def test_mutation_empty_package_without_py_files_fails_scan() -> None:
     如果某个包意外变空，扫描必须检测到并报告。
     """
     packages = _get_packages()
+    empty_packages: list[str] = []
     for pkg_name in packages:
         pkg_dir = ROOT / pkg_name
         if not pkg_dir.is_dir():
@@ -822,6 +822,7 @@ def test_mutation_empty_package_without_py_files_fails_scan() -> None:
             # 基础设施包可能没有大量 Python 源码
             continue
         py_files = list(pkg_dir.rglob("*.py"))
-        if len(py_files) == 0:
-            # 空包必须被标记
-            pytest.fail(f"PKG01 mutation: 包 {pkg_name} 没有 Python 文件，架构扫描可能静默跳过")
+        if not py_files:
+            empty_packages.append(pkg_name)
+
+    assert not empty_packages, f"PKG01 mutation: 空 Python 包未被架构扫描阻断: {empty_packages}"

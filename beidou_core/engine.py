@@ -224,6 +224,27 @@ def _validated_ws_quote(ticker: Any) -> tuple[float, float, float] | None:
     return price, bid, ask
 
 
+def _rotating_symbol_batch(
+    symbols: list[str],
+    start_index: int,
+    batch_size: int = 10,
+) -> tuple[list[str], int]:
+    """Return a fair circular batch and the next cursor.
+
+    The cursor must be computed against the full active universe, not the
+    sliced batch. Otherwise a Testnet universe larger than the batch size can
+    repeatedly evaluate only its first symbols and starve the remainder.
+    """
+
+    if not symbols or batch_size <= 0:
+        return [], 0
+    universe_size = len(symbols)
+    start = start_index % universe_size
+    take = min(batch_size, universe_size)
+    batch = [symbols[(start + offset) % universe_size] for offset in range(take)]
+    return batch, (start + take) % universe_size
+
+
 def _validate_duplicate_order_response(
     response: Any,
     *,
@@ -2410,10 +2431,7 @@ class AutonomousEngine:
             self._startup_mono = time.monotonic()
             startup_elapsed = 0.0
         startup_grace = startup_elapsed < 600.0
-        if status in ("CONNECTED", "UNKNOWN") or startup_grace:
-            effective_max_age = 300.0
-        else:
-            effective_max_age = max_event_age
+        effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") or startup_grace else max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         require_complete_projection = True
         ready = (
@@ -3256,8 +3274,10 @@ class AutonomousEngine:
                 # 重新加载
                 try:
                     rows = list(self._store.restore_protections())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.error("Protection inventory reload failed after cleanup: %s", type(exc).__name__)
+                    self._block_unowned_protection_orders(["PROTECTION_RELOAD_UNKNOWN"])
+                    return False
                 if not rows:
                     return True
                 semantic_issues = self._protection_inventory_semantic_issues(inventory)
@@ -4004,10 +4024,10 @@ class AutonomousEngine:
                             spread_cost=spread_amount,
                             slippage_cost=slippage_amount,
                         )
-                    except Exception:
+                    except Exception as exc:
                         # PKG28 (BDS-P1-060): 写失败已在 record_fill_to_ledger 内部
                         # 记录为 P0 事件 + ledger_write_failures++
-                        pass
+                        logger.error("Paper fill ledger write failed: %s", type(exc).__name__)
 
             # 记录成交明细（fill price / latency / status）
             self._paper_fills.append(
@@ -6453,7 +6473,7 @@ class AutonomousEngine:
                                 dec = 5
                             prec_map = {"price": dec, "quantity": dec}
                         if prec_map:
-                            for p_order in [pp.stop_loss] + list(pp.take_profits):
+                            for p_order in [pp.stop_loss, *list(pp.take_profits)]:
                                 if p_order is None:
                                     continue
                                 try:
@@ -6634,10 +6654,9 @@ class AutonomousEngine:
             active_symbols = self._trading_pool.active_instruments()
             # Testnet: 每轮只处理 10 个标的，避免 REST 调用过多导致 monitor STALL
             if self._env_mode.value == "testnet" and len(active_symbols) > 10:
-                _batch_start = getattr(self, "_nearline_batch_idx", 0) % len(active_symbols)
-                active_symbols = active_symbols[_batch_start : _batch_start + 10]
-                self._nearline_batch_idx = (
-                    (_batch_start + 10) % len(active_symbols) if hasattr(self, "_nearline_batch_idx") else 10
+                active_symbols, self._nearline_batch_idx = _rotating_symbol_batch(
+                    active_symbols,
+                    getattr(self, "_nearline_batch_idx", 0),
                 )
             # BD-FIX: 多时间框架 — 1m/5m/1h/1d 独立评估信号
             TIMEFRAMES = ("1m", "5m", "1h", "1d")
@@ -6742,7 +6761,10 @@ class AutonomousEngine:
                         )
                         if not typed_proposal and not all_signals:
                             continue
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "Strategy kernel evaluation failed for %s/%s: %s", symbol, tf, type(exc).__name__
+                        )
                         continue
 
                     # Track best signal across timeframes
@@ -7160,7 +7182,7 @@ class AutonomousEngine:
                 }
 
                 # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
-                risk_results = {rid: decision for rid, decision in RiskRuleRegistry.evaluate_all(risk_context).items()}
+                risk_results = dict(RiskRuleRegistry.evaluate_all(risk_context))
                 risk_approved = all(d == RuleDecision.PASS for d in risk_results.values())
                 # RiskEngineImpl 辅助校验：快照级别的杠杆/集中度检查（非阻塞后验证）
                 if risk_approved:
@@ -7188,8 +7210,8 @@ class AutonomousEngine:
                         for r in impl_results:
                             if r.decision.value == "REJECTED":
                                 self._post_risk.record_violation(f"RiskEngineImpl:{symbol}:{r.detail}")
-                    except Exception:
-                        pass  # RiskEngineImpl 不可用时不影响现有评估链
+                    except Exception as exc:
+                        logger.warning("Auxiliary RiskEngineImpl unavailable for %s: %s", symbol, type(exc).__name__)
 
                 if not risk_approved:
                     failed_rules = [rid for rid, d in risk_results.items() if d != RuleDecision.PASS]
@@ -7537,7 +7559,8 @@ class AutonomousEngine:
                 ticker = self._feed.get_last_ticker(instrument_id)
                 ob = self._feed.get_last_orderbook(instrument_id)
                 features = await self._feed.async_get_kline_features(instrument_id, "1h", 50)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Trading-pool scoring input failed for %s: %s", instrument_id, type(exc).__name__)
                 continue
 
             if not ticker or not features:
@@ -7812,8 +7835,9 @@ class AutonomousEngine:
                     result = self._key_rotator.start_rotation(cred.credential_id)
                     health["rotation_started"] = result.value
                     print(f"[beidou-security] 🔄 Key rotation started for {cred.credential_id}: {result.value}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    health["rotation_error"] = type(exc).__name__
+                    logger.error("Credential rotation start failed: %s", type(exc).__name__)
                 self._alerts.send_incident(
                     AlertSeverity.WARNING,
                     f"Credential expiring in {days_left:.0f} days",
@@ -7829,8 +7853,9 @@ class AutonomousEngine:
                     if hasattr(self, "_pending_credential"):
                         result = self._key_rotator.complete_rotation(cred.credential_id, self._pending_credential)
                         health["rotation_completed"] = result.value
-                except Exception:
-                    pass
+                except Exception as exc:
+                    health["rotation_error"] = type(exc).__name__
+                    logger.error("Credential rotation completion failed: %s", type(exc).__name__)
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} is ROTATING")
             else:
                 health["level"] = "OK"
@@ -8249,6 +8274,7 @@ class AutonomousEngine:
                 price_tick: str | None = None
                 min_qty: str | None = None
                 min_notional_val: float = 0.0
+                rule_parse_failed = False
                 for f_item in s.get("filters", []):
                     if f_item.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
                         quantity_step = str(f_item.get("stepSize", "")) or quantity_step
@@ -8259,8 +8285,9 @@ class AutonomousEngine:
                         try:
                             min_notional_val = float(str(f_item.get("notional", "0")))
                         except (TypeError, ValueError):
-                            pass
-                if not quantity_step or not price_tick:
+                            rule_parse_failed = True
+                            logger.error("Invalid MIN_NOTIONAL rule for %s", sym)
+                if not quantity_step or not price_tick or rule_parse_failed:
                     continue
                 try:
                     min_quantity = float(min_qty) if min_qty else float(quantity_step)

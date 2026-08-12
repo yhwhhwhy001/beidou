@@ -19,58 +19,6 @@ from .registry import check_package_imports
 WRITE_MODE = "testnet"
 
 
-def _auto_generate_g5(project_root: Path, commit: str) -> None:
-    """自动生成与当前 commit 绑定的 G5 Testnet 证书。"""
-    import hashlib as _hashlib
-    import json as _json
-
-    cert_dir = project_root / "artifacts" / "evidence" / "testnet"
-    cert_path = cert_dir / "g5-certificate.json"
-    plan_path = project_root / "config" / "g5-testnet-plan.yaml"
-    if not plan_path.is_file():
-        return
-    try:
-        from datetime import datetime
-        from datetime import timezone as _timezone
-
-        import yaml as _yaml
-
-        with open(plan_path) as _f:
-            _plan = _yaml.safe_load(_f)
-        _scenarios = _plan.get("scenarios", []) if isinstance(_plan, dict) else []
-        _cert = {
-            "gate": "G5",
-            "status": "PASS",
-            "commit": commit,
-            "testnet_url": "https://testnet.binancefuture.com",
-            "mainnet_prohibited": True,
-            "is_simulated": False,
-            "evidence_hash": _hashlib.sha256(
-                _json.dumps({"gate": "G5", "commit": commit}, sort_keys=True).encode()
-            ).hexdigest(),
-            "started_at": "2026-08-09T00:00:00+00:00",
-            "ended_at": datetime.now(_timezone.utc).isoformat(),
-            "summary": {
-                "total": len(_scenarios),
-                "pass": len(_scenarios),
-                "warn": 0,
-                "fail": 0,
-                "p0": 0,
-                "p0_incidents": 0,
-            },
-            "scenarios": {str(x): {"status": "PASS", "details": "AUTO_GENERATED"} for x in _scenarios},
-            "account_access": {"can_withdraw": False},
-            "blockers": [],
-            "p0_failures": [],
-            "max_notional_usdt": float(_plan.get("max_test_notional_usdt", 20)) if isinstance(_plan, dict) else 20.0,
-        }
-        cert_dir.mkdir(parents=True, exist_ok=True)
-        with open(cert_path, "w") as _f:
-            _json.dump(_cert, _f, indent=2)
-    except Exception:
-        pass
-
-
 def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, dict[str, Any]]:
     """Read-only verify the predecessor G5 certificate for writable Testnet.
 
@@ -336,19 +284,17 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             )
         )
     elif dirty_files:
-        # Testnet: dirty worktree downgraded to WARN/P2 (non-blocking).
-        # Uncommitted changes reduce evidence reproducibility but do not
-        # prevent startup in a dev/test environment.  Production modes
-        # (mainnet) still treat this as a P0 blocker.
+        # A writable Testnet run must be bound to reproducible source. Paper
+        # and research remain usable with a warning.
         strict = mode == WRITE_MODE
         checks.append(
             CheckResult(
                 check_id="preflight.git_worktree",
                 name="Git 工作区状态",
-                status=CheckStatus.WARN if strict else CheckStatus.WARN,
-                severity=CheckSeverity.P2 if strict else CheckSeverity.P2,
+                status=CheckStatus.FAIL if strict else CheckStatus.WARN,
+                severity=CheckSeverity.P0 if strict else CheckSeverity.P2,
                 message=(
-                    f"Testnet 工作区有 {len(dirty_files)} 项未提交变更 (证据降级)"
+                    f"Testnet 工作区有 {len(dirty_files)} 项未提交变更，拒绝启动"
                     if strict
                     else f"非写模式允许脏工作区，但证据降级: {len(dirty_files)} 项变更"
                 ),
@@ -442,8 +388,6 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             )
         )
         if mode == WRITE_MODE:
-            # 自动生成 G5 证书（匹配当前 commit），避免每次 commit 后手动更新
-            _auto_generate_g5(project_root, commit)
             g5_ok, g5_message, g5_evidence = _g5_certificate_probe(project_root, commit)
             checks.append(
                 _result(

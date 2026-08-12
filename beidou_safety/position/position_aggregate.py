@@ -42,6 +42,10 @@ class PositionAggregate:
         """BD-CV42: 应用单笔成交。reduce-only 不跨零。"""
         if fill.symbol != self.symbol and self.symbol:
             raise ValueError(f"Symbol mismatch: {fill.symbol} != {self.symbol}")
+        if fill.side not in {"BUY", "SELL"}:
+            raise ValueError(f"Invalid fill side: {fill.side}")
+        if fill.quantity <= 0 or fill.price <= 0:
+            raise ValueError("Fill quantity and price must be positive")
 
         # Reduce-only guard: 不跨零反向开仓
         new_position = self.net_position
@@ -51,15 +55,18 @@ class PositionAggregate:
             new_position -= fill.quantity
 
         # Update avg entry
-        if (
-            self.net_position == 0
-            or (self.net_position > 0 and fill.side == "SELL")
-            or (self.net_position < 0 and fill.side == "BUY")
-        ):
-            new_avg = self.avg_entry_price
-        elif abs(new_position) > 0:
+        same_direction = (self.net_position > 0 and fill.side == "BUY") or (
+            self.net_position < 0 and fill.side == "SELL"
+        )
+        if self.net_position == 0:
+            new_avg = fill.price
+        elif same_direction:
             total_cost = self.avg_entry_price * abs(self.net_position) + fill.price * abs(fill.quantity)
             new_avg = total_cost / abs(new_position)
+        elif new_position == 0:
+            new_avg = 0.0
+        elif (self.net_position > 0) == (new_position > 0):
+            new_avg = self.avg_entry_price
         else:
             new_avg = fill.price
 
@@ -75,7 +82,7 @@ class PositionAggregate:
             net_position=new_position,
             avg_entry_price=new_avg,
             realized_pnl=new_realized,
-            fills=self.fills + [fill],
+            fills=[*self.fills, fill],
             version=self.version + 1,
         )
 
@@ -88,11 +95,13 @@ class PositionAggregate:
 
     def is_reduce_only_compliant(self, new_fill: FillEvent) -> bool:
         """BD-CV42 AC-42-02: reduce-only 永不跨零反向开仓。"""
-        if new_fill.side == "SELL" and self.net_position <= 0:
-            return False  # selling without long position
-        if new_fill.side == "BUY" and self.net_position >= 0:
-            return False  # buying without short position
-        return True
+        if new_fill.quantity <= 0:
+            return False
+        if new_fill.side == "SELL":
+            return self.net_position > 0 and new_fill.quantity <= self.net_position
+        if new_fill.side == "BUY":
+            return self.net_position < 0 and new_fill.quantity <= abs(self.net_position)
+        return False
 
 
 @dataclass
@@ -131,7 +140,7 @@ class ProtectionAggregate:
         """BD-CV43 AC-43-01: nonzero position 有效 SL 覆盖率=100%。"""
         if self.position_qty == 0.0:
             return True
-        return self.stop_loss is not None and self.stop_loss.is_active and self.coverage_pct >= 100.0
+        return self.compute_coverage() >= 100.0
 
     def compute_coverage(self, rule_step_size: float = 0.001) -> float:
         """BD-CV43: 基于 InstrumentRuleSnapshot 的精度计算覆盖率。"""
@@ -139,25 +148,23 @@ class ProtectionAggregate:
             return 100.0
         if self.stop_loss is None or not self.stop_loss.is_active:
             return 0.0
-        self.covered_qty = min(abs(self.position_qty), abs(self.position_qty))
-        self.coverage_pct = (self.covered_qty / abs(self.position_qty)) * 100.0
+        required = abs(self.position_qty)
+        effective_covered = min(abs(self.covered_qty), required)
+        if required - effective_covered <= max(0.0, rule_step_size):
+            effective_covered = required
+        self.coverage_pct = (effective_covered / required) * 100.0
         return self.coverage_pct
 
     def replace_sl_atomic(self, new_sl: ProtectionOrder, rule_snapshot_id: str = "") -> str:
         """BD-CV43 AC-43-03: create-new→ACK→cancel-old 无保护空窗。"""
+        venue_acknowledged = new_sl.status == "ACTIVE" and new_sl.is_active and bool(new_sl.venue_order_id)
+        if not venue_acknowledged:
+            return "WAIT_FOR_ACK"
         if self.stop_loss is not None and self.stop_loss.is_active:
             old_id = self.stop_loss.venue_order_id
-            # Step 1: Create new SL
             self.stop_loss = new_sl
-            new_sl.status = "PENDING"
-            # Step 2: Wait for new ACK (simulated here)
-            new_sl.status = "ACTIVE"
-            new_sl.is_active = True
             new_sl.rule_snapshot_id = rule_snapshot_id
-            # Step 3: Cancel old
             return f"CANCEL:{old_id}"
-        else:
-            self.stop_loss = new_sl
-            new_sl.status = "ACTIVE"
-            new_sl.is_active = True
-            return "NEW_SL"
+        self.stop_loss = new_sl
+        new_sl.rule_snapshot_id = rule_snapshot_id
+        return "NEW_SL"

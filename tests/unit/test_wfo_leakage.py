@@ -27,7 +27,7 @@ class TestPurgedWFOGuard:
             (165, 215),  # Fold 4: +5 embargo after fold 3
         ]
 
-        for i, (test_start, test_end) in enumerate(fold_test_ranges):
+        for i, (test_start, _test_end) in enumerate(fold_test_ranges):
             train_end = test_start - purge_days
             if i == 0:
                 assert train_end < 0  # First fold has no prior training data
@@ -85,8 +85,8 @@ class TestCPCV:
         """CPCV 组合数 = C(N, N/2) / 2（remove symmetric complements）。"""
         import math as _math
 
-        N = 6
-        expected_combos = _math.comb(N, N // 2) // 2  # = 10
+        n = 6
+        expected_combos = _math.comb(n, n // 2) // 2  # = 10
         # 实际：每个组合选 N/2 个 train，其余 test
         # 组合数 C(6,3)/2 = 10
         assert expected_combos == 10
@@ -125,5 +125,5 @@ class TestAntiLeakageProperty:
         test_leaked = [(x - all_mean) / all_std for x in test]
 
         # 两者应显著不同（证明了全数据集标准化会泄漏信息）
-        for ts, tl in zip(test_standardized, test_leaked):
+        for ts, tl in zip(test_standardized, test_leaked, strict=True):
             assert ts != tl, "Fold 内标准化与全数据集标准化的结果应不同"

@@ -7,7 +7,9 @@ restart counter/fingerprint/checkpoint/attempt log 持久化。
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -15,6 +17,8 @@ from enum import Enum
 from typing import Any
 
 from beidou_autonomy.mapek import Checkpoint, MAPEKController, RecoveryAction, RecoveryResult
+
+logger = logging.getLogger(__name__)
 
 
 class RecoveryPhase(str, Enum):
@@ -39,8 +43,11 @@ class PersistedRecoveryState:
     _state_file: str = field(default="evidence/BD-01/recovery_state.json", repr=False)
 
     def save(self) -> bool:
-        os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
         try:
+            parent = os.path.dirname(self._state_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            self.timestamp = time.time()
             data = {
                 "module_name": self.module_name,
                 "restart_count": self.restart_count,
@@ -48,19 +55,29 @@ class PersistedRecoveryState:
                 "last_result": self.last_result,
                 "checkpoint_id": self.checkpoint_id,
                 "fingerprint_id": self.fingerprint_id,
-                "timestamp": time.time(),
+                "timestamp": self.timestamp,
             }
-            with open(self._state_file, "w") as f:
+            temporary_file = f"{self._state_file}.tmp"
+            with open(temporary_file, "w") as f:
                 json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_file, self._state_file)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.error("failed to persist recovery state: %s", exc)
+            with contextlib.suppress(OSError):
+                os.remove(f"{self._state_file}.tmp")
             return False
 
     @classmethod
-    def load(cls, module_name: str) -> PersistedRecoveryState:
-        state_file = "evidence/BD-01/recovery_state.json"
+    def load(
+        cls,
+        module_name: str,
+        state_file: str = "evidence/BD-01/recovery_state.json",
+    ) -> PersistedRecoveryState:
         if not os.path.exists(state_file):
-            return cls(module_name=module_name)
+            return cls(module_name=module_name, _state_file=state_file)
         try:
             with open(state_file) as f:
                 data = json.load(f)
@@ -72,9 +89,10 @@ class PersistedRecoveryState:
                 checkpoint_id=data.get("checkpoint_id", ""),
                 fingerprint_id=data.get("fingerprint_id", ""),
                 timestamp=data.get("timestamp", 0.0),
+                _state_file=state_file,
             )
-        except (json.JSONDecodeError, KeyError):
-            return cls(module_name=module_name)
+        except (json.JSONDecodeError, KeyError, OSError, TypeError, ValueError):
+            return cls(module_name=module_name, _state_file=state_file)
 
 
 class RecoveryPlanner:
@@ -103,6 +121,9 @@ class RecoveryExecutor:
         self, action: RecoveryAction, module_name: str, checkpoint: Checkpoint | None = None, control_plane: Any = None
     ) -> RecoveryResult:
         return self._mapek.execute_with_authority(action, module_name, checkpoint, control_plane)
+
+    def get_restart_count(self, module_name: str) -> int:
+        return self._mapek.get_restart_count(module_name)
 
 
 class RecoveryVerifier:
@@ -161,9 +182,13 @@ class RecoveryOrchestrator:
         # 4. Persist
         self.state.last_action = action.value
         self.state.last_result = result.value
+        self.state.restart_count = self.executor.get_restart_count(module_name)
         if checkpoint:
             self.state.checkpoint_id = checkpoint.checkpoint_id
-        self.state.save()
+        persisted = self.state.save()
+
+        if not persisted:
+            return RecoveryResult.FAILED, f"{reason}; VERIFY_FAILED:STATE_PERSISTENCE_FAILED"
 
         if verified:
             return RecoveryResult.SUCCESS, f"{reason}; {verify_reason}"

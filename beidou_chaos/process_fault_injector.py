@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import os
 import signal
-import subprocess
+import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from beidou_chaos.fault_injection import FaultInjectionResult, FaultScenario
 
@@ -20,11 +22,11 @@ class ProcessFaultConfig:
     """BD-CV54: 进程级故障配置。"""
 
     pid: int = 0
+    db_pid: int = 0
     db_url: str = ""
-    db_process_name: str = "postgres"
     beidou_process_name: str = "beidou"
     testnet_url: str = "https://testnet.binancefuture.com"
-    fencing_token_path: str = "/tmp/beidou_fencing_token"
+    fencing_token_path: str = field(default_factory=lambda: str(Path(tempfile.gettempdir()) / "beidou_fencing_token"))
 
 
 class ProcessFaultInjector:
@@ -68,21 +70,19 @@ class ProcessFaultInjector:
 
     def inject_db_crash(self) -> FaultInjectionResult:
         """BD-CV54: PostgreSQL SIGSTOP + SIGCONT — DB crash 模拟。"""
-        db_name = self._config.db_process_name
+        db_pid = self._config.db_pid
+        if db_pid <= 0:
+            return FaultInjectionResult(
+                scenario=FaultScenario.DB_CRASH,
+                passed=False,
+                invariants_failed=["DB_PID_REQUIRED"],
+            )
         try:
-            result = subprocess.run(["pgrep", "-f", db_name], capture_output=True, text=True, timeout=5)
-            pids = result.stdout.strip().split("\n")
-            if not pids or not pids[0]:
-                return FaultInjectionResult(
-                    scenario=FaultScenario.DB_CRASH, passed=False, invariants_failed=["DB_NOT_FOUND"]
-                )
-
-            pg_pid = int(pids[0])
             # SIGSTOP 暂停 DB
-            os.kill(pg_pid, signal.SIGSTOP)
+            os.kill(db_pid, signal.SIGSTOP)
             time.sleep(2)
             # SIGCONT 恢复 DB
-            os.kill(pg_pid, signal.SIGCONT)
+            os.kill(db_pid, signal.SIGCONT)
             time.sleep(1)
 
             return FaultInjectionResult(
@@ -102,27 +102,26 @@ class ProcessFaultInjector:
         token_path = self._config.fencing_token_path
         try:
             # 尝试获取 fencing token
-            if os.path.exists(token_path):
-                with open(token_path) as f:
-                    existing = f.read().strip()
+            if os.path.lexists(token_path):
                 return FaultInjectionResult(
                     scenario=FaultScenario.DUAL_INSTANCE,
                     passed=False,
                     actual_authority="LOCK",
-                    invariants_failed=[f"FENCING_TOKEN_EXISTS:{existing}"],
+                    invariants_failed=["FENCING_TOKEN_EXISTS"],
                     evidence_collected=["duplicate_detection_log"],
                 )
-            else:
-                # 创建 fencing token — 单实例
-                with open(token_path, "w") as f:
-                    f.write(f"beidou-{os.getpid()}-{int(time.time())}")
-                return FaultInjectionResult(
-                    scenario=FaultScenario.DUAL_INSTANCE,
-                    passed=True,
-                    actual_authority="NO_NEW_RISK",
-                    invariants_verified=["single_instance", "fencing_token_unique"],
-                    evidence_collected=["fencing_token", "instance_start_time"],
-                )
+            # O_EXCL makes the single-instance claim atomic; 0600 avoids
+            # exposing the token to other local users.
+            descriptor = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w") as token_file:
+                token_file.write(f"beidou-{os.getpid()}-{int(time.time())}")
+            return FaultInjectionResult(
+                scenario=FaultScenario.DUAL_INSTANCE,
+                passed=True,
+                actual_authority="NO_NEW_RISK",
+                invariants_verified=["single_instance", "fencing_token_unique"],
+                evidence_collected=["fencing_token", "instance_start_time"],
+            )
         except Exception as exc:
             return FaultInjectionResult(
                 scenario=FaultScenario.DUAL_INSTANCE, passed=False, invariants_failed=[str(exc)]
@@ -131,11 +130,21 @@ class ProcessFaultInjector:
     def inject_network_timeout(self, url: str = "", timeout_seconds: int = 5) -> FaultInjectionResult:
         """BD-CV54: HTTP 超时模拟 — 真实网络调用。"""
         target_url = url or self._config.testnet_url
+        parsed = urlsplit(target_url)
+        if parsed.scheme != "https" or parsed.hostname not in {
+            "demo-fapi.binance.com",
+            "testnet.binancefuture.com",
+        }:
+            return FaultInjectionResult(
+                scenario=FaultScenario.TIMEOUT,
+                passed=False,
+                invariants_failed=["UNSAFE_TESTNET_URL"],
+            )
         try:
-            import urllib.request
+            import httpx
 
             # 设置极短超时模拟 timeout
-            urllib.request.urlopen(target_url, timeout=0.001)
+            httpx.get(target_url, timeout=min(float(timeout_seconds), 0.001), follow_redirects=False)
             return FaultInjectionResult(
                 scenario=FaultScenario.TIMEOUT, passed=False, invariants_failed=["REQUEST_SHOULD_HAVE_TIMED_OUT"]
             )
@@ -150,7 +159,7 @@ class ProcessFaultInjector:
     def release_fencing_token(self) -> None:
         """清理 fencing token。"""
         token_path = self._config.fencing_token_path
-        if os.path.exists(token_path):
+        if os.path.isfile(token_path) and not os.path.islink(token_path):
             os.unlink(token_path)
 
     def run_all_scenarios(self) -> list[FaultInjectionResult]:

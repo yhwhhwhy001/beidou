@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -51,6 +52,8 @@ class BoundPlanSlice:
             "order_type": self.order_type,
             "time_in_force": self.time_in_force,
             "reduce_only": self.reduce_only,
+            "position_effect": self.position_effect,
+            "client_order_id": self.client_order_id,
             "rule_snapshot_id": self.rule_snapshot_id,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
@@ -86,6 +89,8 @@ class ExecutionPlanEngine:
         """
         if is_emergency:
             return ExecutionAlgorithm.EMERGENCY
+        if quantity <= 0:
+            return ExecutionAlgorithm.NOT_EXECUTABLE
 
         # 极小量 → MARKET
         if quantity < 0.001:
@@ -126,7 +131,9 @@ class ExecutionPlanEngine:
                 time_in_force="IOC",
                 reduce_only=True,
                 position_effect="REDUCE_ONLY",
-                client_order_id=f"emerg-{symbol}-{int(hashlib.sha256(str(current_position).encode()).hexdigest()[:8], 16)}",
+                client_order_id=(
+                    f"emerg-{symbol}-{int(hashlib.sha256(str(current_position).encode()).hexdigest()[:8], 16)}"
+                ),
             )
         ]
 
@@ -134,7 +141,7 @@ class ExecutionPlanEngine:
         self, symbol: str, side: str, total_qty: float, n_slices: int = 5, limit_price: str = "0"
     ) -> list[BoundPlanSlice]:
         """BD-CV40: 创建 TWAP 执行计划。"""
-        if n_slices <= 0 or total_qty <= 0:
+        if n_slices <= 0 or total_qty <= 0 or side not in {"BUY", "SELL"}:
             return []
 
         qty_per_slice = str(total_qty / n_slices)
@@ -156,9 +163,17 @@ class ExecutionPlanEngine:
 
     def validate_emergency_plan(self, plan: list[BoundPlanSlice], current_position: float) -> bool:
         """BD-CV40 AC-40-02: Emergency plan 绝不增加绝对仓位。"""
-        total_qty = sum(abs(float(s.quantity)) for s in plan)
-        return total_qty <= abs(current_position)
-
-
-# time import at bottom to avoid circular
-import time
+        if current_position == 0:
+            return not plan
+        expected_side = "SELL" if current_position > 0 else "BUY"
+        try:
+            quantities = [float(item.quantity) for item in plan]
+        except (TypeError, ValueError):
+            return False
+        return (
+            all(quantity > 0 for quantity in quantities)
+            and all(item.reduce_only for item in plan)
+            and all(item.position_effect == "REDUCE_ONLY" for item in plan)
+            and all(item.side == expected_side for item in plan)
+            and sum(quantities) <= abs(current_position)
+        )

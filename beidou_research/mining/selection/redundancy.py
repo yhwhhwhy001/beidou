@@ -91,6 +91,8 @@ class RedundancyDetector:
         对每个因子，用其他所有因子回归，VIF = 1/(1-R²)。
         """
         names = list(factor_values.keys())
+        if not names:
+            return {}
         n_samples = min(len(v) for v in factor_values.values())
 
         if n_samples < 10 or len(names) < 2:

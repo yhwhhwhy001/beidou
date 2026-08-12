@@ -41,6 +41,8 @@ class SignedCertificate:
         return self.signature
 
     def verify(self, signing_key: str) -> bool:
+        if self.revoked or not signing_key:
+            return False
         payload = (
             f"{self.certificate_id}|{self.gate_id}|{self.repository}|{self.commit}|{self.bundle_hash}|{self.signed_at}"
         )
@@ -72,6 +74,8 @@ class CertificateStore:
         self._revocations: list[SignedCertificate] = []
 
     def issue(self, cert: SignedCertificate) -> SignedCertificate:
+        if not self._signing_key:
+            raise ValueError("BEIDOU_SIGNING_KEY is required to issue certificates")
         cert.sign(self._signing_key)
         self._certificates[cert.certificate_id] = cert
         return cert
@@ -99,39 +103,9 @@ class CertificateStore:
 
         bucket 和 endpoint 优先从参数读取，否则从环境变量读取。
         """
-        bucket = bucket or os.environ.get("BEIDOU_S3_BUCKET", "")
-        endpoint = endpoint or os.environ.get("BEIDOU_S3_ENDPOINT", "")
-        if not bucket.strip() or not endpoint.strip():
-            # A local file export is not evidence of a configured S3/MinIO
-            # publication target; report it as unavailable instead of
-            # silently claiming the certificate was published.
-            return False
-        try:
-            import json
-            import os as _os
-
-            export_dir = _os.environ.get("BEIDOU_CERT_EXPORT_DIR", "evidence/certificates")
-            _os.makedirs(export_dir, exist_ok=True)
-
-            for _cid, cert in self._certificates.items():
-                cert_data = {
-                    "certificate_id": cert.certificate_id,
-                    "gate_id": cert.gate_id,
-                    "repository": cert.repository,
-                    "commit": cert.commit,
-                    "bundle_hash": cert.bundle_hash,
-                    "signature": cert.signature,
-                    "signed_at": cert.signed_at,
-                    "revoked": cert.revoked,
-                }
-                # 本地文件系统导出（最低可行方案）
-                # 生产环境需替换为 S3/MinIO 上传 (boto3/minio client.put_object)
-                filepath = _os.path.join(export_dir, f"{cert.certificate_id}.json")
-                with open(filepath, "w", encoding="utf-8") as fh:
-                    json.dump(cert_data, fh, indent=2)
-            return True
-        except Exception:
-            return False
+        # No S3/MinIO client is part of this package. A local file must never
+        # be reported as remote publication evidence.
+        return False
 
 
 @dataclass

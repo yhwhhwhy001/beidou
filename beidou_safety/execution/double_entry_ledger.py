@@ -81,7 +81,8 @@ class LedgerTransaction:
                 account=f"positions:{symbol}",
                 account_type=AccountType.ASSET,
                 leg_type=LegType.DEBIT if is_buy else LegType.CREDIT,
-                amount=quantity,
+                amount=notional,
+                currency="USDT",
                 description=f"{side} {quantity} @ {price}",
             ),
             # 现金变动
@@ -166,6 +167,4 @@ class TripleReconciliationResult:
             return False
         if len(self.mismatches) > 0:
             return False
-        if not self.detect_same_source_fraud():
-            return False
-        return True
+        return self.detect_same_source_fraud()

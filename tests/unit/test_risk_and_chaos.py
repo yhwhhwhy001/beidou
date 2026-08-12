@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import ClassVar
 
 import pytest
 
@@ -147,7 +148,7 @@ class TestEligibilityMapping:
 class TestFaultInjectionScenarios:
     """BD-CV54: 每个 P0 fault 场景有机器可判定 PASS/FAIL。"""
 
-    ALL_SCENARIOS = list(FaultScenario)
+    ALL_SCENARIOS: ClassVar[list[FaultScenario]] = list(FaultScenario)
 
     def test_all_12_scenarios_covered(self):
         assert len(self.ALL_SCENARIOS) == 12

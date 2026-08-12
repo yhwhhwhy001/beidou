@@ -498,9 +498,6 @@ class MiningRunner:
                 valid_returns,
                 avg_daily_volume=_adv if _adv > 0 else None,
             )
-            # Legacy compatibility
-            legacy_capacity_result = capacity_result
-
             # BD-P1-12: only an externally bound manifest can support a
             # promotion decision.  A local payload hash is not provenance.
             # Fold-level train Sharpe is recorded in metrics when available;

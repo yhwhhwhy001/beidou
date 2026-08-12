@@ -16,7 +16,7 @@ from enum import Enum
 
 
 class GateResult(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # noqa: S105 - certification result, not a credential
     FAIL = "FAIL"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
     REVOKED = "REVOKED"
@@ -51,7 +51,8 @@ class GateCertificate:
         """计算证书签名（绑定所有 hash）。"""
         data = (
             f"{self.gate}:{self.subject}:{self.repo_sha}:{self.lockfile_hash}:"
-            f"{self.config_hash}:{self.policy_hash}:{self.evidence_hash}:{self.issued_at}"
+            f"{self.build_hash}:{self.config_hash}:{self.policy_hash}:{self.artifact_hash}:"
+            f"{self.evidence_hash}:{self.issued_at}:{self.expires_at}:{self.issuer_key_id}:{self.result.value}"
         )
         return hashlib.sha256(data.encode()).hexdigest()
 
@@ -60,6 +61,12 @@ class GateCertificate:
             return False
         if not self.signature:
             return False
+        if self.expires_at:
+            try:
+                if float(self.expires_at) <= time.time():
+                    return False
+            except (TypeError, ValueError):
+                return False
         expected = self.compute_signature()
         return self.signature == expected
 
@@ -82,8 +89,8 @@ class CertificateChain:
         if not issuer_key_id:
             return False, "MISSING_ISSUER_KEY"
         cert.issuer_key_id = issuer_key_id
-        cert.signature = cert.compute_signature()
         cert.issued_at = str(time.time())
+        cert.signature = cert.compute_signature()
         self.certificates[cert.gate] = cert
         self._started_at_map[cert.gate] = time.time()
         return True, f"ISSUED:{cert.gate}"
@@ -164,10 +171,8 @@ class CertificateChain:
                 data = json.load(f)
             for gate, info in data.items():
                 cert = self.certificates.get(gate)
-                if cert is not None:
-                    # 验证 signature 一致性
-                    if info.get("signature") != cert.signature[:16]:
-                        cert.result = GateResult.NOT_VERIFIABLE
+                if cert is not None and info.get("signature") != cert.signature[:16]:
+                    cert.result = GateResult.NOT_VERIFIABLE
             return True
         except (json.JSONDecodeError, KeyError):
             return False

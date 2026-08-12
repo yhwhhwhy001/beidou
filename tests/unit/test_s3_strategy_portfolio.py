@@ -156,8 +156,8 @@ class TestPortfolioOptimizer:
         assert float(long_resolved[0].target_quantity.amount) == 1.0
         assert float(short_resolved[0].target_quantity.amount) == -0.5
 
-    def test_same_direction_scales_by_capital(self) -> None:
-        """同方向策略按资本比例分配（不改变方向）。"""
+    def test_same_direction_preserves_budgeted_targets(self) -> None:
+        """同方向策略目标已含资本预算，组合层不再二次缩放。"""
         optimizer = PortfolioOptimizerImpl()
 
         t1 = PortfolioTarget(
@@ -186,6 +186,7 @@ class TestPortfolioOptimizer:
         # 方向一致，都保留正向
         for t in resolved:
             assert float(t.target_quantity.amount) > 0
+        assert [float(t.target_quantity.amount) for t in resolved] == [2.0, 1.0]
 
     def test_single_strategy_not_affected(self) -> None:
         """单一策略不产生冲突，不被修改。"""

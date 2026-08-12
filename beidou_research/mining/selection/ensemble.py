@@ -79,7 +79,7 @@ class FactorEnsemble:
             return EnsembleWeights(weights=weights, method="shrinkage")
 
         # 样本协方差
-        mean_rets = {fid: sum(rets) / n for fid, rets in factor_returns.items()}
+        mean_rets = {fid: sum(rets[:n]) / n for fid, rets in factor_returns.items()}
         cov = {}
         for i, f1 in enumerate(names):
             for j, f2 in enumerate(names):

@@ -66,6 +66,8 @@ def test_domain_authority_registry_read_models() -> None:
 
 def test_fact_models_are_immutable() -> None:
     """PKG03: 核心事实模型是不可变的 frozen dataclass。"""
+    from datetime import datetime, timezone
+
     from beidou_core.ports import (
         MarketFact,
         RiskDecision,
@@ -73,7 +75,7 @@ def test_fact_models_are_immutable() -> None:
     )
 
     # 所有核心事实都是 frozen
-    fact = MarketFact(symbol="BTCUSDT", price=50000.0, timestamp=__import__("datetime").datetime.utcnow())
+    fact = MarketFact(symbol="BTCUSDT", price=50000.0, timestamp=datetime.now(timezone.utc))
     with pytest.raises(Exception):
         fact.price = 60000.0  # type: ignore[misc]
 
@@ -82,7 +84,7 @@ def test_fact_models_are_immutable() -> None:
         reason="ok",
         generation=1,
         snapshot_hash="abc",
-        timestamp=__import__("datetime").datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
     with pytest.raises(Exception):
         risk.level = "LOCKED"  # type: ignore[misc]
@@ -152,9 +154,8 @@ def test_no_cross_domain_private_field_access() -> None:
                 if stripped.startswith("#"):
                     continue
                 # 检测私有属性访问
-                if "._engine." in stripped or "engine._" in stripped:
-                    if "test" not in rel.lower():
-                        violations.append(f"{rel}:{lineno}: {stripped.strip()[:80]}")
+                if ("._engine." in stripped or "engine._" in stripped) and "test" not in rel.lower():
+                    violations.append(f"{rel}:{lineno}: {stripped.strip()[:80]}")
 
     # 只报告新增违规（不在已知列表中）
     new_violations = [v for v in violations if not any(k in v for k in KNOWN_PRIVATE_ACCESS)]
@@ -195,11 +196,8 @@ def test_mutation_duplicate_authority_registration_blocked() -> None:
         pass
 
     registry.register_authority("Ledger", A())
-    try:
+    with pytest.raises(ValueError, match="Ledger"):
         registry.register_authority("Ledger", B())
-        pytest.fail("Mutation: 重复注册 Ledger Authority 未被阻止")
-    except ValueError:
-        pass  # 预期行为
 
 
 def test_mutation_immutable_fact_modification_blocked() -> None:

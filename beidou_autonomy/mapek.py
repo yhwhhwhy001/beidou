@@ -127,7 +127,6 @@ class MAPEKController:
                     RecoveryAction.LOCK,
                     f"Module {module_name} restarted {count} times; refusing further auto-restart",
                 )
-            self._recovery_counter[module_name] = count + 1
         return (
             best.recommended_action,
             f"Matched fingerprint {best.fingerprint.fingerprint_id} with similarity {best.similarity_score:.2f}",
@@ -259,10 +258,11 @@ class MAPEKController:
         """
         from beidou_control.plane import ControlAction
 
+        status_getter = getattr(control_plane, "get_status", None)
         before = {
             "module": module_name,
             "restart_count": self.get_restart_count(module_name),
-            "control_state": str(getattr(getattr(control_plane, "get_status", None), "__call__", lambda: "UNKNOWN")()),
+            "control_state": str(status_getter() if callable(status_getter) else "UNKNOWN"),
         }
 
         # 映射 RecoveryAction → ControlAction
@@ -310,7 +310,7 @@ class MAPEKController:
             result = RecoveryResult.SUCCESS
         elif ctrl_action is not None:
             # 控制面动作 — 真实 side effect 已观察
-            result = RecoveryResult.DEGRADED if action != RecoveryAction.EMERGENCY_FLATTEN else RecoveryResult.DEGRADED
+            result = RecoveryResult.DEGRADED
         else:
             result = RecoveryResult.FAILED
 

@@ -81,6 +81,8 @@ class LeaseManager:
         elif self._mode == "postgresql":
             # PostgreSQL: 尝试 advisory lock
             self._try_pg_acquire(lease)
+        else:
+            lease.state = LeaseState.UNKNOWN
 
         self._lease = lease
         return lease
@@ -131,12 +133,7 @@ class LeaseManager:
             if acquired:
                 lease.state = LeaseState.ACQUIRED
             else:
-                # 检查是否是旧 generation
-                current = r.get(key)
-                if current and current.decode() != lease.instance_id:
-                    lease.state = LeaseState.FENCED
-                else:
-                    lease.state = LeaseState.ACQUIRED  # 续约
+                lease.state = LeaseState.FENCED
         except Exception:
             # Redis 不可用 → UNKNOWN（fail-closed，禁止自动回退到单实例模式）
             lease.state = LeaseState.UNKNOWN

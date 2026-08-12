@@ -66,25 +66,19 @@ class TestAccount:
     def test_balance_ok(self):
         assert check_balance_sanity({"totalWalletBalance": "1000"}).status == CheckStatus.PASS
 
-    def test_withdrawal_permission_fails_closed(self):
-        # Testnet 豁免提款检查，用 monkeypatch 清除豁免以验证 fail-closed 逻辑
-        import os
-
-        old_env = os.environ.pop("BEIDOU_ENV", None)
-        try:
-            result = check_account_permissions(
-                {
-                    "ok": True,
-                    "observed_at": time.time(),
-                    "account": {"canTrade": True, "canWithdraw": True},
-                }
-            )
-            assert result.status == CheckStatus.FAIL
-            assert result.severity == CheckSeverity.P0
-            assert "withdrawal" in result.message.lower()
-        finally:
-            if old_env is not None:
-                os.environ["BEIDOU_ENV"] = old_env
+    @pytest.mark.parametrize("environment", ["paper", "shadow", "testnet", "production"])
+    def test_withdrawal_permission_fails_closed_in_every_environment(self, monkeypatch, environment):
+        monkeypatch.setenv("BEIDOU_ENV", environment)
+        result = check_account_permissions(
+            {
+                "ok": True,
+                "observed_at": time.time(),
+                "account": {"canTrade": True, "canWithdraw": True},
+            }
+        )
+        assert result.status == CheckStatus.FAIL
+        assert result.severity == CheckSeverity.P0
+        assert "withdrawal" in result.message.lower()
 
     def test_missing_permission_fact_fails_closed(self):
         result = check_account_permissions({"ok": True, "observed_at": time.time(), "account": {"canTrade": True}})

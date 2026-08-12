@@ -738,10 +738,7 @@ class PostgresPersistentStore:
         # 返回 ACTIVE 和 PENDING 状态的保护订单。
         # PENDING 订单是本地已创建但尚未提交到交易所的（如启动时
         # supervisor 尚未授权写入），应被计入保护覆盖检查以避免误报。
-        return [
-            row for row in self._records("protection")
-            if str(row.get("status")) in ("ACTIVE", "PENDING")
-        ]
+        return [row for row in self._records("protection") if str(row.get("status")) in ("ACTIVE", "PENDING")]
 
     def remove_protection(self, position_id: str) -> None:
         for row in self._records("protection"):
@@ -879,9 +876,17 @@ class PostgresPersistentStore:
         for row in self.restore_order_states():
             symbol = str(row.get("symbol", "")).strip().upper()
             status = str(row.get("status", "")).upper()
-            if symbol and symbol not in universe and status in {
-                "NEW", "PARTIALLY_FILLED", "PENDING_CANCEL", "UNKNOWN",
-            }:
+            if (
+                symbol
+                and symbol not in universe
+                and status
+                in {
+                    "NEW",
+                    "PARTIALLY_FILLED",
+                    "PENDING_CANCEL",
+                    "UNKNOWN",
+                }
+            ):
                 self._delete_record("order_state", str(row.get("order_id")))
                 changed += 1
         return changed
@@ -905,7 +910,9 @@ class PostgresPersistentStore:
             if updated < cutoff:
                 row["status"] = "EXPIRED"
                 self._write_record(
-                    "order_state", str(row.get("order_id")), row,
+                    "order_state",
+                    str(row.get("order_id")),
+                    row,
                     event_type="STALE_UNKNOWN_EXPIRED",
                 )
                 changed += 1

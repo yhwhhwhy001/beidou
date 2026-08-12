@@ -52,6 +52,16 @@ class StagedCertificationLadder:
 
     def certify(self, gate: GateLevel, evidence: GateCertificate) -> tuple[bool, str]:
         """BD-CV55 AC-55-01: 不可跳级。"""
+        if evidence.gate != gate:
+            return False, f"GATE_MISMATCH:{evidence.gate.value}→{gate.value}"
+        if not evidence.evidence_hash or not evidence.commit_family:
+            return False, "EVIDENCE_BINDING_MISSING"
+        if evidence.p0_incidents or evidence.unprotected_exposure_seconds or evidence.reconciliation_mismatches:
+            return False, "BLOCKING_SAFETY_EVIDENCE"
+        if gate == GateLevel.G6 and evidence.elapsed_seconds < 72 * 3600:
+            return False, "G6_DURATION_INCOMPLETE"
+        if gate == GateLevel.G7 and evidence.elapsed_seconds < 30 * 24 * 3600:
+            return False, "G7_DURATION_INCOMPLETE"
         target_idx = GATE_ORDER.index(gate)
         current_idx = GATE_ORDER.index(self.current_gate)
 

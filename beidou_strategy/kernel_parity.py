@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class KernelMode(str, Enum):
@@ -185,8 +188,11 @@ class StrategyKernel:
                     for nid in _order
                     if nid in self._typed_graph._nodes
                 }
-                print(f"[kernel] DAG order: {list(zip(_order, [_types.get(n, '?') for n in _order]))}")
-                print(f"[kernel] component outputs: {list(_component_outputs.keys())}")
+                logger.debug(
+                    "Kernel DAG order: %s",
+                    list(zip(_order, [_types.get(n, "?") for n in _order], strict=True)),
+                )
+                logger.debug("Kernel component outputs: %s", list(_component_outputs))
             else:
                 _proposal = await self._typed_graph.execute(context)
                 _component_outputs = {}

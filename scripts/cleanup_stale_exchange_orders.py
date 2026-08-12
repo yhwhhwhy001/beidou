@@ -1,120 +1,89 @@
 #!/usr/bin/env python3
-"""清理 Binance Testnet 上残留的订单（普通订单 + Algo 条件单）。
+"""Inspect or explicitly cancel stale Binance Futures Testnet orders.
 
-上一轮引擎非正常退出（kill -9 / 崩溃）导致交易所残留订单，
-新进程无法认领所有权 → protection_owner_unknown → 阻断下单。
-
-用法:
-  python scripts/cleanup_stale_exchange_orders.py
+The default is read-only. Cancellation requires both ``--execute`` and the
+exact confirmation phrase so an accidental invocation cannot mutate exchange
+state.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import hashlib
-import hmac
-import json
 import os
-import sys
-import time
-import urllib.error
-import urllib.request
+
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 
 TESTNET_REST = "https://demo-fapi.binance.com"
-
-
-def _signed_request(api_key: str, api_secret: str, method: str, path: str, params: dict | None = None) -> dict:
-    params = dict(params or {})
-    params["timestamp"] = int(time.time() * 1000)
-    params["recvWindow"] = 60000
-    qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    signature = hmac.new(api_secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
-    qs += f"&signature={signature}"
-
-    url = f"{TESTNET_REST}{path}"
-    if method == "GET":
-        url = f"{url}?{qs}"
-        req = urllib.request.Request(url, headers={"X-MBX-APIKEY": api_key})
-    elif method == "DELETE":
-        url = f"{url}?{qs}"
-        req = urllib.request.Request(url, headers={"X-MBX-APIKEY": api_key}, method="DELETE")
-    elif method == "POST":
-        req = urllib.request.Request(url, data=qs.encode(), headers={"X-MBX-APIKEY": api_key})
-    else:
-        raise ValueError(f"Unsupported method: {method}")
-
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+CONFIRMATION = "CANCEL-ALL-TESTNET-ORDERS"
 
 
 def load_credentials() -> tuple[str, str]:
-    """从环境变量或 .env 文件加载 API 凭据。"""
+    """Load credentials without printing their values."""
     api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
     api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
-
     if not api_key or not api_secret:
-        print("❌ 未找到 API 凭据。请设置环境变量:")
-        print("   export BEIDOU_BINANCE_API_KEY='your_key'")
-        print("   export BEIDOU_BINANCE_API_SECRET='your_secret'")
-        sys.exit(1)
-
+        raise RuntimeError("BEIDOU_BINANCE_API_KEY and BEIDOU_BINANCE_API_SECRET are required")
     return api_key, api_secret
 
 
-async def main() -> None:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--execute", action="store_true", help="enable Testnet cancellation")
+    parser.add_argument("--confirm", default="", help=f"must equal {CONFIRMATION}")
+    return parser.parse_args()
+
+
+def _count(result) -> int:
+    if not result.is_success() or not isinstance(result.data, list):
+        category = getattr(getattr(result.error, "category", None), "value", "UNKNOWN")
+        raise RuntimeError(f"exchange read failed: {category}")
+    return len(result.data)
+
+
+async def main() -> int:
+    args = parse_args()
+    if args.execute and args.confirm != CONFIRMATION:
+        raise RuntimeError(f"--execute requires --confirm {CONFIRMATION}")
+
     api_key, api_secret = load_credentials()
-    print(f"🔗 连接到 Binance Testnet: {TESTNET_REST}")
-
-    # 1. 取消所有普通挂单
-    print("\n── 1. 查询并取消普通挂单 ──")
+    client = BinanceRESTClient(TESTNET_REST, api_key=api_key, api_secret=api_secret)
     try:
-        orders = _signed_request(api_key, api_secret, "GET", "/fapi/v1/openOrders")
-        print(f"   发现 {len(orders)} 个普通挂单")
-        for o in orders:
-            symbol = o["symbol"]
-            oid = o["orderId"]
-            try:
-                _signed_request(api_key, api_secret, "DELETE", "/fapi/v1/order", {"symbol": symbol, "orderId": oid})
-                print(f"   ✅ 已取消 {symbol} 订单 {oid} ({o.get('side')} {o.get('origQty')})")
-            except urllib.error.HTTPError as e:
-                print(f"   ⚠️  取消失败 {symbol} {oid}: HTTP {e.code}")
-    except urllib.error.HTTPError as e:
-        print(f"   ⚠️  查询挂单失败: HTTP {e.code}")
+        orders_result = await client.get_open_orders()
+        algos_result = await client.get_open_algo_orders()
+        normal_count = _count(orders_result)
+        algo_count = _count(algos_result)
+        print(f"Testnet inventory: normal_orders={normal_count}, algo_orders={algo_count}")
 
-    # 2. 取消所有 Algo 条件单
-    print("\n── 2. 查询并取消 Algo 条件单 ──")
-    try:
-        algos = _signed_request(api_key, api_secret, "GET", "/fapi/v1/openAlgoOrders")
-        print(f"   发现 {len(algos)} 个 Algo 条件单")
-        for a in algos:
-            symbol = a["symbol"]
-            algo_id = a["algoId"]
-            try:
-                _signed_request(
-                    api_key, api_secret, "DELETE", "/fapi/v1/algoOrder", {"symbol": symbol, "algoId": algo_id}
-                )
-                print(f"   ✅ 已取消 {symbol} Algo {algo_id} ({a.get('side')} {a.get('orderType')})")
-            except urllib.error.HTTPError as e:
-                body = e.read().decode()[:200] if e.fp else ""
-                print(f"   ⚠️  取消失败 {symbol} {algo_id}: HTTP {e.code} {body}")
-    except urllib.error.HTTPError as e:
-        print(f"   ⚠️  查询 Algo 失败: HTTP {e.code}")
+        if not args.execute:
+            print("Read-only inspection complete; no orders were cancelled.")
+            return 0
 
-    # 3. 再次确认清理干净
-    print("\n── 3. 最终确认 ──")
-    try:
-        orders = _signed_request(api_key, api_secret, "GET", "/fapi/v1/openOrders")
-        algos = _signed_request(api_key, api_secret, "GET", "/fapi/v1/openAlgoOrders")
-        remaining = len(orders) + len(algos)
-        if remaining == 0:
-            print("   ✅ 交易所订单已全部清理干净")
-        else:
-            print(f"   ⚠️  仍有 {remaining} 个订单残留（可能需要手动处理）")
-    except Exception as e:
-        print(f"   ⚠️  最终确认失败: {e}")
+        failures = 0
+        for order in orders_result.data or []:
+            if not isinstance(order, dict) or not order.get("symbol") or order.get("orderId") is None:
+                failures += 1
+                continue
+            result = await client.cancel_order(str(order["symbol"]), int(order["orderId"]))
+            failures += int(not result.is_success())
 
-    print("\n🎉 清理完成。现在可以重启引擎。")
+        for algo in algos_result.data or []:
+            if not isinstance(algo, dict) or not algo.get("symbol") or algo.get("algoId") is None:
+                failures += 1
+                continue
+            result = await client.cancel_algo_order(str(algo["symbol"]), int(algo["algoId"]))
+            failures += int(not result.is_success())
+
+        remaining_orders = _count(await client.get_open_orders())
+        remaining_algos = _count(await client.get_open_algo_orders())
+        print(
+            f"Cancellation verification: failures={failures}, "
+            f"remaining_normal={remaining_orders}, remaining_algo={remaining_algos}"
+        )
+        return 0 if failures == 0 and remaining_orders == 0 and remaining_algos == 0 else 2
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

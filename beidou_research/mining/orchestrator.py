@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import time
@@ -79,7 +78,13 @@ class MiningOrchestrator:
     """
 
     def __init__(self, config: MiningRunConfig | None = None) -> None:
-        self.config = config or MiningRunConfig(run_id=_generate_run_id())
+        self.config = config or MiningRunConfig()
+        if not self.config.run_id:
+            self.config.run_id = _generate_run_id()
+        if self.config.max_candidates <= 0:
+            raise ValueError("max_candidates must be positive")
+        if self.config.checkpoint_interval <= 0:
+            raise ValueError("checkpoint_interval must be positive")
         self.state = MiningRunState(run_id=self.config.run_id)
         self._checkpoint_callbacks: list[Callable] = []
         self._candidate_failures: dict[str, list[str]] = {}
@@ -102,11 +107,14 @@ class MiningOrchestrator:
 
             try:
                 batch = gen_func()
-                all_candidates.extend(batch)
-                self.state.candidates_generated += len(batch)
+                remaining = self.config.max_candidates - len(all_candidates)
+                accepted_batch = batch[: max(remaining, 0)]
+                all_candidates.extend(accepted_batch)
+                self.state.candidates_generated += len(accepted_batch)
                 self.state.generator_states[gen_name] = {
-                    "candidates": len(batch),
+                    "candidates": len(accepted_batch),
                     "status": "completed",
+                    "truncated": len(accepted_batch) < len(batch),
                 }
             except Exception as e:
                 self.state.errors.append(f"Generator {gen_name}: {e}")
@@ -114,6 +122,9 @@ class MiningOrchestrator:
                     "status": "failed",
                     "error": str(e),
                 }
+
+            if len(all_candidates) >= self.config.max_candidates:
+                break
 
         return all_candidates
 
@@ -204,8 +215,10 @@ class MiningOrchestrator:
         """保存检查点。"""
         self.state.last_checkpoint = datetime.now(timezone.utc)
         for cb in self._checkpoint_callbacks:
-            with contextlib.suppress(Exception):
+            try:
                 cb(self.state)
+            except Exception as exc:
+                self.state.errors.append(f"Checkpoint callback: {exc}")
 
     def cancel(self) -> None:
         self.state.status = MiningRunStatus.CANCELLED
@@ -245,7 +258,14 @@ class MiningOrchestrator:
             candidates_passed=checkpoint["candidates_passed"],
             errors=checkpoint.get("errors", []),
             generator_states=checkpoint.get("generator_states", {}),
+            last_checkpoint=(
+                datetime.fromisoformat(checkpoint["last_checkpoint"]) if checkpoint.get("last_checkpoint") else None
+            ),
         )
+        orch._candidate_failures = {
+            reason: [f"restored-{index}" for index in range(count)]
+            for reason, count in checkpoint.get("failure_taxonomy", {}).items()
+        }
         return orch
 
 

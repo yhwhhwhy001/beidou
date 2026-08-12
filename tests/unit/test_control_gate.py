@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import suppress
 
 from beidou_control.plane import (
     CONTROL_ALLOW_MATRIX,
@@ -244,10 +245,8 @@ class TestRaceConditionSafety:
         versions = []
         # P1-042: LOCK→RESUME 需要显式恢复签名,跳过
         for action in ControlAction:
-            try:
+            with suppress(RuntimeError):
                 cp.execute_action(action)
-            except RuntimeError:
-                pass  # 非法转换跳过（LOCK→RESUME）
             versions.append((action.value, cp.version))
         # 每个成功操作都递增
         assert len({v for _, v in versions}) >= 1

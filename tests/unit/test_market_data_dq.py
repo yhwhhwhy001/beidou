@@ -134,19 +134,17 @@ class TestDQExceptionNotSilent:
 
         # 传入会触发 Exception 的数据（open_time 为 None 会通过检查，
         # 但在后续处理中可能触发异常；用 dict key 缺失触发 TypeError）
-        try:
-            normalizer.normalize(
-                {"open_time": [], "close_time": [], "open": "abc"},  # list 不能当 datetime
-                BTC_USDT,
-                interval="5m",
-            )
-        except Exception:
-            pass
+        result = normalizer.normalize(
+            {"open_time": [], "close_time": [], "open": "abc"},  # list 不能当 datetime
+            BTC_USDT,
+            interval="5m",
+        )
 
         # 如果 normalize 内部捕获了异常，dq_incidents 应该增加
         # 或者在早期验证阶段就返回 INVALID 不触发异常（同样正确）
         # 关键是 dq_incidents 机制存在且可访问
-        assert normalizer._dq_incidents >= initial
+        assert result.status == BarIntegrity.INVALID
+        assert normalizer._dq_incidents == initial + 1
 
     def test_normalize_invalid_data_returns_invalid(self) -> None:
         """异常/无效数据返回非 OK 结果而非崩溃。"""

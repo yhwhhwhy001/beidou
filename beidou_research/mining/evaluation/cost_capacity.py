@@ -275,7 +275,7 @@ class CapacityEvaluator:
         if vol <= 0:
             vol = _compute_volatility(returns)
 
-        avg_impact_bps, annual_turnover, warnings = self._impact_model.estimate_signal_impact(
+        _avg_impact_bps, annual_turnover, warnings = self._impact_model.estimate_signal_impact(
             predictions,
             returns,
             avg_daily_volume=adv,

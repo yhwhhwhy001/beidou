@@ -79,6 +79,7 @@ class CertificationState:
             "p1_incidents": self.p1_incidents,
             "restarts": self.restarts,
             "checks_completed": self.checks_completed,
+            "last_evidence_at": self.last_evidence_at,
             "notes": self.notes,
             "inv012_compliant": True,
         }
@@ -113,11 +114,15 @@ def load_certification(manifest_path: Path) -> CertificationState | None:
         return None
     try:
         data = json.loads(manifest_path.read_text())
-        state = CertificationState(certification_id=data["certification_id"])
+        started_at = datetime.fromisoformat(data["started_at_utc"])
+        if started_at.tzinfo is None:
+            return None
+        state = CertificationState(certification_id=data["certification_id"], started_at=started_at.timestamp())
         state.p0_incidents = data.get("p0_incidents", 0)
         state.p1_incidents = data.get("p1_incidents", 0)
         state.checks_completed = data.get("checks_completed", 0)
         state.restarts = data.get("restarts", 0)
+        state.last_evidence_at = data.get("last_evidence_at", 0.0)
         state.notes = data.get("notes", [])
         state.state = data.get("state", "RUNNING")
         return state

@@ -48,7 +48,12 @@ class MeanReversionEngine:
 
     def compute_z_score(self, price: float, prices: list[float]) -> float:
         """Robust z-score = (price - median) / MAD。"""
-        if len(prices) < 20:
+        if (
+            len(prices) < 20
+            or not math.isfinite(price)
+            or price <= 0
+            or any(not math.isfinite(value) or value <= 0 for value in prices)
+        ):
             return 0.0
 
         n = len(prices)
@@ -65,7 +70,7 @@ class MeanReversionEngine:
 
     def estimate_half_life(self, prices: list[float]) -> float:
         """OLS 对数回归估算半衰期（小时）。"""
-        if len(prices) < 20:
+        if len(prices) < 20 or any(not math.isfinite(price) or price <= 0 for price in prices):
             return 0.0
 
         y = [math.log(p) for p in prices[1:]]
@@ -82,10 +87,10 @@ class MeanReversionEngine:
             return 0.0
 
         slope = num / den
-        if slope <= 0:
+        if slope <= 0 or slope >= 1:
             return float("inf")  # No mean reversion
 
-        return -math.log(2) / slope
+        return -math.log(2) / math.log(slope)
 
     def evaluate(
         self,
@@ -96,6 +101,13 @@ class MeanReversionEngine:
         market_regime: str = "RANGING",
     ) -> ZScoreResult:
         """综合评估。"""
+        if (
+            not math.isfinite(volatility)
+            or volatility < 0
+            or not math.isfinite(estimated_cost_bps)
+            or estimated_cost_bps < 0
+        ):
+            return ZScoreResult(0.0, 0.0, self._no_trade_band, False, False, "NO_ACTION", 0.0, 0.0)
         z_score = self.compute_z_score(price, prices)
         half_life = self.estimate_half_life(prices)
 
@@ -156,10 +168,17 @@ class MultiPeriodMomentum:
 
     def __init__(self, periods: list[int] | None = None):
         self._periods = periods or [5, 10, 20, 50]
+        if any(period <= 0 for period in self._periods):
+            raise ValueError("momentum periods must be positive")
 
     def evaluate(self, prices: list[float], volatility: float) -> MomentumResult:
         """多周期动量评估 (P1-007: 波动率归一化)。"""
-        if len(prices) < max(self._periods) + 1:
+        if (
+            len(prices) < max(self._periods) + 1
+            or not math.isfinite(volatility)
+            or volatility < 0
+            or any(not math.isfinite(price) or price <= 0 for price in prices)
+        ):
             return MomentumResult("FLAT", 0.0, 0.0, False, "VETO")
 
         # P1-007: 使用波动率归一化阈值，替代绝对 0.1%

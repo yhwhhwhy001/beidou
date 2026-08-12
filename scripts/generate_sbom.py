@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import subprocess
 import sys
@@ -27,40 +28,22 @@ def get_git_sha() -> str:
         return "UNKNOWN"
 
 
-def get_pip_freeze(venv_python: str) -> list[dict]:
+def get_installed_packages() -> list[dict]:
     try:
-        result = subprocess.run(
-            [venv_python, "-m", "pip", "freeze", "--all"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
         packages = []
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("-e"):
-                continue
-            if "==" in line:
-                name, version = line.split("==", 1)
-                packages.append(
-                    {
-                        "name": name.strip(),
-                        "version": version.strip(),
-                        "purl": f"pkg:pypi/{name.strip()}@{version.strip()}",
-                    }
-                )
-            elif " @ " in line:
-                name = line.split(" @ ")[0].strip()
-                packages.append({"name": name, "version": "unknown", "purl": f"pkg:pypi/{name}"})
-        return packages
+        for distribution in importlib.metadata.distributions():
+            name = distribution.metadata.get("Name", "").strip()
+            version = distribution.version.strip()
+            if name:
+                packages.append({"name": name, "version": version, "purl": f"pkg:pypi/{name}@{version}"})
+        return sorted(packages, key=lambda item: item["name"].lower())
     except Exception as exc:
         print(f"pip freeze failed: {exc}", file=sys.stderr)
         return []
 
 
 def generate_sbom(project_root: Path, output_path: Path) -> dict:
-    venv_python = str(project_root / ".venv" / "bin" / "python3")
-    packages = get_pip_freeze(venv_python)
+    packages = get_installed_packages()
 
     lockfile_path = project_root / "requirements_lock.txt"
     lockfile_hash = ""

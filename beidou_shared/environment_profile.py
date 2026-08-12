@@ -156,13 +156,17 @@ def reset_environment_profile() -> None:
 # --- PKG02: 禁止旁路检测 ---
 
 
-class SafetyBypassViolation(Exception):
+class SafetyBypassError(Exception):
     """检测到按环境区分安全语义的旁路。"""
 
     def __init__(self, location: str, detail: str) -> None:
         self.location = location
         self.detail = detail
         super().__init__(f"SAFETY_BYPASS at {location}: {detail}")
+
+
+# Backward-compatible alias for callers that imported the earlier name.
+SafetyBypassViolation = SafetyBypassError
 
 
 def detect_forbidden_bypass(source_code: str, location: str = "<unknown>") -> list[str]:
@@ -172,8 +176,6 @@ def detect_forbidden_bypass(source_code: str, location: str = "<unknown>") -> li
     """
     violations: list[str] = []
     for pattern in EnvironmentProfile._FORBIDDEN_BYPASS_PATTERNS:
-        if pattern in source_code:
-            # 排除此模块自身和测试文件
-            if "environment_profile.py" not in location and "test_" not in location:
-                violations.append(f"{location}: 发现禁止的环境旁路模式 '{pattern}'")
+        if pattern in source_code and "environment_profile.py" not in location and "test_" not in location:
+            violations.append(f"{location}: 发现禁止的环境旁路模式 '{pattern}'")
     return violations

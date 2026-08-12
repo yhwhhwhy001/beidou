@@ -55,7 +55,7 @@ class TestEnvironmentProfile:
                 # 所有环境的安全字段均来自 frozen dataclass，不可变
                 # 尝试设置不存在的属性应失败
                 with pytest.raises(AttributeError):
-                    profile.risk_levels  # type: ignore[attr-defined]
+                    _ = profile.risk_levels  # type: ignore[attr-defined]
 
     def test_unknown_environment_falls_back_safety_only(self) -> None:
         """未知环境回退到 SAFETY_ONLY（fail closed）。"""

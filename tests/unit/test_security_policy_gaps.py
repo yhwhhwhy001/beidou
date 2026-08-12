@@ -159,6 +159,7 @@ class TestRotationPersistence:
         )
 
         assert isinstance(record, RotationRecord)
+        assert new_cred.credential_id == "cert-key-gen2"
         assert record.old_credential_id == "cert-key"
         assert record.new_credential_id == "cert-key-gen2"
         assert record.evidence_hash != ""
@@ -245,6 +246,7 @@ class TestImmutablePolicyVersion:
         pv = PolicyVersion(policy_id="p1", version="v1", content_hash="abc123")
         ok, reason = registry.register(pv)
         assert ok
+        assert reason == "registered"
 
     def test_same_id_different_hash_rejected(self) -> None:
         """相同 ID + 不同 hash → 拒绝（不可变）。"""
