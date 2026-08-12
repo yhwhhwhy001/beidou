@@ -10,3 +10,12 @@
 | 2026-08-12 | Focused dual-module coverage gate | 33 tests; 644/644 statements | PASS at 100.00% |
 | 2026-08-12 | Full repository regression | `.venv/bin/pytest tests/ -q -W error::ResourceWarning` | PASS; 1,984 tests |
 | 2026-08-12 | Scoped static and format gates | Ruff check/format and mypy on changed source modules | PASS |
+| 2026-08-12 | Fresh post-commit repository coverage baseline | 1,984 tests; `artifacts/coverage-p3-current.json` | PASS tests; 23,470/31,132 = 75.3887%, so full-coverage gate remains FAIL |
+| 2026-08-12 | Fresh Testnet read-only safety recheck | Testnet account/exchange GET facts | Six non-zero positions, BTCUSDT flat, zero ordinary/Algo orders; write remains stopped on UNKNOWN account exposure |
+| 2026-08-12 | Harden storage compatibility adapter | `tests/unit/test_store_adapter.py`; 142/142 statements | PASS at 100%; unknown modes fail closed, reconnects close prior handles, explicit event columns replace positional `SELECT *` |
+| 2026-08-12 | Harden launcher CLI/check facade | launcher CLI contract tests; 100/100 statements across three modules | PASS at 100%; mixed `ALL`/`DEFAULT` sentinel bypass rejected and duplicate symbols removed |
+| 2026-08-12 | Harden SQLite core truth store | core-store contract tests; 364/364 statements | PASS at 100%; fill identity conflicts, missing runtime table and age-only order deletion repaired |
+| 2026-08-12 | Close small fail-closed contract gaps | 34 new focused tests across truth, evidence, protection, readiness, identity, serialization and planning | PASS; 17 additional modules reached 100% in the full run |
+| 2026-08-12 | Harden unified and legacy order state machines | focused order tests; unified aggregate 130/130 and legacy tracker 53/53 statements | PASS at 100%; invalid fills, overfills, economic-identity conflicts and unsafe legacy migration repaired |
+| 2026-08-12 | Harden emergency execution planning | focused conditional execution tests; 77/77 statements | PASS at 100%; missing governed executor, parse errors and enqueue failures remain fail closed |
+| 2026-08-12 | Full repository regression after tranche 3 | 2,069 tests; `artifacts/coverage-p3-tranche3.json` | PASS; 23,870/31,211 = 76.4794%, 7,341 uncovered; full-coverage gate remains FAIL |

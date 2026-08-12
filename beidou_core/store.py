@@ -275,6 +275,14 @@ class PersistentStore:
                 created_at TEXT NOT NULL,
                 UNIQUE(account_id, venue_id)
             );
+            CREATE TABLE IF NOT EXISTS v3_runtime_records (
+                record_type TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (record_type, record_id)
+            );
             CREATE INDEX IF NOT EXISTS idx_ledger_account ON ledger_entries(account_id, venue_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_correlation ON ledger_entries(correlation_id);
             CREATE INDEX IF NOT EXISTS idx_ledger_postings_tx ON ledger_postings(transaction_id);
@@ -291,6 +299,8 @@ class PersistentStore:
             CREATE INDEX IF NOT EXISTS idx_user_stream_events_time ON user_stream_events(event_time_ms, event_id);
             CREATE INDEX IF NOT EXISTS idx_user_stream_events_order ON user_stream_events(order_id, event_time_ms);
             CREATE INDEX IF NOT EXISTS idx_opening_projection_key ON account_opening_projections(account_id, venue_id, captured_at);
+            CREATE INDEX IF NOT EXISTS idx_v3_runtime_records_type_updated
+                ON v3_runtime_records(record_type, updated_at, record_id);
         """)
         conn.commit()
 
@@ -729,6 +739,22 @@ class PersistentStore:
         """
 
         conn = self._get_conn()
+        expected = {
+            "order_id": str(order_id),
+            "symbol": str(symbol),
+            "side": str(side),
+            "cumulative_qty": str(cumulative_qty),
+            "delta_qty": str(delta_qty),
+            "price": str(price),
+            "status": str(status),
+        }
+        existing = self.get_fill_event(fill_event_id)
+        if existing is not None:
+            if any(str(existing.get(field)) != value for field, value in expected.items()) or (
+                event_time is not None and str(existing.get("event_time")) != str(event_time)
+            ):
+                raise RuntimeError(f"fill event identity conflict: {fill_event_id}")
+            return False
         cursor = conn.execute(
             """INSERT OR IGNORE INTO fill_events
                (fill_event_id, order_id, symbol, side, cumulative_qty, delta_qty,
@@ -1159,22 +1185,43 @@ class PersistentStore:
 
     # --- Maintenance ---
 
-    def clean_stale_new_orders(self, max_age_hours: int = 1) -> int:
-        """清理前次 session 遗留的 NEW 状态订单。
+    def clean_stale_new_orders(
+        self,
+        max_age_hours: int = 1,
+        *,
+        venue_terminal_statuses: dict[str, str] | None = None,
+    ) -> int:
+        """Resolve stale NEW facts only from explicit venue terminal readback.
 
-        NEW 订单超过 max_age_hours 未推进到后续状态即为陈旧，
-        应在启动时自动清理，避免状态残留污染新 session。
-        返回清理数量。
+        Age is diagnostic evidence, never proof that an exchange order no
+        longer exists.  The durable row is retained and transitioned only
+        when the venue confirms a terminal state.
         """
         conn = self._get_conn()
         cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
-        cutoff_str = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
-        deleted = conn.execute(
-            "DELETE FROM order_states WHERE status = 'NEW' AND updated_at < ?",
-            (cutoff_str,),
-        ).rowcount
+        terminal_statuses = venue_terminal_statuses or {}
+        allowed_terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        changed = 0
+        for row in self.get_active_orders():
+            if str(row.get("status")) != "NEW":
+                continue
+            try:
+                updated = datetime.fromisoformat(str(row.get("updated_at"))).timestamp()
+            except ValueError:
+                continue
+            if updated >= cutoff:
+                continue
+            order_id = str(row.get("order_id"))
+            terminal = str(terminal_statuses.get(order_id, "")).upper()
+            if terminal not in allowed_terminal:
+                continue
+            conn.execute(
+                "UPDATE order_states SET status=?, updated_at=? WHERE order_id=? AND status='NEW'",
+                (terminal, datetime.now(timezone.utc).isoformat(), order_id),
+            )
+            changed += 1
         conn.commit()
-        return deleted
+        return changed
 
     def cleanup_old_data(self, retention_days: int = 90) -> int:
         conn = self._get_conn()

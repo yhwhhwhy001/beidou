@@ -155,7 +155,7 @@ def test_order_state_machine_transitions_fills_and_idempotency() -> None:
     assert order.transition(OrderState.ACKED) is True
     assert order.apply_fill(0.5, 100.0, commission=0.1, trade_id="trade-1") is True
     assert order.state is OrderState.PARTIAL
-    assert order.apply_fill(0.5, 120.0, commission=0.1, trade_id="trade-1") is False
+    assert order.apply_fill(0.5, 100.0, commission=0.1, trade_id="trade-1") is False
     assert order.apply_fill(1.5, 110.0, commission=0.1, trade_id="trade-2") is True
     assert order.state is OrderState.FILLED
     assert order.is_terminal is True

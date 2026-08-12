@@ -77,6 +77,7 @@ class AccountFactSnapshot:
     # PKG02: 对账数量容差必须从 InstrumentRuleSnapshot stepSize 获取，不使用硬编码默认值。
     # 0 表示未从交易所规则中获取，调用方必须在有有效 rule snapshot 时才执行对账。
     position_step_size: str = ""
+    position_step_sizes: dict[str, str] = field(default_factory=dict)
 
 
 class ReconciliationEngine:
@@ -174,6 +175,34 @@ class ReconciliationEngine:
                 differences=[
                     "INCOMPLETE_FACT: system/exchange snapshot is not complete",
                 ],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+
+        source_pairs = (("system", system_facts), ("exchange", exchange_facts))
+        missing_lineage = [
+            role
+            for role, facts in source_pairs
+            if not facts.source.strip()
+            or facts.source.strip().upper() == "UNKNOWN"
+            or not facts.fact_version.strip()
+            or facts.fact_version.strip().upper() == "UNKNOWN"
+        ]
+        if missing_lineage:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.INCOMPLETE,
+                differences=["INCOMPLETE_FACT_LINEAGE: " + ", ".join(missing_lineage)],
+                system_facts=system_facts,
+                exchange_facts=exchange_facts,
+                checked_at=checked_at,
+            )
+        if system_facts.source == exchange_facts.source:
+            return ReconciliationResult(
+                matched=False,
+                status=ReconciliationStatus.ERROR,
+                differences=[f"SAME_SOURCE_FRAUD_RISK: both facts declare source {system_facts.source}"],
                 system_facts=system_facts,
                 exchange_facts=exchange_facts,
                 checked_at=checked_at,
@@ -289,18 +318,60 @@ class ReconciliationEngine:
                 checked_at=checked_at,
             )
         symbols = sorted(set(sys_pos) | set(ex_pos))
-        # PKG02: 仓位容差必须从 InstrumentRuleSnapshot stepSize 获取。
-        # 若 stepSize 不可用，使用保守默认值并标记为 NOT_VERIFIABLE。
-        _sys_step = getattr(system_facts, "position_step_size", "") or ""
-        _ex_step = getattr(exchange_facts, "position_step_size", "") or ""
-        _raw_step = _sys_step or _ex_step
-        if not _raw_step:
-            _raw_step = "1e-8"
-        position_step_size = Decimal(str(_raw_step))
+        # PKG02: 每个 symbol 的仓位容差必须由双方绑定的
+        # InstrumentRuleSnapshot stepSize 一致证明，禁止静默使用常量。
+        position_steps: dict[str, Decimal] = {}
+        for symbol in symbols:
+            system_step_raw = system_facts.position_step_sizes.get(symbol, "")
+            exchange_step_raw = exchange_facts.position_step_sizes.get(symbol, "")
+            if not system_step_raw and len(symbols) == 1:
+                system_step_raw = system_facts.position_step_size
+            if not exchange_step_raw and len(symbols) == 1:
+                exchange_step_raw = exchange_facts.position_step_size
+            if not system_step_raw or not exchange_step_raw:
+                return ReconciliationResult(
+                    matched=False,
+                    status=ReconciliationStatus.INCOMPLETE,
+                    differences=[f"POSITION_STEP_SIZE_UNBOUND: {symbol}"],
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    checked_at=checked_at,
+                )
+            try:
+                system_step = Decimal(str(system_step_raw))
+                exchange_step = Decimal(str(exchange_step_raw))
+                if (
+                    not system_step.is_finite()
+                    or not exchange_step.is_finite()
+                    or system_step <= 0
+                    or exchange_step <= 0
+                ):
+                    raise InvalidOperation("step size must be finite and positive")
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                return ReconciliationResult(
+                    matched=False,
+                    status=ReconciliationStatus.ERROR,
+                    differences=[f"INVALID_POSITION_STEP_SIZE: {symbol}: {type(exc).__name__}"],
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    checked_at=checked_at,
+                )
+            if system_step != exchange_step:
+                return ReconciliationResult(
+                    matched=False,
+                    status=ReconciliationStatus.ERROR,
+                    differences=[
+                        f"POSITION_STEP_SIZE_MISMATCH: {symbol}: system={system_step} exchange={exchange_step}"
+                    ],
+                    system_facts=system_facts,
+                    exchange_facts=exchange_facts,
+                    checked_at=checked_at,
+                )
+            position_steps[symbol] = system_step
         position_diffs = {
             symbol: (sys_pos.get(symbol, Decimal("0")), ex_pos.get(symbol, Decimal("0")))
             for symbol in symbols
-            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > position_step_size
+            if abs(sys_pos.get(symbol, Decimal("0")) - ex_pos.get(symbol, Decimal("0"))) > position_steps[symbol]
         }
         if position_diffs:
             diffs.append(f"Position mismatch: {position_diffs}")
@@ -439,17 +510,10 @@ class ReconciliationEngine:
         三方同源伪造测试必须被检测。
         至少需要三个独立来源 (exchange / local / event stream)。
         """
-        system_keys = set(self._system_facts.keys())
-        exchange_keys = set(self._exchange_facts.keys())
-        event_keys = set(self._event_facts.keys())
-
-        sources: list[str] = []
-        if system_keys:
-            sources.append("system")
-        if exchange_keys:
-            sources.append("exchange")
-        if event_keys:
-            sources.append("event_stream")
+        system_keys = set(self._system_facts)
+        exchange_keys = set(self._exchange_facts)
+        event_keys = set(self._event_facts)
+        common_keys = system_keys & exchange_keys & event_keys
 
         tr = TripleReconciliation(
             venue_orders=len(exchange_keys),
@@ -457,10 +521,26 @@ class ReconciliationEngine:
             ledger_entries=len(event_keys),
             is_matched=False,
         )
-        # 三方同源伪造检测：需要 >= 3 个独立来源
-        if not tr.detect_same_source_fraud(sources):
-            tr.mismatches.append("SAME_SOURCE_FRAUD_RISK: fewer than 3 independent fact sources")
-        return tr
+        if not common_keys:
+            tr.mismatches.append("SAME_SOURCE_FRAUD_RISK: no account has all three fact sources")
+            return tr
+
+        for key in sorted(common_keys):
+            sources = [
+                self._system_facts[key].source,
+                self._exchange_facts[key].source,
+                self._event_facts[key].source,
+            ]
+            normalized_sources = [source.strip() for source in sources if source.strip().upper() != "UNKNOWN"]
+            if len(normalized_sources) != 3 or not tr.detect_same_source_fraud(normalized_sources):
+                tr.mismatches.append(f"SAME_SOURCE_FRAUD_RISK: {key} lacks three declared independent sources")
+        return TripleReconciliation(
+            venue_orders=tr.venue_orders,
+            local_orders=tr.local_orders,
+            ledger_entries=tr.ledger_entries,
+            is_matched=not tr.mismatches,
+            mismatches=list(tr.mismatches),
+        )
 
     def repair_strategy(self, result: ReconciliationResult) -> str:
         if result.matched:

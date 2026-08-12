@@ -8,6 +8,7 @@ Testnet/Production 使用 PostgreSQL。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import suppress
 from typing import Any
 
 
@@ -57,18 +58,25 @@ class SQLiteBackend(StorageBackend):
         self._conn = None
 
     def connect(self, connection_string: str = "") -> bool:
+        candidate = None
         try:
             import sqlite3
 
+            self.close()
             path = connection_string or self._db_path
-            self._conn = sqlite3.connect(path)
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            candidate = sqlite3.connect(path)
+            candidate.execute("PRAGMA journal_mode=WAL")
+            self._conn = candidate
             return True
         except Exception:
+            if candidate is not None:
+                with suppress(Exception):
+                    candidate.close()
+            self._conn = None
             return False
 
     def execute(self, sql: str, params: tuple | None = None) -> Any:
-        if not self._conn:
+        if self._conn is None:
             raise RuntimeError("SQLiteBackend not connected")
         return self._conn.execute(sql, params or ())
 
@@ -85,10 +93,12 @@ class SQLiteBackend(StorageBackend):
         import hashlib
         import json
 
-        content = json.dumps(payload, sort_keys=True, default=str)
-        checksum = hashlib.sha256(content.encode()).hexdigest()
-        meta = json.dumps(metadata or {})
         try:
+            if self._conn is None:
+                return False
+            content = json.dumps(payload, sort_keys=True, default=str)
+            checksum = hashlib.sha256(content.encode()).hexdigest()
+            meta = json.dumps(metadata or {})
             self._conn.execute(
                 "INSERT INTO event_store (stream_id, aggregate_type, sequence, "
                 "event_type, payload, metadata, correlation_id, checksum) "
@@ -103,16 +113,20 @@ class SQLiteBackend(StorageBackend):
     def get_events(self, stream_id: str) -> list[dict]:
         import json
 
+        if self._conn is None:
+            raise RuntimeError("SQLiteBackend not connected")
         cur = self._conn.execute(
-            "SELECT * FROM event_store WHERE stream_id=? ORDER BY sequence",
+            "SELECT stream_id, sequence, event_type, payload FROM event_store WHERE stream_id=? ORDER BY sequence",
             (stream_id,),
         )
         return [
-            {"stream_id": r[1], "sequence": r[3], "event_type": r[4], "payload": json.loads(r[5])}
+            {"stream_id": r[0], "sequence": r[1], "event_type": r[2], "payload": json.loads(r[3])}
             for r in cur.fetchall()
         ]
 
     def health_check(self) -> bool:
+        if self._conn is None:
+            return False
         try:
             self._conn.execute("SELECT 1")
             return True
@@ -120,9 +134,9 @@ class SQLiteBackend(StorageBackend):
             return False
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        connection, self._conn = self._conn, None
+        if connection is not None:
+            connection.close()
 
 
 class PostgresBackend(StorageBackend):
@@ -140,21 +154,27 @@ class PostgresBackend(StorageBackend):
         self._conn = None
 
     def connect(self, connection_string: str = "") -> bool:
+        candidate = None
         try:
             import psycopg
 
+            self.close()
             self._dsn = connection_string or self._dsn
             if not self._dsn:
                 return False
-            self._conn = psycopg.connect(self._dsn, autocommit=True)
-            self._conn.execute("SELECT 1")
+            candidate = psycopg.connect(self._dsn, autocommit=True)
+            candidate.execute("SELECT 1")
+            self._conn = candidate
             return True
         except Exception:
-            self.close()
+            if candidate is not None:
+                with suppress(Exception):
+                    candidate.close()
+            self._conn = None
             return False
 
     def execute(self, sql: str, params: tuple | None = None) -> Any:
-        if not self._conn:
+        if self._conn is None:
             raise RuntimeError("PostgresBackend not connected")
         return self._conn.execute(sql, params or ())
 
@@ -171,12 +191,12 @@ class PostgresBackend(StorageBackend):
         import hashlib
         import json
 
-        content = json.dumps(payload, sort_keys=True, default=str)
-        checksum = hashlib.sha256(content.encode()).hexdigest()
-        meta = json.dumps(metadata or {})
         try:
-            if not self._conn:
+            if self._conn is None:
                 return False
+            content = json.dumps(payload, sort_keys=True, default=str)
+            checksum = hashlib.sha256(content.encode()).hexdigest()
+            meta = json.dumps(metadata or {})
             with self._conn.transaction():
                 self._conn.execute(
                     "INSERT INTO event_store (stream_id, aggregate_type, sequence, "
@@ -191,7 +211,7 @@ class PostgresBackend(StorageBackend):
     def get_events(self, stream_id: str) -> list[dict]:
         import json
 
-        if not self._conn:
+        if self._conn is None:
             raise RuntimeError("PostgresBackend not connected")
         rows = self._conn.execute(
             "SELECT stream_id, sequence, event_type, payload FROM event_store WHERE stream_id=%s ORDER BY sequence",
@@ -200,7 +220,7 @@ class PostgresBackend(StorageBackend):
         return [{"stream_id": r[0], "sequence": r[1], "event_type": r[2], "payload": json.loads(r[3])} for r in rows]
 
     def health_check(self) -> bool:
-        if not self._conn:
+        if self._conn is None:
             return False
         try:
             self._conn.execute("SELECT 1")
@@ -209,9 +229,9 @@ class PostgresBackend(StorageBackend):
             return False
 
     def close(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        connection, self._conn = self._conn, None
+        if connection is not None:
+            connection.close()
 
 
 def create_backend(mode: str = "paper") -> StorageBackend:
@@ -220,11 +240,14 @@ def create_backend(mode: str = "paper") -> StorageBackend:
     paper → SQLite (仅本地，无资金)
     testnet/production → PostgreSQL
     """
-    if mode in ("testnet", "production"):
+    normalized_mode = mode.strip().lower()
+    if normalized_mode in ("testnet", "production"):
         import os
 
         dsn = os.environ.get("DATABASE_URL", "")
         if not dsn:
             raise ValueError("DATABASE_URL required for testnet/production mode")
         return PostgresBackend(dsn)
-    return SQLiteBackend()
+    if normalized_mode == "paper":
+        return SQLiteBackend()
+    raise ValueError(f"unsupported storage mode: {mode!r}")

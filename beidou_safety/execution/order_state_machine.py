@@ -77,13 +77,14 @@ class OrderStateMachine:
         if new_state == self.state:
             return True, "NO_CHANGE"
 
+        # Terminal-state semantics are stronger than the generic transition
+        # table and must remain observable to recovery callers.
+        if self.state in (OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, OrderState.EXPIRED):
+            return False, f"TERMINAL_STATE:{self.state.value}"
+
         allowed = VALID_ORDER_TRANSITIONS.get(self.state, set())
         if new_state not in allowed:
             return False, f"INVALID_TRANSITION:{self.state.value}→{new_state.value}"
-
-        # FILLED 后不能回退
-        if self.state in (OrderState.FILLED, OrderState.CANCELED, OrderState.REJECTED, OrderState.EXPIRED):
-            return False, f"TERMINAL_STATE:{self.state.value}"
 
         old_state = self.state
         self.state = new_state

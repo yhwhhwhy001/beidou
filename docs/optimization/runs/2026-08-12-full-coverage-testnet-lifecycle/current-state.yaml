@@ -8,12 +8,13 @@ authority:
   mainnet_or_real_funds: false
   transfers_or_permissions: false
   restart_or_deploy: false
-  git_commit_or_push: true
+  git_commit_or_push: false
 status: IN_PROGRESS
 coverage:
-  covered: 23063
-  statements: 31091
-  percent: 74.17902286835418
+  covered: 23870
+  statements: 31211
+  missing: 7341
+  percent: 76.47944634904361
   target: 100
 exchange:
   host: demo-fapi.binance.com

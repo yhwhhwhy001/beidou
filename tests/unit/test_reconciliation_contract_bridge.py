@@ -9,7 +9,7 @@ from beidou_safety.execution.reconciliation import (
     ReconciliationEngine,
     ReconciliationStatus,
 )
-from beidou_shared.types import AccountId, MonetaryValue, VenueId
+from beidou_shared.types import AccountId, InstrumentId, MonetaryValue, Quantity, VenueId
 
 
 def _make_snapshot(account_id: str = "test", venue_id: str = "BINANCE", **overrides) -> AccountFactSnapshot:
@@ -22,6 +22,8 @@ def _make_snapshot(account_id: str = "test", venue_id: str = "BINANCE", **overri
         "open_orders": [],
         "complete": True,
         "position_step_size": "0.001",
+        "source": "SYSTEM",
+        "fact_version": "v1",
     }
     defaults.update(overrides)
     return AccountFactSnapshot(**defaults)
@@ -31,8 +33,8 @@ class TestReconciliationContractBridge:
     def test_detect_same_source_fraud_three_sources(self):
         engine = ReconciliationEngine()
         engine.update_system_facts(_make_snapshot(account_id="a1"))
-        engine.update_exchange_facts(_make_snapshot(account_id="a1"))
-        engine.update_event_facts(_make_snapshot(account_id="a1"))
+        engine.update_exchange_facts(_make_snapshot(account_id="a1", source="EXCHANGE"))
+        engine.update_event_facts(_make_snapshot(account_id="a1", source="EVENT_STREAM"))
 
         tr = engine.detect_same_source_fraud()
         assert tr.detect_same_source_fraud(["system", "exchange", "event_stream"])
@@ -40,7 +42,7 @@ class TestReconciliationContractBridge:
     def test_detect_same_source_fraud_two_sources(self):
         engine = ReconciliationEngine()
         engine.update_system_facts(_make_snapshot(account_id="a1"))
-        engine.update_exchange_facts(_make_snapshot(account_id="a1"))
+        engine.update_exchange_facts(_make_snapshot(account_id="a1", source="EXCHANGE"))
 
         tr = engine.detect_same_source_fraud()
         assert not tr.detect_same_source_fraud(["system", "exchange"])
@@ -55,15 +57,17 @@ class TestReconciliationContractBridge:
     def test_reconcile_both_sides_present(self):
         engine = ReconciliationEngine()
         engine.update_system_facts(_make_snapshot(account_id="test"))
-        engine.update_exchange_facts(_make_snapshot(account_id="test"))
+        engine.update_exchange_facts(_make_snapshot(account_id="test", source="EXCHANGE"))
 
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
         assert result.status in (ReconciliationStatus.MATCHED, ReconciliationStatus.MISMATCHED)
 
-    def test_step_size_empty_uses_default(self):
+    def test_step_size_empty_is_not_verifiable(self):
         engine = ReconciliationEngine()
-        # step_size="" should still work (fallback to "1e-8")
-        engine.update_system_facts(_make_snapshot(account_id="test", position_step_size=""))
-        engine.update_exchange_facts(_make_snapshot(account_id="test", position_step_size=""))
+        positions = {InstrumentId("BTCUSDT"): Quantity(amount="1")}
+        engine.update_system_facts(_make_snapshot(account_id="test", position_step_size="", positions=positions))
+        engine.update_exchange_facts(
+            _make_snapshot(account_id="test", position_step_size="", positions=positions, source="EXCHANGE")
+        )
         result = engine.reconcile(AccountId("test"), VenueId("BINANCE"))
-        assert result is not None  # 不崩溃即为通过
+        assert result.status is ReconciliationStatus.INCOMPLETE

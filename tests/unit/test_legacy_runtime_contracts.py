@@ -75,8 +75,8 @@ def test_order_state_machine_rejects_illegal_terminal_recovery_and_handles_unkno
     assert machine.transition(OrderState.FILLED)[0]
     assert machine.is_terminal()
     transitioned, message = machine.transition(OrderState.QUEUED)
-    assert not transitioned and message.startswith("INVALID_TRANSITION")
-    assert machine.handle_unknown().startswith("NO_QUERY:INVALID_TRANSITION")
+    assert not transitioned and message == "TERMINAL_STATE:FILLED"
+    assert machine.handle_unknown() == "NO_QUERY:TERMINAL_STATE:FILLED"
     assert machine.compute_idempotency_key() == machine.compute_idempotency_key()
 
 

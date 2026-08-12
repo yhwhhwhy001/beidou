@@ -26,9 +26,9 @@ from .supervisor import BeidouSupervisor
 
 def _parse_symbols(value: str) -> list[str]:
     values = [item.strip().upper() for item in value.split(",") if item.strip()]
-    if values in (["ALL"], ["DEFAULT"]):
+    if any(item in {"ALL", "DEFAULT"} for item in values):
         return []
-    return values
+    return list(dict.fromkeys(values))
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})

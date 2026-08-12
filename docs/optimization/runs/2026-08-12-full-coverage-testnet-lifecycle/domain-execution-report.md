@@ -9,3 +9,10 @@
 - Protection and recovery: no observed ordinary or Algo protection orders for the account-level existing exposure set.
 - UNKNOWN/ownership status: existing positions are UNKNOWN to this validation run. They are not assumed to belong to this system or safe to modify.
 - Decision: `BLOCKED_PRE_WRITE` for the real order lifecycle; no exchange mutation occurred. Continue code/coverage work and retry only after a safe attributable starting state is proven.
+
+## Fresh recheck — 2026-08-12
+
+- Testnet host remained `demo-fapi.binance.com`; account remained trade-enabled and in ONE_WAY mode.
+- Six non-zero positions remained. BTCUSDT itself was flat, with zero ordinary orders and zero Algo orders account-wide.
+- Account-level unknown exposure still prevents a new risk-bearing lifecycle because shared margin and ownership/protection cannot be attributed to this validation run.
+- No order, cancellation, position, leverage, margin or protection mutation was performed.

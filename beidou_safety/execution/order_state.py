@@ -109,11 +109,6 @@ class OrderStateTracker:
             self.status = OrderStatus.UNKNOWN
             self.events.append((event, datetime.now(timezone.utc)))
             return True
-        # PKG14 (BDS-P0-018): 恢复时保留交易所真实状态
-        if event == OrderEvent.RECOVERED and self.status == OrderStatus.UNKNOWN:
-            # 保留 UNKNOWN 等待真实状态确认（不直接跳 NEW）
-            self.events.append((event, datetime.now(timezone.utc)))
-            return True
         return False
 
     def is_terminal(self) -> bool:

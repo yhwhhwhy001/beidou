@@ -64,8 +64,10 @@ def test_launcher_requires_explicit_symbol_universe() -> None:
     from beidou_launcher.cli import _parse_symbols
 
     assert _parse_symbols("BTCUSDT, ethusdt") == ["BTCUSDT", "ETHUSDT"]
+    assert _parse_symbols("BTCUSDT, btcusdt") == ["BTCUSDT"]
     assert _parse_symbols("DEFAULT") == []
     assert _parse_symbols("ALL") == []
+    assert _parse_symbols("BTCUSDT,ALL") == []
 
 
 def test_engine_rejects_missing_or_fixed_symbol_universe() -> None:

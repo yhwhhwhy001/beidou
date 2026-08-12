@@ -47,6 +47,7 @@ def test_protection_pending_is_not_restored_as_active(tmp_path):
     assert restored[0]["protection_id"] == "sl-pos-1"
     assert restored[0]["status"] == "ACTIVE"
     assert restored[0]["quantity"] == "0.01"
+    store.close()
 
 
 def test_ledger_transaction_round_trip_is_append_only(tmp_path):
@@ -83,6 +84,7 @@ def test_ledger_transaction_round_trip_is_append_only(tmp_path):
     assert len(rows) == 1
     assert len(rows[0]["postings"]) == 2
     assert rows[0]["source_event_id"] == "fill-1"
+    store.close()
 
 
 def test_ledger_source_event_conflict_is_not_silently_ignored(tmp_path):
@@ -123,6 +125,7 @@ def test_ledger_source_event_conflict_is_not_silently_ignored(tmp_path):
 
     with pytest.raises(RuntimeError, match="source_event_id conflict"):
         store.save_ledger_transaction(conflicting)
+    store.close()
 
 
 def test_fill_event_is_pending_until_authoritative_facts_commit(tmp_path):
@@ -141,6 +144,7 @@ def test_fill_event_is_pending_until_authoritative_facts_commit(tmp_path):
     assert store.get_fill_event("fill-1")["processing_state"] == "PENDING"
     store.mark_fill_event_committed("fill-1")
     assert store.get_fill_event("fill-1")["processing_state"] == "COMMITTED"
+    store.close()
 
 
 def test_opening_projection_requires_provenance_and_round_trips(tmp_path):
@@ -184,3 +188,4 @@ def test_opening_projection_requires_provenance_and_round_trips(tmp_path):
     assert restored["balance_amount"] == "1000"
     assert restored["positions"] == {"BTCUSDT": "0.25"}
     assert restored["open_orders"] == ["order-1"]
+    store.close()

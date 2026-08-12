@@ -2,7 +2,7 @@
 
 | ID | Requirement | Acceptance evidence | Status |
 |---|---|---|---|
-| FC-001 | Genuine full-repository line coverage reaches 100% | Fresh coverage JSON and configured `--cov-fail-under=100` pass | IN_PROGRESS: 74.1790% baseline |
+| FC-001 | Genuine full-repository line coverage reaches 100% | Fresh coverage JSON and configured `--cov-fail-under=100` pass | IN_PROGRESS: 75.3887% current baseline |
 | FC-002 | Coverage is behavior-backed | Assertions cover success, failure and invariants; no new exclusions, pragma abuse or execution-only tests | IN_PROGRESS |
 | FC-003 | Historical defects found while covering code are repaired | Red-green regression tests and implementation log | IN_PROGRESS |
 | TX-001 | Target cannot be mistaken for Mainnet | Strict Testnet host allowlist and exchange identity | PASS |

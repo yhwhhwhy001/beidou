@@ -24,7 +24,13 @@ from beidou_safety.execution.reconciliation import (
 from beidou_shared.types import AccountId, InstrumentId, MonetaryValue, Quantity, VenueId
 
 
-def _facts(*, timestamp: datetime, complete: bool = True, balance: str = "100") -> AccountFactSnapshot:
+def _facts(
+    *,
+    timestamp: datetime,
+    complete: bool = True,
+    balance: str = "100",
+    source: str = "SYSTEM",
+) -> AccountFactSnapshot:
     return AccountFactSnapshot(
         account_id=AccountId("acct"),
         venue_id=VenueId("BINANCE"),
@@ -32,21 +38,22 @@ def _facts(*, timestamp: datetime, complete: bool = True, balance: str = "100") 
         positions={InstrumentId("BTCUSDT"): Quantity(amount="0.25")},
         open_orders=["order-1"],
         timestamp=timestamp,
-        source="test",
+        source=source,
         fact_version="v1",
         complete=complete,
+        position_step_size="0.001",
     )
 
 
 def test_compare_is_pure_and_requires_fresh_complete_facts() -> None:
     now = datetime(2026, 8, 9, tzinfo=timezone.utc)
-    matched = ReconciliationEngine.compare(_facts(timestamp=now), _facts(timestamp=now), now=now)
+    matched = ReconciliationEngine.compare(_facts(timestamp=now), _facts(timestamp=now, source="EXCHANGE"), now=now)
     assert matched.status is ReconciliationStatus.MATCHED
     assert matched.matched is True
 
     stale = ReconciliationEngine.compare(
         _facts(timestamp=now - timedelta(seconds=31)),
-        _facts(timestamp=now),
+        _facts(timestamp=now, source="EXCHANGE"),
         now=now,
     )
     assert stale.status is ReconciliationStatus.STALE
@@ -54,7 +61,7 @@ def test_compare_is_pure_and_requires_fresh_complete_facts() -> None:
 
     incomplete = ReconciliationEngine.compare(
         _facts(timestamp=now, complete=False),
-        _facts(timestamp=now),
+        _facts(timestamp=now, source="EXCHANGE"),
         now=now,
     )
     assert incomplete.status is ReconciliationStatus.INCOMPLETE
@@ -70,8 +77,8 @@ def test_compare_treats_missing_side_as_unknown() -> None:
 def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> None:
     now = datetime(2026, 8, 9, tzinfo=timezone.utc)
     system = _facts(timestamp=now)
-    exchange = _facts(timestamp=now)
-    event = _facts(timestamp=now)
+    exchange = _facts(timestamp=now, source="EXCHANGE")
+    event = _facts(timestamp=now, source="EVENT_STREAM")
 
     matched = ReconciliationEngine.compare_three_way(system, exchange, event, now=now)
     assert matched.status is ReconciliationStatus.MATCHED
@@ -86,7 +93,7 @@ def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> Non
     assert mismatch.status is ReconciliationStatus.MISMATCHED
     assert any("event_stream" in difference for difference in mismatch.differences)
 
-    stale_event = _facts(timestamp=now - timedelta(seconds=31))
+    stale_event = _facts(timestamp=now - timedelta(seconds=31), source="EVENT_STREAM")
     stale = ReconciliationEngine.compare_three_way(system, exchange, stale_event, now=now)
     assert stale.status is ReconciliationStatus.STALE
 
@@ -94,13 +101,13 @@ def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> Non
 def test_compare_rejects_non_finite_numeric_facts() -> None:
     now = datetime(2026, 8, 9, tzinfo=timezone.utc)
     invalid_balance = _facts(timestamp=now, balance="NaN")
-    result = ReconciliationEngine.compare(invalid_balance, _facts(timestamp=now), now=now)
+    result = ReconciliationEngine.compare(invalid_balance, _facts(timestamp=now, source="EXCHANGE"), now=now)
     assert result.status is ReconciliationStatus.ERROR
     assert "INVALID_BALANCE_FACT" in result.differences[0]
 
     invalid_position = _facts(timestamp=now)
     invalid_position.positions[InstrumentId("BTCUSDT")] = Quantity(amount="Infinity")
-    result = ReconciliationEngine.compare(invalid_position, _facts(timestamp=now), now=now)
+    result = ReconciliationEngine.compare(invalid_position, _facts(timestamp=now, source="EXCHANGE"), now=now)
     assert result.status is ReconciliationStatus.ERROR
     assert "INVALID_POSITION_FACT" in result.differences[0]
 
@@ -108,7 +115,7 @@ def test_compare_rejects_non_finite_numeric_facts() -> None:
 def test_compare_does_not_collapse_long_and_short_positions() -> None:
     now = datetime.now(timezone.utc)
     long_facts = _facts(timestamp=now)
-    short_facts = _facts(timestamp=now)
+    short_facts = _facts(timestamp=now, source="EXCHANGE")
     short_facts.positions[InstrumentId("BTCUSDT")] = Quantity(amount="-0.25")
     result = ReconciliationEngine.compare(long_facts, short_facts, now=now)
     assert result.status is ReconciliationStatus.MISMATCHED
@@ -120,7 +127,7 @@ def test_store_reconciliation_and_fill_projections_are_idempotent(tmp_path) -> N
     facts = _facts(timestamp=now)
     store.save_reconciliation_snapshot("snap-1", "SYSTEM", facts)
     assert store.restore_latest_reconciliation_snapshot("acct", "BINANCE", "SYSTEM")["snapshot_id"] == "snap-1"
-    result = ReconciliationEngine.compare(facts, facts, now=now)
+    result = ReconciliationEngine.compare(facts, _facts(timestamp=now, source="EXCHANGE"), now=now)
     store.save_reconciliation_result("result-1", result, system_snapshot_id="snap-1")
     with store._get_conn() as conn:
         persisted = conn.execute(
