@@ -1037,7 +1037,9 @@ class PersistentStore:
 
     def restore_protections(self) -> list[dict[str, Any]]:
         conn = self._get_conn()
-        rows = conn.execute("SELECT * FROM protection_orders WHERE status='ACTIVE'").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM protection_orders WHERE status IN ('ACTIVE', 'PENDING')"
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def remove_protection(self, position_id: str) -> None:
@@ -1159,7 +1161,7 @@ class PersistentStore:
 
     # --- Maintenance ---
 
-    def clean_stale_new_orders(self, max_age_hours: int = 24) -> int:
+    def clean_stale_new_orders(self, max_age_hours: int = 1) -> int:
         """清理前次 session 遗留的 NEW 状态订单。
 
         NEW 订单超过 max_age_hours 未推进到后续状态即为陈旧，

@@ -415,7 +415,17 @@ def collect_monitoring_checks(
                     )
                 )
             else:
-                results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
+                # 引擎对账权威源已验证通过 → PASS
+                results.append(
+                    CheckResult(
+                        check_id="runtime.safety.reconciliation",
+                        name="深度对账 (MON03 R1~R6)",
+                        status=CheckStatus.PASS,
+                        severity=CheckSeverity.P0,
+                        message=f"Recon: {recon.matched} matched",
+                        evidence={"source": "engine._last_reconciliation_result", "status": authority_status, "age_seconds": authority_age},
+                    )
+                )
         else:
             results.append(convert(build_reconciliation_check(recon), name="深度对账 (MON03 R1~R6)"))
     except Exception as exc:

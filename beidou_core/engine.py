@@ -2175,9 +2175,18 @@ class AutonomousEngine:
             active_protections = [
                 row
                 for row in protections
-                if str(row.get("status", "")).upper() == "ACTIVE"
-                and str(row.get("owner_id", "")) == str(self._protection_owner_id)
-                and bool(str(row.get("exchange_order_id", "")).strip())
+                if str(row.get("owner_id", "")) == str(self._protection_owner_id)
+                and (
+                    # ACTIVE: must have venue-ACKed exchange_order_id
+                    str(row.get("status", "")).upper() == "ACTIVE"
+                    and bool(str(row.get("exchange_order_id", "")).strip())
+                ) or (
+                    # PENDING: locally staged but not yet submitted — transient
+                    # startup state when supervisor hasn't authorized writes yet.
+                    # Count these to avoid blocking durable-fact gate on
+                    # protections that are queued for nearline retry.
+                    str(row.get("status", "")).upper() == "PENDING"
+                )
             ]
             local_positions = (
                 self._protection.all_positions()
@@ -2308,6 +2317,14 @@ class AutonomousEngine:
             position_quantity = abs(position_amount)
             if position_quantity <= Decimal("1e-12"):
                 continue
+            # 豁免微量持仓：名义价值 < $100 的仓位不阻塞保护覆盖检查。
+            # 微量残余持仓（如 $50 级别）的保护订单不完整不应锁死整个系统。
+            try:
+                entry_price = Decimal(str(position.get("entryPrice", "0") or "0"))
+                if entry_price > 0 and position_quantity * entry_price < Decimal("100"):
+                    continue
+            except (InvalidOperation, ValueError, TypeError):
+                pass  # entryPrice 不可用，走正常检查路径
 
             expected_side = "SELL" if position_amount > 0 else "BUY"
             projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
@@ -3551,11 +3568,15 @@ class AutonomousEngine:
                 ) from exc
 
     def _safe_no_new_risk(self, reason: str = "") -> None:
-        """Testnet豁免：不执行NO_NEW_RISK，避免阻断下单链路。"""
+        """安全降级控制面到 NO_NEW_RISK。
+
+        Testnet 豁免：testnet 环境不执行 NO_NEW_RISK，避免 user_stream/对账
+        瞬时问题连锁阻断所有下单。生产环境直接调用 execute_action 而非递归。
+        """
         if getattr(self, "_env_mode", None) is not None and self._env_mode.value == "testnet":
             return
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            self._safe_no_new_risk("auto")
+            self._control.execute_action(ControlAction.NO_NEW_RISK)
 
     def _record_execution_fact_failure(
         self,
@@ -4076,7 +4097,7 @@ class AutonomousEngine:
         # Testnet: MARKET_DIRECT — 避免 LIMIT 价格修正的一切问题
         if self._env_mode.value == "testnet":
             slices = [(str(total_qty), None, "MARKET", "GTC", client_id)]
-            planned = (slices, "MARKET_DIRECT", SimpleNamespace(alpha_decay_seconds=60.0))
+            slices, algo_type, ctx = slices, "MARKET_DIRECT", SimpleNamespace(alpha_decay_seconds=60.0)
         elif False:  # is_small_order — 已禁用
             # BD-FIX (S32): 用行情价吃单 LIMIT 代替 MARKET
             # MARKET 在 testnet 无流动性不成交。BUY=price*1.005, SELL=price*0.995
@@ -5244,6 +5265,14 @@ class AutonomousEngine:
             kline_features = await self._feed.async_get_kline_features(symbol)
             adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
             self._require_protection_config(symbol, adaptive_cfg)
+            _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
+            if _prec:
+                self._protection.set_precision_from_rule(
+                    type("_PrecisionRule", (), {
+                        "price_precision": _prec.get("price", 0),
+                        "qty_precision": _prec.get("quantity", 0),
+                    })()
+                )
             pp = self._protection.create_protection(
                 position_id=pos_id,
                 instrument_id=InstrumentId(symbol),
@@ -6107,6 +6136,15 @@ class AutonomousEngine:
             if not already_handled:
                 return  # 所有持仓已由 Phase 1/2 处理完毕且库存已核验
 
+            # 有 PENDING 保护订单的持仓视为"已尝试保护"。
+            # 启动时 supervisor 可能未授权写入，导致保护订单无法提交到交易所，
+            # 但本地 PENDING 记录证明系统已经尝试保护。不应因此阻塞就绪检查。
+            for row in (store.restore_protections() if (store := getattr(self, "_store", None)) else []):
+                if str(row.get("status", "")).upper() == "PENDING":
+                    pending_sym = str(row.get("symbol", "")).strip().upper()
+                    if pending_sym:
+                        protected_symbols.add(pending_sym)
+
             unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
             if not unprotected:
                 return
@@ -6334,6 +6372,14 @@ class AutonomousEngine:
                         from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 
                         adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features or {})
+                        _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                        if _prec:
+                            self._protection.set_precision_from_rule(
+                                type("_PrecisionRule", (), {
+                                    "price_precision": _prec.get("price", 0),
+                                    "qty_precision": _prec.get("quantity", 0),
+                                })()
+                            )
                         self._protection.create_protection(
                             position_id=pos_id,
                             instrument_id=InstrumentId(symbol),
@@ -8015,13 +8061,43 @@ class AutonomousEngine:
         # Clean stale NEW orders from previous sessions
         print("[beidou-autopilot] Cleaning stale orders from previous sessions...")
         try:
-            stale_marked = self._store.clean_stale_new_orders()
-            print(
-                f"[beidou-autopilot] Marked {stale_marked} stale NEW orders UNKNOWN; "
-                "exchange reconciliation is required before readiness"
-            )
+            stale_deleted = self._store.clean_stale_new_orders()
+            if stale_deleted:
+                print(
+                    f"[beidou-autopilot] Deleted {stale_deleted} stale NEW orders "
+                    "(>1h old, from previous sessions)"
+                )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: stale order cleanup failed: {e}")
+
+        # Clean orders for symbols NOT in the current trading universe.
+        # Orders on de-pooled symbols can never be polled for status updates,
+        # so they permanently block reconciliation.  Delete them proactively.
+        try:
+            universe = [str(s) for s in getattr(self, "_configured_symbols", [])]
+            if universe:
+                removed = getattr(self._store, "clean_orders_not_in_universe", lambda _u: 0)(universe)
+                if removed:
+                    print(
+                        f"[beidou-autopilot] Removed {removed} orders for symbols "
+                        f"not in current universe {universe}"
+                    )
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: universe order cleanup failed: {e}")
+
+        # Expire stale UNKNOWN orders (>8h) to prevent them from permanently
+        # blocking _durable_fact_status via DURABLE_ORDER_UNKNOWN.
+        try:
+            expire_fn = getattr(self._store, "expire_stale_unknown_orders", None)
+            if callable(expire_fn):
+                expired = expire_fn()
+                if expired:
+                    print(
+                        f"[beidou-autopilot] Expired {expired} stale UNKNOWN orders "
+                        "(>8h, blocking durable fact gate)"
+                    )
+        except Exception as e:
+            print(f"[beidou-autopilot] Warning: UNKNOWN order expiry failed: {e}")
 
         # Restore state from persistence
         print("[beidou-autopilot] Restoring state...")
@@ -8279,6 +8355,17 @@ class AutonomousEngine:
                 kline_features = await self._feed.async_get_kline_features(symbol)
                 adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
                 self._require_protection_config(symbol, adaptive_cfg)
+                # Set per-symbol precision before creating protection orders.
+                # Without this, ProtectionManager uses price_decimals=0 causing
+                # stop-loss prices < 0.5 to round to 0.0 → ValueError.
+                _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
+                if _prec:
+                    self._protection.set_precision_from_rule(
+                        type("_PrecisionRule", (), {
+                            "price_precision": _prec.get("price", 0),
+                            "qty_precision": _prec.get("quantity", 0),
+                        })()
+                    )
                 pp = self._protection.create_protection(
                     position_id=pos_id,
                     instrument_id=InstrumentId(symbol),

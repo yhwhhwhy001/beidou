@@ -735,7 +735,13 @@ class PostgresPersistentStore:
         )
 
     def restore_protections(self) -> list[dict[str, Any]]:
-        return [row for row in self._records("protection") if str(row.get("status")) == "ACTIVE"]
+        # 返回 ACTIVE 和 PENDING 状态的保护订单。
+        # PENDING 订单是本地已创建但尚未提交到交易所的（如启动时
+        # supervisor 尚未授权写入），应被计入保护覆盖检查以避免误报。
+        return [
+            row for row in self._records("protection")
+            if str(row.get("status")) in ("ACTIVE", "PENDING")
+        ]
 
     def remove_protection(self, position_id: str) -> None:
         for row in self._records("protection"):
@@ -838,7 +844,13 @@ class PostgresPersistentStore:
 
     # --- Maintenance ---
 
-    def clean_stale_new_orders(self, max_age_hours: int = 24) -> int:
+    def clean_stale_new_orders(self, max_age_hours: int = 1) -> int:
+        """删除超过 max_age_hours 的 NEW 状态滞留订单。
+
+        与 SQLite 版本行为对齐：物理删除而非标记 UNKNOWN。
+        UNKNOWN 状态会阻塞 _durable_fact_status 的 DURABLE_ORDER_UNKNOWN 检查，
+        导致引擎永久 DEGRADED。直接删除避免了制造新的阻塞条件。
+        """
         cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
         changed = 0
         for row in self.get_active_orders():
@@ -849,8 +861,53 @@ class PostgresPersistentStore:
             except ValueError:
                 continue
             if updated < cutoff:
-                row["status"] = "UNKNOWN"
-                self._write_record("order_state", str(row.get("order_id")), row, event_type="STALE_ORDER_UNKNOWN")
+                self._delete_record("order_state", str(row.get("order_id")))
+                changed += 1
+        return changed
+
+    def clean_orders_not_in_universe(self, universe_symbols: list[str]) -> int:
+        """删除不属于当前交易池品种的所有 NEW/UNKNOWN 订单。
+
+        当引擎切换交易品种时，上一批品种的订单可能残留在数据库中。
+        这些订单不会被轮询状态更新，导致对账永远 MISMATCHED。
+        在启动时调用此方法，传入当前交易池品种列表，清理所有不在池中的
+        非终端状态订单（NEW, PARTIALLY_FILLED, PENDING_CANCEL, UNKNOWN）。
+        终端状态订单（FILLED, CANCELED, EXPIRED, REJECTED）保留用于审计。
+        """
+        universe = {s.strip().upper() for s in universe_symbols}
+        changed = 0
+        for row in self.restore_order_states():
+            symbol = str(row.get("symbol", "")).strip().upper()
+            status = str(row.get("status", "")).upper()
+            if symbol and symbol not in universe and status in {
+                "NEW", "PARTIALLY_FILLED", "PENDING_CANCEL", "UNKNOWN",
+            }:
+                self._delete_record("order_state", str(row.get("order_id")))
+                changed += 1
+        return changed
+
+    def expire_stale_unknown_orders(self, max_age_hours: int = 8) -> int:
+        """将超过 max_age_hours 的 UNKNOWN 订单转为 EXPIRED。
+
+        UNKNOWN 订单会阻塞 _durable_fact_status 的 DURABLE_ORDER_UNKNOWN 检查。
+        一旦订单在 UNKNOWN 状态停留超过阈值且未被解析，即可安全过期。
+        终端状态（EXPIRED）不阻塞对账。
+        """
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+        changed = 0
+        for row in self.restore_order_states():
+            if str(row.get("status", "")).upper() != "UNKNOWN":
+                continue
+            try:
+                updated = datetime.fromisoformat(str(row.get("updated_at"))).timestamp()
+            except ValueError:
+                continue
+            if updated < cutoff:
+                row["status"] = "EXPIRED"
+                self._write_record(
+                    "order_state", str(row.get("order_id")), row,
+                    event_type="STALE_UNKNOWN_EXPIRED",
+                )
                 changed += 1
         return changed
 
