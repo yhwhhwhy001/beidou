@@ -691,26 +691,70 @@ class MarketDataFeed:
         self._last_orderbook[symbol] = data
         return data
 
-    def fetch_klines(self, symbol: str, interval: str, limit: int = 100) -> list[dict]:
-        raw = self._api(
-            Endpoint.KLINES,
-            params={
+    def fetch_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 100,
+        start_time: int | None = None,
+        end_time: int | None = None,
+        max_pages: int = 400,
+    ) -> list[dict]:
+        """拉取 K 线。无时间范围时与旧行为一致（单请求 limit 根）。
+
+        有时间范围时按 1000 根/页循环分页（Binance REST 上限），
+        页间以本页最后一根 open_time 递增（含重叠去重），
+        直到覆盖 end_time 或达到 max_pages。
+        """
+        if start_time is None:
+            raw = self._api(
+                Endpoint.KLINES,
+                params={"symbol": symbol, "interval": interval, "limit": limit},
+            )
+            if not isinstance(raw, list):
+                raise MarketDataUnknownError(f"klines for {symbol} are not a list")
+            now = datetime.now(timezone.utc)
+            klines = []
+            for k in raw:
+                parsed = self._parse_rest_kline(k, now, include_closed=True)
+                if parsed is not None:
+                    klines.append(parsed)
+            if not klines:
+                raise MarketDataUnknownError(f"klines for {symbol} contain no closed valid rows")
+            return klines
+
+        page_start = int(start_time)
+        now = datetime.now(timezone.utc)
+        collected: dict[int, dict] = {}
+        for _page_index in range(max_pages):
+            params: dict = {
                 "symbol": symbol,
                 "interval": interval,
-                "limit": limit,
-            },
-        )
-        if not isinstance(raw, list):
-            raise MarketDataUnknownError(f"klines for {symbol} are not a list")
-        klines = []
-        now = datetime.now(timezone.utc)
-        for k in raw:
-            parsed = self._parse_rest_kline(k, now, include_closed=True)
-            if parsed is not None:
-                klines.append(parsed)
-        if not klines:
+                "limit": 1000,
+                "startTime": page_start,
+            }
+            if end_time is not None:
+                params["endTime"] = int(end_time)
+            raw = self._api(Endpoint.KLINES, params=params)
+            if not isinstance(raw, list) or not raw:
+                break
+            page_last_open = None
+            for k in raw:
+                parsed = self._parse_rest_kline(k, now, include_closed=True)
+                if parsed is None:
+                    continue
+                open_time = int(parsed["open_time"].timestamp() * 1000)  # parsed 行里 open_time 是 datetime
+                collected[open_time] = parsed  # 跨页重叠去重
+                if page_last_open is None or open_time > page_last_open:
+                    page_last_open = open_time
+            if page_last_open is None or page_last_open <= page_start:
+                break  # 无进展，防死循环
+            page_start = page_last_open
+            if end_time is not None and page_last_open >= int(end_time):
+                break
+        if not collected:
             raise MarketDataUnknownError(f"klines for {symbol} contain no closed valid rows")
-        return klines
+        return [collected[t] for t in sorted(collected)]
 
     def fetch_account(self) -> dict:
         return self._api(Endpoint.ACCOUNT, signed=True)
