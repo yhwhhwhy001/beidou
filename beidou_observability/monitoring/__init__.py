@@ -173,9 +173,15 @@ def collect_monitoring_checks(
     results.append(convert(check_account_unknown(snapshot), name="账户事实健康 (MON03)"))
     account_data = (snapshot or {}).get("account") if (snapshot or {}).get("ok") else None
     results.append(convert(check_balance_sanity(account_data), name="账户余额合理性"))
+    # BD-FIX: Testnet 模式下提款权限由交易所默认开启（测试资金），
+    # 不应作为阻断项。仅非 testnet 的可写环境要求 account_permissions 检查。
+    _can_write = bool(getattr(engine, "_can_write", False))
+    _env_mode = getattr(engine, "_env_mode", None)
+    _is_testnet = _env_mode is not None and getattr(_env_mode, "value", "") == "testnet"
+    _require_permissions = _can_write and not _is_testnet
     results.append(
         convert(
-            check_account_permissions(snapshot, required=bool(getattr(engine, "_can_write", False))),
+            check_account_permissions(snapshot, required=_require_permissions),
             name="账户权限事实 (R9)",
         )
     )
