@@ -4638,7 +4638,14 @@ class AutonomousEngine:
             if not slc.invariants_check_passed:
                 print(f"[order] {order_symbol}: skip slice {slc.slice_id} (invariants failed)")
                 continue
-            qty_str = str(slc.quantity.amount)
+            # BD-FIX: 切片数量必须按交易对规则量化后再持久化。算法生成的
+            # 浮点乘积（如 0.02×0.8=0.016）不满足 venue step，执行器量化
+            # 后与持久化子命令不一致 → PLANNED_QUANTITY_NOT_VENUE_EXACT
+            # 恒拒（04:03 实测复发）。量化到零/快照缺失 → 跳过该切片。
+            qty_str = self._quantize_slice_quantity(order_symbol, str(slc.quantity.amount))
+            if qty_str is None:
+                print(f"[order] {order_symbol}: skip slice {slc.slice_id} (quantity not venue-exact)")
+                continue
             price_str = str(slc.price.amount) if slc.price is not None else None
             otype = "LIMIT" if slc.order_type == OrderType.LIMIT else "MARKET"
             slice_client_id = client_id if len(plan.slices) == 1 else f"{client_id}-{slc.sequence_number}"
@@ -4675,6 +4682,26 @@ class AutonomousEngine:
             f"est_completion={plan.estimated_completion_seconds:.0f}s"
         )
         return slices, plan.algorithm, ctx
+
+    def _quantize_slice_quantity(self, order_symbol: str, qty_text: str) -> str | None:
+        """切片数量按交易对规则快照量化（BD-FIX）。
+
+        执行算法的切片数量是浮点乘法产物（如 0.02×0.8=0.016），不满足
+        venue step；执行器 ``_submit_order_slice`` 会重新量化并拒绝与持久化
+        子命令不一致的数量（PLANNED_QUANTITY_NOT_VENUE_EXACT，审批绑定
+        语义）。持久化前量化保证两侧一致。快照 unknown/stale 或量化到零
+        时返回 None（跳过该切片，fail-closed 不发送）。
+        """
+        adapter = getattr(self, "_adapter", None)
+        if adapter is None or not callable(getattr(adapter, "get_rule_snapshot", None)):
+            return None
+        snap = adapter.get_rule_snapshot(order_symbol)
+        if snap is None or not snap.is_known:
+            return None
+        try:
+            return snap.quantize_quantity(qty_text)
+        except ValueError:
+            return None
 
     @staticmethod
     def _validate_slices_against_intent(

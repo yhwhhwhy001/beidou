@@ -29,6 +29,7 @@ import pytest
 
 from beidou_core.engine import AutonomousEngine
 from beidou_exchange.core.protocol import UserOrderUpdate, UserStreamEvent
+from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_exchange.core.user_stream import UserStreamStatus
 from beidou_safety.execution.reconciliation import AccountFactSnapshot
 from beidou_safety.execution.user_events import UserProjectionStatus, UserStreamProjector
@@ -357,6 +358,56 @@ def test_readiness_testnet_unprojected_sequencer_still_fails() -> None:
     )
     ready, _ = engine._user_stream_readiness()
     assert ready is False
+
+
+# --- 切片数量量化（修复 PLANNED_QUANTITY_NOT_VENUE_EXACT 复发）---
+
+
+def _snapshot_with_step(step: str) -> InstrumentRuleSnapshot:
+    return InstrumentRuleSnapshot.from_exchange_info(
+        "BNBUSDT",
+        {
+            "symbol": "BNBUSDT",
+            "version": 7,
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": step, "stepSize": step},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+                {"filterType": "MIN_NOTIONAL", "notional": "5"},
+            ],
+        },
+    )
+
+
+def test_slice_quantity_quantized_to_venue_step() -> None:
+    """算法切片浮点乘积（0.02×0.8=0.016）必须量化到 venue step。"""
+    engine = _engine()
+    engine._adapter = SimpleNamespace(get_rule_snapshot=lambda _s: _snapshot_with_step("0.01"))
+    assert engine._quantize_slice_quantity("BNBUSDT", "0.016") == "0.01"
+
+
+def test_slice_quantity_unchanged_when_already_exact() -> None:
+    engine = _engine()
+    engine._adapter = SimpleNamespace(get_rule_snapshot=lambda _s: _snapshot_with_step("0.001"))
+    assert engine._quantize_slice_quantity("BNBUSDT", "0.016") == "0.016"
+
+
+def test_slice_quantity_none_on_unknown_snapshot() -> None:
+    engine = _engine()
+    engine._adapter = SimpleNamespace(
+        get_rule_snapshot=lambda _s: InstrumentRuleSnapshot.unknown("BNBUSDT")
+    )
+    assert engine._quantize_slice_quantity("BNBUSDT", "0.016") is None
+
+
+def test_slice_quantity_none_when_quantization_to_zero() -> None:
+    engine = _engine()
+    engine._adapter = SimpleNamespace(get_rule_snapshot=lambda _s: _snapshot_with_step("0.1"))
+    assert engine._quantize_slice_quantity("BNBUSDT", "0.016") is None
+
+
+def test_slice_quantity_none_without_adapter() -> None:
+    engine = _engine()  # 无 _adapter
+    assert engine._quantize_slice_quantity("BNBUSDT", "0.016") is None
 
 
 # --- 两方一致性守卫（helper result 参数）---
