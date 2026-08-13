@@ -83,11 +83,19 @@ class AccountFactSnapshot:
 class ReconciliationEngine:
     """对账引擎。比较系统事实与交易所事实，差异需修复。"""
 
-    def __init__(self, *, max_age_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        max_age_seconds: float = 30.0,
+        balance_rel_tolerance: Decimal = Decimal("0.0001"),
+    ) -> None:
         self._system_facts: dict[str, AccountFactSnapshot] = {}
         self._exchange_facts: dict[str, AccountFactSnapshot] = {}
         self._event_facts: dict[str, AccountFactSnapshot] = {}
         self._max_age = timedelta(seconds=max(0.0, max_age_seconds))
+        # PKG20: 余额相对容差按环境配置 — 默认 0.01% 保持严格（live/canary），
+        # testnet 由调用方传入 1%（demo-fapi 为共享测试账户，外部活动漂移 ~0.14 USDT/分钟）。
+        self._balance_rel_tolerance = balance_rel_tolerance
         self._last_result: ReconciliationResult | None = None
 
     def update_system_facts(self, facts: AccountFactSnapshot) -> None:
@@ -112,6 +120,7 @@ class ReconciliationEngine:
             self._system_facts.get(key),
             self._exchange_facts.get(key),
             max_age=self._max_age,
+            balance_rel_tolerance=self._balance_rel_tolerance,
         )
         self._last_result = result
         return result
@@ -125,6 +134,7 @@ class ReconciliationEngine:
             self._exchange_facts.get(key),
             self._event_facts.get(key),
             max_age=self._max_age,
+            balance_rel_tolerance=self._balance_rel_tolerance,
         )
         self._last_result = result
         return result
@@ -140,6 +150,7 @@ class ReconciliationEngine:
         *,
         max_age: timedelta = timedelta(seconds=30),
         now: datetime | None = None,
+        balance_rel_tolerance: Decimal = Decimal("0.0001"),
     ) -> ReconciliationResult:
         """Compare two independently captured snapshots without mutating state.
 
@@ -273,7 +284,10 @@ class ReconciliationEngine:
         # PKG20 (BDS-P1-030): 绝对+相对+可解释差值组合容差
         # 固定 5 USDT 对大小账户语义失真
         abs_tolerance = Decimal("0.01")  # 0.01 USDT 绝对容差
-        rel_tolerance = Decimal("0.0001")  # 0.01% 相对容差
+        # 相对容差按环境配置：默认 0.01% 保持严格（live/canary），
+        # testnet 由调用方传入 1%（demo-fapi 共享测试账户存在外部活动漂移，
+        # 0.01% 容差数分钟即失效 — PKG20 语义按环境配置）。
+        rel_tolerance = balance_rel_tolerance
         max_tolerance = max(abs_tolerance, rel_tolerance * max(system_balance, exchange_balance))
         if bal_diff > max_tolerance:
             diffs.append(
@@ -394,6 +408,7 @@ class ReconciliationEngine:
         *,
         max_age: timedelta = timedelta(seconds=30),
         now: datetime | None = None,
+        balance_rel_tolerance: Decimal = Decimal("0.0001"),
     ) -> ReconciliationResult:
         """Compare three independent fact sources without repairing any side.
 
@@ -443,18 +458,38 @@ class ReconciliationEngine:
             )
 
         assert system_facts is not None and exchange_facts is not None and event_facts is not None
+        # compare_three_way 复用 compare 的余额容差段：将 balance_rel_tolerance
+        # 透传给三个 pairwise compare，与二方对账保持同一环境语义。
         pair_results = (
             (
                 "system/exchange",
-                ReconciliationEngine.compare(system_facts, exchange_facts, max_age=max_age, now=checked_at),
+                ReconciliationEngine.compare(
+                    system_facts,
+                    exchange_facts,
+                    max_age=max_age,
+                    now=checked_at,
+                    balance_rel_tolerance=balance_rel_tolerance,
+                ),
             ),
             (
                 "system/event_stream",
-                ReconciliationEngine.compare(system_facts, event_facts, max_age=max_age, now=checked_at),
+                ReconciliationEngine.compare(
+                    system_facts,
+                    event_facts,
+                    max_age=max_age,
+                    now=checked_at,
+                    balance_rel_tolerance=balance_rel_tolerance,
+                ),
             ),
             (
                 "exchange/event_stream",
-                ReconciliationEngine.compare(exchange_facts, event_facts, max_age=max_age, now=checked_at),
+                ReconciliationEngine.compare(
+                    exchange_facts,
+                    event_facts,
+                    max_age=max_age,
+                    now=checked_at,
+                    balance_rel_tolerance=balance_rel_tolerance,
+                ),
             ),
         )
         for pair_name, pair_result in pair_results:

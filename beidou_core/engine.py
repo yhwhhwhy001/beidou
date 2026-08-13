@@ -1315,7 +1315,11 @@ class AutonomousEngine:
         # bootstrap after a PostgreSQL failure.
         self._ledger = ImmutableLedger()
         self._restore_durable_ledger()
-        self._recon = ReconciliationEngine()
+        # PKG20: 余额相对容差按环境配置 — testnet 为共享 demo 账户（外部活动漂移
+        # ~0.14 USDT/分钟，0.01% 容差数分钟即失效）使用 1% 相对容差；
+        # canary/live/paper/research 保持 0.01% 严格默认不变。
+        _recon_rel_tolerance = Decimal("0.01") if self._env_mode.value == "testnet" else Decimal("0.0001")
+        self._recon = ReconciliationEngine(balance_rel_tolerance=_recon_rel_tolerance)
         self._user_stream_projector = UserStreamProjector(store=self._store)
         # PKG02 (BDS-P0-001): 移除 testnet 允许无序列号事件旁路
         # 所有环境必须通过序列完整性验证
