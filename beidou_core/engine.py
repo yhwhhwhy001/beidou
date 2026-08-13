@@ -1053,6 +1053,13 @@ class RealMarketStateEstimator:
 class AutonomousEngine:
     """北斗自主运行引擎。三个时钟域的 asyncio 事件循环。"""
 
+    # BD-FIX: user stream 终端故障后的限次自动重启 — demo listenKey 周期性失效
+    # （LISTEN_KEY_KEEPALIVE_FAILED）曾经使 user stream 永久 FAILED，进而让
+    # supervisor 的 runtime.safety.user_stream P0 永久阻塞控制面。达到上限后
+    # 停止自动恢复并保持 FAILED + NO_NEW_RISK，防止无限循环。
+    _USER_STREAM_RESTART_MAX_ATTEMPTS = 3
+    _USER_STREAM_RESTART_BACKOFF_S = 15.0
+
     def __init__(self, symbols: list[str], mode: str = "paper") -> None:
         normalized_symbols = list(
             dict.fromkeys(str(symbol).strip().upper() for symbol in symbols if str(symbol).strip())
@@ -1348,6 +1355,10 @@ class AutonomousEngine:
             "listen_key_active": False,
             "last_error": "",
         }
+        # BD-FIX: user stream 终端故障自动重启的重试计数、在途标志与任务句柄。
+        self._user_stream_restart_attempts = 0
+        self._user_stream_restarting = False
+        self._user_stream_restart_task: asyncio.Task[None] | None = None
         if self._user_stream_projector.sequencer.last_sequence is not None:
             self._event_stream_facts = self._user_stream_projector.fact_snapshot()
         self._last_reconciliation_result: Any | None = None
@@ -5914,6 +5925,57 @@ class AutonomousEngine:
                 str(reason)[:500],
                 category="user_stream",
             )
+        # BD-FIX: 终端故障后限次自动重启（demo listenKey 周期性失效自愈）。
+        # 记录故障与 incident 之后调度；_restart_user_stream_after_fault 内部
+        # 再校验停止/在途/重试上限，双重保护避免重复 WS 与无限循环。
+        if terminal and bool(getattr(self, "_can_write", False)):
+            with contextlib.suppress(RuntimeError):
+                if getattr(self, "_user_stream_restart_attempts", 0) < self._USER_STREAM_RESTART_MAX_ATTEMPTS:
+                    self._user_stream_restart_task = asyncio.create_task(self._restart_user_stream_after_fault(reason))
+
+    async def _restart_user_stream_after_fault(self, reason: str) -> None:
+        """Terminal user-stream fault 后的限次退避重启。
+
+        停止现有流（清理任务/WS/引用）→ 退避等待 → 重新拉起。成功则恢复
+        CONNECTED 并重置重试计数；失败则再次 ``_user_stream_fault(terminal=True)``，
+        由重试上限（``_USER_STREAM_RESTART_MAX_ATTEMPTS``）终止，保持 FAILED +
+        NO_NEW_RISK，防止无限循环。
+        """
+
+        if getattr(self, "_user_stream_stopping", False):
+            return
+        if not bool(getattr(self, "_running", True)):
+            return
+        if getattr(self, "_user_stream_restarting", False):
+            return
+        if getattr(self, "_user_stream_restart_attempts", 0) >= self._USER_STREAM_RESTART_MAX_ATTEMPTS:
+            return
+        self._user_stream_restarting = True
+        self._user_stream_restart_attempts = getattr(self, "_user_stream_restart_attempts", 0) + 1
+        try:
+            with contextlib.suppress(Exception):
+                await self._stop_user_stream()
+            # _stop_user_stream 置位 _user_stream_stopping；_start_user_stream 只在
+            # listen key 创建成功后才重置该标志，失败提前返回时会遗留 True 挡住
+            # 后续重试，故在此显式清除。
+            self._user_stream_stopping = False
+            await asyncio.sleep(self._USER_STREAM_RESTART_BACKOFF_S)
+            # 退避期间引擎可能已进入关机（_shutdown → _stop_user_stream），
+            # 此时不得再拉起流。
+            if getattr(self, "_user_stream_stopping", False):
+                return
+            started = await self._start_user_stream()
+            if started:
+                self._user_stream_restart_attempts = 0
+                self._update_user_stream_runtime(status="CONNECTED", last_error="", listen_key_active=True)
+            else:
+                self._user_stream_fault(f"USER_STREAM_RESTART_FAILED:{reason}", terminal=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._user_stream_fault(f"USER_STREAM_RESTART_ERROR:{type(exc).__name__}", terminal=True)
+        finally:
+            self._user_stream_restarting = False
 
     async def _start_user_stream(self) -> bool:
         """Start the authenticated user stream for writable environments.
