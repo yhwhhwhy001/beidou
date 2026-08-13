@@ -4726,6 +4726,35 @@ class AutonomousEngine:
             return False, "SLICE_TOTAL_UNKNOWN"
         return True, "OK"
 
+    def _sync_adapter_rule_snapshots(self, exchange_info: dict | None) -> bool:
+        """BD-FIX: 把 exchangeInfo symbols 同步进 adapter 并构建规则快照（BD-CV10）。
+
+        _submit_order_slice 的执行 gate 要求 adapter.get_rule_snapshot
+        返回 known 且新鲜的快照；该缓存只能由 sync_rule_snapshots()
+        填充（从 adapter._reference_data.instruments 构建）。启动时
+        exchangeInfo 已在手，这里一次性注入并同步；否则 get_rule_snapshot
+        恒 unknown，所有订单在执行前被 VENUE_RULE_SNAPSHOT_UNKNOWN_OR_STALE
+        拒绝。返回是否成功同步。
+        """
+
+        try:
+            _ref_data = getattr(self._adapter, "_reference_data", None)
+            if _ref_data is None or not exchange_info or not exchange_info.get("symbols"):
+                return False
+            for _s in exchange_info["symbols"]:
+                _sym = str(_s.get("symbol", ""))
+                if _sym:
+                    _ref_data.instruments[InstrumentId(_sym)] = _s
+            _version = self._adapter.sync_rule_snapshots()
+            print(
+                f"[beidou-autopilot] Rule snapshots synced: version={_version} "
+                f"count={self._adapter.rule_snapshot_count}"
+            )
+            return True
+        except Exception as exc:
+            print(f"[beidou-autopilot] Warning: rule snapshot sync failed: {type(exc).__name__}")
+            return False
+
     async def _submit_order_slice(
         self,
         intent,
@@ -8824,6 +8853,12 @@ class AutonomousEngine:
             print(f"[beidou-autopilot] Loaded precision for {len(self._symbol_precision)} symbols")
         except Exception as e:
             print(f"[beidou-autopilot] Warning: exchangeInfo load failed: {e}")
+
+        # BD-FIX: 执行器规则快照 gate 需要 adapter 缓存（BD-CV10）。
+        # 启动时 exchangeInfo 已在手——同步进 adapter 的 reference_data
+        # 并构建规则快照；否则 get_rule_snapshot 恒 unknown，所有订单
+        # 在执行前被 VENUE_RULE_SNAPSHOT_UNKNOWN_OR_STALE 拒绝。
+        self._sync_adapter_rule_snapshots(exchange_info)
 
         # Never cancel every conditional order on startup.  Without a durable
         # owner/session mapping that action can delete a manual or another
