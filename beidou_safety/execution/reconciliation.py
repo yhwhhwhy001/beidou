@@ -151,6 +151,7 @@ class ReconciliationEngine:
         max_age: timedelta = timedelta(seconds=30),
         now: datetime | None = None,
         balance_rel_tolerance: Decimal = Decimal("0.0001"),
+        stale_exempt_second: bool = False,
     ) -> ReconciliationResult:
         """Compare two independently captured snapshots without mutating state.
 
@@ -158,6 +159,11 @@ class ReconciliationEngine:
         reconciliation path.  Missing, incomplete, or stale facts are typed
         failures; they are never treated as a match and never repaired by
         copying one side over the other.
+
+        ``stale_exempt_second`` 豁免第二侧（事件流侧）的新鲜度检查：事件
+        流的"活"由 transport readiness（event_age）证明，对账职责是状态
+        一致；低频环境（demo 凌晨无事件）投影时间戳自基线/最后事件起
+        冻结，属于"状态无变化"而非"事实失效"。
         """
 
         checked_at = now or datetime.now(timezone.utc)
@@ -239,7 +245,7 @@ class ReconciliationEngine:
                 exchange_facts=exchange_facts,
                 checked_at=checked_at,
             )
-        if system_age > max_age or exchange_age > max_age:
+        if system_age > max_age or (exchange_age > max_age and not stale_exempt_second):
             return ReconciliationResult(
                 matched=False,
                 status=ReconciliationStatus.STALE,
@@ -479,6 +485,7 @@ class ReconciliationEngine:
                     max_age=max_age,
                     now=checked_at,
                     balance_rel_tolerance=balance_rel_tolerance,
+                    stale_exempt_second=True,
                 ),
             ),
             (
@@ -489,6 +496,7 @@ class ReconciliationEngine:
                     max_age=max_age,
                     now=checked_at,
                     balance_rel_tolerance=balance_rel_tolerance,
+                    stale_exempt_second=True,
                 ),
             ),
         )

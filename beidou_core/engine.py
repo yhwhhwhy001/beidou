@@ -2570,12 +2570,26 @@ class AutonomousEngine:
         effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") or startup_grace else max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         require_complete_projection = True
-        ready = (
-            transport_ok
-            and (event_age is None or event_age <= effective_max_age)
-            and (projector_ok or event_age is None)
-            and (projection_complete or event_facts is None or not require_complete_projection)
-        )
+        # BD-FIX: testnet 的"流活性"按 transport 判定（CONNECTED/HEALTHY +
+        # listenKey 有效），不要求事件新鲜。demo 低频环境（凌晨 10+ 分钟
+        # 无事件）中"无事件=无成交=无风险积累"，账户状态由 REST 对账
+        # （90s 新鲜度）持续验证；事件停流保护由 transport 状态承担
+        # （listenKey 失效 → fault → STOPPED → 检查 FAIL）。
+        # live/canary 保持严格 event_age 语义不变。
+        _env_mode = getattr(self, "_env_mode", None)
+        if _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet":
+            ready = (
+                transport_ok
+                and projector_ok
+                and (projection_complete or event_facts is None or not require_complete_projection)
+            )
+        else:
+            ready = (
+                transport_ok
+                and (event_age is None or event_age <= effective_max_age)
+                and (projector_ok or event_age is None)
+                and (projection_complete or event_facts is None or not require_complete_projection)
+            )
         return ready, {
             "status": status,
             "event_age_seconds": event_age,

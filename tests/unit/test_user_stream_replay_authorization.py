@@ -232,6 +232,133 @@ def test_recon_max_age_300s_accepts_32s_old_event_facts() -> None:
     assert result.status.value != "STALE"
 
 
+# --- 三方对账事件侧免 stale（transport 证明流活性）---
+
+
+def test_compare_three_way_event_side_stale_exempt() -> None:
+    """事件流侧时间戳冻结（低频无事件）不构成 STALE —— 流活性由
+    transport readiness 证明；三方一致性仍完整比较。"""
+    from datetime import timedelta
+
+    from beidou_safety.execution.reconciliation import ReconciliationEngine
+
+    old_event = _baseline_facts(
+        source="BINANCE_USER_STREAM_REPLAY_BASELINE",
+        timestamp=datetime.now(timezone.utc) - timedelta(seconds=32),
+    )
+    result = ReconciliationEngine.compare_three_way(
+        _baseline_facts(source="LOCAL_DURABLE_PROJECTION"),
+        _baseline_facts(),
+        old_event,
+    )
+    assert result.status.value != "STALE"
+    assert result.matched is True  # 三侧余额/持仓一致
+
+
+def test_compare_three_way_system_side_stale_still_fails() -> None:
+    """system/exchange 侧新鲜度检查保留 —— 豁免仅限事件流侧。"""
+    from datetime import timedelta
+
+    from beidou_safety.execution.reconciliation import ReconciliationEngine
+
+    old_system = _baseline_facts(
+        source="LOCAL_DURABLE_PROJECTION",
+        timestamp=datetime.now(timezone.utc) - timedelta(seconds=32),
+    )
+    result = ReconciliationEngine.compare_three_way(
+        old_system,
+        _baseline_facts(),
+        _baseline_facts(source="BINANCE_USER_STREAM_REPLAY_BASELINE"),
+    )
+    assert result.status.value == "STALE"
+
+
+# --- readiness: testnet transport 模式 / live 严格 event_age ---
+
+
+def _authorized_projector() -> UserStreamProjector:
+    projector = UserStreamProjector(account_id=AccountId("default"), venue_id=VenueId("BINANCE"), store=None)
+    result = projector.authorize_replay_baseline(
+        _baseline_facts(),
+        evidence_hash="hash123",
+        approval_id="test-approval",
+        last_sequence=None,
+        allow_unsequenced=True,
+    )
+    assert result.status is UserProjectionStatus.ACCEPTED
+    return projector
+
+
+def _ready_engine(
+    *,
+    env_mode: str,
+    transport_status: str,
+    projector: UserStreamProjector,
+    last_event_mono: float | None = None,
+) -> AutonomousEngine:
+    import time
+
+    engine = _engine(env_mode=env_mode, projector=projector)
+    engine._user_stream_runtime = {
+        "status": transport_status,
+        "listen_key_active": True,
+        "last_error": "",
+    }
+    if last_event_mono is not None:
+        engine._user_stream_runtime["last_event_mono"] = last_event_mono
+    engine._event_stream_facts = projector.fact_snapshot()
+    engine._startup_mono = time.monotonic() - 700.0  # 已过启动宽限期
+    return engine
+
+
+def test_readiness_testnet_ready_without_recent_events() -> None:
+    import time
+
+    engine = _ready_engine(
+        env_mode="testnet",
+        transport_status="CONNECTED",
+        projector=_authorized_projector(),
+        last_event_mono=time.monotonic() - 1000.0,  # 停流 1000s
+    )
+    ready, _ = engine._user_stream_readiness()
+    assert ready is True
+
+
+def test_readiness_live_requires_recent_events() -> None:
+    import time
+
+    engine = _ready_engine(
+        env_mode="live",
+        transport_status="CONNECTED",
+        projector=_authorized_projector(),
+        last_event_mono=time.monotonic() - 1000.0,  # 停流 1000s → 严格 FAIL
+    )
+    ready, _ = engine._user_stream_readiness()
+    assert ready is False
+
+
+def test_readiness_testnet_stopped_transport_still_fails() -> None:
+    """testnet 放宽的只是事件新鲜度 —— transport 断开仍 fail-closed。"""
+    engine = _ready_engine(
+        env_mode="testnet",
+        transport_status="STOPPED",
+        projector=_authorized_projector(),
+    )
+    ready, _ = engine._user_stream_readiness()
+    assert ready is False
+
+
+def test_readiness_testnet_unprojected_sequencer_still_fails() -> None:
+    """testnet 放宽的只是事件新鲜度 —— 未授权 sequencer 仍 fail-closed。"""
+    engine = _ready_engine(
+        env_mode="testnet",
+        transport_status="CONNECTED",
+        projector=_projector_requiring_replay(),  # SEQUENCE_UNAVAILABLE
+    )
+    ready, _ = engine._user_stream_readiness()
+    assert ready is False
+
+
 # --- 两方一致性守卫（helper result 参数）---
 
 

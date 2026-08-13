@@ -98,7 +98,9 @@ def test_compare_three_way_requires_event_stream_and_compares_all_pairs() -> Non
 
     stale_event = _facts(timestamp=now - timedelta(seconds=31), source="EVENT_STREAM")
     stale = ReconciliationEngine.compare_three_way(system, exchange, stale_event, now=now)
-    assert stale.status is ReconciliationStatus.STALE
+    # BD-FIX: 事件流侧新鲜度豁免 —— 流活性由 transport readiness（event_age）
+    # 证明，对账只比较状态一致性；低频环境时间戳冻结 = 状态无变化 ≠ 事实失效。
+    assert stale.status is ReconciliationStatus.MATCHED
 
 
 def test_compare_rejects_non_finite_numeric_facts() -> None:
