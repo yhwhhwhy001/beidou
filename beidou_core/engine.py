@@ -6466,8 +6466,60 @@ class AutonomousEngine:
                 exchange_facts=exchange_facts,
                 event_facts=event_facts,
             )
+        # BD-FIX: testnet 自动授权 user stream replay baseline（见 helper docstring）。
+        self._maybe_authorize_user_stream_baseline(exchange_facts, snapshot_base)
         print("[recon] MATCHED: independent durable facts verified")
         return True
+
+    def _maybe_authorize_user_stream_baseline(self, exchange_facts: AccountFactSnapshot, recon_id: str) -> bool:
+        """testnet 在 recon MATCHED 后自动授权 user stream replay baseline（BD-FIX）。
+
+        Binance user stream 事件没有单调序列号，投影器 sequencer 必须经显式
+        replay 授权（``allow_unsequenced=True``）才接受事件；否则下单后第一个
+        ORDER_TRADE_UPDATE 必被拒（USER_EVENT_REJECTED）→ fault → STOPPED →
+        DEGRADED → LOCKED 停机。recon MATCHED（REST/系统/事件三方独立对拍）
+        即投影器 docstring 要求的 "independently verified" 基线，testnet 据此
+        自动授权；live/canary 保持人工治理授权语义（与 1cd1208 环境区分一致）。
+
+        幂等：sequencer 已 HEALTHY 时跳过。授权失败只 defer（事件流保持
+        fail-closed），不冻结账本、不发 incident —— 自动路径不得触发
+        execution_fact fail-closed。
+        """
+        if not bool(getattr(self, "_can_write", False)):
+            return False
+        if str(getattr(self._env_mode, "value", "")) != "testnet":
+            return False
+        projector = getattr(self, "_user_stream_projector", None)
+        if projector is None:
+            return False
+        sequencer = getattr(projector, "sequencer", None)
+        if sequencer is None:
+            return False
+        status = getattr(sequencer.status, "value", sequencer.status)
+        if str(status) == "HEALTHY":
+            return False
+        evidence_hash = hashlib.sha256(f"recon:{recon_id}".encode()).hexdigest()[:24]
+        result = projector.authorize_replay_baseline(
+            exchange_facts,
+            evidence_hash=evidence_hash,
+            approval_id=f"reconciliation-governed:{recon_id}",
+            last_sequence=None,
+            allow_unsequenced=True,
+        )
+        if result.status is UserProjectionStatus.ACCEPTED:
+            self._event_stream_facts = projector.fact_snapshot()
+            recon = getattr(self, "_recon", None)
+            if recon is not None:
+                recon.update_event_facts(self._event_stream_facts)
+            runtime = getattr(self, "_user_stream_runtime", {})
+            if isinstance(runtime, dict):
+                runtime["status"] = "HEALTHY"
+                runtime["listen_key_active"] = True
+                runtime["last_error"] = ""
+            print("[recon] testnet auto-authorized user-stream replay baseline (allow_unsequenced)")
+            return True
+        print(f"[recon] user-stream replay authorization deferred: {result.reason}")
+        return False
 
     async def _safe_recover_unowned_testnet_algos(
         self,
