@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -329,3 +332,56 @@ def test_engine_reconciliation_rule_steps_require_fresh_venue_authority() -> Non
         get_rule_snapshot=lambda _symbol: SimpleNamespace(is_known=True, is_stale=False, step_size="NaN")
     )
     assert engine._reconciliation_rule_steps({"BTCUSDT"}) == ({}, "POSITION_RULE_STEP_INVALID:BTCUSDT")
+
+
+@pytest.mark.asyncio
+async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -> None:
+    """BD-FIX: 实时循环内对账调用由 asyncio.wait_for(25s) 保护。
+
+    慢网络导致 _reconcile 超时时按 fail-closed 处理：本轮不自动
+    RESUME（不更新事实），_last_recon 仍被刷新 —— 循环不被阻塞，
+    30s 后下一轮自然重试，对账间隔不会拉大触发 supervisor 60s
+    新鲜度检查降级。
+    """
+    engine = object.__new__(AutonomousEngine)
+    engine._tick_count = 1
+    engine._trading_pool = SimpleNamespace(active_instruments=lambda: [])
+    engine._outbox = SimpleNamespace(
+        unacked=lambda: [],
+        pending_count=lambda: 0,
+        _outbox=[],
+        _processed=[],
+        _inbox=[],
+    )
+    engine._can_write = False
+    engine._can_simulate = False
+    engine._last_recon = 0.0
+    engine._reconcile = AsyncMock(return_value=True)
+    actions: list[str] = []
+    engine._control = SimpleNamespace(
+        execute_action=lambda action: actions.append(action.value),
+    )
+    engine._durable_fact_status = lambda: (True, None, None)
+    engine._alerts = SimpleNamespace(send_incident=lambda *a, **k: None)
+    engine._error_count = 0
+    engine._last_realtime = 0.0
+    engine._last_realtime_mono = 0.0
+
+    # 模拟 wait_for 超时：先让 coro 完成（避免 dangling coroutine 警告），
+    # 再抛 TimeoutError —— 与真实 wait_for 25s 超时抛出的异常路径一致。
+    async def _simulated_timeout(coro, **kwargs):
+        await coro
+        raise asyncio.TimeoutError
+
+    with patch("asyncio.wait_for", side_effect=_simulated_timeout) as wf:
+        await engine._realtime_tick()
+
+    # wait_for 包装存在，超时 25s（< 30s 对账间隔 + supervisor 60s 阈值余量）
+    assert wf.await_count == 1
+    assert wf.await_args.kwargs["timeout"] == 25.0
+    # _last_recon 被刷新 → 循环未被阻塞，30s 后重试
+    assert time.time() - engine._last_recon < 5
+    assert engine._last_realtime > 0  # tick 完整走完（finally 执行）
+    # fail-closed：recon_ok=False → 不自动 RESUME、不触碰事实
+    assert actions == []
+    assert engine._error_count == 0

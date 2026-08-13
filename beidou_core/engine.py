@@ -3090,7 +3090,14 @@ class AutonomousEngine:
 
             # 6. Reconciliation (every 30s)
             if time.time() - self._last_recon > 30:
-                recon_ok = await self._reconcile()
+                # BD-FIX: 对账含交易所网络调用，慢响应不得阻塞实时循环
+                # （循环停摆会拉大对账间隔，触发 supervisor 的 60s 新鲜度
+                # 检查降级）。超时按 fail-closed 处理：本轮不更新事实，
+                # 30s 后下一轮重试。
+                try:
+                    recon_ok = await asyncio.wait_for(self._reconcile(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    recon_ok = False
                 self._last_recon = time.time()
                 # 对账通过 → 检查持久事实并自动清除事故
                 if recon_ok:
