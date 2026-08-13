@@ -804,17 +804,24 @@ class MiningRunner:
                 sum(r["test_sharpes"]) / len(r["test_sharpes"]) if r["test_sharpes"] else 0.0
                 for r in evaluation_records
             ]
+            # GAP-9: DSR 是 Harvey-Liu 年化 Sharpe 框架（sharpe_std=0.15 与
+            # expected_max=0.15*sqrt(2*ln(n_trials)) 均为年化口径）。observed_sharpe
+            # 必须年化（×sqrt(bars_per_year)）、sample_length 必须是年数；否则
+            # per-bar 量级（~0.001-0.05）相对 0.513 的 expected_max 恒负 → DSR
+            # 恒不显著。PBO 的 IS/OOS 序列保持 per-bar 不动（相对比较，
+            # 口径组内一致即可；当前 PBO=0.0 已正常）。
+            bars_per_year = _bars_per_year_for_timeframe(timeframe)
             for record in evaluation_records:
                 bundle = record["bundle"]
                 # candidate_index 用该候选在全量 candidates 列表中的位置
                 # （BH adjusted p 的索引须与全量 pvalues 对齐）。
                 report = evaluate_multiple_testing(
                     pvalues,
-                    observed_sharpe=record["sharpe"],
+                    observed_sharpe=record["sharpe"] * math.sqrt(bars_per_year),
                     n_trials=max(len(candidates), 1),
                     in_sample_sharpes=train_sharpes,
                     out_of_sample_sharpes=test_sharpes,
-                    sample_length=len(label_returns),
+                    sample_length=max(1, round(len(label_returns) / bars_per_year)),
                     candidate_index=record["candidate"].get("_candidate_index"),
                 )
                 bundle.multiple_testing_results = {
@@ -1585,6 +1592,24 @@ def _max_turnover_for_timeframe(timeframe: str) -> float:
         "1d": 200.0,
     }
     return mapping.get(timeframe.strip().lower(), 3_000.0)
+
+
+def _bars_per_year_for_timeframe(timeframe: str) -> int:
+    """GAP-9: 按 K 线粒度返回每年的 bar 数（年化框架用）。
+
+    DSR（Harvey-Liu）的 sharpe_std=0.15 与 expected_max 均为年化口径，
+    observed_sharpe 必须年化（×sqrt(bars_per_year)）、sample_length 必须是
+    年数。1h→8760、4h→2190、1d→365 等；未知粒度保守取 1h 档。
+    """
+    mapping: dict[str, int] = {
+        "1m": 525_600,
+        "5m": 105_120,
+        "15m": 35_040,
+        "1h": 8_760,
+        "4h": 2_190,
+        "1d": 365,
+    }
+    return mapping.get(timeframe.strip().lower(), 8_760)
 
 
 def _timeframe_to_hours(timeframe: str) -> float:

@@ -16,6 +16,9 @@
   自然换手水平（~365x/年）不再被固定 100 阈值恒拒。
 - GAP-8: CPCV q05 改为 95% 置信下界判定（q05 + 1.645*se <= 0 才 FAIL），
   个别路径略负不再判 non_positive_oos_q05。
+- GAP-9: DSR 按 Harvey-Liu 年化框架输入——observed_sharpe × sqrt(bars_per_year)、
+  sample_length 为年数；per-bar 量级相对 expected_max≈0.513 恒负导致 DSR
+  恒不显著。
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from beidou_research.mining.evaluation.purged_walk_forward import (
 from beidou_research.mining.runner import (
     MiningRunner,
     PipelineConfig,
+    _bars_per_year_for_timeframe,
     _compute_sharpe,
     _max_turnover_for_timeframe,
 )
@@ -407,3 +411,48 @@ def test_cpcv_q05_uses_confidence_lower_bound() -> None:
         f"置信下界应 > 0（q05={result.metric_q05}）: {result.failure_reasons}"
     )
     assert result.gate_result.value == "PASS", f"置信下界判定应 PASS: {result.failure_reasons}"
+
+
+# ================================================================
+# GAP-9: DSR 年化口径
+# ================================================================
+
+
+def test_bars_per_year_for_timeframe_mapping() -> None:
+    """GAP-9: 年化 bar 数映射（1h→8760、1d→365 等）。"""
+    assert _bars_per_year_for_timeframe("1m") == 525_600
+    assert _bars_per_year_for_timeframe("5m") == 105_120
+    assert _bars_per_year_for_timeframe("15m") == 35_040
+    assert _bars_per_year_for_timeframe("1h") == 8_760
+    assert _bars_per_year_for_timeframe("4h") == 2_190
+    assert _bars_per_year_for_timeframe("1d") == 365
+    assert _bars_per_year_for_timeframe("unknown-tf") == 8_760  # 未知粒度保守取 1h 档
+
+
+def test_dsr_observed_sharpe_is_annualized(tmp_path: Path) -> None:
+    """GAP-9 端到端：DSR 按年化框架输入（observed_sharpe × sqrt(bars_per_year)、
+    sample_length 为年数）——强正相关 + 负漂移数据上存在 dsr p_value < 0.05 的
+    候选（旧逻辑 per-bar observed_sharpe ~0.01-0.05 相对 expected_max≈0.513
+    恒负 → p=1.0 恒不显著）。"""
+    rows = _momentum_negative_drift_klines(n=1100, seed=7)
+    cfg = PipelineConfig(run_id="gap9-dsr", policy_version="2.0.0", evidence_dir=str(tmp_path))
+    cfg.strict_policy = False
+    result = MiningRunner(cfg).run(
+        price_data=rows,
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1h",
+    )
+    assert result.evidence_bundles, "应产出评估 bundle"
+
+    dsr_significant = [b for b in result.evidence_bundles if b.multiple_testing_results["dsr"]["p_value"] < 0.05]
+    assert dsr_significant, "年化口径下应有候选 DSR 显著（旧逻辑 per-bar 口径恒 p=1.0）"
+    # 显著候选的 observed_sharpe（raw_metrics["sharpe"]，per-bar）为正且非平凡
+    for bundle in dsr_significant:
+        assert bundle.raw_metrics["sharpe"] > 0.0
+    # 控制：per-bar observed_sharpe 年化后确实超过 expected_max
+    bars_per_year = _bars_per_year_for_timeframe("1h")
+    expected_max = 0.15 * math.sqrt(2 * math.log(result.candidates_generated))
+    strongest = max(dsr_significant, key=lambda b: b.raw_metrics["sharpe"])
+    annualized = strongest.raw_metrics["sharpe"] * math.sqrt(bars_per_year)
+    assert annualized > expected_max, f"年化 observed_sharpe={annualized:.3f} 必须超过 expected_max={expected_max:.3f}"
