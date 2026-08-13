@@ -5,6 +5,12 @@
 historical_replay），随后按 promotion_chain 逐级调用
 FactorPromotionGate.validate_evidence 复验并推进生命周期。
 
+文件格式（与 JSONFileFactorStore.save_factor_version 透传一致）：
+顶层 {"factor_id", "version", "data": {...}}；data 内层同时承载
+bundle 字段与扩展键（promotion_chain/promotion_chain_hash/
+evidence_source/expression_string/role）— 扩展键从 data 读取，
+且不参与 EvidenceBundle 构造。
+
 任何失败只记录并跳过该文件，不阻断启动（fail-closed 但非阻塞）。
 每个文件从解析到组件注册的整段处理均被异常隔离：单个文件异常
 （含非 dict payload 等未预期形态）只产生一条 rejected，不终止扫描。
@@ -34,6 +40,10 @@ from beidou_research.mining.evidence import EvidenceBundle
 from beidou_shared.types import SchemaVersion, VenueId
 
 REPLAY_REJECTED_ENV_MODES = frozenset({"canary", "live"})
+# store 透传的 data 内层扩展键：不属于 EvidenceBundle 构造参数，需单独取出
+EVIDENCE_EXTENSION_KEYS = frozenset(
+    {"promotion_chain", "promotion_chain_hash", "evidence_source", "expression_string", "role"}
+)
 CORE_FACTOR_IDS = frozenset(
     {
         "meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1",
@@ -82,19 +92,24 @@ class EvidenceBridge:
                 if not isinstance(data, dict):
                     report.rejected.append((str(path), "missing_bundle_data"))
                     continue
-                chain = payload.get("promotion_chain")
+                # GAP-10: 扩展键（chain/hash/source/expression/role）由 store
+                # 透传在 data 内层，从 data 读取而非文件顶层。
+                chain = data.get("promotion_chain")
                 if not isinstance(chain, list) or not chain:
                     report.rejected.append((str(path), "missing_promotion_chain"))
                     continue
                 # F2: 链完整性对拍（与 bundle artifact_hash 同模型）—
                 # 逐字节重算 sha256 与写入时绑定哈希比对，链篡改不晋级。
                 chain_hash = hashlib.sha256(json.dumps(chain, sort_keys=True, default=str).encode()).hexdigest()
-                stored_chain_hash = str(payload.get("promotion_chain_hash", ""))
+                stored_chain_hash = str(data.get("promotion_chain_hash", ""))
                 if chain_hash != stored_chain_hash:
                     report.rejected.append((str(path), "promotion_chain_hash_mismatch"))
                     continue
+                bundle_fields = {
+                    k: v for k, v in data.items() if k not in EVIDENCE_EXTENSION_KEYS and k != "created_at"
+                }
                 try:
-                    bundle = EvidenceBundle(**{k: v for k, v in data.items() if k != "created_at"})
+                    bundle = EvidenceBundle(**bundle_fields)
                 except TypeError as exc:
                     report.rejected.append((str(path), f"bundle_construct:{exc}"))
                     continue
@@ -107,12 +122,12 @@ class EvidenceBridge:
                 if not promotable:
                     report.rejected.append((str(path), f"bundle:{reason}"))
                     continue
-                evidence_source = str(payload.get("evidence_source", "")).strip()
+                evidence_source = str(data.get("evidence_source", "")).strip()
                 if evidence_source == "historical_replay" and env_mode in REPLAY_REJECTED_ENV_MODES:
                     report.rejected.append((str(path), "replay_evidence_rejected_in_production"))
                     continue
-                expression_string = str(payload.get("expression_string", "")).strip()
-                role = str(payload.get("role", "entry")).strip().lower() or "entry"
+                expression_string = str(data.get("expression_string", "")).strip()
+                role = str(data.get("role", "entry")).strip().lower() or "entry"
                 if not expression_string:
                     report.rejected.append((str(path), "missing_expression_string"))
                     continue
@@ -133,7 +148,7 @@ class EvidenceBridge:
                         category="mined",
                         universe=frozenset({VenueId("BINANCE")}),
                         instrument_types=frozenset({"perpetual"}),
-                        economic_rationale=payload.get("economic_rationale", "mined factor"),
+                        economic_rationale=data.get("economic_rationale", "mined factor"),
                         lookback_period="1h",
                         rebalance_interval="1h",
                     )

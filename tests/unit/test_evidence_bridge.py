@@ -43,12 +43,16 @@ def _write_evidence(tmp_path: Path, bundle: EvidenceBundle, chain: list[dict], e
     d = tmp_path / "evidence" / "factors"
     d.mkdir(parents=True)
     path = d / "bundle.json"
+    # GAP-10: 与 JSONFileFactorStore.save_factor_version 透传格式一致 —
+    # 扩展键（promotion_chain/hash/source/expression/role）全部在 data 内层
     path.write_text(json.dumps({
         "factor_id": f"BTCUSDT:{bundle.candidate_id}", "version": "2.0.0",
-        "data": bundle.to_dict(),
-        "promotion_chain": chain, "promotion_chain_hash": _chain_hash(chain),
-        "evidence_source": "historical_replay",
-        "expression_string": expression, "role": "entry",
+        "data": {
+            **bundle.to_dict(),
+            "promotion_chain": chain, "promotion_chain_hash": _chain_hash(chain),
+            "evidence_source": "historical_replay",
+            "expression_string": expression, "role": "entry",
+        },
     }))
     return d
 
@@ -124,7 +128,7 @@ def test_old_format_without_chain_is_ignored(tmp_path: Path) -> None:
     evidence_dir = _write_evidence(tmp_path, bundle, _chain(bundle))
     victim = evidence_dir / "bundle.json"
     data = json.loads(victim.read_text())
-    del data["promotion_chain"]
+    del data["data"]["promotion_chain"]
     victim.write_text(json.dumps(data))
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
@@ -166,7 +170,7 @@ def test_tampered_chain_rejected(tmp_path: Path) -> None:
     evidence_dir = _write_evidence(tmp_path, bundle, _chain(bundle))
     victim = evidence_dir / "bundle.json"
     data = json.loads(victim.read_text())
-    data["promotion_chain"][0]["icir"] = 0.99
+    data["data"]["promotion_chain"][0]["icir"] = 0.99
     victim.write_text(json.dumps(data))
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
@@ -191,7 +195,7 @@ def test_nan_chain_step_fail_closed(tmp_path: Path) -> None:
     evidence_dir = _write_evidence(tmp_path, bundle, chain)
     victim = evidence_dir / "bundle.json"
     data = json.loads(victim.read_text())
-    data["promotion_chain_hash"] = _chain_hash(data["promotion_chain"])
+    data["data"]["promotion_chain_hash"] = _chain_hash(data["data"]["promotion_chain"])
     victim.write_text(json.dumps(data))
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
@@ -205,3 +209,28 @@ def test_nan_chain_step_fail_closed(tmp_path: Path) -> None:
     assert any("gate_rejected@ACTIVE" in reason for _, reason in report.rejected)
     record = registry.get("tmpl_x_v1")
     assert record is not None and record.lifecycle != FactorLifecycle.ACTIVE
+
+
+def test_top_level_chain_layout_rejected(tmp_path: Path) -> None:
+    # GAP-10 回归钉：扩展键放文件顶层（旧错误布局，非 store 透传格式）
+    # → data 内层无链，fail-closed 拒绝，不晋级。
+    bundle = _valid_bundle()
+    evidence_dir = _write_evidence(tmp_path, bundle, _chain(bundle))
+    victim = evidence_dir / "bundle.json"
+    data = json.loads(victim.read_text())
+    data["promotion_chain"] = data["data"]["promotion_chain"]
+    data["promotion_chain_hash"] = data["data"]["promotion_chain_hash"]
+    del data["data"]["promotion_chain"]
+    del data["data"]["promotion_chain_hash"]
+    victim.write_text(json.dumps(data))
+    registry = _registry()
+    gate = FactorPromotionGate(strict=True)
+    report = EvidenceBridge.load_and_apply(
+        registry=registry, gate=gate, env_mode="testnet",
+        component_registry={"meanrev_entry_v1": (object, ())},
+        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        evidence_dir=str(evidence_dir),
+    )
+    assert report.applied == []
+    assert any("missing_promotion_chain" in reason for _, reason in report.rejected)
+    assert registry.get("tmpl_x_v1") is None
