@@ -2023,6 +2023,17 @@ class AutonomousEngine:
             return False
         if amount <= 0 or not policy_id or not policy_version or not policy_signature:
             return False
+        # BD-FIX: 紧急平仓意图同样必须在创建/签名前按交易对规则量化。
+        # 该路径没有交易所原生 closePosition Algo 单 —— 意图仍走
+        # _place_order → _plan_execution → _submit_order_slice，执行器对
+        # 非 venue-exact 数量拒绝 PLANNED_QUANTITY_NOT_VENUE_EXACT，
+        # 未量化的平仓量会让非精确持仓永远无法退出。规则快照
+        # UNKNOWN/STALE 时 fail-closed（执行器同样拒绝
+        # VENUE_RULE_SNAPSHOT_UNKNOWN_OR_STALE，行为一致）。
+        _venue_exact = self._venue_exact_quantity(str(symbol), amount, tag="protection")
+        if _venue_exact is None:
+            return False
+        amount = _venue_exact
         from beidou_safety.execution import OrderIntent
 
         now_bucket = int(time.time() / 60)
@@ -7014,6 +7025,35 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[nearline] Protection retry error: {e}")
 
+    def _venue_exact_quantity(self, symbol: str, size: float, *, tag: str = "nearline") -> float | None:
+        """BD-FIX: 意图数量必须在创建/签名前按交易对规则量化。
+
+        执行器 _submit_order_slice 拒绝"量化后与签名不一致"的数量
+        （PLANNED_QUANTITY_NOT_VENUE_EXACT，审批绑定语义），未量化的原始
+        sizing 值会导致所有订单被恒拒。此 helper 与执行器同源（adapter 规则
+        快照 + ROUND_DOWN），保证意图内数量即 venue-exact 数量。
+
+        返回：
+        - float: 按 step_size 向下量化的数量（与执行器结果一致）；
+        - None: 规则快照 UNKNOWN/STALE 或量化失败 — 调用方必须 SKIP/fail-closed；
+        - size: adapter 无规则快照能力时保持原值（与旧行为一致，执行器仍有
+          exchangeInfo fallback 与精确性门禁兜底）。
+        """
+        _rule_adapter = getattr(self, "_adapter", None)
+        _get_snap = getattr(_rule_adapter, "get_rule_snapshot", None) if _rule_adapter is not None else None
+        if not callable(_get_snap):
+            return size
+        _snap = _get_snap(str(symbol))
+        if not _snap.is_known or _snap.is_stale:
+            print(f"[{tag}] {symbol}: SKIP (rule snapshot UNKNOWN/STALE)")
+            return None
+        try:
+            _quantized = _snap.quantize_quantity(str(size))
+        except ValueError:
+            print(f"[{tag}] {symbol}: SKIP (quantity quantization failed)")
+            return None
+        return float(_quantized)
+
     async def _nearline_tick(self) -> None:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
@@ -7738,6 +7778,14 @@ class AutonomousEngine:
                 client_order_id = f"beidou-{symbol.lower()}-entry-{int(time.time())}"
                 correlation = CorrelationId(f"nearline-{int(time.time())}")
                 idempotency_key = f"idem-{symbol}-{int(time.time())}"
+                # BD-FIX: 意图数量必须在创建/签名前按交易对规则量化。
+                # 执行器拒绝"量化后与签名不一致"的数量（审批绑定语义），
+                # 未量化的原始 sizing 值会导致所有订单被
+                # PLANNED_QUANTITY_NOT_VENUE_EXACT 拒绝。
+                _venue_exact = self._venue_exact_quantity(symbol, position_size)
+                if _venue_exact is None:
+                    continue
+                position_size = _venue_exact
                 from beidou_safety.execution import OrderIntent
 
                 unsigned_intent = OrderIntent(
