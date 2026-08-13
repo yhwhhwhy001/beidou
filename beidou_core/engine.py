@@ -1087,6 +1087,10 @@ class AutonomousEngine:
         self._api_key = os.environ.get("BEIDOU_BINANCE_API_KEY", "") or self._settings.exchange.api_key_ref
         self._api_secret = os.environ.get("BEIDOU_BINANCE_API_SECRET", "") or self._settings.exchange.api_secret_ref
         self._config_hash = self._settings.config_hash
+        # BD-FIX: TruthSnapshot 配置事实观察时刻。配置进程内只加载一次，且
+        # is_stale 不校验 config 新鲜度（critical 列表仅含市场/账户/订单/仓位/
+        # 对账/保护/风险），加载时刻即观察时刻，进程生命周期内有效。
+        self._config_observed_at = time.time()
 
         # BD-FIX: 凭证生命周期追踪 — ServiceIdentity 管理 key 元数据和安全审计
         self._service_identity = ServiceIdentity(
@@ -1169,6 +1173,14 @@ class AutonomousEngine:
             print(f"[policy] ERROR: policy load raised {exc} — risk-increasing writes remain blocked")
 
         if self._policy_id_active and self._policy_version:
+            # BD-FIX: TruthSnapshot 策略事实 — 加载即记录。策略进程内只加载一次，
+            # 且 is_stale 不校验 policy 新鲜度（critical 列表仅含市场/账户/订单/
+            # 仓位/对账/保护/风险），加载时刻即观察时刻，进程生命周期内有效。
+            # 策略缺失时保持 _policy_hash 为空 → fail-closed NOT_VERIFIABLE。
+            self._policy_hash = hashlib.sha256(
+                f"{self._policy_id_active}:{self._policy_version}".encode()
+            ).hexdigest()
+            self._policy_observed_at = time.time()
             print(
                 f"[policy] ACTIVE: {self._policy_id_active} v{self._policy_version} "
                 f"params={sorted(self._policy_params.keys())} — overriding YAML risk defaults"
@@ -1292,6 +1304,9 @@ class AutonomousEngine:
         self._active_algo_ids: dict[str, set[str]] = {}
         self._pending_protection_retry: set[str] = set()
         self._protection_owner_unknown = False
+        # BD-FIX: TruthSnapshot 保护事实 — 初始化时所有权归属本服务 → ACTIVE
+        self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
+        self._last_protection_fact_at = time.time()
         self._protection_owner_id = self._service_identity.service_id
         self._position_generation: dict[str, int] = {}
         self._position_projection: dict[str, dict[str, Any]] = {
@@ -3020,6 +3035,11 @@ class AutonomousEngine:
                     features.get("spread_bps"),
                     features.get("volume_24h"),
                 )
+                # BD-FIX: TruthSnapshot 行情事实 — 与快照保存同源（symbol:price:bid:ask）
+                self._last_market_hash = hashlib.sha256(
+                    f"{symbol}:{price}:{features.get('bid')}:{features.get('ask')}".encode()
+                ).hexdigest()
+                self._last_market_fact_at = time.time()
 
             # 5. Process only claimable intents.  Durable UNKNOWN intents are
             # deliberately excluded until an explicit exchange query resolves
@@ -3208,6 +3228,9 @@ class AutonomousEngine:
         """Freeze new risk when venue protection ownership is unproven."""
 
         self._protection_owner_unknown = True
+        # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
+        self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+        self._last_protection_fact_at = time.time()
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
@@ -5613,6 +5636,72 @@ class AutonomousEngine:
             if account_balance > self._peak_equity:
                 self._peak_equity = account_balance
 
+    @staticmethod
+    def _fact_timestamp(fact_dt: Any) -> float:
+        """Convert a (possibly naive/UTC) fact timestamp to Unix seconds."""
+        if not isinstance(fact_dt, datetime):
+            return 0.0
+        if fact_dt.tzinfo is None:
+            fact_dt = fact_dt.replace(tzinfo=timezone.utc)
+        return fact_dt.timestamp()
+
+    def _record_reconciliation_truth(
+        self,
+        result: Any,
+        *,
+        system_facts: AccountFactSnapshot | None = None,
+        exchange_facts: AccountFactSnapshot | None = None,
+    ) -> None:
+        """BD-FIX: 接线 TruthSnapshot 对账派生事实。
+
+        在每一处 ``_last_reconciliation_result`` 被记录的更新点调用，使快照
+        hash 恰好反映被比较的事实（never call-time freshness）。某侧事实为
+        None 时保持 hash 为空 — fail-closed 到 NOT_VERIFIABLE，不伪造证据。
+        """
+        now_ts = time.time()
+        status_value = getattr(result, "status", "UNKNOWN")
+        status = str(getattr(status_value, "value", status_value) or "UNKNOWN")
+        self._last_reconciliation_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "status": status,
+                    "matched": bool(getattr(result, "matched", False)),
+                    "differences": [str(d) for d in getattr(result, "differences", []) or []],
+                },
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+        self._last_reconciliation_fact_at = now_ts
+
+        # 账户/仓位/订单事实以交易所侧为权威来源，系统侧投影作为回退证据。
+        account_facts = exchange_facts or system_facts
+        if account_facts is not None:
+            fact_ts = self._fact_timestamp(account_facts.timestamp) or now_ts
+            self._last_account_hash = hashlib.sha256(
+                json.dumps({"balance": str(account_facts.balance)}, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            self._last_account_fact_at = fact_ts
+            self._last_position_hash = hashlib.sha256(
+                json.dumps(
+                    {str(sym): str(qty) for sym, qty in dict(account_facts.positions).items()},
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest()
+            self._last_position_fact_at = fact_ts
+            self._last_order_hash = hashlib.sha256(
+                json.dumps(sorted(str(o) for o in account_facts.open_orders), sort_keys=True, default=str).encode()
+            ).hexdigest()
+            self._last_order_fact_at = fact_ts
+
+        # 系统侧事实即账本推导结果（本地账本投影），整体序列化作为账本事实。
+        if system_facts is not None:
+            self._last_ledger_hash = hashlib.sha256(
+                json.dumps(system_facts.__dict__, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            self._last_ledger_fact_at = self._fact_timestamp(system_facts.timestamp) or now_ts
+
     def _record_reconciliation_failure(
         self,
         result: Any,
@@ -5630,6 +5719,11 @@ class AutonomousEngine:
 
         self._last_reconciliation_result = result
         event_facts = event_facts or getattr(result, "event_facts", None)
+        self._record_reconciliation_truth(
+            result,
+            system_facts=system_facts,
+            exchange_facts=exchange_facts,
+        )
         snapshot_base = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex[:8]}"
         try:
             if system_facts is not None:
@@ -6216,6 +6310,11 @@ class AutonomousEngine:
         else:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
         self._last_reconciliation_result = result
+        self._record_reconciliation_truth(
+            result,
+            system_facts=system_facts,
+            exchange_facts=exchange_facts,
+        )
         self._last_account = account
         # PKG02 (BDS-P0-001): 移除 testnet 仅仓位不匹配旁路 — 所有环境使用统一对账标准
         if not result.matched:
@@ -7456,6 +7555,9 @@ class AutonomousEngine:
                         risk_hash = hashlib.sha256(
                             f"{dyn_leverage}|{risk_context['concentration_pct']}|{risk_context['drawdown_pct']}".encode()
                         ).hexdigest()[:16]
+                        # BD-FIX: TruthSnapshot 风险事实 — 复用近线风险快照 hash
+                        self._last_risk_hash = risk_hash
+                        self._last_risk_fact_at = time.time()
                         risk_policy_version = (
                             f"{self._policy_id_active or 'UNSIGNED'}:{self._policy_version or 'UNKNOWN'}"
                         )
@@ -8276,7 +8378,8 @@ class AutonomousEngine:
         return TruthSnapshot(
             snapshot_id=f"snap-{int(now_ts * 1000)}",
             created_at=datetime.now(timezone.utc).isoformat(),
-            market_hash=getattr(getattr(self, "_feed", None), "last_hash", ""),
+            market_hash=getattr(self, "_last_market_hash", "")
+            or getattr(getattr(self, "_feed", None), "last_hash", ""),
             account_hash=getattr(self, "_last_account_hash", ""),
             order_hash=getattr(self, "_last_order_hash", ""),
             position_hash=getattr(self, "_last_position_hash", ""),
