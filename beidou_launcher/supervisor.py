@@ -881,7 +881,9 @@ class BeidouSupervisor:
         """在仍有有效授权时，经过 RECOVERING→VALIDATING→ACTIVE。
 
         ``_fail_closed`` 会撤销授权；因此运行时事实故障不能靠“干净几轮”
-        自动回到 RESUME。重新授权必须由受治理的启动/人工恢复流程完成。
+        自动回到 RESUME。重新授权必须由受治理的启动/人工恢复流程完成
+        （testnet/demo 例外：见 ``_maybe_testnet_auto_reauthorize``，故障
+        自愈后由防抖器清洁窗口自动补发授权）。
         """
         if self.engine is None:
             return False
@@ -940,6 +942,48 @@ class BeidouSupervisor:
             f"({window_active}/{self.max_restarts} in {self.recovery_window_seconds:.0f}s window, "
             f"total={self._recovery_count})"
         )
+        return True
+
+    def _maybe_testnet_auto_reauthorize(self) -> bool:
+        """testnet 故障自愈后自动重新授权 RESUME（BD-FIX）。
+
+        环境区分语义：demo/testnet 的运行时事实故障（user stream 掉线、
+        对账失真等）触发 ``_fail_closed`` 撤销授权后，``_recover_if_validated``
+        的前提“仍有有效授权”已不成立 → 控制面永久 NO_NEW_RISK。demo 故障
+        频发、人工授权不现实，因此在防抖器连续清洁（回到 RUNNING）且无
+        blocker 时自动补发授权并 RESUME；live/canary/paper 不进入此路径，
+        保持“撤销后必须人工/重启重新授权”的生产安全语义不变。
+        """
+        if self.engine is None or self.mode != "testnet":
+            return False
+        if self._resume_authorized or self._control_state() == "RESUME" or self.report.blockers:
+            return False
+        lifecycle = self.engine._lifecycle
+        state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
+        # 仅非致命降级（DEGRADED）可自愈；LOCKED/FAILED/QUARANTINED 等
+        # 终态或升级态必须保持人工处置。
+        if state_value != "DEGRADED":
+            return False
+
+        from beidou_control.plane import ControlAction
+        from beidou_lifecycle.lifecycle import ModuleState
+
+        # 复用 _recover_if_validated 的恢复 transition 序列
+        # （RECOVERING→VALIDATING→ACTIVE）。
+        for target in (ModuleState.RECOVERING, ModuleState.VALIDATING, ModuleState.ACTIVE):
+            result = lifecycle.transition(target)
+            if str(getattr(result, "value", result)) != "SUCCESS":
+                return False
+
+        # 先恢复授权再补发 RESUME：_install_resume_interlock 的 guard
+        # 会在 _resume_authorized=False 时把 RESUME 改写为 NO_NEW_RISK。
+        self._resume_authorized = True
+        self.engine._control.execute_action(ControlAction.RESUME)
+        self._control_paused_by_supervisor = False
+        self._critical_streak = 0
+        self._health_debounce.reset()
+        self.report.supervisor_state = "RUNNING"
+        print("[supervisor] testnet auto re-authorized RESUME after clean recovery")
         return True
 
     async def _monitor(self) -> int:
@@ -1020,6 +1064,12 @@ class BeidouSupervisor:
                     self.report.supervisor_state = "PAUSED"
                 else:
                     self.report.supervisor_state = "RUNNING"
+                # BD-FIX: testnet 故障自愈后自动重新授权 RESUME；live/canary/
+                # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
+                # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
+                # 非 RESUME、无 blocker、lifecycle 为 DEGRADED 才动作。
+                if self.mode == "testnet" and not self._resume_authorized:
+                    self._maybe_testnet_auto_reauthorize()
             else:
                 # UNCHANGED: 防抖器计数中。
                 if has_persistent:
