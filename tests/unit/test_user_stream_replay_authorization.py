@@ -194,23 +194,64 @@ def test_returns_false_without_projector() -> None:
     assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-abc") is False
 
 
-# --- _reconcile MATCHED 路径集成 ---
+# --- 两方一致性守卫（helper result 参数）---
+
+
+def _recon_result(*, differences: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        differences=differences,
+        checked_at=datetime.now(timezone.utc),
+        matched=not differences,
+    )
+
+
+def test_two_way_conflict_blocks_authorization() -> None:
+    projector = _projector_requiring_replay()
+    engine = _engine(projector=projector)
+
+    result = _recon_result(differences=["system/exchange: BALANCE_MISMATCH"])
+    assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-x", result=result) is False
+    assert projector.sequencer.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
+
+
+def test_event_stream_only_incompleteness_does_not_block() -> None:
+    """授权前 event_stream 侧必然 INCOMPLETE（鸡生蛋）——不构成授权障碍。"""
+    projector = _projector_requiring_replay()
+    engine = _engine(projector=projector)
+
+    result = _recon_result(
+        differences=[
+            "system/event_stream: INCOMPLETE_FACT: system/exchange snapshot is not complete",
+            "exchange/event_stream: INCOMPLETE_FACT: system/exchange snapshot is not complete",
+        ]
+    )
+    assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-x", result=result) is True
+    assert projector.sequencer.status is UserStreamStatus.HEALTHY
+
+
+# --- _reconcile 死锁打破集成（真实事故场景）---
 
 
 @pytest.mark.asyncio
-async def test_reconcile_matched_path_authorizes_testnet_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_reconcile_incomplete_event_stream_still_authorizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """三方对账 INCOMPLETE（event_stream 未授权）时两方一致 → 仍自动授权。
+
+    镜像 02:42 现场：sequencer 拒绝态使 event_stream 永远 INCOMPLETE，
+    若只在三方 MATCHED 后授权将永久死锁。授权后下一轮 recon 三方齐备。
+    """
     projector = _projector_requiring_replay()
     engine = _engine(projector=projector)
     engine._last_account = {}
     engine._last_reconciliation_result = None
     engine._active_order_ids = set()
+    # 投影器未授权 → 事件流事实 incomplete（真实死锁现场）
+    engine._event_stream_facts = projector.fact_snapshot()
 
     account_payload = {
         "totalWalletBalance": 10544.5,
         "updateTime": 1786645000000,
         "positions": [{"symbol": "BNBUSDT", "positionAmt": 0}],
     }
-    facts = _baseline_facts()
 
     async def fake_api(endpoint: object, *, signed: bool) -> tuple[object, bool]:
         ep = str(endpoint).lower()
@@ -235,7 +276,10 @@ async def test_reconcile_matched_path_authorizes_testnet_baseline(monkeypatch: p
     monkeypatch.setattr(engine, "_record_reconciliation_truth", Mock())
 
     ok = await engine._reconcile()
-    assert ok is True
-    # MATCHED 后 helper 已生效：sequencer 健康且允许无序列事件
+    # 本轮仍 INCOMPLETE（事件流在授权后才完整）——但授权已生效
+    assert ok is False
     assert projector.sequencer.status is UserStreamStatus.HEALTHY
     assert projector.sequencer._unsequenced_allowed is True
+    # 基线已建立（complete 仍需首个事件，属设计语义：证明流是活的）
+    assert projector.replay_baseline_verified is True
+    assert engine._event_stream_facts.complete is False

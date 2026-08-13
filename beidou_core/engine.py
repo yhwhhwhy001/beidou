@@ -6434,6 +6434,12 @@ class AutonomousEngine:
             exchange_facts=exchange_facts,
         )
         self._last_account = account
+        # BD-FIX: testnet 自动授权 user stream replay baseline。
+        # 两方（交易所 REST ↔ 系统账本）对拍一致即"独立验证"成立 ——
+        # event_stream 侧因 sequencer 未授权而 INCOMPLETE 属预期（授权后
+        # 才会完整，鸡生蛋），不构成授权障碍；两方冲突时 fail-closed 不授权。
+        recon_id = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}"
+        self._maybe_authorize_user_stream_baseline(exchange_facts, recon_id, result=result)
         # PKG02 (BDS-P0-001): 移除 testnet 仅仓位不匹配旁路 — 所有环境使用统一对账标准
         if not result.matched:
             return self._record_reconciliation_failure(
@@ -6466,12 +6472,16 @@ class AutonomousEngine:
                 exchange_facts=exchange_facts,
                 event_facts=event_facts,
             )
-        # BD-FIX: testnet 自动授权 user stream replay baseline（见 helper docstring）。
-        self._maybe_authorize_user_stream_baseline(exchange_facts, snapshot_base)
         print("[recon] MATCHED: independent durable facts verified")
         return True
 
-    def _maybe_authorize_user_stream_baseline(self, exchange_facts: AccountFactSnapshot, recon_id: str) -> bool:
+    def _maybe_authorize_user_stream_baseline(
+        self,
+        exchange_facts: AccountFactSnapshot,
+        recon_id: str,
+        *,
+        result: Any | None = None,
+    ) -> bool:
         """testnet 在 recon MATCHED 后自动授权 user stream replay baseline（BD-FIX）。
 
         Binance user stream 事件没有单调序列号，投影器 sequencer 必须经显式
@@ -6484,7 +6494,15 @@ class AutonomousEngine:
         幂等：sequencer 已 HEALTHY 时跳过。授权失败只 defer（事件流保持
         fail-closed），不冻结账本、不发 incident —— 自动路径不得触发
         execution_fact fail-closed。
+
+        ``result`` 提供时先检查两方一致性：存在 system/exchange 差异（两方
+        对拍冲突）则不授权 —— 独立验证不成立。event_stream 侧差异不构成
+        障碍（授权前事件流必然 INCOMPLETE）。
         """
+        if result is not None:
+            differences = [str(d) for d in getattr(result, "differences", []) or []]
+            if any(str(d).startswith("system/exchange") for d in differences):
+                return False
         if not bool(getattr(self, "_can_write", False)):
             return False
         if str(getattr(self._env_mode, "value", "")) != "testnet":
