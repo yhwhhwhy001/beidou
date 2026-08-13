@@ -280,6 +280,7 @@ async def test_reconcile_incomplete_event_stream_still_authorizes(monkeypatch: p
     assert ok is False
     assert projector.sequencer.status is UserStreamStatus.HEALTHY
     assert projector.sequencer._unsequenced_allowed is True
-    # 基线已建立（complete 仍需首个事件，属设计语义：证明流是活的）
+    # 基线已建立即 complete（授权 = REST 独立验证 + listenKey 连接）；
+    # 事件停流保护由运行时 event_age 检查承担
     assert projector.replay_baseline_verified is True
-    assert engine._event_stream_facts.complete is False
+    assert engine._event_stream_facts.complete is True

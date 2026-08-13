@@ -346,11 +346,14 @@ class UserStreamProjector:
             else datetime.now(timezone.utc)
         )
         balance = self._balances.get("USDT", MonetaryValue(amount="0", currency="USDT"))
-        complete = (
-            self._replay_baseline_verified and self._accepted_events_since_replay > 0 and "USDT" in self._balances
-        )
+        # BD-FIX: complete 不再要求 ≥1 个事件。replay baseline 授权本身即
+        # REST 快照独立验证 + listenKey 连接建立，足以作为事件流投影的
+        # 完整基线；低频环境（demo 凌晨无活动）等待首个事件会饿死启动
+        # 自检（三方 MATCHED 要求 complete）。事件停流的保护不削弱——
+        # 运行时 readiness 的 event_age（300s 阈值）仍会在停流后降级。
+        complete = self._replay_baseline_verified and "USDT" in self._balances
         source = (
-            "BINANCE_USER_STREAM_REPLAY_BASELINE+ACCOUNT_UPDATES"
+            "BINANCE_USER_STREAM_REPLAY_BASELINE"
             if complete
             else "BINANCE_USER_STREAM_ORDER_EVENTS_OR_UNVERIFIED"
         )
