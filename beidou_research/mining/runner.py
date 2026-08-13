@@ -587,7 +587,10 @@ class MiningRunner:
                     metrics={
                         "train_ic": train_ic,
                         "test_ic": test_ic,
+                        # GAP-6: PBO 的 IS 序列也用策略化收益（方向由因子决定），
+                        # 而非与因子无关的原始收益；train_sharpe 保留信息用。
                         "train_sharpe": _compute_sharpe_np(train_rets),
+                        "train_strategy_sharpe": _compute_sharpe_np(np.sign(train_preds) * train_rets),
                     },
                 )
 
@@ -604,8 +607,10 @@ class MiningRunner:
             )
             cpcv_result = self._cpcv.evaluate(valid_vals, valid_returns)
 
-            # 快速 IC 评估（ic 已在候选循环开头翻转后重算，此处不再重复）
-            sharpe = _compute_sharpe(valid_returns)
+            # 快速 IC 评估（ic 已在候选循环开头翻转后重算，此处不再重复）。
+            # GAP-6: observed_sharpe（DSR 输入）必须用策略化收益，否则原始收益
+            # 均值 < 0 时 DSR 恒不显著。
+            sharpe = _compute_sharpe([float(np.sign(v) * r) for v, r in zip(valid_vals, valid_returns, strict=False)])
 
             # 稳定性评估
             stability_results = [self._stability.evaluate_time_split(valid_vals, valid_returns, ic_full=ic)]
@@ -666,19 +671,29 @@ class MiningRunner:
             # GAP-4: 容量门禁评估策略化收益（多空组合，方向由翻转后因子决定），
             # 而非与因子无关的原始 forward returns；predictions 保持 valid_vals。
             strategy_returns = [float(np.sign(v) * r) for v, r in zip(valid_vals, valid_returns, strict=False)]
+            # GAP-7: excessive_turnover 阈值按 timeframe 传入（高频 K 线
+            # 天然换手更高，固定 100 会把 1h 因子恒拒）。
             capacity_result, capacity_gate_ok, capacity_gate_reason = self._capacity.evaluate_with_gate(
                 valid_vals,
                 strategy_returns,
                 avg_daily_volume=_adv if _adv > 0 else None,
+                max_annual_turnover=_max_turnover_for_timeframe(timeframe),
             )
             # BD-P1-12: only an externally bound manifest can support a
             # promotion decision.  A local payload hash is not provenance.
             # Fold-level train Sharpe is recorded in metrics when available;
             # keep the explicit arrays for the later multi-test report.
+            # GAP-6: PBO 的 IS/OOS 序列取策略化收益 Sharpe（与 observed_sharpe
+            # 同口径），否则原始收益口径下 PBO=1.00 恒拒。train_sharpe 保留为
+            # 回退（旧 FoldResult 兼容）。
             wfo_train_sharpes = [
-                float(r.metrics.get("train_sharpe", 0.0)) for r in wfo_result.fold_results if not r.failure_reason
+                float(r.metrics.get("train_strategy_sharpe", r.metrics.get("train_sharpe", 0.0)))
+                for r in wfo_result.fold_results
+                if not r.failure_reason
             ]
-            wfo_test_sharpes = [r.sharpe for r in wfo_result.fold_results if not r.failure_reason]
+            wfo_test_sharpes = [
+                getattr(r, "strategy_sharpe", r.sharpe) for r in wfo_result.fold_results if not r.failure_reason
+            ]
             p_value = _correlation_p_value(ic, len(valid_returns))
 
             _initial_failures = [] if ic > 0.02 else ["ic_below_threshold"]
@@ -1552,6 +1567,24 @@ def _compute_sharpe_np(rets: np.ndarray) -> float:
     if std == 0:
         return 0.0
     return float(np.mean(r) / std)
+
+
+def _max_turnover_for_timeframe(timeframe: str) -> float:
+    """GAP-7: 按 K 线粒度返回年化换手率上限。
+
+    依据：250 交易日 × 24/bar_hours × 0.5 次/日（约每两 bar 交易一次），
+    bar_hours 从 timeframe 映射；未知粒度保守取 3000（1h 档）。
+    高频 K 线天然换手更高，固定阈值会把 1h 因子恒拒。
+    """
+    mapping: dict[str, float] = {
+        "1m": 180_000.0,
+        "5m": 36_000.0,
+        "15m": 12_000.0,
+        "1h": 3_000.0,
+        "4h": 1_000.0,
+        "1d": 200.0,
+    }
+    return mapping.get(timeframe.strip().lower(), 3_000.0)
 
 
 def _timeframe_to_hours(timeframe: str) -> float:

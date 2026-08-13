@@ -1,4 +1,4 @@
-"""Task 13 延伸修复：研究评估门禁语义缺陷测试（GAP-3 / GAP-4 / GAP-5）。
+"""Task 13 延伸修复：研究评估门禁语义缺陷测试（GAP-3 ~ GAP-8）。
 
 覆盖:
 - GAP-3: WFO 门禁 Sharpe 使用策略化收益 sign(pred) * ret（多空组合，方向由
@@ -10,6 +10,12 @@
   zero_capacity 与空曲线 fail-closed 分支保留。
 - GAP-5: 多重检验分母 = 全部被尝试候选（len(candidates)），
   trials_not_fully_evaluated 不再出现。
+- GAP-6: 策略化收益补全——DSR 的 observed_sharpe 与 PBO 的 IS/OOS 序列
+  全部取策略化收益（原始收益均值 < 0 时 observed_sharpe 恒负、PBO=1.00）。
+- GAP-7: excessive_turnover 阈值按 K 线粒度（timeframe-aware），1h 因子
+  自然换手水平（~365x/年）不再被固定 100 阈值恒拒。
+- GAP-8: CPCV q05 改为 95% 置信下界判定（q05 + 1.645*se <= 0 才 FAIL），
+  个别路径略负不再判 non_positive_oos_q05。
 """
 
 from __future__ import annotations
@@ -20,13 +26,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from beidou_research.mining.evaluation.cost_capacity import CapacityEvaluator, CostModel
+from beidou_research.mining.evaluation.cpcv import CPCVEvaluator
 from beidou_research.mining.evaluation.purged_walk_forward import (
     FoldConfig,
     FoldResult,
     PurgedWalkForward,
     PurgedWFOResult,
 )
-from beidou_research.mining.runner import MiningRunner, PipelineConfig, _compute_sharpe
+from beidou_research.mining.runner import (
+    MiningRunner,
+    PipelineConfig,
+    _compute_sharpe,
+    _max_turnover_for_timeframe,
+)
 from tests.unit.test_research_gate_fixes import _mean_reverting_klines
 
 # ================================================================
@@ -284,3 +296,114 @@ def test_multiple_testing_denominator_covers_all_candidates(tmp_path: Path) -> N
         assert "trials_not_fully_evaluated" not in mt["failure_reasons"], (
             f"分母覆盖后不应出现 trials_not_fully_evaluated: {bundle.factor_id}"
         )
+
+
+# ================================================================
+# GAP-6: 策略化收益补全（DSR observed_sharpe / PBO IS-OOS 序列）
+# ================================================================
+
+
+def test_observed_sharpe_and_pbo_use_strategy_returns(tmp_path: Path) -> None:
+    """GAP-6 端到端：原始 forward-return Sharpe < 0 的数据上——
+    1) raw_metrics["sharpe"]（DSR 的 observed_sharpe 输入）多数候选为正
+       （旧逻辑恒负 → DSR 恒不显著）；
+    2) PBO 的 IS/OOS 序列来自策略化收益，不再是退化值 1.00（旧逻辑恒拒）。"""
+    rows = _momentum_negative_drift_klines(n=1100, seed=7)
+    raw = _raw_forward_returns(rows)
+    assert _compute_sharpe(raw) < 0, "前置条件：原始收益 Sharpe 必须为负（旧逻辑恒拒的输入）"
+
+    cfg = PipelineConfig(run_id="gap6-strategy", policy_version="2.0.0", evidence_dir=str(tmp_path))
+    cfg.strict_policy = False
+    result = MiningRunner(cfg).run(
+        price_data=rows,
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1h",
+    )
+    assert result.evidence_bundles, "应产出评估 bundle"
+
+    # observed_sharpe 来自策略化收益：多数候选为正（旧逻辑全部为负）
+    assert any(b.raw_metrics["sharpe"] > 0 for b in result.evidence_bundles), (
+        "策略化收益下至少一个候选 observed_sharpe 应为正"
+    )
+    # PBO 输入为策略化收益（跨 bundle 相同序列）：不再是 1.00 退化值。
+    # 固定 seed 下实测 PBO=0.0（16 个组合全部一致），断言 < 0.5 留足余量。
+    for bundle in result.evidence_bundles:
+        mt = bundle.multiple_testing_results
+        assert mt["pbo"] is not None, f"PBO 必须存在: {bundle.factor_id}"
+        assert mt["pbo"]["pbo"] < 0.5, f"PBO 不应为退化值（策略化收益 IS/OOS）: {bundle.factor_id}"
+
+
+# ================================================================
+# GAP-7: excessive_turnover 阈值按粒度
+# ================================================================
+
+
+def test_turnover_threshold_is_timeframe_aware() -> None:
+    """GAP-7: 每 bar 换向的收益序列年化换手 ≈ 365（1h 因子的自然水平）——
+    默认阈值 100 拒绝（旧逻辑恒拒），按 1h 上限 3000 传入后不再
+    触发 excessive_turnover（其余门禁在账户规模点仍通过）。"""
+    model = CostModel(adv_30d=2_000_000, volatility=0.1)
+    evaluator = CapacityEvaluator(model)
+    predictions = [0.5] * 102
+    returns = [0.004, -0.002] * 51  # 相邻符号全翻转 → 年化换手 ≈ 365
+
+    # 默认阈值（向后兼容）：> 100 → excessive_turnover 拒绝
+    report_default, ok_default, reason_default = evaluator.evaluate_with_gate(predictions, returns)
+    assert report_default.avg_turnover > 100.0
+    assert not ok_default
+    assert "excessive_turnover" in reason_default
+
+    # 1h 粒度上限 3000：365 ≤ 3000 → 通过
+    report_1h, ok_1h, reason_1h = evaluator.evaluate_with_gate(predictions, returns, max_annual_turnover=3000.0)
+    assert report_1h.avg_turnover <= 3000.0
+    assert ok_1h, f"1h 上限下应通过 gate: {reason_1h}"
+    assert "excessive_turnover" not in reason_1h
+
+    # 粒度映射：250 交易日 × 24/bar_hours × 0.5 次/日
+    assert _max_turnover_for_timeframe("1m") == 180_000.0
+    assert _max_turnover_for_timeframe("5m") == 36_000.0
+    assert _max_turnover_for_timeframe("15m") == 12_000.0
+    assert _max_turnover_for_timeframe("1h") == 3_000.0
+    assert _max_turnover_for_timeframe("4h") == 1_000.0
+    assert _max_turnover_for_timeframe("1d") == 200.0
+    assert _max_turnover_for_timeframe("unknown-tf") == 3_000.0  # 未知粒度保守取 1h 档
+
+
+# ================================================================
+# GAP-8: CPCV q05 置信下界判定
+# ================================================================
+
+
+def test_cpcv_q05_uses_confidence_lower_bound() -> None:
+    """GAP-8: metric 均值 > 0 但个别路径 q05 略负（36 值中 2 个负、其余正）时——
+    旧逻辑（q05 <= 0 即 FAIL）拒绝，新逻辑（q05 + 1.645*se <= 0 才 FAIL）通过。"""
+    evaluator = CPCVEvaluator()
+    n_groups, group_size = 8, 60
+    n = n_groups * group_size
+    rng_p = random.Random(10)  # 该种子下 q05 ≈ -0.011（略负），置信下界 > 0
+    rng_r = random.Random(1010)
+    predictions: list[float] = []
+    returns: list[float] = []
+    for g in range(n_groups):
+        if g < 6:
+            # 好组：预测 = 收益（完美相关 IC=1.0），方差极小
+            for _ in range(group_size):
+                r = rng_r.gauss(0.0, 0.0001)
+                predictions.append(r)
+                returns.append(r)
+        else:
+            # 坏组：预测与收益独立（IC ≈ 0，采样噪声），方差大
+            for _ in range(group_size):
+                predictions.append(rng_p.gauss(0.0, 1.0))
+                returns.append(rng_r.gauss(0.0, 1.0))
+    group_labels = [i // group_size for i in range(n)]
+
+    result = evaluator.evaluate(predictions, returns, group_labels=group_labels)
+    assert result.n_completed == 28, "C(8,2) 路径应全部完成"
+    assert result.metric_mean > 0, "构造数据均值必须 > 0（mean 检查不变）"
+    assert result.metric_q05 < 0, "构造数据应使 q05 < 0（旧逻辑必 FAIL）"
+    assert "non_positive_oos_q05" not in result.failure_reasons, (
+        f"置信下界应 > 0（q05={result.metric_q05}）: {result.failure_reasons}"
+    )
+    assert result.gate_result.value == "PASS", f"置信下界判定应 PASS: {result.failure_reasons}"

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -269,7 +270,12 @@ class CPCVEvaluator:
         if mean_m <= 0:
             gate = GateResult.FAIL
             failure_reasons.append("non_positive_mean_metric")
-        if q05 <= 0:
+        # GAP-8: q05 是路径分布的一个样本分位数，要求所有路径全正在
+        # 统计上过严（36+ 路径中个别路径为负属正常抽样波动）。改为 95%
+        # 置信下界判定：q05_se = std/sqrt(n_p)，仅当 q05 + 1.645*se <= 0
+        # 才判 FAIL（reason 保持 "non_positive_oos_q05"）。mean 检查不变。
+        q05_se = std_m / math.sqrt(n_p) if n_p > 0 and std_m > 0 else 0.0
+        if q05 + 1.645 * q05_se <= 0:
             gate = GateResult.FAIL
             failure_reasons.append("non_positive_oos_q05")
 

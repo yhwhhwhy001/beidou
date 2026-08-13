@@ -387,8 +387,14 @@ class CapacityEvaluator:
         *,
         aum_range: list[float] | None = None,
         avg_daily_volume: float | None = None,
+        max_annual_turnover: float = 100.0,
     ) -> tuple[SignalCapacityReport, bool, str]:
         """完整评估 + Gate 判定。
+
+        Args:
+            max_annual_turnover: 年化换手率上限（默认 100，向后兼容）。
+                GAP-7: 阈值应与标的粒度相关（高频 K 线天然换手更高），
+                调用方按 timeframe 传入合理上限。
 
         Returns:
             (report, gate_passed, gate_reason)
@@ -418,8 +424,8 @@ class CapacityEvaluator:
         if account_decay < 0.3:
             failures.append(f"severe_decay:{account_decay:.2%}")
 
-        if report.avg_turnover > 100:
-            failures.append(f"excessive_turnover:{report.avg_turnover:.0f}")
+        if report.avg_turnover > max_annual_turnover:
+            failures.append(f"excessive_turnover:{report.avg_turnover:.0f}>{max_annual_turnover:.0f}")
 
         cost_viable, cost_reason = self.is_cost_viable(
             eval_point.net_return,
