@@ -46,6 +46,23 @@ def _state_after_persistent_block(current_state: str, has_persistent_blocker: bo
     return current_state
 
 
+async def _refresh_snapshot_safe(coro: Any, *, timeout: float = 25.0) -> None:
+    """为单个交易所快照查询加超时保护（BD-FIX: Main loop STALL 误报）。
+
+    慢网络快照（数秒到数十秒）不应拖住监控循环心跳，也不应阻塞下一轮
+    检查。超时后 ``wait_for`` 取消该 coroutine，快照保留上一轮状态，
+    由下轮循环在探测频率窗口后重试；取消（CancelledError）不在此捕获，
+    随监督器关停正常传播。
+    """
+
+    try:
+        await asyncio.wait_for(coro, timeout=timeout)
+    except Exception:
+        # 慢快照下轮重试；快照失败（含超时）不影响循环心跳与下轮检查。
+        # 内部 _refresh_* 已把失败写入 UNKNOWN/error 快照，这里仅吞掉超时。
+        return
+
+
 class BeidouSupervisor:
     def __init__(
         self,
@@ -930,11 +947,17 @@ class BeidouSupervisor:
         fatal_triggered = False
         while not self._engine_task.done():
             await asyncio.sleep(self.monitor_interval)
-            # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）
+            # BD-FIX: 循环醒来即心跳。快照 gather 可能耗时数秒到数十秒，
+            # 若在 gather/checks 之后才更新时间戳，慢 IO 会被
+            # check_monitor_loop_health 误判为循环 STALL（Main loop STALL 误报）。
+            # 醒来即证明主循环存活，慢网络快照不计入心跳间隔。
+            self._last_monitor_loop_ts = time.monotonic()
+            # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）；
+            # 每路快照带超时保护，慢网络不拖住循环心跳，超时下轮重试。
             await asyncio.gather(
-                self._refresh_exchange_account_snapshot(),
-                self._refresh_position_mode(),
-                self._refresh_exchange_algo_snapshot(),
+                _refresh_snapshot_safe(self._refresh_exchange_account_snapshot()),
+                _refresh_snapshot_safe(self._refresh_position_mode()),
+                _refresh_snapshot_safe(self._refresh_exchange_algo_snapshot()),
             )
             # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
             # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
@@ -956,7 +979,6 @@ class BeidouSupervisor:
                         evidence={"error": type(exc).__name__},
                     )
                 )
-            self._last_monitor_loop_ts = time.monotonic()
 
             if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
