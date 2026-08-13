@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections import deque
 from typing import TYPE_CHECKING, Any
@@ -24,7 +25,8 @@ if TYPE_CHECKING:
 
 EXPRESSION_BINDINGS: dict[str, tuple[str, str]] = {}  # factor_id -> (expression_string, role)
 
-_HISTORY_LIMIT = 3000
+_HISTORY_LIMIT = 800  # 历史窗口上限：挖掘因子最大滚动窗口 100、z 窗口 100，800 根余量充足；
+# 相比 3000 根，逐 bar 求值量 ÷3.75，缓解同步 evaluate_series 阻塞共享 event loop（P0 STALL）
 _MIN_BARS = 30
 _Z_WINDOW = 100
 _Z_MIN = 30
@@ -107,7 +109,11 @@ class ExpressionComponent(AlphaComponent):
             return self._no_action(context)
         try:
             feature_dict = self._build_feature_dict()
-            values = self._expr.evaluate_series(feature_dict)
+            # 同步 CPU 密集求值（37 组件 × 逐 bar 全历史）移入默认线程池，
+            # 避免阻塞引擎与 supervisor 共享的 asyncio event loop；异常在 await 处抛出，
+            # 由下方 except Exception 捕获走 NO_ACTION。
+            loop = asyncio.get_running_loop()
+            values = await loop.run_in_executor(None, self._expr.evaluate_series, feature_dict)
             last = float(values[-1]) if values else math.nan
         except Exception:
             return self._no_action(context)
