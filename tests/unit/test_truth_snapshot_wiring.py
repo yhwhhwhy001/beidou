@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -52,11 +53,18 @@ _FRESHNESS_ATTRS: list[str] = [
 
 
 def _wired_engine() -> AutonomousEngine:
-    """最小 engine 实例 — 模拟全部接线点已运行后的状态。"""
+    """最小 engine 实例 — 模拟全部接线点已运行后的状态。
+
+    protection 的 hash 必须与真实评估记录一致（"ACTIVE" 的 sha256），
+    因为 protection_status 跟随记录的 hash（fail-closed 机制）。
+    """
     engine = AutonomousEngine.__new__(AutonomousEngine)
     now = time.time()
     for attr, _name in _HASH_ATTRS:
-        setattr(engine, attr, f"hash-{attr}")
+        if attr == "_last_protection_hash":
+            setattr(engine, attr, hashlib.sha256(b"ACTIVE").hexdigest())
+        else:
+            setattr(engine, attr, f"hash-{attr}")
     for attr in _FRESHNESS_ATTRS:
         setattr(engine, attr, now)
     engine._last_reconciliation_result = SimpleNamespace(
@@ -181,3 +189,67 @@ def test_reconciliation_wiring_then_eligibility_flow() -> None:
         exchange_facts=facts,
     )
     assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
+
+
+def test_stale_protection_fact_not_verifiable_then_refresh_eligible() -> None:
+    """保护事实 300s 未刷新 → NOT_VERIFIABLE；周期评估刷新后 → ELIGIBLE。"""
+    engine = _wired_engine()
+    engine._last_protection_fact_at = time.time() - 3600
+    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.NOT_VERIFIABLE
+    # _durable_fact_status 周期评估（覆盖 OK）刷新事实
+    engine._last_protection_hash = hashlib.sha256(b"ACTIVE").hexdigest()
+    engine._last_protection_fact_at = time.time()
+    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
+
+
+def test_stale_risk_fact_not_verifiable_then_refresh_eligible() -> None:
+    """风险事实 300s 未刷新 → NOT_VERIFIABLE；近线周期刷新后 → ELIGIBLE。"""
+    engine = _wired_engine()
+    engine._last_risk_fact_at = time.time() - 3600
+    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.NOT_VERIFIABLE
+    # 近线 tick 起始处周期风险快照刷新
+    engine._last_risk_hash = hashlib.sha256(b"periodic_risk:NORMAL").hexdigest()
+    engine._last_risk_fact_at = time.time()
+    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
+
+
+def test_unknown_protection_hash_keeps_status_unknown_fail_closed() -> None:
+    """覆盖评估失败（hash=UNKNOWN）时，即使 owner 标志为 False 也不进入 ACTIVE。"""
+    engine = _wired_engine()
+    engine._last_protection_hash = hashlib.sha256(b"UNKNOWN").hexdigest()
+    snap = engine.build_truth_snapshot()
+    assert snap.protection_status == "UNKNOWN"
+    assert derive_eligibility(snap) == TradingEligibility.NO_NEW_RISK
+
+
+def _durable_engine() -> AutonomousEngine:
+    """最小 engine 实例 — _durable_fact_status 可通过的持久事实 fake。"""
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._store = SimpleNamespace(restore_order_states=lambda: [], restore_protections=lambda: [])  # type: ignore[assignment]  # fake
+    engine._outbox = SimpleNamespace(stats=lambda: {"state_counts": {}})  # type: ignore[assignment]  # fake
+    engine._active_order_ids = set()
+    engine._owned_order_ids = set()
+    engine._protection_owner_id = "owner-1"
+    engine._protection = SimpleNamespace(all_positions=lambda: {})  # type: ignore[assignment]  # fake
+    engine._last_account = {"positions": []}
+    return engine
+
+
+def test_durable_fact_status_refreshes_protection_fact() -> None:
+    """覆盖 OK 时 _durable_fact_status 记录 ACTIVE 保护事实并刷新新鲜度。"""
+    engine = _durable_engine()
+    engine._last_protection_fact_at = 0.0  # 陈旧
+    ok, reason, _evidence = engine._durable_fact_status()
+    assert ok and reason == "DURABLE_FACTS_VERIFIED"
+    assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+    assert time.time() - engine._last_protection_fact_at < 5
+
+
+def test_durable_fact_status_coverage_gap_records_unknown_protection() -> None:
+    """覆盖缺失时 _durable_fact_status 记录 UNKNOWN 保护事实（fail-closed）。"""
+    engine = _durable_engine()
+    engine._last_account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}]}
+    ok, reason, _evidence = engine._durable_fact_status()
+    assert not ok and reason == "DURABLE_PROTECTION_COVERAGE_UNKNOWN"
+    assert engine._last_protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+    assert time.time() - engine._last_protection_fact_at < 5

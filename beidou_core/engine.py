@@ -1177,9 +1177,7 @@ class AutonomousEngine:
             # 且 is_stale 不校验 policy 新鲜度（critical 列表仅含市场/账户/订单/
             # 仓位/对账/保护/风险），加载时刻即观察时刻，进程生命周期内有效。
             # 策略缺失时保持 _policy_hash 为空 → fail-closed NOT_VERIFIABLE。
-            self._policy_hash = hashlib.sha256(
-                f"{self._policy_id_active}:{self._policy_version}".encode()
-            ).hexdigest()
+            self._policy_hash = hashlib.sha256(f"{self._policy_id_active}:{self._policy_version}".encode()).hexdigest()
             self._policy_observed_at = time.time()
             print(
                 f"[policy] ACTIVE: {self._policy_id_active} v{self._policy_version} "
@@ -2346,6 +2344,17 @@ class AutonomousEngine:
                 local_positions,
             )
             evidence.update(protection_evidence)
+            # BD-FIX: TruthSnapshot 保护事实周期刷新 — 保护覆盖评估随
+            # _durable_fact_status 周期运行（realtime 对账后 30s 一次 +
+            # supervisor 健康探测），每次评估都刷新事实，避免运行超过 300s 后
+            # 保护事实恒 stale → 资格恒 NOT_VERIFIABLE。覆盖失败时记录
+            # UNKNOWN 状态（fail-closed: build_truth_snapshot 的
+            # protection_status 跟随记录的 hash，未覆盖时不进入 ACTIVE）。
+            # 幂等：多次调用无副作用。
+            self._last_protection_hash = (
+                hashlib.sha256(b"ACTIVE").hexdigest() if protection_ok else hashlib.sha256(b"UNKNOWN").hexdigest()
+            )
+            self._last_protection_fact_at = time.time()
             if not protection_ok:
                 return False, "DURABLE_PROTECTION_COVERAGE_UNKNOWN", evidence
             return True, "DURABLE_FACTS_VERIFIED", evidence
@@ -6911,8 +6920,17 @@ class AutonomousEngine:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
 
-        # === 策略风险管理检查 ===
+        # BD-FIX: TruthSnapshot 风险事实周期刷新 — 近线每轮（testnet 30s，
+        # 首轮启动即执行）无论是否产生信号/提案都刷新，避免 sizing 分支
+        # 未执行时风险事实 300s 后 stale → 资格恒 NOT_VERIFIABLE。
+        # hash 取周期性风险状态快照（策略风险等级）；sizing 分支随后用更
+        # 丰富的 leverage/concentration/drawdown hash 覆盖。
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
+        _periodic_risk_level = getattr(getattr(risk_state, "risk_level", None), "value", None)
+        self._last_risk_hash = hashlib.sha256(f"periodic_risk:{_periodic_risk_level or 'UNKNOWN'}".encode()).hexdigest()
+        self._last_risk_fact_at = time.time()
+
+        # === 策略风险管理检查 ===
         if not self._strategy_risk.is_trading_allowed(self._autopilot_strategy_id):
             level = risk_state.risk_level if risk_state else StrategyRiskLevel.LOCKED
             print(f"[nearline] SKIP: Strategy risk level={level.value} — trading not allowed")
@@ -8400,7 +8418,15 @@ class AutonomousEngine:
             config_freshness=float(getattr(self, "_config_observed_at", 0.0) or 0.0),
             policy_freshness=float(getattr(self, "_policy_observed_at", 0.0) or 0.0),
             reconciliation_status=str(getattr(recon_status, "value", recon_status)),
-            protection_status="ACTIVE" if self._protection_owner_unknown is False else "UNKNOWN",
+            # protection_status 跟随记录的 hash: 仅当所有权已知且最近一次
+            # 覆盖评估记录为 ACTIVE 时才可进入 ACTIVE；覆盖缺失/未评估时
+            # 记录 UNKNOWN → NO_NEW_RISK（fail-closed）。
+            protection_status=(
+                "ACTIVE"
+                if self._protection_owner_unknown is False
+                and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                else "UNKNOWN"
+            ),
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
             env_mode=str(getattr(getattr(self, "_env_mode", None), "value", "")),
             control_action=str(getattr(getattr(self._control, "_action", None), "value", "NO_NEW_RISK")),
