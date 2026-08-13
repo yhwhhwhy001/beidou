@@ -220,6 +220,10 @@ class FoldResult:
     icir: float = 0.0
     rank_ic_mean: float = 0.0
     sharpe: float = 0.0
+    # GAP-3: 策略化收益（sign(test_preds) * test_rets）的 Sharpe，方向由因子决定。
+    # sharpe 保留原始 test fold forward-return 的 Sharpe（信息用），
+    # 门禁判定只应基于策略化的 strategy_sharpe。
+    strategy_sharpe: float = 0.0
     max_drawdown_pct: float = 0.0
     hit_rate: float = 0.0
     cost_adjusted_return: float = 0.0
@@ -367,7 +371,9 @@ class PurgedWalkForward:
 
         completed = [r for r in fold_results if not r.failure_reason]
         ic_means = [r.ic_mean for r in completed]
-        sharpes = [r.sharpe for r in completed]
+        # GAP-3: 门禁 Sharpe 取策略化收益（方向由因子决定）的 strategy_sharpe；
+        # 对未填写该字段的旧 FoldResult 回退到原始收益 sharpe。
+        sharpes = [getattr(r, "strategy_sharpe", r.sharpe) for r in completed]
 
         ic_mean_cv = sum(ic_means) / len(ic_means)
         ic_std_cv = (

@@ -45,6 +45,7 @@ from beidou_shared.types import (
 from ..backtest.replay import PaperReplayResult, simulate_paper_window
 from ..factors.factor import PROMOTION_EVIDENCE_REQUIREMENTS, FactorLifecycle
 from .contracts import (
+    LabelRecord,
     LabelSpec,
     PriceType,
     ReturnType,
@@ -405,6 +406,11 @@ class MiningRunner:
         # 预构建特征字典，供 Phase 3/4 中表达式求值使用
         self._feature_dict = self._build_feature_dict(price_points)
 
+        # label_returns[t] = 从 bar t 起算的 forward return。
+        # GAP-5: 预筛（Phase 3）之前即构造，预筛循环为每个候选（含被淘汰者）
+        # 计算全样本 IC p 值，作为多重检验分母的覆盖。
+        label_returns = [l.label_value for l in labels if l.is_valid_for_evaluation()]
+
         # ================================================================
         # Phase 3: 快速预筛
         # ================================================================
@@ -416,11 +422,17 @@ class MiningRunner:
         if self._generation_policy_error:
             failure_taxonomy["generation_policy"] = 1
 
-        for c in candidates:
+        for candidate_index, c in enumerate(candidates):
             factor_values = self._evaluate_candidate(c, price_points)
             ch = c.get(
                 "expression_hash", hashlib.sha256(json.dumps(c, sort_keys=True, default=str).encode()).hexdigest()[:16]
             )
+
+            # GAP-5: 每个被尝试的候选都贡献多重检验分母的 p 值（全样本 IC，
+            # 未过 WFO——统计口径诚实；样本不足或无信号时保守取 1.0）。
+            # _candidate_index 是该候选在全量 candidates 列表中的位置。
+            c["_p_value"] = _candidate_full_sample_p_value(factor_values, labels)
+            c["_candidate_index"] = candidate_index
 
             result = self._fast_screen.screen(
                 factor_values=factor_values,
@@ -450,8 +462,6 @@ class MiningRunner:
         raw_feature_manifest_hash = str(self.config.feature_manifest_hash or "").strip()
         feature_manifest_hash = self._validated_manifest_hash(raw_feature_manifest_hash)
         feature_manifest_invalid = bool(raw_feature_manifest_hash) and feature_manifest_hash == "UNKNOWN"
-        # label_returns[t] = 从 bar t 起算的 forward return
-        label_returns = [l.label_value for l in labels if l.is_valid_for_evaluation()]
 
         def _aligned_samples(factor_values: list[float]) -> list[tuple[int, float, float, datetime, datetime]]:
             """Align predictions and labels by their original bar index.
@@ -562,6 +572,8 @@ class MiningRunner:
                     )
                 test_ic = _compute_ic_np(test_preds, test_rets)
                 train_ic = _compute_ic_np(train_preds, train_rets)
+                # GAP-3: 门禁 Sharpe 用策略化收益（多空组合，方向由因子决定），
+                # 而非原始 test fold forward-return 的 Sharpe（与因子无关）。
                 return FoldResult(
                     fold_id=fold_id,
                     train_samples=len(train_preds),
@@ -570,6 +582,7 @@ class MiningRunner:
                     ic_std=abs(train_ic - test_ic),
                     icir=test_ic,
                     sharpe=_compute_sharpe_np(test_rets),
+                    strategy_sharpe=_compute_sharpe_np(np.sign(test_preds) * test_rets),
                     cost_adjusted_return=float(test_rets.mean()),
                     metrics={
                         "train_ic": train_ic,
@@ -650,9 +663,12 @@ class MiningRunner:
                 self.config.cost_model.adv_30d = _adv
                 self.config.cost_model.volatility = _vol
                 self._capacity = CapacityEvaluator(self.config.cost_model)
+            # GAP-4: 容量门禁评估策略化收益（多空组合，方向由翻转后因子决定），
+            # 而非与因子无关的原始 forward returns；predictions 保持 valid_vals。
+            strategy_returns = [float(np.sign(v) * r) for v, r in zip(valid_vals, valid_returns, strict=False)]
             capacity_result, capacity_gate_ok, capacity_gate_reason = self._capacity.evaluate_with_gate(
                 valid_vals,
-                valid_returns,
+                strategy_returns,
                 avg_daily_volume=_adv if _adv > 0 else None,
             )
             # BD-P1-12: only an externally bound manifest can support a
@@ -756,7 +772,15 @@ class MiningRunner:
         # Multi-test correction is a single run-level operation: every
         # candidate attempted by the generator belongs in the denominator.
         if evaluation_records:
-            pvalues = [r["p_value"] for r in evaluation_records]
+            # GAP-5: 全量 pvalues 按 candidates 原始顺序构建，长度 = len(candidates)。
+            # 预筛时每个候选已写入 _p_value（未评估者 = 全样本 IC p 值）；
+            # 评估候选覆盖为其评估阶段 p 值（post-flip IC，与评估口径一致）。
+            evaluated_pvalues: dict[int, float] = {
+                record["candidate"]["_candidate_index"]: record["p_value"]
+                for record in evaluation_records
+                if record["candidate"].get("_candidate_index") is not None
+            }
+            pvalues = [evaluated_pvalues.get(index, c.get("_p_value", 1.0)) for index, c in enumerate(candidates)]
             train_sharpes = [
                 sum(r["train_sharpes"]) / len(r["train_sharpes"]) if r["train_sharpes"] else 0.0
                 for r in evaluation_records
@@ -765,8 +789,10 @@ class MiningRunner:
                 sum(r["test_sharpes"]) / len(r["test_sharpes"]) if r["test_sharpes"] else 0.0
                 for r in evaluation_records
             ]
-            for candidate_index, record in enumerate(evaluation_records):
+            for record in evaluation_records:
                 bundle = record["bundle"]
+                # candidate_index 用该候选在全量 candidates 列表中的位置
+                # （BH adjusted p 的索引须与全量 pvalues 对齐）。
                 report = evaluate_multiple_testing(
                     pvalues,
                     observed_sharpe=record["sharpe"],
@@ -774,7 +800,7 @@ class MiningRunner:
                     in_sample_sharpes=train_sharpes,
                     out_of_sample_sharpes=test_sharpes,
                     sample_length=len(label_returns),
-                    candidate_index=candidate_index,
+                    candidate_index=record["candidate"].get("_candidate_index"),
                 )
                 bundle.multiple_testing_results = {
                     "verdict": report.verdict,
@@ -1365,6 +1391,34 @@ def _is_finite(v: float | None) -> bool:
         return math.isfinite(float(v))
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def _candidate_full_sample_p_value(factor_values: list[float], labels: list[LabelRecord]) -> float:
+    """候选全样本 IC 的 p 值（未过 WFO）。
+
+    GAP-5 多重检验分母覆盖：所有被生成器尝试过的候选都必须计入分母。
+    预筛淘汰候选没有评估期 IC，其全样本 IC 是统计口径上唯一诚实的信号估计。
+
+    对齐约定与 Phase 4 的 _aligned_samples 完全一致：labels 按 price-series
+    索引枚举，factor_values[index] 对应 labels[index]，仅取两侧有限样本，
+    样本量用对齐后的有效对数（len(rets)）。（不能直接对 factor_values 与
+    label_returns 做位置 zip：factor_values 含 NaN warm-up 期，NaN 会让 IC
+    为 NaN，而 _correlation_p_value 会把 NaN 归零——作为分母 p 值会灾难性
+    地低估。）
+    样本不足时保守返回 1.0（无证据，不降低显著性门槛）。
+    """
+    vals: list[float] = []
+    rets: list[float] = []
+    for index, label in enumerate(labels):
+        if index >= len(factor_values) or not label.is_valid_for_evaluation():
+            continue
+        value = factor_values[index]
+        if _is_finite(value) and _is_finite(label.label_value):
+            vals.append(float(value))
+            rets.append(float(label.label_value))
+    if len(vals) < 4:
+        return 1.0
+    return _correlation_p_value(_compute_ic(vals, rets), len(vals))
 
 
 # ================================================================

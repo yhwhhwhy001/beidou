@@ -222,9 +222,12 @@ class TestCapacityEvaluatorSignalAware:
         )
         evaluator = CapacityEvaluator(model)
 
-        # 使用微小正收益 + 大量换手 → 冲击成本吃掉收益
+        # 使用微小正收益 + 大量换手 → 冲击成本吃掉收益。
+        # GAP-4 单位一致性后 gross 为年化（×365）：恒定 [0.0001] 的序列年化
+        # gross≈3.65% 不会再被 0.1 的换手成本吃穿；改用交替正负收益产生
+        # 高换手（≈365x/年），使 100M 点净收益转负、归零点落在曲线范围内。
         predictions = [0.01] * 100
-        returns = [0.0001] * 100  # 极低收益
+        returns = [0.0025, -0.001] * 50  # 均值 0.00075，交替符号 → 高换手
 
         report = evaluator.evaluate_capacity_curve(
             predictions,

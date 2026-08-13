@@ -252,8 +252,29 @@ class CapacityEvaluator:
         if aum_range is None:
             aum_range = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000]
 
-        # 计算毛收益（年化）
-        gross_return = _mean(returns) if returns else 0.0
+        # 边界：无评估点 → 空曲线报告（_find_zero_crossing 对空列表会 IndexError，
+        # 且 gate 侧按 fail-closed 处理）。
+        if not aum_range:
+            return SignalCapacityReport(
+                curve=[],
+                capacity_at_zero_return=0.0,
+                capacity_at_half_return=0.0,
+                recommended_max_aum=0.0,
+                signal_decay_ratio=0.0,
+                avg_turnover=0.0,
+                adv_used=avg_daily_volume or self.cost_model.adv_30d,
+                participation_at_capacity=0.0,
+                warnings=["empty_aum_range"],
+            )
+
+        # GAP-4 单位一致性：returns 是 per-period 收益（_mean 直接取均值），
+        # 而成本项 cost_decimal * trades_per_period * annual_turnover 是年化
+        # 口径（annual_turnover 为年化换手率）。net_return 公式把 per-period
+        # gross 减去年化成本 → 单位不一致。按模块既有约定（_estimate_turnover_
+        # from_returns 以 ×365 年化、_compute_sharpe_annualized 默认 365 期/年）
+        # 将 gross 年化（×365），使 gross/net 均与 CapacityCurvePoint 文档
+        # "年化" 语义一致，且衰减比 net/gross 不变。
+        gross_return = (_mean(returns) * 365.0) if returns else 0.0
         if gross_return <= 0:
             # 无正收益时，容量为0
             empty_curve = [CapacityCurvePoint(aum, gross_return, min(0.0, gross_return), 0.0, 0.0) for aum in aum_range]
@@ -381,18 +402,28 @@ class CapacityEvaluator:
 
         failures: list[str] = []
 
+        # 边界：无曲线点 → fail-closed（不产生误放行）。
+        if not report.curve:
+            return report, False, "capacity_curve_empty"
+
+        # GAP-4: 账户实际规模约 10k，在 aum_range 首点（默认 10K）判定
+        # is_cost_viable 与 severe_decay；原逻辑用 curve[-1]（50M 最大冲击点）
+        # 判定导致任何策略恒拒。zero_capacity（全曲线无正净收益）保留。
+        eval_point = report.curve[0]
+
         if report.capacity_at_zero_return <= 0:
             failures.append("zero_capacity")
 
-        if report.signal_decay_ratio < 0.3:
-            failures.append(f"severe_decay:{report.signal_decay_ratio:.2%}")
+        account_decay = eval_point.net_return / eval_point.gross_return if eval_point.gross_return > 0 else 0.0
+        if account_decay < 0.3:
+            failures.append(f"severe_decay:{account_decay:.2%}")
 
         if report.avg_turnover > 100:
             failures.append(f"excessive_turnover:{report.avg_turnover:.0f}")
 
         cost_viable, cost_reason = self.is_cost_viable(
-            report.curve[-1].net_return if report.curve else 0.0,
-            report.curve[-1].gross_return if report.curve else 0.0,
+            eval_point.net_return,
+            eval_point.gross_return,
         )
         if not cost_viable:
             failures.append(cost_reason)
