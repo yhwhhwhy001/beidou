@@ -3153,20 +3153,14 @@ class AutonomousEngine:
                 # 对账通过 → 检查持久事实并自动清除事故
                 if recon_ok:
                     durable_ok, _, _ = self._durable_fact_status()
+                    # BD-FIX: incident 清理与 RESUME 动作解耦。旧逻辑把两者
+                    # 包在 `control != RESUME` 条件下 —— 控制面已 RESUME
+                    # （testnet 自动重新授权）时 incident 永不 resolve，
+                    # 残留 CRITICAL 事故永久展示且告警噪音不断（final14/21
+                    # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
+                    if durable_ok:
+                        self._maybe_auto_resolve_incidents()
                     if durable_ok and self._control.get_status() != ControlAction.RESUME:
-                        _alerts = getattr(self, "_alerts", None)
-                        if _alerts is not None:
-                            try:
-                                _active = getattr(_alerts, "_active_incidents", {})
-                                for _iid, _inc in list(_active.items()):
-                                    if getattr(_inc, "root_cause_category", "") == "execution_fact":
-                                        _alerts.resolve_incident(_iid)
-                                        print("[realtime] Auto-resolved execution_fact incident")
-                            except Exception as exc:
-                                logger.warning(
-                                    "execution_fact incident resolution failed: %s",
-                                    type(exc).__name__,
-                                )
                         try:
                             self._control.execute_action(ControlAction.RESUME)
                             print("[realtime] Auto-restored RESUME after durable facts verified")
@@ -6012,8 +6006,14 @@ class AutonomousEngine:
         with contextlib.suppress(Exception):
             if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
                 self._safe_no_new_risk("auto")
-        with contextlib.suppress(Exception):
-            self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
+        # BD-FIX: user stream 连接故障 ≠ 执行事实持久化失败。freeze 账本
+        # 是无解冻路径的永久动作 —— demo ws 抖动（一次临时连接失败）即
+        # 永久停机（final21 实测 04:20）。testnet 只降级控制面（NO_NEW_RISK，
+        # 可恢复）+ user_stream incident，不冻结账本；live/canary 保留
+        # freeze 语义（真实资金下成交事件丢失不可接受，账本必须冻结）。
+        if str(getattr(getattr(self, "_env_mode", None), "value", "")) in ("live", "canary"):
+            with contextlib.suppress(Exception):
+                self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
         with contextlib.suppress(Exception):
             self._alerts.send_incident(
                 AlertSeverity.CRITICAL,
@@ -6530,6 +6530,35 @@ class AutonomousEngine:
             )
         print("[recon] MATCHED: independent durable facts verified")
         return True
+
+    def _maybe_auto_resolve_incidents(self) -> None:
+        """持久事实干净后自动清除残留事故（BD-FIX）。
+
+        执行事实已恢复可验证（recon 通过 + durable_ok）时：
+        - execution_fact 事故无条件 resolve（事实已证明持久化可用）
+        - user_stream 事故在 transport 恢复健康（CONNECTED/HEALTHY）后
+          resolve（连接恢复 + 事实干净 = 事故根因消除）
+        testnet 自动重新授权（1cd1208）可能已恢复 RESUME —— 事故清理
+        不得依赖控制面状态（旧逻辑死角：control==RESUME 时永不 resolve，
+        CRITICAL 事故永久残留，final14/21 实测）。
+        """
+        _alerts = getattr(self, "_alerts", None)
+        if _alerts is None:
+            return
+        _runtime = getattr(self, "_user_stream_runtime", {})
+        _ustatus = str(_runtime.get("status", "")).upper() if isinstance(_runtime, dict) else ""
+        try:
+            _active = getattr(_alerts, "_active_incidents", {})
+            for _iid, _inc in list(_active.items()):
+                _cat = str(getattr(_inc, "root_cause_category", ""))
+                if _cat == "execution_fact":
+                    _alerts.resolve_incident(_iid)
+                    print("[realtime] Auto-resolved execution_fact incident")
+                elif _cat == "user_stream" and _ustatus in ("CONNECTED", "HEALTHY"):
+                    _alerts.resolve_incident(_iid)
+                    print("[realtime] Auto-resolved user_stream incident")
+        except Exception as exc:
+            logger.warning("incident auto-resolution failed: %s", type(exc).__name__)
 
     def _maybe_authorize_user_stream_baseline(
         self,
