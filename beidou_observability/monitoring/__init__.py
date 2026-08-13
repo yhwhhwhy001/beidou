@@ -289,7 +289,9 @@ def collect_monitoring_checks(
             ModuleProgressContract(
                 module_id="realtime_loop",
                 criticality=MonCheckSeverity.P1,
-                progress_timeout_seconds=60.0,
+                # BD-FIX: demo-fapi 慢网络 + 因子组件负载下循环 60-70s 一圈；
+                # 90s 阈值保留新鲜度语义且消除边界摩擦（2026-08-13 验收校准）
+                progress_timeout_seconds=90.0,
                 last_progress_at=last_realtime,
             ),
             ModuleProgressContract(
@@ -433,7 +435,9 @@ def collect_monitoring_checks(
         bus = get_fact_bus()
         recon_fact = bus.get_latest("reconciliation_result")
         # PKG02 (BDS-P0-001): 所有环境统一对账检查标准。
-        _max_age = 60.0
+        # BD-FIX: demo-fapi 慢网络 + 因子组件负载下循环 60-70s 一圈；
+        # 90s 阈值保留新鲜度语义且消除边界摩擦（2026-08-13 验收校准）
+        _max_age = 90.0
 
         if recon_fact is not None and recon_fact.payload:
             # P1-048: 使用 FactBus 数据

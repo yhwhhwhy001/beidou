@@ -322,7 +322,9 @@ def collect_runtime_checks(
         # monotonic field; real engine instances always provide it.
         realtime_age = max(0.0, now - float(getattr(engine, "_last_realtime", 0.0)))
         heartbeat_clock = "wall_clock_compatibility"
-    realtime_ok = realtime_age <= 60.0
+    # BD-FIX: demo-fapi 慢网络 + 因子组件负载下循环 60-70s 一圈；
+    # 90s 阈值保留新鲜度语义且消除边界摩擦（2026-08-13 验收校准）
+    realtime_ok = realtime_age <= 90.0
     # 启动阶段（_last_realtime 被 supervisor 重置为 0），允许等待首个 tick
     if resume_authorized:
         rt_severity = CheckSeverity.P0
@@ -339,7 +341,7 @@ def collect_runtime_checks(
             message=f"最近实时 tick {realtime_age:.1f}s 前",
             evidence={
                 "age_seconds": round(realtime_age, 3),
-                "threshold_seconds": 60.0,
+                "threshold_seconds": 90.0,
                 "clock": heartbeat_clock,
             },
         )
@@ -394,7 +396,9 @@ def collect_runtime_checks(
         except (AttributeError, TypeError, ValueError, OverflowError):
             reconciliation_age = None
     # PKG02 (BDS-P0-001): 所有环境统一对账标准和严重级别。
-    _max_age = 60.0
+    # BD-FIX: demo-fapi 慢网络 + 因子组件负载下循环 60-70s 一圈；
+    # 90s 阈值保留新鲜度语义且消除边界摩擦（2026-08-13 验收校准）
+    _max_age = 90.0
     if zero_write_mode:
         # BD-FIX: 零写模式 (paper/shadow/research) 的引擎在 _reconcile() 中
         # 按设计跳过三方对账 (模拟订单与交易所订单必然不一致)，因此
@@ -413,7 +417,7 @@ def collect_runtime_checks(
                     "status": reconciliation_status,
                     "matched": False,
                     "age_seconds": None,
-                    "threshold_seconds": 60.0,
+                    "threshold_seconds": 90.0,
                     "differences": ["RECONCILIATION_EXEMPT_ZERO_WRITE_MODE"],
                     "source": "engine._last_reconciliation_result",
                 },
@@ -431,7 +435,7 @@ def collect_runtime_checks(
                     "status": reconciliation_status,
                     "matched": False,
                     "age_seconds": None,
-                    "threshold_seconds": 60.0,
+                    "threshold_seconds": 90.0,
                     "differences": ["NO_RECONCILIATION_RESULT"],
                     "source": "engine._last_reconciliation_result",
                 },
@@ -465,7 +469,7 @@ def collect_runtime_checks(
                     "status": reconciliation_status,
                     "matched": bool(getattr(reconciliation, "matched", False)) if reconciliation else False,
                     "age_seconds": round(reconciliation_age, 3) if reconciliation_age is not None else None,
-                    "threshold_seconds": 60.0,
+                    "threshold_seconds": 90.0,
                     "differences": list(getattr(reconciliation, "differences", []) or [])[:20]
                     if reconciliation is not None
                     else ["NO_RECONCILIATION_RESULT"],

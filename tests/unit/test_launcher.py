@@ -236,6 +236,35 @@ def test_runtime_heartbeat_evidence_declares_monotonic_clock() -> None:
     assert heartbeat.evidence["clock"] == "monotonic"
 
 
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_status", "expected_severity"),
+    [
+        (61.0, CheckStatus.PASS, CheckSeverity.P0),  # BD-FIX: 阈值 60→90s 后 61s 新鲜度在阈值内 → PASS
+        (91.0, CheckStatus.FAIL, CheckSeverity.P0),  # 91s 超 90s 阈值 → 边界语义保持 FAIL (P0)
+    ],
+)
+def test_runtime_heartbeat_freshness_threshold_boundary(
+    age_seconds: float, expected_status: CheckStatus, expected_severity: CheckSeverity
+) -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._running = True
+    engine._last_realtime_mono = time.monotonic() - age_seconds
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    heartbeat = next(item for item in checks if item.check_id == "runtime.health.realtime_heartbeat")
+    assert heartbeat.status is expected_status
+    assert heartbeat.severity is expected_severity
+    assert heartbeat.evidence["threshold_seconds"] == 90.0
+
+
 def test_authority_reconciliation_fact_is_required_and_fresh() -> None:
     from beidou_launcher.runtime import collect_runtime_checks
 
@@ -280,8 +309,28 @@ def test_authority_reconciliation_fact_is_required_and_fresh() -> None:
         last_error_count=0,
     )
     authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
-    # Stale but MATCHED reconciliation may pass or warn depending on threshold strictness
-    assert authority.status.is_safe if hasattr(authority.status, "is_safe") else True
+    # BD-FIX: 阈值 60→90s 后 61s 新鲜度在阈值内 → PASS
+    assert authority.status is CheckStatus.PASS
+    assert authority.severity is CheckSeverity.P0
+
+    engine._last_reconciliation_result = SimpleNamespace(
+        matched=True,
+        status=SimpleNamespace(value="MATCHED"),
+        checked_at=datetime.now(timezone.utc) - timedelta(seconds=91),
+        differences=[],
+    )
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    authority = next(item for item in checks if item.check_id == "runtime.safety.reconciliation_authority")
+    # 91s 超 90s 阈值 → 边界语义保持 FAIL (P0)
+    assert authority.status is CheckStatus.FAIL
+    assert authority.severity is CheckSeverity.P0
 
 
 def test_writable_runtime_requires_user_stream_fact_boundary() -> None:
