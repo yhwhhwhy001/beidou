@@ -45,7 +45,12 @@ from beidou_shared.types import (
 )
 
 
-def _baseline_facts(*, complete: bool = True, source: str = "BINANCE_ACCOUNT_AND_OPEN_ORDERS") -> AccountFactSnapshot:
+def _baseline_facts(
+    *,
+    complete: bool = True,
+    source: str = "BINANCE_ACCOUNT_AND_OPEN_ORDERS",
+    timestamp: datetime | None = None,
+) -> AccountFactSnapshot:
     """recon 事实快照（默认交易所侧来源）。"""
     return AccountFactSnapshot(
         account_id=AccountId("default"),
@@ -53,7 +58,7 @@ def _baseline_facts(*, complete: bool = True, source: str = "BINANCE_ACCOUNT_AND
         balance=MonetaryValue(amount="10544.5", currency="USDT", decimals=8),
         positions={},
         open_orders=[],
-        timestamp=datetime.now(timezone.utc),
+        timestamp=timestamp or datetime.now(timezone.utc),
         source=source,
         fact_version="rest-123",
         complete=complete,
@@ -192,6 +197,39 @@ def test_authorization_failure_does_not_freeze_or_incident() -> None:
 def test_returns_false_without_projector() -> None:
     engine = _engine(projector=None)
     assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-abc") is False
+
+
+# --- 对账事实新鲜度阈值环境化 ---
+
+
+def test_recon_max_age_testnet_relaxed_to_300s() -> None:
+    """testnet 低频事件流：30s 无新事件即 STALE 恒失败；放宽到 300s，
+    与运行时 readiness 的 event_age 阈值（CONNECTED 时 300s）一致。"""
+    from beidou_core.engine import _reconciliation_max_age_seconds
+
+    assert _reconciliation_max_age_seconds("testnet") == 300.0
+
+
+def test_recon_max_age_strict_for_production_envs() -> None:
+    from beidou_core.engine import _reconciliation_max_age_seconds
+
+    assert _reconciliation_max_age_seconds("live") == 30.0
+    assert _reconciliation_max_age_seconds("canary") == 30.0
+    assert _reconciliation_max_age_seconds("paper") == 30.0
+
+
+def test_recon_max_age_300s_accepts_32s_old_event_facts() -> None:
+    """镜像 03:04 现场：授权后投影冻结 32s → 30s 阈值 STALE；
+    300s 阈值下对账正常比较（不再 STALE）。"""
+    from datetime import timedelta
+
+    from beidou_safety.execution.reconciliation import ReconciliationEngine
+
+    engine = ReconciliationEngine(max_age_seconds=300.0)
+    old_timestamp = datetime.now(timezone.utc) - timedelta(seconds=32)
+    stale_facts = _baseline_facts(timestamp=old_timestamp)
+    result = engine.compare(stale_facts, _baseline_facts())
+    assert result.status.value != "STALE"
 
 
 # --- 两方一致性守卫（helper result 参数）---

@@ -297,6 +297,18 @@ def _validate_duplicate_order_response(
     return True, "OK"
 
 
+def _reconciliation_max_age_seconds(env_mode_value: str) -> float:
+    """对账事实新鲜度阈值按环境区分（BD-FIX）。
+
+    默认 30s 阈值对低频用户流过严：replay baseline 授权后投影时间戳冻结，
+    demo 共享账户凌晨可 10+ 分钟无事件，30s 即 STALE → 三方对账恒失败 →
+    DEGRADED。testnet 放宽到 300s，与运行时 readiness 的 event_age 阈值
+    （CONNECTED 时 300s）一致——事件停流保护语义不变，只是对齐时间尺度。
+    live/canary/paper 保持 30s 严格默认。
+    """
+    return 300.0 if env_mode_value == "testnet" else 30.0
+
+
 def _signal_identity(context: dict[str, Any]) -> tuple[InstrumentId, VenueId]:
     """Resolve an explicit identity; never default a missing symbol to BTCUSDT."""
 
@@ -1339,7 +1351,10 @@ class AutonomousEngine:
         # ~0.14 USDT/分钟，0.01% 容差数分钟即失效）使用 1% 相对容差；
         # canary/live/paper/research 保持 0.01% 严格默认不变。
         _recon_rel_tolerance = Decimal("0.01") if self._env_mode.value == "testnet" else Decimal("0.0001")
-        self._recon = ReconciliationEngine(balance_rel_tolerance=_recon_rel_tolerance)
+        self._recon = ReconciliationEngine(
+            balance_rel_tolerance=_recon_rel_tolerance,
+            max_age_seconds=_reconciliation_max_age_seconds(self._env_mode.value),
+        )
         self._user_stream_projector = UserStreamProjector(store=self._store)
         # PKG02 (BDS-P0-001): 移除 testnet 允许无序列号事件旁路
         # 所有环境必须通过序列完整性验证
