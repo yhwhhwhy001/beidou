@@ -1,8 +1,10 @@
 """Task 10: ExpressionComponent 通用表达式组件单元测试。"""
 
 import asyncio
+import concurrent.futures
 from typing import Any
 
+from beidou_core import expression_component
 from beidou_core.expression_component import ExpressionComponent
 from beidou_strategy.alpha import AlphaSignal, SignalDirection
 
@@ -94,3 +96,11 @@ def test_generate_runs_in_event_loop_with_capped_history() -> None:
     assert len(comp._history) == 800
     assert len(comp._value_history) == 100  # z 窗口不受历史窗口缩小影响
     assert comp._history[0] > 100.0  # 最早 200 根已被丢弃
+
+
+def test_eval_executor_is_dedicated_pool_of_4() -> None:
+    """求值走专用线程池：与 rest_client 的 asyncio.to_thread 默认池隔离（修复循环 90s 退化）。"""
+    executor = expression_component._EVAL_EXECUTOR
+    assert isinstance(executor, concurrent.futures.ThreadPoolExecutor)
+    assert executor._max_workers == 4
+    assert executor._thread_name_prefix == "expr-eval"

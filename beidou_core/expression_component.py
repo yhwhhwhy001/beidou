@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import math
 from collections import deque
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
     from beidou_research.mining.expression_ast import Expression
 
 EXPRESSION_BINDINGS: dict[str, tuple[str, str]] = {}  # factor_id -> (expression_string, role)
+
+# 表达式求值专用线程池：与 rest_client 的 asyncio.to_thread 默认线程池隔离。
+# 默认池 max_workers≈12，nearline 每 tick 37 组件求值批次会占满默认池数秒，
+# 导致行情/对账/池评分的网络请求排队、循环周期恶化到 90s+；独立小池保证
+# 求值（4 线程）与网络 IO 互不挤占。
+_EVAL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="expr-eval",
+)
 
 _HISTORY_LIMIT = 800  # 历史窗口上限：挖掘因子最大滚动窗口 100、z 窗口 100，800 根余量充足；
 # 相比 3000 根，逐 bar 求值量 ÷3.75，缓解同步 evaluate_series 阻塞共享 event loop（P0 STALL）
@@ -109,11 +119,12 @@ class ExpressionComponent(AlphaComponent):
             return self._no_action(context)
         try:
             feature_dict = self._build_feature_dict()
-            # 同步 CPU 密集求值（37 组件 × 逐 bar 全历史）移入默认线程池，
-            # 避免阻塞引擎与 supervisor 共享的 asyncio event loop；异常在 await 处抛出，
-            # 由下方 except Exception 捕获走 NO_ACTION。
+            # 同步 CPU 密集求值（37 组件 × 逐 bar 全历史）移入专用求值线程池，
+            # 避免阻塞引擎与 supervisor 共享的 asyncio event loop，且与
+            # rest_client 的网络线程（asyncio.to_thread 默认池）隔离；
+            # 异常在 await 处抛出，由下方 except Exception 捕获走 NO_ACTION。
             loop = asyncio.get_running_loop()
-            values = await loop.run_in_executor(None, self._expr.evaluate_series, feature_dict)
+            values = await loop.run_in_executor(_EVAL_EXECUTOR, self._expr.evaluate_series, feature_dict)
             last = float(values[-1]) if values else math.nan
         except Exception:
             return self._no_action(context)
