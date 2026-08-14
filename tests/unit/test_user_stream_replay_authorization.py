@@ -651,8 +651,9 @@ async def test_reconcile_incomplete_event_stream_still_authorizes(monkeypatch: p
     monkeypatch.setattr(engine, "_record_reconciliation_truth", Mock())
 
     ok = await engine._reconcile()
-    # 本轮仍 INCOMPLETE（事件流在授权后才完整）——但授权已生效
-    assert ok is False
+    # BD-FIX（共享账户语义）: testnet 走两方对账（event 侧仅参考）——
+    # 两方一致即 MATCHED；授权仍发生（事件侧 incomplete 不阻断）
+    assert ok is True
     assert projector.sequencer.status is UserStreamStatus.HEALTHY
     assert projector.sequencer._unsequenced_allowed is True
     # 基线已建立即 complete（授权 = REST 独立验证 + listenKey 连接）；

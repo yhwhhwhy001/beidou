@@ -6819,8 +6819,16 @@ class AutonomousEngine:
         if event_facts is not None:
             self._recon.update_event_facts(event_facts)
         # 启动时事件流可能尚未就绪 — 先使用两方对账建立基线，
-        # 三方对账在事件流可用后自动启用
-        if event_facts is not None:
+        # 三方对账在事件流可用后自动启用。
+        # BD-FIX（共享账户语义）: testnet/demo 的事件侧投影含共享账户
+        # 外部活动（其他用户的持仓/余额变动经 ACCOUNT_UPDATE 流入），
+        # 与本地账本（system 侧）必然不一致 —— 三方 MATCHED 在共享
+        # demo 下不可达（final33 实测：外部 -0.02 空头 + 余额变动 →
+        # event_stream 余额 5000 vs system 10548 恒 MISMATCH）。
+        # testnet 以 system/exchange 两方为对账权威，事件侧仅作参考；
+        # live/canary 保持三方严格语义不变。
+        _is_testnet = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+        if event_facts is not None and not _is_testnet:
             result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
         else:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
