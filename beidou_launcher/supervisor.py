@@ -890,7 +890,19 @@ class BeidouSupervisor:
     # 保护覆盖等任一事实失真时，必须撤销当前授权并重新走启动/恢复门禁。
     # 这条约束防止 supervisor 在 stale heartbeat 或卡死订单链期间继续声称
     # RESUME/READY，也防止健康防抖器把安全故障误判成可自愈抖动。
-    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset()
+    # BD-FIX（C6 审查落实，无人值守目标）: demo 网络抖动的瞬时 FAIL 不
+    # 进入 LOCKED 防抖（只 DEGRADED 并持续重试）。LOCKED 只留给
+    # execution/protection 类持久事实失真；网络类检查（对账/用户流/
+    # 持仓模式探针）由各自的恢复机制处理（对账 30s 重试、user stream
+    # 限次重启 + recon 重置预算、position_mode 300s 周期探针）。
+    _TRANSIENT_CHECK_IDS: frozenset[str] = frozenset(
+        {
+            "runtime.safety.position_mode",
+            "runtime.safety.user_stream",
+            "runtime.safety.reconciliation",
+            "runtime.safety.reconciliation_authority",
+        }
+    )
 
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """在仍有有效授权时，经过 RECOVERING→VALIDATING→ACTIVE。
