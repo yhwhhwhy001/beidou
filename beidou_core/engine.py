@@ -6925,25 +6925,18 @@ class AutonomousEngine:
                 # stability_score：负收益天数占比反向
                 down_days = float((returns < 0).mean()) if len(returns) else 0.5
                 stability_score = max(0.0, min(1.0, 1.0 - down_days))
-                # spread 代理：(high-low)/close 均值 → 映射（<0.5% → 1 分，>10% → 0 分）
-                avg_range = float(((highs - lows) / closes).mean())
-                spread_score = max(0.0, min(1.0, 1.0 - (avg_range - 0.005) / 0.095)) if avg_range > 0.005 else 1.0
-                # depth 无历史订单簿 → 中性 0.5
-                quality = (
-                    spread_score * 0.25
-                    + 0.5 * 0.25
-                    + volume_score * 0.20
-                    + stability_score * 0.15
-                    + capacity_score * 0.15
-                )
+                # BD-FIX: 历史质量分只用可推导的 3 维 —— 点差/深度没有
+                # 历史订单簿（(high-low)/close 是日内振幅不是点差，硬套
+                # 实时权重会把历史分系统性低估到阈值以下，预筛选失效）
+                quality = volume_score * 0.35 + stability_score * 0.30 + capacity_score * 0.35
                 if pool.seed_historical_observation(
                     sym,
                     quality,
+                    threshold=0.5,  # 预筛选是加速器：宽松准入，晋级权在实时评分
                     evidence={
                         "avg_daily_notional": round(avg_daily_notional, 2),
                         "ann_vol": round(ann_vol, 4),
                         "down_days_pct": round(down_days * 100, 2),
-                        "avg_range_pct": round(avg_range * 100, 4),
                         "days": len(closes),
                     },
                 ):

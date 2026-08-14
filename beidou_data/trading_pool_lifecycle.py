@@ -202,6 +202,7 @@ class TradingPool:
         quality_score: float,
         *,
         evidence: dict[str, Any] | None = None,
+        threshold: float | None = None,
     ) -> bool:
         """历史数据预筛选（BD-FIX，启动加速）。
 
@@ -214,7 +215,10 @@ class TradingPool:
         entry = self._pool.get(instrument_id)
         if not entry or entry.status != PoolStatus.OBSERVING:
             return False
-        if quality_score < self.PROMOTE_THRESHOLD:
+        # 默认与晋级阈值一致；调用方可显式放宽（历史预筛选是加速器，
+        # 晋级权仍在实时评分规则的 PROMOTE_THRESHOLD）
+        _threshold = self.PROMOTE_THRESHOLD if threshold is None else threshold
+        if quality_score < _threshold:
             return False
         entry.historical_seed = {
             "quality_score": round(quality_score, 4),
