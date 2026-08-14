@@ -9830,18 +9830,30 @@ class AutonomousEngine:
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"
                 )
             # Phase 1: 本地创建所有保护单
-            # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建
+            # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建。
+            # BD-FIX（final54）: 只统计本引擎（beidou- clientAlgoId）的
+            # Algo 单 —— 共享账户他人的算法单被误计为"已有保护"导致
+            # 引擎持仓跳过保护创建 → protection_coverage 恒
+            # MISSING_SL/TP（final54 实测）。
             existing_algo_count: dict[str, int] = {}
             if isinstance(existing_algo_inventory, list):
                 for a in existing_algo_inventory:
+                    _client_aid = str(a.get("clientAlgoId", "") or "")
+                    if _client_aid and not _client_aid.startswith("beidou-"):
+                        continue  # 共享账户他人的算法单不计
                     sym = str(a.get("symbol", "")).upper()
                     existing_algo_count[sym] = existing_algo_count.get(sym, 0) + 1
             pending_submissions: list[dict] = []
+            _owned_syms = _local_owned_symbols(self)
             for p in positions_list if durable_projection_ok else []:
                 amt = float(p.get("positionAmt", 0))
                 if amt == 0:
                     continue
                 symbol = p["symbol"]
+                # BD-FIX（final54）: 只为本地所有权（fill 重放锚定）的
+                # 持仓创建保护 —— 共享账户外部持仓不归引擎保护
+                if symbol not in _owned_syms:
+                    continue
                 # 交易所已有 >=2 个 Algo 单 → 跳过
                 if existing_algo_count.get(symbol.upper(), 0) >= 2:
                     print(
