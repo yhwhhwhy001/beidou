@@ -1155,6 +1155,81 @@ def test_user_stream_runtime_starts_and_stops_without_rest_fallback(monkeypatch:
     asyncio.run(scenario())
 
 
+def test_algo_update_informational_on_testnet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """demo 共享账户其他用户的算法单推送 ALGO_UPDATE —— testnet 按信息性
+    事件处理保持流健康；live 保持 fault（自己的算法单状态必须复核）。
+
+    镜像 15:52 现场：FILLED 达成后 ALGO_UPDATE 触发 fault → NO_NEW_RISK。
+    """
+    import beidou_exchange.binance_usdm as binance_usdm
+
+    class FakeWebSocket:
+        instances: ClassVar[list[FakeWebSocket]] = []
+
+        def __init__(self, base_url: str) -> None:
+            self.base_url = base_url
+            self.callback = None
+            self.closed = False
+            self._stopped = asyncio.Event()
+            self.__class__.instances.append(self)
+
+        def on_state_change(self, callback) -> None:
+            self.state_callback = callback
+
+        async def subscribe(self, _stream: str, callback) -> None:
+            self.callback = callback
+
+        async def run(self) -> None:
+            await self._stopped.wait()
+
+        async def close(self) -> None:
+            self.closed = True
+            self._stopped.set()
+
+    class Adapter:
+        async def create_user_listen_key(self):
+            return Result.success({"listenKey": "secret-listen-key"})
+
+        async def keepalive_user_listen_key(self, _listen_key: str):
+            return Result.success({})
+
+    def _make_engine(env_mode: str) -> AutonomousEngine:
+        engine = AutonomousEngine.__new__(AutonomousEngine)
+        engine._can_write = True
+        engine._env_mode = SimpleNamespace(value=env_mode)
+        engine._adapter = Adapter()
+        engine._control = SimpleNamespace(
+            get_status=lambda: ControlAction.NO_NEW_RISK,
+            execute_action=lambda _action: None,
+        )
+        engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
+        engine._record_execution_fact_failure = lambda _reason: None
+        engine._record_execution_fact_failure_env_guarded = lambda _reason: None
+        engine.ingest_user_order_update = lambda _update: True
+        engine._user_stream_runtime = {"status": "NOT_STARTED", "listen_key_active": False}
+        return engine
+
+    monkeypatch.setattr(binance_usdm, "BinanceUsdmWebSocketClient", FakeWebSocket)
+
+    async def scenario() -> None:
+        # testnet：ALGO_UPDATE 不 fault，流保持健康
+        testnet_engine = _make_engine("testnet")
+        assert await testnet_engine._start_user_stream() is True
+        await FakeWebSocket.instances[-1].callback("listen-key-1", {"e": "ALGO_UPDATE", "E": 1000})
+        assert testnet_engine._user_stream_runtime["status"] in ("HEALTHY", "CONNECTED")
+        assert "REVALIDATION" not in str(testnet_engine._user_stream_runtime.get("last_error", ""))
+        await testnet_engine._stop_user_stream()
+
+        # live：ALGO_UPDATE 仍 fault（算法单状态必须复核）
+        live_engine = _make_engine("live")
+        assert await live_engine._start_user_stream() is True
+        await FakeWebSocket.instances[-1].callback("listen-key-1", {"e": "ALGO_UPDATE", "E": 1000})
+        assert live_engine._user_stream_runtime["status"] == "DEGRADED"
+        assert "ALGO_UPDATE_REVALIDATION_REQUIRED" in str(live_engine._user_stream_runtime.get("last_error", ""))
+
+    asyncio.run(scenario())
+
+
 def test_writable_stopped_engine_cannot_claim_health_or_readiness() -> None:
     engine = _engine()
     engine._state_backend_supported = True

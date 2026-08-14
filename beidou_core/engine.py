@@ -6174,6 +6174,20 @@ class AutonomousEngine:
                     # 故障。接收并更新账户配置事实，保持流健康。
                     accepted = self._ingest_account_config_update(data)
                 elif event_type == "ALGO_UPDATE":
+                    # BD-FIX: demo 共享账户其他用户的算法单推送 ALGO_UPDATE
+                    # —— 对单账户系统是"需复核"，对共享 demo 是环境噪音
+                    # （15:52 实测 FILLED 达成后 ALGO_UPDATE 触发 fault →
+                    # NO_NEW_RISK）。testnet 按信息性事件处理（保持流健康，
+                    # 与 ACCOUNT_CONFIG_UPDATE 同语义）；live/canary 保持
+                    # fault（自己的算法单状态变化必须复核）。
+                    if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                        self._update_user_stream_runtime(
+                            status="HEALTHY",
+                            last_event_mono=time.monotonic(),
+                            listen_key_active=True,
+                            last_error="",
+                        )
+                        return
                     self._user_stream_fault("ALGO_UPDATE_REVALIDATION_REQUIRED")
                     return
                 elif event_type == "MARGIN_CALL":
