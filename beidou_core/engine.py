@@ -341,15 +341,35 @@ def _local_owned_symbols(engine: Any) -> set[str]:
     """本地所有权可证明的持仓标的集合（BD-FIX，共享账户本地化）。
 
     共享 demo 账户上其他用户的持仓不属于引擎 —— 风控输入、保护覆盖、
-    权益估计都只统计本地所有权（保护位置/持仓投影/代际记录）可证明
-    的部分。
+    权益估计都只统计本地所有权可证明的部分。可靠锚定：
+    1. 当前本地保护持仓（protection 内存）
+    2. 本地订单（beidou- client_order_id）的 fill 重放品种 ——
+       自有成交是持仓所有权的唯一硬证据
+    （_position_projection/_position_generation 不再作为依据 ——
+    共享账户外部成交曾污染投影记录导致判定失真，final47 实测
+    RVNUSDT 外部持仓被误认本地）
     """
     protection = getattr(engine, "_protection", None)
     owned: set[str] = set()
     if protection is not None and callable(getattr(protection, "all_positions", None)):
         owned.update(str(pp.instrument_id) for pp in protection.all_positions().values())
-    owned.update(str(sym) for sym in getattr(engine, "_position_generation", {}).keys())
-    owned.update(str(sym) for sym in getattr(engine, "_position_projection", {}).keys())
+    store = getattr(engine, "_store", None)
+    if store is not None and callable(getattr(store, "restore_fill_events", None)) and callable(
+        getattr(store, "restore_order_states", None)
+    ):
+        try:
+            local_order_ids = {
+                str(row.get("order_id") or row.get("record_id") or "")
+                for row in store.restore_order_states()
+                if str(row.get("client_order_id", "") or "").startswith("beidou-")
+            }
+            for fill in store.restore_fill_events():
+                if str(fill.get("order_id", "")) in local_order_ids:
+                    sym = str(fill.get("symbol", "")).strip()
+                    if sym:
+                        owned.add(sym)
+        except Exception:
+            pass
     return owned
 
 
