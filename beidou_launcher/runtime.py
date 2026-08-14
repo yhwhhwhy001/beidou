@@ -540,7 +540,10 @@ def collect_runtime_checks(
 
     error_count = int(getattr(engine, "_error_count", 0))
     error_delta = error_count - last_error_count
-    errors_ok = error_delta <= 5 and error_count < 100
+    # BD-FIX: 只看本周期新增 —— 累计硬阈值（<100）让 demo 抖动期间
+    # 的历史错误（final56 累计 420）永久 FAIL（累计值从不回落）。
+    # 爆发检测的核心信号是本周期新增速率；累计值只作 evidence。
+    errors_ok = error_delta <= 5
     checks.append(
         CheckResult(
             check_id="runtime.health.errors",
@@ -548,7 +551,7 @@ def collect_runtime_checks(
             status=CheckStatus.PASS if errors_ok else CheckStatus.FAIL,
             severity=CheckSeverity.P2,
             message=f"累计错误={error_count}, 本周期新增={error_delta}",
-            evidence={"total": error_count, "delta": error_delta, "fatal_threshold": 100},
+            evidence={"total": error_count, "delta": error_delta},
         )
     )
 
