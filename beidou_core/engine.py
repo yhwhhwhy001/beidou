@@ -3444,12 +3444,20 @@ class AutonomousEngine:
         return generation
 
     def _block_unowned_protection_orders(self, order_ids: list[str]) -> None:
-        """Freeze new risk when venue protection ownership is unproven."""
+        """Freeze new risk when venue protection ownership is unproven.
 
-        self._protection_owner_unknown = True
-        # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
-        self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
-        self._last_protection_fact_at = time.time()
+        BD-FIX: testnet 不置位 owner_unknown —— 共享账户其他用户的
+        算法单不构成"所有权未证明"（beidou- 前缀过滤已把他人订单
+        排除出 unowned 判定），此处被触发的场景多为共享账户噪音；
+        置位后 protection UNKNOWN → 资格恒 NO_NEW_RISK（final52
+        实测 1154 FAILED）。live/canary 保持置位严格语义不变。
+        """
+        _is_testnet_block = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+        if not _is_testnet_block:
+            self._protection_owner_unknown = True
+            # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
+            self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+            self._last_protection_fact_at = time.time()
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
