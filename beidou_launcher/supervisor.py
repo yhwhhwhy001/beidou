@@ -777,7 +777,12 @@ class BeidouSupervisor:
             if lifecycle_value == "ACTIVE" and self._shutdown_requested:
                 self.engine._running = False
                 return False
-            if lifecycle_value == "ACTIVE" and health_thread is not None and health_thread.is_alive():
+            # BD-FIX（C5 审查残留）: 引擎启动期 lifecycle 可为 DEGRADED
+            # （启动 durable gate 环境化后 fail-closed 但非致命）—— 只认
+            # ACTIVE 会让检查永不执行、启动必超时（final43 实测 300s
+            # exit）。ACTIVE/DEGRADED 均进入检查循环：检查通过后授权
+            # RESUME，引擎经 _recover_if_validated 回到 ACTIVE。
+            if lifecycle_value in ("ACTIVE", "DEGRADED") and health_thread is not None and health_thread.is_alive():
                 if not self._algorithm_probe.get("ok") and (
                     time.monotonic() - self._last_algorithm_probe_attempt >= 10.0
                     or self._last_algorithm_probe_attempt == 0.0
