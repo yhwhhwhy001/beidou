@@ -297,6 +297,21 @@ def _validate_duplicate_order_response(
     return True, "OK"
 
 
+def _derive_liquidation_price(position_qty: float, entry_price: float, leverage: float) -> float | None:
+    """杠杆推导的名义清算价（BD-FIX）。
+
+    demo 账户快照不提供 liquidationPrice 字段，testnet 用标准名义近似：
+    LONG → entry × (1 − 1/lev)；SHORT → entry × (1 + 1/lev)。输入非法时
+    返回 None（R7 保持 UNKNOWN fail-closed）。
+    """
+    if not math.isfinite(position_qty) or not math.isfinite(entry_price) or not math.isfinite(leverage):
+        return None
+    if entry_price <= 0 or leverage <= 0 or position_qty == 0:
+        return None
+    shift = entry_price / leverage
+    return entry_price - shift if position_qty > 0 else entry_price + shift
+
+
 def _reconciliation_max_age_seconds(env_mode_value: str) -> float:
     """对账事实新鲜度阈值按环境区分（BD-FIX）。
 
@@ -7799,10 +7814,28 @@ class AutonomousEngine:
                                     liquidation_price = liquidation_candidate
                         except (TypeError, ValueError):
                             liquidation_price = None
+                        # BD-FIX: demo 账户快照不提供 liquidationPrice 字段
+                        # （实测 None）—— R7 恒 UNKNOWN 使有持仓后无法下
+                        # 任何新单（fail-closed 拦截加仓与平仓，18:20 实测
+                        # SELL strength=1.0 被拒）。testnet 用杠杆推导保守
+                        # 清算价（entry × (1 ∓ 1/lev)，标准名义近似）；
+                        # live/canary 保持严格（缺失即 UNKNOWN）。
+                        if (
+                            liquidation_price is None
+                            and raw_qty != 0
+                            and str(getattr(self._env_mode, "value", "")) == "testnet"
+                        ):
+                            try:
+                                _entry = float(account_position.get("entryPrice"))
+                                liquidation_price = _derive_liquidation_price(
+                                    raw_qty, _entry, dyn_leverage
+                                )
+                            except (TypeError, ValueError):
+                                liquidation_price = None
                         break
 
                 # PKG02 (BDS-P0-001): 所有环境统一使用交易所返回的 liquidation_price。
-                # 若为 None/0，R7 应如实返回 UNKNOWN。
+                # 若为 None/0，R7 应如实返回 UNKNOWN（testnet 推导价例外，见上）。
                 risk_context: dict = {
                     "leverage": dyn_leverage,
                     "max_leverage": self._policy_float("max_leverage", self._settings.production.max_leverage),

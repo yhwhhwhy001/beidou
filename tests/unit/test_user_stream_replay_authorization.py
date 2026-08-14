@@ -659,3 +659,28 @@ async def test_reconcile_incomplete_event_stream_still_authorizes(monkeypatch: p
     # 事件停流保护由运行时 event_age 检查承担
     assert projector.replay_baseline_verified is True
     assert engine._event_stream_facts.complete is True
+
+
+# --- 杠杆推导清算价（demo 快照缺 liquidationPrice）---
+
+
+def test_derive_liquidation_price_long_and_short() -> None:
+    from beidou_core.engine import _derive_liquidation_price
+
+    # 3x 多头：entry 608.43 → liq = 608.43 × 2/3 = 405.62
+    long_liq = _derive_liquidation_price(0.01, 608.43, 3.0)
+    assert long_liq is not None
+    assert abs(long_liq - 608.43 * 2 / 3) < 1e-9
+    # 3x 空头：entry 608.43 → liq = 608.43 × 4/3 = 811.24
+    short_liq = _derive_liquidation_price(-0.01, 608.43, 3.0)
+    assert short_liq is not None
+    assert abs(short_liq - 608.43 * 4 / 3) < 1e-9
+
+
+def test_derive_liquidation_price_invalid_inputs_return_none() -> None:
+    from beidou_core.engine import _derive_liquidation_price
+
+    assert _derive_liquidation_price(0.0, 608.43, 3.0) is None  # 无持仓
+    assert _derive_liquidation_price(0.01, 0.0, 3.0) is None  # 非法 entry
+    assert _derive_liquidation_price(0.01, 608.43, 0.0) is None  # 非法杠杆
+    assert _derive_liquidation_price(0.01, float("nan"), 3.0) is None
