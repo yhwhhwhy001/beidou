@@ -258,7 +258,25 @@ def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: P
 def test_supervisor_has_no_transient_authority_bypass() -> None:
     from beidou_launcher.supervisor import BeidouSupervisor
 
-    assert frozenset() == BeidouSupervisor._TRANSIENT_CHECK_IDS
+    # BD-FIX（无人值守目标）: 瞬时检查集仅豁免网络类检查的 LOCKED
+    # 防抖（各自有恢复机制）；execution/protection 类持久事实失真
+    # 仍进入 LOCKED 防抖，fail-closed 不弱化。
+    assert BeidouSupervisor._TRANSIENT_CHECK_IDS == frozenset(
+        {
+            "runtime.safety.position_mode",
+            "runtime.safety.user_stream",
+            "runtime.safety.reconciliation",
+            "runtime.safety.reconciliation_authority",
+        }
+    )
+    # 关键持久检查不得进入瞬时豁免集
+    for critical in (
+        "runtime.safety.protection_coverage",
+        "runtime.safety.account",
+        "runtime.health.lifecycle",
+        "runtime.safety.write_interlock",
+    ):
+        assert critical not in BeidouSupervisor._TRANSIENT_CHECK_IDS
 
 
 def test_monitor_loop_health_uses_monotonic_clock() -> None:
