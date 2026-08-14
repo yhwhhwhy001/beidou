@@ -84,11 +84,10 @@ class ExpressionComponent(AlphaComponent):
         self._expression_string = expression_string
         self._strategy_id = strategy_id
         self._expr: Expression | None = None
-        self._history: deque[float] = deque(maxlen=_HISTORY_LIMIT)  # close
-        self._high_history: deque[float] = deque(maxlen=_HISTORY_LIMIT)
-        self._low_history: deque[float] = deque(maxlen=_HISTORY_LIMIT)
-        self._volume_history: deque[float] = deque(maxlen=_HISTORY_LIMIT)
-        self._value_history: deque[float] = deque(maxlen=_Z_WINDOW)
+        # BD-FIX: 历史按 timeframe 隔离 —— 单例组件被 1m/5m/1h/1d 四个
+        # 近线循环交错喂收盘价，混合粒度序列上的 z-score 完全失真
+        # （信号触发慢/不稳定的根因）。每 tf 独立历史与 z 窗口。
+        self._histories: dict[str, dict[str, deque[float]]] = {}
         if expression_string:
             try:
                 from beidou_research.mining.primitive_library import PrimitiveRegistry
@@ -96,6 +95,19 @@ class ExpressionComponent(AlphaComponent):
                 self._expr = PrimitiveRegistry().parse(expression_string)
             except Exception:
                 self._expr = None
+
+    def _hist_for(self, timeframe: str) -> dict[str, deque[float]]:
+        hist = self._histories.get(timeframe)
+        if hist is None:
+            hist = {
+                "close": deque(maxlen=_HISTORY_LIMIT),
+                "high": deque(maxlen=_HISTORY_LIMIT),
+                "low": deque(maxlen=_HISTORY_LIMIT),
+                "volume": deque(maxlen=_HISTORY_LIMIT),
+                "value": deque(maxlen=_Z_WINDOW),
+            }
+            self._histories[timeframe] = hist
+        return hist
 
     @classmethod
     def bind(cls, factor_id: str, expression_string: str, role: str = "ENTRY") -> None:
@@ -107,6 +119,7 @@ class ExpressionComponent(AlphaComponent):
 
     async def generate(self, context: dict[str, Any]) -> AlphaSignal:
         features = context.get("features", {}) or {}
+        _hist = self._hist_for(str(context.get("timeframe", "1m")))
         try:
             close = float(features["close"])
             high = float(features.get("high", close))
@@ -114,15 +127,15 @@ class ExpressionComponent(AlphaComponent):
             volume = float(features.get("volume", 0.0))
         except (KeyError, TypeError, ValueError):
             return self._no_action(context)
-        self._history.append(close)
-        self._high_history.append(high)
-        self._low_history.append(low)
-        self._volume_history.append(volume)
+        _hist["close"].append(close)
+        _hist["high"].append(high)
+        _hist["low"].append(low)
+        _hist["volume"].append(volume)
 
-        if self._expr is None or len(self._history) < _MIN_BARS:
+        if self._expr is None or len(_hist["close"]) < _MIN_BARS:
             return self._no_action(context)
         try:
-            feature_dict = self._build_feature_dict()
+            feature_dict = self._build_feature_dict(_hist)
             # 同步 CPU 密集求值（37 组件 × 逐 bar 全历史）移入专用求值线程池，
             # 避免阻塞引擎与 supervisor 共享的 asyncio event loop，且与
             # rest_client 的网络线程（asyncio.to_thread 默认池）隔离；
@@ -134,10 +147,10 @@ class ExpressionComponent(AlphaComponent):
             return self._no_action(context)
         if not math.isfinite(last):
             return self._no_action(context)
-        self._value_history.append(last)
-        if len(self._value_history) < _Z_MIN:
+        _hist["value"].append(last)
+        if len(_hist["value"]) < _Z_MIN:
             return self._no_action(context)
-        vals = list(self._value_history)
+        vals = list(_hist["value"])
         mean = sum(vals) / len(vals)
         var = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
         std = math.sqrt(max(var, 0.0))
@@ -158,16 +171,16 @@ class ExpressionComponent(AlphaComponent):
             metadata={"factor_id": self._factor_id, "expression": self._expression_string, "z": round(z, 4)},
         )
 
-    def _build_feature_dict(self) -> dict[str, list[float]]:
+    def _build_feature_dict(self, hist: dict[str, deque[float]]) -> dict[str, list[float]]:
         """构建与 runner._build_feature_dict 同构的特征列（close/log_return/volume/spread）。"""
-        closes = list(self._history)
+        closes = list(hist["close"])
         n = len(closes)
         log_return = [math.nan] * n
         for i in range(1, n):
             if closes[i] > 0 and closes[i - 1] > 0:
                 log_return[i] = math.log(closes[i] / closes[i - 1])
-        highs = list(self._high_history)
-        lows = list(self._low_history)
+        highs = list(hist["high"])
+        lows = list(hist["low"])
         spread = [math.nan] * n
         for i in range(n):
             if closes[i] > 0:
@@ -175,7 +188,7 @@ class ExpressionComponent(AlphaComponent):
         return {
             "close": closes,
             "log_return": log_return,
-            "volume": list(self._volume_history),
+            "volume": list(hist["volume"]),
             "spread": spread,
         }
 

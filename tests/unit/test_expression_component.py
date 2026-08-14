@@ -68,13 +68,13 @@ def test_history_window_capped_at_800() -> None:
             await comp.generate(_context(100.0 + i))
 
     asyncio.run(feed())
-    assert len(comp._history) == 800
-    assert len(comp._high_history) == 800
-    assert len(comp._low_history) == 800
-    assert len(comp._volume_history) == 800
+    assert len(comp._hist_for("1m")["close"]) == 800
+    assert len(comp._hist_for("1m")["high"]) == 800
+    assert len(comp._hist_for("1m")["low"]) == 800
+    assert len(comp._hist_for("1m")["volume"]) == 800
     # 仅保留最近 800 根（丢弃最早 200 根）
-    assert comp._history[0] == 100.0 + 200.0
-    assert comp._history[-1] == 100.0 + 999.0
+    assert comp._hist_for("1m")["close"][0] == 100.0 + 200.0
+    assert comp._hist_for("1m")["close"][-1] == 100.0 + 999.0
 
 
 def test_generate_runs_in_event_loop_with_capped_history() -> None:
@@ -93,9 +93,9 @@ def test_generate_runs_in_event_loop_with_capped_history() -> None:
     signal = asyncio.run(drive())
     assert signal.direction == SignalDirection.LONG
     assert 0.0 < signal.strength <= 1.0
-    assert len(comp._history) == 800
-    assert len(comp._value_history) == 100  # z 窗口不受历史窗口缩小影响
-    assert comp._history[0] > 100.0  # 最早 200 根已被丢弃
+    assert len(comp._hist_for("1m")["close"]) == 800
+    assert len(comp._hist_for("1m")["value"]) == 100  # z 窗口不受历史窗口缩小影响
+    assert comp._hist_for("1m")["close"][0] > 100.0  # 最早 200 根已被丢弃
 
 
 def test_eval_executor_is_dedicated_pool_of_4() -> None:

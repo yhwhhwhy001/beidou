@@ -7819,6 +7819,9 @@ class AutonomousEngine:
                         "state": state,
                         "_predictions": {},
                         "_position_info": pos_info,
+                        # BD-FIX: 组件历史按 timeframe 隔离 —— 单例组件
+                        # 被 4 个 tf 循环交错喂历史会污染 z-score
+                        "timeframe": tf,
                     }
                     if features.get("n_candles", 0) < 10:
                         continue
