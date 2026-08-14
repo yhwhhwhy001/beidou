@@ -16,7 +16,7 @@ import math
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any
@@ -6660,6 +6660,24 @@ class AutonomousEngine:
                 continue
             positions[symbol] = Quantity(amount=format(current.normalize(), "f"))
         active_orders = self._store.get_active_orders()
+        # BD-FIX: testnet 下 stale 订单行（历史遗留，交易所早已无此单）
+        # 不参与 open_orders 对账 —— 多品种上线后 8-12 时代的 6 个
+        # 遗留 active 行造成 system/exchange 恒 MISMATCH。24h 为界，
+        # 时间戳不可解析的行保留（fail-safe 不过滤）。
+        if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+            _stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            _filtered: list[dict[str, Any]] = []
+            for _row in active_orders:
+                try:
+                    _row_ts = datetime.fromisoformat(str(_row.get("updated_at") or _row.get("created_at") or ""))
+                    if _row_ts.tzinfo is None:
+                        _row_ts = _row_ts.replace(tzinfo=timezone.utc)
+                    if _row_ts <= _stale_cutoff:
+                        continue  # stale 行：交易所早已无此单
+                except (TypeError, ValueError):
+                    pass
+                _filtered.append(_row)
+            active_orders = _filtered
         # Post-opening fills mean the balance may be slightly stale (fees),
         # but that is acceptable within the reconciliation balance tolerance
         # (5 USDT).  Only an inconsistent projection (uncommitted fills,
@@ -6771,12 +6789,19 @@ class AutonomousEngine:
             return self._record_reconciliation_failure(result)
 
         exchange_positions: dict[InstrumentId, Quantity] = {}
+        _owned_syms = _local_owned_symbols(self)
+        _is_testnet_recon = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
         for position in account["positions"]:
             if not isinstance(position, dict) or "symbol" not in position or "positionAmt" not in position:
                 result = ReconciliationEngine.compare(None, None)
                 result.status = ReconciliationStatus.INCOMPLETE
                 result.differences = ["INCOMPLETE_FACT: malformed exchange position row"]
                 return self._record_reconciliation_failure(result)
+            # BD-FIX: testnet 共享账户的外部持仓不参与对账（system 侧
+            # 只含引擎自己的账本事实 —— 多品种上线后外部持仓造成
+            # 恒 MISMATCH，final38 实测 APRUSDT/BEATUSDT/EPICUSDT 等）
+            if _is_testnet_recon and str(position["symbol"]) not in _owned_syms:
+                continue
             amount = float(position.get("positionAmt", 0) or 0)
             if amount:
                 exchange_positions[InstrumentId(str(position["symbol"]))] = Quantity(amount=str(amount))
