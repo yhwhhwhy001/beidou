@@ -372,7 +372,15 @@ def collect_monitoring_checks(
             except Exception as exc:
                 raise RuntimeError("local protection projection unavailable") from exc
         if exchange_positions:
+            # BD-FIX（共享账户本地化）: testnet 只检查本地所有权可证明
+            # 的持仓 —— 共享 demo 账户外部持仓无本地保护投影，恒
+            # MISSING_SL/MISSING_TP P0 FAIL → 防抖 DEGRADED（final45
+            # 实测 40 品种外部持仓全 FAIL）。live/canary 全量严格不变。
+            _env_mode = getattr(engine, "_env_mode", None)
+            _is_testnet_check = _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet"
             for ep in exchange_positions:
+                if _is_testnet_check and ep.symbol not in local_by_symbol:
+                    continue  # 外部持仓（共享账户）不参与保护覆盖判定
                 semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
                 check = build_protection_check(semantic)
                 results.append(convert(check, name="持仓保护覆盖 (PKG-MON-04)"))
