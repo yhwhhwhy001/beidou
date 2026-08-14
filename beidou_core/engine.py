@@ -349,10 +349,10 @@ def _local_owned_symbols(engine: Any) -> set[str]:
     共享账户外部成交曾污染投影记录导致判定失真，final47 实测
     RVNUSDT 外部持仓被误认本地）
     """
-    protection = getattr(engine, "_protection", None)
+    # BD-FIX: 保护持仓不作为所有权依据 —— 下单纯孤儿保护（final47
+    # RVNUSDT 无成交但创建了保护）会把外部持仓品种误认本地。
+    # 自有成交（fill 重放）是持仓所有权的唯一硬证据。
     owned: set[str] = set()
-    if protection is not None and callable(getattr(protection, "all_positions", None)):
-        owned.update(str(pp.instrument_id) for pp in protection.all_positions().values())
     store = getattr(engine, "_store", None)
     if store is not None and callable(getattr(store, "restore_fill_events", None)) and callable(
         getattr(store, "restore_order_states", None)
