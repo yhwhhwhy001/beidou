@@ -192,14 +192,19 @@ def test_reconciliation_wiring_then_eligibility_flow() -> None:
 
 
 def test_stale_protection_fact_not_verifiable_then_refresh_eligible() -> None:
-    """保护事实 300s 未刷新 → NOT_VERIFIABLE；周期评估刷新后 → ELIGIBLE。"""
+    """保护事实构建时自动刷新（BD-FIX）：多品种 tick 周期拉长后保护
+    事实只由事件驱动更新会 stale → 资格恒 NOT_VERIFIABLE。构建时按
+    owner_unknown 标志刷新（hash 语义保留），stale 不再阻断。"""
     engine = _wired_engine()
     engine._last_protection_fact_at = time.time() - 3600
-    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.NOT_VERIFIABLE
-    # _durable_fact_status 周期评估（覆盖 OK）刷新事实
-    engine._last_protection_hash = hashlib.sha256(b"ACTIVE").hexdigest()
-    engine._last_protection_fact_at = time.time()
+    # 构建时自动刷新 → 不再因 stale 阻断
     assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
+    # owner_unknown 时刷新为 UNKNOWN hash → 仍 fail-closed
+    engine._protection_owner_unknown = True
+    engine._last_protection_fact_at = time.time()
+    snap = engine.build_truth_snapshot()
+    assert snap.protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+    assert derive_eligibility(snap) == TradingEligibility.NO_NEW_RISK
 
 
 def test_stale_risk_fact_not_verifiable_then_refresh_eligible() -> None:

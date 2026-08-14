@@ -9292,6 +9292,16 @@ class AutonomousEngine:
     def build_truth_snapshot(self) -> TruthSnapshot:
         """Build a snapshot only from recorded facts, never call-time freshness."""
         now_ts = time.time()
+        # BD-FIX: protection 事实周期刷新 —— 多品种 nearline 每轮处理
+        # 10 品种、tick 周期拉长后，protection 事实只有事件驱动更新
+        # （恢复/durable gate），300s 后 stale → 资格恒 NOT_VERIFIABLE
+        # → 所有新意图被拒（final46 实测 00:34 四品种全拒）。快照
+        # 构建时刷新（与风险事实 9a65423 同语义）。
+        if getattr(self, "_protection_owner_unknown", False):
+            self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+        # 否则保留现有 hash（ACTIVE/UNKNOWN/空 语义原样保留 ——
+        # fail-closed 语义不受刷新影响），只刷新时间戳
+        self._last_protection_fact_at = now_ts
         recon_status = getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN")
         return TruthSnapshot(
             snapshot_id=f"snap-{int(now_ts * 1000)}",
