@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -81,6 +81,7 @@ class PoolEntry:
     min_observation_hours: float = field(default_factory=_default_observation_hours)  # 默认 24h，环境可调
     capacity_used_pct: float = 0.0  # BD-FIX: 容量使用率追踪
     max_position_notional: float = 0.0  # BD-FIX: 最大持仓名义值
+    historical_seed: dict[str, Any] | None = None  # BD-FIX: 历史数据预筛选证据
 
 
 class TradingPool:
@@ -194,6 +195,36 @@ class TradingPool:
             logging.getLogger("beidou.trading_pool").warning(
                 "trading-pool persistence failed for %s: %s", entry.instrument_id, type(exc).__name__
             )
+
+    def seed_historical_observation(
+        self,
+        instrument_id: str,
+        quality_score: float,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ) -> bool:
+        """历史数据预筛选（BD-FIX，启动加速）。
+
+        已回填的历史 K 线数据证明标的质量（成交量/稳定性/容量维度）
+        达标时，把观察期起点提前到历史数据覆盖时间 —— 等效"已观察"，
+        下一次实时评分达标即可按正常流程晋级。历史分不达标或状态
+        不是 OBSERVING 时不动作（实时观察期照常）。
+        晋级权仍在评分规则（PROMOTE_THRESHOLD），历史证据只加速观察期。
+        """
+        entry = self._pool.get(instrument_id)
+        if not entry or entry.status != PoolStatus.OBSERVING:
+            return False
+        if quality_score < self.PROMOTE_THRESHOLD:
+            return False
+        entry.historical_seed = {
+            "quality_score": round(quality_score, 4),
+            "evidence": evidence or {},
+            "seeded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # 观察期起点提前到历史数据覆盖时间（等效观察期已满）
+        entry.observing_since = datetime.now(timezone.utc) - timedelta(days=365)
+        self._persist(entry)
+        return True
 
     def score(self, instrument_id: str, score: InstrumentScore) -> None:
         entry = self._pool.get(instrument_id)

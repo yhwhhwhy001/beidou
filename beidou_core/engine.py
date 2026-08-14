@@ -1546,6 +1546,10 @@ class AutonomousEngine:
             f"[beidou-autopilot] Trading Pool: {self._trading_pool.active_count()} active instruments "
             f"(configured={len(configured_symbols)})"
         )
+        # BD-FIX（历史数据加速筛选）: 用已回填的历史 K 线预筛选候选 ——
+        # 历史质量分达标者观察期等效已满（下一次实时评分达标即按正常
+        # 流程晋级）。历史数据缺失的标的保持标准观察期。
+        self._seed_pool_from_history(configured_symbols)
 
         # === NEW: Strategy Risk Manager ===
         self._strategy_risk = StrategyRiskManager()
@@ -6879,6 +6883,76 @@ class AutonomousEngine:
             )
         print("[recon] MATCHED: independent durable facts verified")
         return True
+
+    def _seed_pool_from_history(self, configured_symbols: list[str]) -> None:
+        """启动时用历史 K 线数据预筛选交易池候选（BD-FIX）。
+
+        历史质量分（成交量/稳定性/容量三维 —— 1d K 线可推导；点差与
+        深度由实时评分补）达标者经 TradingPool.seed_historical_observation
+        观察期等效已满；晋级权仍在实时 5 维评分规则。无历史数据的
+        标的跳过（标准观察期）。
+        """
+        pool = getattr(self, "_trading_pool", None)
+        if pool is None:
+            return
+        try:
+            from beidou_research.data.kline_store import KlineStore
+        except Exception:
+            return
+        store = KlineStore()
+        seeded = 0
+        for sym in configured_symbols:
+            try:
+                df = store.load(sym, "1d")
+            except Exception:
+                continue
+            if df is None or len(df) < 100:
+                continue
+            try:
+                closes = df["close"].astype(float).values
+                volumes = df["volume"].astype(float).values
+                highs = df["high"].astype(float).values
+                lows = df["low"].astype(float).values
+                if len(closes) < 100 or closes[-1] <= 0:
+                    continue
+                # volume_score：日均成交额（与实时 log10/8 同构）
+                avg_daily_notional = float((volumes * closes).mean())
+                volume_score = max(0.0, min(1.0, __import__("math").log10(max(1, avg_daily_notional)) / 8))
+                # capacity_score：1 - 年化波动率（与实时 ann_vol 同构）
+                returns = closes[1:] / closes[:-1] - 1.0
+                ann_vol = float(returns.std()) * (365**0.5) if len(returns) > 30 else 1.0
+                capacity_score = max(0.0, min(1.0, 1.0 - ann_vol))
+                # stability_score：负收益天数占比反向
+                down_days = float((returns < 0).mean()) if len(returns) else 0.5
+                stability_score = max(0.0, min(1.0, 1.0 - down_days))
+                # spread 代理：(high-low)/close 均值 → 映射（<0.5% → 1 分，>10% → 0 分）
+                avg_range = float(((highs - lows) / closes).mean())
+                spread_score = max(0.0, min(1.0, 1.0 - (avg_range - 0.005) / 0.095)) if avg_range > 0.005 else 1.0
+                # depth 无历史订单簿 → 中性 0.5
+                quality = (
+                    spread_score * 0.25
+                    + 0.5 * 0.25
+                    + volume_score * 0.20
+                    + stability_score * 0.15
+                    + capacity_score * 0.15
+                )
+                if pool.seed_historical_observation(
+                    sym,
+                    quality,
+                    evidence={
+                        "avg_daily_notional": round(avg_daily_notional, 2),
+                        "ann_vol": round(ann_vol, 4),
+                        "down_days_pct": round(down_days * 100, 2),
+                        "avg_range_pct": round(avg_range * 100, 4),
+                        "days": len(closes),
+                    },
+                ):
+                    seeded += 1
+                    print(f"[pool] historical seed: {sym} quality={quality:.3f}")
+            except Exception:
+                continue
+        if seeded:
+            print(f"[pool] historical pre-filter seeded {seeded}/{len(configured_symbols)} candidates")
 
     def _maybe_auto_resolve_incidents(self) -> None:
         """持久事实干净后自动清除残留事故（BD-FIX）。
