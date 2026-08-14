@@ -213,6 +213,25 @@ class TestAdaptiveSliceAlgorithm:
         assert not plan.is_canceled
         assert len(plan.slices) > 0
 
+    def test_plan_uses_marketable_crossing_price(self) -> None:
+        """BUY 穿透 best_ask、SELL 穿透 best_bid（marketable limit）。
+
+        同侧挂价（BUY@bid / SELL@ask）+ IOC 组合在流动性不足时必然
+        EXPIRED —— 2026-08-14 15:03 实测 5 单 3 秒全过期、零成交。
+        穿透价保留限价保护的同时保证撮合。
+        """
+        buy_ctx = _make_ctx(side=OrderSide.BUY, urgency=0.4, min_quantity=0.001)
+        buy_plan = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25).plan(buy_ctx, FIXED_ORDER_ID)
+        for s in buy_plan.slices:
+            assert s.order_type is OrderType.LIMIT
+            assert s.time_in_force is TimeInForce.IOC
+            assert float(s.price.amount) == float(buy_ctx.best_ask.amount)  # 穿透卖一
+
+        sell_ctx = _make_ctx(side=OrderSide.SELL, urgency=0.4, min_quantity=0.001)
+        sell_plan = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25).plan(sell_ctx, FIXED_ORDER_ID)
+        for s in sell_plan.slices:
+            assert float(s.price.amount) == float(sell_ctx.best_bid.amount)  # 穿透买一
+
     def test_cancels_high_cost(self):
         ctx = _make_ctx(urgency=0.4, net_alpha_bps=3.0, predicted_cost_bps=10.0)
         algo = AdaptiveSliceAlgorithm()

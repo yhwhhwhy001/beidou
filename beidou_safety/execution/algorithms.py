@@ -557,7 +557,11 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
                     slice_id=f"{order_id}-adaptive-{i}",
                     parent_order_id=order_id,
                     quantity=Quantity(amount=str(qty)),
-                    price=ctx.best_bid if ctx.side == OrderSide.BUY else ctx.best_ask,
+                    # BD-FIX: marketable limit —— BUY 穿透 best_ask、SELL 穿透
+                    # best_bid。同侧挂价 + IOC 在流动性不足时必然 EXPIRED
+                    # （15:03 实测 5 单 3 秒全过期零成交）；穿透价保留限价
+                    # 保护的同时保证撮合。
+                    price=ctx.best_ask if ctx.side == OrderSide.BUY else ctx.best_bid,
                     order_type=OrderType.LIMIT,
                     time_in_force=TimeInForce.IOC,
                     algorithm=self.algorithm_type,
