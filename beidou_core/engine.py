@@ -9351,10 +9351,21 @@ class AutonomousEngine:
             # protection_status 跟随记录的 hash: 仅当所有权已知且最近一次
             # 覆盖评估记录为 ACTIVE 时才可进入 ACTIVE；覆盖缺失/未评估时
             # 记录 UNKNOWN → NO_NEW_RISK（fail-closed）。
+            # BD-FIX: 无本地持仓时保护覆盖不适用（共享账户外部持仓不归
+            # 引擎保护）—— 与 supervisor 检查"无持仓，保护覆盖不适用
+            # PASS"同语义。否则多品种下 _last_protection_hash 永不等于
+            # ACTIVE 哈希 → protection UNKNOWN → 所有意图
+            # ELIGIBILITY_NO_NEW_RISK（final50 实测 03:28 717 FAILED）。
             protection_status=(
                 "ACTIVE"
-                if self._protection_owner_unknown is False
-                and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                if (
+                    not _local_owned_symbols(self)
+                    and getattr(self, "_last_protection_hash", "") == ""
+                )
+                or (
+                    self._protection_owner_unknown is False
+                    and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                )
                 else "UNKNOWN"
             ),
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
