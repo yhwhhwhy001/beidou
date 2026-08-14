@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import math
+import os
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -40,7 +41,10 @@ _HISTORY_LIMIT = 800  # 历史窗口上限：挖掘因子最大滚动窗口 100�
 _MIN_BARS = 30
 _Z_WINDOW = 100
 _Z_MIN = 30
-_Z_ACTION_THRESHOLD = 0.5
+# BD-FIX: 信号阈值环境可调（默认 0.5 生产语义不变）。demo 验证期
+# RANGING 市场 + z 窗口 100 根预热（1m bar 约 100 分钟）使信号触发
+# 极慢 —— BEIDOU_Z_ACTION_THRESHOLD 允许 testnet 调低加速端到端验证。
+_Z_ACTION_THRESHOLD = float(os.getenv("BEIDOU_Z_ACTION_THRESHOLD", "0.5"))
 
 
 class ExpressionComponent(AlphaComponent):

@@ -104,3 +104,23 @@ def test_eval_executor_is_dedicated_pool_of_4() -> None:
     assert isinstance(executor, concurrent.futures.ThreadPoolExecutor)
     assert executor._max_workers == 4
     assert executor._thread_name_prefix == "expr-eval"
+
+
+def test_z_action_threshold_env_override(monkeypatch) -> None:
+    """BEIDOU_Z_ACTION_THRESHOLD 环境变量可调（生产默认 0.5 不变）。
+
+    demo 验证期 RANGING 市场 + z 窗口 100 根预热使信号触发极慢 ——
+    testnet 可调低阈值加速端到端验证。
+    """
+    import importlib
+
+    import beidou_core.expression_component as module
+
+    monkeypatch.setenv("BEIDOU_Z_ACTION_THRESHOLD", "0.15")
+    importlib.reload(module)
+    try:
+        assert module._Z_ACTION_THRESHOLD == 0.15
+    finally:
+        monkeypatch.delenv("BEIDOU_Z_ACTION_THRESHOLD")
+        importlib.reload(module)
+        assert module._Z_ACTION_THRESHOLD == 0.5  # 默认恢复
