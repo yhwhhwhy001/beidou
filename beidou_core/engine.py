@@ -8488,9 +8488,20 @@ class AutonomousEngine:
                         ).lower() in ("paper", "shadow", "research", "safety_only")
                         if zero_write_snapshot:
                             source_timestamp = evaluated_at
+                        # BD-FIX: testnet 快照风控的对账匹配窗口放宽到 300s ——
+                        # demo 网络抖动的瞬时对账失败（30s 重试周期）让
+                        # R0 恒拒（final58 实测 163 信号全被 AUX-R0 SKIP）。
+                        # 对账的权威判定仍在 supervisor（90s 新鲜度），
+                        # 此处只需"近期有过 MATCHED"作为快照输入。
+                        _is_testnet_snap = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
                         snapshot_reconciliation_status = (
                             "MATCHED"
-                            if self._fresh_matched_reconciliation() or zero_write_snapshot
+                            if (
+                                self._fresh_matched_reconciliation(
+                                    max_age_seconds=300.0 if _is_testnet_snap else 60.0
+                                )
+                                or zero_write_snapshot
+                            )
                             else "MISMATCHED"
                         )
                         account_hash = hashlib.sha256(
