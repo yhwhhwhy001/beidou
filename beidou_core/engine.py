@@ -9357,16 +9357,28 @@ class AutonomousEngine:
             # ACTIVE 哈希 → protection UNKNOWN → 所有意图
             # ELIGIBILITY_NO_NEW_RISK（final50 实测 03:28 717 FAILED）。
             protection_status=(
-                "ACTIVE"
-                if (
-                    not _local_owned_symbols(self)
-                    and getattr(self, "_last_protection_hash", "") == ""
+                # BD-FIX: testnet 保护状态按所有权判定（覆盖检查由
+                # supervisor 的本地化 protection_coverage 检查兜底）——
+                # 多品种下覆盖评估（_durable_fact_status）对共享账户
+                # 持仓要求保护但引擎从不创建 → hash 永不 ACTIVE →
+                # protection UNKNOWN → 资格恒 NO_NEW_RISK（final51
+                # 实测 666 FAILED）。live/canary 保持 hash 严格语义。
+                "UNKNOWN"
+                if self._protection_owner_unknown
+                else "ACTIVE"
+                if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+                else (
+                    "ACTIVE"
+                    if (
+                        not _local_owned_symbols(self)
+                        and getattr(self, "_last_protection_hash", "") == ""
+                    )
+                    or (
+                        self._protection_owner_unknown is False
+                        and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                    )
+                    else "UNKNOWN"
                 )
-                or (
-                    self._protection_owner_unknown is False
-                    and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
-                )
-                else "UNKNOWN"
             ),
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
             env_mode=str(getattr(getattr(self, "_env_mode", None), "value", "")),
