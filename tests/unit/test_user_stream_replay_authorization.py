@@ -144,6 +144,42 @@ def test_authorizes_baseline_when_sequencer_blocked() -> None:
     assert result.status is UserProjectionStatus.ACCEPTED
 
 
+def test_unsequenced_event_older_than_baseline_is_accepted() -> None:
+    """跨时钟源比较不可靠：demo 服务器时钟落后于本机，事件时间早于
+    baseline 授权时间，旧逻辑判 DUPLICATE 拒绝真实成交事件（14:11 现场）。
+    unsequenced 模式按到达顺序接受，event_id 去重防真重复。"""
+    projector = UserStreamProjector(account_id=AccountId("default"), venue_id=VenueId("BINANCE"), store=None)
+    result = projector.authorize_replay_baseline(
+        _baseline_facts(),
+        evidence_hash="hash123",
+        approval_id="test-approval",
+        last_sequence=None,
+        allow_unsequenced=True,
+    )
+    assert result.status is UserProjectionStatus.ACCEPTED
+    # 事件时间早于 baseline（交易所时钟落后 2 分钟）
+    past_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - 120_000
+    accepted = projector.ingest(_unsequenced_order_update(event_time_ms=past_ms))
+    assert accepted.status is UserProjectionStatus.ACCEPTED
+    assert projector.sequencer.status is UserStreamStatus.HEALTHY
+
+
+def test_true_duplicate_event_id_still_rejected_after_authorization() -> None:
+    """event_id 去重保留 —— 时间比较移除不削弱防重复。"""
+    projector = UserStreamProjector(account_id=AccountId("default"), venue_id=VenueId("BINANCE"), store=None)
+    projector.authorize_replay_baseline(
+        _baseline_facts(),
+        evidence_hash="hash123",
+        approval_id="test-approval",
+        last_sequence=None,
+        allow_unsequenced=True,
+    )
+    update = _unsequenced_order_update()
+    assert projector.ingest(update).status is UserProjectionStatus.ACCEPTED
+    again = projector.ingest(update)  # 同 event_id 重放
+    assert again.status is UserProjectionStatus.DUPLICATE
+
+
 def test_skips_when_sequencer_healthy() -> None:
     projector = UserStreamProjector(account_id=AccountId("default"), venue_id=VenueId("BINANCE"), store=None)
     projector.sequencer.mark_replayed(None, allow_unsequenced=True, last_event_time_ms=1786645000000)
@@ -445,6 +481,52 @@ def test_user_stream_fault_freezes_ledger_on_live() -> None:
     engine._user_stream_fault("TEST_CONNECTION_FAILED", terminal=True)
 
     engine._ledger.freeze.assert_called_once()
+
+
+# --- 事件拒绝与账本冻结解耦（testnet 可恢复）---
+
+
+def _engine_with_reject_path(env_mode: str) -> tuple[AutonomousEngine, Mock, Mock]:
+    engine = _engine(env_mode=env_mode)
+    ledger = Mock()
+    alerts = Mock()
+    engine._ledger = ledger
+    engine._alerts = alerts
+    return engine, ledger, alerts
+
+
+def test_ingest_rejection_does_not_freeze_ledger_on_testnet() -> None:
+    """投影器拒绝事件（流问题）不冻结账本 —— freeze 无解冻路径。
+
+    镜像 14:11 现场：ORDER_TRADE_UPDATE 被 sequencer 判 DUPLICATE →
+    ingest 返回 False → 旧代码 _record_execution_fact_failure → 账本
+    永久冻结。testnet 只降级控制面，不 freeze；live/canary 保留。
+    """
+    engine, ledger, _alerts = _engine_with_reject_path("testnet")
+    engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
+    engine._event_stream_facts = None
+    engine._recon = Mock()
+    projector = _projector_requiring_replay()
+    engine._user_stream_projector = projector
+    engine._update_user_stream_runtime = Mock()  # type: ignore[method-assign]
+
+    result = projector.ingest(_unsequenced_order_update())
+    assert result.status is UserProjectionStatus.BLOCKED  # sequencer 拒绝态
+
+    # ingest_user_order_update 在 BLOCKED 时走记录路径
+    engine.ingest_user_order_update(_unsequenced_order_update())
+    ledger.freeze.assert_not_called()
+
+
+def test_ingest_rejection_freezes_ledger_on_live() -> None:
+    engine, ledger, _alerts = _engine_with_reject_path("live")
+    engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
+    engine._event_stream_facts = None
+    engine._recon = Mock()
+    engine._user_stream_projector = _projector_requiring_replay()
+
+    engine.ingest_user_order_update(_unsequenced_order_update())
+    ledger.freeze.assert_called_once()
 
 
 # --- 事故自动清理（与 RESUME 动作解耦）---

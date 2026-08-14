@@ -63,15 +63,11 @@ class UserStreamSequencer:
             )
         if event.sequence is None:
             if self._unsequenced_allowed:
-                if self._last_event_time_ms is not None and event.event_time_ms <= self._last_event_time_ms:
-                    self._status = UserStreamStatus.DUPLICATE
-                    return UserStreamObservation(
-                        False,
-                        self._status,
-                        previous,
-                        None,
-                        "unsequenced event time is not greater than the last accepted event",
-                    )
+                # BD-FIX: unsequenced 模式按到达顺序接受，不做跨时钟源
+                # 时间比较。交易所事件时间（venue 时钟）与本机基线时间
+                # 相比不可靠 —— demo 服务器时钟落后即把真实成交事件判
+                # DUPLICATE 拒绝（14:11 实测）。真重复由投影器 event_id
+                # 去重拦截，不受影响。
                 self._last_event_time_ms = event.event_time_ms
                 self._status = UserStreamStatus.HEALTHY
                 return UserStreamObservation(True, self._status, previous, None)

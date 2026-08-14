@@ -3706,6 +3706,20 @@ class AutonomousEngine:
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._control.execute_action(ControlAction.NO_NEW_RISK)
 
+    def _record_execution_fact_failure_env_guarded(self, reason: str) -> None:
+        """user stream 层失败的环境化处理（BD-FIX）。
+
+        事件拒绝/投影阻塞/基线受阻是流层问题而非账本写失败 ——
+        ``_record_execution_fact_failure`` 会 freeze 账本（无解冻路径），
+        demo ws 抖动即永久停机。testnet 只降级控制面（NO_NEW_RISK，
+        可恢复）；live/canary 保留 freeze 语义（真实资金下成交事件
+        丢失不可接受，账本必须冻结）。
+        """
+        if str(getattr(getattr(self, "_env_mode", None), "value", "")) in ("live", "canary"):
+            self._record_execution_fact_failure(reason)
+        else:
+            self._safe_no_new_risk(reason)
+
     def _record_execution_fact_failure(
         self,
         reason: str,
@@ -5898,7 +5912,7 @@ class AutonomousEngine:
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
-        self._record_execution_fact_failure(
+        self._record_execution_fact_failure_env_guarded(
             f"user-stream event {result.event_id or '<unknown>'} blocked: {result.reason}"
         )
         return False
@@ -5929,7 +5943,7 @@ class AutonomousEngine:
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
-        self._record_execution_fact_failure(f"user-stream replay baseline blocked: {result.reason}")
+        self._record_execution_fact_failure_env_guarded(f"user-stream replay baseline blocked: {result.reason}")
         return False
 
     def ingest_user_account_update(self, update: Any) -> bool:
@@ -5944,7 +5958,7 @@ class AutonomousEngine:
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
-        self._record_execution_fact_failure(
+        self._record_execution_fact_failure_env_guarded(
             f"account user-stream event {result.event_id or '<unknown>'} blocked: {result.reason}"
         )
         return False

@@ -328,7 +328,9 @@ def test_account_duplicate_gap_nonfinite_and_order_regression_are_blocked() -> N
     update = _account_update(event_time=2_000)
     assert duplicate.ingest_account_update(update).status is UserProjectionStatus.ACCEPTED
     assert duplicate.ingest_account_update(update).status is UserProjectionStatus.DUPLICATE
-    assert duplicate.ingest_account_update(_account_update(event_time=1_999)).status is UserProjectionStatus.BLOCKED
+    # BD-FIX: unsequenced 模式按到达顺序接受，不做跨时钟源时间比较
+    # （venue 时钟落后会把真实事件判 DUPLICATE）；真重复由 event_id 去重。
+    assert duplicate.ingest_account_update(_account_update(event_time=1_999)).status is UserProjectionStatus.ACCEPTED
 
     nonfinite = UserStreamProjector()
     assert _authorize(nonfinite).accepted
