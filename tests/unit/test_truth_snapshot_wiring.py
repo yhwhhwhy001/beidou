@@ -219,8 +219,13 @@ def test_stale_risk_fact_not_verifiable_then_refresh_eligible() -> None:
 
 
 def test_unknown_protection_hash_keeps_status_unknown_fail_closed() -> None:
-    """覆盖评估失败（hash=UNKNOWN）时，即使 owner 标志为 False 也不进入 ACTIVE。"""
+    """覆盖评估失败（hash=UNKNOWN）时，即使 owner 标志为 False 也不进入 ACTIVE。
+
+    BD-FIX: testnet 保护状态按 owner_unknown 判定（共享账户语义），
+    本测试用 live 语义验证 hash 严格路径不变。
+    """
     engine = _wired_engine()
+    engine._env_mode = SimpleNamespace(value="live")
     engine._last_protection_hash = hashlib.sha256(b"UNKNOWN").hexdigest()
     snap = engine.build_truth_snapshot()
     assert snap.protection_status == "UNKNOWN"
