@@ -156,7 +156,7 @@ async def test_unqueryable_restored_order_remains_unknown() -> None:
     engine._order_trackers = {"123": tracker}
     engine._store = store
     engine._api_async_safe = query_order
-    engine._record_execution_fact_failure = failures.append
+    engine._record_execution_fact_failure_env_guarded = failures.append
 
     await engine._monitor_orders("BTCUSDT")
 
@@ -278,7 +278,7 @@ async def test_unknown_intent_order_fact_persistence_failure_stays_unknown() -> 
     engine = AutonomousEngine.__new__(AutonomousEngine)
     engine._adapter = SimpleNamespace(query_order_by_client_id=found_lookup)
     engine._store = SimpleNamespace(save_order_state=fail_persist)
-    engine._record_execution_fact_failure = failures.append
+    engine._record_execution_fact_failure_env_guarded = failures.append
     engine._outbox = SimpleNamespace(
         get_unknown_intents=lambda: [
             {

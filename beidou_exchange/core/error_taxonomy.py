@@ -192,6 +192,9 @@ class ErrorNormalizer:
             -2021: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
             -2022: (ErrorCategory.POSITION_LIMIT, FaultSeverity.P0_CRITICAL, RecoveryAction.DEGRADE),
             -4061: (ErrorCategory.RATE_LIMIT, FaultSeverity.P1_MAJOR, RecoveryAction.RETRY),
+            # BD-FIX（M4 审查）: demo 薄盘/波动大时保护单触发价贴近市价的
+            # -4164 是常规拒绝，不是 P0_CRITICAL/MANUAL
+            -4164: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
         },
     }
 

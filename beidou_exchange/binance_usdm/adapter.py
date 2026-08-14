@@ -61,6 +61,19 @@ def _format_decimal(value: str) -> str:
         return value
 
 
+def _safe_enum(enum_cls: Any, raw_value: str) -> Any:
+    """BD-FIX: 未知枚举值降级为 UNKNOWN 而非抛 ValueError。
+
+    共享 demo 账户的非常规订单类型（新类型/新状态）会让合法事件
+    解析失败 → fault → 停机（I4/I6 审查）。降级保流；原始值可在
+    raw_event 中审计。
+    """
+    try:
+        return enum_cls(raw_value)
+    except ValueError:
+        return enum_cls("UNKNOWN")
+
+
 def _strict_bool(value: Any, *, field_name: str) -> bool:
     """Parse venue booleans without Python's truthy-string trap."""
 
@@ -949,7 +962,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 ),
                 account_ref=account_ref,
                 side=OrderSide(str(raw["side"])),
-                order_type=OrderType(str(raw["orderType"])),
+                order_type=_safe_enum(OrderType, str(raw["orderType"])),
                 quantity=Quantity(amount=str(raw.get("quantity", "0"))),
                 trigger_price=Price(amount=str(raw["triggerPrice"])),
                 status=str(raw["algoStatus"]),
@@ -1225,8 +1238,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 client_order_id=str(order["c"]),
                 symbol=InstrumentId(str(order["s"])),
                 side=OrderSide(str(order["S"])),
-                order_type=OrderType(str(order["o"])),
-                order_status=OrderStatus(str(order["X"])),
+                order_type=_safe_enum(OrderType, str(order["o"])),
+                order_status=_safe_enum(OrderStatus, str(order["X"])),
                 execution_type=str(order["x"]),
                 original_quantity=Quantity(amount=str(order["q"])),
                 cumulative_quantity=Quantity(amount=str(order["z"])),

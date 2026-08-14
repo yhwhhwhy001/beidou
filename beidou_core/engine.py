@@ -297,6 +297,31 @@ def _validate_duplicate_order_response(
     return True, "OK"
 
 
+def _is_retryable_venue_rejection(reason: str) -> bool:
+    """venue 拒绝原因是否可重试（BD-FIX，I6 审查）。
+
+    demo 共享账户的限频（-1003）、时钟偏差（-1021）、临时请求拒绝
+    （-4131）、服务不可用（-1006）、地域限制（-2015/restricted）等
+    属瞬时错误 —— 意图不应直接 FAILED（新意图只能等下一个新收盘
+    K 线，可能数分钟无单），mark_unknown 后由运行时周期 resolve
+    按 identity-bound 事实裁决恢复。
+    """
+    upper = str(reason).upper()
+    retryable_markers = (
+        "-1003",  # TOO_MANY_REQUESTS
+        "-1021",  # TIMESTAMP_OUTSIDE_RECV_WINDOW
+        "-4131",  # 临时请求拒绝
+        "-1006",  # UNEXPECTED_RESP
+        "-2015",  # 地域限制
+        "RESTRICTED",
+        "RATE_LIMIT",
+        "TIMEOUT",
+        "RETRYABLE",
+        "SERVICE_UNAVAILABLE",
+    )
+    return any(marker in upper for marker in retryable_markers)
+
+
 def _derive_liquidation_price(position_qty: float, entry_price: float, leverage: float) -> float | None:
     """杠杆推导的名义清算价（BD-FIX）。
 
@@ -1950,8 +1975,18 @@ class AutonomousEngine:
             result = await self._adapter.get_open_algo_orders()
         except Exception as exc:
             print(f"[api] open Algo inventory failed: {type(exc).__name__}: {exc}")
+            # BD-FIX: 异常路径同样返回空列表（docstring 承诺的 testnet
+            # 语义）—— 返回 None 会触发 _block_unowned_protection_orders
+            # → NO_NEW_RISK（I4 审查：demo 端点一次瞬时失败即锁控全局
+            # 下单）。保护单缺失重试有 inventory 语义校验兜底。
+            if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                print("[api] testnet: treating open Algo inventory failure as empty (retry next cycle)")
+                return []
             return None
         if not result.is_success() or result.data is None:
+            if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                print("[api] testnet: treating open Algo inventory UNKNOWN as empty (retry next cycle)")
+                return []
             return None
         return [dict(snapshot.raw_response) for snapshot in result.data]
 
@@ -2308,6 +2343,11 @@ class AutonomousEngine:
         outbox = getattr(self, "_outbox", None)
         if store is None or outbox is None:
             return False, "DURABLE_FACT_STORE_UNAVAILABLE", {}
+        # BD-FIX: 账本冻结状态必须暴露 —— freeze 后 incident 可能被
+        # auto-resolve 清除，唯一可见信号是 durable 检查本身。
+        ledger = getattr(self, "_ledger", None)
+        if ledger is not None and getattr(ledger, "is_frozen", False):
+            return False, "LEDGER_FROZEN", {}
         try:
             order_rows = list(store.restore_order_states())
             unknown_orders = [
@@ -3155,6 +3195,17 @@ class AutonomousEngine:
                         await self._place_order(intent)
 
             # 6. Reconciliation (every 30s)
+            # BD-FIX: UNKNOWN/SENDING 意图的运行时恢复（C1 审查：demo
+            # 一次 POST 超时即让该标的在途敞口永久占满、重启前无法再
+            # 下单）。周期重查（按 client_id 的 identity-bound venue
+            # 事实裁决），与启动时 resolve 同语义。
+            if time.time() - getattr(self, "_last_unknown_resolve", 0.0) > 60:
+                self._last_unknown_resolve = time.time()
+                try:
+                    await asyncio.wait_for(self._resolve_unknown_outbox_intents(), timeout=20.0)
+                except Exception as _resolve_exc:
+                    logger.warning("periodic unknown-intent resolve skipped: %s", type(_resolve_exc).__name__)
+
             if time.time() - self._last_recon > 30:
                 # BD-FIX: 对账含交易所网络调用，慢响应不得阻塞实时循环
                 # （循环停摆会拉大对账间隔，触发 supervisor 的 60s 新鲜度
@@ -3175,6 +3226,13 @@ class AutonomousEngine:
                     # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
                     if durable_ok:
                         self._maybe_auto_resolve_incidents()
+                        # BD-FIX: 保护事实恢复后复位所有权标志（I3 审查：
+                        # 置位后进程内永不复位，瞬态 API 失败即永久锁死）
+                        if getattr(self, "_protection_owner_unknown", False):
+                            self._protection_owner_unknown = False
+                            self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
+                            self._last_protection_fact_at = time.time()
+                            print("[protection] ownership verified — protection facts restored")
                     if durable_ok and self._control.get_status() != ControlAction.RESUME:
                         try:
                             self._control.execute_action(ControlAction.RESUME)
@@ -3718,22 +3776,47 @@ class AutonomousEngine:
 
     def _safe_no_new_risk(self, reason: str = "") -> None:
         """安全降级控制面到 NO_NEW_RISK；环境标签不得改变语义。"""
-        if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
-            self._control.execute_action(ControlAction.NO_NEW_RISK)
+        _control = getattr(self, "_control", None)
+        if _control is None:
+            return
+        try:
+            if _control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
+                _control.execute_action(ControlAction.NO_NEW_RISK)
+        except Exception:
+            pass  # 降级动作失败不得掩盖原始故障；上层 incident/日志已记录
 
-    def _record_execution_fact_failure_env_guarded(self, reason: str) -> None:
-        """user stream 层失败的环境化处理（BD-FIX）。
+    def _record_execution_fact_failure_env_guarded(
+        self,
+        reason: str,
+        *,
+        alert_title: str = "Execution fact persistence blocked",
+        alert_category: str = "execution_fact",
+    ) -> None:
+        """执行/用户流层失败的环境化处理（BD-FIX，覆盖 12+ 调用点）。
 
-        事件拒绝/投影阻塞/基线受阻是流层问题而非账本写失败 ——
         ``_record_execution_fact_failure`` 会 freeze 账本（无解冻路径），
-        demo ws 抖动即永久停机。testnet 只降级控制面（NO_NEW_RISK，
-        可恢复）；live/canary 保留 freeze 语义（真实资金下成交事件
-        丢失不可接受，账本必须冻结）。
+        demo 抖动（REST 超时/sqlite 锁/ws 断连/共享账户事件）即永久停机。
+        testnet 只降级控制面（NO_NEW_RISK，可恢复）并保留事故可见性
+        （incident 照发，不 freeze）；live/canary 保留 freeze 语义
+        （真实资金下执行真相丢失不可接受，账本必须冻结）。
+
+        安全等价性：testnet 不 freeze 时，账本写失败意味着 durable 行
+        缺失 → ``_durable_fact_status`` 仍判定不可恢复 → RESUME 被阻断，
+        与 freeze 一样阻止继续交易，只是可恢复。
         """
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) in ("live", "canary"):
-            self._record_execution_fact_failure(reason)
+            self._record_execution_fact_failure(reason, alert_title=alert_title, alert_category=alert_category)
         else:
             self._safe_no_new_risk(reason)
+            _alerts = getattr(self, "_alerts", None)
+            if _alerts is not None:
+                with contextlib.suppress(Exception):
+                    _alerts.send_incident(
+                        AlertSeverity.CRITICAL,
+                        alert_title,
+                        str(reason)[:500],
+                        category=alert_category,
+                    )
 
     def _record_execution_fact_failure(
         self,
@@ -3796,7 +3879,7 @@ class AutonomousEngine:
         # durable UNKNOWN record that blocks readiness and requires governed
         # client-order/exchange reconciliation before any retry.
         getattr(self, "_active_order_ids", set()).discard(order_id)
-        self._record_execution_fact_failure(f"{reason}{persist_error}")
+        self._record_execution_fact_failure_env_guarded(f"{reason}{persist_error}")
 
     async def _resolve_unknown_outbox_intents(self) -> int:
         """Resolve UNKNOWN only from an identity-bound positive venue fact.
@@ -3863,7 +3946,7 @@ class AutonomousEngine:
                     client_order_id=client_id,
                 )
             except Exception as exc:
-                self._record_execution_fact_failure(
+                self._record_execution_fact_failure_env_guarded(
                     f"UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:{intent_id}:{type(exc).__name__}"
                 )
                 continue
@@ -3947,7 +4030,7 @@ class AutonomousEngine:
             self._store.save_ledger_transaction(transaction)
             self._ledger.post(transaction)
         except Exception as exc:
-            self._record_execution_fact_failure(
+            self._record_execution_fact_failure_env_guarded(
                 f"ledger transaction {transaction.transaction_id} persistence/post failed: {type(exc).__name__}: {exc}"
             )
             raise
@@ -4291,7 +4374,7 @@ class AutonomousEngine:
             execution_aggregate = self._outbox.persist_execution_plan(str(intent.intent_id), commands)
         except Exception as exc:
             self._outbox.mark_unknown(intent.intent_id, f"EXECUTION_PLAN_PERSISTENCE_FAILED:{type(exc).__name__}")
-            self._record_execution_fact_failure(
+            self._record_execution_fact_failure_env_guarded(
                 f"EXECUTION_PLAN_PERSISTENCE_FAILED:{intent.intent_id}:{type(exc).__name__}"
             )
             return
@@ -4361,15 +4444,21 @@ class AutonomousEngine:
             )
             outcome = str((order or {}).get("_submit_outcome", "ACKED" if order else "UNKNOWN"))
             if outcome == "REJECTED":
+                reject_reason = str((order or {}).get("reason", "EXECUTION_CHILD_REJECTED"))
                 execution_aggregate = self._outbox.transition_execution_child(
                     intent.intent_id,
                     idx,
                     ChildCommandState.REJECTED,
                     event_id=f"reject:{intent.intent_id}:{idx}",
                 )
+                if _is_retryable_venue_rejection(reject_reason):
+                    # BD-FIX: 瞬时错误（限频/时钟偏差等）不直接 FAILED ——
+                    # mark_unknown 由运行时周期 resolve 按 venue 事实裁决
+                    self._outbox.mark_unknown(intent.intent_id, f"RETRYABLE_REJECTION:{reject_reason}")
+                    return
                 self._outbox.reject(
                     intent.intent_id,
-                    str((order or {}).get("reason", "EXECUTION_CHILD_REJECTED")),
+                    reject_reason,
                     idempotency_key=getattr(intent, "idempotency_key", "") or "",
                 )
                 return
@@ -4416,6 +4505,26 @@ class AutonomousEngine:
                 )
                 return
             if actual_status in {"CANCELED", "EXPIRED"}:
+                # BD-FIX: ACK 即过期/撤销且带部分成交时，成交事实必须
+                # 入账（C2 审查 —— 与 _monitor_orders 同款修复）。
+                if cumulative_filled > 0:
+                    _delta, _price, _fill_id = self._consume_cumulative_fill(
+                        order_id,
+                        order_symbol,
+                        order,
+                        status=actual_status,
+                    )
+                    if _delta > 0 and _price > 0:
+                        self._record_partial_fill_to_ledger(
+                            order_id,
+                            order_symbol,
+                            order,
+                            _delta,
+                            _price,
+                            float(cumulative_filled),
+                            _fill_id,
+                            status=actual_status,
+                        )
                 execution_aggregate = self._outbox.transition_execution_child(
                     intent.intent_id,
                     idx,
@@ -4574,7 +4683,12 @@ class AutonomousEngine:
         _min_qty = float(_prec.get("min_quantity", 0) or 0)
         if _min_qty <= 0:
             # PKG02: 规则 UNKNOWN 时 symbol=NOT_EXECUTABLE
-            print(f"[engine] min_quantity UNKNOWN for {order_symbol}; skipping slice")
+            # BD-FIX: return None 前必须 mark_unknown —— 意图已被 claim
+            # 标记 SENDING，静默 None 会让它进程内永远无人再处理
+            # （I2 审查：SENDING↔PENDING 死循环，outbox 行无限累积）。
+            print(f"[engine] min_quantity UNKNOWN for {order_symbol}; marking intent UNKNOWN")
+            with contextlib.suppress(Exception):
+                self._outbox.mark_unknown(intent.intent_id, f"MIN_QUANTITY_UNKNOWN:{order_symbol}")
             return None
         _min_notional = float(_prec.get("min_notional", 0) or 0)
         ctx = ExecutionContext(
@@ -5159,11 +5273,33 @@ class AutonomousEngine:
                     await self._process_fill(order_id, order_sym or symbol, result)
 
                 elif status == "CANCELED" or status == "EXPIRED":
+                    # BD-FIX: 部分成交后 EXPIRED/CANCELED 的成交事实必须
+                    # 入账 —— IOC 切片在薄盘上"先部分成交后过期"时旧代码
+                    # 直接置终态，executedQty 从不进 ledger → 本地持仓被
+                    # 低估 → 对账恒 MISMATCH → 锁盘（C2 审查）。
+                    if executed_qty > 0:
+                        delta_qty, partial_price, _fill_event_id = self._consume_cumulative_fill(
+                            order_id,
+                            order_sym or symbol,
+                            result,
+                            status=status,
+                        )
+                        if delta_qty > 0 and partial_price > 0:
+                            self._record_partial_fill_to_ledger(
+                                order_id,
+                                order_sym or symbol,
+                                result,
+                                delta_qty,
+                                partial_price,
+                                executed_qty,
+                                _fill_event_id,
+                                status=status,
+                            )
                     tracker.apply(OrderEvent.CANCELED)
                     self._active_order_ids.discard(order_id)
                     self._store.save_order_state(
                         order_id,
-                        symbol,
+                        order_sym or symbol,  # BD-FIX: 用该订单的真实 symbol（批量循环 symbol 会错标跨品种订单）
                         result.get("side", ""),
                         result.get("type", ""),
                         result.get("origQty", "0"),
@@ -5182,66 +5318,15 @@ class AutonomousEngine:
                     )
                     fill_event_id_for_retry = fill_event_id
                     if delta_qty > 0 and partial_price > 0:
-                        partial_notional = delta_qty * partial_price
-                        side_desc = result.get("side", "")
-                        is_buy = side_desc.upper() == "BUY"
-                        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
-                        tx = LedgerTransaction(
-                            transaction_id=tx_id,
-                            transaction_type=LedgerTransactionType.FILL,
-                            source_event_id=fill_event_id,
-                            postings=(
-                                Posting(
-                                    posting_id=f"{tx_id}-p1",
-                                    account_id=AccountId("default"),
-                                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
-                                    venue_id=VenueId("BINANCE"),
-                                    instrument_id=InstrumentId(order_sym or symbol),
-                                    amount=MonetaryValue(amount=str(partial_notional)),
-                                    side=PostingSide.DEBIT,
-                                    description=f"PARTIAL {side_desc} {delta_qty} {order_sym or symbol} @ {partial_price}",
-                                ),
-                                Posting(
-                                    posting_id=f"{tx_id}-p2",
-                                    account_id=AccountId("default"),
-                                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
-                                    venue_id=VenueId("BINANCE"),
-                                    instrument_id=InstrumentId(order_sym or symbol),
-                                    amount=MonetaryValue(amount=str(partial_notional)),
-                                    side=PostingSide.CREDIT,
-                                    description=f"PARTIAL {side_desc} {delta_qty} {order_sym or symbol} @ {partial_price}",
-                                ),
-                            ),
-                            correlation_id=CorrelationId(f"exec-{order_id}"),
-                        )
-                        self._post_ledger_transaction(tx)
-                        self._update_position_projection(
+                        fill_committed = self._record_partial_fill_to_ledger(
+                            order_id,
                             order_sym or symbol,
-                            side_desc,
+                            result,
                             delta_qty,
                             partial_price,
+                            executed_qty,
                             fill_event_id,
-                        )
-                        self._mark_fill_committed(
-                            order_id,
-                            fill_event_id,
-                            float(result.get("executedQty", 0) or 0),
-                        )
-                        fill_committed = True
-                        self._store.save_order_state(
-                            order_id,
-                            order_sym or symbol,
-                            side_desc,
-                            result.get("type", "MARKET"),
-                            result.get("origQty", "0"),
-                            result.get("price"),
-                            "PARTIALLY_FILLED",
-                            str(executed_qty),
-                            str(partial_price),
-                        )
-                        print(
-                            f"[order] PARTIAL FILL recorded: {order_sym or symbol} {side_desc} "
-                            f"qty={delta_qty} @ {partial_price} notional={partial_notional:.2f}"
+                            status="PARTIALLY_FILLED",
                         )
 
             except Exception as e:
@@ -5254,6 +5339,77 @@ class AutonomousEngine:
                     f"ORDER_MONITOR_UNKNOWN:{type(e).__name__}:{str(e)[:240]}",
                 )
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
+
+    def _record_partial_fill_to_ledger(
+        self,
+        order_id: str,
+        symbol: str,
+        result: dict,
+        delta_qty: float,
+        price: float,
+        executed_qty: float,
+        fill_event_id: str,
+        *,
+        status: str,
+    ) -> bool:
+        """部分成交入账（PARTIALLY_FILLED/EXPIRED/CANCELED 共用，BD-FIX）。
+
+        IOC 切片在薄盘上"先部分成交后过期/撤销"的成交事实必须与普通
+        部分成交走同一入账路径（ledger + 持仓投影 + fill 提交），否则
+        本地持仓被低估 → 对账恒 MISMATCH → 锁盘（C2 审查）。
+        返回是否已入账（fill_committed）。
+        """
+        partial_notional = delta_qty * price
+        side_desc = result.get("side", "")
+        is_buy = side_desc.upper() == "BUY"
+        tx_id = f"tx-{fill_event_id.replace(':', '-')}"
+        tx = LedgerTransaction(
+            transaction_id=tx_id,
+            transaction_type=LedgerTransactionType.FILL,
+            source_event_id=fill_event_id,
+            postings=(
+                Posting(
+                    posting_id=f"{tx_id}-p1",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=str(partial_notional)),
+                    side=PostingSide.DEBIT,
+                    description=f"PARTIAL {side_desc} {delta_qty} {symbol} @ {price}",
+                ),
+                Posting(
+                    posting_id=f"{tx_id}-p2",
+                    account_id=AccountId("default"),
+                    account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                    venue_id=VenueId("BINANCE"),
+                    instrument_id=InstrumentId(symbol),
+                    amount=MonetaryValue(amount=str(partial_notional)),
+                    side=PostingSide.CREDIT,
+                    description=f"PARTIAL {side_desc} {delta_qty} {symbol} @ {price}",
+                ),
+            ),
+            correlation_id=CorrelationId(f"exec-{order_id}"),
+        )
+        self._post_ledger_transaction(tx)
+        self._update_position_projection(symbol, side_desc, delta_qty, price, fill_event_id)
+        self._mark_fill_committed(order_id, fill_event_id, executed_qty)
+        self._store.save_order_state(
+            order_id,
+            symbol,
+            side_desc,
+            result.get("type", "MARKET"),
+            result.get("origQty", "0"),
+            result.get("price"),
+            status,
+            str(executed_qty),
+            str(price),
+        )
+        print(
+            f"[order] PARTIAL FILL recorded: {symbol} {side_desc} "
+            f"qty={delta_qty} @ {price} notional={partial_notional:.2f}"
+        )
+        return True
 
     def _consume_cumulative_fill(
         self,
@@ -5473,7 +5629,7 @@ class AutonomousEngine:
                 str(avg_price),
             )
         except Exception as exc:
-            self._record_execution_fact_failure(
+            self._record_execution_fact_failure_env_guarded(
                 f"fill {fill_event_id} secondary index persistence failed: {type(exc).__name__}: {exc}"
             )
             raise
@@ -5498,6 +5654,16 @@ class AutonomousEngine:
         except (TypeError, ValueError):
             raw_executed_qty = 0.0
             raw_avg_price = 0.0
+        # BD-FIX: avgPrice 缺失/为 0 时用 cumQuote/executedQty 推导
+        # （demo 成交响应可能缺 avgPrice 字段 —— I5 审查）。推导仍
+        # 无效才判事实不完整。
+        if raw_executed_qty > 0 and (not math.isfinite(raw_avg_price) or raw_avg_price <= 0):
+            try:
+                raw_cum_quote = float(result.get("cumQuote", 0) or 0)
+                if math.isfinite(raw_cum_quote) and raw_cum_quote > 0:
+                    raw_avg_price = raw_cum_quote / raw_executed_qty
+            except (TypeError, ValueError):
+                raw_avg_price = 0.0
         if (
             not math.isfinite(raw_executed_qty)
             or not math.isfinite(raw_avg_price)
@@ -5919,7 +6085,7 @@ class AutonomousEngine:
             try:
                 self._outbox.project_user_order_update(update)
             except Exception as exc:
-                self._record_execution_fact_failure(
+                self._record_execution_fact_failure_env_guarded(
                     f"user-stream child projection blocked for {result.event_id or '<unknown>'}: "
                     f"{type(exc).__name__}:{exc}"
                 )
@@ -6009,7 +6175,7 @@ class AutonomousEngine:
         )
         if symbol:
             getattr(self, "_leverage_cache", {}).pop(symbol, None)
-        self._record_execution_fact_failure("ACCOUNT_CONFIG_UPDATE_REVALIDATION_REQUIRED")
+        self._record_execution_fact_failure_env_guarded("ACCOUNT_CONFIG_UPDATE_REVALIDATION_REQUIRED")
         return False
 
     def _update_user_stream_runtime(self, **updates: Any) -> None:
@@ -6171,6 +6337,16 @@ class AutonomousEngine:
                     self._user_stream_fault("LISTEN_KEY_EXPIRED", terminal=True)
                     return
                 self._update_user_stream_runtime(last_state_mono=time.monotonic())
+                # BD-FIX: 事件成功到达即证明传输健康 —— 非终态 fault
+                # （DEGRADED：解析失败/事件被拒等）在事件流恢复后自动
+                # 回到 HEALTHY，不再永久卡死交易（I5 审查：单次未知
+                # 事件后 DEGRADED 无恢复路径）。
+                if str(self._user_stream_runtime.get("status", "")).upper() == "DEGRADED":
+                    self._update_user_stream_runtime(
+                        status="HEALTHY",
+                        listen_key_active=True,
+                        last_error="",
+                    )
                 if event_type == "ORDER_TRADE_UPDATE":
                     parsed = BinanceUsdmAdapter.parse_user_order_update(data)
                     if not parsed.is_success() or parsed.data is None:
@@ -6206,13 +6382,51 @@ class AutonomousEngine:
                     self._user_stream_fault("ALGO_UPDATE_REVALIDATION_REQUIRED")
                     return
                 elif event_type == "MARGIN_CALL":
+                    # BD-FIX: 共享 demo 账户的其他用户把共享保证金打到追缴线
+                    # 也会推送 MARGIN_CALL —— testnet 按信息性事件处理
+                    # （记录 + 保持流健康）；live 保持 terminal（自身仓位
+                    # 追缴必须停流复核）。
+                    if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                        print(f"[user-stream] MARGIN_CALL received on testnet (shared account) — informational")
+                        self._update_user_stream_runtime(
+                            status="HEALTHY",
+                            last_event_mono=time.monotonic(),
+                            listen_key_active=True,
+                            last_error="",
+                        )
+                        return
                     self._user_stream_fault("MARGIN_CALL", terminal=True)
                     return
                 elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
+                    # BD-FIX: 共享 demo 账户其他用户的策略/网格单更新属环境
+                    # 噪音 —— testnet 按信息性事件处理；live 保持 fault。
+                    if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                        print(f"[user-stream] {event_type} on testnet (shared account) — informational")
+                        self._update_user_stream_runtime(
+                            status="HEALTHY",
+                            last_event_mono=time.monotonic(),
+                            listen_key_active=True,
+                            last_error="",
+                        )
+                        return
                     self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type}")
                     return
                 else:
-                    # PKG02 (BDS-P0-001): 所有环境统一 fail-closed。
+                    # PKG02 (BDS-P0-001): 所有环境统一 fail-closed；
+                    # testnet 共享账户的未知事件（新格式/其他 worker 构造）
+                    # 按信息性处理，避免一次未知事件永久锁死交易（I5 审查）。
+                    if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                        print(
+                            f"[user-stream] unknown event type {event_type or 'UNKNOWN'} "
+                            "on testnet (shared account) — informational"
+                        )
+                        self._update_user_stream_runtime(
+                            status="HEALTHY",
+                            last_event_mono=time.monotonic(),
+                            listen_key_active=True,
+                            last_error="",
+                        )
+                        return
                     self._user_stream_fault(f"UNSUPPORTED_USER_EVENT:{event_type or 'UNKNOWN'}")
                     return
                 if accepted:
@@ -6240,8 +6454,14 @@ class AutonomousEngine:
             return False
 
     async def _user_stream_keepalive_loop(self, listen_key: str) -> None:
-        """Renew the exact listen key; failure revokes writable authority."""
+        """Renew the exact listen key; failure revokes writable authority.
 
+        BD-FIX: 单次瞬时失败（限频/网络抖动）重试后再判 terminal ——
+        demo 抖动下单次失败即停流换 key 会快速耗尽 3 次重启预算
+        （M9 审查：跨小时 3 次失败即永久 STOPPED）。
+        """
+
+        _consecutive_failures = 0
         try:
             while True:
                 await asyncio.sleep(30 * 60)
@@ -6253,8 +6473,24 @@ class AutonomousEngine:
                     return
                 result = await keepalive(listen_key)
                 if not result.is_success():
-                    self._user_stream_fault("LISTEN_KEY_KEEPALIVE_FAILED", terminal=True)
-                    return
+                    _consecutive_failures += 1
+                    if _consecutive_failures >= 3:
+                        self._user_stream_fault("LISTEN_KEY_KEEPALIVE_FAILED", terminal=True)
+                        return
+                    # 瞬时失败：60s 后重试，不立即停流
+                    print(f"[user-stream] keepalive failed ({_consecutive_failures}/3), retrying in 60s")
+                    await asyncio.sleep(60)
+                    if getattr(self, "_user_stream_stopping", False):
+                        return
+                    result = await keepalive(listen_key)
+                    if not result.is_success():
+                        _consecutive_failures += 1
+                        if _consecutive_failures >= 3:
+                            self._user_stream_fault("LISTEN_KEY_KEEPALIVE_FAILED", terminal=True)
+                            return
+                        print(f"[user-stream] keepalive failed ({_consecutive_failures}/3), will retry next cycle")
+                    continue
+                _consecutive_failures = 0
                 self._update_user_stream_runtime(listen_key_active=True, last_keepalive_mono=time.monotonic())
         except asyncio.CancelledError:
             raise
@@ -6578,9 +6814,13 @@ class AutonomousEngine:
         """持久事实干净后自动清除残留事故（BD-FIX）。
 
         执行事实已恢复可验证（recon 通过 + durable_ok）时：
-        - execution_fact 事故无条件 resolve（事实已证明持久化可用）
+        - execution_fact 事故在账本未冻结时 resolve（冻结是永久事故，
+          不得被清理掩盖 —— C2 审查：旧逻辑 resolve 后 freeze 无任何
+          可见信号）
+        - reconciliation 事故（对账已恢复）无条件 resolve
         - user_stream 事故在 transport 恢复健康（CONNECTED/HEALTHY）后
           resolve（连接恢复 + 事实干净 = 事故根因消除）
+        - protection 事故在所有权标志已复位后 resolve
         testnet 自动重新授权（1cd1208）可能已恢复 RESUME —— 事故清理
         不得依赖控制面状态（旧逻辑死角：control==RESUME 时永不 resolve，
         CRITICAL 事故永久残留，final14/21 实测）。
@@ -6590,16 +6830,27 @@ class AutonomousEngine:
             return
         _runtime = getattr(self, "_user_stream_runtime", {})
         _ustatus = str(_runtime.get("status", "")).upper() if isinstance(_runtime, dict) else ""
+        _ledger = getattr(self, "_ledger", None)
+        _ledger_frozen = bool(_ledger is not None and getattr(_ledger, "is_frozen", False))
+        _protection_ok = not bool(getattr(self, "_protection_owner_unknown", False))
         try:
             _active = getattr(_alerts, "_active_incidents", {})
             for _iid, _inc in list(_active.items()):
                 _cat = str(getattr(_inc, "root_cause_category", ""))
                 if _cat == "execution_fact":
+                    if _ledger_frozen:
+                        continue  # 冻结未解，事故必须保留
                     _alerts.resolve_incident(_iid)
                     print("[realtime] Auto-resolved execution_fact incident")
+                elif _cat == "reconciliation":
+                    _alerts.resolve_incident(_iid)
+                    print("[realtime] Auto-resolved reconciliation incident")
                 elif _cat == "user_stream" and _ustatus in ("CONNECTED", "HEALTHY"):
                     _alerts.resolve_incident(_iid)
                     print("[realtime] Auto-resolved user_stream incident")
+                elif _cat == "protection" and _protection_ok:
+                    _alerts.resolve_incident(_iid)
+                    print("[realtime] Auto-resolved protection incident")
         except Exception as exc:
             logger.warning("incident auto-resolution failed: %s", type(exc).__name__)
 
@@ -6657,12 +6908,28 @@ class AutonomousEngine:
             recon = getattr(self, "_recon", None)
             if recon is not None:
                 recon.update_event_facts(self._event_stream_facts)
-            runtime = getattr(self, "_user_stream_runtime", {})
-            if isinstance(runtime, dict):
-                runtime["status"] = "HEALTHY"
-                runtime["listen_key_active"] = True
-                runtime["last_error"] = ""
+            # BD-FIX: 只授权投影器，不得伪造 transport 健康 ——
+            # runtime status 只能由 ws 状态回调/事件到达驱动。重启限次
+            # 耗尽后实际无任何 ws 连接，伪造 HEALTHY 会让 testnet
+            # readiness 误判为可交易（幽灵健康）。
             print("[recon] testnet auto-authorized user-stream replay baseline (allow_unsequenced)")
+            # BD-FIX: 重启限次耗尽后（I7 审查：attempts=3 用完即永久
+            # FAILED 且无恢复机会），recon 独立验证干净时重置预算并
+            # 重新拉起传输 —— 受 _user_stream_restarting/_user_ws_task
+            # 防护，无连接才重拉。
+            _runtime = getattr(self, "_user_stream_runtime", {})
+            _ustatus = str(_runtime.get("status", "")).upper() if isinstance(_runtime, dict) else ""
+            if (
+                _ustatus in ("FAILED", "STOPPED", "UNKNOWN")
+                and getattr(self, "_user_stream_restart_attempts", 0) >= self._USER_STREAM_RESTART_MAX_ATTEMPTS
+                and not getattr(self, "_user_stream_restarting", False)
+            ):
+                self._user_stream_restart_attempts = 0
+                with contextlib.suppress(RuntimeError):
+                    self._user_stream_restart_task = asyncio.create_task(
+                        self._restart_user_stream_after_fault("ATTEMPTS_RESET_AFTER_RECON")
+                    )
+                print("[recon] user-stream restart budget reset after verified reconciliation")
             return True
         print(f"[recon] user-stream replay authorization deferred: {result.reason}")
         return False
@@ -8926,9 +9193,22 @@ class AutonomousEngine:
                 )
                 await asyncio.sleep(wait_s)
         if not server_time_ok:
-            print("[beidou-autopilot] FATAL: Cannot connect to exchange after 5 attempts")
-            self._lifecycle.transition(ModuleState.FAILED)
-            return
+            # BD-FIX（I2 审查）: demo 地域限制（-2015）是间歇性的 ——
+            # 快速 5 次重试（~15s）后 FATAL 会让每次抖动杀死进程。
+            # testnet 进入长周期退避重试（最长 10 分钟），期间健康
+            # 端点存活；live/canary 保持快速 FATAL。
+            if str(getattr(self._env_mode, "value", "")) == "testnet":
+                print("[beidou-autopilot] testnet: exchange API unavailable — long-cycle retry (up to 10min)")
+                for _long_attempt in range(10):
+                    await asyncio.sleep(60)
+                    server_time, st_ok = await self._api_async_safe(Endpoint.SERVER_TIME)
+                    if st_ok and isinstance(server_time, dict) and "serverTime" in server_time:
+                        server_time_ok = True
+                        break
+            if not server_time_ok:
+                print("[beidou-autopilot] FATAL: Cannot connect to exchange after 5 attempts")
+                self._lifecycle.transition(ModuleState.FAILED)
+                return
         print(f"[beidou-autopilot] Exchange connected: {self._rest_url}")
 
         # Verify account access (with retries for flaky testnet API)
@@ -8954,7 +9234,7 @@ class AutonomousEngine:
         permissions_ok, permission_reason = self._apply_venue_account_permissions(account)
         if not permissions_ok and self._can_write:
             self._safe_no_new_risk("auto")
-            self._record_execution_fact_failure(
+            self._record_execution_fact_failure_env_guarded(
                 permission_reason,
                 alert_title="Venue account permission blocked",
                 alert_category="credential",
@@ -9052,7 +9332,9 @@ class AutonomousEngine:
                 unowned = self._unowned_active_order_ids()
                 if self._can_write and unowned:
                     self._safe_no_new_risk("auto")
-                    self._record_execution_fact_failure(f"ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned)[:20])}")
+                    self._record_execution_fact_failure_env_guarded(
+                        f"ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned)[:20])}"
+                    )
                     self._alerts.send_incident(
                         AlertSeverity.CRITICAL,
                         "Active order ownership unknown",
@@ -9476,7 +9758,7 @@ class AutonomousEngine:
         durable_ok, durable_reason, durable_evidence = self._durable_fact_status()
         if not durable_ok:
             recon_ok = False
-            self._record_execution_fact_failure(
+            self._record_execution_fact_failure_env_guarded(
                 f"STARTUP_DURABLE_FACT_GATE:{durable_reason}:{json.dumps(durable_evidence, sort_keys=True, default=str)[:500]}"
             )
 
@@ -9626,7 +9908,7 @@ class AutonomousEngine:
                 # proven.  Keep the account in NO_NEW_RISK and surface the
                 # exact IDs for operator-governed reconciliation.
                 self._safe_no_new_risk("auto")
-                self._record_execution_fact_failure(
+                self._record_execution_fact_failure_env_guarded(
                     f"SHUTDOWN_ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned_active_order_ids)[:20])}"
                 )
                 self._alerts.send_incident(

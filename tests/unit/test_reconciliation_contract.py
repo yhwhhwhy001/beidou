@@ -221,7 +221,10 @@ def test_ledger_persistence_failure_freezes_and_closes_gate() -> None:
 
     with pytest.raises(OSError, match="disk full"):
         engine._post_ledger_transaction(tx)
-    assert engine._ledger.is_frozen is True
+    # BD-FIX（freeze 家族环境化）: 账本写失败在 testnet 不 freeze（无
+    # 解冻路径，demo 抖动一次即永久停机）—— 但 NO_NEW_RISK 必须成立
+    # 且交易未入账（durable 行缺失本身阻止 RESUME，安全等价）。
+    assert engine._ledger.is_frozen is False
     assert control.action is ControlAction.NO_NEW_RISK
     assert engine._ledger.transaction_count == 0
 
@@ -379,7 +382,9 @@ async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -
         await engine._realtime_tick()
 
     # wait_for 包装存在，超时 25s（< 30s 对账间隔 + supervisor 60s 阈值余量）
-    assert wf.await_count == 1
+    # BD-FIX: 周期 UNKNOWN 意图恢复（60s 一次）也用 wait_for 包装 ——
+    # 两次 wait_for：第一次周期 resolve（20s 超时），第二次对账（25s）
+    assert wf.await_count == 2
     assert wf.await_args.kwargs["timeout"] == 25.0
     # _last_recon 被刷新 → 循环未被阻塞，30s 后重试
     assert time.time() - engine._last_recon < 5

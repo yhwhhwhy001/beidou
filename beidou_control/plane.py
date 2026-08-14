@@ -88,17 +88,19 @@ CONTROL_TRANSITION_MATRIX: dict[ControlAction, set[ControlAction]] = {
         ControlAction.NO_NEW_RISK,
     },
     ControlAction.EXIT_ONLY: {
+        ControlAction.NO_NEW_RISK,  # BD-FIX: 降级动作合法化（_safe_no_new_risk 从 EXIT_ONLY 曾抛异常静默失效）
         ControlAction.EMERGENCY_FLATTEN,
         ControlAction.LOCK,
         ControlAction.RESUME,
         ControlAction.EXIT_ONLY,
     },
     ControlAction.EMERGENCY_FLATTEN: {
+        ControlAction.NO_NEW_RISK,  # BD-FIX: 紧急平仓后可降级（不再死锁于 FLATTEN/LOCK）
         ControlAction.LOCK,
         ControlAction.EMERGENCY_FLATTEN,
     },
     ControlAction.LOCK: {
-        ControlAction.LOCK,  # LOCK 是终态 — 仅允许显式恢复
+        ControlAction.LOCK,  # LOCK 是终态 — 仅允许显式恢复（人工/签名 API）
     },
     ControlAction.RESUME: {
         ControlAction.NO_NEW_RISK,

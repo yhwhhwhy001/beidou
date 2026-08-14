@@ -256,9 +256,18 @@ class AlertDispatcher:
             candidates = [
                 dict(record)
                 for record in self._delivery_state.values()
-                if record.get("status") in {"PENDING", "FAILED"}
-                and float(record.get("next_retry_at", 0.0)) <= current_time
-                and int(record.get("attempts", 0)) < self._max_delivery_attempts
+                # BD-FIX: DEAD_LETTER 可安全重试（幂等键在，C4 审查：
+                # 旧逻辑死信永不重试 → alert_delivery P0 永久 FAIL →
+                # LOCKED → 跨重启残留 → 崩溃循环）。DEAD_LETTER 的
+                # attempts 已打满，重试前重置预算。
+                if float(record.get("next_retry_at", 0.0)) <= current_time
+                and (
+                    (
+                        record.get("status") in {"PENDING", "FAILED"}
+                        and int(record.get("attempts", 0)) < self._max_delivery_attempts
+                    )
+                    or record.get("status") == "DEAD_LETTER"
+                )
             ][:max_items]
 
         retried = 0
@@ -268,6 +277,14 @@ class AlertDispatcher:
                 incident = self._incident_from_delivery(record)
             if incident is None:
                 continue
+            if str(record.get("status", "")) == "DEAD_LETTER":
+                # 重试死信前重置 attempts，重新获得完整预算
+                with self._lock:
+                    self._delivery_state[str(record.get("incident_id", ""))] = {
+                        **record,
+                        "attempts": 0,
+                        "status": "PENDING",
+                    }
             self._send_webhook(incident)
             retried += 1
         return retried

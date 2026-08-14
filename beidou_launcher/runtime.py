@@ -588,7 +588,12 @@ def collect_runtime_checks(
             unknown = int(delivery.get("unknown", 0))
             pending = int(delivery.get("pending", 0))
             configured = bool(delivery.get("configured", False))
-            if critical_pending or dead_letter or unknown:
+            # BD-FIX: dead_letter 不再 P0 阻断 —— 死信现在可重试
+            # （retry_pending 重置预算后重投，幂等键在），重试间隙
+            # 的残留计数不应触发 LOCKED（C4 审查：旧逻辑死信永久
+            # P0 → LOCKED → 跨重启崩溃循环）。critical_pending/unknown
+            # 仍保持 P0（交付确实不可证明）。
+            if critical_pending or unknown:
                 # PKG02: 所有环境统一交付状态检查标准。
                 delivery_status = CheckStatus.FAIL
                 delivery_severity = CheckSeverity.P0
@@ -596,10 +601,12 @@ def collect_runtime_checks(
                     f"告警送达不可证明: critical_pending={critical_pending}, "
                     f"dead_letter={dead_letter}, unknown={unknown}"
                 )
-            elif pending:
+            elif pending or dead_letter:
                 delivery_status = CheckStatus.WARN
                 delivery_severity = CheckSeverity.P1
-                delivery_message = f"告警仍在重试队列: pending={pending}"
+                delivery_message = (
+                    f"告警仍在重试队列: pending={pending}, dead_letter={dead_letter}（死信可重试）"
+                )
             elif not configured:
                 delivery_status = CheckStatus.WARN
                 delivery_severity = CheckSeverity.P1

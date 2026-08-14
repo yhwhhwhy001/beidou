@@ -121,9 +121,14 @@ class BeidouSupervisor:
         from .models import HealthDebounce
 
         # PKG02 (BDS-P0-001): 所有环境使用统一的健康防抖参数。
+        # BD-FIX（C6 审查）: demo 故障时长（用户流重启预算 45s+、
+        # position-mode 探针 300s 周期、对账 90s 阈值）远超 60s LOCKED
+        # 窗口 —— 网络类瞬时故障即停机。testnet 加长 LOCKED 窗口
+        # （60 周期 × 5s = 5 分钟），live/canary 保持严格 12 周期。
+        _lock_after = 60 if self.mode == "testnet" else 12
         self._health_debounce = HealthDebounce(
             degrade_after=6,
-            lock_after=12,
+            lock_after=_lock_after,
         )
         # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
         from .g7_tracker import G7LiveTracker
@@ -800,9 +805,14 @@ class BeidouSupervisor:
                 self.report.phase = "STARTUP_VALIDATION"
                 self.report.replace_phase_checks("runtime.", checks)
                 self.writer.write(self.report)
-                # 只有所有 P0/P1 blocker 都已清除才允许授权 RESUME。
-                # 关键检查过滤只用于诊断“启动尚未完成”，不能把实时心跳、
-                # 对账、保护或订单链故障隐藏在控制面证书之后。
+                # 只有关键启动检查全部清除才允许授权 RESUME。
+                # BD-FIX（C5 审查）: 旧条件 `not startup_blockers and not
+                # self.report.blockers` 要求零 blocker —— 任何瞬时
+                # P0/P1（user_stream/对账/alert_delivery/position_mode）
+                # 即启动超时 exit 4，demo 抖动下必然循环。注释（741-742）
+                # 明说"行情、对账、心跳等运行时检查不应阻断启动"，
+                # 实现却相反。启动门禁只按关键集判定；运行时检查的
+                # blocker 在启动后由 monitor 循环持续收紧。
                 startup_blockers = [c for c in checks if c.is_blocking and c.check_id in self._STARTUP_CRITICAL_CHECKS]
                 all_blockers = [c for c in checks if c.is_blocking]
                 if all_blockers:
@@ -812,7 +822,7 @@ class BeidouSupervisor:
                             f"[supervisor] Blockers ({len(all_blockers)}): "
                             f"{[(b.check_id, b.message[:60]) for b in all_blockers[:5]]}"
                         )
-                if not startup_blockers and not self.report.blockers:
+                if not startup_blockers:
                     return True
             else:
                 self.report.phase = "ENGINE_STARTING"

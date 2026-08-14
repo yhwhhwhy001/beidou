@@ -109,6 +109,19 @@ class BinanceRESTClient:
         """获取服务端时间，用于时钟偏差校准。"""
         return await self._request("GET", Endpoint.SERVER_TIME)
 
+    async def _resync_clock_offset(self) -> None:
+        """-1021 后重取 server time 校正偏移（BD-FIX，I1 审查）。
+
+        demo 服务器时钟落后本机超过 recvWindow 时，所有签名请求
+        确定性 -1021；旧逻辑用同一偏移重新签名必然再败。
+        """
+        time_result = await self.get_server_time()
+        if time_result.is_success():
+            server_time = int(time_result.data.get("serverTime", 0))
+            local_time = int(time.time() * 1000)
+            if server_time > 0:
+                self._clock_offset_ms = server_time - local_time
+
     async def get_exchange_info(self, symbol: str | None = None) -> Result[dict]:
         """获取交易规则和交易对信息。"""
         params = {"symbol": symbol} if symbol else {}
@@ -499,7 +512,9 @@ class BinanceRESTClient:
                     # result after the retry budget is exhausted.
                     retry_after_raw = e.headers.get("Retry-After", attempt + 1)
                     try:
-                        retry_after = max(0.0, float(retry_after_raw))
+                        # BD-FIX: Retry-After 封顶 30s（M2 审查：超大值
+                        # 如 86400 会让每次重试睡一天级）
+                        retry_after = min(30.0, max(0.0, float(retry_after_raw)))
                     except (TypeError, ValueError):
                         retry_after = float(attempt + 1)
                     if attempt < self._max_retries - 1:
@@ -519,14 +534,28 @@ class BinanceRESTClient:
                     )
 
                 if retryable and attempt < self._max_retries - 1:
+                    # BD-FIX: -1021（时钟偏差）先重取 server time 校正
+                    # 偏移再重试 —— 旧逻辑用同一偏移重新签名必然再败
+                    # （I1 审查：demo 服务器时钟落后超 recvWindow 时
+                    # 所有签名请求确定性 -1021）
+                    if binance_code == -1021:
+                        try:
+                            await self._resync_clock_offset()
+                        except Exception:
+                            pass
                     wait = 0.5 * (2**attempt)
                     await asyncio.sleep(wait)
                     continue
 
-                self._rate_state.consecutive_failures += 1
-                if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
-                    self._rate_state.circuit_open = True
-                    self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
+                # BD-FIX: 认证/地域类错误（-2015 间歇性抖动）不计入
+                # venue 熔断计数 —— 熔断只针对 venue 侧可恢复错误
+                # （I3 审查：5 次地域抖动即打开 30s 熔断，引擎连锁
+                # DEGRADED）
+                if category != ErrorCategory.AUTH_FAILURE:
+                    self._rate_state.consecutive_failures += 1
+                    if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                        self._rate_state.circuit_open = True
+                        self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
 
                 return Result.failure(
                     error_message or f"HTTP {http_status}",

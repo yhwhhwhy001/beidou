@@ -68,6 +68,12 @@ class OrderType(str, Enum):
     TRAILING_STOP = "TRAILING_STOP"
     TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
     TAKE_PROFIT_LIMIT = "TAKE_PROFIT_LIMIT"
+    # BD-FIX（I6/I4 审查）: Binance USD-M 实际订单类型补全 ——
+    # 缺失枚举导致合法事件解析 ValueError → fault → 停机。
+    TRAILING_STOP_MARKET = "TRAILING_STOP_MARKET"
+    LIQUIDATION = "LIQUIDATION"
+    INSURANCE = "INSURANCE"
+    ADL = "ADL"
 
 
 class OrderStatus(str, Enum):
@@ -79,6 +85,9 @@ class OrderStatus(str, Enum):
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
     UNKNOWN = "UNKNOWN"
+    # BD-FIX（I4 审查）: Binance 强平/保险/ADL 单的合法状态
+    NEW_INSURANCE = "NEW_INSURANCE"
+    NEW_ADL = "NEW_ADL"
 
 
 class TimeInForce(str, Enum):

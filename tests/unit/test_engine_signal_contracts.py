@@ -149,7 +149,7 @@ def test_ambiguous_order_status_is_durable_unknown_and_closes_risk() -> None:
     engine._active_order_ids = {"order-unknown"}
     engine._store = Store()
     failures: list[str] = []
-    engine._record_execution_fact_failure = failures.append
+    engine._record_execution_fact_failure_env_guarded = failures.append
 
     AutonomousEngine._mark_order_unknown(engine, "order-unknown", "BTCUSDT", "ORDER_QUERY_TIMEOUT")
 
@@ -177,7 +177,7 @@ def test_filled_without_positive_execution_facts_cannot_become_filled() -> None:
     engine._active_order_ids = {"order-filled-unknown"}
     engine._store = Store()
     failures: list[str] = []
-    engine._record_execution_fact_failure = failures.append
+    engine._record_execution_fact_failure_env_guarded = failures.append
 
     asyncio.run(
         AutonomousEngine._process_fill(

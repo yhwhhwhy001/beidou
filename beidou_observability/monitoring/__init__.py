@@ -235,6 +235,18 @@ def collect_monitoring_checks(
             },
         )
 
+    def _convert_multi(result_list, *, name: str):
+        """BD-FIX: 检查函数返回 list[MonitoringCheckResult] 时逐个转换。
+
+        旧代码把 list 当单个结果 convert → 'list' object has no attribute
+        'check_id' → MONITORING_CHECK_ERROR，且掩蔽真实 P0 因子失败
+        （I5 审查：5 个检查永久 FAIL）。
+        """
+        out = []
+        for item in result_list or []:
+            out.append(convert(item, name=name))
+        return out
+
     results: list[CheckResult] = []
 
     def failure(check_id: str, name: str, severity: CheckSeverity, exc: Exception) -> CheckResult:
@@ -581,11 +593,11 @@ def collect_monitoring_checks(
             factor_states = _factor_state_snapshots(factor_registry)
             strategy_states = _strategy_snapshots(engine)
             try:
-                results.append(convert(check_factors(factor_states), name="因子注册健康"))
+                results.extend(_convert_multi(check_factors(factor_states), name="因子注册健康"))
             except Exception as exc:
                 results.append(failure("runtime.factors.health", "因子注册健康", CheckSeverity.P2, exc))
             try:
-                results.append(convert(check_factor_strategies(strategy_states), name="因子策略关联"))
+                results.extend(_convert_multi(check_factor_strategies(strategy_states), name="因子策略关联"))
             except Exception as exc:
                 results.append(failure("runtime.factors.strategies", "因子策略关联", CheckSeverity.P2, exc))
     except Exception as exc:
@@ -597,15 +609,15 @@ def collect_monitoring_checks(
             if strategy_risk is not None and autopilot_id is not None:
                 strategy_states = _strategy_snapshots(engine)
                 try:
-                    results.append(convert(check_strategy_signal_silence(strategy_states), name="策略信号沉默检测"))
+                    results.extend(_convert_multi(check_strategy_signal_silence(strategy_states), name="策略信号沉默检测"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.silence", "策略信号沉默检测", CheckSeverity.P2, exc))
                 try:
-                    results.append(convert(check_strategy_risk_drift(strategy_states), name="策略风险漂移"))
+                    results.extend(_convert_multi(check_strategy_risk_drift(strategy_states), name="策略风险漂移"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.risk_drift", "策略风险漂移", CheckSeverity.P2, exc))
                 try:
-                    results.append(convert(check_strategy_version_drift(strategy_states), name="策略版本漂移"))
+                    results.extend(_convert_multi(check_strategy_version_drift(strategy_states), name="策略版本漂移"))
                 except Exception as exc:
                     results.append(failure("runtime.strategy.version_drift", "策略版本漂移", CheckSeverity.P2, exc))
     except Exception as exc:

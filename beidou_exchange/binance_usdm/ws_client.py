@@ -287,6 +287,7 @@ class _StreamGroup:
         self._closed = False
         self._backoff = INITIAL_RECONNECT_BACKOFF
         self._ping_pending = False
+        self._stable_pings = 0  # BD-FIX: 连续稳定 ping 计数（退避归零门槛）
         self.state = ConnectionState.DISCONNECTED
 
     # === 主循环 ===
@@ -328,6 +329,8 @@ class _StreamGroup:
         self._ws = ws
         await ws.connect(url)
         self._set_state(ConnectionState.CONNECTED)
+        # BD-FIX: 新连接重置稳定计数（退避归零需本连接的连续稳定 ping）
+        self._stable_pings = 0
         pinger = asyncio.create_task(self._ping_loop(ws))
         try:
             await self._listen(ws)
@@ -368,7 +371,12 @@ class _StreamGroup:
                     logger.warning("ws group %d keepalive failed: %s", self.group_id, exc)
                     await self._abort_ws()
                     return
-                self._backoff = INITIAL_RECONNECT_BACKOFF  # 连接稳定，退避归零
+                # BD-FIX（M1 审查）: 单次 ping 成功即归零退避 —— demo
+                # 抖动下连接存活 >70s 即永远停在 1s 退避，反复快速重连。
+                # 要求连续多次稳定 ping 周期（约 3 分钟）才归零。
+                self._stable_pings += 1
+                if self._stable_pings >= 3:
+                    self._backoff = INITIAL_RECONNECT_BACKOFF  # 连接持续稳定，退避归零
         except asyncio.CancelledError:
             raise
         except Exception as exc:

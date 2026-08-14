@@ -53,6 +53,7 @@ class UserStreamProjector:
         store: Any | None = None,
         account_id: AccountId | None = None,
         venue_id: VenueId | None = None,
+        owned_client_order_prefix: str | None = "beidou-",
     ) -> None:
         self._store = store
         self._account_id = account_id or AccountId("default")
@@ -69,6 +70,12 @@ class UserStreamProjector:
         self._replay_evidence_hash = ""
         self._replay_approval_id = ""
         self._accepted_events_since_replay = 0
+        # BD-FIX: open_orders 所有权过滤 —— 共享 demo 账户上其他用户的
+        # 挂单（非 beidou- clientOrderId）不得污染事件侧 open_orders，
+        # 否则三方对账 open_orders 严格集合比较恒 MISMATCH（I8 审查）。
+        # None 表示不过滤（单用户账户语义）。positions 的 delta 投影
+        # 保持全量（共享持仓变化是真实的共享事实）。
+        self._owned_client_order_prefix = owned_client_order_prefix
         if store is not None:
             self._restore_projection()
 
@@ -259,7 +266,19 @@ class UserStreamProjector:
             self._applied_event_ids.add(event_id)
             self._accepted_events_since_replay += 1
         except (InvalidOperation, TypeError, ValueError, RuntimeError) as exc:
+            # 逻辑错误（cumulative 回退/非有限值等）—— 投影状态已损坏，
+            # freeze 是正确的 fail-closed。
             return self._freeze(f"user-stream projection failed for {event_id}: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            # BD-FIX: 存储层瞬时错误（sqlite 锁/连接抖动）不冻结投影器
+            # —— freeze 无解冻路径，demo 一次抖动即永久拒绝事件流。
+            # BLOCKED 由上层 env_guarded 处理（testnet NO_NEW_RISK
+            # 可恢复），下一个事件重试即可。
+            return UserProjectionResult(
+                UserProjectionStatus.BLOCKED,
+                event_id,
+                reason=f"projection storage error: {type(exc).__name__}",
+            )
         return UserProjectionResult(UserProjectionStatus.ACCEPTED, event_id, observation=observation)
 
     def ingest_account_update(self, update: UserAccountUpdate) -> UserProjectionResult:
@@ -319,7 +338,15 @@ class UserStreamProjector:
             self._applied_event_ids.add(event_id)
             self._accepted_events_since_replay += 1
         except (InvalidOperation, TypeError, ValueError, RuntimeError) as exc:
+            # 逻辑错误 → freeze（同 ingest 语义）
             return self._freeze(f"account user-stream projection failed for {event_id}: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            # BD-FIX: 存储层瞬时错误 → BLOCKED 可重试（同 ingest 语义）
+            return UserProjectionResult(
+                UserProjectionStatus.BLOCKED,
+                event_id,
+                reason=f"projection storage error: {type(exc).__name__}",
+            )
         return UserProjectionResult(UserProjectionStatus.ACCEPTED, event_id, observation=observation)
 
     def _apply_order_update(self, update: UserOrderUpdate) -> None:
@@ -334,7 +361,12 @@ class UserStreamProjector:
             signed_delta = delta if update.side.value == "BUY" else -delta
             self._positions[symbol] = self._positions.get(symbol, Decimal("0")) + signed_delta
         self._cumulative_by_order[order_id] = max(previous, cumulative)
-        if update.order_status.value in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}:
+        # BD-FIX: 只把属于引擎的挂单投进 open_orders（共享账户过滤）
+        _owned = (
+            self._owned_client_order_prefix is None
+            or str(update.client_order_id).startswith(self._owned_client_order_prefix)
+        )
+        if _owned and update.order_status.value in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}:
             self._open_orders.add(order_id)
         else:
             self._open_orders.discard(order_id)

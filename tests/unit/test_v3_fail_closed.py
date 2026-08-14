@@ -655,31 +655,50 @@ def test_factor_promotion_gate_binds_active_to_sealed_bundle() -> None:
 def test_startup_wait_does_not_authorize_resume_with_runtime_blocker(tmp_path: Path) -> None:
     from beidou_launcher.supervisor import BeidouSupervisor
 
-    supervisor = BeidouSupervisor(
-        project_root=tmp_path,
-        mode="testnet",
-        symbols=["BTCUSDT"],
-        port=19090,
-        startup_timeout=0.02,
-    )
+    def _make_supervisor() -> BeidouSupervisor:
+        supervisor = BeidouSupervisor(
+            project_root=tmp_path,
+            mode="testnet",
+            symbols=["BTCUSDT"],
+            port=19090,
+            startup_timeout=0.02,
+        )
 
-    class _Thread:
-        @staticmethod
-        def is_alive() -> bool:
-            return True
+        class _Thread:
+            @staticmethod
+            def is_alive() -> bool:
+                return True
 
-    supervisor.engine = SimpleNamespace(
-        _lifecycle=SimpleNamespace(state=SimpleNamespace(value="ACTIVE")),
-        _health=SimpleNamespace(_thread=_Thread()),
-    )
-    blocker = CheckResult(
+        supervisor.engine = SimpleNamespace(
+            _lifecycle=SimpleNamespace(state=SimpleNamespace(value="ACTIVE")),
+            _health=SimpleNamespace(_thread=_Thread()),
+        )
+        return supervisor
+
+    async def _run(supervisor: BeidouSupervisor) -> bool:
+        async def _running_engine() -> None:
+            await asyncio.sleep(1)
+
+        supervisor._engine_task = asyncio.create_task(_running_engine())
+        try:
+            return await supervisor._wait_for_startup()
+        finally:
+            supervisor._engine_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await supervisor._engine_task
+
+    # BD-FIX（C5 审查）: 运行时检查（心跳/对账等）不再阻断启动 ——
+    # 瞬时 P0/P1 在 demo 抖动下必然出现，旧语义导致启动超时循环。
+    # 启动门禁只按关键启动检查集判定。
+    supervisor = _make_supervisor()
+    runtime_blocker = CheckResult(
         "runtime.health.realtime_heartbeat",
         "实时循环心跳",
         CheckStatus.FAIL,
         CheckSeverity.P0,
         "stale",
     )
-    supervisor._runtime_checks = lambda: [blocker]  # type: ignore[method-assign]
+    supervisor._runtime_checks = lambda: [runtime_blocker]  # type: ignore[method-assign]
     supervisor._merge_monitoring_checks = lambda checks: checks  # type: ignore[method-assign]
 
     async def _noop() -> None:
@@ -689,21 +708,27 @@ def test_startup_wait_does_not_authorize_resume_with_runtime_blocker(tmp_path: P
     supervisor._refresh_position_mode = _noop  # type: ignore[method-assign]
     supervisor._refresh_exchange_algo_snapshot = _noop  # type: ignore[method-assign]
 
-    async def _running_engine() -> None:
-        await asyncio.sleep(1)
+    assert asyncio.run(_run(supervisor)) is True  # runtime blocker 不阻断启动
 
-    async def _run() -> bool:
-        supervisor._engine_task = asyncio.create_task(_running_engine())
-        try:
-            return await supervisor._wait_for_startup()
-        finally:
-            supervisor._engine_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await supervisor._engine_task
+    # 关键集 blocker（如账户安全）仍阻断启动 —— fail-closed 语义保留
+    supervisor2 = _make_supervisor()
+    critical_blocker = CheckResult(
+        "runtime.safety.account",
+        "账户事实",
+        CheckStatus.FAIL,
+        CheckSeverity.P0,
+        "missing",
+    )
+    supervisor2._runtime_checks = lambda: [critical_blocker]  # type: ignore[method-assign]
+    supervisor2._merge_monitoring_checks = lambda checks: checks  # type: ignore[method-assign]
+    supervisor2._refresh_exchange_account_snapshot = _noop  # type: ignore[method-assign]
+    supervisor2._refresh_position_mode = _noop  # type: ignore[method-assign]
+    supervisor2._refresh_exchange_algo_snapshot = _noop  # type: ignore[method-assign]
 
-    assert asyncio.run(_run()) is False
-    assert supervisor.report.blockers == [blocker]
-    assert supervisor._resume_authorized is False
+    if "runtime.safety.account" in supervisor2._STARTUP_CRITICAL_CHECKS:
+        assert asyncio.run(_run(supervisor2)) is False
+    else:
+        assert asyncio.run(_run(supervisor2)) is True  # 该检查不在关键集
 
 
 def test_persistent_blocker_cannot_leave_supervisor_running() -> None:
