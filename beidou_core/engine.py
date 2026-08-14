@@ -7113,10 +7113,14 @@ class AutonomousEngine:
                 return
             if isinstance(algos_resp, list):
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                # BD-FIX（C2 审查）: 共享账户他人算法单（非 beidou- 前缀）
+                # 不构成所有权阻断 —— 集合级过滤（取消循环内另有逐条过滤）
                 unowned_algo_ids = [
                     str(item.get("algoId"))
                     for item in algos_resp
-                    if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                    if item.get("algoId") is not None
+                    and str(item.get("algoId")) not in known_algo_ids
+                    and str(item.get("clientAlgoId", "") or "").startswith("beidou-")
                 ]
                 if unowned_algo_ids:
                     # PKG02 (BDS-P0-001): 所有环境统一处理 — 清理残留无主 Algo 订单。
@@ -7154,7 +7158,9 @@ class AutonomousEngine:
                     unowned_algo_ids = [
                         str(item.get("algoId"))
                         for item in algos_resp
-                        if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                        if item.get("algoId") is not None
+                        and str(item.get("algoId")) not in known_algo_ids
+                        and str(item.get("clientAlgoId", "") or "").startswith("beidou-")
                     ]
                 if unowned_algo_ids:
                     self._block_unowned_protection_orders(unowned_algo_ids)
@@ -7258,10 +7264,15 @@ class AutonomousEngine:
             if not isinstance(existing_algos, list):
                 return
             known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+            # BD-FIX（C2 审查运行时变体）: 共享 demo 账户上其他用户的
+            # 算法单（非 beidou- 前缀）不构成所有权阻断 —— 排除出
+            # unowned 集合；只有本引擎命名空间的未知单才触发阻断。
             unowned_algo_ids = [
                 str(item.get("algoId"))
                 for item in existing_algos
-                if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                if item.get("algoId") is not None
+                and str(item.get("algoId")) not in known_algo_ids
+                and str(item.get("clientAlgoId", "") or "").startswith("beidou-")
             ]
             if unowned_algo_ids:
                 self._block_unowned_protection_orders(unowned_algo_ids)
@@ -7365,10 +7376,14 @@ class AutonomousEngine:
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                # BD-FIX（C2 审查运行时变体）: 非 beidou- 前缀的算法单是
+                # 共享账户他人订单，不构成所有权阻断（同 cleanup 路径）
                 unowned_algo_ids = [
                     str(item.get("algoId"))
                     for item in existing_algos
-                    if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
+                    if item.get("algoId") is not None
+                    and str(item.get("algoId")) not in known_algo_ids
+                    and str(item.get("clientAlgoId", "") or "").startswith("beidou-")
                 ]
                 if unowned_algo_ids:
                     self._block_unowned_protection_orders(unowned_algo_ids)
