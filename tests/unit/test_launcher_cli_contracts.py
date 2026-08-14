@@ -171,3 +171,51 @@ def test_python_module_entrypoints_delegate_to_click_command(tmp_path, monkeypat
     monkeypatch.setattr(cli_module, "main", lambda: calls.append("called"))
     runpy.run_module("beidou_launcher.__main__", run_name="__main__")
     assert calls == ["called"]
+
+
+def test_enable_unbuffered_stdout_reconfigures_non_tty_streams(monkeypatch) -> None:
+    """非 tty 流（日志文件重定向）切换行缓冲 —— 诊断输出逐行落盘。"""
+    calls: list[dict] = []
+
+    class FakeStream:
+        def isatty(self) -> bool:
+            return False
+
+        def reconfigure(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module.sys, "stdout", FakeStream())
+    monkeypatch.setattr(cli_module.sys, "stderr", FakeStream())
+
+    cli_module._enable_unbuffered_stdout()
+
+    assert calls == [{"line_buffering": True}, {"line_buffering": True}]
+
+
+def test_enable_unbuffered_stdout_leaves_tty_streams_alone(monkeypatch) -> None:
+    """tty 流保持默认缓冲行为。"""
+
+    class FakeTty:
+        def isatty(self) -> bool:
+            return True
+
+        def reconfigure(self, **kwargs) -> None:
+            raise AssertionError("tty streams must not be reconfigured")
+
+    monkeypatch.setattr(cli_module.sys, "stdout", FakeTty())
+    monkeypatch.setattr(cli_module.sys, "stderr", FakeTty())
+
+    cli_module._enable_unbuffered_stdout()  # 不抛异常即通过
+
+
+def test_enable_unbuffered_stdout_survives_non_reconfigurable_streams(monkeypatch) -> None:
+    """StringIO 等无 reconfigure 方法的流不抛异常（测试捕获器场景）。"""
+
+    class FakeCapture:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr(cli_module.sys, "stdout", FakeCapture())
+    monkeypatch.setattr(cli_module.sys, "stderr", FakeCapture())
+
+    cli_module._enable_unbuffered_stdout()  # 不抛异常即通过

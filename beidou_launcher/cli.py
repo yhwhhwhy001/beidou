@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import click
+
+
+def _enable_unbuffered_stdout() -> None:
+    """BD-FIX: 引擎日志实时可见。
+
+    stdout 重定向到文件时为块缓冲（数 KB），观测窗口内 nearline/realtime
+    诊断输出不可见——2026-08-14 排查"长时间无订单"时被缓冲假象误导
+    （fd offset 不增长被误判为 tick 停摆）。行缓冲让日志逐行落盘；
+    tty 场景保持默认不干预。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        try:
+            if not stream.isatty():
+                stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass  # 不可 reconfigure 的流（如某些测试捕获器）保持默认
 
 from .checks import find_project_root
 from .manifest import (
@@ -71,6 +91,7 @@ def main(
 
     直接执行 `beidou`、`北斗` 或 `bd` 等价于 `start`。
     """
+    _enable_unbuffered_stdout()
     root: Path = find_project_root()
     os.chdir(root)
     os.environ["BEIDOU_ENV"] = mode

@@ -6,6 +6,10 @@
 # ============================================================
 set -e
 
+# BD-FIX: 引擎日志实时可见 —— stdout 重定向到文件时为块缓冲，
+# 观测窗口内诊断输出不可见；行缓冲让日志逐行落盘。
+export PYTHONUNBUFFERED=1
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
