@@ -8531,7 +8531,27 @@ class AutonomousEngine:
                             account_id="default",
                             dq_tier="PASS",
                             reconciliation_status=snapshot_reconciliation_status,
-                            exchange_health=("HEALTHY" if self._check_liveness() is HealthState.HEALTHY else "UNSAFE"),
+                            exchange_health=(
+                                # BD-FIX: testnet 用核心活性判定（运行中 +
+                                # realtime 新鲜）—— 完整 liveness 的 user
+                                # stream/对账/控制面瞬时状态在 demo 抖动下
+                                # 反复 DEGRADED → R0 恒拒（final59 实测
+                                # auxskip 36 增长）。这些维度的安全由各自
+                                # 门禁负责；live/canary 保持完整 liveness。
+                                (
+                                    "HEALTHY"
+                                    if (
+                                        _is_testnet_snap
+                                        and self._running
+                                        and self._realtime_age_seconds() <= 15.0
+                                    )
+                                    or (
+                                        not _is_testnet_snap
+                                        and self._check_liveness() is HealthState.HEALTHY
+                                    )
+                                    else "UNSAFE"
+                                )
+                            ),
                             portfolio_hash=account_hash,
                             policy_version=risk_policy_version,
                             correlation_id=f"risk-eval-{symbol}-{source_timestamp}",
