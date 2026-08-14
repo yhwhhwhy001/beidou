@@ -6613,10 +6613,16 @@ class AutonomousEngine:
             and str(opening.get("approval_id", "")).strip()
         )
         if opening is not None:
+            # BD-FIX: testnet 下 opening baseline 只保留本地所有权品种 ——
+            # 8-12 时代的 baseline 含共享账户外部持仓（AIOUSDT 178 等），
+            # 与本地账本事实混同造成对账恒 MISMATCH
+            _owned_syms = _local_owned_symbols(self)
+            _is_testnet_sys = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
             positions.update(
                 {
                     InstrumentId(str(symbol)): Quantity(amount=str(amount))
                     for symbol, amount in dict(opening.get("positions", {})).items()
+                    if not _is_testnet_sys or str(symbol) in _owned_syms
                 }
             )
         captured_at = None
@@ -6669,8 +6675,16 @@ class AutonomousEngine:
         # 时间戳不可解析的行保留（fail-safe 不过滤）。
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
             _stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            _tracked_ids = {str(oid) for oid in getattr(self, "_active_order_ids", set())}
             _filtered: list[dict[str, Any]] = []
             for _row in active_orders:
+                # BD-FIX: 只保留本引擎命名空间的订单 —— 共享账户其他
+                # 用户的订单行（经恢复路径写入 order_state）不参与
+                # system 侧 open_orders 对账
+                _oid = str(_row.get("order_id") or _row.get("record_id") or "")
+                _cid = str(_row.get("client_order_id", "") or "")
+                if _oid not in _tracked_ids and not _cid.startswith("beidou-"):
+                    continue
                 try:
                     _row_ts = datetime.fromisoformat(str(_row.get("updated_at") or _row.get("created_at") or ""))
                     if _row_ts.tzinfo is None:
