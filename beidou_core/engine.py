@@ -6634,7 +6634,21 @@ class AutonomousEngine:
             except (KeyError, TypeError, ValueError):
                 opening_complete = False
         post_opening_fill = False
+        # BD-FIX: testnet 下 fill 重放只认本地订单 —— 共享账户其他用户
+        # 的成交（外部订单）经监控写入 fill_event/position_projection，
+        # 重放会把外部持仓混进 system 侧（final40 实测 CYSUSDT/AIOUSDT
+        # 等外部成交污染投影 → 对账恒 MISMATCH）
+        _is_testnet_replay = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+        _local_order_ids: set[str] = set()
+        if _is_testnet_replay:
+            _local_order_ids = {
+                str(row.get("order_id") or row.get("record_id") or "")
+                for row in self._store.restore_order_states()
+                if str(row.get("client_order_id", "") or "").startswith("beidou-")
+            } | {str(oid) for oid in getattr(self, "_owned_order_ids", set())}
         for fill in self._store.restore_fill_events():
+            if _is_testnet_replay and str(fill.get("order_id", "")) not in _local_order_ids:
+                continue  # 外部订单的成交：不属于引擎账本
             try:
                 fill_time = datetime.fromisoformat(str(fill.get("event_time", "")))
                 if fill_time.tzinfo is None:
@@ -9559,7 +9573,18 @@ class AutonomousEngine:
         try:
             exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
             if isinstance(exchange_open, list):
+                # BD-FIX: testnet 只认领本引擎命名空间（beidou- clientOrderId）
+                # 的挂单 —— 共享账户其他用户的 open orders 被认领后会
+                # 被 _monitor_orders 监控、成交进本地持仓投影，污染对账
+                # （final40 实测：CYSUSDT/AIOUSDT/GRIFFAINUSDT 外部成交
+                # 写入 position_projection）
+                _is_testnet_restore = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+                _skipped_foreign = 0
                 for o in exchange_open:
+                    _client_oid = str(o.get("clientOrderId", "") or "")
+                    if _is_testnet_restore and not _client_oid.startswith("beidou-"):
+                        _skipped_foreign += 1
+                        continue
                     oid = str(o["orderId"])
                     ostatus = str(o.get("status", "NEW")).upper()
                     osymbol = str(o.get("symbol", ""))
@@ -9588,6 +9613,8 @@ class AutonomousEngine:
                         )
                     except Exception as _persist_exc:
                         print(f"[beidou-autopilot] Warning: Failed to persist restored order {oid}: {_persist_exc}")
+                if _skipped_foreign:
+                    print(f"[beidou-autopilot] Skipped {_skipped_foreign} foreign orders (shared account, not beidou- owned)")
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
                 unowned = self._unowned_active_order_ids()
                 if self._can_write and unowned:
