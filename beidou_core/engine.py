@@ -465,7 +465,10 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
         return 0.0
     vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
     spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
-    _base_pct = 0.02  # PKG02 (BDS-P0-001): 所有环境使用统一仓位计算
+    # BD-FIX: 仓位基数环境可调（默认 0.02 生产语义不变）—— 0.02 与
+    # risk_per_trade_pct 双重保守叠加使 testnet 名义恒 ~10 USDT，
+    # 自适应变化不可感知（用户反馈"自适应未启用"）。
+    _base_pct = float(os.getenv("BEIDOU_ADAPTIVE_BASE_PCT", "0.02"))
     base = strength * _base_pct
     return base * vol_penalty * spread_penalty
 
@@ -8113,6 +8116,7 @@ class AutonomousEngine:
                 print(
                     f"[nearline] {symbol}: Adaptive → size={position_size:.4f} "
                     f"notional={position_notional:.0f} lev={dyn_leverage:.1f}x "
+                    f"risk_based={risk_based_size:.4f} pct={adaptive_pct:.4f} "
                     f"vol={ann_vol:.1%} atr_stop={stop_loss_pct:.1f}% "
                     f"pool={'OK' if pool_capacity else 'SKIP'}"
                 )
