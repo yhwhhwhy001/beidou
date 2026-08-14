@@ -987,9 +987,12 @@ class BeidouSupervisor:
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
-        # 仅非致命降级（DEGRADED）可自愈；LOCKED/FAILED/QUARANTINED 等
-        # 终态或升级态必须保持人工处置。
-        if state_value != "DEGRADED":
+        # 仅非致命状态（DEGRADED/ACTIVE）可自愈；LOCKED/FAILED/
+        # QUARANTINED 等终态或升级态必须保持人工处置。
+        # BD-FIX: ACTIVE 也必须可重新授权 —— 引擎自愈回 ACTIVE 但控制面
+        # 授权已被 _fail_closed 撤销时（final57 实测），旧条件只认
+        # DEGRADED → PAUSED 卡死。
+        if state_value not in ("DEGRADED", "ACTIVE"):
             return False
 
         from beidou_control.plane import ControlAction
