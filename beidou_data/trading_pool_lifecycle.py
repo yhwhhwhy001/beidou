@@ -58,6 +58,16 @@ class InstrumentScore:
         return self.overall
 
 
+def _default_observation_hours() -> float:
+    """BD-FIX（观察期可配置）: testnet 验收可经环境变量缩短观察期。"""
+    import os
+
+    try:
+        return float(os.getenv("BEIDOU_MIN_OBSERVATION_HOURS", "24.0"))
+    except ValueError:
+        return 24.0
+
+
 @dataclass
 class PoolEntry:
     """交易池条目。"""
@@ -68,7 +78,7 @@ class PoolEntry:
     promoted_at: datetime | None = None
     quarantine_reason: str | None = None
     scores: list[InstrumentScore] = field(default_factory=list)
-    min_observation_hours: float = 24.0  # 最少观察24小时
+    min_observation_hours: float = field(default_factory=_default_observation_hours)  # 默认 24h，环境可调
     capacity_used_pct: float = 0.0  # BD-FIX: 容量使用率追踪
     max_position_notional: float = 0.0  # BD-FIX: 最大持仓名义值
 
@@ -212,7 +222,22 @@ class TradingPool:
         import math as _math
 
         entry = self._pool.get(instrument_id)
-        if not entry or entry.status != PoolStatus.OBSERVING:
+        # BD-FIX（M3 审查）: QUARANTINED 允许回归 —— 连续 N 次评分恢复
+        # 到晋级阈值即回到 OBSERVING（随后正常观察期晋级流程）。
+        if not entry:
+            return False
+        if entry.status == PoolStatus.QUARANTINED:
+            recent = entry.scores[-self.DEGRADE_CONSECUTIVE :]
+            if len(recent) >= self.DEGRADE_CONSECUTIVE and all(
+                _math.isfinite(s.overall) and s.overall >= self.PROMOTE_THRESHOLD for s in recent
+            ):
+                entry.status = PoolStatus.OBSERVING
+                entry.quarantine_reason = None
+                entry.observing_since = datetime.now(timezone.utc)
+                self._persist(entry)
+            else:
+                return False
+        if entry.status != PoolStatus.OBSERVING:
             return False
 
         # 观察期检查

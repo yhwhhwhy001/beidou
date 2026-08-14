@@ -337,6 +337,56 @@ def _derive_liquidation_price(position_qty: float, entry_price: float, leverage:
     return entry_price - shift if position_qty > 0 else entry_price + shift
 
 
+def _local_owned_symbols(engine: Any) -> set[str]:
+    """本地所有权可证明的持仓标的集合（BD-FIX，共享账户本地化）。
+
+    共享 demo 账户上其他用户的持仓不属于引擎 —— 风控输入、保护覆盖、
+    权益估计都只统计本地所有权（保护位置/持仓投影/代际记录）可证明
+    的部分。
+    """
+    protection = getattr(engine, "_protection", None)
+    owned: set[str] = set()
+    if protection is not None and callable(getattr(protection, "all_positions", None)):
+        owned.update(str(pp.instrument_id) for pp in protection.all_positions().values())
+    owned.update(str(sym) for sym in getattr(engine, "_position_generation", {}).keys())
+    owned.update(str(sym) for sym in getattr(engine, "_position_projection", {}).keys())
+    return owned
+
+
+def _local_equity_estimate(engine: Any, shared_balance: float) -> float:
+    """testnet 本地权益估计（BD-FIX，I4 审查）。
+
+    共享 demo 账户的 REST 余额含外部用户资金 —— 用它更新策略权益/
+    peak_equity 会放大或掩盖自有 drawdown、污染仓位 sizing。本地估计：
+    启动基线（共享余额 - 自有持仓名义）+ 自有持仓 unrealized（取自
+    交易所持仓行，Binance 标准字段）。非 testnet 直接返回共享余额。
+    """
+    if str(getattr(getattr(engine, "_env_mode", None), "value", "")) != "testnet":
+        return shared_balance
+    base = getattr(engine, "_local_equity_base", None)
+    owned = _local_owned_symbols(engine)
+    unreal = 0.0
+    owned_notional = 0.0
+    positions = (getattr(engine, "_last_account", {}) or {}).get("positions", [])
+    if isinstance(positions, list):
+        for row in positions:
+            if str(row.get("symbol", "")) not in owned:
+                continue
+            try:
+                unreal += float(row.get("unrealizedProfit", 0) or 0)
+                amt = float(row.get("positionAmt", 0) or 0)
+                entry = float(row.get("entryPrice", 0) or 0)
+                owned_notional += abs(amt) * entry
+            except (TypeError, ValueError):
+                continue
+    if base is None:
+        base = shared_balance - owned_notional
+        engine._local_equity_base = base
+        print(f"[equity] local equity baseline: shared={shared_balance:.2f} "
+              f"owned_notional={owned_notional:.2f} base={base:.2f}")
+    return base + unreal
+
+
 def _reconciliation_max_age_seconds(env_mode_value: str) -> float:
     """对账事实新鲜度阈值按环境区分（BD-FIX）。
 
@@ -2508,11 +2558,19 @@ class AutonomousEngine:
         for symbol in sorted(protection_symbols - exchange_symbols):
             gaps.append({"symbol": symbol, "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"})
 
+        # BD-FIX（C3 审查）: 保护覆盖只统计本地所有权可证明的持仓 ——
+        # 共享 demo 账户的外部持仓不属于引擎，不得产生覆盖 gap。
+        # 豁免仅限 testnet：live/canary 中"交易所有持仓但本地无记录"
+        # 仍是严重缺口（丢仓），必须 fail-closed。
+        _is_testnet = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+        _locally_owned_symbols = set(local_symbols) | {str(sym) for sym in getattr(self, "_position_generation", {}).keys()}
         for position in exchange_positions:
             symbol = str(position.get("symbol", "")).strip()
             if not symbol:
                 gaps.append({"symbol": "", "reason": "VENUE_POSITION_SYMBOL_UNKNOWN"})
                 continue
+            if _is_testnet and symbol not in _locally_owned_symbols:
+                continue  # 外部持仓（共享账户）不参与覆盖判定
             try:
                 position_amount = Decimal(str(position.get("positionAmt", "0") or "0"))
             except (InvalidOperation, ValueError, TypeError):
@@ -5750,7 +5808,9 @@ class AutonomousEngine:
                     break
             account_balance = float(self._last_account.get("totalWalletBalance", 0))
             if account_balance > 0:
-                self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+                self._strategy_risk.update_equity(
+                    self._autopilot_strategy_id, _local_equity_estimate(self, account_balance)
+                )
                 if account_balance > self._peak_equity:
                     self._peak_equity = account_balance
         else:
@@ -5944,7 +6004,9 @@ class AutonomousEngine:
         # Update strategy risk on any fill
         account_balance = float(self._last_account.get("totalWalletBalance", 0))
         if account_balance > 0:
-            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+            self._strategy_risk.update_equity(
+                self._autopilot_strategy_id, _local_equity_estimate(self, account_balance)
+            )
             if account_balance > self._peak_equity:
                 self._peak_equity = account_balance
 
@@ -6960,10 +7022,21 @@ class AutonomousEngine:
             for algo_id in unowned_algo_ids:
                 try:
                     symbol = ""
+                    client_algo_id = ""
                     for item in (existing_algo_inventory or []):
                         if str(item.get("algoId")) == algo_id:
                             symbol = str(item.get("symbol", ""))
+                            client_algo_id = str(item.get("clientAlgoId", "") or "")
                             break
+                    # BD-FIX（C2 审查）: 共享 demo 账户上其他用户的算法单
+                    # 不是"残留无主"—— 只有本引擎命名空间（beidou- 前缀）
+                    # 的单才允许自动取消；他人订单保持阻断（fail-closed）。
+                    if client_algo_id and not client_algo_id.startswith("beidou-"):
+                        print(
+                            f"[beidou-autopilot] Skip foreign Algo {algo_id} "
+                            f"(clientAlgoId={client_algo_id[:24]}...) — not owned by this engine"
+                        )
+                        continue
                     await self._cancel_algo_order(symbol, int(algo_id))
                     cancelled += 1
                     print(
@@ -7046,7 +7119,10 @@ class AutonomousEngine:
                     if item.get("algoId") is not None and str(item.get("algoId")) not in known_algo_ids
                 ]
                 if unowned_algo_ids:
-                    # PKG02 (BDS-P0-001): 所有环境统一处理 — 无条件清理残留无主 Algo 订单。
+                    # PKG02 (BDS-P0-001): 所有环境统一处理 — 清理残留无主 Algo 订单。
+                    # BD-FIX（C2 审查）: 只取消本引擎命名空间（beidou- 前缀）
+                    # 的残留单；共享 demo 账户上其他用户的算法单不是残留
+                    # —— 保持阻断（fail-closed）而非取消。
                     print(
                         f"[startup] Cancelling {len(unowned_algo_ids)} "
                         f"stale unowned Algo orders (positions={len(exchange_positions)})"
@@ -7055,6 +7131,13 @@ class AutonomousEngine:
                         algo_id = str(item.get("algoId"))
                         if algo_id not in known_algo_ids:
                             sym = str(item.get("symbol", ""))
+                            _client_algo_id = str(item.get("clientAlgoId", "") or "")
+                            if _client_algo_id and not _client_algo_id.startswith("beidou-"):
+                                print(
+                                    f"[startup]   ⊘ Skip foreign Algo {algo_id} "
+                                    f"(clientAlgoId={_client_algo_id[:24]}...) — not owned by this engine"
+                                )
+                                continue
                             try:
                                 await self._adapter.cancel_algo_order(sym, int(algo_id))
                                 print(f"[startup]   ✓ Cancelled {sym} Algo {algo_id}")
@@ -7116,7 +7199,28 @@ class AutonomousEngine:
                     if pending_sym:
                         protected_symbols.add(pending_sym)
 
-            unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
+            # BD-FIX（C3 审查）: 只对本地所有权可证明的持仓要求保护 ——
+            # 共享 demo 账户的外部持仓不属于引擎，不创建保护也不触发
+            # UNPROTECTED 阻断；豁免仅限 testnet（live/canary 中交易所
+            # 持仓无本地记录 = 丢仓，必须阻断）。
+            _locally_owned_symbols = {
+                str(pp.instrument_id) for pp in self._protection.all_positions().values()
+            } | {str(sym) for sym in getattr(self, "_position_generation", {}).keys()}
+            _env_mode = getattr(self, "_env_mode", None)
+            if _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet":
+                _foreign_positions = {s for s in exchange_positions if s not in _locally_owned_symbols}
+                if _foreign_positions:
+                    print(
+                        f"[startup] {len(_foreign_positions)} foreign positions on shared account "
+                        f"— no protection required: {sorted(_foreign_positions)}"
+                    )
+                unprotected = {
+                    s: d
+                    for s, d in exchange_positions.items()
+                    if s in _locally_owned_symbols and s not in protected_symbols
+                }
+            else:
+                unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
             if not unprotected:
                 return
 
@@ -8073,6 +8177,17 @@ class AutonomousEngine:
                             position_qty = None
                             break
                         position_qty = raw_qty
+                        # BD-FIX（I5 审查）: 共享账户外部持仓不参与
+                        # 风控判定 —— testnet 下本地无所有权证明时
+                        # 按无持仓处理（风控针对自有敞口；liq 价同步
+                        # 置 None，避免"已平仓但有清算价"误判）
+                        _foreign_position = (
+                            str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+                            and symbol not in _local_owned_symbols(self)
+                        )
+                        if _foreign_position:
+                            position_qty = 0.0
+                            break
                         try:
                             raw_liquidation = account_position.get("liquidationPrice")
                             if raw_liquidation not in (None, ""):
@@ -8604,9 +8719,15 @@ class AutonomousEngine:
 
             bid = float(ticker.get("bidPrice", 0) or ticker.get("bid", 0) or 0)
             ask = float(ticker.get("askPrice", 0) or ticker.get("ask", 0) or 0)
+            if bid <= 0 or ask <= 0 or bid > ask:
+                # BD-FIX（M3 审查）: 凌晨薄盘/WS 抖动下 bid/ask 缺失 ——
+                # 跳过本轮评分（不产生 0 分），避免连续 3 次低分把标的
+                # 误 QUARANTINED（无回归路径）
+                logger.warning("Trading-pool: %s bid/ask unavailable — skip scoring this cycle", instrument_id)
+                continue
 
             # 点差评分：spread_bps 越低越好，>50bps → 0分, <1bps → 1分
-            spread_bps = ((ask - bid) / ask * 10000) if 0 < bid <= ask else 999.0
+            spread_bps = (ask - bid) / ask * 10000
             spread_score = max(0.0, min(1.0, 1.0 - (spread_bps - 1) / 49)) if spread_bps > 1 else 1.0
 
             # 深度评分：从 orderbook 获取
@@ -9245,6 +9366,9 @@ class AutonomousEngine:
         if not permissions_ok:
             print(f"[beidou-autopilot] Account permission facts are not writable-safe: {permission_reason}")
         init_equity = float(account.get("totalWalletBalance", 0))
+        # BD-FIX（I4 审查）: 策略权益/峰值用本地推导（共享余额含外部
+        # 资金会污染 drawdown 与 sizing）
+        init_equity = _local_equity_estimate(self, init_equity)
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
