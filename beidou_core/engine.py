@@ -6160,6 +6160,35 @@ class AutonomousEngine:
                     f"{type(exc).__name__}:{exc}"
                 )
                 return False
+            # BD-FIX: 保护单（algo 单）触发的平仓订单不在引擎
+            # _active_order_ids 监控集 —— 其成交只有 user stream 事件
+            # 可观测。事件驱动记账保证 system 侧持仓与交易所对齐
+            # （final72 实测 BTRUSDT 保护单平仓后 system 365 vs
+            # exchange 0 恒 MISMATCH）。
+            _order_id = str(getattr(update, "order_id", "") or "")
+            if (
+                result.status is UserProjectionStatus.ACCEPTED
+                and _order_id not in getattr(self, "_active_order_ids", set())
+                and str(getattr(getattr(update, "order_status", None), "value", ""))
+                in {"FILLED", "PARTIALLY_FILLED"}
+            ):
+                try:
+                    _result_payload = {
+                        "orderId": _order_id,
+                        "symbol": str(update.symbol),
+                        "side": str(getattr(getattr(update, "side", None), "value", "")),
+                        "type": str(getattr(getattr(update, "order_type", None), "value", "MARKET")),
+                        "executedQty": str(getattr(update, "cumulative_quantity", Quantity(amount="0")).amount),
+                        "avgPrice": str(getattr(update, "average_price", Price(amount="0")).amount),
+                        "status": str(getattr(getattr(update, "order_status", None), "value", "")),
+                    }
+                    await self._process_fill(
+                        _order_id,
+                        str(update.symbol),
+                        _result_payload,
+                    )
+                except Exception as _event_fill_exc:
+                    logger.warning("event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__)
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
