@@ -3500,8 +3500,15 @@ class AutonomousEngine:
             if not expected_side or actual_side != expected_side:
                 issues.append(f"PROTECTION_SIDE_MISMATCH:{algo_id}")
             expected_type = str(expected.get("order_type", "")).strip().upper()
-            actual_type = str(actual.get("orderType", actual.get("type", ""))).strip().upper()
-            if not expected_type or actual_type != expected_type:
+            # BD-FIX: 库存只提供 algoType（算法单类型，CONDITIONAL 恒成立），
+            # 不提供触发后的订单类型 —— 与 durable 行的 order_type
+            # （STOP_MARKET/TAKE_PROFIT_MARKET）不是同一语义，不可比。
+            # 仅当库存提供具体 orderType/type 时才严格比较。
+            _venue_typed = actual.get("orderType") or actual.get("type")
+            actual_type = str(_venue_typed or "").strip().upper()
+            if not expected_type:
+                issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
+            elif _venue_typed and actual_type != expected_type:
                 issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
             expected_qty = _decimal(expected.get("quantity"))
             actual_qty = _decimal(actual.get("quantity"))
