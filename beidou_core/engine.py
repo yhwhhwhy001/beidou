@@ -3806,37 +3806,11 @@ class AutonomousEngine:
             except (TypeError, ValueError) as exc:
                 self._block_unowned_protection_orders([f"PROTECTION_RESTORE_FAILED:{type(exc).__name__}"])
                 return False
-            # BD-FIX (final82c): PENDING 止损意图在 restore 校验通过后挂载
-            # 到投影（CREATED 状态，无 ACK —— 不能参与 restore 的 ACK-backed
-            # 校验，但必须计入近线补发的 expected_count，否则 TP 已覆盖的
-            # 品种被 server_count>=expected_count continue 跳过，SL 永不补发）。
-            if not stop_orders and pending_stop_rows:
-                try:
-                    _ps_row = pending_stop_rows[0]
-                    _ps_trigger = Decimal(str(_ps_row["trigger_price"]))
-                    _ps_qty = Decimal(str(_ps_row["quantity"]))
-                    if _ps_trigger.is_finite() and _ps_trigger > 0 and _ps_qty.is_finite() and _ps_qty > 0:
-                        projection.stop_loss = ProtectionOrder(
-                            protection_id=str(_ps_row["protection_id"]),
-                            position_id=position_id,
-                            instrument_id=InstrumentId(symbol),
-                            venue_id=VenueId("BINANCE"),
-                            side=OrderSide.SELL if position_side == OrderSide.BUY else OrderSide.BUY,
-                            trigger_price=Price(amount=str(_ps_trigger)),
-                            order_price=None,
-                            quantity=Quantity(amount=str(_ps_qty)),
-                            order_type=str(_ps_row["order_type"]).strip().upper(),
-                            reduce_only=True,
-                            status=ProtectionStatus.CREATED,
-                            stop_type=(StopLossType(str(_ps_row["stop_type"])) if _ps_row.get("stop_type") else None),
-                            take_profit_type=None,
-                            owner_id=str(self._protection_owner_id),
-                            position_generation=next(iter(generations)),
-                            session_id=next(iter(sessions)),
-                            exchange_order_id="",
-                        )
-                except (KeyError, InvalidOperation, TypeError, ValueError):
-                    pass
+            # BD-FIX (final82d): PENDING 止损行不挂载投影 —— 其 trigger 是
+            # 上一时段的已审批意图，价格漂移后恒被交易所 -2021（立即触发）
+            # 拒绝（final82c 实测：APRUSDT 现价 0.004 vs 旧 trigger 0.50）。
+            # 投影保持 stop_loss=None，由近线 S33 自适应重算创建新保护；
+            # 旧 PENDING 行在 S33 创建前清理（CANCELLED）。
             self._position_entry_times.setdefault(position_id, time.time())
         return True
 
@@ -7723,80 +7697,26 @@ class AutonomousEngine:
 
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
                 if pp.stop_loss is None:
-                    # BD-FIX (final82): 优先复用 durable PENDING 行已审批
-                    # trigger 提交（重启前的 SL 从未提交成功）；无 PENDING 行
-                    # 才走 S33 自适应重算。重算会改变已签名的止损触发价，
-                    # 违背"移动止损需重新审批"的严格语义。
+                    # BD-FIX (final82d): 旧 PENDING 行的 trigger 已随价格漂移
+                    # 过期（-2021 恒拒），不再复用提交；先清理 durable 行，
+                    # 再走 S33 按当前市价自适应重算创建新保护。
                     store = getattr(self, "_store", None)
-                    pending_stop_row = None
-                    for row in (store.restore_protections() if store else []):
-                        if (
-                            str(row.get("position_id", "")) == pos_id
-                            and str(row.get("status", "")).strip().upper() == "PENDING"
-                            and (
-                                str(row.get("stop_type", "") or "").strip()
-                                or str(row.get("order_type", "") or "").strip().upper().startswith("STOP")
-                            )
-                        ):
-                            pending_stop_row = row
-                            break
-                    if pending_stop_row is not None:
-                        try:
-                            pending_trigger = str(pending_stop_row.get("trigger_price", "")).strip()
-                            pending_qty = str(pending_stop_row.get("quantity", "")).strip()
-                            pending_otype = str(pending_stop_row.get("order_type", "")).strip().upper()
-                            if pending_trigger and pending_qty and pending_otype:
-                                algo_params = {
-                                    "symbol": symbol,
-                                    "side": "SELL" if pp.side == OrderSide.BUY else "BUY",
-                                    "algoType": "CONDITIONAL",
-                                    "type": pending_otype,
-                                    "quantity": pending_qty,
-                                    "triggerPrice": pending_trigger,
-                                    "reduceOnly": "true",
-                                    "workingType": "CONTRACT_PRICE",
-                                }
-                                resp = await self._create_algo_order(algo_params)
-                                if "algoId" in resp:
-                                    algo_id = str(resp["algoId"])
-                                    self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
-                                    placed += 1
-                                    print(
-                                        f"[nearline] ✅ Pending stop loss submitted for {symbol} "
-                                        f"at approved trigger {pending_trigger} → algoId={algo_id}"
-                                    )
-                                    # 更新 durable 行：PENDING → ACTIVE + exchange_order_id
-                                    _pending_order = ProtectionOrder(
-                                        protection_id=str(pending_stop_row["protection_id"]),
-                                        position_id=pos_id,
-                                        instrument_id=InstrumentId(symbol),
-                                        venue_id=VenueId("BINANCE"),
-                                        side=(OrderSide.SELL if pp.side == OrderSide.BUY else OrderSide.BUY),
-                                        trigger_price=Price(amount=pending_trigger),
-                                        order_price=None,
-                                        quantity=Quantity(amount=pending_qty),
-                                        order_type=pending_otype,
-                                        reduce_only=True,
-                                        status=ProtectionStatus.ACTIVE,
-                                        stop_type=(StopLossType(str(pending_stop_row["stop_type"])) if pending_stop_row.get("stop_type") else None),
-                                        take_profit_type=None,
-                                        owner_id=str(getattr(self, "_protection_owner_id", "")),
-                                        position_generation=int(pending_stop_row.get("position_generation") or 0),
-                                        session_id=str(pending_stop_row.get("session_id", "")),
-                                        exchange_order_id=algo_id,
-                                    )
-                                    self._persist_protection_order(_pending_order, status="ACTIVE")
-                                    # 挂回投影：下一轮近线补发看到 ACK-backed
-                                    # stop_loss 后不再重复提交（防重复下单）。
-                                    pp.stop_loss = _pending_order
-                                    continue
-                                else:
-                                    print(
-                                        f"[nearline] ⚠️ Pending stop loss submit failed for {symbol}: "
-                                        f"{resp.get('msg', str(resp)[:100])}"
-                                    )
-                        except Exception as exc:
-                            print(f"[nearline] ⚠️ Pending stop loss reuse failed for {symbol}: {exc}")
+                    if store:
+                        for row in store.restore_protections():
+                            if (
+                                str(row.get("position_id", "")) == pos_id
+                                and str(row.get("status", "")).strip().upper() == "PENDING"
+                                and (
+                                    str(row.get("stop_type", "") or "").strip()
+                                    or str(row.get("order_type", "") or "").strip().upper().startswith("STOP")
+                                )
+                            ):
+                                try:
+                                    store.remove_protection(pos_id)
+                                    print(f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}")
+                                except Exception:
+                                    pass
+                                break
                     try:
                         entry_price = pp.entry_price
                         if entry_price <= 0:
@@ -7911,6 +7831,11 @@ class AutonomousEngine:
                 # --- 重试止盈单 ---
                 for i, tp in enumerate(pp.take_profits):
                     if not _needs_exchange_protection(tp):
+                        continue
+                    # BD-FIX (final82d): 已 ACK 且仍在交易所 inventory 的 TP
+                    # 无需重发 —— 旧逻辑对"总数不足"的品种重发全部 TP →
+                    # ClientOrderId duplicated（final82c 实测）。
+                    if getattr(tp, "exchange_order_id", "") and str(tp.exchange_order_id) in existing_ids:
                         continue
                     # Take-profit retries use the same approved trigger; a
                     # venue rejection remains UNKNOWN instead of inventing a
