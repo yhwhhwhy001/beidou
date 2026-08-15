@@ -7679,6 +7679,12 @@ class AutonomousEngine:
                 server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
+                    if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_detail_diag", 0) > 30:
+                        self._last_retry_detail_diag = time.time()
+                        print(
+                            f"[nearline-diag] {symbol}: covered skip expected={expected_count} "
+                            f"server={server_count} sl_status={getattr(getattr(pp.stop_loss,'status',None),'value',None)}"
+                        )
                     continue
 
                 retry_count = getattr(self, "_protection_retries", {}).get(pos_id, 0)
@@ -7707,6 +7713,9 @@ class AutonomousEngine:
                 # BD-FIX (S41): 交易所已有 Algo 单 → 跳过
                 symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
                 if symbol_algo_count >= 2:
+                    if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_detail_diag", 0) > 30:
+                        self._last_retry_detail_diag = time.time()
+                        print(f"[nearline-diag] {symbol}: s41 skip symbol_algo_count={symbol_algo_count}")
                     continue  # 已有 SL+TP
 
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
