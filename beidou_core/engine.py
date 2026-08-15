@@ -3694,6 +3694,12 @@ class AutonomousEngine:
                     return False
                 row_status = str(row.get("status", "")).strip().upper()
                 is_pending = row_status == "PENDING"
+                if is_pending:
+                    # BD-FIX (final82): PENDING 行是本地已审批但从未提交成功的
+                    # 意图，不是 venue 事实 —— 不进入投影（投影契约要求
+                    # ACK-backed ACTIVE），也不毒化恢复。近线补发流程
+                    # （_retry_missing_protections）负责复用其 trigger 提交。
+                    continue
                 if (
                     not protection_id
                     or (not exchange_order_id and not is_pending)
@@ -3751,7 +3757,21 @@ class AutonomousEngine:
                 else:
                     take_profit_orders.append(order)
 
-            if len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
+            # BD-FIX (final82): 无 ACK-backed 止损但有 PENDING 止损意图时，
+            # 允许投影以 stop_loss=None 构建（资格保持 fail-closed），由近线
+            # 补发流程复用 PENDING 行 trigger 提交；其余情况仍严格覆盖检查。
+            pending_stop_rows = [
+                r
+                for r in position_rows
+                if str(r.get("status", "")).strip().upper() == "PENDING"
+                and (
+                    str(r.get("stop_type", "") or "").strip()
+                    or str(r.get("order_type", "") or "").strip().upper().startswith("STOP")
+                )
+            ]
+            if len(stop_orders) == 0 and pending_stop_rows:
+                pass
+            elif len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
                 self._block_unowned_protection_orders([f"PROTECTION_STOP_COVERAGE_UNKNOWN:{position_id}"])
                 return False
             if position_id in self._protection.all_positions():
@@ -7148,36 +7168,49 @@ class AutonomousEngine:
         非正常退出（kill -9 / 崩溃）会导致交易所残留条件单，新进程无法
         认领所有权，造成 protection_owner_unknown 永久阻断。Testnet 无真实
         持仓时安全取消这些残留订单，避免手动清理。
+
+        BD-FIX (final82): 取消判定改为按 symbol 粒度 —— 幽灵单所在 symbol
+        无持仓即安全取消；全账户"任一持仓存在就不清理"导致有持仓品种与
+        幽灵单品种共存时幽灵单永远无法清理 → owner_unknown 永久置位
+        （final81/final82 实测 3 个幽灵 symbol 死锁）。
         """
         if not unowned_algo_ids:
             return unowned_algo_ids, existing_algo_inventory
 
-        has_any_position = any(
-            abs(float(pos.get("positionAmt", 0) or 0)) > 0 for pos in positions_list
-        )
+        position_symbols = {
+            str(pos.get("symbol", "")).strip().upper()
+            for pos in positions_list
+            if abs(float(pos.get("positionAmt", 0) or 0)) > 0
+        }
         _env_mode = getattr(self, "_env_mode", None)
         is_testnet = _env_mode is not None and _env_mode.value == "testnet"
 
-        if is_testnet and not has_any_position:
+        if is_testnet:
             cancelled = 0
+            remaining: list[str] = []
             for algo_id in unowned_algo_ids:
+                symbol = ""
+                client_algo_id = ""
+                for item in (existing_algo_inventory or []):
+                    if str(item.get("algoId")) == algo_id:
+                        symbol = str(item.get("symbol", "")).strip().upper()
+                        client_algo_id = str(item.get("clientAlgoId", "") or "")
+                        break
+                # BD-FIX（C2 审查）: 共享 demo 账户上其他用户的算法单
+                # 不是"残留无主"—— 只有本引擎命名空间（beidou- 前缀）
+                # 的单才允许自动取消；他人订单不构成所有权阻断。
+                if not client_algo_id or not client_algo_id.startswith("beidou-"):
+                    print(
+                        f"[beidou-autopilot] Skip foreign Algo {algo_id} "
+                        f"(clientAlgoId={client_algo_id[:24] if client_algo_id else '<empty>'}...) — not owned by this engine"
+                    )
+                    continue
+                if symbol in position_symbols:
+                    # BD-FIX (final82): 幽灵单所在 symbol 有持仓 → 严格阻断；
+                    # 无持仓 → 安全取消（不影响有持仓品种的恢复）。
+                    remaining.append(algo_id)
+                    continue
                 try:
-                    symbol = ""
-                    client_algo_id = ""
-                    for item in (existing_algo_inventory or []):
-                        if str(item.get("algoId")) == algo_id:
-                            symbol = str(item.get("symbol", ""))
-                            client_algo_id = str(item.get("clientAlgoId", "") or "")
-                            break
-                    # BD-FIX（C2 审查）: 共享 demo 账户上其他用户的算法单
-                    # 不是"残留无主"—— 只有本引擎命名空间（beidou- 前缀）
-                    # 的单才允许自动取消；他人订单保持阻断（fail-closed）。
-                    if client_algo_id and not client_algo_id.startswith("beidou-"):
-                        print(
-                            f"[beidou-autopilot] Skip foreign Algo {algo_id} "
-                            f"(clientAlgoId={client_algo_id[:24]}...) — not owned by this engine"
-                        )
-                        continue
                     await self._cancel_algo_order(symbol, int(algo_id))
                     cancelled += 1
                     print(
@@ -7185,11 +7218,12 @@ class AutonomousEngine:
                         f"{algo_id} (symbol={symbol})"
                     )
                 except Exception as exc:
+                    remaining.append(algo_id)
                     print(f"[beidou-autopilot] Failed to cancel unowned Algo {algo_id}: {exc}")
             if cancelled:
                 print(
                     f"[beidou-autopilot] BD-FIX (S2): Auto-cancelled {cancelled} unowned "
-                    "testnet Algo orders (no exchange positions)"
+                    "testnet Algo orders (no position on their symbols)"
                 )
                 # Refresh Algo inventory after cancellation
                 try:
@@ -7200,10 +7234,15 @@ class AutonomousEngine:
                         existing_algo_inventory = existing_algos
                 except Exception as exc:
                     logger.warning("Failed to refresh algo inventory after cancellation: %s", exc)
-                return [], existing_algo_inventory
-            return unowned_algo_ids, existing_algo_inventory
+            if remaining:
+                self._block_unowned_protection_orders(remaining)
+                print(
+                    f"[beidou-autopilot] {len(remaining)} unowned Algo orders remain "
+                    "UNKNOWN; startup recovery is read-only"
+                )
+            return remaining, existing_algo_inventory
 
-        # Non-testnet or has positions: keep the blocking behaviour
+        # Non-testnet: keep the blocking behaviour
         self._block_unowned_protection_orders(unowned_algo_ids)
         print(
             f"[beidou-autopilot] {len(unowned_algo_ids)} unowned Algo orders remain "
@@ -7595,6 +7634,80 @@ class AutonomousEngine:
 
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
                 if pp.stop_loss is None:
+                    # BD-FIX (final82): 优先复用 durable PENDING 行已审批
+                    # trigger 提交（重启前的 SL 从未提交成功）；无 PENDING 行
+                    # 才走 S33 自适应重算。重算会改变已签名的止损触发价，
+                    # 违背"移动止损需重新审批"的严格语义。
+                    store = getattr(self, "_store", None)
+                    pending_stop_row = None
+                    for row in (store.restore_protections() if store else []):
+                        if (
+                            str(row.get("position_id", "")) == pos_id
+                            and str(row.get("status", "")).strip().upper() == "PENDING"
+                            and (
+                                str(row.get("stop_type", "") or "").strip()
+                                or str(row.get("order_type", "") or "").strip().upper().startswith("STOP")
+                            )
+                        ):
+                            pending_stop_row = row
+                            break
+                    if pending_stop_row is not None:
+                        try:
+                            pending_trigger = str(pending_stop_row.get("trigger_price", "")).strip()
+                            pending_qty = str(pending_stop_row.get("quantity", "")).strip()
+                            pending_otype = str(pending_stop_row.get("order_type", "")).strip().upper()
+                            if pending_trigger and pending_qty and pending_otype:
+                                algo_params = {
+                                    "symbol": symbol,
+                                    "side": "SELL" if pp.side == OrderSide.BUY else "BUY",
+                                    "algoType": "CONDITIONAL",
+                                    "type": pending_otype,
+                                    "quantity": pending_qty,
+                                    "triggerPrice": pending_trigger,
+                                    "reduceOnly": "true",
+                                    "workingType": "CONTRACT_PRICE",
+                                }
+                                resp = await self._create_algo_order(algo_params)
+                                if "algoId" in resp:
+                                    algo_id = str(resp["algoId"])
+                                    self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                                    placed += 1
+                                    print(
+                                        f"[nearline] ✅ Pending stop loss submitted for {symbol} "
+                                        f"at approved trigger {pending_trigger} → algoId={algo_id}"
+                                    )
+                                    # 更新 durable 行：PENDING → ACTIVE + exchange_order_id
+                                    _pending_order = ProtectionOrder(
+                                        protection_id=str(pending_stop_row["protection_id"]),
+                                        position_id=pos_id,
+                                        instrument_id=InstrumentId(symbol),
+                                        venue_id=VenueId("BINANCE"),
+                                        side=(OrderSide.SELL if pp.side == OrderSide.BUY else OrderSide.BUY),
+                                        trigger_price=Price(amount=pending_trigger),
+                                        order_price=None,
+                                        quantity=Quantity(amount=pending_qty),
+                                        order_type=pending_otype,
+                                        reduce_only=True,
+                                        status=ProtectionStatus.ACTIVE,
+                                        stop_type=(StopLossType(str(pending_stop_row["stop_type"])) if pending_stop_row.get("stop_type") else None),
+                                        take_profit_type=None,
+                                        owner_id=str(getattr(self, "_protection_owner_id", "")),
+                                        position_generation=int(pending_stop_row.get("position_generation") or 0),
+                                        session_id=str(pending_stop_row.get("session_id", "")),
+                                        exchange_order_id=algo_id,
+                                    )
+                                    self._persist_protection_order(_pending_order, status="ACTIVE")
+                                    # 挂回投影：下一轮近线补发看到 ACK-backed
+                                    # stop_loss 后不再重复提交（防重复下单）。
+                                    pp.stop_loss = _pending_order
+                                    continue
+                                else:
+                                    print(
+                                        f"[nearline] ⚠️ Pending stop loss submit failed for {symbol}: "
+                                        f"{resp.get('msg', str(resp)[:100])}"
+                                    )
+                        except Exception as exc:
+                            print(f"[nearline] ⚠️ Pending stop loss reuse failed for {symbol}: {exc}")
                     try:
                         entry_price = pp.entry_price
                         if entry_price <= 0:
