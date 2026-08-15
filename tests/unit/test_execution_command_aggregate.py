@@ -294,6 +294,36 @@ def test_user_stream_partial_and_fill_update_same_durable_child_idempotently(tmp
     assert outbox.restore_execution_plan(intent.intent_id) == filled
 
 
+def test_user_stream_terminal_partial_fill_projects_unknown(tmp_path) -> None:
+    outbox = IntentOutbox(str(tmp_path / "execution-terminal-partial.db"))
+    intent = OrderIntent(
+        intent_id="intent-1",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=Quantity(amount="1"),
+        idempotency_key="idem-intent-terminal-partial",
+        reduce_only=True,
+    )
+    outbox.commit(intent)
+    assert outbox.claim("engine-test") is not None
+    outbox.persist_execution_plan(intent.intent_id, [_child(0)])
+    outbox.transition_execution_child(intent.intent_id, 0, ChildCommandState.SENDING, event_id="send-terminal")
+    update = SimpleNamespace(
+        client_order_id="beidou-intent-1-0",
+        order_status=SimpleNamespace(value="CANCELED"),
+        cumulative_quantity=Quantity(amount="0.4"),
+        event=SimpleNamespace(event_id="terminal-partial-1"),
+        order_id="987",
+    )
+
+    projected = outbox.project_user_order_update(update)
+
+    assert projected.children[0].state is ChildCommandState.UNKNOWN
+    assert projected.state is ParentExecutionState.UNKNOWN
+
+
 def test_engine_persists_complete_multi_slice_plan_before_first_write(monkeypatch) -> None:
     outbox = IntentOutbox()
     intent = OrderIntent(

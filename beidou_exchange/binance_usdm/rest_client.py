@@ -34,7 +34,7 @@ from beidou_exchange.core.error_taxonomy import (
     Result,
     classify_http_error,
 )
-from beidou_exchange.core.write_authority import TerminalWriteAuthority, TerminalWriteContext, evaluate_terminal_write
+from beidou_exchange.core.write_authority import TerminalWriteKind
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,6 @@ class BinanceRESTClient:
         recv_window: int = DEFAULT_RECV_WINDOW_MS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         account_id: str = "UNKNOWN",
-        write_authority: TerminalWriteAuthority | None = None,
-        write_context: TerminalWriteContext | None = None,
     ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
@@ -82,8 +80,6 @@ class BinanceRESTClient:
         self._recv_window = recv_window
         self._max_retries = max_retries
         self._account_id = str(account_id or "UNKNOWN")
-        self._write_authority = write_authority
-        self._write_context = write_context
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
@@ -399,18 +395,20 @@ class BinanceRESTClient:
             path,
             base_params,
             account_id=self._account_id,
-            context=self._write_context,
         )
         if write_request is not None:
-            decision = evaluate_terminal_write(self._write_authority, write_request)
-            if not decision.allowed:
-                return Result.failure(
-                    "Terminal write is not authorized",
-                    category=ErrorCategory.PERMISSION_DENIED,
-                    retryable=False,
-                    raw={"reason": decision.reason_code, "kind": write_request.kind.value},
-                    source="binance_rest_write_authority",
-                )
+            reason = (
+                "UNCLASSIFIED_TERMINAL_WRITE"
+                if write_request.kind is TerminalWriteKind.UNKNOWN
+                else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+            )
+            return Result.failure(
+                "Terminal writes are held until the capability registry is complete",
+                category=ErrorCategory.PERMISSION_DENIED,
+                retryable=False,
+                raw={"reason": reason, "kind": write_request.kind.value},
+                source="binance_rest_write_hold",
+            )
 
         # A writable Testnet request has the same ambiguity and rate-limit
         # semantics as any other venue write.  Environment labels must never

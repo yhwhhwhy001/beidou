@@ -520,6 +520,7 @@ class IntentOutbox:
 
         raw_status = str(getattr(getattr(update, "order_status", None), "value", "UNKNOWN"))
         cumulative = str(getattr(getattr(update, "cumulative_quantity", None), "amount", "0"))
+        terminal_partial = raw_status in {"CANCELED", "EXPIRED"} and Decimal(cumulative) > 0
         state_map = {
             "NEW": ChildCommandState.ACKED,
             "PENDING_CANCEL": (
@@ -527,8 +528,8 @@ class IntentOutbox:
             ),
             "PARTIALLY_FILLED": ChildCommandState.PARTIALLY_FILLED,
             "FILLED": ChildCommandState.FILLED,
-            "CANCELED": ChildCommandState.CANCELED,
-            "EXPIRED": ChildCommandState.CANCELED,
+            "CANCELED": ChildCommandState.UNKNOWN if terminal_partial else ChildCommandState.CANCELED,
+            "EXPIRED": ChildCommandState.UNKNOWN if terminal_partial else ChildCommandState.CANCELED,
             "REJECTED": ChildCommandState.REJECTED,
             "UNKNOWN": ChildCommandState.UNKNOWN,
         }
@@ -541,7 +542,8 @@ class IntentOutbox:
             exchange_order_id=str(getattr(update, "order_id", "") or ""),
             cumulative_filled_quantity=(
                 cumulative
-                if target
+                if terminal_partial
+                or target
                 in {
                     ChildCommandState.PARTIALLY_FILLED,
                     ChildCommandState.FILLED,

@@ -29,7 +29,7 @@ from beidou_exchange.core.protocol import (
     UserStreamEvent,
 )
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
-from beidou_exchange.core.write_authority import TerminalWriteAuthority, TerminalWriteContext, evaluate_terminal_write
+from beidou_exchange.core.write_authority import TerminalWriteKind
 from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
     AccountId,
@@ -219,14 +219,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         venue_id: VenueId = VenueId("BINANCE"),
         account_id: AccountId = AccountId("default"),
         rest_client=None,  # BD-T18: BinanceRESTClient 注入
-        write_authority: TerminalWriteAuthority | None = None,
-        write_context: TerminalWriteContext | None = None,
     ) -> None:
         self._venue_id = venue_id
         self._account_id = account_id
         self._rest_client = rest_client  # BD-T18: 真实传输层
-        self._write_authority = write_authority
-        self._write_context = write_context
         self._health_monitor = BinanceHealthMonitor(venue_id)
         self._reference_data = BinanceReferenceData(venue_id=venue_id)
         # BD-CV10: InstrumentRuleSnapshot 缓存 — adapter 是唯一规则来源
@@ -287,18 +283,20 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             path,
             params,
             account_id=write_account_id or str(self._account_id),
-            context=self._write_context,
         )
         if write_request is not None:
-            decision = evaluate_terminal_write(self._write_authority, write_request)
-            if not decision.allowed:
-                return Result.failure(
-                    "Terminal write is not authorized",
-                    category=ErrorCategory.PERMISSION_DENIED,
-                    retryable=False,
-                    raw={"reason": decision.reason_code, "kind": write_request.kind.value},
-                    source="binance_adapter_write_authority",
-                )
+            reason = (
+                "UNCLASSIFIED_TERMINAL_WRITE"
+                if write_request.kind is TerminalWriteKind.UNKNOWN
+                else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+            )
+            return Result.failure(
+                "Terminal writes are held until the capability registry is complete",
+                category=ErrorCategory.PERMISSION_DENIED,
+                retryable=False,
+                raw={"reason": reason, "kind": write_request.kind.value},
+                source="binance_adapter_write_hold",
+            )
 
         def enabled(value: Any) -> bool:
             if isinstance(value, bool):
@@ -846,6 +844,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return False, "CANCEL_ACK_QUANTITY_INVALID"
         if executed > original:
             return False, "CANCEL_ACK_EXECUTED_QTY_INVALID"
+        if status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and executed > 0:
+            return False, "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
         try:
             OrderSide(str(response["side"]))
             OrderType(str(response["type"]))

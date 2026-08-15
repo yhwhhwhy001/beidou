@@ -58,7 +58,7 @@ def classify_terminal_write(
         client_order_id=str(values.get("newClientOrderId") or values.get("clientAlgoId") or ""),
         order_id=str(values.get("orderId") or ""),
         algo_id=str(values.get("algoId") or ""),
-        quantity=str(values.get("quantity") or ""),
+        quantity=str(values.get("quantity") or context.quantity or ""),
         task_id=context.task_id,
         entrypoint=context.entrypoint,
         owner_id=context.owner_id,

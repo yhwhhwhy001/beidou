@@ -45,12 +45,12 @@ gates:
   G10_production: NOT_AUTHORIZED
 task_status:
   TASK-M00-C00: CONDITIONAL_PASS
-  TASK-M00-C01: REVIEW_PENDING
+  TASK-M00-C01: RE_REVIEW_PENDING
 active_task: TASK-M00-C01
 status: INDEPENDENT_REVIEW_PENDING
 latest_offline_evidence:
-  targeted_tests: 193_passed
-  offline_suite: 2485_passed
+  targeted_tests: 226_passed
+  offline_suite: 2494_passed
   excluded: tests/testnet; exchange/account/database/deploy/runtime activation
   new_modules_ruff_format_mypy: PASS
   engine_f821_scan: PASS
@@ -60,6 +60,14 @@ containment_limit:
   exhaustive_entry_registry: NOT_STARTED_M00_E
   runtime_loaded: false
   testnet_ready: false
+adversarial_review:
+  rejected_commit: ad3f8fd383962558c7f691fcbda16b73b6979cc4
+  rejected_verdict: FAIL
+  remediation:
+    caller_supplied_production_authority_surface: REMOVED
+    terminal_partial_fill_paths: UNKNOWN_RECONCILIATION_REQUIRED
+    nan_expiry_and_non_bool_decision: REJECTED
+  current_verdict: RE_REVIEW_PENDING
 stop_conditions:
   - any need to touch PID 15276 or its runtime state
   - any exchange, account, running database, deployment, Mainnet, or real-funds action

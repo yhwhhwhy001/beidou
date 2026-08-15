@@ -222,6 +222,7 @@ class BeidouSupervisor:
                 path: str,
                 signed: bool = False,
                 params: dict[str, Any] | None = None,
+                write_account_id: str | None = None,
             ) -> Any:
                 if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                     record(path, method)
@@ -230,7 +231,13 @@ class BeidouSupervisor:
                         category=ErrorCategory.UNKNOWN,
                         source="beidou_supervisor_interlock",
                     )
-                return await adapter_request(method, path, signed=signed, params=params)
+                return await adapter_request(
+                    method,
+                    path,
+                    signed=signed,
+                    params=params,
+                    write_account_id=write_account_id,
+                )
 
             adapter.request = guarded_adapter_request
 

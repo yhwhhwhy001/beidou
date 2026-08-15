@@ -167,6 +167,52 @@ async def test_unqueryable_restored_order_remains_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_terminal_partial_fill_monitoring_requires_reconciliation() -> None:
+    class RestoredTracker:
+        status = "ACKED"
+
+        def __init__(self) -> None:
+            self.events: list[OrderEvent] = []
+
+        def apply(self, event: OrderEvent) -> bool:
+            self.events.append(event)
+            self.status = event.value
+            return True
+
+    async def query_order(*_args, **_kwargs):
+        return (
+            {
+                "orderId": 123,
+                "symbol": "BTCUSDT",
+                "status": "CANCELED",
+                "executedQty": "0.25",
+                "origQty": "1",
+            },
+            True,
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    tracker = RestoredTracker()
+    store = _Store()
+    failures: list[str] = []
+    engine._active_order_ids = {"123"}
+    engine._order_symbols = {"123": "BTCUSDT"}
+    engine._order_trackers = {"123": tracker}
+    engine._store = store
+    engine._api_async_safe = query_order
+    engine._record_execution_fact_failure_env_guarded = failures.append
+    engine._consume_cumulative_fill = lambda *_args, **_kwargs: pytest.fail("must not consume ambiguous fill")
+    engine._record_partial_fill_to_ledger = lambda *_args, **_kwargs: pytest.fail("must not write ledger")
+
+    await engine._monitor_orders("BTCUSDT")
+
+    assert tracker.events[-1] is OrderEvent.UNKNOWN
+    assert "123" not in engine._active_order_ids
+    assert store.saved_order_states[-1][0][6] == "UNKNOWN"
+    assert failures == ["TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:123"]
+
+
+@pytest.mark.asyncio
 async def test_unknown_intent_lookup_failure_is_not_requeued() -> None:
     resolutions: list[tuple[str, bool]] = []
 
@@ -197,6 +243,52 @@ async def test_unknown_intent_lookup_failure_is_not_requeued() -> None:
 
     assert resolved == 0
     assert resolutions == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_terminal_partial_fill_requires_reconciliation() -> None:
+    resolutions: list[tuple[str, bool]] = []
+    persisted: list[tuple[tuple, dict]] = []
+    failures: list[str] = []
+
+    async def found_partial_terminal(_symbol: str, _client_id: str) -> Result:
+        return Result.success(
+            {
+                "orderId": 42,
+                "clientOrderId": "beidou-intent-unknown-partial",
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "1",
+                "executedQty": "0.25",
+                "avgPrice": "95000",
+                "status": "CANCELED",
+            }
+        )
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._adapter = SimpleNamespace(query_order_by_client_id=found_partial_terminal)
+    engine._store = SimpleNamespace(save_order_state=lambda *args, **kwargs: persisted.append((args, kwargs)))
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-partial",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-partial",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+    engine._record_execution_fact_failure_env_guarded = failures.append
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 0
+    assert persisted == []
+    assert resolutions == []
+    assert failures == ["UNKNOWN_TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:intent-unknown-partial"]
 
 
 @pytest.mark.asyncio

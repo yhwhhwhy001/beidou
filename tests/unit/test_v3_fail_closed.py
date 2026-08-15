@@ -258,6 +258,16 @@ def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: P
     ):
         denied = asyncio.run(adapter.request(method, path, True, params))
         assert denied.is_success() is False
+    typed_denied = asyncio.run(
+        adapter.request(
+            "POST",
+            "/order",
+            True,
+            {"symbol": "BTCUSDT"},
+            write_account_id="dedicated-test-account",
+        )
+    )
+    assert typed_denied.is_success() is False
     assert calls == []
 
 

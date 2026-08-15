@@ -12,7 +12,6 @@ from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_exchange.core.protocol import Capability, OrderRequest
 from beidou_exchange.core.user_stream import UserStreamSequencer, UserStreamStatus
-from beidou_exchange.core.write_authority import TerminalWriteContext, TerminalWriteDecision, TerminalWriteRequest
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -48,30 +47,25 @@ class FakeRestClient:
         return Result.success({"listenKey": listen_key})
 
 
-class ExplicitTestWriteAuthority:
-    """Unit-only authority for tests exercising behavior after the write gate."""
+class PostGateTestAdapter(BinanceUsdmAdapter):
+    """Test-only seam for ACK/error parsing after the production hard hold."""
 
-    def authorize(self, _request: TerminalWriteRequest) -> TerminalWriteDecision:
-        return TerminalWriteDecision(True, "TEST_EXPLICIT_ALLOW")
+    async def request(
+        self,
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict | None = None,
+        write_account_id: str | None = None,
+    ) -> Result:
+        del write_account_id
+        return await self._rest_client.request(method, path, signed=signed, params=params)
 
 
 def write_enabled_adapter(transport: FakeRestClient) -> BinanceUsdmAdapter:
-    return BinanceUsdmAdapter(
+    return PostGateTestAdapter(
         account_id=AccountId("dedicated-test-account"),
         rest_client=transport,
-        write_authority=ExplicitTestWriteAuthority(),
-        write_context=TerminalWriteContext(
-            task_id="TASK-UNIT-ADAPTER",
-            entrypoint="pytest.binance_adapter",
-            owner_id="test-owner",
-            generation="test-generation",
-            approval_id="test-approval",
-            expires_at=4_102_444_800.0,
-            nonce="test-nonce",
-            intent_id="test-intent",
-            position_id="test-position",
-            dedicated_account=True,
-        ),
     )
 
 
@@ -271,7 +265,7 @@ class TestBinanceAdapter:
         assert params["quantity"] == "0.01"
 
     @pytest.mark.asyncio
-    async def test_authorized_exit_only_write_can_reach_transport_with_unknown_health(self):
+    async def test_post_gate_exit_ack_parsing_is_independent_of_health_probe(self):
         transport = FakeRestClient(
             {
                 "orderId": 18,
@@ -366,9 +360,9 @@ class TestBinanceAdapter:
         assert response.raw_response["retryable"] is False
 
     @pytest.mark.asyncio
-    async def test_risk_increasing_write_remains_blocked_by_unknown_venue_health(self):
+    async def test_write_hold_precedes_unknown_venue_health(self):
         transport = FakeRestClient({"orderId": 19, "status": "NEW", "executedQty": "0"})
-        adapter = write_enabled_adapter(transport)
+        adapter = BinanceUsdmAdapter(rest_client=transport)
         result = await adapter.request("POST", Endpoint.ORDER, signed=True, params={"symbol": "BTCUSDT"})
 
         assert result.is_success() is False
@@ -437,6 +431,20 @@ class TestBinanceAdapter:
         assert response.status.value == "UNKNOWN"
         assert response.raw_response is not None
         assert response.raw_response["reason"] == "CANCEL_ACK_NOT_TERMINAL"
+
+        transport.response = {
+            "orderId": 18,
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "status": "CANCELED",
+            "origQty": "0.01",
+            "executedQty": "0.005",
+        }
+        response = await adapter.cancel_order("18", venue_instrument)
+        assert response.status.value == "UNKNOWN"
+        assert response.raw_response is not None
+        assert response.raw_response["reason"] == "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_client_order_recovery_query_requires_bound_identity(self):

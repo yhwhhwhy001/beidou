@@ -4061,8 +4061,16 @@ class AutonomousEngine:
             ):
                 continue
             try:
-                OrderStatus(str(venue_order.get("status", "")))
-            except ValueError:
+                venue_status = OrderStatus(str(venue_order.get("status", "")))
+                venue_executed = Decimal(str(venue_order.get("executedQty", "")))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if not venue_executed.is_finite() or venue_executed < 0:
+                continue
+            if venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0:
+                self._record_execution_fact_failure_env_guarded(
+                    f"UNKNOWN_TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{intent_id}"
+                )
                 continue
             try:
                 store = getattr(self, "_store", None)
@@ -5410,28 +5418,17 @@ class AutonomousEngine:
                     await self._process_fill(order_id, order_sym or symbol, result)
 
                 elif status == "CANCELED" or status == "EXPIRED":
-                    # BD-FIX: 部分成交后 EXPIRED/CANCELED 的成交事实必须
-                    # 入账 —— IOC 切片在薄盘上"先部分成交后过期"时旧代码
-                    # 直接置终态，executedQty 从不进 ledger → 本地持仓被
-                    # 低估 → 对账恒 MISMATCH → 锁盘（C2 审查）。
                     if executed_qty > 0:
-                        delta_qty, partial_price, _fill_event_id = self._consume_cumulative_fill(
+                        # A terminal row with a partial fill spans order, fill,
+                        # position, and ledger authorities.  Preserve UNKNOWN
+                        # until independent reconciliation supplies the exact
+                        # fill facts; do not infer or book from one REST row.
+                        self._mark_order_unknown(
                             order_id,
                             order_sym or symbol,
-                            result,
-                            status=status,
+                            f"TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{order_id}",
                         )
-                        if delta_qty > 0 and partial_price > 0:
-                            self._record_partial_fill_to_ledger(
-                                order_id,
-                                order_sym or symbol,
-                                result,
-                                delta_qty,
-                                partial_price,
-                                executed_qty,
-                                _fill_event_id,
-                                status=status,
-                            )
+                        continue
                     tracker.apply(OrderEvent.CANCELED)
                     self._active_order_ids.discard(order_id)
                     self._store.save_order_state(

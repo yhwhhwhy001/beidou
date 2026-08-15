@@ -8,6 +8,7 @@ invalid, or failing authorities deny the write without touching the transport.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -37,6 +38,7 @@ class TerminalWriteContext:
     nonce: str
     intent_id: str = ""
     position_id: str = ""
+    quantity: str = ""
     dedicated_account: bool = False
 
 
@@ -101,6 +103,8 @@ def evaluate_terminal_write(
         return TerminalWriteDecision(False, "WRITE_SCOPE_INCOMPLETE")
     if request.account_id.strip().upper() in {"", "UNKNOWN", "DEFAULT"} or not request.dedicated_account:
         return TerminalWriteDecision(False, "WRITE_ACCOUNT_NOT_DEDICATED")
+    if not math.isfinite(request.expires_at):
+        return TerminalWriteDecision(False, "WRITE_SCOPE_INVALID_EXPIRY")
     if request.expires_at <= time.time():
         return TerminalWriteDecision(False, "WRITE_SCOPE_EXPIRED")
     if request.kind in {
@@ -111,12 +115,22 @@ def evaluate_terminal_write(
         return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
     if request.kind is TerminalWriteKind.REDUCE_OWNED and not request.position_id:
         return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
-    if request.kind is TerminalWriteKind.CANCEL_OWNED and not (request.order_id or request.algo_id):
+    if request.kind is TerminalWriteKind.CANCEL_OWNED and (
+        not (request.order_id or request.algo_id)
+        or not request.symbol
+        or not request.quantity
+        or not request.intent_id
+        or not request.position_id
+    ):
         return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
     try:
         decision = authority.authorize(request)
     except Exception:
         return TerminalWriteDecision(False, "WRITE_AUTHORITY_ERROR")
-    if not isinstance(decision, TerminalWriteDecision) or not decision.reason_code:
+    if (
+        not isinstance(decision, TerminalWriteDecision)
+        or type(decision.allowed) is not bool
+        or not decision.reason_code
+    ):
         return TerminalWriteDecision(False, "WRITE_AUTHORITY_INVALID_DECISION")
     return decision
