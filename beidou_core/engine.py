@@ -3692,9 +3692,11 @@ class AutonomousEngine:
                 except (KeyError, InvalidOperation, TypeError, ValueError):
                     self._block_unowned_protection_orders([f"PROTECTION_ROW_UNKNOWN:{position_id}"])
                     return False
+                row_status = str(row.get("status", "")).strip().upper()
+                is_pending = row_status == "PENDING"
                 if (
                     not protection_id
-                    or not exchange_order_id
+                    or (not exchange_order_id and not is_pending)
                     or order_side != expected_protection_side
                     or not order_type
                     or not trigger_price.is_finite()
@@ -3732,7 +3734,10 @@ class AutonomousEngine:
                     quantity=Quantity(amount=str(quantity)),
                     order_type=order_type,
                     reduce_only=True,
-                    status=ProtectionStatus.ACTIVE,
+                    # BD-FIX: PENDING 行（从未提交成功，无 exchange_order_id）
+                    # 恢复为 CREATED —— 进入投影并交由近线补发流程重新提交，
+                    # 而非把整个投影恢复毒化为 PROTECTION_ROW_SEMANTICS_UNKNOWN。
+                    status=ProtectionStatus.CREATED if is_pending else ProtectionStatus.ACTIVE,
                     stop_type=stop_type,
                     take_profit_type=take_profit_type,
                     owner_id=str(self._protection_owner_id),
@@ -7485,9 +7490,30 @@ class AutonomousEngine:
                 return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
-                self._block_unowned_protection_orders(semantic_issues)
-                print("[nearline] Protection retry blocked: protection semantics UNKNOWN")
-                return
+                # BD-FIX: 区分"交易所缺失"与"语义不匹配"（与启动恢复 S2 同语义）。
+                # 缺失 → 保护单已被触发/取消/过期 → 清理本地 stale 行后继续补发；
+                # 真语义冲突（SYMBOL/SIDE/QTY/TRIGGER/REDUCE_ONLY）→ 保持 fail-closed。
+                venue_missing = [i for i in semantic_issues if i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+                hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+                if hard_issues:
+                    self._block_unowned_protection_orders(hard_issues)
+                    print("[nearline] Protection retry blocked: protection semantics UNKNOWN")
+                    return
+                if venue_missing:
+                    store = getattr(self, "_store", None)
+                    cleaned = 0
+                    for row in (store.restore_protections() if store else []):
+                        algo_id = str(row.get("exchange_order_id", "")).strip()
+                        if algo_id and any(algo_id in issue for issue in venue_missing):
+                            pos_id = str(row.get("position_id", "")).strip()
+                            if pos_id:
+                                try:
+                                    store.remove_protection(pos_id)
+                                    cleaned += 1
+                                except Exception:
+                                    pass
+                    if cleaned:
+                        print(f"[nearline] Cleaned {cleaned} stale protection(s) (no longer on venue)")
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
