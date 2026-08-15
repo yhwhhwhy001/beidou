@@ -7725,6 +7725,16 @@ class AutonomousEngine:
                         from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 
                         adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features or {})
+                        # BD-FIX (final82i): blocked 配置（NO_MARKET_DATA 等）
+                        # 不能用于创建 —— ATR_BASED 无 atr 会抛异常。跳过
+                        # 本轮，等下一轮 kline 数据完整后再重建。
+                        _cfg_meta = getattr(adaptive_cfg, "metadata", {}) or {}
+                        if _cfg_meta.get("blocked") or float(getattr(adaptive_cfg, "stop_pct", 0) or 0) <= 0:
+                            print(
+                                f"[nearline] ⚠️ S33 skipped for {symbol}: adaptive config blocked "
+                                f"({_cfg_meta.get('reason', 'UNKNOWN')})"
+                            )
+                            continue
                         _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
                         if _prec:
                             self._protection.set_precision_from_rule(
