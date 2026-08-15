@@ -1,0 +1,50 @@
+run_id: 2026-08-15-full-system-executable-plan
+repository: /Users/maguannan/beidou
+baseline_commit: e2819c4dfd7786d68674d85c4aad286eef8872c1
+remote_main_after_fetch: 7bbd7d83ef3b0bd8032d487d45acc771b6393bf6
+branch: main
+execution_worktree: PENDING_CREATION
+execution_branch: codex/full-system-optimization
+python: 3.14.6
+locks:
+  requirements_lock_sha256: a71ee1564c49540dee7cfa9d8df5d67afe0ded49b807bf74f9cc0f245d54bc63
+  pyproject_sha256: e73ac10a55957e9fbd5f1e2643daa1c42551db5c544cfe4cb96c052814de7cca
+authority:
+  local_source_changes: true
+  local_tests: true
+  isolated_worktree: true
+  git_commit: true
+  git_push_main: true
+  stop_or_restart_existing_process: false
+  exchange_account_reads: false
+  exchange_writes: false
+  running_database_writes: false
+  deploy_or_activate: false
+  mainnet_or_real_funds: false
+authorization_source: user objective in current Codex thread
+human_owner_identity: NOT_PROVIDED
+active_runtime:
+  pid: 15276
+  mode: testnet
+  checkout: /Users/maguannan/beidou
+  state: UNKNOWN
+  do_not_touch: true
+gates:
+  G0_context: READY_WITH_CONDITIONS
+  G1_requirements: APPROVED
+  G2_architecture: APPROVED_WITH_CONDITIONS
+  G3_tasks: READY
+  G4_development: IN_PROGRESS
+  G5_debugging: NOT_STARTED
+  G6_review: NOT_STARTED
+  G7_system_verification: NOT_STARTED
+  G8_acceptance: NOT_STARTED
+  G9_release: NOT_STARTED
+  G10_production: NOT_AUTHORIZED
+active_task: TASK-M00-C00
+status: IN_PROGRESS
+stop_conditions:
+  - any need to touch PID 15276 or its runtime state
+  - any exchange, account, running database, deployment, Mainnet, or real-funds action
+  - unknown concurrent changes or inability to preserve user work
+  - task-level P0 failure without a fail-closed containment path
