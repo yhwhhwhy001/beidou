@@ -3254,6 +3254,11 @@ class AutonomousEngine:
                         try:
                             await self._place_order(intent)
                         except Exception as _claim_exc:
+                            # BD-FIX (final83c): TERMINAL_CHILD_STATE（意图已
+                            # 推进到终态如 FILLED）是成交事件处理的幂等重复，
+                            # 静默跳过；其余异常保持 SENDING 待恢复。
+                            if "TERMINAL_CHILD_STATE" in str(_claim_exc):
+                                continue
                             # 单条 intent 异常不应阻断整个 claim 循环；
                             # 失败的 intent 保持在 SENDING，下次重启恢复。
                             print(
