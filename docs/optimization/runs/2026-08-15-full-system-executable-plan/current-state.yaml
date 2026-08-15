@@ -1,9 +1,10 @@
 run_id: 2026-08-15-full-system-executable-plan
 repository: /Users/maguannan/beidou
-baseline_commit: e2819c4dfd7786d68674d85c4aad286eef8872c1
+source_baseline_commit: e2819c4dfd7786d68674d85c4aad286eef8872c1
+implementation_baseline_commit: a3f4f4a6ccddb9827d09e13d4265677e161fdf85
 remote_main_after_fetch: 7bbd7d83ef3b0bd8032d487d45acc771b6393bf6
 branch: main
-execution_worktree: PENDING_CREATION
+execution_worktree: /Users/maguannan/beidou-worktrees/full-system-optimization-20260815
 execution_branch: codex/full-system-optimization
 python: 3.14.6
 locks:
@@ -22,7 +23,8 @@ authority:
   deploy_or_activate: false
   mainnet_or_real_funds: false
 authorization_source: user objective in current Codex thread
-human_owner_identity: NOT_PROVIDED
+human_owner_identity: current Codex thread user; external legal name not provided
+owner_limit: sufficient for offline implementation and Git scope only; runtime and trading gates remain blocked
 active_runtime:
   pid: 15276
   mode: testnet
@@ -30,7 +32,7 @@ active_runtime:
   state: UNKNOWN
   do_not_touch: true
 gates:
-  G0_context: READY_WITH_CONDITIONS
+  G0_context: READY
   G1_requirements: APPROVED
   G2_architecture: APPROVED_WITH_CONDITIONS
   G3_tasks: READY
@@ -41,7 +43,7 @@ gates:
   G8_acceptance: NOT_STARTED
   G9_release: NOT_STARTED
   G10_production: NOT_AUTHORIZED
-active_task: TASK-M00-C00
+active_task: TASK-M00-C01
 status: IN_PROGRESS
 stop_conditions:
   - any need to touch PID 15276 or its runtime state
