@@ -1411,6 +1411,7 @@ class AutonomousEngine:
         # Initialise these collections before any recovery/cleanup path can run.
         self._protection_exchange_attempted: set[str] = set()
         self._active_algo_ids: dict[str, set[str]] = {}
+        self._venue_missing_streaks: dict[str, int] = {}  # algoId → 连续缺失轮数（清理防抖）
         self._pending_protection_retry: set[str] = set()
         self._protection_owner_unknown = False
         # BD-FIX: TruthSnapshot 保护事实 — 初始化时所有权归属本服务 → ACTIVE
@@ -3552,6 +3553,14 @@ class AutonomousEngine:
         if not isinstance(inventory, list):
             self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
             return False
+        if not inventory:
+            # BD-FIX (final82b): 空 inventory 不构成 MISSING 证据（testnet
+            # API 抖动时 _get_open_algo_inventory 返回 []）。fail-closed
+            # 阻断但不清理本地行 —— 空 inventory 判定"全部缺失"曾把 55 条
+            # ACTIVE 误清为 CANCELLED。
+            self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_EMPTY"])
+            print("[startup] Conditional-order inventory empty (API unstable) — recovery remains read-only")
+            return False
 
         semantic_issues = self._protection_inventory_semantic_issues(inventory)
         if semantic_issues:
@@ -3783,7 +3792,7 @@ class AutonomousEngine:
                 entry_price=account_entry,
                 quantity=float(abs(signed_quantity)),
                 side=position_side,
-                stop_loss=stop_orders[0],
+                stop_loss=(stop_orders[0] if stop_orders else None),
                 take_profits=take_profit_orders,
                 owner_id=str(self._protection_owner_id),
                 position_generation=next(iter(generations)),
@@ -7527,6 +7536,14 @@ class AutonomousEngine:
                 self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
                 print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
                 return
+            # BD-FIX (final82b): 空 inventory 不构成 MISSING 证据 —— testnet
+            # API 抖动时 _get_open_algo_inventory 返回 []（见其 docstring），
+            # 若据此判定全部 VENUE_ROW_MISSING 并清理本地行，会把仍然存在
+            # 的 55 条 ACTIVE 保护误清为 CANCELLED（final82b 实测事故，
+            # 已手工恢复）。空 inventory 时本轮 defer，下一轮再评估。
+            if not existing_algos:
+                print("[nearline] Protection retry deferred: algo inventory empty (API unstable)")
+                return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
                 # BD-FIX: 区分"交易所缺失"与"语义不匹配"（与启动恢复 S2 同语义）。
@@ -7541,16 +7558,34 @@ class AutonomousEngine:
                 if venue_missing:
                     store = getattr(self, "_store", None)
                     cleaned = 0
+                    # BD-FIX (final82b): 清理加连续缺失防抖 —— 同一 algoId
+                    # 连续 3 轮在交易所缺失才清理（单轮 MISSING 可能是 API
+                    # 抖动/限流假象；final82b 实测一次空 inventory 误清 55 条）。
+                    current_missing_ids = {
+                        str(issue.split(":", 1)[1])
+                        for issue in venue_missing
+                        if issue.startswith("PROTECTION_VENUE_ROW_MISSING:")
+                    }
+                    streaks = getattr(self, "_venue_missing_streaks", {})
+                    for aid in list(streaks):
+                        if aid not in current_missing_ids:
+                            streaks.pop(aid, None)
                     for row in (store.restore_protections() if store else []):
                         algo_id = str(row.get("exchange_order_id", "")).strip()
-                        if algo_id and any(algo_id in issue for issue in venue_missing):
+                        if algo_id and algo_id in current_missing_ids:
+                            streak = streaks.get(algo_id, 0) + 1
+                            streaks[algo_id] = streak
+                            if streak < 3:
+                                continue
                             pos_id = str(row.get("position_id", "")).strip()
                             if pos_id:
                                 try:
                                     store.remove_protection(pos_id)
                                     cleaned += 1
+                                    streaks.pop(algo_id, None)
                                 except Exception:
                                     pass
+                    self._venue_missing_streaks = streaks
                     if cleaned:
                         print(f"[nearline] Cleaned {cleaned} stale protection(s) (no longer on venue)")
             exchange_algo_symbols: dict[str, set[str]] = {}
