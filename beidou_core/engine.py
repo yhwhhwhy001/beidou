@@ -7276,28 +7276,7 @@ class AutonomousEngine:
                     if pending_sym:
                         protected_symbols.add(pending_sym)
 
-            # BD-FIX（C3 审查）: 只对本地所有权可证明的持仓要求保护 ——
-            # 共享 demo 账户的外部持仓不属于引擎，不创建保护也不触发
-            # UNPROTECTED 阻断；豁免仅限 testnet（live/canary 中交易所
-            # 持仓无本地记录 = 丢仓，必须阻断）。
-            _locally_owned_symbols = {
-                str(pp.instrument_id) for pp in self._protection.all_positions().values()
-            } | {str(sym) for sym in getattr(self, "_position_generation", {}).keys()}
-            _env_mode = getattr(self, "_env_mode", None)
-            if _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet":
-                _foreign_positions = {s for s in exchange_positions if s not in _locally_owned_symbols}
-                if _foreign_positions:
-                    print(
-                        f"[startup] {len(_foreign_positions)} foreign positions on shared account "
-                        f"— no protection required: {sorted(_foreign_positions)}"
-                    )
-                unprotected = {
-                    s: d
-                    for s, d in exchange_positions.items()
-                    if s in _locally_owned_symbols and s not in protected_symbols
-                }
-            else:
-                unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
+            unprotected = {s: d for s, d in exchange_positions.items() if s not in protected_symbols}
             if not unprotected:
                 return
 
