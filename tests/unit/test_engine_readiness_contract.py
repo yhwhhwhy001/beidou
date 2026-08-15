@@ -609,7 +609,7 @@ def test_final_send_rejects_order_payload_mutation_after_approval() -> None:
     assert asyncio.run(engine._verify_intent_at_send(tampered)) is False
 
 
-def test_final_send_blocks_risk_increase_without_signed_policy_but_allows_governed_close() -> None:
+def test_final_send_blocks_unsigned_risk_increase_and_unowned_close() -> None:
     signer = RiskApprovalSignerImpl(signing_key="unit-policy-gate-key")
     approval_id = RiskApprovalId("approval-policy-gate")
     expires_at = time.time() + 60
@@ -655,7 +655,7 @@ def test_final_send_blocks_risk_increase_without_signed_policy_but_allows_govern
     assert asyncio.run(engine._verify_intent_at_send(intent)) is False
 
     close = replace(intent, risk_approval_id="RISK_EXEMPT_CLOSE", reduce_only=True)
-    assert asyncio.run(engine._verify_intent_at_send(close)) is True
+    assert asyncio.run(engine._verify_intent_at_send(close)) is False
 
 
 def test_execution_slices_cannot_change_signed_order_semantics() -> None:

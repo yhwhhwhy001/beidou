@@ -15,6 +15,14 @@ from beidou_exchange.binance_usdm import rest_client as rest_module
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
+from beidou_exchange.core.write_authority import TerminalWriteContext, TerminalWriteDecision, TerminalWriteRequest
+
+
+class ExplicitTestWriteAuthority:
+    """Unit-only authority for tests exercising post-gate transport semantics."""
+
+    def authorize(self, _request: TerminalWriteRequest) -> TerminalWriteDecision:
+        return TerminalWriteDecision(True, "TEST_EXPLICIT_ALLOW")
 
 
 def test_sync_urlopen_handles_large_response_and_preserves_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,7 +263,25 @@ def test_http_5xx_retryable_error_and_business_rejection(monkeypatch: pytest.Mon
 def test_ambiguous_order_503_is_unknown_and_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     """A venue write may have succeeded despite a generic 503; query by client id first."""
 
-    client = BinanceRESTClient("https://demo.example", api_secret="secret", max_retries=3)  # noqa: S106
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=3,
+        account_id="dedicated-test-account",
+        write_authority=ExplicitTestWriteAuthority(),
+        write_context=TerminalWriteContext(
+            task_id="TASK-UNIT-REST",
+            entrypoint="pytest.binance_rest_client",
+            owner_id="test-owner",
+            generation="test-generation",
+            approval_id="test-approval",
+            expires_at=4_102_444_800.0,
+            nonce="test-nonce",
+            intent_id="test-intent",
+            position_id="test-position",
+            dedicated_account=True,
+        ),
+    )
     calls = 0
 
     def unavailable(request, timeout, _session=None):

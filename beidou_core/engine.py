@@ -4196,8 +4196,11 @@ class AutonomousEngine:
             return False
         approval_id = str(getattr(intent, "risk_approval_id", "") or "")
         if approval_id == "RISK_EXEMPT_CLOSE":
-            # 仅允许明确标记为 reduce-only 的风险下降命令走紧急路径。
-            return bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
+            # M00-C01 containment: reduce-only/close-position flags do not
+            # prove account, position, owner, generation, or maximum safe
+            # quantity.  A future scoped capability must replace this legacy
+            # exemption before any terminal write can be re-enabled.
+            return False
         if not approval_id or not getattr(intent, "risk_approval_signature", None):
             return False
         intent_hash = str(getattr(intent, "risk_intent_hash", "") or "")
@@ -4643,26 +4646,22 @@ class AutonomousEngine:
                 )
                 return
             if actual_status in {"CANCELED", "EXPIRED"}:
-                # BD-FIX: ACK 即过期/撤销且带部分成交时，成交事实必须
-                # 入账（C2 审查 —— 与 _monitor_orders 同款修复）。
+                # M00-C01 containment: a terminal acknowledgement with a
+                # partial fill crosses order, fill, position, and ledger
+                # authorities.  Until M11 closes that fact chain, preserve it
+                # as UNKNOWN and require reconciliation instead of calling the
+                # legacy branch that referenced an undefined order_id.
                 if cumulative_filled > 0:
-                    _delta, _price, _fill_id = self._consume_cumulative_fill(
-                        order_id,
-                        order_symbol,
-                        order,
-                        status=actual_status,
+                    execution_aggregate = self._outbox.transition_execution_child(
+                        intent.intent_id,
+                        idx,
+                        ChildCommandState.UNKNOWN,
+                        event_id=f"terminal-partial-fill:{intent.intent_id}:{idx}:{exchange_order_id}:{filled_text}",
+                        exchange_order_id=exchange_order_id,
+                        cumulative_filled_quantity=filled_text,
                     )
-                    if _delta > 0 and _price > 0:
-                        self._record_partial_fill_to_ledger(
-                            order_id,
-                            order_symbol,
-                            order,
-                            _delta,
-                            _price,
-                            float(cumulative_filled),
-                            _fill_id,
-                            status=actual_status,
-                        )
+                    self._outbox.mark_unknown(intent.intent_id, "TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED")
+                    return
                 execution_aggregate = self._outbox.transition_execution_child(
                     intent.intent_id,
                     idx,

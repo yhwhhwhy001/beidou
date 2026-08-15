@@ -28,11 +28,13 @@ from beidou_exchange.binance_usdm.endpoints import (
     DEFAULT_WEIGHT_LIMIT,
     Endpoint,
 )
+from beidou_exchange.binance_usdm.write_guard import classify_terminal_write
 from beidou_exchange.core.error_taxonomy import (
     ErrorCategory,
     Result,
     classify_http_error,
 )
+from beidou_exchange.core.write_authority import TerminalWriteAuthority, TerminalWriteContext, evaluate_terminal_write
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +72,18 @@ class BinanceRESTClient:
         api_secret: str = "",
         recv_window: int = DEFAULT_RECV_WINDOW_MS,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        account_id: str = "UNKNOWN",
+        write_authority: TerminalWriteAuthority | None = None,
+        write_context: TerminalWriteContext | None = None,
     ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
         self._api_secret = api_secret
         self._recv_window = recv_window
         self._max_retries = max_retries
+        self._account_id = str(account_id or "UNKNOWN")
+        self._write_authority = write_authority
+        self._write_context = write_context
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
@@ -385,6 +393,24 @@ class BinanceRESTClient:
         """发送 HTTP 请求并返回 Result[T]。HTTP 调用在线程池中执行，不阻塞事件循环。"""
         base_params = dict(params or {})
         method = str(method).upper()
+
+        write_request = classify_terminal_write(
+            method,
+            path,
+            base_params,
+            account_id=self._account_id,
+            context=self._write_context,
+        )
+        if write_request is not None:
+            decision = evaluate_terminal_write(self._write_authority, write_request)
+            if not decision.allowed:
+                return Result.failure(
+                    "Terminal write is not authorized",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    retryable=False,
+                    raw={"reason": decision.reason_code, "kind": write_request.kind.value},
+                    source="binance_rest_write_authority",
+                )
 
         # A writable Testnet request has the same ambiguity and rate-limit
         # semantics as any other venue write.  Environment labels must never

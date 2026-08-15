@@ -174,26 +174,13 @@ class BeidouSupervisor:
             }
 
         def write_allowed(method: str, params: dict[str, Any] | None = None) -> bool:
-            # 环境变量 _can_write 只是能力上限，不是运行时授权。
-            # 只有监督器确认无阻断、控制面 RESUME 且本轮授权仍有效时才允许
-            # 新风险写入；NO_NEW_RISK/EXIT_ONLY 仍允许显式撤单和
-            # reduce-only/closePosition 退出，避免安全门禁反而阻断平仓。
-            if not bool(engine._can_write):
-                return False
-            if self._is_trading_ready():
-                return True
-            method_upper = method.upper()
-            params = params or {}
-
-            def enabled(value: Any) -> bool:
-                if isinstance(value, bool):
-                    return value
-                return str(value).strip().lower() in {"1", "true", "yes"}
-
-            reducing = enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
-            return self._control_state() in {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN"} and (
-                method_upper == "DELETE" or reducing
-            )
+            # M00-C01 containment: runtime readiness, DELETE, reduceOnly, and
+            # closePosition classify intent but do not prove ownership or grant
+            # terminal-write authority.  Until a scoped capability producer is
+            # installed, every exchange mutation remains blocked here as well
+            # as at the adapter/REST choke points.
+            del method, params
+            return False
 
         async def guarded_async(
             path: str,

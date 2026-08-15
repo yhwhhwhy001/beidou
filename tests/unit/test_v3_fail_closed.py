@@ -169,8 +169,8 @@ def test_testnet_without_signed_policy_is_a_p0_startup_blocker(monkeypatch, tmp_
     assert policy.severity == CheckSeverity.P0
 
 
-def test_supervisor_write_interlock_requires_live_resume_authority(tmp_path: Path) -> None:
-    """Environment write capability is not sufficient while the supervisor is unsafe."""
+def test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready(tmp_path: Path) -> None:
+    """Runtime readiness is not a scoped terminal-write capability."""
 
     from beidou_launcher.supervisor import BeidouSupervisor
 
@@ -207,9 +207,9 @@ def test_supervisor_write_interlock_requires_live_resume_authority(tmp_path: Pat
     supervisor._resume_authorized = True
     supervisor.report.supervisor_state = "RUNNING"
     supervisor.engine._control = SimpleNamespace(get_status=lambda: SimpleNamespace(value="RESUME"))
-    allowed = asyncio.run(supervisor.engine._api_async("/order", method="POST"))
-    assert allowed == {"ok": True}
-    assert calls == [("POST", "/order")]
+    still_blocked = asyncio.run(supervisor.engine._api_async("/order", method="POST"))
+    assert still_blocked["error"] == -3
+    assert calls == []
 
 
 def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: Path) -> None:
@@ -249,10 +249,16 @@ def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: P
     assert blocked_false_string.is_success() is False
     assert calls == []
 
-    # Exits remain available while NO_NEW_RISK is active.
-    allowed = asyncio.run(adapter.request("POST", "/order", True, {"reduceOnly": "true"}))
-    assert allowed == {"ok": True}
-    assert calls == [("POST", "/order")]
+    # HTTP method and reduce-only flags are classification hints, not ownership proof.
+    for method, path, params in (
+        ("POST", "/order", {"reduceOnly": "true"}),
+        ("POST", "/order", {"closePosition": True}),
+        ("DELETE", "/order", {"orderId": "17"}),
+        ("DELETE", "/algoOrder", {"algoId": "19"}),
+    ):
+        denied = asyncio.run(adapter.request(method, path, True, params))
+        assert denied.is_success() is False
+    assert calls == []
 
 
 def test_supervisor_has_no_transient_authority_bypass() -> None:

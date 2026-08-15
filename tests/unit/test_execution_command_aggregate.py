@@ -386,6 +386,7 @@ def test_engine_persists_complete_multi_slice_plan_before_first_write(monkeypatc
     [
         ("REJECTED", "0", ChildCommandState.REJECTED, "FAILED"),
         ("CANCELED", "0", ChildCommandState.CANCELED, "ACKED"),
+        ("CANCELED", "0.25", ChildCommandState.UNKNOWN, "UNKNOWN"),
         ("MYSTERY", "0", ChildCommandState.UNKNOWN, "UNKNOWN"),
         ("FILLED", "NaN", ChildCommandState.UNKNOWN, "UNKNOWN"),
     ],
