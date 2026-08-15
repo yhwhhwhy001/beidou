@@ -7564,9 +7564,12 @@ class AutonomousEngine:
         if time.time() - getattr(self, "_last_retry_diag", 0) > 30:
             self._last_retry_diag = time.time()
             _proj = self._protection.all_positions()
+            _proj_syms = sorted({str(p.instrument_id) for p in _proj.values()})
+            _miss = sorted(set(_proj_syms) - set(exchange_symbols))[:6]
             print(
                 f"[nearline-diag] retry: symbols={len(exchange_symbols)} "
                 f"positions={len(_proj)} sl_none={sum(1 for p in _proj.values() if p.stop_loss is None)} "
+                f"proj_not_in_symbols={_miss} "
                 f"pending_retry={sorted(getattr(self, '_pending_protection_retry', set()))[:5]}"
             )
         try:
