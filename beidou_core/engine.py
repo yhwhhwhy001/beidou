@@ -3782,6 +3782,12 @@ class AutonomousEngine:
             ]
             if len(stop_orders) == 0 and pending_stop_rows:
                 pass
+            elif len(stop_orders) == 0 and take_profit_orders:
+                # BD-FIX (final82f): SL 行已被清理（上一轮 S33 成功后清
+                # PENDING）或从未存在，但 TP 已 ACK —— 允许投影以
+                # stop_loss=None 构建（资格保持 fail-closed），由近线
+                # S33 重建 SL。
+                pass
             elif len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
                 self._block_unowned_protection_orders([f"PROTECTION_STOP_COVERAGE_UNKNOWN:{position_id}"])
                 return False
@@ -7707,45 +7713,10 @@ class AutonomousEngine:
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
                 if pp.stop_loss is None:
                     # BD-FIX (final82d): 旧 PENDING 行的 trigger 已随价格漂移
-                    # 过期（-2021 恒拒），不再复用提交；先清理 durable 行，
-                    # 再走 S33 按当前市价自适应重算创建新保护。
-                    # 注意 remove_protection 只处理 ACTIVE 行 —— PENDING 行
-                    # 需用 save_protection 显式重写为 CANCELLED。
-                    store = getattr(self, "_store", None)
-                    if store:
-                        for row in store.restore_protections():
-                            if (
-                                str(row.get("position_id", "")) == pos_id
-                                and str(row.get("status", "")).strip().upper() == "PENDING"
-                                and (
-                                    str(row.get("stop_type", "") or "").strip()
-                                    or str(row.get("order_type", "") or "").strip().upper().startswith("STOP")
-                                )
-                            ):
-                                try:
-                                    store.save_protection(
-                                        protection_id=str(row.get("protection_id", "")),
-                                        position_id=str(row.get("position_id", "")),
-                                        symbol=str(row.get("symbol", "")),
-                                        side=str(row.get("side", "")),
-                                        trigger_price=str(row.get("trigger_price", "")),
-                                        order_price=(str(row["order_price"]) if row.get("order_price") else None),
-                                        quantity=str(row.get("quantity", "")),
-                                        order_type=str(row.get("order_type", "")),
-                                        status="CANCELLED",
-                                        stop_type=(str(row.get("stop_type")) if row.get("stop_type") else None),
-                                        take_profit_type=(str(row.get("take_profit_type")) if row.get("take_profit_type") else None),
-                                        owner_id=str(row.get("owner_id", "")),
-                                        position_generation=int(row.get("position_generation") or 0),
-                                        session_id=str(row.get("session_id", "")),
-                                        exchange_order_id=(str(row["exchange_order_id"]) if row.get("exchange_order_id") else None),
-                                    )
-                                    if hasattr(self, "_pending_stop_intent"):
-                                        self._pending_stop_intent.pop(pos_id, None)
-                                    print(f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}")
-                                except Exception:
-                                    pass
-                                break
+                    # 过期（-2021 恒拒），不再复用提交 —— 走 S33 按当前市价
+                    # 自适应重算创建新保护；旧 PENDING 行在新 SL 提交成功后
+                    # 再清理（提前清理会让重启后的投影恢复因 STOP_COVERAGE
+                    # 拒绝而整体失败，final82f 实测）。
                     try:
                         entry_price = pp.entry_price
                         if entry_price <= 0:
@@ -7852,6 +7823,42 @@ class AutonomousEngine:
                                         )
                                         if hasattr(self, "_pending_stop_intent"):
                                             self._pending_stop_intent.pop(pos_id, None)
+                                        # 新 SL 已提交成功 → 清理过期 PENDING 行
+                                        # （推迟到成功后再清，避免重启后投影恢复
+                                        # 因无 SL 行被 STOP_COVERAGE 拒绝）。
+                                        _store = getattr(self, "_store", None)
+                                        if _store:
+                                            for _row in _store.restore_protections():
+                                                if (
+                                                    str(_row.get("position_id", "")) == pos_id
+                                                    and str(_row.get("status", "")).strip().upper() == "PENDING"
+                                                    and (
+                                                        str(_row.get("stop_type", "") or "").strip()
+                                                        or str(_row.get("order_type", "") or "").strip().upper().startswith("STOP")
+                                                    )
+                                                ):
+                                                    try:
+                                                        _store.save_protection(
+                                                            protection_id=str(_row.get("protection_id", "")),
+                                                            position_id=str(_row.get("position_id", "")),
+                                                            symbol=str(_row.get("symbol", "")),
+                                                            side=str(_row.get("side", "")),
+                                                            trigger_price=str(_row.get("trigger_price", "")),
+                                                            order_price=(str(_row["order_price"]) if _row.get("order_price") else None),
+                                                            quantity=str(_row.get("quantity", "")),
+                                                            order_type=str(_row.get("order_type", "")),
+                                                            status="CANCELLED",
+                                                            stop_type=(str(_row.get("stop_type")) if _row.get("stop_type") else None),
+                                                            take_profit_type=(str(_row.get("take_profit_type")) if _row.get("take_profit_type") else None),
+                                                            owner_id=str(_row.get("owner_id", "")),
+                                                            position_generation=int(_row.get("position_generation") or 0),
+                                                            session_id=str(_row.get("session_id", "")),
+                                                            exchange_order_id=(str(_row["exchange_order_id"]) if _row.get("exchange_order_id") else None),
+                                                        )
+                                                        print(f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}")
+                                                    except Exception:
+                                                        pass
+                                                    break
                                     else:
                                         print(
                                             f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg', '')[:80]}"
