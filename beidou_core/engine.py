@@ -3433,6 +3433,8 @@ class AutonomousEngine:
         实测 1154 FAILED）。live/canary 保持置位严格语义不变。
         """
         self._protection_owner_unknown = True
+        # 诊断打印：定位投影恢复失败的触发点（final82 调试用）
+        print(f"[protection] BLOCK owner_unknown: {sorted(set(order_ids))[:8]}")
         # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
         self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
         self._last_protection_fact_at = time.time()
