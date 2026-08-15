@@ -15,6 +15,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 _PYTHON_MARKERS = (
     'if __name__ == "__main__"',
     "if __name__ == '__main__'",
@@ -41,10 +43,12 @@ _ALLOWED_CAPABILITIES = {
     "BUILD_AND_RUNTIME_ALIAS_SURFACE",
     "CANCEL_ACCOUNT_ORDERS",
     "CANCEL_OWNED_REQUIRED",
+    "CI_AUTOMATION",
     "CONTROL_RESUME_AUTHORITY_REQUIRED",
     "CREATE_PROTECTION_SCOPE_REQUIRED",
     "DATABASE_MIGRATION",
     "DELEGATE_TO_LAUNCHER",
+    "DEVELOPER_HOOKS",
     "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
     "EVIDENCE_READ_ONLY",
     "EVIDENCE_WINDOW_CONTROL",
@@ -86,6 +90,7 @@ _MUTATING_CALL_NAMES = {
     "_submit_order_slice",
 }
 _GENERIC_REQUEST_NAMES = {"request", "_request", "exchange", "_api", "_api_async", "_api_async_safe"}
+_NETWORK_MODULES = {"aiohttp", "httpx", "requests", "socket", "urllib.request"}
 _MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _HTTP_CALL_NAMES = {"post", "put", "patch", "delete"}
 _CONSTRUCTOR_NAMES = {"AutonomousEngine", "BinanceRESTClient", "BinanceUsdmAdapter"}
@@ -139,6 +144,22 @@ _REQUIRED_DECLARATION_FIELDS = {
     "negative_test",
     "expected_rejection",
 }
+_REQUIRED_NETWORK_IMPORT_FIELDS = {
+    "id",
+    "source",
+    "occurrences",
+    "owner",
+    "purpose",
+    "negative_test",
+}
+_ALLOWED_NETWORK_PURPOSES = {
+    "ALERT_DELIVERY",
+    "EXCHANGE_WEBSOCKET",
+    "EXCHANGE_TRANSPORT",
+    "FAULT_INJECTION_READ",
+    "LOCAL_HEALTH_READ",
+    "LOCAL_NETWORK_BIND_CHECK",
+}
 _ALLOWED_REJECTIONS = {
     "CANONICAL_LAUNCHER_REQUIRED",
     "CONTROL_AUTHORITY_REQUIRED",
@@ -184,6 +205,17 @@ def discover_sensitive_entry_paths(root: Path) -> set[str]:
         make_source = makefile.read_text(encoding="utf-8")
         if "python -m apps." in make_source or "beidou" in make_source:
             discovered.add("Makefile")
+    for declarative_relative in ("docker-compose.yml", ".pre-commit-config.yaml"):
+        if (root / declarative_relative).is_file():
+            discovered.add(declarative_relative)
+    workflows = root / ".github" / "workflows"
+    if workflows.is_dir():
+        discovered.update(
+            path.relative_to(root).as_posix()
+            for pattern in ("*.yml", "*.yaml")
+            for path in workflows.glob(pattern)
+            if path.is_file()
+        )
 
     for path in root.rglob("*.py"):
         if _is_skipped(path, root):
@@ -246,6 +278,62 @@ def discover_declared_entrypoints(root: Path) -> dict[str, str]:
     return dict(sorted(declarations.items()))
 
 
+def discover_network_imports(root: Path) -> dict[str, int]:
+    """Inventory network-capable imports and explicit stream-opening calls."""
+
+    root = root.resolve()
+    imports: Counter[str] = Counter()
+    for path in root.rglob("*.py"):
+        if _is_skipped(path, root):
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, UnicodeError, SyntaxError):
+            continue
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    modules.append(alias.name)
+                    aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules.append(node.module)
+                for alias in node.names:
+                    aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "import_module"
+                and node.args
+            ):
+                dynamic_module = _constant_string(node.args[0])
+                if dynamic_module:
+                    modules.append(dynamic_module)
+            for module in modules:
+                normalized = "urllib.request" if module.startswith("urllib.request") else module.split(".", 1)[0]
+                if normalized in _NETWORK_MODULES:
+                    imports[f"{relative}::{normalized}"] += 1
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            parts: list[str] = []
+            while isinstance(function, ast.Attribute):
+                parts.append(function.attr)
+                function = function.value
+            if isinstance(function, ast.Name):
+                parts.append(function.id)
+            dotted = ".".join(reversed(parts))
+            root_name, _, remainder = dotted.partition(".")
+            resolved_root = aliases.get(root_name, root_name)
+            resolved = f"{resolved_root}.{remainder}" if remainder else resolved_root
+            if resolved in {"asyncio.open_connection", "socket.socket"}:
+                imports[f"{relative}::{resolved}"] += 1
+    return dict(sorted(imports.items()))
+
+
 def _constant_string(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -279,6 +367,8 @@ class _EntrySurfaceVisitor(ast.NodeVisitor):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     self.aliases.add(target.id)
+                elif isinstance(target, (ast.Attribute, ast.Subscript)):
+                    self.sensitive = True
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -399,6 +489,18 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
                 return scope_aliases[name]
         return ""
 
+    def _explicit_callable_reference(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            reference = self._lookup_alias(node.id)
+            return "" if reference in {"DYNAMIC", "exchange", "import_alias[exchange]"} else reference
+        if isinstance(node, ast.Attribute) and (
+            node.attr in _MUTATING_CALL_NAMES
+            or node.attr in (_GENERIC_REQUEST_NAMES - {"exchange"})
+            or node.attr == "execute_action"
+        ):
+            return node.attr
+        return ""
+
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         for alias in node.names:
             if (
@@ -416,6 +518,14 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if node.value is not None:
             self._remember_alias(node.target, node.value)
+        self.generic_visit(node)
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is not None:
+            reference = self._reference_target(node.value)
+            if reference:
+                scope = ".".join(self.scope) if self.scope else "<module>"
+                self.calls[f"{self.relative_path}::{scope}::returned_callable[{reference}]"] += 1
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -452,7 +562,7 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
             marker = partial_target
 
         generic_name = call_name if call_name in _GENERIC_REQUEST_NAMES else ""
-        if alias_target:
+        if alias_target and not alias_target.startswith("partial["):
             alias_words = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", alias_target))
             alias_generics = alias_words & _GENERIC_REQUEST_NAMES
             if alias_generics:
@@ -488,6 +598,19 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
         if call_name.lower() in _HTTP_CALL_NAMES and self._is_direct_http_client(node.func):
             marker = f"http[{call_name.upper()}]"
 
+        if call_name == "setattr" and len(node.args) >= 3:
+            stored_target = self._reference_target(node.args[2])
+            if stored_target:
+                marker = f"setattr[{stored_target}]"
+
+        callable_arguments = {
+            self._explicit_callable_reference(argument)
+            for argument in [*node.args, *(keyword.value for keyword in node.keywords)]
+        }
+        callable_arguments.discard("")
+        if callable_arguments and not marker:
+            marker = f"callable_argument[{','.join(sorted(callable_arguments))}]"
+
         if marker:
             scope = ".".join(self.scope) if self.scope else "<module>"
             self.calls[f"{self.relative_path}::{scope}::{marker}"] += 1
@@ -506,18 +629,41 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
         return False
 
 
+def _logical_shell_lines(source: str) -> list[str]:
+    lines: list[str] = []
+    pending = ""
+    for raw_line in source.splitlines():
+        stripped = raw_line.rstrip()
+        pending = f"{pending} {stripped}".strip() if pending else stripped
+        if stripped.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        lines.append(pending)
+        pending = ""
+    if pending:
+        lines.append(pending)
+    return lines
+
+
+def _curl_method(command: str) -> str | None:
+    if not re.search(r"(?:^|[;&|]\s*|\benv\s+)(?:[^\s]+/)?curl\b|\$\([^)]*CURL[^)]*\)", command):
+        return None
+    method_match = re.search(r"(?:^|\s)(?:-X|--request)(?:=|\s+)([^\s]+)", command)
+    if method_match is not None:
+        candidate = method_match.group(1).strip("'\"").upper()
+        return candidate if candidate in _MUTATING_HTTP_METHODS else "DYNAMIC"
+    if re.search(r"(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?|-F|--form)(?:=|\s+)", command):
+        return "POST"
+    return None
+
+
 def _discover_shell_write_calls(path: Path, relative: str) -> Counter[str]:
     calls: Counter[str] = Counter()
     source = path.read_text(encoding="utf-8")
-    for line in source.splitlines():
-        if not re.search(r"(^|[;&|]\s*)curl\b", line):
-            continue
-        method_match = re.search(r"(?:^|\s)(?:-X|--request)(?:=|\s+)([^\s]+)", line)
-        if method_match is None:
-            continue
-        raw_method = method_match.group(1).strip("'\"")
-        method = raw_method.upper() if raw_method.upper() in _MUTATING_HTTP_METHODS else "DYNAMIC"
-        calls[f"{relative}::<shell>::curl[{method}]"] += 1
+    for line in _logical_shell_lines(source):
+        method = _curl_method(line)
+        if method is not None:
+            calls[f"{relative}::<shell>::curl[{method}]"] += 1
     return calls
 
 
@@ -526,9 +672,12 @@ def _discover_plist_write_calls(path: Path, relative: str) -> Counter[str]:
     with path.open("rb") as handle:
         payload = plistlib.load(handle)
     arguments = payload.get("ProgramArguments", []) if isinstance(payload, dict) else []
-    if not isinstance(arguments, list) or not arguments or str(arguments[0]).rsplit("/", 1)[-1] != "curl":
+    if not isinstance(arguments, list) or "curl" not in [str(argument).rsplit("/", 1)[-1] for argument in arguments]:
         return calls
-    method = "DYNAMIC"
+    has_post_data = any(
+        str(argument) in {"-d", "--data", "--data-raw", "--data-binary"} for argument in arguments
+    )
+    method = "POST" if has_post_data else "DYNAMIC"
     for index, argument in enumerate(arguments[:-1]):
         if str(argument) in {"-X", "--request"}:
             candidate = str(arguments[index + 1]).upper()
@@ -546,15 +695,13 @@ def _discover_make_write_calls(path: Path) -> Counter[str]:
         if target_match:
             current_target = target_match.group(1)
             continue
-        if not line.startswith("\t") or "curl" not in line:
+        if not line.startswith("\t"):
             continue
-        method_match = re.search(r"(?:^|\s)(?:-X|--request)(?:=|\s+)([^\s]+)", line)
-        if method_match is None:
-            method = "DYNAMIC"
-        else:
-            candidate = method_match.group(1).strip("'\"").upper()
-            method = candidate if candidate in _MUTATING_HTTP_METHODS else "DYNAMIC"
-        calls[f"Makefile::<make:{current_target}>::curl[{method}]"] += 1
+        method = _curl_method(line)
+        if method is not None:
+            calls[f"Makefile::<make:{current_target}>::curl[{method}]"] += 1
+        if re.search(r"\b(?:httpx|requests|aiohttp|urllib\.request)\b", line):
+            calls[f"Makefile::<make:{current_target}>::embedded_network[DYNAMIC]"] += 1
     return calls
 
 
@@ -633,6 +780,20 @@ def discover_source_scan_issues(root: Path) -> list[str]:
                 plistlib.load(handle)
         except (OSError, plistlib.InvalidFileException) as exc:
             issues.append(f"WRITE_REGISTRY_SOURCE_SCAN_FAILED:{relative}:{type(exc).__name__}")
+    declarative_paths = [root / "docker-compose.yml", root / ".pre-commit-config.yaml"]
+    workflows = root / ".github" / "workflows"
+    if workflows.is_dir():
+        declarative_paths.extend([*workflows.glob("*.yml"), *workflows.glob("*.yaml")])
+    for path in declarative_paths:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, (dict, list)):
+                raise ValueError("declarative entrypoint must be a mapping or list")
+        except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+            issues.append(f"WRITE_REGISTRY_SOURCE_SCAN_FAILED:{relative}:{type(exc).__name__}")
     return sorted(issues)
 
 
@@ -657,7 +818,8 @@ def _negative_test_reference_exists(reference: str, root: Path) -> bool:
     """Require a concrete top-level pytest function, not just a test file."""
 
     path_text, separator, node_id = reference.partition("::")
-    if not separator or not node_id.startswith("test_"):
+    function_name = node_id.partition("[")[0]
+    if not separator or not function_name.startswith("test_"):
         return False
     test_path = (root / path_text).resolve()
     if not test_path.is_relative_to(root) or not test_path.is_file():
@@ -666,7 +828,22 @@ def _negative_test_reference_exists(reference: str, root: Path) -> bool:
         tree = ast.parse(test_path.read_text(encoding="utf-8"), filename=str(test_path))
     except (OSError, UnicodeError, SyntaxError):
         return False
-    return any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == node_id for node in tree.body)
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name for node in tree.body
+    )
+
+
+def _bound_negative_test(kind: str, identity: str) -> str:
+    pytest_identity = "".join(
+        character
+        if character.isascii() and (character.isalnum() or character in "_-")
+        else f"u{ord(character):04x}"
+        for character in identity
+    )
+    return (
+        "tests/architecture/test_registry_record_contracts.py::"
+        f"test_{kind}_record_is_behaviorally_bound[{pytest_identity}]"
+    )
 
 
 def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
@@ -707,6 +884,8 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
             negative_test = raw_record.get("negative_test")
             if not isinstance(negative_test, str) or not _negative_test_reference_exists(negative_test, root):
                 issues.append(f"WRITE_REGISTRY_DECLARED_NEGATIVE_TEST_MISSING:{declaration}")
+            elif negative_test != _bound_negative_test("declaration", declaration):
+                issues.append(f"WRITE_REGISTRY_DECLARED_NEGATIVE_TEST_UNBOUND:{declaration}")
             if negative_test == _GENERIC_NEGATIVE_TEST:
                 issues.append(f"WRITE_REGISTRY_DECLARED_NEGATIVE_TEST_GENERIC:{declaration}")
             if (
@@ -714,6 +893,53 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
                 or not raw_record["expected_rejection"].strip()
             ):
                 issues.append(f"WRITE_REGISTRY_DECLARED_REJECTION_EMPTY:{declaration}")
+
+    network_imports = registry.get("network_imports")
+    registered_network_imports: dict[str, int] = {}
+    network_ids: set[str] = set()
+    if not isinstance(network_imports, list):
+        issues.append("WRITE_REGISTRY_NETWORK_IMPORTS_INVALID")
+    else:
+        for index, raw_import in enumerate(network_imports):
+            if not isinstance(raw_import, dict):
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_NOT_OBJECT:{index}")
+                continue
+            missing = sorted(_REQUIRED_NETWORK_IMPORT_FIELDS - raw_import.keys())
+            if missing:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_FIELDS_MISSING:{index}:{','.join(missing)}")
+                continue
+            source = raw_import["source"]
+            import_id = raw_import["id"]
+            occurrences = raw_import["occurrences"]
+            if not isinstance(import_id, str) or not import_id or import_id in network_ids:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_ID_INVALID:{index}")
+                continue
+            network_ids.add(import_id)
+            if not isinstance(source, str) or not source or source in registered_network_imports:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_SOURCE_INVALID:{index}")
+                continue
+            if not isinstance(occurrences, int) or isinstance(occurrences, bool) or occurrences < 1:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_COUNT_INVALID:{source}")
+                continue
+            registered_network_imports[source] = occurrences
+            if raw_import["owner"] not in _ALLOWED_OWNERS:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_OWNER_INVALID:{source}")
+            if raw_import["purpose"] not in _ALLOWED_NETWORK_PURPOSES:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_PURPOSE_INVALID:{source}")
+            negative_test = raw_import["negative_test"]
+            if not isinstance(negative_test, str) or not _negative_test_reference_exists(negative_test, root):
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_NEGATIVE_TEST_MISSING:{source}")
+            elif negative_test != _bound_negative_test("network", import_id):
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_NEGATIVE_TEST_UNBOUND:{source}")
+        discovered_network_imports = discover_network_imports(root)
+        for source in sorted(discovered_network_imports.keys() - registered_network_imports.keys()):
+            issues.append(f"WRITE_REGISTRY_UNREGISTERED_NETWORK_IMPORT:{source}")
+        for source in sorted(registered_network_imports.keys() - discovered_network_imports.keys()):
+            issues.append(f"WRITE_REGISTRY_STALE_NETWORK_IMPORT:{source}")
+        for source in sorted(discovered_network_imports.keys() & registered_network_imports.keys()):
+            if discovered_network_imports[source] != registered_network_imports[source]:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_COUNT_MISMATCH:{source}")
+
     entries = registry.get("entries")
     if not isinstance(entries, list):
         return ["WRITE_REGISTRY_ENTRIES_INVALID"]
@@ -762,6 +988,8 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
         negative_test = raw_entry["negative_test"]
         if isinstance(negative_test, str) and not _negative_test_reference_exists(negative_test, root):
             issues.append(f"WRITE_REGISTRY_NEGATIVE_TEST_MISSING:{entry_id}")
+        elif negative_test != _bound_negative_test("entry", entry_id):
+            issues.append(f"WRITE_REGISTRY_NEGATIVE_TEST_UNBOUND:{entry_id}")
         if negative_test == _GENERIC_NEGATIVE_TEST:
             issues.append(f"WRITE_REGISTRY_NEGATIVE_TEST_GENERIC:{entry_id}")
         if not isinstance(raw_entry["call_graph"], str) or "->" not in raw_entry["call_graph"]:
@@ -831,6 +1059,8 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
         negative_test = raw_path["negative_test"]
         if isinstance(negative_test, str) and not _negative_test_reference_exists(negative_test, root):
             issues.append(f"WRITE_REGISTRY_TERMINAL_NEGATIVE_TEST_MISSING:{path_id}")
+        elif negative_test != _bound_negative_test("terminal", path_id):
+            issues.append(f"WRITE_REGISTRY_TERMINAL_NEGATIVE_TEST_UNBOUND:{path_id}")
         if negative_test == _GENERIC_NEGATIVE_TEST:
             issues.append(f"WRITE_REGISTRY_NEGATIVE_TEST_GENERIC:{path_id}")
         if not isinstance(raw_path["call_graph"], str) or "->" not in raw_path["call_graph"]:
@@ -851,7 +1081,11 @@ def run_negative_test_gate(registry: dict[str, Any], *, root: Path) -> list[str]
     """Execute every referenced behavioral negative test as a separate gate."""
 
     references: set[str] = set()
-    for section in (registry.get("entries", []), registry.get("terminal_write_paths", [])):
+    for section in (
+        registry.get("entries", []),
+        registry.get("network_imports", []),
+        registry.get("terminal_write_paths", []),
+    ):
         if isinstance(section, list):
             references.update(
                 item["negative_test"]

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from beidou_launcher.write_registry import (
     discover_declared_entrypoints,
+    discover_network_imports,
     discover_sensitive_entry_paths,
     discover_terminal_write_calls,
     load_registry,
@@ -80,8 +81,16 @@ async def mutate(client, holder, ops, runtime_name):
     callbacks = {'send': client.create_order}
     await callbacks['send']()
     await functools.partial(client.request, 'POST', '/write')()
+    partial_send = functools.partial(client.request, 'POST', '/write-two')
+    await partial_send()
+    setattr(holder, 'cancel', client.cancel_order)
+    register_callback(client.create_order)
+    def callback_factory():
+        return client.create_order
     await imported_send()
     E()
+    holder.factory = E
+    holder.factory()
 """,
         encoding="utf-8",
     )
@@ -95,12 +104,46 @@ async def mutate(client, holder, ops, runtime_name):
     assert "subscript_alias[create_order]" in rendered
     assert "partial[request:POST]" in rendered
     assert "import_alias[create_order]" in rendered
+    assert "setattr[cancel_order]" in rendered
+    assert "callable_argument[create_order]" in rendered
+    assert "returned_callable[create_order]" in rendered
     assert discover_sensitive_entry_paths(tmp_path) == {"payload.py"}
+
+
+def test_network_import_inventory_catches_aliases_before_call_analysis(tmp_path: Path) -> None:
+    (tmp_path / "payload.py").write_text(
+        """
+import httpx as hx
+import asyncio as aio
+from httpx import post as send
+import socket as sock
+import urllib.request
+
+async def mutate():
+    client = hx.AsyncClient()
+    await client.delete('https://offline.invalid/write')
+    await send('https://offline.invalid/write')
+    request = urllib.request.Request('https://offline.invalid/write', method='POST')
+    urllib.request.urlopen(request)
+    await aio.open_connection('offline.invalid', 443)
+    sock.socket()
+""",
+        encoding="utf-8",
+    )
+
+    assert discover_network_imports(tmp_path) == {
+        "payload.py::httpx": 2,
+        "payload.py::asyncio.open_connection": 1,
+        "payload.py::socket": 1,
+        "payload.py::socket.socket": 1,
+        "payload.py::urllib.request": 1,
+    }
 
 
 def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path: Path) -> None:
     (tmp_path / "payload.sh").write_text(
-        '#!/bin/sh\ncurl -X POST https://offline.invalid/order\ncurl -X "$METHOD" https://offline.invalid/dynamic\n',
+        '#!/bin/sh\ncurl -X POST https://offline.invalid/order\ncurl -X "$METHOD" https://offline.invalid/dynamic\n'
+        'curl \\\n  --data "risk=1" https://offline.invalid/implicit\n',
         encoding="utf-8",
     )
     (tmp_path / "broken.sh").write_text("#!/bin/sh\nif then\n", encoding="utf-8")
@@ -108,22 +151,24 @@ def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path
         """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>ProgramArguments</key><array>
-<string>curl</string><string>-X</string><string>DELETE</string><string>https://offline.invalid/order</string>
+<string>/usr/bin/env</string><string>curl</string><string>-X</string><string>DELETE</string><string>https://offline.invalid/order</string>
 </array></dict></plist>
 """,
         encoding="utf-8",
     )
     (tmp_path / "Makefile").write_text(
-        "write:\n\tcurl --request PATCH https://offline.invalid/order\n",
+        "write:\n\t$(CURL) --request PATCH https://offline.invalid/order\n"
+        "embedded:\n\tpython -c \"import httpx; httpx.post('https://offline.invalid')\"\n",
         encoding="utf-8",
     )
 
     calls = discover_terminal_write_calls(tmp_path)
 
-    assert calls["payload.sh::<shell>::curl[POST]"] == 1
     assert calls["payload.sh::<shell>::curl[DYNAMIC]"] == 1
+    assert calls["payload.sh::<shell>::curl[POST]"] == 2
     assert calls["payload.plist::<plist>::curl[DELETE]"] == 1
     assert calls["Makefile::<make:write>::curl[PATCH]"] == 1
+    assert calls["Makefile::<make:embedded>::embedded_network[DYNAMIC]"] == 1
     assert any(
         issue.startswith("WRITE_REGISTRY_SOURCE_SCAN_FAILED:broken.sh:")
         for issue in validate_registry(
@@ -187,6 +232,21 @@ def test_every_declared_console_and_make_entry_has_exact_governance() -> None:
         assert record["status"] in {"HARD_HOLD", "READ_ONLY", "OFFLINE_ONLY", "DELEGATE_ONLY"}
         assert record["negative_test"].startswith("tests/")
         assert record["expected_rejection"]
+
+
+def test_network_import_inventory_is_exact_and_policy_bound() -> None:
+    registry = load_registry(REGISTRY)
+    registered = {item["source"]: item["occurrences"] for item in registry["network_imports"]}
+
+    assert registered == discover_network_imports(ROOT)
+    assert {item["purpose"] for item in registry["network_imports"]} == {
+        "ALERT_DELIVERY",
+        "EXCHANGE_WEBSOCKET",
+        "EXCHANGE_TRANSPORT",
+        "FAULT_INJECTION_READ",
+        "LOCAL_HEALTH_READ",
+        "LOCAL_NETWORK_BIND_CHECK",
+    }
 
 
 def test_registry_read_only_dry_run_is_executable() -> None:

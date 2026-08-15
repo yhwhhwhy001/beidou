@@ -33,7 +33,7 @@
       "owner": "Runtime Owner",
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003abd]",
       "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED"
     },
     "console:beidou": {
@@ -41,7 +41,7 @@
       "owner": "Runtime Owner",
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003abeidou]",
       "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED"
     },
     "console:北斗": {
@@ -49,7 +49,7 @@
       "owner": "Runtime Owner",
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003au5317u6597]",
       "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED"
     },
     "make:build": {
@@ -57,7 +57,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003abuild]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:build-smoke": {
@@ -65,7 +65,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003abuild-smoke]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:clean": {
@@ -73,7 +73,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003aclean]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:dead-code": {
@@ -81,7 +81,7 @@
       "owner": "Engineering Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003adead-code]",
       "expected_rejection": "OFFLINE_ONLY_NO_RUNTIME_AUTHORITY"
     },
     "make:hardcoded-scan": {
@@ -89,7 +89,7 @@
       "owner": "Engineering Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003ahardcoded-scan]",
       "expected_rejection": "OFFLINE_ONLY_NO_RUNTIME_AUTHORITY"
     },
     "make:install": {
@@ -97,7 +97,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003ainstall]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:lint": {
@@ -105,7 +105,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003alint]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:lint-fix": {
@@ -113,7 +113,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003alint-fix]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:run-research": {
@@ -121,7 +121,7 @@
       "owner": "Research Owner",
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003arun-research]",
       "expected_rejection": "RESEARCH_MODE_ONLY"
     },
     "make:run-safety": {
@@ -129,7 +129,7 @@
       "owner": "Safety Owner",
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003arun-safety]",
       "expected_rejection": "FIXED_SAFETY_ONLY_MODE"
     },
     "make:run-strategy": {
@@ -137,7 +137,7 @@
       "owner": "Execution Owner",
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003arun-strategy]",
       "expected_rejection": "FIXED_PAPER_MODE"
     },
     "make:sbom": {
@@ -145,7 +145,7 @@
       "owner": "Engineering Owner",
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003asbom]",
       "expected_rejection": "LOCAL_ARTIFACT_SCOPE_ONLY"
     },
     "make:security-scan": {
@@ -153,7 +153,7 @@
       "owner": "Engineering Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003asecurity-scan]",
       "expected_rejection": "OFFLINE_ONLY_NO_RUNTIME_AUTHORITY"
     },
     "make:test-all": {
@@ -161,7 +161,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-all]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:test-architecture": {
@@ -169,7 +169,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-architecture]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:test-coverage": {
@@ -177,7 +177,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-coverage]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:test-integration": {
@@ -185,7 +185,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-integration]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:test-quality": {
@@ -193,7 +193,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-quality]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:test-unit": {
@@ -201,7 +201,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atest-unit]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:typecheck": {
@@ -209,7 +209,7 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003atypecheck]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     },
     "make:verify": {
@@ -217,10 +217,185 @@
       "owner": "Test Quality Owner",
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003averify]",
       "expected_rejection": "NO_RUNTIME_OR_EXCHANGE_AUTHORITY"
     }
   },
+  "independent_oracle_findings": [
+    "beidou_control/api.py:191:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_core/alerts.py:225:DIRECT_URLLIB_REQUEST:POST",
+    "beidou_core/alerts.py:226:NETWORK_TRANSPORT_CALL:urllib.urlopen",
+    "beidou_core/engine.py:1304:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+    "beidou_core/engine.py:1308:UNRESOLVED_WRITE_CALLABLE:callback:exchange",
+    "beidou_core/engine.py:1313:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+    "beidou_core/engine.py:1994:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/engine.py:2011:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/engine.py:2057:TERMINAL_CALL:create_algo_order",
+    "beidou_core/engine.py:2088:TERMINAL_CALL:cancel_algo_order",
+    "beidou_core/engine.py:2116:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/engine.py:2280:TERMINAL_CALL:_api_async:POST",
+    "beidou_core/engine.py:2309:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/engine.py:3313:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_core/engine.py:3374:TERMINAL_CALL:_cancel_algo_order",
+    "beidou_core/engine.py:4586:TERMINAL_CALL:_submit_order_slice",
+    "beidou_core/engine.py:5158:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/engine.py:5242:TERMINAL_CALL:create_order",
+    "beidou_core/engine.py:5387:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:5882:TERMINAL_CALL:_cancel_algo_orders",
+    "beidou_core/engine.py:5895:TERMINAL_CALL:_cancel_algo_orders",
+    "beidou_core/engine.py:6013:TERMINAL_CALL:_create_algo_order",
+    "beidou_core/engine.py:6859:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:6871:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:7246:TERMINAL_CALL:_cancel_algo_order",
+    "beidou_core/engine.py:7358:TERMINAL_CALL:cancel_algo_order",
+    "beidou_core/engine.py:7537:TERMINAL_CALL:_cancel_algo_order",
+    "beidou_core/engine.py:7881:TERMINAL_CALL:_create_algo_order",
+    "beidou_core/engine.py:7959:TERMINAL_CALL:_create_algo_order",
+    "beidou_core/engine.py:7998:TERMINAL_CALL:_create_algo_order",
+    "beidou_core/engine.py:8130:TERMINAL_CALL:_cancel_algo_orders",
+    "beidou_core/engine.py:9292:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/engine.py:9832:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:9851:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:9864:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:9947:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/engine.py:10007:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:10090:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:10096:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+    "beidou_core/engine.py:10267:TERMINAL_CALL:_create_algo_order",
+    "beidou_core/engine.py:10570:TERMINAL_CALL:_api_async:DELETE",
+    "beidou_core/feed.py:62:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+    "beidou_core/feed.py:63:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+    "beidou_core/feed.py:299:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/feed.py:304:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/feed.py:310:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/feed.py:315:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_core/feed.py:465:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:472:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:479:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:503:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:504:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:626:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_core/feed.py:681:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_core/feed.py:688:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_core/feed.py:710:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_core/feed.py:738:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_core/feed.py:760:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_exchange/binance_usdm/adapter.py:325:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_exchange/binance_usdm/adapter.py:635:TERMINAL_CALL:request:POST",
+    "beidou_exchange/binance_usdm/adapter.py:729:TERMINAL_CALL:request:DELETE",
+    "beidou_exchange/binance_usdm/adapter.py:1058:TERMINAL_CALL:request:POST",
+    "beidou_exchange/binance_usdm/adapter.py:1165:TERMINAL_CALL:request:DELETE",
+    "beidou_exchange/binance_usdm/rest_client.py:210:TERMINAL_CALL:_request:POST",
+    "beidou_exchange/binance_usdm/rest_client.py:214:TERMINAL_CALL:_request:DELETE",
+    "beidou_exchange/binance_usdm/rest_client.py:233:TERMINAL_CALL:_request:POST",
+    "beidou_exchange/binance_usdm/rest_client.py:238:TERMINAL_CALL:_request:DELETE",
+    "beidou_exchange/binance_usdm/rest_client.py:249:TERMINAL_CALL:_request:POST",
+    "beidou_exchange/binance_usdm/rest_client.py:260:TERMINAL_CALL:_request:PUT",
+    "beidou_exchange/binance_usdm/rest_client.py:274:TERMINAL_CALL:_request:DYNAMIC",
+    "beidou_exchange/binance_usdm/rest_client.py:450:DIRECT_URLLIB_REQUEST:POST",
+    "beidou_exchange/binance_usdm/rest_client.py:453:DIRECT_URLLIB_REQUEST:DYNAMIC",
+    "beidou_exchange/binance_usdm/rest_client.py:649:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_exchange/binance_usdm/ws_client.py:137:NETWORK_STREAM_CALL:asyncio.open_connection",
+    "beidou_launcher/preflight.py:234:NETWORK_STREAM_CALL:socket.socket",
+    "beidou_launcher/supervisor.py:192:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_launcher/supervisor.py:202:TERMINAL_CALL:_api:DYNAMIC",
+    "beidou_launcher/supervisor.py:213:UNRESOLVED_WRITE_CALLABLE:callback:request",
+    "beidou_launcher/supervisor.py:231:TERMINAL_CALL:request:DYNAMIC",
+    "beidou_launcher/supervisor.py:247:UNRESOLVED_WRITE_CALLABLE:stored:execute_action",
+    "beidou_launcher/supervisor.py:403:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_launcher/supervisor.py:442:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_launcher/supervisor.py:500:TERMINAL_CALL:_api_async:DYNAMIC",
+    "beidou_launcher/supervisor.py:941:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_launcher/supervisor.py:982:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_launcher/supervisor.py:1030:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_launcher/supervisor.py:1045:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_launcher/supervisor.py:1224:RUNTIME_CONSTRUCTOR:AutonomousEngine",
+    "beidou_launcher/supervisor.py:1293:TERMINAL_CALL:execute_action:RESUME",
+    "beidou_shared/config/__init__.py:469:UNRESOLVED_WRITE_CALLABLE:callback:exchange",
+    "scripts/cleanup_stale_exchange_orders.py:50:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+    "scripts/cleanup_stale_exchange_orders.py:67:TERMINAL_CALL:cancel_order",
+    "scripts/cleanup_stale_exchange_orders.py:74:TERMINAL_CALL:cancel_algo_order",
+    "scripts/monitor_daemon.py:123:NETWORK_TRANSPORT_CALL:urllib.urlopen",
+    "scripts/testnet/run_g5.py:187:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+    "scripts/testnet/run_g5.py:192:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+    "scripts/testnet/run_g5.py:203:TERMINAL_CALL:request:DYNAMIC",
+    "tools/historical_simulation_diagnostic.py:30:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+    "tools/historical_simulation_diagnostic.py:35:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter"
+  ],
+  "network_imports": [
+    {
+      "id": "NETWORK-CHAOS-HTTPX",
+      "source": "beidou_chaos/process_fault_injector.py::httpx",
+      "occurrences": 1,
+      "owner": "Test Quality Owner",
+      "purpose": "FAULT_INJECTION_READ",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-CHAOS-HTTPX]"
+    },
+    {
+      "id": "NETWORK-ALERTS-URLLIB",
+      "source": "beidou_core/alerts.py::urllib.request",
+      "occurrences": 1,
+      "owner": "SRE Owner",
+      "purpose": "ALERT_DELIVERY",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-ALERTS-URLLIB]"
+    },
+    {
+      "id": "NETWORK-HEALTH-SOCKET",
+      "source": "beidou_core/health.py::socket",
+      "occurrences": 1,
+      "owner": "SRE Owner",
+      "purpose": "LOCAL_HEALTH_READ",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-HEALTH-SOCKET]"
+    },
+    {
+      "id": "NETWORK-REST-HTTPX",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::httpx",
+      "occurrences": 2,
+      "owner": "Execution Owner",
+      "purpose": "EXCHANGE_TRANSPORT",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-REST-HTTPX]"
+    },
+    {
+      "id": "NETWORK-REST-URLLIB",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::urllib.request",
+      "occurrences": 2,
+      "owner": "Execution Owner",
+      "purpose": "EXCHANGE_TRANSPORT",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-REST-URLLIB]"
+    },
+    {
+      "id": "NETWORK-WS-OPEN-CONNECTION",
+      "source": "beidou_exchange/binance_usdm/ws_client.py::asyncio.open_connection",
+      "occurrences": 1,
+      "owner": "Market Data Owner",
+      "purpose": "EXCHANGE_WEBSOCKET",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-WS-OPEN-CONNECTION]"
+    },
+    {
+      "id": "NETWORK-PREFLIGHT-SOCKET",
+      "source": "beidou_launcher/preflight.py::socket",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "purpose": "LOCAL_NETWORK_BIND_CHECK",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-PREFLIGHT-SOCKET]"
+    },
+    {
+      "id": "NETWORK-PREFLIGHT-SOCKET-CONSTRUCTOR",
+      "source": "beidou_launcher/preflight.py::socket.socket",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "purpose": "LOCAL_NETWORK_BIND_CHECK",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-PREFLIGHT-SOCKET-CONSTRUCTOR]"
+    },
+    {
+      "id": "NETWORK-MONITOR-URLLIB",
+      "source": "scripts/monitor_daemon.py::urllib.request",
+      "occurrences": 1,
+      "owner": "SRE Owner",
+      "purpose": "LOCAL_HEALTH_READ",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-MONITOR-URLLIB]"
+    }
+  ],
   "entries": [
     {
       "id": "ENTRY-APP-AUTOPILOT",
@@ -230,7 +405,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.autopilot -> beidou_launcher.cli",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_delegating_entrypoints_reject_write_mode_injection",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-APP-AUTOPILOT]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -241,7 +416,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "python -m apps.factor_miner -> research mining pipeline",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-APP-FACTOR-MINER]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -252,7 +427,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "python -m apps.research_lab -> offline research guidance",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-APP-RESEARCH-LAB]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -263,7 +438,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.safety_executor -> launcher safety_only",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_delegating_entrypoints_reject_write_mode_injection",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-APP-SAFETY-EXECUTOR]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -274,7 +449,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.strategy_engine -> launcher paper",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_delegating_entrypoints_reject_write_mode_injection",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-APP-STRATEGY-ENGINE]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -285,7 +460,7 @@
       "capability": "TERMINAL_WRITE_INTERNAL",
       "status": "HARD_HOLD",
       "call_graph": "launcher supervisor -> AutonomousEngine -> Adapter",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -296,7 +471,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "Engine -> MarketDataFeed -> Adapter/REST GET",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-FEED-INTERNAL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -307,7 +482,7 @@
       "capability": "TERMINAL_WRITE_BOUNDARY",
       "status": "HARD_HOLD",
       "call_graph": "caller -> BinanceUsdmAdapter.request -> REST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ADAPTER-BOUNDARY]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -318,7 +493,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m beidou_launcher -> beidou_launcher.cli",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_canonical_cli_help_probe_has_no_runtime_side_effects",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-LAUNCHER-MODULE]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -329,7 +504,7 @@
       "capability": "WRITABLE_RUNTIME_CANDIDATE",
       "status": "HARD_HOLD",
       "call_graph": "beidou/bd -> cli -> preflight -> supervisor",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-LAUNCHER-CLI]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -340,7 +515,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "READ_ONLY",
       "call_graph": "preflight -> package imports -> runtime wiring inspection",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-LAUNCHER-REGISTRY]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -351,7 +526,7 @@
       "capability": "TERMINAL_WRITE_INTERLOCK",
       "status": "HARD_HOLD",
       "call_graph": "launcher cli -> supervisor -> engine/adapter",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -362,7 +537,7 @@
       "capability": "RUNTIME_ACTIVATION",
       "status": "HARD_HOLD",
       "call_graph": "launchd -> beidou start",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-LAUNCHD-PLIST]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -373,7 +548,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "beidou/bd -> beidou_launcher.cli:main",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_canonical_cli_help_probe_has_no_runtime_side_effects",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-CONSOLE-SCRIPTS]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -384,7 +559,7 @@
       "capability": "EVIDENCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> G7 evidence evaluator",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-CERT-EVALUATE-G7]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -395,7 +570,7 @@
       "capability": "EVIDENCE_WINDOW_CONTROL",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> G7 window state",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-CERT-START-G7]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -406,7 +581,7 @@
       "capability": "EVIDENCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> historical certification evidence",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-CERTIFY-72H]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -417,7 +592,7 @@
       "capability": "CANCEL_ACCOUNT_ORDERS",
       "status": "HARD_HOLD",
       "call_graph": "operator -> REST inventory -> cancel order/algo",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-CLEANUP-ORDERS]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -428,7 +603,7 @@
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local SBOM artifact",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-GENERATE-SBOM]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -439,7 +614,7 @@
       "capability": "LOCAL_CONFIG_MIGRATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local config migration",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-MIGRATE-CONFIG]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -450,7 +625,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "cron -> factor miner",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-MINING-CRON]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -461,7 +636,7 @@
       "capability": "LOCAL_OBSERVATION",
       "status": "READ_ONLY",
       "call_graph": "operator -> process/health observation",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-MONITOR-DAEMON]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -472,7 +647,7 @@
       "capability": "DATABASE_MIGRATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> configured database migration",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-RUN-MIGRATIONS]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -483,7 +658,7 @@
       "capability": "OFFLINE_REPLAY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local replay fixture",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-REPLAY-FIXTURE]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -494,7 +669,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "CI/operator -> source scanner",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SCAN-HARDCODED]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -505,7 +680,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "CI/operator -> test scanner",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SCAN-TEST-QUALITY]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -516,7 +691,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "CI/operator -> independent AST and lexical oracle -> registry coverage decision",
-      "negative_test": "tests/architecture/test_write_registry_independent_oracle.py::test_independent_oracle_cli_is_a_separate_executable_gate",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-WRITE-REGISTRY-INDEPENDENT-ORACLE]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -527,7 +702,7 @@
       "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
       "status": "HARD_HOLD",
       "call_graph": "operator -> producer preflight -> held Testnet scenario writes -> independent verifier",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_g5_runner_uses_producer_preflight_and_remains_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -538,7 +713,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "operator -> validated legacy shell arguments -> canonical launcher",
-      "negative_test": "tests/unit/test_start_beidou_wrapper.py::test_wrapper_requires_explicit_start_mode_and_symbols",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-START-SHELL]",
       "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED"
     },
     {
@@ -549,7 +724,7 @@
       "capability": "OFFLINE_SIMULATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local end-to-end simulation",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-TOOL-E2E-DEMO]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -560,7 +735,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "module import -> REST/Adapter historical reads",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-TOOL-HISTORICAL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -571,7 +746,7 @@
       "capability": "LEGACY_TRADE_TOOL",
       "status": "HARD_HOLD",
       "call_graph": "operator -> legacy strategy trade tool",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-TOOL-STRATEGY-LIVE]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -582,8 +757,41 @@
       "capability": "BUILD_AND_RUNTIME_ALIAS_SURFACE",
       "status": "HARD_HOLD",
       "call_graph": "operator or CI -> make target -> apps/tools/scripts",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_declared_entrypoints_have_specific_rejection_contracts",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-MAKEFILE]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
+    },
+    {
+      "id": "ENTRY-DOCKER-COMPOSE",
+      "path": "docker-compose.yml",
+      "kind": "declarative_runtime",
+      "owner": "Storage Owner",
+      "capability": "DATABASE_MIGRATION",
+      "status": "HARD_HOLD",
+      "call_graph": "operator -> docker compose -> PostgreSQL bootstrap and migrations",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DOCKER-COMPOSE]",
+      "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    },
+    {
+      "id": "ENTRY-GITHUB-CI",
+      "path": ".github/workflows/ci.yml",
+      "kind": "ci_workflow",
+      "owner": "Test Quality Owner",
+      "capability": "CI_AUTOMATION",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "GitHub event -> CI workflow -> repository verification",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-GITHUB-CI]",
+      "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
+    },
+    {
+      "id": "ENTRY-PRE-COMMIT",
+      "path": ".pre-commit-config.yaml",
+      "kind": "developer_hook",
+      "owner": "Engineering Owner",
+      "capability": "DEVELOPER_HOOKS",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "developer commit -> pre-commit hooks -> source verification",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-PRE-COMMIT]",
+      "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
       "id": "ENTRY-DELIVERY-FORBIDDEN-SCAN",
@@ -593,7 +801,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "legacy delivery validation -> forbidden-pattern scan",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-FORBIDDEN-SCAN]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -604,7 +812,7 @@
       "capability": "LEGACY_COMMAND_AND_EVIDENCE_WRITE",
       "status": "HARD_HOLD",
       "call_graph": "legacy delivery collector -> configured subprocesses -> local evidence",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-COLLECT-EVIDENCE]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -615,7 +823,7 @@
       "capability": "GIT_BRANCH_MUTATION",
       "status": "HARD_HOLD",
       "call_graph": "legacy delivery shell -> git worktree and branch mutation",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-INIT-BRANCH]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -626,7 +834,7 @@
       "capability": "LEGACY_PREFLIGHT_COMMANDS",
       "status": "HARD_HOLD",
       "call_graph": "legacy delivery preflight -> repository validation commands",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-PREFLIGHT]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -637,7 +845,7 @@
       "capability": "LEGACY_EVIDENCE_PRODUCER",
       "status": "HARD_HOLD",
       "call_graph": "legacy delivery gate -> preflight and evidence producer",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_legacy_delivery_and_activation_entries_are_hard_held",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-RUN-G0]",
       "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD"
     },
     {
@@ -648,7 +856,7 @@
       "capability": "PACKAGE_READ_ONLY_VALIDATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "legacy delivery validation -> package contract reads",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-VALIDATE-PACKAGE]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     },
     {
@@ -659,7 +867,7 @@
       "capability": "LEGACY_EVIDENCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "legacy delivery verifier -> evidence bundle reads",
-      "negative_test": "tests/architecture/test_entrypoint_negative_contracts.py::test_offline_and_read_only_entries_have_no_terminal_write_calls",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-DELIVERY-VERIFY-EVIDENCE]",
       "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED"
     }
   ],
@@ -672,7 +880,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine cancel wrapper -> adapter cancel_algo_order -> REST DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CANCEL-ALGO-ADAPTER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -683,7 +891,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "owned position protection cleanup -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CANCEL-ALGO-BATCH]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -694,7 +902,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "excess protection reconciliation -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CLEANUP-EXCESS-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -705,7 +913,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine Algo wrapper -> adapter create_algo_order -> REST POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CREATE-ALGO-ADAPTER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -716,7 +924,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "position protection reconciliation -> adapter cancel_algo_order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-REPLACE-PROTECTION-CANCEL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -727,7 +935,7 @@
       "capability": "ACCOUNT_RISK_SETTING_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine leverage reconciliation -> legacy API wrapper -> REST POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-LEVERAGE]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -738,7 +946,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "nearline lifecycle -> protection cancel batch",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-NEARLINE-CANCEL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -749,7 +957,7 @@
       "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "strategy intent -> execution plan -> submit order slice",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-PLACE-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -760,7 +968,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "fill processing -> old protection cancel batch",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-FILL-CANCEL-PROTECTION]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -771,7 +979,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "fill processing -> create position protection",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-FILL-CREATE-PROTECTION]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -782,7 +990,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "protection recovery -> create Algo protection",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-RETRY-PROTECTION]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -793,7 +1001,7 @@
       "capability": "UNOWNED_RECOVERY_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "legacy unowned Testnet recovery -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-UNOWNED-RECOVERY-CANCEL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -804,7 +1012,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "shutdown -> legacy API wrapper -> REST DELETE order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SHUTDOWN-CANCEL]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -815,7 +1023,7 @@
       "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "execution slice -> adapter create_order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SUBMIT-SLICE]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -826,7 +1034,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "runtime protection callback -> engine Algo wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-RUN-SUBMIT-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -837,7 +1045,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter cancel_algo_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CANCEL-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -848,7 +1056,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter cancel_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CANCEL-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -859,7 +1067,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter create_algo_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CREATE-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -870,7 +1078,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter create_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CREATE-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -881,7 +1089,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST cancel_algo_order -> guarded HTTP DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CANCEL-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -892,7 +1100,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST cancel_order -> guarded HTTP DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CANCEL-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -903,7 +1111,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST create_algo_order -> guarded HTTP POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -914,7 +1122,7 @@
       "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "user stream startup -> guarded HTTP POST listen key",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_listen_key_session_writes_are_held_before_transport",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-LISTEN-KEY]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -925,7 +1133,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST create_order -> guarded HTTP POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -936,7 +1144,7 @@
       "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "user stream keepalive -> guarded HTTP PUT listen key",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_listen_key_session_writes_are_held_before_transport",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-KEEPALIVE-LISTEN-KEY]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -947,7 +1155,7 @@
       "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "retired cleanup execute path -> REST cancel_algo_order",
-      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py::test_execute_is_held_before_credentials_or_network",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SCRIPT-CLEANUP-CANCEL-ALGO]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -958,7 +1166,7 @@
       "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "retired cleanup execute path -> REST cancel_order",
-      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py::test_execute_is_held_before_credentials_or_network",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SCRIPT-CLEANUP-CANCEL-ORDER]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -969,7 +1177,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "MAPEK authority decision -> dynamic control action; RESUME requires explicit authority",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-MAPEK-DYNAMIC-CONTROL]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -980,7 +1188,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "control API emergency request -> parsed dynamic control action",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-CONTROL-API-DYNAMIC]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -991,7 +1199,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "control API resume -> ControlPlane RESUME -> supervisor terminal interlock",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-CONTROL-API-RESUME]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1002,7 +1210,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "legacy synchronous engine API -> adapter dynamic request -> REST classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SYNC-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1013,7 +1221,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine async API -> adapter dynamic request -> REST classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-ASYNC-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1024,7 +1232,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine safe API wrapper -> adapter dynamic request -> REST classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SAFE-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1035,7 +1243,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "realtime lifecycle branch -> ControlPlane RESUME -> supervisor terminal interlock",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-REALTIME-RESUME]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1046,7 +1254,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "market feed sync wrapper -> REST dynamic request classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-FEED-SYNC-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1057,7 +1265,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "market feed async wrapper -> REST dynamic request classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-FEED-ASYNC-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1068,7 +1276,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter generic request -> REST generic request -> terminal classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1079,7 +1287,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "public REST request -> private terminal classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-PUBLIC-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1090,7 +1298,18 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "classified urllib request -> httpx client dynamic method transport",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-HTTPX-DYNAMIC-REQUEST]",
+      "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-REQUEST-CALLBACK",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._install_exchange_write_interlock::callable_argument[request]",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "Supervisor interlock installation -> captured request callback -> guarded transport",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-REQUEST-CALLBACK]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1101,7 +1320,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "supervisor adapter interlock -> captured original dynamic request",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-ADAPTER-ALIAS]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1112,7 +1331,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "supervisor engine async interlock -> captured original dynamic wrapper",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-ASYNC-ALIAS]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1123,7 +1342,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "supervisor engine sync interlock -> captured original dynamic wrapper",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-SYNC-ALIAS]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     },
     {
@@ -1134,7 +1353,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "Supervisor guarded execute alias -> control execute_action -> RESUME hold",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-RESUME-ATTRIBUTE-ALIAS]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1145,7 +1364,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "Testnet recovery branch -> ControlPlane RESUME -> terminal write interlock",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-AUTO-RESUME]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1156,7 +1375,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "validated recovery -> ControlPlane RESUME -> terminal write interlock",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-RECOVERY-RESUME]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1167,7 +1386,7 @@
       "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "startup readiness -> ControlPlane RESUME -> terminal write interlock",
-      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-START-RESUME]",
       "expected_rejection": "CONTROL_AUTHORITY_REQUIRED"
     },
     {
@@ -1178,7 +1397,7 @@
       "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "explicit G5 scenario -> adapter dynamic request -> terminal classifier",
-      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+      "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-G5-DYNAMIC-REQUEST]",
       "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
     }
   ]

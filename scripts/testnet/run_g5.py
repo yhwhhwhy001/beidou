@@ -17,12 +17,15 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+from beidou_launcher.models import CheckResult
 
 
 def fail_fast(reason: str) -> None:
@@ -41,6 +44,21 @@ def fail_fast(reason: str) -> None:
     sys.exit(1)
 
 
+def blocking_preflight_checks(checks: list[CheckResult]) -> list[CheckResult]:
+    """Use the canonical fail-closed blocker semantics, including P1 UNKNOWN."""
+
+    return [check for check in checks if check.is_blocking]
+
+
+def validate_probe_symbol(raw_symbol: str) -> str:
+    """Return one normalized Binance symbol or fail before preflight/network access."""
+
+    symbol = raw_symbol.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{5,30}", symbol) or symbol in {"ALL", "DEFAULT"}:
+        raise ValueError("symbol must be one explicit 5-30 character alphanumeric market")
+    return symbol
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
@@ -53,9 +71,10 @@ def main() -> int:
         help="最大测试名义金额 (USDT)，默认读取 G5 plan；不得超过 plan 上限",
     )
     args = parser.parse_args()
-    probe_symbol = args.symbol.strip().upper()
-    if not probe_symbol or probe_symbol in {"ALL", "DEFAULT"}:
-        parser.error("--symbol 必须是单个显式品种，且不得为 ALL/DEFAULT")
+    try:
+        probe_symbol = validate_probe_symbol(args.symbol)
+    except ValueError as exc:
+        parser.error(f"--symbol 无效: {exc}")
 
     if not args.confirm_testnet:
         print("ERROR: 必须使用 --confirm-testnet 标志确认 Testnet 环境")
@@ -70,9 +89,7 @@ def main() -> int:
     from beidou_launcher.preflight import run_g5_producer_preflight
 
     preflight_checks, _ = run_g5_producer_preflight(project_root, 9090)
-    preflight_blockers = [
-        check for check in preflight_checks if check.status.value == "FAIL" and check.severity.value == "P0"
-    ]
+    preflight_blockers = blocking_preflight_checks(preflight_checks)
     if preflight_blockers:
         details = "; ".join(f"{check.check_id}: {check.message}" for check in preflight_blockers)
         fail_fast(f"preflight blocked before network access: {details}")

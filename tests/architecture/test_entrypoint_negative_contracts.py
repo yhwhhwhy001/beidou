@@ -55,6 +55,16 @@ def test_legacy_delivery_and_activation_entries_are_hard_held() -> None:
         assert entries[entry_id]["status"] == "HARD_HOLD"
 
 
+def test_declarative_entrypoint_surfaces_are_explicitly_governed() -> None:
+    registry = _registry()
+    entries = {entry["path"]: entry for entry in registry["entries"]}  # type: ignore[index]
+
+    assert entries["docker-compose.yml"]["status"] == "HARD_HOLD"
+    assert entries["docker-compose.yml"]["capability"] == "DATABASE_MIGRATION"
+    assert entries[".github/workflows/ci.yml"]["capability"] == "CI_AUTOMATION"
+    assert entries[".pre-commit-config.yaml"]["capability"] == "DEVELOPER_HOOKS"
+
+
 def test_declared_entrypoints_have_specific_rejection_contracts() -> None:
     registry = _registry()
     declarations = registry["declared_entrypoints"]  # type: ignore[index]
@@ -63,9 +73,19 @@ def test_declared_entrypoints_have_specific_rejection_contracts() -> None:
     assert set(records) == set(declarations)
     for declaration, command in declarations.items():
         record = records[declaration]
+        pytest_identity = "".join(
+            character
+            if character.isascii() and (character.isalnum() or character in "_-")
+            else f"u{ord(character):04x}"
+            for character in declaration
+        )
         assert record["command"] == command
         assert record["expected_rejection"] not in {"", "PASS", "NONE"}
-        assert record["negative_test"].endswith("::test_declared_entrypoints_have_specific_rejection_contracts")
+        assert record["negative_test"] == (
+            "tests/architecture/test_registry_record_contracts.py::"
+            "test_declaration_record_is_behaviorally_bound["
+            f"{pytest_identity}]"
+        )
 
 
 def test_g5_runner_uses_producer_preflight_and_remains_hard_held() -> None:

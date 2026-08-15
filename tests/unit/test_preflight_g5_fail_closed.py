@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from beidou_launcher import preflight
-from beidou_launcher.models import CheckStatus
+from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
+from scripts.testnet.run_g5 import blocking_preflight_checks, validate_probe_symbol
 
 
 def test_missing_g5_certificate_is_rejected_without_creating_evidence(tmp_path: Path) -> None:
@@ -67,3 +70,29 @@ def test_g5_runner_uses_dedicated_producer_preflight() -> None:
 
     assert "run_g5_producer_preflight" in source
     assert "run_preflight(project_root" not in source
+
+
+@pytest.mark.parametrize("symbol", ["BTCUSDT,ETHUSDT", "BTC/USDT", "BTC USDT", "ALL", "DEFAULT", "BTC"])
+def test_g5_probe_symbol_rejects_ambiguous_or_non_market_values(symbol: str) -> None:
+    with pytest.raises(ValueError, match="one explicit"):
+        validate_probe_symbol(symbol)
+
+
+def test_g5_probe_symbol_normalizes_one_explicit_market() -> None:
+    assert validate_probe_symbol(" btcusdt ") == "BTCUSDT"
+
+
+def test_g5_producer_blocks_p0_and_p1_fail_or_unknown() -> None:
+    checks = [
+        CheckResult("p0-fail", "p0", CheckStatus.FAIL, CheckSeverity.P0, "blocked"),
+        CheckResult("p1-fail", "p1", CheckStatus.FAIL, CheckSeverity.P1, "blocked"),
+        CheckResult("p1-unknown", "p1 unknown", CheckStatus.UNKNOWN, CheckSeverity.P1, "blocked"),
+        CheckResult("p2-unknown", "p2 unknown", CheckStatus.UNKNOWN, CheckSeverity.P2, "diagnostic"),
+        CheckResult("p1-pass", "p1 pass", CheckStatus.PASS, CheckSeverity.P1, "ok"),
+    ]
+
+    assert [check.check_id for check in blocking_preflight_checks(checks)] == [
+        "p0-fail",
+        "p1-fail",
+        "p1-unknown",
+    ]
