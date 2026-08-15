@@ -378,9 +378,15 @@ def collect_monitoring_checks(
             # 实测 40 品种外部持仓全 FAIL）。live/canary 全量严格不变。
             _env_mode = getattr(engine, "_env_mode", None)
             _is_testnet_check = _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet"
+            _limit_rejected = getattr(engine, "_protection_limit_rejected_symbols", set()) or set()
             for ep in exchange_positions:
                 if _is_testnet_check and ep.symbol not in local_by_symbol:
                     continue  # 外部持仓（共享账户）不参与保护覆盖判定
+                # BD-FIX: 交易所保护单限额拒绝（-4045，共享账户他人
+                # algo 单占满限额）的品种豁免 —— 环境限制非引擎失职
+                if _is_testnet_check and ep.symbol in _limit_rejected:
+                    print(f"[monitor] protection_coverage: {ep.symbol} exempted (venue stop-order limit)")
+                    continue
                 semantic = verify_position_protection(ep, local_by_symbol.get(ep.symbol, []), mode)
                 check = build_protection_check(semantic)
                 results.append(convert(check, name="持仓保护覆盖 (PKG-MON-04)"))

@@ -5998,6 +5998,13 @@ class AutonomousEngine:
                     p_order.status = ProtectionStatus.CREATED
                     self._persist_protection_order(p_order, status="PENDING")
                     print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
+                    # BD-FIX: 交易所保护单限额拒绝（-4045）—— 共享账户
+                    # 他人 algo 单占满限额时引擎无法创建保护，覆盖检查
+                    # 对这类品种豁免（testnet 环境限制，非引擎失职）
+                    if str(err_code) == "-4045" or "max stop order" in str(err_msg).lower():
+                        if not hasattr(self, "_protection_limit_rejected_symbols"):
+                            self._protection_limit_rejected_symbols: set[str] = set()
+                        self._protection_limit_rejected_symbols.add(str(symbol))
 
             if exchange_protection_count > 0:
                 print(
