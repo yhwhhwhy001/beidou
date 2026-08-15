@@ -9772,7 +9772,7 @@ class AutonomousEngine:
                     )
 
                     adaptive_cfg = AdaptiveProtectionConfig(
-                        stop_loss_config={"type": "FIXED_PCT", "stop_pct": 5.0},
+                        stop_loss_config={"type": "FIXED_PERCENT", "stop_pct": 5.0},
                         take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
                         stop_pct=5.0,
                         rr_ratio=2.0,
