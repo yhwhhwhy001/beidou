@@ -1265,6 +1265,7 @@ class AutonomousEngine:
         self._policy_params: dict[str, Any] = {}
         self._policy_id_active: str | None = None
         self._policy_version: str | None = None
+        self._policy_signature: str | None = None
         self._policy_error: str | None = None
         try:
             for policy_id in ("risk_parameters", "autopilot_risk"):
@@ -1277,6 +1278,7 @@ class AutonomousEngine:
                     self._policy_params = dict(envelope.parameters)
                     self._policy_id_active = envelope.policy_id
                     self._policy_version = envelope.version
+                    self._policy_signature = envelope.signature
                     self._policy_error = None
                     break
         except Exception as exc:
@@ -1412,6 +1414,7 @@ class AutonomousEngine:
         self._protection_exchange_attempted: set[str] = set()
         self._active_algo_ids: dict[str, set[str]] = {}
         self._venue_missing_streaks: dict[str, int] = {}  # algoId → 连续缺失轮数（清理防抖）
+        self._sl_unprotectable_streak: dict[str, int] = {}  # pos_id → SL 连续无法建立轮数（紧急平仓防抖）
         self._pending_protection_retry: set[str] = set()
         self._protection_owner_unknown = False
         # BD-FIX: TruthSnapshot 保护事实 — 初始化时所有权归属本服务 → ACTIVE
@@ -7532,6 +7535,45 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[nearline] Excess order cleanup error: {e}")
 
+    async def _maybe_emergency_close_unprotectable(
+        self, pos_id: str, symbol: str, pp: Any
+    ) -> bool:
+        """SL 连续无法建立（-2021 立即触发 / adaptive blocked）→ 紧急平仓。
+
+        BD-FIX (final83): 持仓深亏时基于入场价的止损已越过现价，交易所
+        恒以 -2021 拒绝 —— 止损事实上已实现，正确行为是按市价平仓而非
+        无限重试。连续 3 轮无法建立（防 API 瞬时假象）后走受治理的
+        reduce-only 紧急平仓路径（enqueue_reduce_only_market，仅持久化
+        意图，执行仍走唯一 fenced executor 写路径）。
+        """
+        streak = self._sl_unprotectable_streak.get(pos_id, 0) + 1
+        self._sl_unprotectable_streak[pos_id] = streak
+        if streak < 3:
+            print(f"[nearline] ⚠️ {symbol}: stop unprotectable x{streak}/3 (waiting for confirmation)")
+            return False
+        if not self._policy_id_active or not self._policy_version or not self._policy_signature:
+            print(f"[nearline] ⚠️ Emergency close for {symbol} blocked: signed policy unavailable")
+            return False
+        try:
+            ok = await self.enqueue_reduce_only_market(
+                symbol=symbol,
+                side=("SELL" if pp.side == OrderSide.BUY else "BUY"),
+                quantity=float(pp.quantity),
+                correlation_id=f"sl-unprotectable-{pos_id}",
+                policy_id=self._policy_id_active,
+                policy_version=self._policy_version,
+                policy_signature=self._policy_signature,
+            )
+        except Exception as exc:
+            print(f"[nearline] ⚠️ Emergency close enqueue failed for {symbol}: {exc}")
+            return False
+        if ok:
+            self._sl_unprotectable_streak.pop(pos_id, None)
+            print(f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak})")
+            return True
+        print(f"[nearline] ⚠️ Emergency close intent rejected for {symbol}")
+        return False
+
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
         """对保护单缺失的持仓进行重试；同时覆盖止损单和止盈单。
 
@@ -7734,6 +7776,9 @@ class AutonomousEngine:
                                 f"[nearline] ⚠️ S33 skipped for {symbol}: adaptive config blocked "
                                 f"({_cfg_meta.get('reason', 'UNKNOWN')})"
                             )
+                            # BD-FIX (final83): 特征长期越界（价格极端漂移）
+                            # → 保护无法建立 → 连续 3 轮后紧急平仓。
+                            await self._maybe_emergency_close_unprotectable(pos_id, symbol, pp)
                             continue
                         _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
                         if _prec:
@@ -7873,6 +7918,13 @@ class AutonomousEngine:
                                         print(
                                             f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg', '')[:80]}"
                                         )
+                                        # BD-FIX (final83): S33 新建止损被 -2021
+                                        # 拒绝 → 止损已越过现价 → 计入防抖。
+                                        if (
+                                            getattr(p_order, "stop_type", None) is not None
+                                            and "immediately trigger" in str(algo_resp.get("msg", "")).lower()
+                                        ):
+                                            await self._maybe_emergency_close_unprotectable(pos_id, symbol, pp)
                                 except Exception as exc:
                                     print(f"[nearline] ⚠️ SL/TP error: {symbol} {exc}")
                         print(f"[nearline] Protection CREATED for {symbol}: SL+TP")
@@ -7916,6 +7968,10 @@ class AutonomousEngine:
                         print(
                             f"[nearline] ⚠️ Stop loss retry FAILED for {symbol}: {algo_resp.get('msg', str(algo_resp)[:100])}"
                         )
+                        # BD-FIX (final83): -2021 立即触发 = 止损已越过现价
+                        # → 计入无法建立防抖，连续 3 轮触发紧急平仓。
+                        if "immediately trigger" in str(algo_resp.get("msg", "")).lower():
+                            await self._maybe_emergency_close_unprotectable(pos_id, symbol, pp)
 
                 # --- 重试止盈单 ---
                 for i, tp in enumerate(pp.take_profits):
