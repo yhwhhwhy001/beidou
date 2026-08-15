@@ -931,10 +931,23 @@ class BeidouSupervisor:
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
-        if state_value != "DEGRADED":
-            if state_value not in ("DEGRADED", "ACTIVE"):
-                print(f"[supervisor] RECOVERY SKIP: lifecycle={state_value} (not DEGRADED)")
+        # BD-FIX: ACTIVE 时跳过 transition（ACTIVE→RECOVERING 状态机
+        # 非法），直接走下方 RESUME 补发 —— 引擎健康但控制面被
+        # 撤销的场景（final63 实测 PAUSED 卡死：授权撤销 + 对账恢复
+        # 后无任何路径重新 RESUME）。
+        if state_value not in ("DEGRADED", "ACTIVE"):
+            print(f"[supervisor] RECOVERY SKIP: lifecycle={state_value} (not DEGRADED/ACTIVE)")
             return False
+        if state_value == "ACTIVE":
+            # 引擎已 ACTIVE：无需 transition 序列，直接补发 RESUME
+            if self._control_state() not in ("RESUME", "LOCK", "EMERGENCY_FLATTEN"):
+                self.engine._control.execute_action(ControlAction.RESUME)
+                print("[supervisor] Re-issued RESUME (engine already ACTIVE)")
+            self._control_paused_by_supervisor = False
+            self._critical_streak = 0
+            self._health_debounce.reset()
+            self.report.supervisor_state = "RUNNING"
+            return True
         # 时间窗口恢复计数：清理过期记录，仅在窗口内超限时拒绝
         now = time.monotonic()
         self._recovery_timestamps = [t for t in self._recovery_timestamps if now - t < self.recovery_window_seconds]
@@ -1013,6 +1026,17 @@ class BeidouSupervisor:
 
         # 复用 _recover_if_validated 的恢复 transition 序列
         # （RECOVERING→VALIDATING→ACTIVE）。
+        # BD-FIX: lifecycle 已 ACTIVE 时跳过 transition（ACTIVE→
+        # RECOVERING 状态机非法），直接授权 + RESUME。
+        if state_value == "ACTIVE":
+            self._resume_authorized = True
+            self.engine._control.execute_action(ControlAction.RESUME)
+            self._control_paused_by_supervisor = False
+            self._critical_streak = 0
+            self._health_debounce.reset()
+            self.report.supervisor_state = "RUNNING"
+            print("[supervisor] testnet auto re-authorized RESUME (engine already ACTIVE)")
+            return True
         for target in (ModuleState.RECOVERING, ModuleState.VALIDATING, ModuleState.ACTIVE):
             result = lifecycle.transition(target)
             if str(getattr(result, "value", result)) != "SUCCESS":
