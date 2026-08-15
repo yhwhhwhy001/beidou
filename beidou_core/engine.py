@@ -7873,6 +7873,14 @@ class AutonomousEngine:
 
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
+                if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_sl_diag", 0) > 30:
+                    self._last_retry_sl_diag = time.time()
+                    print(
+                        f"[nearline-diag] {symbol}: sl={pp.stop_loss} "
+                        f"needs={_needs_exchange_protection(pp.stop_loss)} "
+                        f"expected={expected_count} server={server_count} "
+                        f"retry_count={getattr(self, '_protection_retries', {}).get(pos_id, 0)}"
+                    )
                 if _needs_exchange_protection(pp.stop_loss):
                     # Retry the exact approved trigger.  Moving a stop after
                     # rejection changes the signed risk contract and could
