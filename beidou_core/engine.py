@@ -7766,19 +7766,60 @@ class AutonomousEngine:
                                     },
                                 )()
                             )
-                        self._protection.create_protection(
-                            position_id=pos_id,
-                            instrument_id=InstrumentId(symbol),
-                            venue_id=VenueId("BINANCE"),
-                            entry_price=entry_price,
-                            quantity=float(pp.quantity),
-                            side=pp.side,
-                            stop_loss_config=adaptive_cfg.stop_loss_config,
-                            take_profit_config=adaptive_cfg.take_profit_config,
-                            owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
-                            position_generation=0,
-                            session_id=str(getattr(self, "_session_id", "")),
-                        )
+                        if pos_id in self._protection.all_positions():
+                            # BD-FIX (final82f): 投影已存在（stop_loss=None 恢复
+                            # 场景）—— create_protection 会抛 "already exists"。
+                            # 直接构建新止损单补挂投影，再走下方提交循环。
+                            from beidou_safety.protection.engine import StopLossCalculator
+
+                            sl_type = StopLossType(adaptive_cfg.stop_loss_config.get("type", "FIXED_PERCENT"))
+                            stop_price = StopLossCalculator.calculate(
+                                sl_type,
+                                entry_price,
+                                pp.side,
+                                atr=adaptive_cfg.stop_loss_config.get("atr"),
+                                volatility_pct=adaptive_cfg.stop_loss_config.get("volatility_pct"),
+                                stop_pct=adaptive_cfg.stop_loss_config.get("stop_pct") or 2.0,
+                                multiplier=adaptive_cfg.stop_loss_config.get("multiplier") or 2.0,
+                            )
+                            trigger_value = float(stop_price)
+                            if not math.isfinite(trigger_value) or trigger_value <= 0:
+                                print(f"[nearline] ⚠️ S33 stop price invalid for {symbol}: {stop_price!r}")
+                                continue
+                            sl_side = OrderSide.SELL if pp.side == OrderSide.BUY else OrderSide.BUY
+                            pp.stop_loss = ProtectionOrder(
+                                protection_id=f"sl-{pos_id}",
+                                position_id=pos_id,
+                                instrument_id=InstrumentId(symbol),
+                                venue_id=VenueId("BINANCE"),
+                                side=sl_side,
+                                trigger_price=Price(amount=str(round(trigger_value, _prec.get("price", 0) if _prec else 4))),
+                                order_price=None,
+                                quantity=Quantity(amount=str(float(pp.quantity))),
+                                order_type="STOP_MARKET",
+                                reduce_only=True,
+                                status=ProtectionStatus.CREATED,
+                                stop_type=sl_type,
+                                reason=f"Stop Loss: {sl_type.value} (S33 rebuild)",
+                                owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
+                                position_generation=0,
+                                session_id=str(getattr(self, "_session_id", "")),
+                            )
+                            print(f"[nearline] 🔧 S33 rebuilt stop loss for {symbol} at {trigger_value}")
+                        else:
+                            self._protection.create_protection(
+                                position_id=pos_id,
+                                instrument_id=InstrumentId(symbol),
+                                venue_id=VenueId("BINANCE"),
+                                entry_price=entry_price,
+                                quantity=float(pp.quantity),
+                                side=pp.side,
+                                stop_loss_config=adaptive_cfg.stop_loss_config,
+                                take_profit_config=adaptive_cfg.take_profit_config,
+                                owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
+                                position_generation=0,
+                                session_id=str(getattr(self, "_session_id", "")),
+                            )
                         # 立即提交到交易所
                         reduce_side = "SELL" if pp.side == OrderSide.BUY else "BUY"
                         prec_map = self._symbol_precision.get(symbol)
