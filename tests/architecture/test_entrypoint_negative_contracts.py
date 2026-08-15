@@ -32,12 +32,16 @@ def test_delegating_entrypoints_reject_write_mode_injection() -> None:
 
 def test_offline_and_read_only_entries_have_no_terminal_write_calls() -> None:
     registry = _registry()
-    terminal_sources = [item["source"] for item in registry["terminal_write_paths"]]  # type: ignore[index]
+    terminal_records = registry["terminal_write_paths"]  # type: ignore[index]
     for entry in registry["entries"]:  # type: ignore[index]
         if entry["status"] not in {"OFFLINE_ONLY", "READ_ONLY"}:
             continue
         prefix = entry["path"] + "::"
-        assert not any(source.startswith(prefix) for source in terminal_sources), entry["id"]
+        assert all(
+            terminal["status"] == "READ_ONLY"
+            for terminal in terminal_records
+            if terminal["source"].startswith(prefix)
+        ), entry["id"]
 
 
 def test_legacy_delivery_and_activation_entries_are_hard_held() -> None:

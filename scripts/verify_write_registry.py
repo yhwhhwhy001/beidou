@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import plistlib
 import re
@@ -30,7 +31,17 @@ TERMINAL_NAMES = {
 }
 REQUEST_NAMES = {"request", "_request", "exchange", "_api", "_api_async", "_api_async_safe"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-SKIP_PARTS = {".git", ".venv", "__pycache__", "build", "dist", "docs", "tests"}
+SKIP_PARTS = {
+    ".beidou",
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "docs",
+    "evidence",
+    "tests",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +50,41 @@ class OracleFinding:
     kind: str
     line: int
     detail: str
+
+
+def scan_source_digests(root: Path) -> dict[str, str]:
+    """Independently enumerate production code and declarative source hashes."""
+
+    root = root.resolve()
+    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".toml", ".yaml", ".yml"}
+    digests: dict[str, str] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if any(part in SKIP_PARTS for part in relative.parts):
+            continue
+        relative_text = relative.as_posix()
+        if relative_text in {
+            "beidou_launcher/write_registry.py",
+            "config/write-capability-registry.json",
+        }:
+            continue
+        try:
+            data = path.read_bytes()
+            executable = bool(path.stat().st_mode & 0o111)
+        except OSError:
+            continue
+        if (
+            path.suffix.lower() not in governed_suffixes
+            and path.name not in {"Makefile", "Dockerfile"}
+            and not path.name.startswith("Dockerfile.")
+            and not executable
+            and not data.startswith(b"#!")
+        ):
+            continue
+        digests[relative_text] = hashlib.sha256(data).hexdigest()
+    return dict(sorted(digests.items()))
 
 
 def _constant_string(node: ast.AST) -> str | None:
@@ -216,7 +262,7 @@ class _OracleVisitor(ast.NodeVisitor):
 
         for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
             argument_target = self._target(argument)
-            if argument_target in CONSTRUCTORS | TERMINAL_NAMES | REQUEST_NAMES:
+            if argument_target in CONSTRUCTORS | TERMINAL_NAMES | (REQUEST_NAMES - {"exchange"}):
                 self._record(node, "UNRESOLVED_WRITE_CALLABLE", f"callback:{argument_target}")
 
         if isinstance(node.func, ast.Attribute) and node.func.attr.lower() in {"post", "put", "patch", "delete"}:
@@ -244,13 +290,37 @@ def scan_repository(root: Path) -> list[OracleFinding]:
         }:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
         except (OSError, UnicodeError, SyntaxError) as exc:
             findings.append(OracleFinding(relative.as_posix(), "UNREADABLE_SOURCE", 0, type(exc).__name__))
             continue
         visitor = _OracleVisitor(relative.as_posix())
         visitor.visit(tree)
         findings.extend(visitor.findings)
+        has_network_import = bool(visitor.module_aliases) or any(
+            target.startswith(("NETWORK_CLIENT:", "NETWORK_METHOD:", "URLLIB:"))
+            for target in visitor.aliases.values()
+        )
+        if has_network_import:
+            imported_roots = {module.split(".", 1)[0] for module in visitor.module_aliases.values()}
+            lexical_tokens = {"__import__"}
+            if imported_roots & {"aiohttp", "httpx", "requests", "urllib"}:
+                lexical_tokens.update({"getattr(", ".post", ".put", ".patch", ".delete", "Request", "urlopen"})
+            if "asyncio" in imported_roots:
+                lexical_tokens.add("open_connection")
+            if "socket" in imported_roots:
+                lexical_tokens.update({"create_connection", "sendall"})
+            for line_number, line in enumerate(source.splitlines(), start=1):
+                if any(token in line for token in lexical_tokens):
+                    findings.append(
+                        OracleFinding(relative.as_posix(), "LEXICAL_NETWORK_SURFACE", line_number, "network")
+                    )
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if "lambda" in line and any(name in line for name in TERMINAL_NAMES | REQUEST_NAMES | {"getattr"}):
+                findings.append(
+                    OracleFinding(relative.as_posix(), "LEXICAL_CALLABLE_SURFACE", line_number, "lambda")
+                )
 
     for path in root.rglob("*.sh"):
         relative = path.relative_to(root)
@@ -262,7 +332,12 @@ def scan_repository(root: Path) -> list[OracleFinding]:
             findings.append(OracleFinding(relative.as_posix(), "UNREADABLE_SOURCE", 0, type(exc).__name__))
             continue
         logical_source = re.sub(r"\\\r?\n", " ", source)
+        curl_aliases = set(
+            re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?(?:[^\s'\"]*/)?curl['\"]?\s*$", source)
+        )
         for line_number, line in enumerate(logical_source.splitlines(), start=1):
+            for alias in curl_aliases:
+                line = re.sub(rf'"?\$(?:\{{{re.escape(alias)}\}}|{re.escape(alias)})"?', "curl", line)
             curl_command = re.search(r"(?:\bcurl\b|\$\([^)]*CURL[^)]*\))", line)
             write_option = re.search(
                 r"(?:-X|--request)(?:=|\s+)|(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?|-F|--form)(?:=|\s+)",
@@ -278,21 +353,51 @@ def scan_repository(root: Path) -> list[OracleFinding]:
             with path.open("rb") as handle:
                 payload = plistlib.load(handle)
             arguments = payload.get("ProgramArguments", []) if isinstance(payload, dict) else []
-            if isinstance(arguments, list) and "curl" in [
-                str(argument).rsplit("/", 1)[-1] for argument in arguments
-            ]:
+            command = " ".join(str(argument) for argument in arguments) if isinstance(arguments, list) else ""
+            if re.search(r"\bcurl\b", command) and re.search(r"(?:-d|--data|-F|--form|-X|--request)", command):
                 findings.append(OracleFinding(relative.as_posix(), "PLIST_HTTP_WRITE", 0, "curl"))
         except (OSError, plistlib.InvalidFileException) as exc:
             findings.append(OracleFinding(relative.as_posix(), "UNREADABLE_SOURCE", 0, type(exc).__name__))
     makefile = root / "Makefile"
     if makefile.is_file():
-        for line_number, line in enumerate(makefile.read_text(encoding="utf-8").splitlines(), start=1):
+        make_source = makefile.read_text(encoding="utf-8")
+        curl_aliases = set(
+            re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:?+]?=\s*(?:[^\s]*/)?curl\s*$", make_source)
+        )
+        for line_number, line in enumerate(make_source.splitlines(), start=1):
             if not line.startswith("\t"):
                 continue
+            for alias in curl_aliases:
+                line = line.replace(f"$({alias})", "curl").replace(f"${{{alias}}}", "curl")
             if re.search(r"(?:\bcurl\b|\$\([^)]*CURL[^)]*\))", line):
                 findings.append(OracleFinding("Makefile", "MAKE_HTTP_WRITE", line_number, "curl"))
             if re.search(r"\b(?:httpx|requests|aiohttp|urllib\.request)\b", line):
                 findings.append(OracleFinding("Makefile", "MAKE_EMBEDDED_NETWORK", line_number, "python"))
+    for pattern in ("*.yml", "*.yaml"):
+        for path in root.rglob(pattern):
+            relative = path.relative_to(root)
+            if any(part in SKIP_PARTS for part in relative.parts):
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                findings.append(OracleFinding(relative.as_posix(), "UNREADABLE_SOURCE", 0, type(exc).__name__))
+                continue
+            for line_number, line in enumerate(source.splitlines(), start=1):
+                if re.search(r"\b(?:run|command|entrypoint|script):.*\bcurl\b.*(?:-d|--data|-F|--form|-X|--request)", line):
+                    findings.append(OracleFinding(relative.as_posix(), "YAML_HTTP_WRITE", line_number, "curl"))
+                if re.search(r"\buses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@", line):
+                    findings.append(OracleFinding(relative.as_posix(), "YAML_REMOTE_ACTION", line_number, "uses"))
+                if re.search(r"\b(?:python\s+-m\s+)?pip\s+install(?:\s|$)", line):
+                    findings.append(OracleFinding(relative.as_posix(), "YAML_PACKAGE_NETWORK", line_number, "pip"))
+    for path in root.rglob("*.cron"):
+        relative = path.relative_to(root)
+        if any(part in SKIP_PARTS for part in relative.parts):
+            continue
+        source = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if re.search(r"\bcurl\b.*(?:-d|--data|-F|--form|-X|--request)", line):
+                findings.append(OracleFinding(relative.as_posix(), "CRON_HTTP_WRITE", line_number, "curl"))
     return sorted(findings, key=lambda item: (item.path, item.line, item.kind, item.detail))
 
 
@@ -300,14 +405,73 @@ def verify_coverage(root: Path, registry: dict[str, Any]) -> list[str]:
     actual = {
         f"{finding.path}:{finding.line}:{finding.kind}:{finding.detail}" for finding in scan_repository(root)
     }
+    governance_payload = {
+        "declared_entrypoint_records": registry.get("declared_entrypoint_records"),
+        "entries": registry.get("entries"),
+        "governed_source_digests": registry.get("governed_source_digests"),
+        "network_imports": registry.get("network_imports"),
+        "terminal_write_paths": registry.get("terminal_write_paths"),
+    }
+    governance_digest = hashlib.sha256(
+        json.dumps(
+            governance_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    governance_issues = []
+    if registry.get("governance_digest") != governance_digest:
+        governance_issues.append("INDEPENDENT_ORACLE_GOVERNANCE_DIGEST_MISMATCH")
+    registered_digests = registry.get("governed_source_digests")
+    actual_digests = scan_source_digests(root)
+    if not isinstance(registered_digests, dict):
+        return [*governance_issues, "INDEPENDENT_ORACLE_SOURCE_DIGESTS_INVALID"]
+    digest_issues: list[str] = []
+    for path in sorted(actual_digests.keys() - registered_digests.keys()):
+        digest_issues.append(f"INDEPENDENT_ORACLE_SOURCE_UNREGISTERED:{path}")
+    for path in sorted(registered_digests.keys() - actual_digests.keys()):
+        digest_issues.append(f"INDEPENDENT_ORACLE_SOURCE_STALE:{path}")
+    for path in sorted(actual_digests.keys() & registered_digests.keys()):
+        if actual_digests[path] != registered_digests[path]:
+            digest_issues.append(f"INDEPENDENT_ORACLE_SOURCE_MISMATCH:{path}")
     declared = registry.get("independent_oracle_findings")
-    if not isinstance(declared, list) or not all(isinstance(item, str) and item for item in declared):
-        return ["INDEPENDENT_ORACLE_DECLARATIONS_INVALID"]
-    expected = set(declared)
-    issues = [f"INDEPENDENT_ORACLE_UNREGISTERED:{identity}" for identity in sorted(actual - expected)]
+    required = {"identity", "governance_id", "owner", "status", "negative_test"}
+    if not isinstance(declared, list) or not all(
+        isinstance(item, dict) and required <= item.keys() for item in declared
+    ):
+        return [*governance_issues, *digest_issues, "INDEPENDENT_ORACLE_DECLARATIONS_INVALID"]
+    identities = [item["identity"] for item in declared]
+    if not all(isinstance(identity, str) and identity for identity in identities):
+        return [*governance_issues, *digest_issues, "INDEPENDENT_ORACLE_DECLARATIONS_INVALID"]
+    expected = set(identities)
+    issues = [*governance_issues, *digest_issues]
+    issues.extend(f"INDEPENDENT_ORACLE_UNREGISTERED:{identity}" for identity in sorted(actual - expected))
     issues.extend(f"INDEPENDENT_ORACLE_STALE:{identity}" for identity in sorted(expected - actual))
-    if len(expected) != len(declared):
+    if len(expected) != len(identities):
         issues.append("INDEPENDENT_ORACLE_DUPLICATE_DECLARATION")
+    governed_records = {
+        item.get("id"): item
+        for section in ("entries", "terminal_write_paths", "network_imports")
+        for item in registry.get(section, [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    for declaration in declared:
+        identity = declaration["identity"]
+        governance_id = declaration["governance_id"]
+        record = governed_records.get(governance_id)
+        if record is None:
+            issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_MISSING:{identity}")
+            continue
+        finding_path = identity.split(":", 1)[0]
+        record_path = record.get("path") or str(record.get("source", "")).split("::", 1)[0]
+        if finding_path != record_path:
+            issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_PATH_MISMATCH:{identity}")
+        for field in ("owner", "status", "negative_test"):
+            if declaration.get(field) != record.get(field):
+                issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_{field.upper()}_MISMATCH:{identity}")
+        if declaration.get("status") not in {"HARD_HOLD", "READ_ONLY"}:
+            issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_STATUS_INVALID:{identity}")
     return issues
 
 

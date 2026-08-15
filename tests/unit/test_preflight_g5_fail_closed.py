@@ -8,7 +8,7 @@ import pytest
 
 from beidou_launcher import preflight
 from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
-from scripts.testnet.run_g5 import blocking_preflight_checks, validate_probe_symbol
+from scripts.testnet.run_g5 import blocking_preflight_checks, require_exchange_symbol, validate_probe_symbol
 
 
 def test_missing_g5_certificate_is_rejected_without_creating_evidence(tmp_path: Path) -> None:
@@ -72,7 +72,10 @@ def test_g5_runner_uses_dedicated_producer_preflight() -> None:
     assert "run_preflight(project_root" not in source
 
 
-@pytest.mark.parametrize("symbol", ["BTCUSDT,ETHUSDT", "BTC/USDT", "BTC USDT", "ALL", "DEFAULT", "BTC"])
+@pytest.mark.parametrize(
+    "symbol",
+    ["BTCUSDT,ETHUSDT", "BTC/USDT", "BTC USDT", "ALL", "DEFAULT", "BTC", "12345", "BTCUSDTETHUSDT"],
+)
 def test_g5_probe_symbol_rejects_ambiguous_or_non_market_values(symbol: str) -> None:
     with pytest.raises(ValueError, match="one explicit"):
         validate_probe_symbol(symbol)
@@ -80,6 +83,15 @@ def test_g5_probe_symbol_rejects_ambiguous_or_non_market_values(symbol: str) -> 
 
 def test_g5_probe_symbol_normalizes_one_explicit_market() -> None:
     assert validate_probe_symbol(" btcusdt ") == "BTCUSDT"
+
+
+def test_g5_exchange_info_requires_exact_requested_symbol() -> None:
+    assert require_exchange_symbol("BTCUSDT", [{"symbol": "BTCUSDT", "status": "TRADING"}]) == {
+        "symbol": "BTCUSDT",
+        "status": "TRADING",
+    }
+    with pytest.raises(ValueError, match="not returned"):
+        require_exchange_symbol("BTCUSDT", [{"symbol": "ETHUSDT", "status": "TRADING"}])
 
 
 def test_g5_producer_blocks_p0_and_p1_fail_or_unknown() -> None:

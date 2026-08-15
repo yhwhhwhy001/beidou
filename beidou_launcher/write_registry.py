@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import hashlib
 import json
 import plistlib
 import re
@@ -17,6 +18,31 @@ from typing import Any
 
 import yaml
 
+
+class DuplicateKeyError(ValueError):
+    """Raised when YAML attempts to hide a previous mapping value."""
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_unique_mapping(loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise DuplicateKeyError(f"duplicate YAML key: {key}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping)
+
+
+def _load_yaml_unique(source: str) -> Any:
+    return yaml.load(source, Loader=_UniqueKeyLoader)  # noqa: S506 - strict SafeLoader subclass
+
 _PYTHON_MARKERS = (
     'if __name__ == "__main__"',
     "if __name__ == '__main__'",
@@ -24,7 +50,17 @@ _PYTHON_MARKERS = (
     "BinanceRESTClient(",
     "BinanceUsdmAdapter(",
 )
-_SKIP_PARTS = {".git", ".venv", "__pycache__", "docs", "tests", "build", "dist"}
+_SKIP_PARTS = {
+    ".beidou",
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "docs",
+    "evidence",
+    "tests",
+}
 _REQUIRED_ENTRY_FIELDS = {
     "id",
     "path",
@@ -93,6 +129,13 @@ _GENERIC_REQUEST_NAMES = {"request", "_request", "exchange", "_api", "_api_async
 _NETWORK_MODULES = {"aiohttp", "httpx", "requests", "socket", "urllib.request"}
 _MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _HTTP_CALL_NAMES = {"post", "put", "patch", "delete"}
+_NETWORK_CALL_MARKERS = {
+    "Request": "urllib_request",
+    "urlopen": "urllib_urlopen",
+    "open_connection": "asyncio_open_connection",
+    "create_connection": "socket_create_connection",
+    "sendall": "socket_sendall",
+}
 _CONSTRUCTOR_NAMES = {"AutonomousEngine", "BinanceRESTClient", "BinanceUsdmAdapter"}
 _ALLOWED_OWNERS = {
     "Control Owner",
@@ -115,12 +158,14 @@ _TERMINAL_CAPABILITIES = {
     "CONTROL_RESUME_AUTHORITY_REQUIRED",
     "CREATE_PROTECTION_SCOPE_REQUIRED",
     "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+    "DYNAMIC_READ_BOUNDARY",
     "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
     "TERMINAL_CANCEL_SCOPE_REQUIRED",
     "TERMINAL_CREATE_SCOPE_REQUIRED",
     "TESTNET_CERTIFICATION_WRITE_HELD",
     "UNOWNED_RECOVERY_FORBIDDEN",
     "USER_STREAM_SESSION_WRITE_REQUIRED",
+    "LOCAL_HEALTH_READ",
 }
 _GENERIC_NEGATIVE_TEST = (
     "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
@@ -150,7 +195,9 @@ _REQUIRED_NETWORK_IMPORT_FIELDS = {
     "occurrences",
     "owner",
     "purpose",
+    "status",
     "negative_test",
+    "expected_rejection",
 }
 _ALLOWED_NETWORK_PURPOSES = {
     "ALERT_DELIVERY",
@@ -166,6 +213,14 @@ _ALLOWED_REJECTIONS = {
     "EXTERNAL_WRITE_NOT_AUTHORIZED",
     "NONCANONICAL_ENTRYPOINT_HELD",
     "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+}
+_REQUIRED_BEHAVIORAL_NEGATIVE_TESTS = {
+    "tests/architecture/test_entrypoint_negative_contracts.py::test_delegating_entrypoints_reject_write_mode_injection",
+    "tests/unit/test_startup_side_effects.py::test_blocked_preflight_runs_before_lock_or_evidence_writes",
+    "tests/unit/test_terminal_write_authority.py::test_adapter_does_not_treat_reduce_or_cancel_as_implicitly_authorized",
+    "tests/unit/test_terminal_write_authority.py::test_listen_key_session_writes_are_held_before_transport",
+    "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority",
+    "tests/unit/test_terminal_write_authority.py::test_unknown_mutating_endpoint_is_denied_before_transport",
 }
 
 
@@ -190,6 +245,22 @@ def _is_skipped(path: Path, root: Path) -> bool:
     return relative.as_posix() == "beidou_launcher/write_registry.py" or any(
         part in _SKIP_PARTS for part in relative.parts
     )
+
+
+def _yaml_execution_strings(payload: Any) -> list[str]:
+    commands: list[str] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).lower() in {"command", "entrypoint", "exec", "run", "script", "uses"}:
+                if isinstance(value, str):
+                    commands.append(value)
+                elif isinstance(value, list):
+                    commands.append(" ".join(str(item) for item in value))
+            commands.extend(_yaml_execution_strings(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            commands.extend(_yaml_execution_strings(item))
+    return commands
 
 
 def discover_sensitive_entry_paths(root: Path) -> set[str]:
@@ -239,6 +310,17 @@ def discover_sensitive_entry_paths(root: Path) -> set[str]:
         for path in root.rglob(pattern):
             if not _is_skipped(path, root):
                 discovered.add(path.relative_to(root).as_posix())
+    for pattern in ("*.yml", "*.yaml"):
+        for path in root.rglob(pattern):
+            if _is_skipped(path, root):
+                continue
+            with contextlib.suppress(OSError, UnicodeError, yaml.YAMLError, DuplicateKeyError):
+                payload = _load_yaml_unique(path.read_text(encoding="utf-8"))
+                if _yaml_execution_strings(payload):
+                    discovered.add(path.relative_to(root).as_posix())
+    for path in root.rglob("*.cron"):
+        if not _is_skipped(path, root):
+            discovered.add(path.relative_to(root).as_posix())
     return discovered
 
 
@@ -334,6 +416,35 @@ def discover_network_imports(root: Path) -> dict[str, int]:
     return dict(sorted(imports.items()))
 
 
+def discover_governed_source_digests(root: Path) -> dict[str, str]:
+    """Hash every production code, executable, and declarative source surface."""
+
+    root = root.resolve()
+    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".toml", ".yaml", ".yml"}
+    digests: dict[str, str] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or _is_skipped(path, root):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative == "config/write-capability-registry.json":
+            continue
+        try:
+            executable = bool(path.stat().st_mode & 0o111)
+            has_shebang = path.read_bytes()[:2] == b"#!"
+        except OSError:
+            continue
+        if (
+            path.suffix.lower() not in governed_suffixes
+            and path.name not in {"Makefile", "Dockerfile"}
+            and not path.name.startswith("Dockerfile.")
+            and not executable
+            and not has_shebang
+        ):
+            continue
+        digests[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return dict(sorted(digests.items()))
+
+
 def _constant_string(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -370,6 +481,28 @@ class _EntrySurfaceVisitor(ast.NodeVisitor):
                 elif isinstance(target, (ast.Attribute, ast.Subscript)):
                     self.sensitive = True
         self.generic_visit(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        if any(
+            isinstance(child, (ast.Name, ast.Attribute))
+            and self._constructor_name(child) in self.aliases | _CONSTRUCTOR_NAMES
+            for child in ast.walk(node.body)
+        ):
+            self.sensitive = True
+        self.generic_visit(node)
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        if any(self._constructor_name(value) in self.aliases | _CONSTRUCTOR_NAMES for value in node.values):
+            self.sensitive = True
+        self.generic_visit(node)
+
+    @staticmethod
+    def _constructor_name(node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return ""
 
     def visit_Call(self, node: ast.Call) -> None:
         direct_constructor = isinstance(node.func, ast.Name) and node.func.id in self.aliases | _CONSTRUCTOR_NAMES
@@ -436,6 +569,10 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
         target = _constant_string(node.args[1])
         if target is None:
             return "DYNAMIC"
+        if target.lower() in _HTTP_CALL_NAMES:
+            return f"http[{target.upper()}]"
+        if target in _NETWORK_CALL_MARKERS:
+            return _NETWORK_CALL_MARKERS[target]
         if target in _MUTATING_CALL_NAMES or target in _GENERIC_REQUEST_NAMES or target == "execute_action":
             return target
         return ""
@@ -450,6 +587,10 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
             if container_alias:
                 return f"subscript_alias[{container_alias}]"
         name = self._attribute_name(node)
+        if name.lower() in _HTTP_CALL_NAMES:
+            return f"http[{name.upper()}]"
+        if name in _NETWORK_CALL_MARKERS:
+            return _NETWORK_CALL_MARKERS[name]
         if name in _MUTATING_CALL_NAMES or name in _GENERIC_REQUEST_NAMES or name == "execute_action":
             return name
         getattr_target = self._getattr_target(node)
@@ -461,6 +602,12 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
                 method_value = _constant_string(node.args[1]) if len(node.args) > 1 else None
                 method = method_value.upper() if method_value else "DYNAMIC"
                 return f"partial[{reference}:{method}]"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            container_reference = self._reference_target(node.func.value)
+            if node.func.attr in {"get", "pop", "values"} and container_reference:
+                return f"container_extract[{container_reference}]"
+        if isinstance(node, ast.Lambda):
+            return self._reference_target(node.body)
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             references = {self._reference_target(item) for item in node.elts}
             references.discard("")
@@ -557,6 +704,23 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
         if direct_getattr_target:
             marker = f"getattr[{direct_getattr_target}]"
 
+        if call_name == "getattr":
+            retrieved_target = self._getattr_target(node)
+            if retrieved_target:
+                marker = f"getattr[{retrieved_target}]"
+
+        if call_name == "__import__" and node.args:
+            imported = _constant_string(node.args[0])
+            if imported and imported.split(".", 1)[0] in {
+                "aiohttp",
+                "asyncio",
+                "httpx",
+                "requests",
+                "socket",
+                "urllib",
+            }:
+                marker = f"dynamic_import[{imported}]"
+
         partial_target = self._reference_target(node.func) if isinstance(node.func, ast.Call) else ""
         if partial_target.startswith("partial["):
             marker = partial_target
@@ -595,8 +759,11 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
                 action = "DYNAMIC"
             marker = f"execute_action[{action}]" if action in {"RESUME", "DYNAMIC"} else ""
 
-        if call_name.lower() in _HTTP_CALL_NAMES and self._is_direct_http_client(node.func):
+        if call_name.lower() in _HTTP_CALL_NAMES:
             marker = f"http[{call_name.upper()}]"
+
+        if call_name in _NETWORK_CALL_MARKERS:
+            marker = _NETWORK_CALL_MARKERS[call_name]
 
         if call_name == "setattr" and len(node.args) >= 3:
             stored_target = self._reference_target(node.args[2])
@@ -646,7 +813,7 @@ def _logical_shell_lines(source: str) -> list[str]:
 
 
 def _curl_method(command: str) -> str | None:
-    if not re.search(r"(?:^|[;&|]\s*|\benv\s+)(?:[^\s]+/)?curl\b|\$\([^)]*CURL[^)]*\)", command):
+    if not re.search(r"(?:^|\s|[;&|]\s*|\benv\s+)(?:[^\s]+/)?curl\b|\$\([^)]*CURL[^)]*\)", command):
         return None
     method_match = re.search(r"(?:^|\s)(?:-X|--request)(?:=|\s+)([^\s]+)", command)
     if method_match is not None:
@@ -660,11 +827,25 @@ def _curl_method(command: str) -> str | None:
 def _discover_shell_write_calls(path: Path, relative: str) -> Counter[str]:
     calls: Counter[str] = Counter()
     source = path.read_text(encoding="utf-8")
+    curl_aliases = set(
+        re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?(?:[^\s'\"]*/)?curl['\"]?\s*$", source)
+    )
     for line in _logical_shell_lines(source):
+        for alias in curl_aliases:
+            line = re.sub(rf'"?\$(?:\{{{re.escape(alias)}\}}|{re.escape(alias)})"?', "curl", line)
         method = _curl_method(line)
         if method is not None:
             calls[f"{relative}::<shell>::curl[{method}]"] += 1
+        if re.search(r"\b(?:python|python3)\b.*\b(?:httpx|requests|aiohttp|urllib\.request|socket)\b", line):
+            calls[f"{relative}::<shell>::embedded_network[DYNAMIC]"] += 1
     return calls
+
+
+def _discover_cron_write_calls(path: Path, relative: str) -> Counter[str]:
+    shell_calls = _discover_shell_write_calls(path, relative)
+    return Counter(
+        {source.replace("::<shell>::", "::<cron>::"): count for source, count in shell_calls.items()}
+    )
 
 
 def _discover_plist_write_calls(path: Path, relative: str) -> Counter[str]:
@@ -672,36 +853,54 @@ def _discover_plist_write_calls(path: Path, relative: str) -> Counter[str]:
     with path.open("rb") as handle:
         payload = plistlib.load(handle)
     arguments = payload.get("ProgramArguments", []) if isinstance(payload, dict) else []
-    if not isinstance(arguments, list) or "curl" not in [str(argument).rsplit("/", 1)[-1] for argument in arguments]:
+    if not isinstance(arguments, list):
         return calls
-    has_post_data = any(
-        str(argument) in {"-d", "--data", "--data-raw", "--data-binary"} for argument in arguments
-    )
-    method = "POST" if has_post_data else "DYNAMIC"
-    for index, argument in enumerate(arguments[:-1]):
-        if str(argument) in {"-X", "--request"}:
-            candidate = str(arguments[index + 1]).upper()
-            method = candidate if candidate in _MUTATING_HTTP_METHODS else "DYNAMIC"
-            break
-    calls[f"{relative}::<plist>::curl[{method}]"] += 1
+    command = " ".join(str(argument) for argument in arguments)
+    method = _curl_method(command)
+    if method is not None:
+        calls[f"{relative}::<plist>::curl[{method}]"] += 1
+    if re.search(r"\b(?:python|python3)\b.*\b(?:httpx|requests|aiohttp|urllib\.request|socket)\b", command):
+        calls[f"{relative}::<plist>::embedded_network[DYNAMIC]"] += 1
     return calls
 
 
 def _discover_make_write_calls(path: Path) -> Counter[str]:
     calls: Counter[str] = Counter()
     current_target = "UNKNOWN"
-    for line in path.read_text(encoding="utf-8").splitlines():
+    source = path.read_text(encoding="utf-8")
+    curl_aliases = set(
+        re.findall(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:?+]?=\s*(?:[^\s]*/)?curl\s*$", source)
+    )
+    for line in source.splitlines():
         target_match = re.match(r"^([A-Za-z0-9_.-]+):(?:\s.*)?$", line)
         if target_match:
             current_target = target_match.group(1)
             continue
         if not line.startswith("\t"):
             continue
+        for alias in curl_aliases:
+            line = line.replace(f"$({alias})", "curl").replace(f"${{{alias}}}", "curl")
         method = _curl_method(line)
         if method is not None:
             calls[f"Makefile::<make:{current_target}>::curl[{method}]"] += 1
         if re.search(r"\b(?:httpx|requests|aiohttp|urllib\.request)\b", line):
             calls[f"Makefile::<make:{current_target}>::embedded_network[DYNAMIC]"] += 1
+    return calls
+
+
+def _discover_yaml_write_calls(path: Path, relative: str) -> Counter[str]:
+    calls: Counter[str] = Counter()
+    payload = _load_yaml_unique(path.read_text(encoding="utf-8"))
+    for command in _yaml_execution_strings(payload):
+        method = _curl_method(command)
+        if method is not None:
+            calls[f"{relative}::<yaml>::curl[{method}]"] += 1
+        if re.search(r"\b(?:python|python3)\b.*\b(?:httpx|requests|aiohttp|urllib\.request|socket)\b", command):
+            calls[f"{relative}::<yaml>::embedded_network[DYNAMIC]"] += 1
+        if re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@", command.strip()):
+            calls[f"{relative}::<yaml>::remote_action[DYNAMIC]"] += 1
+        if re.search(r"(?:^|\s)(?:python\s+-m\s+)?pip\s+install(?:\s|$)", command):
+            calls[f"{relative}::<yaml>::package_network[DYNAMIC]"] += 1
     return calls
 
 
@@ -733,6 +932,21 @@ def discover_terminal_write_calls(root: Path) -> dict[str, int]:
         try:
             calls.update(_discover_plist_write_calls(path, path.relative_to(root).as_posix()))
         except (OSError, plistlib.InvalidFileException):
+            continue
+    for pattern in ("*.yml", "*.yaml"):
+        for path in root.rglob(pattern):
+            if _is_skipped(path, root):
+                continue
+            try:
+                calls.update(_discover_yaml_write_calls(path, path.relative_to(root).as_posix()))
+            except (OSError, UnicodeError, yaml.YAMLError, DuplicateKeyError):
+                continue
+    for path in root.rglob("*.cron"):
+        if _is_skipped(path, root):
+            continue
+        try:
+            calls.update(_discover_cron_write_calls(path, path.relative_to(root).as_posix()))
+        except (OSError, UnicodeError):
             continue
     makefile = root / "Makefile"
     if makefile.is_file():
@@ -780,16 +994,18 @@ def discover_source_scan_issues(root: Path) -> list[str]:
                 plistlib.load(handle)
         except (OSError, plistlib.InvalidFileException) as exc:
             issues.append(f"WRITE_REGISTRY_SOURCE_SCAN_FAILED:{relative}:{type(exc).__name__}")
-    declarative_paths = [root / "docker-compose.yml", root / ".pre-commit-config.yaml"]
-    workflows = root / ".github" / "workflows"
-    if workflows.is_dir():
-        declarative_paths.extend([*workflows.glob("*.yml"), *workflows.glob("*.yaml")])
+    declarative_paths = [
+        path
+        for pattern in ("*.yml", "*.yaml")
+        for path in root.rglob(pattern)
+        if not _is_skipped(path, root)
+    ]
     for path in declarative_paths:
         if not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            payload = _load_yaml_unique(path.read_text(encoding="utf-8"))
             if not isinstance(payload, (dict, list)):
                 raise ValueError("declarative entrypoint must be a mapping or list")
         except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
@@ -846,13 +1062,51 @@ def _bound_negative_test(kind: str, identity: str) -> str:
     )
 
 
+def compute_governance_digest(registry: dict[str, Any]) -> str:
+    """Bind all security-relevant record semantics to one immutable identity."""
+
+    payload = {
+        "declared_entrypoint_records": registry.get("declared_entrypoint_records"),
+        "entries": registry.get("entries"),
+        "governed_source_digests": registry.get("governed_source_digests"),
+        "network_imports": registry.get("network_imports"),
+        "terminal_write_paths": registry.get("terminal_write_paths"),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
     """Return stable validation errors; an empty list is the only passing state."""
 
+    root = root.resolve()
     issues: list[str] = []
+    if registry.get("governance_digest") != compute_governance_digest(registry):
+        issues.append("WRITE_REGISTRY_GOVERNANCE_DIGEST_MISMATCH")
+    behavioral_tests = registry.get("behavioral_negative_tests")
+    if not isinstance(behavioral_tests, list) or set(behavioral_tests) != _REQUIRED_BEHAVIORAL_NEGATIVE_TESTS:
+        issues.append("WRITE_REGISTRY_BEHAVIORAL_NEGATIVE_TESTS_INVALID")
+    else:
+        for reference in behavioral_tests:
+            if not _negative_test_reference_exists(reference, root):
+                issues.append(f"WRITE_REGISTRY_BEHAVIORAL_NEGATIVE_TEST_MISSING:{reference}")
+    registered_digests = registry.get("governed_source_digests")
+    discovered_digests = discover_governed_source_digests(root)
+    if not isinstance(registered_digests, dict) or not all(
+        isinstance(path, str) and isinstance(digest, str) and len(digest) == 64
+        for path, digest in registered_digests.items()
+    ):
+        issues.append("WRITE_REGISTRY_SOURCE_DIGESTS_INVALID")
+    else:
+        for path in sorted(discovered_digests.keys() - registered_digests.keys()):
+            issues.append(f"WRITE_REGISTRY_SOURCE_DIGEST_UNREGISTERED:{path}")
+        for path in sorted(registered_digests.keys() - discovered_digests.keys()):
+            issues.append(f"WRITE_REGISTRY_SOURCE_DIGEST_STALE:{path}")
+        for path in sorted(discovered_digests.keys() & registered_digests.keys()):
+            if discovered_digests[path] != registered_digests[path]:
+                issues.append(f"WRITE_REGISTRY_SOURCE_DIGEST_MISMATCH:{path}")
     if registry.get("schema_version") != "1.0":
         issues.append("WRITE_REGISTRY_SCHEMA_VERSION_INVALID")
-    root = root.resolve()
     issues.extend(discover_source_scan_issues(root))
     declared_entrypoints = registry.get("declared_entrypoints")
     if not isinstance(declared_entrypoints, dict):
@@ -926,6 +1180,16 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
                 issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_OWNER_INVALID:{source}")
             if raw_import["purpose"] not in _ALLOWED_NETWORK_PURPOSES:
                 issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_PURPOSE_INVALID:{source}")
+            network_status = raw_import["status"]
+            if network_status not in {"HARD_HOLD", "READ_ONLY"}:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_STATUS_INVALID:{source}")
+            expected_network_rejection = (
+                "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+                if network_status == "HARD_HOLD"
+                else "EXTERNAL_WRITE_NOT_AUTHORIZED"
+            )
+            if raw_import["expected_rejection"] != expected_network_rejection:
+                issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_REJECTION_MISMATCH:{source}")
             negative_test = raw_import["negative_test"]
             if not isinstance(negative_test, str) or not _negative_test_reference_exists(negative_test, root):
                 issues.append(f"WRITE_REGISTRY_NETWORK_IMPORT_NEGATIVE_TEST_MISSING:{source}")
@@ -1039,8 +1303,8 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
             issues.append(f"WRITE_REGISTRY_TERMINAL_COUNT_INVALID:{path_id}")
             continue
         registered_calls[source] = occurrences
-        if raw_path["status"] != "HARD_HOLD":
-            issues.append(f"WRITE_REGISTRY_TERMINAL_NOT_HELD:{path_id}")
+        if raw_path["status"] not in {"HARD_HOLD", "READ_ONLY"}:
+            issues.append(f"WRITE_REGISTRY_TERMINAL_STATUS_INVALID:{path_id}")
         if raw_path["capability"] not in _TERMINAL_CAPABILITIES:
             issues.append(f"WRITE_REGISTRY_TERMINAL_CAPABILITY_INVALID:{path_id}")
         if raw_path["owner"] not in _ALLOWED_OWNERS:
@@ -1050,6 +1314,10 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> list[str]:
                 issues.append(f"WRITE_REGISTRY_TERMINAL_FIELD_EMPTY:{path_id}:{field}")
         if raw_path["expected_rejection"] not in _ALLOWED_REJECTIONS:
             issues.append(f"WRITE_REGISTRY_REJECTION_INVALID:{path_id}")
+        elif raw_path["status"] == "READ_ONLY":
+            expected_terminal_rejection = "EXTERNAL_WRITE_NOT_AUTHORIZED"
+            if raw_path["expected_rejection"] != expected_terminal_rejection:
+                issues.append(f"WRITE_REGISTRY_REJECTION_MISMATCH:{path_id}")
         elif raw_path["expected_rejection"] != (
             "CONTROL_AUTHORITY_REQUIRED"
             if raw_path["capability"] == "CONTROL_RESUME_AUTHORITY_REQUIRED"
@@ -1099,6 +1367,9 @@ def run_negative_test_gate(registry: dict[str, Any], *, root: Path) -> list[str]
             for item in declaration_records.values()
             if isinstance(item, dict) and isinstance(item.get("negative_test"), str)
         )
+    behavioral_tests = registry.get("behavioral_negative_tests", [])
+    if isinstance(behavioral_tests, list):
+        references.update(reference for reference in behavioral_tests if isinstance(reference, str))
     if not references or _GENERIC_NEGATIVE_TEST in references:
         return ["WRITE_REGISTRY_NEGATIVE_TEST_GATE_INVALID"]
     result = subprocess.run(  # noqa: S603 - validated repository-local pytest node IDs

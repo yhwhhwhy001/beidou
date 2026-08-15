@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.verify_write_registry import load_registry, scan_repository, verify_coverage
+from scripts.verify_write_registry import load_registry, scan_repository, scan_source_digests, verify_coverage
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "config" / "write-capability-registry.json"
@@ -45,6 +45,11 @@ async def bypass(client, holder, name, operations):
     urllib.request.urlopen(request)
     await asyncio.open_connection('offline.invalid', 443)
     socket.socket()
+    send = hx.post
+    relay = send
+    relay('https://offline.invalid/write', data=b'x')
+    hidden = (lambda: getattr(client, 'create_' + 'order'))()
+    await hidden()
     E()
 """,
         encoding="utf-8",
@@ -62,7 +67,11 @@ async def bypass(client, holder, name, operations):
         encoding="utf-8",
     )
     (tmp_path / "Makefile").write_text(
-        "write:\n\t$(CURL) --data risk=1 https://offline.invalid/write\n",
+        "HTTP = curl\nwrite:\n\t$(HTTP) --data risk=1 https://offline.invalid/write\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "workflow.yml").write_text(
+        "jobs:\n  write:\n    steps:\n      - run: curl --data x https://offline.invalid/write\n",
         encoding="utf-8",
     )
 
@@ -85,8 +94,33 @@ async def bypass(client, holder, name, operations):
         "entries": [{"path": "payload.py", "status": "HARD_HOLD"}],
         "terminal_write_paths": [{"source": "payload.py::bogus"}],
         "independent_oracle_findings": [],
+        "governed_source_digests": scan_source_digests(tmp_path),
     }
     assert verify_coverage(tmp_path, fake_coverage)
+
+    exact_identity = f"{findings[0].path}:{findings[0].line}:{findings[0].kind}:{findings[0].detail}"
+    raw_allowlist = {**fake_coverage, "independent_oracle_findings": [exact_identity]}
+    assert "INDEPENDENT_ORACLE_DECLARATIONS_INVALID" in verify_coverage(tmp_path, raw_allowlist)
+
+    false_governance = {
+        **fake_coverage,
+        "independent_oracle_findings": [
+            {
+                "identity": exact_identity,
+                "governance_id": "missing",
+                "owner": "Security Owner",
+                "status": "HARD_HOLD",
+                "negative_test": (
+                    "tests/architecture/test_write_registry_independent_oracle.py::"
+                    "test_independent_oracle_detects_primary_scanner_bypass_shapes"
+                ),
+            }
+        ],
+    }
+    assert any(
+        issue.startswith("INDEPENDENT_ORACLE_GOVERNANCE_MISSING:")
+        for issue in verify_coverage(tmp_path, false_governance)
+    )
 
 
 def test_independent_oracle_accepts_current_registry() -> None:

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from beidou_launcher.write_registry import (
     discover_declared_entrypoints,
+    discover_governed_source_digests,
     discover_network_imports,
     discover_sensitive_entry_paths,
     discover_terminal_write_calls,
@@ -59,6 +60,7 @@ async def mutate(client, method):
     assert discover_terminal_write_calls(tmp_path) == {
         "payload.py::mutate::alias[cancel_order]": 1,
         "payload.py::mutate::alias[create_order]": 1,
+        "payload.py::mutate::getattr[cancel_order]": 1,
         "payload.py::mutate::request[DYNAMIC]": 1,
     }
 
@@ -91,6 +93,10 @@ async def mutate(client, holder, ops, runtime_name):
     E()
     holder.factory = E
     holder.factory()
+    hidden = (lambda: getattr(client, 'create_' + 'order'))()
+    await hidden()
+    constructor_box = {'engine': E}
+    next(iter(constructor_box.values()))()
 """,
         encoding="utf-8",
     )
@@ -107,6 +113,7 @@ async def mutate(client, holder, ops, runtime_name):
     assert "setattr[cancel_order]" in rendered
     assert "callable_argument[create_order]" in rendered
     assert "returned_callable[create_order]" in rendered
+    assert "getattr[create_order]" in rendered
     assert discover_sensitive_entry_paths(tmp_path) == {"payload.py"}
 
 
@@ -140,6 +147,70 @@ async def mutate():
     }
 
 
+def test_governed_source_digest_detects_hidden_behavior_and_new_sources(tmp_path: Path) -> None:
+    payload = tmp_path / "payload.py"
+    payload.write_text("import httpx\n", encoding="utf-8")
+    baseline = discover_governed_source_digests(tmp_path)
+
+    payload.write_text("import httpx\ngetattr(httpx, 'po' + 'st')('https://offline.invalid')\n", encoding="utf-8")
+    changed = discover_governed_source_digests(tmp_path)
+    assert changed["payload.py"] != baseline["payload.py"]
+
+    (tmp_path / "activate.cron").write_text("* * * * * dynamic-command\n", encoding="utf-8")
+    assert "activate.cron" in discover_governed_source_digests(tmp_path)
+
+    runtime_evidence = tmp_path / "evidence" / "generated.json"
+    runtime_evidence.parent.mkdir()
+    runtime_evidence.write_text('{"result":"runtime"}\n', encoding="utf-8")
+    runtime_state = tmp_path / ".beidou" / "state.json"
+    runtime_state.parent.mkdir()
+    runtime_state.write_text('{"state":"runtime"}\n', encoding="utf-8")
+    governed = discover_governed_source_digests(tmp_path)
+    assert "evidence/generated.json" not in governed
+    assert ".beidou/state.json" not in governed
+
+
+def test_terminal_scan_detects_network_aliases_and_dynamic_loading(tmp_path: Path) -> None:
+    (tmp_path / "payload.py").write_text(
+        """
+import asyncio
+import httpx
+import socket
+import urllib.request
+
+send = httpx.post
+relay = send
+dynamic_httpx = __import__('htt' + 'px')
+
+async def mutate(client):
+    relay('https://offline.invalid/write', data=b'x')
+    getattr(dynamic_httpx, 'po' + 'st')('https://offline.invalid/write')
+    request_factory = urllib.request.Request
+    request_alias = request_factory
+    request = request_alias('https://offline.invalid/write', data=b'x')
+    opener = urllib.request.urlopen
+    opener_alias = opener
+    opener_alias(request)
+    connect = asyncio.open_connection
+    await connect('offline.invalid', 443)
+    create_socket = socket.create_connection
+    sock = create_socket(('offline.invalid', 443))
+    sender = sock.sendall
+    sender(b'x')
+""",
+        encoding="utf-8",
+    )
+
+    calls = "\n".join(discover_terminal_write_calls(tmp_path))
+    assert "http[POST]" in calls
+    assert "dynamic_import[httpx]" in calls
+    assert "urllib_request" in calls
+    assert "urllib_urlopen" in calls
+    assert "asyncio_open_connection" in calls
+    assert "socket_create_connection" in calls
+    assert "socket_sendall" in calls
+
+
 def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path: Path) -> None:
     (tmp_path / "payload.sh").write_text(
         '#!/bin/sh\ncurl -X POST https://offline.invalid/order\ncurl -X "$METHOD" https://offline.invalid/dynamic\n'
@@ -161,6 +232,26 @@ def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path
         "embedded:\n\tpython -c \"import httpx; httpx.post('https://offline.invalid')\"\n",
         encoding="utf-8",
     )
+    (tmp_path / "dynamic.sh").write_text(
+        '#!/bin/sh\nc=curl\n"$c" --data x https://offline.invalid/write\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "dynamic.plist").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>ProgramArguments</key><array>
+<string>/bin/sh</string><string>-c</string><string>curl --data x https://offline.invalid/write</string>
+</array></dict></plist>
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "workflow.yml").write_text(
+        "jobs:\n  write:\n    steps:\n      - run: curl --data x https://offline.invalid/write\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "schedule.cron").write_text(
+        "* * * * * curl --data x https://offline.invalid/write\n",
+        encoding="utf-8",
+    )
 
     calls = discover_terminal_write_calls(tmp_path)
 
@@ -169,6 +260,11 @@ def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path
     assert calls["payload.plist::<plist>::curl[DELETE]"] == 1
     assert calls["Makefile::<make:write>::curl[PATCH]"] == 1
     assert calls["Makefile::<make:embedded>::embedded_network[DYNAMIC]"] == 1
+    assert calls["dynamic.sh::<shell>::curl[POST]"] == 1
+    assert calls["dynamic.plist::<plist>::curl[POST]"] == 1
+    assert calls["workflow.yml::<yaml>::curl[POST]"] == 1
+    assert calls["schedule.cron::<cron>::curl[POST]"] == 1
+    assert {"workflow.yml", "schedule.cron"} <= discover_sensitive_entry_paths(tmp_path)
     assert any(
         issue.startswith("WRITE_REGISTRY_SOURCE_SCAN_FAILED:broken.sh:")
         for issue in validate_registry(
@@ -182,6 +278,27 @@ def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path
             root=tmp_path,
         )
     )
+
+
+def test_yaml_duplicate_keys_fail_source_scan(tmp_path: Path) -> None:
+    (tmp_path / "workflow.yml").write_text(
+        "jobs:\n  first: {}\njobs:\n  hidden:\n    steps:\n      - run: curl --data x https://offline.invalid\n",
+        encoding="utf-8",
+    )
+
+    issues = validate_registry(
+        {
+            "schema_version": "1.0",
+            "declared_entrypoints": {},
+            "declared_entrypoint_records": {},
+            "entries": [],
+            "network_imports": [],
+            "terminal_write_paths": [],
+        },
+        root=tmp_path,
+    )
+
+    assert any("WRITE_REGISTRY_SOURCE_SCAN_FAILED:workflow.yml:DuplicateKeyError" in issue for issue in issues)
 
 
 def test_registry_rejects_semantically_ungoverned_terminal_record() -> None:
@@ -207,6 +324,18 @@ def test_registry_rejects_semantically_ungoverned_terminal_record() -> None:
     assert "WRITE_REGISTRY_TERMINAL_CAPABILITY_INVALID:" + original["id"] in issues
     assert "WRITE_REGISTRY_CALL_GRAPH_INVALID:" + original["id"] in issues
     assert "WRITE_REGISTRY_NEGATIVE_TEST_GENERIC:" + original["id"] in issues
+    assert "WRITE_REGISTRY_GOVERNANCE_DIGEST_MISMATCH" in issues
+
+
+def test_governance_digest_rejects_legal_but_false_record_semantics() -> None:
+    registry = load_registry(REGISTRY)
+    registry["entries"][0]["owner"] = "Security Owner"
+    registry["terminal_write_paths"][0]["capability"] = "DYNAMIC_WRITE_BOUNDARY_REQUIRED"
+    registry["network_imports"][0]["purpose"] = "LOCAL_HEALTH_READ"
+    declaration = next(iter(registry["declared_entrypoint_records"].values()))
+    declaration["expected_rejection"] = "THIS_REASON_IS_NEVER_EMITTED"
+
+    assert "WRITE_REGISTRY_GOVERNANCE_DIGEST_MISMATCH" in validate_registry(registry, root=ROOT)
 
 
 def test_registry_loader_rejects_duplicate_json_keys(tmp_path: Path) -> None:

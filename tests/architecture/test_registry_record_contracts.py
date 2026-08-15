@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from beidou_launcher.write_registry import (
+    compute_governance_digest,
     discover_declared_entrypoints,
     discover_network_imports,
     discover_sensitive_entry_paths,
@@ -49,28 +50,35 @@ def _expected_entry_rejection(status: str, capability: str) -> str:
 
 @pytest.mark.parametrize("record_id", sorted(ENTRY_RECORDS), ids=sorted(ENTRY_RECORDS))
 def test_entry_record_is_behaviorally_bound(record_id: str) -> None:
+    assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = ENTRY_RECORDS[record_id]
     assert record["path"] in discover_sensitive_entry_paths(ROOT)
     assert record["expected_rejection"] == _expected_entry_rejection(record["status"], record["capability"])
     if record["status"] in {"READ_ONLY", "OFFLINE_ONLY"}:
-        assert not any(
-            source.startswith(record["path"] + "::") for source in discover_terminal_write_calls(ROOT)
-        )
+        matching = [
+            terminal
+            for terminal in TERMINAL_RECORDS.values()
+            if terminal["source"].startswith(record["path"] + "::")
+        ]
+        assert all(terminal["status"] == "READ_ONLY" for terminal in matching)
     if record["status"] == "HARD_HOLD":
         assert record["capability"] not in {"EXCHANGE_READ_ONLY", "SOURCE_READ_ONLY"}
 
 
 @pytest.mark.parametrize("record_id", sorted(TERMINAL_RECORDS), ids=sorted(TERMINAL_RECORDS))
 def test_terminal_record_is_behaviorally_bound(record_id: str) -> None:
+    assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = TERMINAL_RECORDS[record_id]
     discovered = discover_terminal_write_calls(ROOT)
     assert discovered[record["source"]] == record["occurrences"]
-    assert record["status"] == "HARD_HOLD"
-    expected = (
-        "CONTROL_AUTHORITY_REQUIRED"
-        if record["capability"] == "CONTROL_RESUME_AUTHORITY_REQUIRED"
-        else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
-    )
+    assert record["status"] in {"HARD_HOLD", "READ_ONLY"}
+    expected = "EXTERNAL_WRITE_NOT_AUTHORIZED"
+    if record["status"] == "HARD_HOLD":
+        expected = (
+            "CONTROL_AUTHORITY_REQUIRED"
+            if record["capability"] == "CONTROL_RESUME_AUTHORITY_REQUIRED"
+            else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+        )
     assert record["expected_rejection"] == expected
     if record["capability"] == "USER_STREAM_SESSION_WRITE_REQUIRED":
         assert "listen_key" in record["source"]
@@ -80,11 +88,18 @@ def test_terminal_record_is_behaviorally_bound(record_id: str) -> None:
 
 @pytest.mark.parametrize("record_id", sorted(NETWORK_RECORDS), ids=sorted(NETWORK_RECORDS))
 def test_network_record_is_behaviorally_bound(record_id: str) -> None:
+    assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = NETWORK_RECORDS[record_id]
     assert discover_network_imports(ROOT)[record["source"]] == record["occurrences"]
     path, module = record["source"].split("::", 1)
     source = (ROOT / path).read_text(encoding="utf-8")
     assert module.split(".", 1)[0] in source
+    assert record["status"] in {"HARD_HOLD", "READ_ONLY"}
+    assert record["expected_rejection"] == (
+        "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+        if record["status"] == "HARD_HOLD"
+        else "EXTERNAL_WRITE_NOT_AUTHORIZED"
+    )
 
 
 @pytest.mark.parametrize(
@@ -93,6 +108,7 @@ def test_network_record_is_behaviorally_bound(record_id: str) -> None:
     ids=[_pytest_identity(declaration) for declaration in sorted(DECLARATION_RECORDS)],
 )
 def test_declaration_record_is_behaviorally_bound(declaration: str) -> None:
+    assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = DECLARATION_RECORDS[declaration]
     assert discover_declared_entrypoints(ROOT)[declaration] == record["command"]
     assert record["expected_rejection"] not in {"", "NONE", "PASS"}

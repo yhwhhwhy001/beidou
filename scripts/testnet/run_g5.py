@@ -54,9 +54,24 @@ def validate_probe_symbol(raw_symbol: str) -> str:
     """Return one normalized Binance symbol or fail before preflight/network access."""
 
     symbol = raw_symbol.strip().upper()
-    if not re.fullmatch(r"[A-Z0-9]{5,30}", symbol) or symbol in {"ALL", "DEFAULT"}:
-        raise ValueError("symbol must be one explicit 5-30 character alphanumeric market")
+    if (
+        not re.fullmatch(r"[A-Z][A-Z0-9]{4,11}", symbol)
+        or symbol in {"ALL", "DEFAULT"}
+        or not any(character.isalpha() for character in symbol)
+    ):
+        raise ValueError("symbol must be one explicit 5-12 character alphanumeric market")
     return symbol
+
+
+def require_exchange_symbol(probe_symbol: str, symbols: object) -> dict[str, object]:
+    """Require exchange-info to return the exact requested market."""
+
+    if not isinstance(symbols, list):
+        raise ValueError("exchange info symbols is UNKNOWN")
+    for candidate in symbols:
+        if isinstance(candidate, dict) and candidate.get("symbol") == probe_symbol:
+            return candidate
+    raise ValueError(f"requested symbol {probe_symbol} was not returned by exchange info")
 
 
 def main() -> int:
@@ -292,20 +307,9 @@ def main() -> int:
             ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": probe_symbol})
             if not isinstance(ei_data, dict):
                 raise RuntimeError("exchange info response is not an object")
-            symbols = ei_data.get("symbols")
-            if not isinstance(symbols, list):
-                raise RuntimeError("exchange info symbols is UNKNOWN")
-            symbol_info = None
-            for s in symbols:
-                if isinstance(s, dict) and s.get("symbol") == probe_symbol:
-                    symbol_info = s
-                    break
-            if symbol_info:
-                print(f"  PASS: {probe_symbol} status={symbol_info.get('status')}")
-                results["exchange_info"] = {"status": "PASS", "symbol": probe_symbol}
-            else:
-                print("  PASS: exchange info retrieved")
-                results["exchange_info"] = {"status": "PASS"}
+            symbol_info = require_exchange_symbol(probe_symbol, ei_data.get("symbols"))
+            print(f"  PASS: {probe_symbol} status={symbol_info.get('status')}")
+            results["exchange_info"] = {"status": "PASS", "symbol": probe_symbol}
         except Exception as e:
             print(f"  FAIL: {e}")
             results["exchange_info"] = {"status": "FAIL", "error": str(e)}
