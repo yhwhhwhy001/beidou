@@ -338,38 +338,17 @@ def _derive_liquidation_price(position_qty: float, entry_price: float, leverage:
 
 
 def _local_owned_symbols(engine: Any) -> set[str]:
-    """本地所有权可证明的持仓标的集合（BD-FIX，共享账户本地化）。
+    """本地所有权可证明的持仓标的集合。
 
-    共享 demo 账户上其他用户的持仓不属于引擎 —— 风控输入、保护覆盖、
-    权益估计都只统计本地所有权可证明的部分。可靠锚定：
-    1. 当前本地保护持仓（protection 内存）
-    2. 本地订单（beidou- client_order_id）的 fill 重放品种 ——
-       自有成交是持仓所有权的唯一硬证据
-    （_position_projection/_position_generation 不再作为依据 ——
-    共享账户外部成交曾污染投影记录导致判定失真，final47 实测
-    RVNUSDT 外部持仓被误认本地）
+    单账户语义（2026-08-15 用户确认 demo key 仅引擎使用）：保护位置/
+    持仓投影/代际记录 + fill 重放品种都是引擎自己的事实。
     """
-    # BD-FIX: 保护持仓不作为所有权依据 —— 下单纯孤儿保护（final47
-    # RVNUSDT 无成交但创建了保护）会把外部持仓品种误认本地。
-    # 自有成交（fill 重放）是持仓所有权的唯一硬证据。
+    protection = getattr(engine, "_protection", None)
     owned: set[str] = set()
-    store = getattr(engine, "_store", None)
-    if store is not None and callable(getattr(store, "restore_fill_events", None)) and callable(
-        getattr(store, "restore_order_states", None)
-    ):
-        try:
-            local_order_ids = {
-                str(row.get("order_id") or row.get("record_id") or "")
-                for row in store.restore_order_states()
-                if str(row.get("client_order_id", "") or "").startswith("beidou-")
-            }
-            for fill in store.restore_fill_events():
-                if str(fill.get("order_id", "")) in local_order_ids:
-                    sym = str(fill.get("symbol", "")).strip()
-                    if sym:
-                        owned.add(sym)
-        except Exception:
-            pass
+    if protection is not None and callable(getattr(protection, "all_positions", None)):
+        owned.update(str(pp.instrument_id) for pp in protection.all_positions().values())
+    owned.update(str(sym) for sym in getattr(engine, "_position_generation", {}).keys())
+    owned.update(str(sym) for sym in getattr(engine, "_position_projection", {}).keys())
     return owned
 
 
@@ -3452,12 +3431,10 @@ class AutonomousEngine:
         置位后 protection UNKNOWN → 资格恒 NO_NEW_RISK（final52
         实测 1154 FAILED）。live/canary 保持置位严格语义不变。
         """
-        _is_testnet_block = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-        if not _is_testnet_block:
-            self._protection_owner_unknown = True
-            # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
-            self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
-            self._last_protection_fact_at = time.time()
+        self._protection_owner_unknown = True
+        # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
+        self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+        self._last_protection_fact_at = time.time()
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
@@ -5843,9 +5820,7 @@ class AutonomousEngine:
                     break
             account_balance = float(self._last_account.get("totalWalletBalance", 0))
             if account_balance > 0:
-                self._strategy_risk.update_equity(
-                    self._autopilot_strategy_id, _local_equity_estimate(self, account_balance)
-                )
+                self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
                 if account_balance > self._peak_equity:
                     self._peak_equity = account_balance
         else:
@@ -5998,13 +5973,6 @@ class AutonomousEngine:
                     p_order.status = ProtectionStatus.CREATED
                     self._persist_protection_order(p_order, status="PENDING")
                     print(f"[protection] ❌ {symbol} {p_order.reason}: code={err_code} {err_msg}")
-                    # BD-FIX: 交易所保护单限额拒绝（-4045）—— 共享账户
-                    # 他人 algo 单占满限额时引擎无法创建保护，覆盖检查
-                    # 对这类品种豁免（testnet 环境限制，非引擎失职）
-                    if str(err_code) == "-4045" or "max stop order" in str(err_msg).lower():
-                        if not hasattr(self, "_protection_limit_rejected_symbols"):
-                            self._protection_limit_rejected_symbols: set[str] = set()
-                        self._protection_limit_rejected_symbols.add(str(symbol))
 
             if exchange_protection_count > 0:
                 print(
@@ -6046,9 +6014,7 @@ class AutonomousEngine:
         # Update strategy risk on any fill
         account_balance = float(self._last_account.get("totalWalletBalance", 0))
         if account_balance > 0:
-            self._strategy_risk.update_equity(
-                self._autopilot_strategy_id, _local_equity_estimate(self, account_balance)
-            )
+            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
             if account_balance > self._peak_equity:
                 self._peak_equity = account_balance
 
@@ -6648,16 +6614,10 @@ class AutonomousEngine:
             and str(opening.get("approval_id", "")).strip()
         )
         if opening is not None:
-            # BD-FIX: testnet 下 opening baseline 只保留本地所有权品种 ——
-            # 8-12 时代的 baseline 含共享账户外部持仓（AIOUSDT 178 等），
-            # 与本地账本事实混同造成对账恒 MISMATCH
-            _owned_syms = _local_owned_symbols(self)
-            _is_testnet_sys = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
             positions.update(
                 {
                     InstrumentId(str(symbol)): Quantity(amount=str(amount))
                     for symbol, amount in dict(opening.get("positions", {})).items()
-                    if not _is_testnet_sys or str(symbol) in _owned_syms
                 }
             )
         captured_at = None
@@ -6669,21 +6629,7 @@ class AutonomousEngine:
             except (KeyError, TypeError, ValueError):
                 opening_complete = False
         post_opening_fill = False
-        # BD-FIX: testnet 下 fill 重放只认本地订单 —— 共享账户其他用户
-        # 的成交（外部订单）经监控写入 fill_event/position_projection，
-        # 重放会把外部持仓混进 system 侧（final40 实测 CYSUSDT/AIOUSDT
-        # 等外部成交污染投影 → 对账恒 MISMATCH）
-        _is_testnet_replay = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-        _local_order_ids: set[str] = set()
-        if _is_testnet_replay:
-            _local_order_ids = {
-                str(row.get("order_id") or row.get("record_id") or "")
-                for row in self._store.restore_order_states()
-                if str(row.get("client_order_id", "") or "").startswith("beidou-")
-            } | {str(oid) for oid in getattr(self, "_owned_order_ids", set())}
         for fill in self._store.restore_fill_events():
-            if _is_testnet_replay and str(fill.get("order_id", "")) not in _local_order_ids:
-                continue  # 外部订单的成交：不属于引擎账本
             try:
                 fill_time = datetime.fromisoformat(str(fill.get("event_time", "")))
                 if fill_time.tzinfo is None:
@@ -6718,32 +6664,6 @@ class AutonomousEngine:
                 continue
             positions[symbol] = Quantity(amount=format(current.normalize(), "f"))
         active_orders = self._store.get_active_orders()
-        # BD-FIX: testnet 下 stale 订单行（历史遗留，交易所早已无此单）
-        # 不参与 open_orders 对账 —— 多品种上线后 8-12 时代的 6 个
-        # 遗留 active 行造成 system/exchange 恒 MISMATCH。24h 为界，
-        # 时间戳不可解析的行保留（fail-safe 不过滤）。
-        if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
-            _stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-            _tracked_ids = {str(oid) for oid in getattr(self, "_active_order_ids", set())}
-            _filtered: list[dict[str, Any]] = []
-            for _row in active_orders:
-                # BD-FIX: 只保留本引擎命名空间的订单 —— 共享账户其他
-                # 用户的订单行（经恢复路径写入 order_state）不参与
-                # system 侧 open_orders 对账
-                _oid = str(_row.get("order_id") or _row.get("record_id") or "")
-                _cid = str(_row.get("client_order_id", "") or "")
-                if _oid not in _tracked_ids and not _cid.startswith("beidou-"):
-                    continue
-                try:
-                    _row_ts = datetime.fromisoformat(str(_row.get("updated_at") or _row.get("created_at") or ""))
-                    if _row_ts.tzinfo is None:
-                        _row_ts = _row_ts.replace(tzinfo=timezone.utc)
-                    if _row_ts <= _stale_cutoff:
-                        continue  # stale 行：交易所早已无此单
-                except (TypeError, ValueError):
-                    pass
-                _filtered.append(_row)
-            active_orders = _filtered
         # Post-opening fills mean the balance may be slightly stale (fees),
         # but that is acceptable within the reconciliation balance tolerance
         # (5 USDT).  Only an inconsistent projection (uncommitted fills,
@@ -6855,19 +6775,12 @@ class AutonomousEngine:
             return self._record_reconciliation_failure(result)
 
         exchange_positions: dict[InstrumentId, Quantity] = {}
-        _owned_syms = _local_owned_symbols(self)
-        _is_testnet_recon = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
         for position in account["positions"]:
             if not isinstance(position, dict) or "symbol" not in position or "positionAmt" not in position:
                 result = ReconciliationEngine.compare(None, None)
                 result.status = ReconciliationStatus.INCOMPLETE
                 result.differences = ["INCOMPLETE_FACT: malformed exchange position row"]
                 return self._record_reconciliation_failure(result)
-            # BD-FIX: testnet 共享账户的外部持仓不参与对账（system 侧
-            # 只含引擎自己的账本事实 —— 多品种上线后外部持仓造成
-            # 恒 MISMATCH，final38 实测 APRUSDT/BEATUSDT/EPICUSDT 等）
-            if _is_testnet_recon and str(position["symbol"]) not in _owned_syms:
-                continue
             amount = float(position.get("positionAmt", 0) or 0)
             if amount:
                 exchange_positions[InstrumentId(str(position["symbol"]))] = Quantity(amount=str(amount))
@@ -6915,15 +6828,7 @@ class AutonomousEngine:
             self._recon.update_event_facts(event_facts)
         # 启动时事件流可能尚未就绪 — 先使用两方对账建立基线，
         # 三方对账在事件流可用后自动启用。
-        # BD-FIX（共享账户语义）: testnet/demo 的事件侧投影含共享账户
-        # 外部活动（其他用户的持仓/余额变动经 ACCOUNT_UPDATE 流入），
-        # 与本地账本（system 侧）必然不一致 —— 三方 MATCHED 在共享
-        # demo 下不可达（final33 实测：外部 -0.02 空头 + 余额变动 →
-        # event_stream 余额 5000 vs system 10548 恒 MISMATCH）。
-        # testnet 以 system/exchange 两方为对账权威，事件侧仅作参考；
-        # live/canary 保持三方严格语义不变。
-        _is_testnet = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-        if event_facts is not None and not _is_testnet:
+        if event_facts is not None:
             result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
         else:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
@@ -6940,18 +6845,6 @@ class AutonomousEngine:
         # 才会完整，鸡生蛋），不构成授权障碍；两方冲突时 fail-closed 不授权。
         recon_id = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}"
         self._maybe_authorize_user_stream_baseline(exchange_facts, recon_id, result=result)
-        # BD-FIX: testnet 持仓漂移豁免 —— 共享账户其他用户可能平掉引擎
-        # 的持仓（final53 实测：DOGE/BCH/TUTU 成交后 exchange 侧持仓归零，
-        # fill 推导的本地持仓 vs 共享实时持仓无法保证一致）。豁免仅限
-        # Position mismatch（余额/open_orders 差异仍严格阻断）；
-        # live/canary 保持 PKG02 全量严格不变。
-        if not result.matched and _is_testnet_recon:
-            _diffs = [str(d) for d in getattr(result, "differences", []) or []]
-            if _diffs and all(str(d).startswith("Position mismatch") for d in _diffs):
-                print("[recon] testnet: position drift on shared account — treated as matched")
-                result.matched = True
-                result.differences = []
-                result.status = ReconciliationStatus.MATCHED
         # PKG02 (BDS-P0-001): 移除 testnet 仅仓位不匹配旁路 — 所有环境使用统一对账标准
         if not result.matched:
             return self._record_reconciliation_failure(
@@ -9426,28 +9319,13 @@ class AutonomousEngine:
             # ACTIVE 哈希 → protection UNKNOWN → 所有意图
             # ELIGIBILITY_NO_NEW_RISK（final50 实测 03:28 717 FAILED）。
             protection_status=(
-                # BD-FIX: testnet 保护状态按所有权判定（覆盖检查由
-                # supervisor 的本地化 protection_coverage 检查兜底）——
-                # 多品种下覆盖评估（_durable_fact_status）对共享账户
-                # 持仓要求保护但引擎从不创建 → hash 永不 ACTIVE →
-                # protection UNKNOWN → 资格恒 NO_NEW_RISK（final51
-                # 实测 666 FAILED）。live/canary 保持 hash 严格语义。
-                "UNKNOWN"
-                if self._protection_owner_unknown
-                else "ACTIVE"
-                if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-                else (
-                    "ACTIVE"
-                    if (
-                        not _local_owned_symbols(self)
-                        and getattr(self, "_last_protection_hash", "") == ""
-                    )
-                    or (
-                        self._protection_owner_unknown is False
-                        and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
-                    )
-                    else "UNKNOWN"
-                )
+                # protection_status 跟随记录的 hash: 仅当所有权已知且最近一次
+                # 覆盖评估记录为 ACTIVE 时才可进入 ACTIVE；覆盖缺失/未评估时
+                # 记录 UNKNOWN → NO_NEW_RISK（fail-closed）。
+                "ACTIVE"
+                if self._protection_owner_unknown is False
+                and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                else "UNKNOWN"
             ),
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
             env_mode=str(getattr(getattr(self, "_env_mode", None), "value", "")),
@@ -9638,9 +9516,6 @@ class AutonomousEngine:
         if not permissions_ok:
             print(f"[beidou-autopilot] Account permission facts are not writable-safe: {permission_reason}")
         init_equity = float(account.get("totalWalletBalance", 0))
-        # BD-FIX（I4 审查）: 策略权益/峰值用本地推导（共享余额含外部
-        # 资金会污染 drawdown 与 sizing）
-        init_equity = _local_equity_estimate(self, init_equity)
         self._peak_equity = init_equity
         self._strategy_risk.update_equity(self._autopilot_strategy_id, init_equity)
         print(f"[beidou-autopilot] Account OK: equity={init_equity}")
@@ -9695,18 +9570,7 @@ class AutonomousEngine:
         try:
             exchange_open = await self._api_async(Endpoint.OPEN_ORDERS, signed=True)
             if isinstance(exchange_open, list):
-                # BD-FIX: testnet 只认领本引擎命名空间（beidou- clientOrderId）
-                # 的挂单 —— 共享账户其他用户的 open orders 被认领后会
-                # 被 _monitor_orders 监控、成交进本地持仓投影，污染对账
-                # （final40 实测：CYSUSDT/AIOUSDT/GRIFFAINUSDT 外部成交
-                # 写入 position_projection）
-                _is_testnet_restore = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-                _skipped_foreign = 0
                 for o in exchange_open:
-                    _client_oid = str(o.get("clientOrderId", "") or "")
-                    if _is_testnet_restore and not _client_oid.startswith("beidou-"):
-                        _skipped_foreign += 1
-                        continue
                     oid = str(o["orderId"])
                     ostatus = str(o.get("status", "NEW")).upper()
                     osymbol = str(o.get("symbol", ""))
@@ -9735,8 +9599,6 @@ class AutonomousEngine:
                         )
                     except Exception as _persist_exc:
                         print(f"[beidou-autopilot] Warning: Failed to persist restored order {oid}: {_persist_exc}")
-                if _skipped_foreign:
-                    print(f"[beidou-autopilot] Skipped {_skipped_foreign} foreign orders (shared account, not beidou- owned)")
                 print(f"[beidou-autopilot] Restored {len(self._active_order_ids)} active orders from exchange")
                 unowned = self._unowned_active_order_ids()
                 if self._can_write and unowned:
@@ -9879,30 +9741,18 @@ class AutonomousEngine:
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"
                 )
             # Phase 1: 本地创建所有保护单
-            # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建。
-            # BD-FIX（final54）: 只统计本引擎（beidou- clientAlgoId）的
-            # Algo 单 —— 共享账户他人的算法单被误计为"已有保护"导致
-            # 引擎持仓跳过保护创建 → protection_coverage 恒
-            # MISSING_SL/TP（final54 实测）。
+            # BD-FIX (S41): 统计交易所已有 Algo 单，去重避免重复创建
             existing_algo_count: dict[str, int] = {}
             if isinstance(existing_algo_inventory, list):
                 for a in existing_algo_inventory:
-                    _client_aid = str(a.get("clientAlgoId", "") or "")
-                    if _client_aid and not _client_aid.startswith("beidou-"):
-                        continue  # 共享账户他人的算法单不计
                     sym = str(a.get("symbol", "")).upper()
                     existing_algo_count[sym] = existing_algo_count.get(sym, 0) + 1
             pending_submissions: list[dict] = []
-            _owned_syms = _local_owned_symbols(self)
             for p in positions_list if durable_projection_ok else []:
                 amt = float(p.get("positionAmt", 0))
                 if amt == 0:
                     continue
                 symbol = p["symbol"]
-                # BD-FIX（final54）: 只为本地所有权（fill 重放锚定）的
-                # 持仓创建保护 —— 共享账户外部持仓不归引擎保护
-                if symbol not in _owned_syms:
-                    continue
                 # 交易所已有 >=2 个 Algo 单 → 跳过
                 if existing_algo_count.get(symbol.upper(), 0) >= 2:
                     print(
