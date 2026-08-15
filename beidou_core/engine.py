@@ -3811,6 +3811,10 @@ class AutonomousEngine:
             # 拒绝（final82c 实测：APRUSDT 现价 0.004 vs 旧 trigger 0.50）。
             # 投影保持 stop_loss=None，由近线 S33 自适应重算创建新保护；
             # 旧 PENDING 行在 S33 创建前清理（CANCELLED）。
+            if pending_stop_rows:
+                if not hasattr(self, "_pending_stop_intent"):
+                    self._pending_stop_intent: dict[str, bool] = {}
+                self._pending_stop_intent[position_id] = True
             self._position_entry_times.setdefault(position_id, time.time())
         return True
 
@@ -7653,6 +7657,11 @@ class AutonomousEngine:
                 expected_count = (1 if _needs_exchange_protection(pp.stop_loss) else 0) + sum(
                     1 for tp in pp.take_profits if _needs_exchange_protection(tp)
                 )
+                # BD-FIX (final82e): stop_loss=None 但有 PENDING 止损意图时
+                # expected +1 —— 否则 TP 已覆盖的品种被 covered skip 跳过，
+                # S33 重建永远执行不到（final82d 实测）。
+                if pp.stop_loss is None and getattr(self, "_pending_stop_intent", {}).get(pos_id):
+                    expected_count += 1
                 server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
@@ -7700,6 +7709,8 @@ class AutonomousEngine:
                     # BD-FIX (final82d): 旧 PENDING 行的 trigger 已随价格漂移
                     # 过期（-2021 恒拒），不再复用提交；先清理 durable 行，
                     # 再走 S33 按当前市价自适应重算创建新保护。
+                    # 注意 remove_protection 只处理 ACTIVE 行 —— PENDING 行
+                    # 需用 save_protection 显式重写为 CANCELLED。
                     store = getattr(self, "_store", None)
                     if store:
                         for row in store.restore_protections():
@@ -7712,7 +7723,25 @@ class AutonomousEngine:
                                 )
                             ):
                                 try:
-                                    store.remove_protection(pos_id)
+                                    store.save_protection(
+                                        protection_id=str(row.get("protection_id", "")),
+                                        position_id=str(row.get("position_id", "")),
+                                        symbol=str(row.get("symbol", "")),
+                                        side=str(row.get("side", "")),
+                                        trigger_price=str(row.get("trigger_price", "")),
+                                        order_price=(str(row["order_price"]) if row.get("order_price") else None),
+                                        quantity=str(row.get("quantity", "")),
+                                        order_type=str(row.get("order_type", "")),
+                                        status="CANCELLED",
+                                        stop_type=(str(row.get("stop_type")) if row.get("stop_type") else None),
+                                        take_profit_type=(str(row.get("take_profit_type")) if row.get("take_profit_type") else None),
+                                        owner_id=str(row.get("owner_id", "")),
+                                        position_generation=int(row.get("position_generation") or 0),
+                                        session_id=str(row.get("session_id", "")),
+                                        exchange_order_id=(str(row["exchange_order_id"]) if row.get("exchange_order_id") else None),
+                                    )
+                                    if hasattr(self, "_pending_stop_intent"):
+                                        self._pending_stop_intent.pop(pos_id, None)
                                     print(f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}")
                                 except Exception:
                                     pass
@@ -7780,6 +7809,8 @@ class AutonomousEngine:
                                         print(
                                             f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}"
                                         )
+                                        if hasattr(self, "_pending_stop_intent"):
+                                            self._pending_stop_intent.pop(pos_id, None)
                                     else:
                                         print(
                                             f"[nearline] ⚠️ SL/TP submit failed: {symbol} {algo_resp.get('msg', '')[:80]}"
