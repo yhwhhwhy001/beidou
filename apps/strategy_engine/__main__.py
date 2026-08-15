@@ -7,7 +7,7 @@ import sys
 
 def main() -> None:
     """Start only the non-writing paper mode and require explicit symbols."""
-    if "--mode" in sys.argv[1:]:
+    if any(argument == "--mode" or argument.startswith("--mode=") for argument in sys.argv[1:]):
         raise SystemExit("apps.strategy_engine fixes mode=paper; use beidou directly for another mode")
 
     from beidou_launcher.cli import main as launcher_command

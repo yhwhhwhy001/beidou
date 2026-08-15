@@ -7,7 +7,7 @@ import sys
 
 def main() -> None:
     """Start only safety-only mode and require explicit symbols."""
-    if "--mode" in sys.argv[1:]:
+    if any(argument == "--mode" or argument.startswith("--mode=") for argument in sys.argv[1:]):
         raise SystemExit("apps.safety_executor fixes mode=safety_only; use beidou directly for another mode")
 
     from beidou_launcher.cli import main as launcher_command

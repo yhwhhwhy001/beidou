@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from beidou_launcher.write_registry import (
+    discover_declared_entrypoints,
     discover_sensitive_entry_paths,
     discover_terminal_write_calls,
     load_registry,
@@ -25,6 +26,40 @@ def test_write_capability_registry_is_complete_and_valid() -> None:
     assert {entry["path"] for entry in registry["entries"]} == discover_sensitive_entry_paths(ROOT)
     registered_calls = {item["source"]: item["occurrences"] for item in registry["terminal_write_paths"]}
     assert registered_calls == discover_terminal_write_calls(ROOT)
+
+
+def test_registry_covers_delivery_and_make_entry_surfaces() -> None:
+    registry = load_registry(REGISTRY)
+    registered = {entry["path"] for entry in registry["entries"]}
+
+    assert "Makefile" in registered
+    assert {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "delivery" / "scripts").iterdir()
+        if path.suffix in {".py", ".sh"}
+    } <= registered
+    assert registry["declared_entrypoints"] == discover_declared_entrypoints(ROOT)
+    assert registry["declared_entrypoints"]["console:beidou"] == "beidou_launcher.cli:main"
+
+
+def test_terminal_scan_detects_dynamic_alias_and_getattr_calls(tmp_path: Path) -> None:
+    (tmp_path / "payload.py").write_text(
+        """
+async def mutate(client, method):
+    await client.request(method, '/dynamic')
+    send = client.create_order
+    await send()
+    cancel = getattr(client, 'cancel_order')
+    await cancel()
+""",
+        encoding="utf-8",
+    )
+
+    assert discover_terminal_write_calls(tmp_path) == {
+        "payload.py::mutate::alias[cancel_order]": 1,
+        "payload.py::mutate::alias[create_order]": 1,
+        "payload.py::mutate::request[DYNAMIC]": 1,
+    }
 
 
 def test_registry_read_only_dry_run_is_executable() -> None:
@@ -79,6 +114,9 @@ def test_noncanonical_tools_have_no_implicit_testnet_symbols_or_shell_secret_loa
     assert "BTCUSDT,ETHUSDT" not in mining_cron
     assert "BEIDOU_MINING_SYMBOLS" in mining_cron
     assert "api_key[-4:]" not in g5_runner
+    assert '"BTCUSDT"' not in g5_runner
+    assert 'parser.add_argument("--symbol", required=True' in g5_runner
+    assert "BEIDOU_DEV_FAST_START" not in (ROOT / "beidou_launcher/preflight.py").read_text(encoding="utf-8")
 
 
 def test_legacy_start_wrapper_has_no_startup_side_effects() -> None:

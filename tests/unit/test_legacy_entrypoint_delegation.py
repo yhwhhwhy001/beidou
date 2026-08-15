@@ -45,11 +45,27 @@ def test_legacy_entrypoint_delegates_without_constructing_runtime(
 
 
 @pytest.mark.parametrize(
-    "module_name",
-    ["apps.strategy_engine.__main__", "apps.safety_executor.__main__"],
+    ("module_name", "mode_argument"),
+    [
+        ("apps.strategy_engine.__main__", "--mode"),
+        ("apps.strategy_engine.__main__", "--mode=testnet"),
+        ("apps.safety_executor.__main__", "--mode"),
+        ("apps.safety_executor.__main__", "--mode=testnet"),
+    ],
 )
-def test_fixed_safe_legacy_entrypoints_reject_mode_override(module_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "argv", [module_name, "--mode", "testnet", "--symbols", "EXPLICIT_SYMBOL"])
+def test_fixed_safe_legacy_entrypoints_reject_mode_override(
+    module_name: str, mode_argument: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arguments = [module_name, mode_argument]
+    if mode_argument == "--mode":
+        arguments.append("testnet")
+    arguments.extend(["--symbols", "EXPLICIT_SYMBOL"])
+    monkeypatch.setattr(sys, "argv", arguments)
+    monkeypatch.setattr(
+        launcher_cli.main,
+        "main",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("mode override reached launcher")),
+    )
 
     with pytest.raises(SystemExit, match="fixes mode="):
         importlib.import_module(module_name).main()

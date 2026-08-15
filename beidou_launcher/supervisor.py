@@ -1195,27 +1195,29 @@ class BeidouSupervisor:
     async def run(self) -> int:
         os.chdir(self.project_root)
         os.environ["BEIDOU_ENV"] = self.mode
+        print("=" * 72)
+        print("北斗一键启动监督器 / Beidou One-Click Supervisor")
+        print(f"mode={self.mode} symbols={','.join(self.symbols)} port={self.port}")
+        print("=" * 72)
+
+        # Preflight is strictly read-only. Do not create a PID lock or write
+        # supervisor evidence until every blocking fact has passed.
+        preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
+        self.report.phase = "PREFLIGHT"
+        self.report.replace_phase_checks("preflight.", preflight)
+        self._print_checks(preflight)
+        if self.report.blockers:
+            self.report.supervisor_state = "BLOCKED"
+            print("❌ 启动前置检查未通过，系统未启动。")
+            return 2
+
         locked, lock_message = self.lock.acquire()
         if not locked:
             print(f"❌ {lock_message}")
             return 3
 
         try:
-            print("=" * 72)
-            print("北斗一键启动监督器 / Beidou One-Click Supervisor")
-            print(f"mode={self.mode} symbols={','.join(self.symbols)} port={self.port}")
-            print("=" * 72)
-
-            preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
-            self.report.phase = "PREFLIGHT"
-            self.report.replace_phase_checks("preflight.", preflight)
-            self._print_checks(preflight)
             self.writer.write(self.report)
-            if self.report.blockers:
-                self.report.supervisor_state = "BLOCKED"
-                self.writer.write(self.report)
-                print("❌ 启动前置检查未通过，系统未启动。")
-                return 2
 
             from beidou_core.engine import AutonomousEngine
 

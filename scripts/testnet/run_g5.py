@@ -1,7 +1,7 @@
 """BD-T18: G5 Testnet 认证运行器 — 验证真实 Binance Testnet 协议层正确性。
 
 用法:
-    python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --confirm-testnet
+    python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --symbol SYMBOL --confirm-testnet
 
 前置条件:
     - BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_SIGNING_KEY 已设置
@@ -44,6 +44,7 @@ def fail_fast(reason: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
+    parser.add_argument("--symbol", required=True, help="显式指定只读协议探测品种")
     parser.add_argument("--confirm-testnet", action="store_true", help="确认连接到 Testnet（非 Mainnet）")
     parser.add_argument(
         "--max-notional",
@@ -52,6 +53,9 @@ def main() -> int:
         help="最大测试名义金额 (USDT)，默认读取 G5 plan；不得超过 plan 上限",
     )
     args = parser.parse_args()
+    probe_symbol = args.symbol.strip().upper()
+    if not probe_symbol or probe_symbol in {"ALL", "DEFAULT"}:
+        parser.error("--symbol 必须是单个显式品种，且不得为 ALL/DEFAULT")
 
     if not args.confirm_testnet:
         print("ERROR: 必须使用 --confirm-testnet 标志确认 Testnet 环境")
@@ -268,20 +272,20 @@ def main() -> int:
         # --- S3: Exchange Info (交易对信息) ---
         print("\n[S3] Exchange Info Check...")
         try:
-            ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": "BTCUSDT"})
+            ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": probe_symbol})
             if not isinstance(ei_data, dict):
                 raise RuntimeError("exchange info response is not an object")
             symbols = ei_data.get("symbols")
             if not isinstance(symbols, list):
                 raise RuntimeError("exchange info symbols is UNKNOWN")
-            btc_info = None
+            symbol_info = None
             for s in symbols:
-                if isinstance(s, dict) and s.get("symbol") == "BTCUSDT":
-                    btc_info = s
+                if isinstance(s, dict) and s.get("symbol") == probe_symbol:
+                    symbol_info = s
                     break
-            if btc_info:
-                print(f"  PASS: BTCUSDT status={btc_info.get('status')}")
-                results["exchange_info"] = {"status": "PASS", "symbol": "BTCUSDT"}
+            if symbol_info:
+                print(f"  PASS: {probe_symbol} status={symbol_info.get('status')}")
+                results["exchange_info"] = {"status": "PASS", "symbol": probe_symbol}
             else:
                 print("  PASS: exchange info retrieved")
                 results["exchange_info"] = {"status": "PASS"}

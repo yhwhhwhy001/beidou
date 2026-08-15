@@ -1,6 +1,32 @@
 {
   "schema_version": "1.0",
   "baseline_policy": "M00-E01 entries are inventory only; HARD_HOLD never grants write authority",
+  "declared_entrypoints": {
+    "console:bd": "beidou_launcher.cli:main",
+    "console:beidou": "beidou_launcher.cli:main",
+    "console:北斗": "beidou_launcher.cli:main",
+    "make:build": "python -m build",
+    "make:build-smoke": "python -m build && python -m venv /tmp/beidou-smoke-venv && /tmp/beidou-smoke-venv/bin/pip install dist/*.whl && /tmp/beidou-smoke-venv/bin/python -c \"import beidou_shared; import beidou_core; print('SMOKE TEST PASSED')\" && rm -rf /tmp/beidou-smoke-venv",
+    "make:clean": "find . -type d -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \".pytest_cache\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \".mypy_cache\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \"*.egg-info\" -exec rm -rf {} + 2>/dev/null; true && rm -rf build/ dist/ htmlcov/ .coverage",
+    "make:dead-code": "vulture $(BEIDOU_PACKAGES) --min-confidence 80",
+    "make:hardcoded-scan": "python scripts/scan_hardcoded.py $(BEIDOU_PACKAGES)",
+    "make:install": "pip install -e \".[dev]\" && pre-commit install",
+    "make:lint": "ruff check $(BEIDOU_PACKAGES) $(APPS_DIR) $(TEST_DIR) && ruff format --check $(BEIDOU_PACKAGES) $(APPS_DIR) $(TEST_DIR)",
+    "make:lint-fix": "ruff check --fix $(BEIDOU_PACKAGES) $(APPS_DIR) $(TEST_DIR) && ruff format $(BEIDOU_PACKAGES) $(APPS_DIR) $(TEST_DIR)",
+    "make:run-research": "python -m apps.research_lab",
+    "make:run-safety": "python -m apps.safety_executor",
+    "make:run-strategy": "python -m apps.strategy_engine",
+    "make:sbom": "@echo \"=== SBOM Generation ===\" && pip freeze > requirements.lock && sha256sum requirements.lock > requirements.lock.sha256 && @echo \"Lockfile hash: $$(cat requirements.lock.sha256)\" && @echo \"SBOM written to requirements.lock\"",
+    "make:security-scan": "bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml && pip-audit",
+    "make:test-all": "pytest $(TEST_DIR) -v",
+    "make:test-architecture": "pytest $(TEST_DIR)/architecture -v",
+    "make:test-coverage": "pytest $(TEST_DIR) -v --cov --cov-report=html --cov-report=term-missing --cov-report=xml",
+    "make:test-integration": "pytest $(TEST_DIR)/integration -v",
+    "make:test-quality": "python scripts/scan_test_quality.py $(TEST_DIR)",
+    "make:test-unit": "pytest $(TEST_DIR)/unit -v",
+    "make:typecheck": "mypy $(BEIDOU_PACKAGES) $(APPS_DIR)",
+    "make:verify": "@echo \"=== LINT ===\" && ruff check $(BEIDOU_PACKAGES) $(APPS_DIR) $(TEST_DIR) || exit 1 && @echo \"=== TYPECHECK ===\" && mypy $(BEIDOU_PACKAGES) --no-error-summary || exit 1 && @echo \"=== UNIT TESTS ===\" && pytest $(TEST_DIR)/unit -q || exit 1 && @echo \"=== INTEGRATION TESTS ===\" && pytest $(TEST_DIR)/integration -q || exit 1 && @echo \"=== ARCHITECTURE TESTS ===\" && pytest $(TEST_DIR)/architecture -q || exit 1 && @echo \"=== TEST QUALITY SCAN ===\" && python scripts/scan_test_quality.py $(TEST_DIR) || exit 1 && @echo \"=== HARDCODED SCAN ===\" && python scripts/scan_hardcoded.py $(BEIDOU_PACKAGES) || exit 1 && @echo \"=== VERIFY PASSED ===\""
+  },
   "entries": [
     {
       "id": "ENTRY-APP-AUTOPILOT",
@@ -10,7 +36,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.autopilot -> beidou_launcher.cli",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-APP-FACTOR-MINER",
@@ -20,7 +46,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "python -m apps.factor_miner -> research mining pipeline",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-APP-RESEARCH-LAB",
@@ -30,7 +56,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "python -m apps.research_lab -> offline research guidance",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-APP-SAFETY-EXECUTOR",
@@ -40,7 +66,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.safety_executor -> launcher safety_only",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-APP-STRATEGY-ENGINE",
@@ -50,7 +76,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m apps.strategy_engine -> launcher paper",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-ENGINE-INTERNAL",
@@ -60,7 +86,7 @@
       "capability": "TERMINAL_WRITE_INTERNAL",
       "status": "HARD_HOLD",
       "call_graph": "launcher supervisor -> AutonomousEngine -> Adapter",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "ENTRY-FEED-INTERNAL",
@@ -70,7 +96,7 @@
       "capability": "EXCHANGE_READ_ONLY",
       "status": "READ_ONLY",
       "call_graph": "Engine -> MarketDataFeed -> Adapter/REST GET",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-ADAPTER-BOUNDARY",
@@ -80,7 +106,7 @@
       "capability": "TERMINAL_WRITE_BOUNDARY",
       "status": "HARD_HOLD",
       "call_graph": "caller -> BinanceUsdmAdapter.request -> REST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "ENTRY-LAUNCHER-MODULE",
@@ -90,7 +116,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "python -m beidou_launcher -> beidou_launcher.cli",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-LAUNCHER-CLI",
@@ -100,7 +126,7 @@
       "capability": "WRITABLE_RUNTIME_CANDIDATE",
       "status": "HARD_HOLD",
       "call_graph": "beidou/bd -> cli -> preflight -> supervisor",
-      "negative_test": "tests/unit/test_v3_fail_closed.py"
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
     },
     {
       "id": "ENTRY-SUPERVISOR",
@@ -110,7 +136,7 @@
       "capability": "TERMINAL_WRITE_INTERLOCK",
       "status": "HARD_HOLD",
       "call_graph": "launcher cli -> supervisor -> engine/adapter",
-      "negative_test": "tests/unit/test_v3_fail_closed.py"
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
     },
     {
       "id": "ENTRY-LAUNCHD-PLIST",
@@ -120,7 +146,7 @@
       "capability": "RUNTIME_ACTIVATION",
       "status": "HARD_HOLD",
       "call_graph": "launchd -> beidou start",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-CONSOLE-SCRIPTS",
@@ -130,7 +156,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "beidou/bd -> beidou_launcher.cli:main",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-CERT-EVALUATE-G7",
@@ -140,7 +166,7 @@
       "capability": "EVIDENCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> G7 evidence evaluator",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-CERT-START-G7",
@@ -150,7 +176,7 @@
       "capability": "EVIDENCE_WINDOW_CONTROL",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> G7 window state",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-CERTIFY-72H",
@@ -160,7 +186,7 @@
       "capability": "EVIDENCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> historical certification evidence",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-CLEANUP-ORDERS",
@@ -170,7 +196,7 @@
       "capability": "CANCEL_ACCOUNT_ORDERS",
       "status": "HARD_HOLD",
       "call_graph": "operator -> REST inventory -> cancel order/algo",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "ENTRY-GENERATE-SBOM",
@@ -180,7 +206,7 @@
       "capability": "LOCAL_ARTIFACT_WRITE",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local SBOM artifact",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-MIGRATE-CONFIG",
@@ -190,7 +216,7 @@
       "capability": "LOCAL_CONFIG_MIGRATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local config migration",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-MINING-CRON",
@@ -200,7 +226,7 @@
       "capability": "OFFLINE_RESEARCH",
       "status": "OFFLINE_ONLY",
       "call_graph": "cron -> factor miner",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-MONITOR-DAEMON",
@@ -210,7 +236,7 @@
       "capability": "LOCAL_OBSERVATION",
       "status": "READ_ONLY",
       "call_graph": "operator -> process/health observation",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-RUN-MIGRATIONS",
@@ -220,7 +246,7 @@
       "capability": "DATABASE_MIGRATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> configured database migration",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-REPLAY-FIXTURE",
@@ -230,7 +256,7 @@
       "capability": "OFFLINE_REPLAY",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local replay fixture",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-SCAN-HARDCODED",
@@ -240,7 +266,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "CI/operator -> source scanner",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-SCAN-TEST-QUALITY",
@@ -250,7 +276,7 @@
       "capability": "SOURCE_READ_ONLY",
       "status": "OFFLINE_ONLY",
       "call_graph": "CI/operator -> test scanner",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-G5-RUNNER",
@@ -260,7 +286,7 @@
       "capability": "EXCHANGE_READ_ONLY",
       "status": "READ_ONLY",
       "call_graph": "operator -> preflight -> Adapter GET probes",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-START-SHELL",
@@ -270,7 +296,7 @@
       "capability": "DELEGATE_TO_LAUNCHER",
       "status": "DELEGATE_ONLY",
       "call_graph": "operator -> validated legacy shell arguments -> canonical launcher",
-      "negative_test": "tests/unit/test_start_beidou_wrapper.py"
+      "negative_test": "tests/unit/test_start_beidou_wrapper.py::test_wrapper_requires_explicit_start_mode_and_symbols"
     },
     {
       "id": "ENTRY-TOOL-E2E-DEMO",
@@ -280,7 +306,7 @@
       "capability": "OFFLINE_SIMULATION",
       "status": "OFFLINE_ONLY",
       "call_graph": "operator -> local end-to-end simulation",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-TOOL-HISTORICAL",
@@ -290,7 +316,7 @@
       "capability": "EXCHANGE_READ_ONLY",
       "status": "READ_ONLY",
       "call_graph": "module import -> REST/Adapter historical reads",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     },
     {
       "id": "ENTRY-TOOL-STRATEGY-LIVE",
@@ -300,7 +326,87 @@
       "capability": "LEGACY_TRADE_TOOL",
       "status": "HARD_HOLD",
       "call_graph": "operator -> legacy strategy trade tool",
-      "negative_test": "tests/architecture/test_write_capability_registry.py"
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-MAKEFILE",
+      "path": "Makefile",
+      "kind": "make_target_surface",
+      "owner": "Engineering Owner",
+      "capability": "BUILD_AND_RUNTIME_ALIAS_SURFACE",
+      "status": "HARD_HOLD",
+      "call_graph": "operator or CI -> make target -> apps/tools/scripts",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-FORBIDDEN-SCAN",
+      "path": "delivery/scripts/check_forbidden_patterns.py",
+      "kind": "legacy_delivery_script",
+      "owner": "Security Owner",
+      "capability": "SOURCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "legacy delivery validation -> forbidden-pattern scan",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-COLLECT-EVIDENCE",
+      "path": "delivery/scripts/collect_evidence.py",
+      "kind": "legacy_delivery_script",
+      "owner": "Test Quality Owner",
+      "capability": "LEGACY_COMMAND_AND_EVIDENCE_WRITE",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy delivery collector -> configured subprocesses -> local evidence",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-INIT-BRANCH",
+      "path": "delivery/scripts/init_execution_branch.sh",
+      "kind": "legacy_delivery_shell",
+      "owner": "Engineering Owner",
+      "capability": "GIT_BRANCH_MUTATION",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy delivery shell -> git worktree and branch mutation",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-PREFLIGHT",
+      "path": "delivery/scripts/preflight.sh",
+      "kind": "legacy_delivery_shell",
+      "owner": "Engineering Owner",
+      "capability": "LEGACY_PREFLIGHT_COMMANDS",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy delivery preflight -> repository validation commands",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-RUN-G0",
+      "path": "delivery/scripts/run_g0.sh",
+      "kind": "legacy_delivery_shell",
+      "owner": "Test Quality Owner",
+      "capability": "LEGACY_EVIDENCE_PRODUCER",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy delivery gate -> preflight and evidence producer",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-VALIDATE-PACKAGE",
+      "path": "delivery/scripts/validate_package.py",
+      "kind": "legacy_delivery_script",
+      "owner": "Test Quality Owner",
+      "capability": "PACKAGE_READ_ONLY_VALIDATION",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "legacy delivery validation -> package contract reads",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
+    },
+    {
+      "id": "ENTRY-DELIVERY-VERIFY-EVIDENCE",
+      "path": "delivery/scripts/verify_evidence_bundle.py",
+      "kind": "legacy_delivery_script",
+      "owner": "Test Quality Owner",
+      "capability": "LEGACY_EVIDENCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "legacy delivery verifier -> evidence bundle reads",
+      "negative_test": "tests/architecture/test_write_capability_registry.py::test_write_capability_registry_is_complete_and_valid"
     }
   ],
   "terminal_write_paths": [
@@ -312,7 +418,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine cancel wrapper -> adapter cancel_algo_order -> REST DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-CANCEL-ALGO-BATCH",
@@ -322,7 +428,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "owned position protection cleanup -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
@@ -332,7 +438,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "excess protection reconciliation -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-CREATE-ALGO-ADAPTER",
@@ -342,7 +448,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine Algo wrapper -> adapter create_algo_order -> REST POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-REPLACE-PROTECTION-CANCEL",
@@ -352,7 +458,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "position protection reconciliation -> adapter cancel_algo_order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-LEVERAGE",
@@ -362,7 +468,7 @@
       "capability": "ACCOUNT_RISK_SETTING_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "engine leverage reconciliation -> legacy API wrapper -> REST POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-NEARLINE-CANCEL",
@@ -372,7 +478,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "nearline lifecycle -> protection cancel batch",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-PLACE-ORDER",
@@ -382,7 +488,7 @@
       "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "strategy intent -> execution plan -> submit order slice",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-FILL-CANCEL-PROTECTION",
@@ -392,7 +498,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "fill processing -> old protection cancel batch",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-FILL-CREATE-PROTECTION",
@@ -402,7 +508,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "fill processing -> create position protection",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-RETRY-PROTECTION",
@@ -412,7 +518,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "protection recovery -> create Algo protection",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-UNOWNED-RECOVERY-CANCEL",
@@ -422,7 +528,7 @@
       "capability": "UNOWNED_RECOVERY_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "legacy unowned Testnet recovery -> engine cancel wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-SHUTDOWN-CANCEL",
@@ -432,7 +538,7 @@
       "capability": "CANCEL_OWNED_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "shutdown -> legacy API wrapper -> REST DELETE order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-SUBMIT-SLICE",
@@ -442,7 +548,7 @@
       "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "execution slice -> adapter create_order",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ENGINE-RUN-SUBMIT-ALGO",
@@ -452,7 +558,7 @@
       "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "runtime protection callback -> engine Algo wrapper",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ADAPTER-CANCEL-ALGO",
@@ -462,7 +568,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter cancel_algo_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ADAPTER-CANCEL-ORDER",
@@ -472,7 +578,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter cancel_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ADAPTER-CREATE-ALGO",
@@ -482,7 +588,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter create_algo_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-ADAPTER-CREATE-ORDER",
@@ -492,7 +598,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "adapter create_order -> guarded terminal request",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-CANCEL-ALGO",
@@ -502,7 +608,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST cancel_algo_order -> guarded HTTP DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-CANCEL-ORDER",
@@ -512,7 +618,7 @@
       "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST cancel_order -> guarded HTTP DELETE",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-CREATE-ALGO",
@@ -522,7 +628,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST create_algo_order -> guarded HTTP POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-CREATE-LISTEN-KEY",
@@ -532,7 +638,7 @@
       "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "user stream startup -> guarded HTTP POST listen key",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-CREATE-ORDER",
@@ -542,7 +648,7 @@
       "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "REST create_order -> guarded HTTP POST",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-REST-KEEPALIVE-LISTEN-KEY",
@@ -552,7 +658,7 @@
       "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
       "status": "HARD_HOLD",
       "call_graph": "user stream keepalive -> guarded HTTP PUT listen key",
-      "negative_test": "tests/unit/test_terminal_write_authority.py"
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     },
     {
       "id": "WRITE-SCRIPT-CLEANUP-CANCEL-ALGO",
@@ -562,7 +668,7 @@
       "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "retired cleanup execute path -> REST cancel_algo_order",
-      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py"
+      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py::test_execute_is_held_before_credentials_or_network"
     },
     {
       "id": "WRITE-SCRIPT-CLEANUP-CANCEL-ORDER",
@@ -572,7 +678,197 @@
       "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
       "status": "HARD_HOLD",
       "call_graph": "retired cleanup execute path -> REST cancel_order",
-      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py"
+      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py::test_execute_is_held_before_credentials_or_network"
+    },
+    {
+      "id": "WRITE-MAPEK-DYNAMIC-CONTROL",
+      "source": "beidou_autonomy/mapek.py::MAPEKController.execute_with_authority::execute_action[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "MAPEK authority decision -> dynamic control action; RESUME requires explicit authority",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-CONTROL-API-DYNAMIC",
+      "source": "beidou_control/api.py::ControlPlaneAPI.emergency::execute_action[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "control API emergency request -> parsed dynamic control action",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-CONTROL-API-RESUME",
+      "source": "beidou_control/api.py::ControlPlaneAPI.resume_trading::execute_action[RESUME]",
+      "occurrences": 1,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "control API resume -> ControlPlane RESUME -> supervisor terminal interlock",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-ENGINE-SYNC-DYNAMIC-REQUEST",
+      "source": "beidou_core/engine.py::AutonomousEngine._api::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy synchronous engine API -> adapter dynamic request -> REST classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-ENGINE-ASYNC-DYNAMIC-REQUEST",
+      "source": "beidou_core/engine.py::AutonomousEngine._api_async::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "engine async API -> adapter dynamic request -> REST classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-ENGINE-SAFE-DYNAMIC-REQUEST",
+      "source": "beidou_core/engine.py::AutonomousEngine._api_async_safe::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "engine safe API wrapper -> adapter dynamic request -> REST classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-ENGINE-REALTIME-RESUME",
+      "source": "beidou_core/engine.py::AutonomousEngine._realtime_tick::execute_action[RESUME]",
+      "occurrences": 1,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "realtime lifecycle branch -> ControlPlane RESUME -> supervisor terminal interlock",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-FEED-SYNC-DYNAMIC-REQUEST",
+      "source": "beidou_core/feed.py::MarketDataFeed._api.request::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Market Data Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "market feed sync wrapper -> REST dynamic request classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-FEED-ASYNC-DYNAMIC-REQUEST",
+      "source": "beidou_core/feed.py::MarketDataFeed._api_async::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Market Data Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "market feed async wrapper -> REST dynamic request classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-ADAPTER-DYNAMIC-REQUEST",
+      "source": "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.request::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "adapter generic request -> REST generic request -> terminal classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-REST-PUBLIC-DYNAMIC-REQUEST",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.request::_request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "public REST request -> private terminal classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-REST-HTTPX-DYNAMIC-REQUEST",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::_sync_urlopen::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "classified urllib request -> httpx client dynamic method transport",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-ADAPTER-ALIAS",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._install_exchange_write_interlock.guarded_adapter_request::alias[request]",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "supervisor adapter interlock -> captured original dynamic request",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-ASYNC-ALIAS",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._install_exchange_write_interlock.guarded_async::alias[_api_async]",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "supervisor engine async interlock -> captured original dynamic wrapper",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-SYNC-ALIAS",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._install_exchange_write_interlock.guarded_sync::alias[_api]",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "supervisor engine sync interlock -> captured original dynamic wrapper",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-AUTO-RESUME",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._maybe_testnet_auto_reauthorize::execute_action[RESUME]",
+      "occurrences": 2,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "Testnet recovery branch -> ControlPlane RESUME -> terminal write interlock",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-RECOVERY-RESUME",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor._recover_if_validated::execute_action[RESUME]",
+      "occurrences": 2,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "validated recovery -> ControlPlane RESUME -> terminal write interlock",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-SUPERVISOR-START-RESUME",
+      "source": "beidou_launcher/supervisor.py::BeidouSupervisor.run::execute_action[RESUME]",
+      "occurrences": 1,
+      "owner": "Control Owner",
+      "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "startup readiness -> ControlPlane RESUME -> terminal write interlock",
+      "negative_test": "tests/unit/test_v3_fail_closed.py::test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_ready"
+    },
+    {
+      "id": "WRITE-G5-DYNAMIC-REQUEST",
+      "source": "scripts/testnet/run_g5.py::main.run_scenarios.exchange::request[DYNAMIC]",
+      "occurrences": 1,
+      "owner": "Test Quality Owner",
+      "capability": "DYNAMIC_WRITE_BOUNDARY_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "explicit G5 scenario -> adapter dynamic request -> terminal classifier",
+      "negative_test": "tests/unit/test_terminal_write_authority.py::test_rest_transport_denies_all_terminal_writes_without_authority"
     }
   ]
 }

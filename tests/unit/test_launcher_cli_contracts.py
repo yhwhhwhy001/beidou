@@ -89,9 +89,9 @@ def test_cli_doctor_status_and_stop_actions(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert '"status": "PASS"' in result.output
     assert cli_module.os.environ["BEIDOU_ENV"] == "paper"
-    assert cli_module.os.environ["FROM_DOTENV"] == "loaded"
+    assert "FROM_DOTENV" not in cli_module.os.environ
     assert cli_module.os.environ["PRESERVED"] == "from-process"
-    assert cli_module.os.environ["QUOTED"] == "quoted-value"
+    assert "QUOTED" not in cli_module.os.environ
 
     monkeypatch.setattr(cli_module, "run_preflight", lambda root, mode, port: ([_check(blocking=True)], None))
     assert runner.invoke(cli_module.main, ["doctor"]).exit_code == 2

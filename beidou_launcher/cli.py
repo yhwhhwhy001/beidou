@@ -94,24 +94,10 @@ def main(
     """
     _enable_unbuffered_stdout()
     root: Path = find_project_root()
-    os.chdir(root)
-    os.environ["BEIDOU_ENV"] = mode
-
-    # 自动加载项目 .env 文件，确保 bd / 北斗 / beidou 直接运行时环境变量可用
-    _env_path = root / ".env"
-    if _env_path.is_file():
-        with open(_env_path, encoding="utf-8") as _ef:
-            for _line in _ef:
-                _line = _line.strip()
-                if not _line or _line.startswith("#") or "=" not in _line:
-                    continue
-                _key, _, _val = _line.partition("=")
-                _key = _key.strip()
-                _val = _val.strip().strip('"').strip("'")
-                if _key and _key not in os.environ:
-                    os.environ[_key] = _val
 
     if action == "doctor":
+        os.chdir(root)
+        os.environ["BEIDOU_ENV"] = mode
         checks, _ = run_preflight(root, mode, port)
         for item in checks:
             click.echo(json.dumps(item.to_dict(), ensure_ascii=False))
@@ -130,6 +116,8 @@ def main(
         click.echo(message)
         raise SystemExit(0 if ok else 1)
 
+    os.chdir(root)
+    os.environ["BEIDOU_ENV"] = mode
     parsed_symbols = _parse_symbols(symbols)
     if not parsed_symbols:
         raise click.ClickException("必须显式提供 --symbols；固定 DEFAULT/ALL 交易池已禁用")

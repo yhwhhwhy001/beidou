@@ -27,6 +27,8 @@ esac
 if [ "$action" = "start" ]; then
     mode_seen=false
     symbols_seen=false
+    mode_count=0
+    symbols_count=0
     expect_mode=false
     expect_symbols=false
     for argument in "$@"; do
@@ -43,13 +45,25 @@ if [ "$action" = "start" ]; then
             continue
         fi
         case "$argument" in
-            --mode) expect_mode=true ;;
-            --mode=?*) mode_seen=true ;;
-            --symbols) expect_symbols=true ;;
-            --symbols=?*) symbols_seen=true ;;
+            --mode)
+                mode_count=$((mode_count + 1))
+                expect_mode=true
+                ;;
+            --mode=?*)
+                mode_count=$((mode_count + 1))
+                mode_seen=true
+                ;;
+            --symbols)
+                symbols_count=$((symbols_count + 1))
+                expect_symbols=true
+                ;;
+            --symbols=?*)
+                symbols_count=$((symbols_count + 1))
+                symbols_seen=true
+                ;;
         esac
     done
-    if [ "$expect_mode" = true ] || [ "$expect_symbols" = true ] || [ "$mode_seen" != true ] || [ "$symbols_seen" != true ]; then
+    if [ "$expect_mode" = true ] || [ "$expect_symbols" = true ] || [ "$mode_seen" != true ] || [ "$symbols_seen" != true ] || [ "$mode_count" -ne 1 ] || [ "$symbols_count" -ne 1 ]; then
         usage
         exit 64
     fi

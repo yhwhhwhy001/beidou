@@ -46,3 +46,25 @@ def test_wrapper_execs_only_the_canonical_launcher(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout.strip() == "delegated:start --mode safety_only --symbols EXPLICIT_SYMBOL"
+
+
+def test_wrapper_rejects_duplicate_security_options(tmp_path: Path) -> None:
+    wrapper = _sandboxed_wrapper(tmp_path)
+
+    result = subprocess.run(  # noqa: S603 - test-owned executable path
+        [
+            str(wrapper),
+            "start",
+            "--mode",
+            "safety_only",
+            "--mode=testnet",
+            "--symbols",
+            "EXPLICIT_SYMBOL",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert "delegated:" not in result.stdout
