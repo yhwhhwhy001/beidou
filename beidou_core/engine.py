@@ -3806,6 +3806,37 @@ class AutonomousEngine:
             except (TypeError, ValueError) as exc:
                 self._block_unowned_protection_orders([f"PROTECTION_RESTORE_FAILED:{type(exc).__name__}"])
                 return False
+            # BD-FIX (final82c): PENDING 止损意图在 restore 校验通过后挂载
+            # 到投影（CREATED 状态，无 ACK —— 不能参与 restore 的 ACK-backed
+            # 校验，但必须计入近线补发的 expected_count，否则 TP 已覆盖的
+            # 品种被 server_count>=expected_count continue 跳过，SL 永不补发）。
+            if not stop_orders and pending_stop_rows:
+                try:
+                    _ps_row = pending_stop_rows[0]
+                    _ps_trigger = Decimal(str(_ps_row["trigger_price"]))
+                    _ps_qty = Decimal(str(_ps_row["quantity"]))
+                    if _ps_trigger.is_finite() and _ps_trigger > 0 and _ps_qty.is_finite() and _ps_qty > 0:
+                        projection.stop_loss = ProtectionOrder(
+                            protection_id=str(_ps_row["protection_id"]),
+                            position_id=position_id,
+                            instrument_id=InstrumentId(symbol),
+                            venue_id=VenueId("BINANCE"),
+                            side=OrderSide.SELL if position_side == OrderSide.BUY else OrderSide.BUY,
+                            trigger_price=Price(amount=str(_ps_trigger)),
+                            order_price=None,
+                            quantity=Quantity(amount=str(_ps_qty)),
+                            order_type=str(_ps_row["order_type"]).strip().upper(),
+                            reduce_only=True,
+                            status=ProtectionStatus.CREATED,
+                            stop_type=(StopLossType(str(_ps_row["stop_type"])) if _ps_row.get("stop_type") else None),
+                            take_profit_type=None,
+                            owner_id=str(self._protection_owner_id),
+                            position_generation=next(iter(generations)),
+                            session_id=next(iter(sessions)),
+                            exchange_order_id="",
+                        )
+                except (KeyError, InvalidOperation, TypeError, ValueError):
+                    pass
             self._position_entry_times.setdefault(position_id, time.time())
         return True
 
