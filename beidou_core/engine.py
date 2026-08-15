@@ -6864,6 +6864,22 @@ class AutonomousEngine:
             result = self._recon.reconcile_three_way(AccountId("default"), VenueId("BINANCE"))
         else:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
+        # BD-FIX（用户批准）: testnet 下 event 侧（user stream 投影）差异
+        # 降 WARN 不阻断 —— demo 事件乱序/丢失使投影器与 fill 记账两条
+        # 重建路径周期性分歧（final75 实测 BEAT 符号反转、余额 4997
+        # 恒定）。system/exchange 两方仍严格（差异阻断不变）；
+        # live/canary 保持三方严格。
+        if (
+            not result.matched
+            and str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+        ):
+            _diffs = [str(d) for d in getattr(result, "differences", []) or []]
+            _two_way_diffs = [d for d in _diffs if str(d).startswith("system/exchange")]
+            if not _two_way_diffs and _diffs:
+                print("[recon] testnet: event-stream drift (reference only) — treated as matched")
+                result.matched = True
+                result.differences = []
+                result.status = ReconciliationStatus.MATCHED
         self._last_reconciliation_result = result
         self._record_reconciliation_truth(
             result,
