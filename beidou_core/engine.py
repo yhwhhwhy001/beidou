@@ -2165,7 +2165,9 @@ class AutonomousEngine:
         approval_nonce = f"emergency-{uuid.uuid4().hex}"
         approval_id = f"EMERGENCY:{policy_id}:{policy_version}:{approval_nonce[-12:]}"
         intent_id = f"emergency-{symbol}-{now_bucket}-{uuid.uuid4().hex[:10]}"
-        client_order_id = f"beidou-{str(symbol).lower()}-emergency-{now_bucket}-{uuid.uuid4().hex[:8]}"
+        # BD-FIX (final83b): Binance clientOrderId 限 36 字符 —— 旧格式含
+        # symbol+emergency+bucket+hex 最长达 49 字符，恒被 -4015 拒绝。
+        client_order_id = f"beidou-emg-{now_bucket}-{uuid.uuid4().hex[:8]}"
         idempotency_key = f"emergency-{str(symbol).upper()}-{now_bucket}-{uuid.uuid4().hex[:8]}"
         correlation = CorrelationId(str(correlation_id)) if correlation_id else None
         proposal_hash = hashlib.sha256(
