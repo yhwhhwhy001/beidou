@@ -9758,6 +9758,34 @@ class AutonomousEngine:
 
                 kline_features = await self._feed.async_get_kline_features(symbol)
                 adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
+                # BD-FIX: 小市值品种 K 线特征越界（OUT_OF_RANGE）时降级
+                # 为保守默认保护配置（5% SL / 10% TP —— 名义安全值），
+                # 而不是 raise 阻断整个恢复（final69 实测 APRUSDT 等
+                # 特征异常 → 21 持仓恢复只读 → 覆盖恒 MISSING）。
+                _cfg_metadata = getattr(adaptive_cfg, "metadata", {}) or {}
+                if _cfg_metadata.get("blocked") or float(getattr(adaptive_cfg, "stop_pct", 0) or 0) <= 0:
+                    from beidou_strategy.protection.adaptive import (
+                        AdaptiveProtectionConfig,
+                        MarketRegime,
+                        PriceTier,
+                        VolatilityRegime,
+                    )
+
+                    adaptive_cfg = AdaptiveProtectionConfig(
+                        stop_loss_config={"type": "FIXED_PCT", "stop_pct": 5.0},
+                        take_profit_config={"type": "FIXED_RR", "rr_ratio": 2.0},
+                        stop_pct=5.0,
+                        rr_ratio=2.0,
+                        atr_pct=0.0,
+                        volatility_regime=VolatilityRegime.NORMAL,
+                        price_tier=PriceTier.MID if entry_price >= 1.0 else PriceTier.MICRO,
+                        market_regime=MarketRegime.RANGING,
+                        metadata={"fallback": True, "blocked": False, "reason": "CONSERVATIVE_DEFAULT"},
+                    )
+                    print(
+                        f"[startup] {symbol}: adaptive protection config degraded to "
+                        f"conservative default ({_cfg_metadata.get('reason', 'FEATURES_UNKNOWN')})"
+                    )
                 self._require_protection_config(symbol, adaptive_cfg)
                 # Set per-symbol precision before creating protection orders.
                 # Without this, ProtectionManager uses price_decimals=0 causing
