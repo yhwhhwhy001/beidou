@@ -9009,6 +9009,17 @@ class AutonomousEngine:
         """离线时钟：因子评估 → 漂移检测 → 策略风控 → 日报 → 检查点 → 清理。"""
         self._last_offline = time.time()
 
+        # BD-FIX: 规则快照周期刷新（offline tick 5 分钟一次 —— 比循环
+        # 计数器可靠）。快照 TTL 1h，>25 分钟未刷新即重拉 exchangeInfo。
+        if time.time() - getattr(self, "_last_rule_snapshot_refresh", 0.0) > 1500:
+            try:
+                _ex_info = await asyncio.wait_for(self._api_async(Endpoint.EXCHANGE_INFO), timeout=30.0)
+                if self._sync_adapter_rule_snapshots(_ex_info):
+                    self._last_rule_snapshot_refresh = time.time()
+                    print("[offline] rule snapshots refreshed")
+            except Exception as _rs_exc:
+                print(f"[offline] rule snapshot refresh skipped: {type(_rs_exc).__name__}")
+
         try:
             now = datetime.now(timezone.utc)
 
@@ -10234,12 +10245,6 @@ class AutonomousEngine:
             _offline_interval = 300 if self._env_mode.value == "testnet" else 3600
             # 首次运行：启动后 60s 执行首次宇宙评估
             _first_tick_done = False
-            # BD-FIX: 规则快照周期刷新 —— 启动同步一次后无刷新点，
-            # TTL 1h 到期后部分品种 get_rule_snapshot 返回 stale →
-            # SKIP (rule snapshot UNKNOWN/STALE)（final60 实测运行 1h
-            # 后 BCHUSDT 等品种恒 SKIP）。每 30 分钟重新拉 exchangeInfo
-            # 同步（offline 循环 60s 周期，计数 30 次）。
-            _rule_sync_counter = 0
             while self._running:
                 try:
                     elapsed = time.time() - self._last_offline
@@ -10248,17 +10253,6 @@ class AutonomousEngine:
                         if not _first_tick_done:
                             _first_tick_done = True
                         await self._offline_tick()
-                    _rule_sync_counter += 1
-                    if _rule_sync_counter >= 30:
-                        _rule_sync_counter = 0
-                        try:
-                            _ex_info = await asyncio.wait_for(
-                                self._api_async(Endpoint.EXCHANGE_INFO), timeout=30.0
-                            )
-                            if self._sync_adapter_rule_snapshots(_ex_info):
-                                print("[offline] rule snapshots refreshed")
-                        except Exception as _rs_exc:
-                            print(f"[offline] rule snapshot refresh skipped: {type(_rs_exc).__name__}")
                 except Exception as exc:
                     self._error_count += 1
                     import traceback as _tb
