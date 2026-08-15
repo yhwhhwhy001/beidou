@@ -106,8 +106,8 @@ def test_convenience_methods_share_one_request_boundary(monkeypatch: pytest.Monk
     assert calls[-1][1] == Endpoint.TICKER_24HR
 
 
-def test_keepalive_transport_preserves_put_method(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The convenience boundary is insufficient: the actual transport must send PUT."""
+def test_keepalive_transport_holds_put_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Listen-key PUT is session mutation and must not bypass the write hold."""
 
     client = BinanceRESTClient(
         "https://demo.example",
@@ -124,8 +124,11 @@ def test_keepalive_transport_preserves_put_method(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
     result = asyncio.run(client.keepalive_listen_key("listen-key-1"))
 
-    assert result.is_success() is True
-    assert methods == ["PUT"]
+    assert result.is_success() is False
+    assert result.error is not None
+    assert result.error.raw["reason"] == "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    assert result.error.raw["kind"] == "SESSION_CONTROL"
+    assert methods == []
 
 
 def test_signed_success_adds_timestamp_signature_and_auth_header(monkeypatch: pytest.MonkeyPatch) -> None:

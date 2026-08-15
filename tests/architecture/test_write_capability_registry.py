@@ -62,6 +62,133 @@ async def mutate(client, method):
     }
 
 
+def test_terminal_scan_fails_closed_for_indirect_write_callables(tmp_path: Path) -> None:
+    (tmp_path / "payload.py").write_text(
+        """
+from venue import create_order as imported_send
+from engine import AutonomousEngine as E
+import functools
+
+async def mutate(client, holder, ops, runtime_name):
+    first = client.create_order
+    second = first
+    await second()
+    await getattr(client, runtime_name)()
+    await getattr(client, 'cancel_' + 'order')()
+    holder.send = client.create_order
+    await holder.send()
+    callbacks = {'send': client.create_order}
+    await callbacks['send']()
+    await functools.partial(client.request, 'POST', '/write')()
+    await imported_send()
+    E()
+""",
+        encoding="utf-8",
+    )
+
+    calls = discover_terminal_write_calls(tmp_path)
+    rendered = "\n".join(calls)
+    assert "alias[create_order]" in rendered
+    assert "getattr[DYNAMIC]" in rendered
+    assert "getattr[cancel_order]" in rendered
+    assert "attribute_alias[create_order]" in rendered
+    assert "subscript_alias[create_order]" in rendered
+    assert "partial[request:POST]" in rendered
+    assert "import_alias[create_order]" in rendered
+    assert discover_sensitive_entry_paths(tmp_path) == {"payload.py"}
+
+
+def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path: Path) -> None:
+    (tmp_path / "payload.sh").write_text(
+        '#!/bin/sh\ncurl -X POST https://offline.invalid/order\ncurl -X "$METHOD" https://offline.invalid/dynamic\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "broken.sh").write_text("#!/bin/sh\nif then\n", encoding="utf-8")
+    (tmp_path / "payload.plist").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>ProgramArguments</key><array>
+<string>curl</string><string>-X</string><string>DELETE</string><string>https://offline.invalid/order</string>
+</array></dict></plist>
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "Makefile").write_text(
+        "write:\n\tcurl --request PATCH https://offline.invalid/order\n",
+        encoding="utf-8",
+    )
+
+    calls = discover_terminal_write_calls(tmp_path)
+
+    assert calls["payload.sh::<shell>::curl[POST]"] == 1
+    assert calls["payload.sh::<shell>::curl[DYNAMIC]"] == 1
+    assert calls["payload.plist::<plist>::curl[DELETE]"] == 1
+    assert calls["Makefile::<make:write>::curl[PATCH]"] == 1
+    assert any(
+        issue.startswith("WRITE_REGISTRY_SOURCE_SCAN_FAILED:broken.sh:")
+        for issue in validate_registry(
+            {
+                "schema_version": "1.0",
+                "declared_entrypoints": {},
+                "declared_entrypoint_records": {},
+                "entries": [],
+                "terminal_write_paths": [],
+            },
+            root=tmp_path,
+        )
+    )
+
+
+def test_registry_rejects_semantically_ungoverned_terminal_record() -> None:
+    registry = load_registry(REGISTRY)
+    record = registry["terminal_write_paths"][0]
+    original = dict(record)
+    try:
+        record.update(
+            owner="TBD",
+            capability="SOURCE_READ_ONLY",
+            call_graph="generic",
+            negative_test=(
+                "tests/architecture/test_write_capability_registry.py::"
+                "test_write_capability_registry_is_complete_and_valid"
+            ),
+        )
+        issues = validate_registry(registry, root=ROOT)
+    finally:
+        record.clear()
+        record.update(original)
+
+    assert "WRITE_REGISTRY_OWNER_INVALID:" + original["id"] in issues
+    assert "WRITE_REGISTRY_TERMINAL_CAPABILITY_INVALID:" + original["id"] in issues
+    assert "WRITE_REGISTRY_CALL_GRAPH_INVALID:" + original["id"] in issues
+    assert "WRITE_REGISTRY_NEGATIVE_TEST_GENERIC:" + original["id"] in issues
+
+
+def test_registry_loader_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text('{"schema_version":"1.0","schema_version":"2.0","entries":[]}', encoding="utf-8")
+
+    try:
+        load_registry(registry_path)
+    except ValueError as exc:
+        assert str(exc) == "WRITE_REGISTRY_DUPLICATE_KEY:schema_version"
+    else:
+        raise AssertionError("duplicate JSON key was accepted")
+
+
+def test_every_declared_console_and_make_entry_has_exact_governance() -> None:
+    registry = load_registry(REGISTRY)
+
+    assert set(registry["declared_entrypoint_records"]) == set(discover_declared_entrypoints(ROOT))
+    for declaration, record in registry["declared_entrypoint_records"].items():
+        assert record["command"] == registry["declared_entrypoints"][declaration]
+        assert record["owner"] not in {"", "TBD", "UNKNOWN"}
+        assert record["capability"]
+        assert record["status"] in {"HARD_HOLD", "READ_ONLY", "OFFLINE_ONLY", "DELEGATE_ONLY"}
+        assert record["negative_test"].startswith("tests/")
+        assert record["expected_rejection"]
+
+
 def test_registry_read_only_dry_run_is_executable() -> None:
     result = subprocess.run(  # noqa: S603 - fixed interpreter and repository-local module
         [
@@ -72,6 +199,7 @@ def test_registry_read_only_dry_run_is_executable() -> None:
             str(ROOT),
             "--registry",
             str(REGISTRY),
+            "--run-negative-tests",
         ],
         cwd=ROOT,
         capture_output=True,

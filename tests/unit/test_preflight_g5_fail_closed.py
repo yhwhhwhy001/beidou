@@ -40,3 +40,30 @@ def test_dev_fast_start_cannot_remove_g5_preflight_check(
     g5_checks = [check for check in checks if check.check_id == "preflight.g5_certificate"]
     assert len(g5_checks) == 1
     assert g5_checks[0].status is CheckStatus.FAIL
+
+
+def test_g5_producer_preflight_omits_only_existing_certificate_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(preflight, "current_commit", lambda _root: "a" * 40)
+
+    launcher_checks, _ = preflight.run_preflight(tmp_path, "testnet", 0)
+    producer_checks, _ = preflight.run_g5_producer_preflight(tmp_path, 0)
+
+    assert any(check.check_id == "preflight.g5_certificate" for check in launcher_checks)
+    assert all(check.check_id != "preflight.g5_certificate" for check in producer_checks)
+    launcher_without_g5 = {
+        check.check_id: (check.status, check.severity)
+        for check in launcher_checks
+        if check.check_id != "preflight.g5_certificate"
+    }
+    producer = {check.check_id: (check.status, check.severity) for check in producer_checks}
+    assert producer == launcher_without_g5
+
+
+def test_g5_runner_uses_dedicated_producer_preflight() -> None:
+    source = (Path(__file__).resolve().parents[2] / "scripts" / "testnet" / "run_g5.py").read_text(encoding="utf-8")
+
+    assert "run_g5_producer_preflight" in source
+    assert "run_preflight(project_root" not in source

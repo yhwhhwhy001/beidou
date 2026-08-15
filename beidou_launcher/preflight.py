@@ -242,7 +242,13 @@ def _port_available(port: int) -> tuple[bool, str]:
         sock.close()
 
 
-def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
+def _run_preflight(
+    project_root: Path,
+    mode: str,
+    port: int,
+    *,
+    require_g5_certificate: bool,
+) -> tuple[list[CheckResult], Any | None]:
     checks: list[CheckResult] = []
     version_ok = (3, 12) <= sys.version_info[:2] < (4, 0)
     checks.append(
@@ -407,7 +413,7 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 evidence={"source": settings.source, "config_hash": settings.config_hash, "rest_url": rest_url},
             )
         )
-        if mode == WRITE_MODE:
+        if mode == WRITE_MODE and require_g5_certificate:
             g5_ok, g5_message, g5_evidence = _g5_certificate_probe(project_root, commit)
             checks.append(
                 _result(
@@ -596,3 +602,15 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             )
         )
     return checks, settings
+
+
+def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
+    """Run launcher preflight; writable Testnet always requires an existing G5 certificate."""
+
+    return _run_preflight(project_root, mode, port, require_g5_certificate=True)
+
+
+def run_g5_producer_preflight(project_root: Path, port: int) -> tuple[list[CheckResult], Any | None]:
+    """Run the read-only G5 producer preflight without a circular existing-G5 requirement."""
+
+    return _run_preflight(project_root, WRITE_MODE, port, require_g5_certificate=False)

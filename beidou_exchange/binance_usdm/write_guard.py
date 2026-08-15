@@ -22,18 +22,35 @@ def classify_terminal_write(
     account_id: str,
     context: TerminalWriteContext | None = None,
 ) -> TerminalWriteRequest | None:
-    """Return a typed terminal write, ``None`` for reads/session control.
+    """Return a typed terminal write, ``None`` only for read-only requests.
 
     Unknown mutating endpoints deliberately produce ``UNKNOWN`` so the shared
-    authority evaluator rejects them.  Listen-key lifecycle is session control
-    used to observe account facts; it is not an order/position mutation.
+    authority evaluator rejects them. Listen-key lifecycle mutates venue
+    session state and therefore remains held behind its own capability class.
     """
 
     method_upper = str(method).upper()
     if method_upper not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
     if path == Endpoint.LISTEN_KEY:
-        return None
+        kind = TerminalWriteKind.SESSION_CONTROL
+        values = dict(params or {})
+        context = context or TerminalWriteContext("", "", "", "", "", 0.0, "")
+        return TerminalWriteRequest(
+            kind=kind,
+            method=method_upper,
+            path=str(path),
+            account_id=str(account_id or "UNKNOWN"),
+            task_id=context.task_id,
+            entrypoint=context.entrypoint,
+            owner_id=context.owner_id,
+            generation=context.generation,
+            approval_id=context.approval_id,
+            expires_at=context.expires_at,
+            nonce=context.nonce,
+            intent_id=str(values.get("listenKey") or context.intent_id or ""),
+            dedicated_account=context.dedicated_account,
+        )
 
     values = dict(params or {})
     if path in {Endpoint.ORDER, Endpoint.ALGO_ORDER}:

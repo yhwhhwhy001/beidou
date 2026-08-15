@@ -128,6 +128,31 @@ def test_rest_transport_denies_all_terminal_writes_without_authority(monkeypatch
     assert transport_calls == 0
 
 
+def test_listen_key_session_writes_are_held_before_transport(monkeypatch) -> None:
+    transport_calls = 0
+
+    def unexpected_transport(*_args, **_kwargs):
+        nonlocal transport_calls
+        transport_calls += 1
+        raise AssertionError("session write reached transport")
+
+    monkeypatch.setattr("beidou_exchange.binance_usdm.rest_client._sync_urlopen", unexpected_transport)
+    client = BinanceRESTClient("https://offline.invalid", max_retries=1)
+
+    created = asyncio.run(client.create_listen_key())
+    kept_alive = asyncio.run(client.keepalive_listen_key("listen-key-under-test"))
+
+    assert created.is_success() is False
+    assert kept_alive.is_success() is False
+    assert created.error is not None
+    assert kept_alive.error is not None
+    assert created.error.raw["reason"] == "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    assert kept_alive.error.raw["reason"] == "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    assert created.error.raw["kind"] == "SESSION_CONTROL"
+    assert kept_alive.error.raw["kind"] == "SESSION_CONTROL"
+    assert transport_calls == 0
+
+
 def test_production_transport_exposes_no_caller_supplied_authority_surface() -> None:
     rest_parameters = signature(BinanceRESTClient).parameters
     adapter_parameters = signature(BinanceUsdmAdapter).parameters

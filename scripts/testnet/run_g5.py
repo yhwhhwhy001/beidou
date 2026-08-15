@@ -67,9 +67,9 @@ def main() -> int:
     # Never start a certification probe from an unreproducible artifact.  The
     # same preflight used by the launcher is a hard gate here, before any REST
     # client is constructed or any exchange request is attempted.
-    from beidou_launcher.preflight import run_preflight
+    from beidou_launcher.preflight import run_g5_producer_preflight
 
-    preflight_checks, _ = run_preflight(project_root, "testnet", 9090)
+    preflight_checks, _ = run_g5_producer_preflight(project_root, 9090)
     preflight_blockers = [
         check for check in preflight_checks if check.status.value == "FAIL" and check.severity.value == "P0"
     ]
