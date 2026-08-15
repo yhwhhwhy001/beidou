@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from scripts.verify_write_registry import load_registry, scan_repository, scan_source_digests, verify_coverage
+from scripts.verify_write_registry import (
+    expected_governance_ids,
+    load_registry,
+    scan_repository,
+    scan_source_digests,
+    verify_coverage,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "config" / "write-capability-registry.json"
@@ -50,6 +56,9 @@ async def bypass(client, holder, name, operations):
     relay('https://offline.invalid/write', data=b'x')
     hidden = (lambda: getattr(client, 'create_' + 'order'))()
     await hidden()
+    table = vars(hx)
+    callback(table.get('post'))
+    object.__getattribute__(hx, 'post')('https://offline.invalid/write', data=b'x')
     E()
 """,
         encoding="utf-8",
@@ -127,6 +136,36 @@ def test_independent_oracle_accepts_current_registry() -> None:
     registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
 
     assert verify_coverage(ROOT, registry) == []
+
+
+def test_oracle_finding_cannot_be_rebound_to_unrelated_same_file_record() -> None:
+    registry = load_registry(REGISTRY)
+    finding = next(
+        item
+        for item in scan_repository(ROOT)
+        if item.path == "beidou_core/alerts.py" and item.kind == "DIRECT_URLLIB_REQUEST"
+    )
+    allowed = expected_governance_ids(finding, root=ROOT, registry=registry)
+
+    assert "WRITE-ALERT-WEBHOOK-REQUEST" in allowed
+    assert "NETWORK-ALERTS-URLLIB" not in allowed
+    declaration = next(
+        item
+        for item in registry["independent_oracle_findings"]
+        if item["identity"] == f"{finding.path}:{finding.line}:{finding.kind}:{finding.detail}"
+    )
+    network_record = next(item for item in registry["network_imports"] if item["id"] == "NETWORK-ALERTS-URLLIB")
+    declaration.update(
+        governance_id=network_record["id"],
+        owner=network_record["owner"],
+        status=network_record["status"],
+        negative_test=network_record["negative_test"],
+    )
+
+    assert any(
+        issue.startswith("INDEPENDENT_ORACLE_GOVERNANCE_SCOPE_MISMATCH:")
+        for issue in verify_coverage(ROOT, registry)
+    )
 
 
 def test_independent_oracle_cli_is_a_separate_executable_gate() -> None:

@@ -32,14 +32,12 @@ TERMINAL_NAMES = {
 REQUEST_NAMES = {"request", "_request", "exchange", "_api", "_api_async", "_api_async_safe"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 SKIP_PARTS = {
-    ".beidou",
     ".git",
     ".venv",
     "__pycache__",
     "build",
     "dist",
     "docs",
-    "evidence",
     "tests",
 }
 
@@ -56,7 +54,8 @@ def scan_source_digests(root: Path) -> dict[str, str]:
     """Independently enumerate production code and declarative source hashes."""
 
     root = root.resolve()
-    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".toml", ".yaml", ".yml"}
+    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".sql", ".toml", ".yaml", ".yml"}
+    runtime_source_suffixes = {".cron", ".plist", ".py", ".sh", ".sql", ".toml", ".yaml", ".yml"}
     digests: dict[str, str] = {}
     for path in root.rglob("*"):
         if not path.is_file():
@@ -65,15 +64,16 @@ def scan_source_digests(root: Path) -> dict[str, str]:
         if any(part in SKIP_PARTS for part in relative.parts):
             continue
         relative_text = relative.as_posix()
-        if relative_text in {
-            "beidou_launcher/write_registry.py",
-            "config/write-capability-registry.json",
-        }:
+        if relative_text == "config/write-capability-registry.json":
             continue
         try:
             data = path.read_bytes()
             executable = bool(path.stat().st_mode & 0o111)
         except OSError:
+            continue
+        if relative.parts[0] in {".beidou", "evidence"} and not (
+            path.suffix.lower() in runtime_source_suffixes or executable or data.startswith(b"#!")
+        ):
             continue
         if (
             path.suffix.lower() not in governed_suffixes
@@ -130,12 +130,29 @@ class _OracleVisitor(ast.NodeVisitor):
 
     def _target(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):
-            return self.aliases.get(node.id, "")
+            alias = self.aliases.get(node.id, "")
+            if alias:
+                return alias
+            module = self.module_aliases.get(node.id, "").split(".", 1)[0]
+            return f"NETWORK_MODULE:{module}" if module in {"aiohttp", "httpx", "requests", "urllib"} else ""
         if isinstance(node, ast.Attribute):
             return node.attr
         if isinstance(node, ast.Call) and _name(node.func) == "getattr":
             value = _constant_string(node.args[1]) if len(node.args) > 1 else None
             return value or "UNRESOLVED_GETATTR"
+        if isinstance(node, ast.Call) and _name(node.func) == "vars" and node.args:
+            base = self._target(node.args[0])
+            return f"NETWORK_CONTAINER:{base}" if base.startswith("NETWORK_MODULE:") else ""
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"get", "pop"}:
+            base = self._target(node.func.value)
+            if base.startswith("NETWORK_CONTAINER:"):
+                value = _constant_string(node.args[0]) if node.args else None
+                return f"NETWORK_METHOD:{(value or 'DYNAMIC').upper()}"
+        if isinstance(node, ast.Subscript):
+            base = self._target(node.value)
+            if base.startswith("NETWORK_CONTAINER:"):
+                value = _constant_string(node.slice)
+                return f"NETWORK_METHOD:{(value or 'DYNAMIC').upper()}"
         return ""
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -167,6 +184,12 @@ class _OracleVisitor(ast.NodeVisitor):
                 if isinstance(assigned, ast.Name):
                     self.aliases[assigned.id] = target
                 elif isinstance(assigned, (ast.Attribute, ast.Subscript)):
+                        self._record(node, "UNRESOLVED_WRITE_CALLABLE", f"stored:{target}")
+        elif target.startswith(("NETWORK_CONTAINER:", "NETWORK_METHOD:")):
+            for assigned in node.targets:
+                if isinstance(assigned, ast.Name):
+                    self.aliases[assigned.id] = target
+                else:
                     self._record(node, "UNRESOLVED_WRITE_CALLABLE", f"stored:{target}")
         elif isinstance(node.value, ast.Call) and isinstance(node.value.func, (ast.Name, ast.Attribute)):
             constructor_name = _name(node.value.func)
@@ -189,7 +212,7 @@ class _OracleVisitor(ast.NodeVisitor):
     def visit_Return(self, node: ast.Return) -> None:
         if node.value is not None:
             target = self._target(node.value)
-            if target in CONSTRUCTORS | TERMINAL_NAMES | REQUEST_NAMES:
+            if target in CONSTRUCTORS | TERMINAL_NAMES | REQUEST_NAMES or target.startswith("NETWORK_METHOD:"):
                 self._record(node, "UNRESOLVED_WRITE_CALLABLE", f"returned:{target}")
         self.generic_visit(node)
 
@@ -262,7 +285,9 @@ class _OracleVisitor(ast.NodeVisitor):
 
         for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
             argument_target = self._target(argument)
-            if argument_target in CONSTRUCTORS | TERMINAL_NAMES | (REQUEST_NAMES - {"exchange"}):
+            if argument_target in CONSTRUCTORS | TERMINAL_NAMES | (REQUEST_NAMES - {"exchange"}) or argument_target.startswith(
+                "NETWORK_METHOD:"
+            ):
                 self._record(node, "UNRESOLVED_WRITE_CALLABLE", f"callback:{argument_target}")
 
         if isinstance(node.func, ast.Attribute) and node.func.attr.lower() in {"post", "put", "patch", "delete"}:
@@ -304,7 +329,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
         )
         if has_network_import:
             imported_roots = {module.split(".", 1)[0] for module in visitor.module_aliases.values()}
-            lexical_tokens = {"__import__"}
+            lexical_tokens = {"__getattribute__", "__import__", "vars("}
             if imported_roots & {"aiohttp", "httpx", "requests", "urllib"}:
                 lexical_tokens.update({"getattr(", ".post", ".put", ".patch", ".delete", "Request", "urlopen"})
             if "asyncio" in imported_roots:
@@ -401,6 +426,76 @@ def scan_repository(root: Path) -> list[OracleFinding]:
     return sorted(findings, key=lambda item: (item.path, item.line, item.kind, item.detail))
 
 
+def _qualified_scopes_at_line(path: Path, line: int) -> set[str]:
+    """Return independently parsed function scopes containing a source line."""
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, UnicodeError, SyntaxError):
+        return set()
+    matches: set[str] = set()
+
+    def walk(nodes: list[ast.stmt], parents: tuple[str, ...] = ()) -> None:
+        for node in nodes:
+            if isinstance(node, ast.ClassDef):
+                walk(node.body, (*parents, node.name))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                end = getattr(node, "end_lineno", node.lineno)
+                if node.lineno <= line <= end:
+                    matches.add(".".join((*parents, node.name)))
+                walk(node.body, (*parents, node.name))
+
+    walk(tree.body)
+    return matches
+
+
+def expected_governance_ids(
+    finding: OracleFinding,
+    *,
+    root: Path,
+    registry: dict[str, Any],
+) -> set[str]:
+    """Derive the only record identities allowed to govern a finding."""
+
+    entries = {
+        record["id"]
+        for record in registry.get("entries", [])
+        if isinstance(record, dict) and record.get("path") == finding.path and isinstance(record.get("id"), str)
+    }
+    networks = {
+        record["id"]
+        for record in registry.get("network_imports", [])
+        if isinstance(record, dict)
+        and str(record.get("source", "")).split("::", 1)[0] == finding.path
+        and isinstance(record.get("id"), str)
+    }
+    scopes = _qualified_scopes_at_line(root / finding.path, finding.line)
+    terminals = {
+        record["id"]
+        for record in registry.get("terminal_write_paths", [])
+        if isinstance(record, dict)
+        and str(record.get("source", "")).split("::", 1)[0] == finding.path
+        and len(str(record.get("source", "")).split("::")) >= 3
+        and str(record.get("source", "")).split("::")[1] in scopes
+        and isinstance(record.get("id"), str)
+    }
+    terminal_kinds = {"DIRECT_URLLIB_REQUEST", "NETWORK_TRANSPORT_CALL", "TERMINAL_CALL"}
+    entry_kinds = {
+        "LEXICAL_CALLABLE_SURFACE",
+        "RUNTIME_CONSTRUCTOR",
+        "UNRESOLVED_WRITE_CALLABLE",
+        "YAML_PACKAGE_NETWORK",
+        "YAML_REMOTE_ACTION",
+    }
+    if finding.kind in terminal_kinds:
+        return terminals or entries
+    if finding.kind in entry_kinds:
+        return entries
+    if finding.kind in {"NETWORK_STREAM_CALL", "LEXICAL_NETWORK_SURFACE"}:
+        return terminals or networks or entries
+    return terminals or entries or networks
+
+
 def verify_coverage(root: Path, registry: dict[str, Any]) -> list[str]:
     actual = {
         f"{finding.path}:{finding.line}:{finding.kind}:{finding.detail}" for finding in scan_repository(root)
@@ -409,6 +504,7 @@ def verify_coverage(root: Path, registry: dict[str, Any]) -> list[str]:
         "declared_entrypoint_records": registry.get("declared_entrypoint_records"),
         "entries": registry.get("entries"),
         "governed_source_digests": registry.get("governed_source_digests"),
+        "independent_oracle_findings": registry.get("independent_oracle_findings"),
         "network_imports": registry.get("network_imports"),
         "terminal_write_paths": registry.get("terminal_write_paths"),
     }
@@ -463,6 +559,19 @@ def verify_coverage(root: Path, registry: dict[str, Any]) -> list[str]:
         if record is None:
             issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_MISSING:{identity}")
             continue
+        identity_parts = identity.split(":", 3)
+        if len(identity_parts) != 4 or not identity_parts[1].isdigit():
+            issues.append(f"INDEPENDENT_ORACLE_IDENTITY_INVALID:{identity}")
+            continue
+        finding = OracleFinding(
+            path=identity_parts[0],
+            line=int(identity_parts[1]),
+            kind=identity_parts[2],
+            detail=identity_parts[3],
+        )
+        allowed_governance = expected_governance_ids(finding, root=root, registry=registry)
+        if governance_id not in allowed_governance:
+            issues.append(f"INDEPENDENT_ORACLE_GOVERNANCE_SCOPE_MISMATCH:{identity}")
         finding_path = identity.split(":", 1)[0]
         record_path = record.get("path") or str(record.get("source", "")).split("::", 1)[0]
         if finding_path != record_path:

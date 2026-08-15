@@ -51,14 +51,12 @@ _PYTHON_MARKERS = (
     "BinanceUsdmAdapter(",
 )
 _SKIP_PARTS = {
-    ".beidou",
     ".git",
     ".venv",
     "__pycache__",
     "build",
     "dist",
     "docs",
-    "evidence",
     "tests",
 }
 _REQUIRED_ENTRY_FIELDS = {
@@ -247,6 +245,13 @@ def _is_skipped(path: Path, root: Path) -> bool:
     )
 
 
+def _is_governed_source_skipped(path: Path, root: Path) -> bool:
+    """Exclude non-source trees while retaining executable runtime artifacts."""
+
+    relative = path.relative_to(root)
+    return any(part in _SKIP_PARTS for part in relative.parts)
+
+
 def _yaml_execution_strings(payload: Any) -> list[str]:
     commands: list[str] = []
     if isinstance(payload, dict):
@@ -420,18 +425,24 @@ def discover_governed_source_digests(root: Path) -> dict[str, str]:
     """Hash every production code, executable, and declarative source surface."""
 
     root = root.resolve()
-    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".toml", ".yaml", ".yml"}
+    governed_suffixes = {".cron", ".json", ".plist", ".py", ".sh", ".sql", ".toml", ".yaml", ".yml"}
+    runtime_source_suffixes = {".cron", ".plist", ".py", ".sh", ".sql", ".toml", ".yaml", ".yml"}
     digests: dict[str, str] = {}
     for path in root.rglob("*"):
-        if not path.is_file() or _is_skipped(path, root):
+        if not path.is_file() or _is_governed_source_skipped(path, root):
             continue
-        relative = path.relative_to(root).as_posix()
-        if relative == "config/write-capability-registry.json":
+        relative = path.relative_to(root)
+        relative_text = relative.as_posix()
+        if relative_text == "config/write-capability-registry.json":
             continue
         try:
             executable = bool(path.stat().st_mode & 0o111)
             has_shebang = path.read_bytes()[:2] == b"#!"
         except OSError:
+            continue
+        if relative.parts[0] in {".beidou", "evidence"} and not (
+            path.suffix.lower() in runtime_source_suffixes or executable or has_shebang
+        ):
             continue
         if (
             path.suffix.lower() not in governed_suffixes
@@ -441,7 +452,7 @@ def discover_governed_source_digests(root: Path) -> dict[str, str]:
             and not has_shebang
         ):
             continue
-        digests[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        digests[relative_text] = hashlib.sha256(path.read_bytes()).hexdigest()
     return dict(sorted(digests.items()))
 
 
@@ -577,11 +588,27 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
             return target
         return ""
 
+    def _reflective_target(self, node: ast.AST) -> str:
+        direct = self._getattr_target(node)
+        if direct:
+            return direct
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "__getattribute__"
+            and len(node.args) >= 2
+        ):
+            return ""
+        target = _constant_string(node.args[1])
+        return f"reflective[{target or 'DYNAMIC'}]"
+
     def _reference_target(self, node: ast.AST) -> str:
         key = self._expression_key(node)
         alias = self._lookup_alias(key)
         if alias:
             return alias
+        if isinstance(node, ast.Name) and node.id in {"aiohttp", "asyncio", "httpx", "requests", "socket", "urllib"}:
+            return f"network_module[{node.id}]"
         if isinstance(node, ast.Subscript):
             container_alias = self._lookup_alias(self._expression_key(node.value))
             if container_alias:
@@ -593,7 +620,7 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
             return _NETWORK_CALL_MARKERS[name]
         if name in _MUTATING_CALL_NAMES or name in _GENERIC_REQUEST_NAMES or name == "execute_action":
             return name
-        getattr_target = self._getattr_target(node)
+        getattr_target = self._reflective_target(node)
         if getattr_target:
             return getattr_target
         if isinstance(node, ast.Call) and self._attribute_name(node.func) == "partial" and node.args:
@@ -602,6 +629,10 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
                 method_value = _constant_string(node.args[1]) if len(node.args) > 1 else None
                 method = method_value.upper() if method_value else "DYNAMIC"
                 return f"partial[{reference}:{method}]"
+        if isinstance(node, ast.Call) and self._attribute_name(node.func) == "vars" and node.args:
+            reference = self._reference_target(node.args[0])
+            if reference:
+                return f"vars[{reference}]"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             container_reference = self._reference_target(node.func.value)
             if node.func.attr in {"get", "pop", "values"} and container_reference:
@@ -700,7 +731,7 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
                 else f"alias[{alias_target}]"
             )
 
-        direct_getattr_target = self._getattr_target(node.func)
+        direct_getattr_target = self._reflective_target(node.func)
         if direct_getattr_target:
             marker = f"getattr[{direct_getattr_target}]"
 
@@ -770,10 +801,17 @@ class _TerminalWriteCallVisitor(ast.NodeVisitor):
             if stored_target:
                 marker = f"setattr[{stored_target}]"
 
-        callable_arguments = {
-            self._explicit_callable_reference(argument)
-            for argument in [*node.args, *(keyword.value for keyword in node.keywords)]
-        }
+        callable_arguments: set[str] = set()
+        for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+            reference = self._explicit_callable_reference(argument)
+            if not reference:
+                dynamic_reference = self._reference_target(argument)
+                if dynamic_reference.startswith(
+                    ("container_extract[", "partial[", "reflective[", "subscript_alias[", "vars[")
+                ):
+                    reference = dynamic_reference
+            if reference:
+                callable_arguments.add(reference)
         callable_arguments.discard("")
         if callable_arguments and not marker:
             marker = f"callable_argument[{','.join(sorted(callable_arguments))}]"
@@ -1069,6 +1107,7 @@ def compute_governance_digest(registry: dict[str, Any]) -> str:
         "declared_entrypoint_records": registry.get("declared_entrypoint_records"),
         "entries": registry.get("entries"),
         "governed_source_digests": registry.get("governed_source_digests"),
+        "independent_oracle_findings": registry.get("independent_oracle_findings"),
         "network_imports": registry.get("network_imports"),
         "terminal_write_paths": registry.get("terminal_write_paths"),
     }

@@ -159,15 +159,31 @@ def test_governed_source_digest_detects_hidden_behavior_and_new_sources(tmp_path
     (tmp_path / "activate.cron").write_text("* * * * * dynamic-command\n", encoding="utf-8")
     assert "activate.cron" in discover_governed_source_digests(tmp_path)
 
+    (tmp_path / "migration.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    assert "migration.sql" in discover_governed_source_digests(tmp_path)
+
     runtime_evidence = tmp_path / "evidence" / "generated.json"
     runtime_evidence.parent.mkdir()
     runtime_evidence.write_text('{"result":"runtime"}\n', encoding="utf-8")
     runtime_state = tmp_path / ".beidou" / "state.json"
     runtime_state.parent.mkdir()
     runtime_state.write_text('{"state":"runtime"}\n', encoding="utf-8")
+    hidden_script = tmp_path / "evidence" / "activate.sh"
+    hidden_script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     governed = discover_governed_source_digests(tmp_path)
     assert "evidence/generated.json" not in governed
     assert ".beidou/state.json" not in governed
+    assert "evidence/activate.sh" in governed
+
+
+def test_primary_governance_implementation_is_itself_hashed() -> None:
+    governed = discover_governed_source_digests(ROOT)
+
+    assert "beidou_launcher/write_registry.py" in governed
+    assert all(
+        path in governed
+        for path in ("migrations/001_initial_schema.up.sql", "migrations/006_execution_children.up.sql")
+    )
 
 
 def test_terminal_scan_detects_network_aliases_and_dynamic_loading(tmp_path: Path) -> None:
@@ -197,6 +213,12 @@ async def mutate(client):
     sock = create_socket(('offline.invalid', 443))
     sender = sock.sendall
     sender(b'x')
+    table = vars(httpx)
+    def factory():
+        return table['post']
+    factory()('https://offline.invalid/write', data=b'x')
+    callback(vars(httpx).get('post'))
+    object.__getattribute__(httpx, 'post')('https://offline.invalid/write', data=b'x')
 """,
         encoding="utf-8",
     )
@@ -209,6 +231,8 @@ async def mutate(client):
     assert "asyncio_open_connection" in calls
     assert "socket_create_connection" in calls
     assert "socket_sendall" in calls
+    assert "vars[network_module[httpx]]" in calls
+    assert "reflective[post]" in calls
 
 
 def test_non_python_write_surfaces_are_scanned_and_parse_failures_block(tmp_path: Path) -> None:
