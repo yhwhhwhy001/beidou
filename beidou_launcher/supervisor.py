@@ -940,6 +940,8 @@ class BeidouSupervisor:
             return False
         if state_value == "ACTIVE":
             # 引擎已 ACTIVE：无需 transition 序列，直接补发 RESUME
+            from beidou_control.plane import ControlAction
+
             if self._control_state() not in ("RESUME", "LOCK", "EMERGENCY_FLATTEN"):
                 self.engine._control.execute_action(ControlAction.RESUME)
                 print("[supervisor] Re-issued RESUME (engine already ACTIVE)")
