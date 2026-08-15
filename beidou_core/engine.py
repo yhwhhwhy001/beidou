@@ -7560,6 +7560,15 @@ class AutonomousEngine:
         if self._control.get_status() == ControlAction.LOCK:
             print("[nearline] Protection retry skipped: control plane is LOCKED")
             return
+        # 诊断打印（限频 30s）：定位补发不触发的原因
+        if time.time() - getattr(self, "_last_retry_diag", 0) > 30:
+            self._last_retry_diag = time.time()
+            _proj = self._protection.all_positions()
+            print(
+                f"[nearline-diag] retry: symbols={len(exchange_symbols)} "
+                f"positions={len(_proj)} sl_none={sum(1 for p in _proj.values() if p.stop_loss is None)} "
+                f"pending_retry={sorted(getattr(self, '_pending_protection_retry', set()))[:5]}"
+            )
         try:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
             existing_algos = await self._get_open_algo_inventory()
