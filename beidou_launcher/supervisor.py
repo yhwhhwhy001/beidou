@@ -475,14 +475,27 @@ class BeidouSupervisor:
             else:
                 raise RuntimeError(f"Invalid position mode response: {str(response)[:300]}")
         except Exception as exc:
-            self._position_mode_evidence = PositionModeEvidence(
-                account_id="",
-                venue="BINANCE_USDM",
-                mode=AccountPositionMode.UNKNOWN,
-                source="EXCHANGE_USER_DATA",
-                observed_at=now,
-                error=f"{type(exc).__name__}: {exc}",
-            )
+            # BD-FIX: 查询失败保留上次成功证据 —— position mode 是
+            # 账户级设置不会瞬时变化，demo 网络抖动/熔断循环下探针
+            # 反复失败 → UNKNOWN P0 持续 blocker → 自动重新授权被
+            # blocker 条件卡住 → PAUSED + NO_NEW_RISK（final62 实测
+            # 5.5h）。失败只记错误供审计，证据保留上次成功值。
+            if self._position_mode_evidence is None or str(
+                getattr(self._position_mode_evidence.mode, "value", self._position_mode_evidence.mode)
+            ) == "UNKNOWN":
+                self._position_mode_evidence = PositionModeEvidence(
+                    account_id="",
+                    venue="BINANCE_USDM",
+                    mode=AccountPositionMode.UNKNOWN,
+                    source="EXCHANGE_USER_DATA",
+                    observed_at=now,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            else:
+                print(
+                    f"[supervisor] position mode probe failed ({type(exc).__name__}) — "
+                    "keeping last known mode"
+                )
 
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
         """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
