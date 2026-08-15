@@ -7473,6 +7473,13 @@ class AutonomousEngine:
                 self._block_unowned_protection_orders(unowned_algo_ids)
                 print("[nearline] Excess-order cleanup blocked: conditional-order ownership UNKNOWN")
                 return
+            # BD-FIX (final83e): 空/残缺 inventory 不构成 MISSING 证据
+            # （testnet API 抖动时返回 []，见 _get_open_algo_inventory
+            # docstring）—— 否则全部 ACTIVE 行被判 VENUE_ROW_MISSING
+            # 并 block owner_unknown（t33 实测）。
+            if not existing_algos:
+                print("[nearline] Excess-order cleanup deferred: algo inventory empty (API unstable)")
+                return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
                 self._block_unowned_protection_orders(semantic_issues)
