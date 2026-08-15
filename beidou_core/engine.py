@@ -5263,8 +5263,8 @@ class AutonomousEngine:
         if "orderId" in order:
             oid_str = str(order["orderId"])
             slice_client_id = params.get("newClientOrderId", "")
-            # 标记平仓订单（通过 client_order_id 中的 "-close-"/"-emergency-" 模式识别）
-            if slice_client_id and ("-close-" in slice_client_id or "-emergency-" in slice_client_id):
+            # 标记平仓订单（通过 client_order_id 中的 "-close-"/"-emergency-"/"-emg-" 模式识别）
+            if slice_client_id and ("-close-" in slice_client_id or "-emergency-" in slice_client_id or "-emg-" in slice_client_id):
                 self._close_order_ids.add(oid_str)
                 print(f"[order] Marked as close order: {oid_str}")
             tracker = OrderStateTracker(order_id=OrderId(oid_str))
