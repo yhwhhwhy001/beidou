@@ -8004,7 +8004,23 @@ class AutonomousEngine:
         await self._cleanup_excess_orders()
 
         # === 保护单缺失重试：对 -2021 (立即触发) 等瞬时失败自动重试 ===
-        await self._retry_missing_protections(exchange_symbols)
+        # BD-FIX (final82b): 补发的 symbol 集合不依赖 RESUME 门禁 ——
+        # cleanup_facts_ready=False（控制面 NO_NEW_RISK）时 exchange_symbols
+        # 为空 → 补发全部被 continue 跳过 → 保护覆盖永不恢复 → supervisor
+        # 持续 MISSING_SL blocker → 永不 RESUME（鸡生蛋死锁）。
+        # 补发本身就是 fail-closed 恢复路径的一部分（下单仅受 LOCK 约束），
+        # 用账户快照构建 symbol 集合。
+        retry_symbols = exchange_symbols
+        if not retry_symbols:
+            for ep in (self._last_account.get("positions", []) if isinstance(self._last_account, dict) else []):
+                try:
+                    amt = float(ep.get("positionAmt", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                sym = str(ep.get("symbol", "")).strip().upper()
+                if math.isfinite(amt) and abs(amt) > 0 and sym:
+                    retry_symbols.add(sym)
+        await self._retry_missing_protections(retry_symbols)
 
         try:
             # No active pool evidence means no proposal collection.  Falling
