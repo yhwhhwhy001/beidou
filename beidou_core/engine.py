@@ -7660,14 +7660,14 @@ class AutonomousEngine:
                     status = getattr(getattr(p_order, "status", None), "value", "")
                     return status in (ProtectionStatus.ACTIVE.value, ProtectionStatus.CREATED.value)
 
-                expected_count = (1 if _needs_exchange_protection(pp.stop_loss) else 0) + sum(
+                # BD-FIX (final82h): SL 恒计入 expected —— 每个持仓都需要 1
+                # 个止损单；投影 SL 为 None/CREATED（无 ACK）时 server 不含
+                # SL → 不满足 covered → 进入 S33 重建/重试。旧逻辑 SL 缺失
+                # 不计 expected，TP 已覆盖品种被 covered skip 跳过 → SL
+                # 永不补发（final82d/e 实测死锁）。
+                expected_count = 1 + sum(
                     1 for tp in pp.take_profits if _needs_exchange_protection(tp)
                 )
-                # BD-FIX (final82e): stop_loss=None 但有 PENDING 止损意图时
-                # expected +1 —— 否则 TP 已覆盖的品种被 covered skip 跳过，
-                # S33 重建永远执行不到（final82d 实测）。
-                if pp.stop_loss is None and getattr(self, "_pending_stop_intent", {}).get(pos_id):
-                    expected_count += 1
                 server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
