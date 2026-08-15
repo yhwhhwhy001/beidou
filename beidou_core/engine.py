@@ -6182,11 +6182,14 @@ class AutonomousEngine:
                         "avgPrice": str(getattr(update, "average_price", Price(amount="0")).amount),
                         "status": str(getattr(getattr(update, "order_status", None), "value", "")),
                     }
-                    await self._process_fill(
-                        _order_id,
-                        str(update.symbol),
-                        _result_payload,
-                    )
+                    with contextlib.suppress(RuntimeError):
+                        asyncio.create_task(
+                            self._process_fill(
+                                _order_id,
+                                str(update.symbol),
+                                _result_payload,
+                            )
+                        )
                 except Exception as _event_fill_exc:
                     logger.warning("event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__)
             self._event_stream_facts = projector.fact_snapshot()
