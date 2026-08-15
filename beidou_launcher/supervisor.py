@@ -134,13 +134,10 @@ class BeidouSupervisor:
         from .g7_tracker import G7LiveTracker
 
         self._g7_tracker = G7LiveTracker()
-        # The live tracker is informational; the certification producer is
-        # the durable source used by the real G7 window.  It never creates or
-        # starts a window automatically, so a missing/legacy window remains
-        # NOT_VERIFIABLE rather than silently starting certification.
-        from beidou_certification.unattended import UnattendedCertification
-
-        self._g7_certification = UnattendedCertification(str(project_root / "artifacts" / "evidence" / "g7"))
+        # Startup cannot activate or refresh a certification producer. A
+        # separately authorized evidence workflow may inject one explicitly;
+        # the runtime default remains producer-free and HARD_HOLD.
+        self._g7_certification: Any | None = None
         self._g7_observed_incident_ids: set[str] = set()
 
     @staticmethod
@@ -474,9 +471,11 @@ class BeidouSupervisor:
             # 反复失败 → UNKNOWN P0 持续 blocker → 自动重新授权被
             # blocker 条件卡住 → PAUSED + NO_NEW_RISK（final62 实测
             # 5.5h）。失败只记错误供审计，证据保留上次成功值。
-            if self._position_mode_evidence is None or str(
-                getattr(self._position_mode_evidence.mode, "value", self._position_mode_evidence.mode)
-            ) == "UNKNOWN":
+            if (
+                self._position_mode_evidence is None
+                or str(getattr(self._position_mode_evidence.mode, "value", self._position_mode_evidence.mode))
+                == "UNKNOWN"
+            ):
                 self._position_mode_evidence = PositionModeEvidence(
                     account_id="",
                     venue="BINANCE_USDM",
@@ -486,10 +485,7 @@ class BeidouSupervisor:
                     error=f"{type(exc).__name__}: {exc}",
                 )
             else:
-                print(
-                    f"[supervisor] position mode probe failed ({type(exc).__name__}) — "
-                    "keeping last known mode"
-                )
+                print(f"[supervisor] position mode probe failed ({type(exc).__name__}) — keeping last known mode")
 
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
         """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
@@ -546,6 +542,8 @@ class BeidouSupervisor:
 
     def _g7_certification_summary(self) -> dict[str, Any]:
         """Expose durable G7 producer state without certifying it."""
+        if self._g7_certification is None:
+            return {"active_windows": [], "state_load_errors": [], "producer_status": "HARD_HOLD"}
         try:
             windows = self._g7_certification.list_windows()
             active = [item for item in windows if item.get("status") in {"CREATED", "RUNNING", "PAUSED"}]
@@ -564,6 +562,9 @@ class BeidouSupervisor:
         check is recorded as a failed SLI; a P0 blocker also opens a durable
         P0 incident and resets the window through the certification engine.
         """
+        if self._g7_certification is None:
+            return
+
         from datetime import datetime, timezone
 
         from beidou_certification.unattended import (
@@ -1149,11 +1150,15 @@ class BeidouSupervisor:
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新
             try:
-                active_windows = [
-                    item
-                    for item in self._g7_certification.list_windows()
-                    if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
-                ]
+                active_windows = (
+                    [
+                        item
+                        for item in self._g7_certification.list_windows()
+                        if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
+                    ]
+                    if self._g7_certification is not None
+                    else []
+                )
                 set_window_state = getattr(self._g7_tracker, "set_durable_window_state", None)
                 if callable(set_window_state):
                     set_window_state(running=len(active_windows) == 1, evidence_state_complete=len(active_windows) == 1)

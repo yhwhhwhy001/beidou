@@ -1,28 +1,22 @@
-"""实时安全与执行层入口 (Safety Executor)。Clock Domain: REALTIME。
-
-现在委托给统一的 beidou_core.engine.AutonomousEngine。
-保留此入口用于向后兼容和独立安全层测试。
-"""
+"""Retired safety-executor entrypoint delegated to the governed launcher."""
 
 from __future__ import annotations
 
-import os
 import sys
 
 
 def main() -> None:
-    proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, proj_root)
-    os.chdir(proj_root)
-    if "BEIDOU_ENV" not in os.environ:
-        os.environ["BEIDOU_ENV"] = "testnet"
+    """Start only safety-only mode and require explicit symbols."""
+    if "--mode" in sys.argv[1:]:
+        raise SystemExit("apps.safety_executor fixes mode=safety_only; use beidou directly for another mode")
 
-    import asyncio
+    from beidou_launcher.cli import main as launcher_command
 
-    from beidou_core.engine import AutonomousEngine
-
-    engine = AutonomousEngine(symbols=["BTCUSDT", "ETHUSDT"], mode="safety_only")
-    asyncio.run(engine.run())
+    launcher_command.main(
+        args=["start", "--mode", "safety_only", *sys.argv[1:]],
+        prog_name="python -m apps.safety_executor",
+        standalone_mode=True,
+    )
 
 
 if __name__ == "__main__":

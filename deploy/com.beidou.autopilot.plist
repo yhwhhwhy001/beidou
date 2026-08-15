@@ -15,10 +15,6 @@
     <array>
         <string>/opt/homebrew/bin/beidou</string>
         <string>start</string>
-        <string>--mode</string>
-        <string>testnet</string>
-        <string>--symbols</string>
-        <string>BTCUSDT,ETHUSDT</string>
         <string>--no-self-heal</string>
     </array>
 
@@ -28,13 +24,13 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>BEIDOU_ENV</key>
-        <string>testnet</string>
+        <string>safety_only</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>
 
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
 
     <!-- Never restart a failed/LOCKED process without a governed watchdog. -->
     <key>KeepAlive</key>

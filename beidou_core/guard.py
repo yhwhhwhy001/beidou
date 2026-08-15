@@ -351,7 +351,7 @@ class EnvironmentGuard:
 
         return len(failures) == 0
 
-    def run_all_checks(self, cli_mode: str = "paper") -> StartupGateResult:
+    def run_all_checks(self, cli_mode: str = "paper", *, persist_audit: bool = True) -> StartupGateResult:
         """运行所有启动检查，返回综合结果。
 
         Args:
@@ -408,8 +408,10 @@ class EnvironmentGuard:
             },
         )
 
-        # Write audit events to disk
-        self._write_audit_trail()
+        # Offline callers may request an in-memory gate result. Preflight uses
+        # this mode so fact discovery never manufactures its own evidence.
+        if persist_audit:
+            self._write_audit_trail()
 
         status = StartupGateStatus.PASS if len(failures) == 0 else StartupGateStatus.FAIL
         return StartupGateResult(

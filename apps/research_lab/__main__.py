@@ -14,8 +14,7 @@ def main() -> None:
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sys.path.insert(0, proj_root)
     os.chdir(proj_root)
-    if "BEIDOU_ENV" not in os.environ:
-        os.environ["BEIDOU_ENV"] = "testnet"
+    os.environ.setdefault("BEIDOU_ENV", "research")
 
     print("=" * 60)
     print("北斗 Research Lab — 离线因子研究环境")

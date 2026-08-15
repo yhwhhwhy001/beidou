@@ -142,7 +142,7 @@ def main() -> int:
     signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
     if not signing_key:
         fail_fast("BEIDOU_SIGNING_KEY not set")
-    print(f"API Key: {'*' * 8}{api_key[-4:] if len(api_key) > 4 else ''}")
+    print("API key: configured (value withheld)")
 
     # 1e: Commit hash
     import subprocess

@@ -1,28 +1,22 @@
-"""近线策略引擎入口 (Strategy Engine)。Clock Domain: NEARLINE。
-
-现在委托给统一的 beidou_core.engine.AutonomousEngine。
-保留此入口用于向后兼容和独立策略层测试。
-"""
+"""Retired strategy-engine entrypoint delegated to the governed launcher."""
 
 from __future__ import annotations
 
-import os
 import sys
 
 
 def main() -> None:
-    proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, proj_root)
-    os.chdir(proj_root)
-    if "BEIDOU_ENV" not in os.environ:
-        os.environ["BEIDOU_ENV"] = "testnet"
+    """Start only the non-writing paper mode and require explicit symbols."""
+    if "--mode" in sys.argv[1:]:
+        raise SystemExit("apps.strategy_engine fixes mode=paper; use beidou directly for another mode")
 
-    import asyncio
+    from beidou_launcher.cli import main as launcher_command
 
-    from beidou_core.engine import AutonomousEngine
-
-    engine = AutonomousEngine(symbols=["BTCUSDT", "ETHUSDT"], mode="paper")
-    asyncio.run(engine.run())
+    launcher_command.main(
+        args=["start", "--mode", "paper", *sys.argv[1:]],
+        prog_name="python -m apps.strategy_engine",
+        standalone_mode=True,
+    )
 
 
 if __name__ == "__main__":

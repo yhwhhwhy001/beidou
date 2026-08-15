@@ -342,28 +342,48 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
 
     evidence_dir = project_root / "evidence" / "bootstrap"
     runtime_dir = project_root / ".beidou"
-    writable = True
-    write_error = ""
-    try:
-        evidence_dir.mkdir(parents=True, exist_ok=True)
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        probe = runtime_dir / ".write_probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
-    except OSError as exc:
-        writable = False
-        write_error = str(exc)
-    checks.append(
-        _result(
-            "preflight.runtime_storage",
-            "运行证据目录",
-            writable,
-            CheckSeverity.P1,
-            "运行状态和证据目录可写",
-            f"运行目录不可写: {write_error}",
-            evidence={"runtime_dir": str(runtime_dir), "evidence_dir": str(evidence_dir)},
+    storage_targets = (runtime_dir, evidence_dir)
+    storage_evidence = {
+        "probe": "read_only_access_check",
+        "targets": [
+            {
+                "path": str(target),
+                "exists": target.exists(),
+                "is_directory": target.is_dir(),
+                "write_access": target.is_dir() and os.access(target, os.W_OK | os.X_OK),
+            }
+            for target in storage_targets
+        ],
+    }
+    missing_storage = [str(target) for target in storage_targets if not target.exists()]
+    inaccessible_storage = [
+        str(target)
+        for target in storage_targets
+        if target.exists() and (not target.is_dir() or not os.access(target, os.W_OK | os.X_OK))
+    ]
+    if missing_storage:
+        checks.append(
+            CheckResult(
+                check_id="preflight.runtime_storage",
+                name="运行证据目录",
+                status=CheckStatus.UNKNOWN,
+                severity=CheckSeverity.P1,
+                message="运行目录缺失；预检不会创建目录或写探针",
+                evidence={**storage_evidence, "missing": missing_storage},
+            )
         )
-    )
+    else:
+        checks.append(
+            _result(
+                "preflight.runtime_storage",
+                "运行证据目录",
+                not inaccessible_storage,
+                CheckSeverity.P1,
+                "现有运行状态和证据目录具备进程写权限",
+                "现有运行目录不可写或不是目录",
+                evidence={**storage_evidence, "inaccessible": inaccessible_storage},
+            )
+        )
 
     api_key_env = os.environ.get("BEIDOU_BINANCE_API_KEY", "")
     api_secret_env = os.environ.get("BEIDOU_BINANCE_API_SECRET", "")
@@ -551,7 +571,7 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
             config_path="",
             evidence_dir=str(evidence_dir),
         )
-        gate = guard.run_all_checks(cli_mode=mode)
+        gate = guard.run_all_checks(cli_mode=mode, persist_audit=False)
         gate_ok = gate.status == StartupGateStatus.PASS
         checks.append(
             _result(

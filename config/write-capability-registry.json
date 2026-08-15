@@ -1,0 +1,578 @@
+{
+  "schema_version": "1.0",
+  "baseline_policy": "M00-E01 entries are inventory only; HARD_HOLD never grants write authority",
+  "entries": [
+    {
+      "id": "ENTRY-APP-AUTOPILOT",
+      "path": "apps/autopilot/__main__.py",
+      "kind": "python_module",
+      "owner": "Engineering Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "python -m apps.autopilot -> beidou_launcher.cli",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-APP-FACTOR-MINER",
+      "path": "apps/factor_miner/__main__.py",
+      "kind": "python_module",
+      "owner": "Research Owner",
+      "capability": "OFFLINE_RESEARCH",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "python -m apps.factor_miner -> research mining pipeline",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-APP-RESEARCH-LAB",
+      "path": "apps/research_lab/__main__.py",
+      "kind": "python_module",
+      "owner": "Research Owner",
+      "capability": "OFFLINE_RESEARCH",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "python -m apps.research_lab -> offline research guidance",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-APP-SAFETY-EXECUTOR",
+      "path": "apps/safety_executor/__main__.py",
+      "kind": "python_module",
+      "owner": "Engineering Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "python -m apps.safety_executor -> launcher safety_only",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-APP-STRATEGY-ENGINE",
+      "path": "apps/strategy_engine/__main__.py",
+      "kind": "python_module",
+      "owner": "Engineering Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "python -m apps.strategy_engine -> launcher paper",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-ENGINE-INTERNAL",
+      "path": "beidou_core/engine.py",
+      "kind": "internal_runtime",
+      "owner": "Engineering Owner",
+      "capability": "TERMINAL_WRITE_INTERNAL",
+      "status": "HARD_HOLD",
+      "call_graph": "launcher supervisor -> AutonomousEngine -> Adapter",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "ENTRY-FEED-INTERNAL",
+      "path": "beidou_core/feed.py",
+      "kind": "internal_transport",
+      "owner": "Market Data Owner",
+      "capability": "EXCHANGE_READ_ONLY",
+      "status": "READ_ONLY",
+      "call_graph": "Engine -> MarketDataFeed -> Adapter/REST GET",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-ADAPTER-BOUNDARY",
+      "path": "beidou_exchange/binance_usdm/adapter.py",
+      "kind": "terminal_choke_point",
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_WRITE_BOUNDARY",
+      "status": "HARD_HOLD",
+      "call_graph": "caller -> BinanceUsdmAdapter.request -> REST",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "ENTRY-LAUNCHER-MODULE",
+      "path": "beidou_launcher/__main__.py",
+      "kind": "python_module",
+      "owner": "Runtime Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "python -m beidou_launcher -> beidou_launcher.cli",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-LAUNCHER-CLI",
+      "path": "beidou_launcher/cli.py",
+      "kind": "canonical_cli",
+      "owner": "Runtime Owner",
+      "capability": "WRITABLE_RUNTIME_CANDIDATE",
+      "status": "HARD_HOLD",
+      "call_graph": "beidou/bd -> cli -> preflight -> supervisor",
+      "negative_test": "tests/unit/test_v3_fail_closed.py"
+    },
+    {
+      "id": "ENTRY-SUPERVISOR",
+      "path": "beidou_launcher/supervisor.py",
+      "kind": "runtime_orchestrator",
+      "owner": "Runtime Owner",
+      "capability": "TERMINAL_WRITE_INTERLOCK",
+      "status": "HARD_HOLD",
+      "call_graph": "launcher cli -> supervisor -> engine/adapter",
+      "negative_test": "tests/unit/test_v3_fail_closed.py"
+    },
+    {
+      "id": "ENTRY-LAUNCHD-PLIST",
+      "path": "deploy/com.beidou.autopilot.plist",
+      "kind": "launchd",
+      "owner": "Runtime Owner",
+      "capability": "RUNTIME_ACTIVATION",
+      "status": "HARD_HOLD",
+      "call_graph": "launchd -> beidou start",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-CONSOLE-SCRIPTS",
+      "path": "pyproject.toml",
+      "kind": "console_script_declaration",
+      "owner": "Engineering Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "beidou/bd -> beidou_launcher.cli:main",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-CERT-EVALUATE-G7",
+      "path": "scripts/certification/evaluate_g7.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "EVIDENCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> G7 evidence evaluator",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-CERT-START-G7",
+      "path": "scripts/certification/start_g7.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "EVIDENCE_WINDOW_CONTROL",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> G7 window state",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-CERTIFY-72H",
+      "path": "scripts/certify_72h.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "EVIDENCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> historical certification evidence",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-CLEANUP-ORDERS",
+      "path": "scripts/cleanup_stale_exchange_orders.py",
+      "kind": "script",
+      "owner": "Execution Owner",
+      "capability": "CANCEL_ACCOUNT_ORDERS",
+      "status": "HARD_HOLD",
+      "call_graph": "operator -> REST inventory -> cancel order/algo",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "ENTRY-GENERATE-SBOM",
+      "path": "scripts/generate_sbom.py",
+      "kind": "script",
+      "owner": "Security Owner",
+      "capability": "LOCAL_ARTIFACT_WRITE",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> local SBOM artifact",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-MIGRATE-CONFIG",
+      "path": "scripts/migrate_config_v2.py",
+      "kind": "script",
+      "owner": "Engineering Owner",
+      "capability": "LOCAL_CONFIG_MIGRATION",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> local config migration",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-MINING-CRON",
+      "path": "scripts/mining_cron.sh",
+      "kind": "cron_shell",
+      "owner": "Research Owner",
+      "capability": "OFFLINE_RESEARCH",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "cron -> factor miner",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-MONITOR-DAEMON",
+      "path": "scripts/monitor_daemon.py",
+      "kind": "script",
+      "owner": "SRE Owner",
+      "capability": "LOCAL_OBSERVATION",
+      "status": "READ_ONLY",
+      "call_graph": "operator -> process/health observation",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-RUN-MIGRATIONS",
+      "path": "scripts/run_migrations.py",
+      "kind": "script",
+      "owner": "Storage Owner",
+      "capability": "DATABASE_MIGRATION",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> configured database migration",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-REPLAY-FIXTURE",
+      "path": "scripts/run_replay_fixture.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "OFFLINE_REPLAY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> local replay fixture",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-SCAN-HARDCODED",
+      "path": "scripts/scan_hardcoded.py",
+      "kind": "script",
+      "owner": "Security Owner",
+      "capability": "SOURCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "CI/operator -> source scanner",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-SCAN-TEST-QUALITY",
+      "path": "scripts/scan_test_quality.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "SOURCE_READ_ONLY",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "CI/operator -> test scanner",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-G5-RUNNER",
+      "path": "scripts/testnet/run_g5.py",
+      "kind": "script",
+      "owner": "Test Quality Owner",
+      "capability": "EXCHANGE_READ_ONLY",
+      "status": "READ_ONLY",
+      "call_graph": "operator -> preflight -> Adapter GET probes",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-START-SHELL",
+      "path": "start_beidou.sh",
+      "kind": "shell",
+      "owner": "Runtime Owner",
+      "capability": "DELEGATE_TO_LAUNCHER",
+      "status": "DELEGATE_ONLY",
+      "call_graph": "operator -> validated legacy shell arguments -> canonical launcher",
+      "negative_test": "tests/unit/test_start_beidou_wrapper.py"
+    },
+    {
+      "id": "ENTRY-TOOL-E2E-DEMO",
+      "path": "tools/e2e_real_demo.py",
+      "kind": "tool",
+      "owner": "Test Quality Owner",
+      "capability": "OFFLINE_SIMULATION",
+      "status": "OFFLINE_ONLY",
+      "call_graph": "operator -> local end-to-end simulation",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-TOOL-HISTORICAL",
+      "path": "tools/historical_simulation_diagnostic.py",
+      "kind": "tool",
+      "owner": "Research Owner",
+      "capability": "EXCHANGE_READ_ONLY",
+      "status": "READ_ONLY",
+      "call_graph": "module import -> REST/Adapter historical reads",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    },
+    {
+      "id": "ENTRY-TOOL-STRATEGY-LIVE",
+      "path": "tools/strategy_live_trade.py",
+      "kind": "tool",
+      "owner": "Execution Owner",
+      "capability": "LEGACY_TRADE_TOOL",
+      "status": "HARD_HOLD",
+      "call_graph": "operator -> legacy strategy trade tool",
+      "negative_test": "tests/architecture/test_write_capability_registry.py"
+    }
+  ],
+  "terminal_write_paths": [
+    {
+      "id": "WRITE-ENGINE-CANCEL-ALGO-ADAPTER",
+      "source": "beidou_core/engine.py::AutonomousEngine._cancel_algo_order::cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "engine cancel wrapper -> adapter cancel_algo_order -> REST DELETE",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-CANCEL-ALGO-BATCH",
+      "source": "beidou_core/engine.py::AutonomousEngine._cancel_algo_orders::_cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "owned position protection cleanup -> engine cancel wrapper",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
+      "source": "beidou_core/engine.py::AutonomousEngine._cleanup_excess_orders::_cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "excess protection reconciliation -> engine cancel wrapper",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-CREATE-ALGO-ADAPTER",
+      "source": "beidou_core/engine.py::AutonomousEngine._create_algo_order::create_algo_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "engine Algo wrapper -> adapter create_algo_order -> REST POST",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-REPLACE-PROTECTION-CANCEL",
+      "source": "beidou_core/engine.py::AutonomousEngine._ensure_exchange_position_protections::cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Safety Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "position protection reconciliation -> adapter cancel_algo_order",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-LEVERAGE",
+      "source": "beidou_core/engine.py::AutonomousEngine._ensure_leverage::_api_async[POST]",
+      "occurrences": 1,
+      "owner": "Risk Owner",
+      "capability": "ACCOUNT_RISK_SETTING_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "engine leverage reconciliation -> legacy API wrapper -> REST POST",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-NEARLINE-CANCEL",
+      "source": "beidou_core/engine.py::AutonomousEngine._nearline_tick::_cancel_algo_orders",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "nearline lifecycle -> protection cancel batch",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-PLACE-ORDER",
+      "source": "beidou_core/engine.py::AutonomousEngine._place_order::_submit_order_slice",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "strategy intent -> execution plan -> submit order slice",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-FILL-CANCEL-PROTECTION",
+      "source": "beidou_core/engine.py::AutonomousEngine._process_fill::_cancel_algo_orders",
+      "occurrences": 2,
+      "owner": "Safety Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "fill processing -> old protection cancel batch",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-FILL-CREATE-PROTECTION",
+      "source": "beidou_core/engine.py::AutonomousEngine._process_fill::_create_algo_order",
+      "occurrences": 1,
+      "owner": "Safety Owner",
+      "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "fill processing -> create position protection",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-RETRY-PROTECTION",
+      "source": "beidou_core/engine.py::AutonomousEngine._retry_missing_protections::_create_algo_order",
+      "occurrences": 3,
+      "owner": "Safety Owner",
+      "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "protection recovery -> create Algo protection",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-UNOWNED-RECOVERY-CANCEL",
+      "source": "beidou_core/engine.py::AutonomousEngine._safe_recover_unowned_testnet_algos::_cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Safety Owner",
+      "capability": "UNOWNED_RECOVERY_FORBIDDEN",
+      "status": "HARD_HOLD",
+      "call_graph": "legacy unowned Testnet recovery -> engine cancel wrapper",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-SHUTDOWN-CANCEL",
+      "source": "beidou_core/engine.py::AutonomousEngine._shutdown::_api_async[DELETE]",
+      "occurrences": 1,
+      "owner": "Runtime Owner",
+      "capability": "CANCEL_OWNED_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "shutdown -> legacy API wrapper -> REST DELETE order",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-SUBMIT-SLICE",
+      "source": "beidou_core/engine.py::AutonomousEngine._submit_order_slice::create_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "INCREASE_OR_REDUCE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "execution slice -> adapter create_order",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ENGINE-RUN-SUBMIT-ALGO",
+      "source": "beidou_core/engine.py::AutonomousEngine.run._submit_algo::_create_algo_order",
+      "occurrences": 1,
+      "owner": "Safety Owner",
+      "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "runtime protection callback -> engine Algo wrapper",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ADAPTER-CANCEL-ALGO",
+      "source": "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.cancel_algo_order::request[DELETE]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "adapter cancel_algo_order -> guarded terminal request",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ADAPTER-CANCEL-ORDER",
+      "source": "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.cancel_order::request[DELETE]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "adapter cancel_order -> guarded terminal request",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ADAPTER-CREATE-ALGO",
+      "source": "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.create_algo_order::request[POST]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "adapter create_algo_order -> guarded terminal request",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-ADAPTER-CREATE-ORDER",
+      "source": "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.create_order::request[POST]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "adapter create_order -> guarded terminal request",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-CANCEL-ALGO",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.cancel_algo_order::_request[DELETE]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "REST cancel_algo_order -> guarded HTTP DELETE",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-CANCEL-ORDER",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.cancel_order::_request[DELETE]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "REST cancel_order -> guarded HTTP DELETE",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-CREATE-ALGO",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.create_algo_order::_request[POST]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "REST create_algo_order -> guarded HTTP POST",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-CREATE-LISTEN-KEY",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.create_listen_key::_request[POST]",
+      "occurrences": 1,
+      "owner": "Market Data Owner",
+      "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "user stream startup -> guarded HTTP POST listen key",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-CREATE-ORDER",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.create_order::_request[POST]",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "REST create_order -> guarded HTTP POST",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-REST-KEEPALIVE-LISTEN-KEY",
+      "source": "beidou_exchange/binance_usdm/rest_client.py::BinanceRESTClient.keepalive_listen_key::_request[PUT]",
+      "occurrences": 1,
+      "owner": "Market Data Owner",
+      "capability": "USER_STREAM_SESSION_WRITE_REQUIRED",
+      "status": "HARD_HOLD",
+      "call_graph": "user stream keepalive -> guarded HTTP PUT listen key",
+      "negative_test": "tests/unit/test_terminal_write_authority.py"
+    },
+    {
+      "id": "WRITE-SCRIPT-CLEANUP-CANCEL-ALGO",
+      "source": "scripts/cleanup_stale_exchange_orders.py::main::cancel_algo_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
+      "status": "HARD_HOLD",
+      "call_graph": "retired cleanup execute path -> REST cancel_algo_order",
+      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py"
+    },
+    {
+      "id": "WRITE-SCRIPT-CLEANUP-CANCEL-ORDER",
+      "source": "scripts/cleanup_stale_exchange_orders.py::main::cancel_order",
+      "occurrences": 1,
+      "owner": "Execution Owner",
+      "capability": "ACCOUNT_WIDE_CLEANUP_FORBIDDEN",
+      "status": "HARD_HOLD",
+      "call_graph": "retired cleanup execute path -> REST cancel_order",
+      "negative_test": "tests/unit/test_cleanup_stale_exchange_orders.py"
+    }
+  ]
+}

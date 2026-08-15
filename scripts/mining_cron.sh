@@ -5,15 +5,15 @@
 set -e
 cd /Users/maguannan/beidou
 
-# 从 ~/.zshrc 提取并加载北斗环境变量
-eval "$(grep '^export BEIDOU_' ~/.zshrc 2>/dev/null)" 2>/dev/null || true
-export BEIDOU_ENV="${BEIDOU_ENV:-testnet}"
+# 研究定时任务固定为零写环境；品种必须由调度配置显式提供。
+export BEIDOU_ENV="research"
+: "${BEIDOU_MINING_SYMBOLS:?BEIDOU_MINING_SYMBOLS must be explicitly configured}"
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 北斗因子挖掘开始"
 
 python -m apps.factor_miner run \
     --policy config/factor_mining_policy.yaml \
-    --symbols BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT \
+    --symbols "$BEIDOU_MINING_SYMBOLS" \
     --interval 1h \
     --limit 500
 

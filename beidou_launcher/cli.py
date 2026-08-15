@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import sys
 from pathlib import Path
 
 import click
+
+from .checks import find_project_root
+from .manifest import (
+    DEFAULT_MODE,
+    DEFAULT_SYMBOLS,
+    HEALTH_PORT,
+    MAX_RESTARTS,
+    MONITOR_INTERVAL,
+    STARTUP_TIMEOUT,
+    SUPPORTED_MODES,
+)
+from .preflight import run_preflight
+from .state import inspect_runtime_status, stop_running_instance
+from .supervisor import BeidouSupervisor
 
 
 def _enable_unbuffered_stdout() -> None:
@@ -25,23 +38,11 @@ def _enable_unbuffered_stdout() -> None:
             continue
         try:
             if not stream.isatty():
-                stream.reconfigure(line_buffering=True)
-        except Exception:
-            pass  # 不可 reconfigure 的流（如某些测试捕获器）保持默认
-
-from .checks import find_project_root
-from .manifest import (
-    DEFAULT_MODE,
-    DEFAULT_SYMBOLS,
-    HEALTH_PORT,
-    MAX_RESTARTS,
-    MONITOR_INTERVAL,
-    STARTUP_TIMEOUT,
-    SUPPORTED_MODES,
-)
-from .preflight import run_preflight
-from .state import inspect_runtime_status, stop_running_instance
-from .supervisor import BeidouSupervisor
+                reconfigure = getattr(stream, "reconfigure", None)
+                if callable(reconfigure):
+                    reconfigure(line_buffering=True)
+        except (AttributeError, OSError, TypeError, ValueError):
+            continue  # 不可 reconfigure 的流（如某些测试捕获器）保持默认
 
 
 def _parse_symbols(value: str) -> list[str]:
