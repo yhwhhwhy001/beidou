@@ -6164,7 +6164,8 @@ class AutonomousEngine:
             # _active_order_ids 监控集 —— 其成交只有 user stream 事件
             # 可观测。事件驱动记账保证 system 侧持仓与交易所对齐
             # （final72 实测 BTRUSDT 保护单平仓后 system 365 vs
-            # exchange 0 恒 MISMATCH）。
+            # exchange 0 恒 MISMATCH）。注意不能用 _process_fill ——
+            # 它要求订单在 _order_trackers（保护单订单不在）。
             _order_id = str(getattr(update, "order_id", "") or "")
             if (
                 result.status is UserProjectionStatus.ACCEPTED
@@ -6182,13 +6183,22 @@ class AutonomousEngine:
                         "avgPrice": str(getattr(update, "average_price", Price(amount="0")).amount),
                         "status": str(getattr(getattr(update, "order_status", None), "value", "")),
                     }
-                    with contextlib.suppress(RuntimeError):
-                        asyncio.create_task(
-                            self._process_fill(
-                                _order_id,
-                                str(update.symbol),
-                                _result_payload,
-                            )
+                    _delta, _price, _fill_id = self._consume_cumulative_fill(
+                        _order_id,
+                        str(update.symbol),
+                        _result_payload,
+                        status=str(getattr(getattr(update, "order_status", None), "value", "")),
+                    )
+                    if _delta > 0 and _price > 0:
+                        self._record_partial_fill_to_ledger(
+                            _order_id,
+                            str(update.symbol),
+                            _result_payload,
+                            _delta,
+                            _price,
+                            float(getattr(update, "cumulative_quantity", Quantity(amount="0")).amount),
+                            _fill_id,
+                            status=str(getattr(getattr(update, "order_status", None), "value", "")),
                         )
                 except Exception as _event_fill_exc:
                     logger.warning("event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__)
