@@ -1953,6 +1953,46 @@ class AutonomousEngine:
             raise RuntimeError(f"SIGNED_POLICY_PARAMETER_MISSING:{key}")
         return default
 
+    def _policy_float_audited(self, key: str, default: float) -> float:
+        """带审计的策略参数读取（M00-F08）。
+
+        策略提供字段 → 生效；缺失 → 采用保守默认并首次 WARN 打印
+        （绝不静默使用代码常量）。策略文件补齐对应键后默认值自然失效。
+        """
+        if key in self._policy_params:
+            return float(self._policy_params[key])
+        _flag = f"_policy_fallback_warned_{key}"
+        if not getattr(self, _flag, False):
+            setattr(self, _flag, True)
+            print(f"[policy] PARAMETER_MISSING_FALLBACK:{key}={default} — 采用保守默认,请补齐签名策略字段")
+        return default
+
+    def _compute_stop_loss_pct(self, atr_pct: float) -> float:
+        """ATR 自适应止损百分比: multiplier×ATR 钳制在 [min, max]（策略可覆盖）。"""
+        return max(
+            self._policy_float_audited("stop_loss_min_pct", 1.0),
+            min(
+                atr_pct * self._policy_float_audited("stop_loss_atr_multiplier", 1.5),
+                self._policy_float_audited("stop_loss_max_pct", 5.0),
+            ),
+        )
+
+    def _apply_fee_tier(self, venue_id: VenueId) -> None:
+        """按签名策略（或保守默认）设置成本模型费率档（M00-F08）。"""
+        self._cost_model.set_fee_tier(
+            venue_id,
+            "vip1",
+            self._policy_float_audited("maker_fee_bps", 2.0),
+            self._policy_float_audited("taker_fee_bps", 4.0),
+        )
+
+    def _capital_budget_amount(self, account_balance: float) -> MonetaryValue:
+        """组合资本预算（M00-F08：比例经签名策略可覆盖，默认 10%）。"""
+        return MonetaryValue(
+            amount=str(account_balance * self._policy_float_audited("capital_budget_ratio", 0.1)),
+            currency="USDT",
+        )
+
     # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
     # 所有 Binance API 访问统一通过 self._adapter (BinanceUsdmAdapter)
     # 不再在 engine 内重复实现签名逻辑
@@ -4768,7 +4808,7 @@ class AutonomousEngine:
             return None
         try:
             vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(order_symbol))
-            self._cost_model.set_fee_tier(VenueId("BINANCE"), "vip1", 2.0, 4.0)
+            self._apply_fee_tier(VenueId("BINANCE"))
             est = self._cost_model.estimate_order(
                 vi,
                 Quantity(amount=str(intent.quantity.amount)),
@@ -8389,7 +8429,8 @@ class AutonomousEngine:
 
                 # ATR-based stop loss (volatility-adaptive; missing ATR was
                 # rejected above rather than replaced with a trading default).
-                stop_loss_pct = max(1.0, min(atr_pct * 1.5, 5.0))  # 1.5× ATR, capped 1%-5%
+                # M00-F08: 1.5×ATR/1%-5% 钳制经签名策略可覆盖,缺失时保守默认+WARN。
+                stop_loss_pct = self._compute_stop_loss_pct(atr_pct)
                 stop_loss_price = price * (1 - stop_loss_pct / 100)
 
                 risk_based_size = budget.compute_position_size(
@@ -8481,7 +8522,7 @@ class AutonomousEngine:
                         venue_id=venue_id,
                         target_quantity=Quantity(amount=str(position_size)),
                         target_notional=MonetaryValue(amount=str(position_notional), currency="USDT"),
-                        capital_budget=MonetaryValue(amount=str(account_balance * 0.1), currency="USDT"),
+                        capital_budget=self._capital_budget_amount(account_balance),
                         max_leverage=dyn_leverage,
                         ownership=PositionOwnership.EXCLUSIVE,
                     )
@@ -8585,7 +8626,7 @@ class AutonomousEngine:
 
                 # === 6. Cost estimation ===
                 vi = VenueInstrument(venue_id=venue_id, instrument_id=instrument_id)
-                self._cost_model.set_fee_tier(venue_id, "vip1", 2.0, 4.0)
+                self._apply_fee_tier(venue_id)
                 cost_est = self._cost_model.estimate_order(
                     vi,
                     Quantity(amount=str(position_size)),
@@ -8698,7 +8739,8 @@ class AutonomousEngine:
                     "margin_ratio": (position_notional / dyn_leverage) / max(account_balance, 1)
                     if account_balance > 0
                     else 1.0,
-                    "max_margin_ratio": 0.95,  # 保证金使用率不超过 95%
+                    # M00-F08: 保证金使用率上限经签名策略可覆盖（默认 95%）。
+                    "max_margin_ratio": self._policy_float_audited("max_margin_ratio", 0.95),
                     "position_qty": position_qty,
                     "liquidation_price": liquidation_price,
                     "current_price": price,
