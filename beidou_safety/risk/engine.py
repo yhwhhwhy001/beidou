@@ -59,6 +59,7 @@ class _PreRiskContext:
     current_position: Quantity | None = None
     current_margin: MonetaryValue | None = None
     pending_orders: list[OrderId] = field(default_factory=list)
+    account_balance: float | None = None  # M10-F01: 保证金检查输入
     correlation_id: CorrelationId | None = None
 
 
@@ -301,11 +302,16 @@ class PreRiskCheckerImpl:
     """Pre-Risk 同步检查。不变量守卫：保证金、仓位上限、未决订单、Approval有效性。"""
 
     def __init__(
-        self, max_leverage: float = 3.0, max_concentration_pct: float = 50.0, max_position_notional: float = 500000.0
+        self,
+        max_leverage: float = 3.0,
+        max_concentration_pct: float = 50.0,
+        max_position_notional: float = 500000.0,
+        max_pending_orders: int = 50,
     ):
         self.max_leverage = max_leverage
         self.max_concentration_pct = max_concentration_pct
         self.max_position_notional = max_position_notional
+        self.max_pending_orders = max_pending_orders  # M10-F01: 挂单上限(原内联检查)
 
     async def check(self, context: _PreRiskContext) -> list[_RiskCheckResult]:
         results: list[_RiskCheckResult] = []
@@ -341,6 +347,27 @@ class PreRiskCheckerImpl:
                     RiskRuleLevel.R2,
                     RiskDecision.REJECTED,
                     f"Position notional {notional} exceeds max {self.max_position_notional}",
+                    cid,
+                )
+            )
+        # M10-F01: 保证金检查（原引擎内联,收敛到真实 checker）
+        if context.account_balance is not None and context.account_balance > 0:
+            if notional > context.account_balance * leverage:
+                results.append(
+                    _RiskCheckResult(
+                        RiskRuleLevel.R2,
+                        RiskDecision.REJECTED,
+                        f"Notional {notional} exceeds margin (balance={context.account_balance}, leverage={leverage})",
+                        cid,
+                    )
+                )
+        # M10-F01: 挂单上限检查（原引擎内联,收敛到真实 checker）
+        if len(context.pending_orders) >= self.max_pending_orders:
+            results.append(
+                _RiskCheckResult(
+                    RiskRuleLevel.R2,
+                    RiskDecision.REJECTED,
+                    f"Too many pending orders ({len(context.pending_orders)} >= {self.max_pending_orders})",
                     cid,
                 )
             )

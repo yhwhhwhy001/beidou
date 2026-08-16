@@ -53,6 +53,7 @@ class PreRiskContext:
     current_position: Quantity | None = None
     current_margin: MonetaryValue | None = None
     pending_orders: list[OrderId] = field(default_factory=list)
+    account_balance: float | None = None  # M10-F01: 保证金检查输入
     correlation_id: CorrelationId | None = None
 
 

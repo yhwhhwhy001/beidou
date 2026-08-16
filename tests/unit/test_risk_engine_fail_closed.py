@@ -14,6 +14,8 @@ from beidou_shared.types import (
     AccountRef,
     CorrelationId,
     InstrumentId,
+    MonetaryValue,
+    OrderId,
     Price,
     Quantity,
     RiskDecision,
@@ -223,3 +225,64 @@ def test_add_rule_rejects_non_callable_and_async_rule_is_awaited() -> None:
             timestamp=results[0].timestamp,
         )
     ]
+
+
+def test_pre_risk_rejects_notional_exceeding_margin() -> None:
+    """M10-F01: 保证金检查（原引擎内联,收敛到 checker）—— 名义 > 余额×杠杆 → 拒绝。"""
+    import asyncio
+
+    from beidou_safety.risk import PreRiskChecker, PreRiskContext
+    from beidou_safety.risk.engine import RiskDecision
+
+    checker = PreRiskChecker(max_leverage=3.0)
+    context = PreRiskContext(
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        order_quantity=Quantity(amount="10"),
+        order_price=MonetaryValue(amount="200", currency="USDT"),
+        leverage=3.0,
+        account_balance=500.0,  # 名义 2000 > 500×3=1500
+    )
+    results = asyncio.run(checker.check(context))
+    assert any(r.decision != RiskDecision.APPROVED and "margin" in r.reason for r in results)
+
+
+def test_pre_risk_rejects_too_many_pending_orders() -> None:
+    """M10-F01: 挂单上限检查（原引擎内联,收敛到 checker）。"""
+    import asyncio
+
+    from beidou_safety.risk import PreRiskChecker, PreRiskContext
+    from beidou_safety.risk.engine import RiskDecision
+
+    checker = PreRiskChecker(max_leverage=3.0, max_pending_orders=5)
+    context = PreRiskContext(
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        order_quantity=Quantity(amount="1"),
+        order_price=MonetaryValue(amount="100", currency="USDT"),
+        leverage=2.0,
+        account_balance=10000.0,
+        pending_orders=[OrderId(f"o{i}") for i in range(5)],
+    )
+    results = asyncio.run(checker.check(context))
+    assert any(r.decision != RiskDecision.APPROVED and "pending" in r.reason for r in results)
+
+
+def test_pre_risk_approves_within_all_limits() -> None:
+    import asyncio
+
+    from beidou_safety.risk import PreRiskChecker, PreRiskContext
+    from beidou_safety.risk.engine import RiskDecision
+
+    checker = PreRiskChecker(max_leverage=3.0, max_pending_orders=5)
+    context = PreRiskContext(
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        order_quantity=Quantity(amount="1"),
+        order_price=MonetaryValue(amount="100", currency="USDT"),
+        leverage=2.0,
+        account_balance=10000.0,
+        pending_orders=[OrderId("o0")],
+    )
+    results = asyncio.run(checker.check(context))
+    assert all(r.decision == RiskDecision.APPROVED for r in results)
