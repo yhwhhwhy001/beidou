@@ -184,12 +184,17 @@ class ControlPlaneAPI:
     # === Control Actions (BD-T14) ===
 
     def resume_trading(self) -> dict:
-        """BD-T14: 手动 RESUME — 验证通过后恢复交易能力。"""
-        if self._control_plane is not None:
-            from beidou_control.plane import ControlAction
+        """BD-T14: 手动 RESUME — 验证通过后恢复交易能力。
 
-            result = self._control_plane.execute_action(ControlAction.RESUME)
-            return {"action": "RESUME", "success": result, "new_status": str(self._control_plane.get_status())}
+        M19-F01 (P0-12): 手动 RESUME 必须经过 TruthSnapshot 授权门禁
+        (BD-CV02 AC-02-04)。使用引擎同步到控制面的最新事实快照;
+        无快照或快照不满足 MATCHED 对账 + ACTIVE 保护 + NORMAL 风险时拒绝。
+        """
+        if self._control_plane is not None:
+            allowed, reason = self._control_plane.execute_authorized_resume()
+            if not allowed:
+                return {"action": "RESUME", "success": False, "error": f"authorize_resume rejected: {reason}"}
+            return {"action": "RESUME", "success": True, "new_status": str(self._control_plane.get_status())}
         return {"action": "RESUME", "success": False, "error": "control_plane not wired"}
 
     def wire_control_plane(self, control_plane) -> None:

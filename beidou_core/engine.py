@@ -10100,7 +10100,7 @@ class AutonomousEngine:
         # fail-closed 语义不受刷新影响），只刷新时间戳
         self._last_protection_fact_at = now_ts
         recon_status = getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN")
-        return TruthSnapshot(
+        snapshot = TruthSnapshot(
             snapshot_id=f"snap-{int(now_ts * 1000)}",
             created_at=datetime.now(timezone.utc).isoformat(),
             market_hash=getattr(self, "_last_market_hash", "")
@@ -10146,6 +10146,11 @@ class AutonomousEngine:
             env_mode=str(getattr(getattr(self, "_env_mode", None), "value", "")),
             control_action=str(getattr(getattr(self._control, "_action", None), "value", "NO_NEW_RISK")),
         )
+        # M19-F01 (P0-12): 同步最新事实快照到控制面 —— 受门禁的 RESUME
+        # 入口(execute_authorized_resume)与手动 API 从这里取权威快照;
+        # 控制面自身永不构造快照。
+        self._control.update_truth_snapshot(snapshot)
+        return snapshot
 
     def evaluate_trading_eligibility(self) -> TradingEligibility:
         """BD-CV02 AC-02-01: 全仓唯一 TradingEligibility authority。"""

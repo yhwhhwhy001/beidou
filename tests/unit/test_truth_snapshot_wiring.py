@@ -73,7 +73,11 @@ def _wired_engine() -> AutonomousEngine:
         differences=[],
     )
     engine._protection_owner_unknown = False
-    engine._control = SimpleNamespace(_action=ControlAction.RESUME)  # type: ignore[assignment]  # fake
+    engine._control = SimpleNamespace(
+        _action=ControlAction.RESUME,
+        # M19-F01: build_truth_snapshot 同步快照到控制面 — fake 需提供入口
+        update_truth_snapshot=lambda snap: None,
+    )  # type: ignore[assignment]  # fake
     engine._env_mode = SimpleNamespace(value="testnet")  # type: ignore[assignment]  # fake
     return engine
 

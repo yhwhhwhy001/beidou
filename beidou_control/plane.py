@@ -171,6 +171,9 @@ class ControlPlane:
             pending_approvals=0,
             risk_events_24h=0,
         )
+        # M19-F01 (P0-12): 引擎周期性同步的最新事实快照,供受门禁的
+        # RESUME 入口(execute_authorized_resume)与手动 API 使用。
+        self._latest_truth_snapshot = None
 
     # --- State management ---
 
@@ -488,6 +491,31 @@ class ControlPlane:
             return False, f"RESUME rejected: UNKNOWN components: {', '.join(unknown)}"
 
         return True, "RESUME authorized: all evidence fresh and verified"
+
+    def update_truth_snapshot(self, snapshot: TruthSnapshot) -> None:
+        """M19-F01 (P0-12): 记录引擎同步的最新事实快照。
+
+        快照仅由引擎的 build_truth_snapshot 周期性同步;控制面自身
+        从不构造快照 —— 保证授权判定永远基于真实组件事实。
+        """
+        self._latest_truth_snapshot = snapshot
+
+    def execute_authorized_resume(self, snapshot: TruthSnapshot | None = None) -> tuple[bool, str]:
+        """M19-F01 (P0-12): 唯一受门禁的 RESUME 入口。
+
+        BD-CV02 AC-02-04: RESUME 必须经过 authorize_resume
+        (TruthSnapshot 门禁)验证。裸 execute_action(ControlAction.RESUME)
+        仅供已登记豁免路径使用(EXEMPT-07 引擎侧旁路、EXEMPT-08
+        零写模式)。返回 (是否已执行, reason)。
+        """
+        snap = snapshot if snapshot is not None else self._latest_truth_snapshot
+        if snap is None:
+            return False, "RESUME rejected: no TruthSnapshot available (engine has not synced facts)"
+        allowed, reason = self.authorize_resume(snap)
+        if not allowed:
+            return False, reason
+        self.execute_action(ControlAction.RESUME)
+        return True, "RESUME authorized: TruthSnapshot gate passed"
 
     def evaluate_eligibility(self, snapshot: TruthSnapshot) -> TradingEligibility:
         """BD-CV02: 评估当前快照的交易资格。

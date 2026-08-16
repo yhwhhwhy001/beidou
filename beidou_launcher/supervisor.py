@@ -1178,6 +1178,25 @@ class BeidouSupervisor:
         print("[supervisor] testnet auto re-authorized RESUME after clean recovery")
         return True
 
+    def _authorize_resume_via_truth_snapshot(self) -> tuple[bool, str]:
+        """M19-F01 (P0-12): 启动授权链挂接 TruthSnapshot 门禁。
+
+        BD-CV02 AC-02-04: RESUME 必须有新 TruthSnapshot 且
+        MATCHED 对账 + ACTIVE 保护 + NORMAL 风险。零写模式
+        (paper/shadow/research/safety_only)按设计跳过对账/保护
+        事实(EXEMPT-08 已登记,与 intent 门禁 engine.py:4578 及
+        health liveness 的对账豁免同语义),走豁免路径。
+        本方法只验证不执行 —— RESUME 动作由调用方在置位
+        _resume_authorized 后发出,interlock 放行语义不变。
+        """
+        if self.mode in ("paper", "shadow", "research", "safety_only"):
+            return True, "authorized via EXEMPT-08 (zero-write mode)"
+        if self.engine is None:
+            return False, "engine not initialized"
+        snap = self.engine.build_truth_snapshot()
+        allowed, reason = self.engine._control.authorize_resume(snap)
+        return allowed, reason
+
     async def _monitor(self) -> int:
         assert self._engine_task is not None
         fatal_triggered = False
@@ -1370,16 +1389,26 @@ class BeidouSupervisor:
                 print("❌ 深度启动自检未通过。")
                 return 4
 
-            self._resume_authorized = True
-            from beidou_control.plane import ControlAction
+            # M19-F01 (P0-12): 启动授权链挂接 TruthSnapshot 门禁
+            # (BD-CV02 AC-02-04)。门禁拒绝时不授权 —— 保持 NO_NEW_RISK;
+            # testnet 由 _maybe_testnet_auto_reauthorize 兜底,live/canary
+            # 需人工重启重新授权(生产安全语义,supervisor 注释 1031 行)。
+            allowed, reason = self._authorize_resume_via_truth_snapshot()
+            self._resume_authorized = allowed
+            if allowed:
+                if self._control_state() != "RESUME":
+                    from beidou_control.plane import ControlAction
 
-            self.engine._control.execute_action(ControlAction.RESUME)
+                    self.engine._control.execute_action(ControlAction.RESUME)
+                print(f"✅ 深度启动自检通过：环境、模块、算法、数据、账户与安全门禁均已验证。({reason})")
+            else:
+                print(f"[supervisor] RESUME DEFERRED: TruthSnapshot gate rejected — {reason}")
+                print("   (事实齐备后 testnet 自动重新授权 / live 需人工重启授权)")
             self._control_paused_by_supervisor = False
             self.report.supervisor_state = "RUNNING"
             self.report.trading_ready = self._is_trading_ready()
             self.report.phase = "RUNTIME_MONITORING"
             self.writer.write(self.report)
-            print("✅ 深度启动自检通过：环境、模块、算法、数据、账户与安全门禁均已验证。")
             print(f"✅ 状态: http://127.0.0.1:{self.port}/status")
             print(f"✅ 证据: {self.writer.state_path}")
             return await self._monitor()
