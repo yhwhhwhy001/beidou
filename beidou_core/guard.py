@@ -311,47 +311,9 @@ class EnvironmentGuard:
                 },
             )
 
-            # 3. G5 证书链 — BD-P2-18: 证书由独立 Gate Runner 签发
-            # G5 证书要求由 ProductionLadder (BD-P2-18) 强制执行；
-            # CLI 层不再通过 mode 参数触发 G5 检查。
-            # check_write_mode_requirements() 专注于环境安全检查，
-            # 证书验证由 CertificationManager 独立完成。
-            g5_cert_path = self._g5_cert_path or os.path.join("evidence", "certificates", "G5.json")
-            if not os.path.exists(g5_cert_path):
-                failures.append("G5 certificate not found")
-                self._audit(
-                    "WRITE_MODE_BLOCKED",
-                    {
-                        "blocker": "no_g5_certificate",
-                        "path": g5_cert_path,
-                    },
-                )
-            elif self._commit:
-                # 证书-commit 绑定
-                try:
-                    with open(g5_cert_path) as f:
-                        cert = json.load(f)
-                    cert_commit = cert.get("commit", "")
-                    if cert_commit != self._commit:
-                        failures.append(f"Certificate commit {cert_commit[:8]} != current {self._commit[:8]}")
-                        self._audit(
-                            "WRITE_MODE_BLOCKED",
-                            {
-                                "blocker": "commit_mismatch",
-                            },
-                        )
-                except Exception:
-                    failures.append("Certificate unreadable")
-                    self._audit(
-                        "WRITE_MODE_BLOCKED",
-                        {
-                            "blocker": "certificate_unreadable",
-                        },
-                    )
-
         return len(failures) == 0
 
-    def run_all_checks(self, cli_mode: str = "paper") -> StartupGateResult:
+    def run_all_checks(self, cli_mode: str = "paper", *, persist_audit: bool = True) -> StartupGateResult:
         """运行所有启动检查，返回综合结果。
 
         Args:
@@ -408,8 +370,10 @@ class EnvironmentGuard:
             },
         )
 
-        # Write audit events to disk
-        self._write_audit_trail()
+        # Offline callers may request an in-memory gate result. Preflight uses
+        # this mode so fact discovery never manufactures its own evidence.
+        if persist_audit:
+            self._write_audit_trail()
 
         status = StartupGateStatus.PASS if len(failures) == 0 else StartupGateStatus.FAIL
         return StartupGateResult(

@@ -9,8 +9,12 @@ def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "open_time": [1000, 2000],
-            "open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0],
-            "close": [1.0, 2.0], "volume": [10.0, 20.0], "is_closed": [True, True],
+            "open": [1.0, 2.0],
+            "high": [1.0, 2.0],
+            "low": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [10.0, 20.0],
+            "is_closed": [True, True],
         }
     )
 

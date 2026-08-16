@@ -362,9 +362,8 @@ class UserStreamProjector:
             self._positions[symbol] = self._positions.get(symbol, Decimal("0")) + signed_delta
         self._cumulative_by_order[order_id] = max(previous, cumulative)
         # BD-FIX: 只把属于引擎的挂单投进 open_orders（共享账户过滤）
-        _owned = (
-            self._owned_client_order_prefix is None
-            or str(update.client_order_id).startswith(self._owned_client_order_prefix)
+        _owned = self._owned_client_order_prefix is None or str(update.client_order_id).startswith(
+            self._owned_client_order_prefix
         )
         if _owned and update.order_status.value in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}:
             self._open_orders.add(order_id)
@@ -384,11 +383,7 @@ class UserStreamProjector:
         # 自检（三方 MATCHED 要求 complete）。事件停流的保护不削弱——
         # 运行时 readiness 的 event_age（300s 阈值）仍会在停流后降级。
         complete = self._replay_baseline_verified and "USDT" in self._balances
-        source = (
-            "BINANCE_USER_STREAM_REPLAY_BASELINE"
-            if complete
-            else "BINANCE_USER_STREAM_ORDER_EVENTS_OR_UNVERIFIED"
-        )
+        source = "BINANCE_USER_STREAM_REPLAY_BASELINE" if complete else "BINANCE_USER_STREAM_ORDER_EVENTS_OR_UNVERIFIED"
         return AccountFactSnapshot(
             account_id=self._account_id,
             venue_id=self._venue_id,

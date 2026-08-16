@@ -5,7 +5,7 @@ from __future__ import annotations
 from .registry import EXPECTED_ALPHA_COMPONENTS, EXPECTED_FACTORS, REQUIRED_ENGINE_ATTRIBUTES, REQUIRED_PACKAGES
 
 SUPPORTED_MODES = ("research", "paper", "shadow", "testnet", "safety_only")
-DEFAULT_MODE = "testnet"
+DEFAULT_MODE = "safety_only"
 # A writable runtime must receive an explicit, versioned universe.  There is
 # intentionally no fixed-symbol fallback in the launcher.
 DEFAULT_SYMBOLS: tuple[str, ...] = ()

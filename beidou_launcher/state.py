@@ -93,18 +93,23 @@ class EvidenceWriter:
     def __init__(self, project_root: Path) -> None:
         self.runtime_dir = project_root / ".beidou"
         self.evidence_dir = project_root / "evidence" / "bootstrap"
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.runtime_dir / "supervisor-state.json"
         self.history_path = self.evidence_dir / "supervisor-history.jsonl"
         self._last_history_fingerprint = ""
         self._last_history_write = 0.0
+
+    def _ensure_directories(self) -> None:
+        """Create output directories only after startup gates have passed."""
+
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
     def write_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """追加结构化事件到证据目录（监督事件日志）。
 
         用于监控阻断转变、持仓模式变更等监督级事件。
         """
+        self._ensure_directories()
         event: dict[str, Any] = {
             "type": event_type,
             "pid": os.getpid(),
@@ -118,6 +123,7 @@ class EvidenceWriter:
             os.fsync(handle.fileno())
 
     def write(self, report: StartupReport) -> None:
+        self._ensure_directories()
         report.updated_at = datetime.now(timezone.utc).isoformat()
         payload = report.to_dict()
         payload["pid"] = os.getpid()

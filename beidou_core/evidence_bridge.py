@@ -46,9 +46,14 @@ EVIDENCE_EXTENSION_KEYS = frozenset(
 )
 CORE_FACTOR_IDS = frozenset(
     {
-        "meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1",
-        "momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1",
-        "trailing_exit_v1", "time_exit_v1",
+        "meanrev_entry_v1",
+        "trend_entry_v1",
+        "breakout_entry_v1",
+        "momentum_filter_v1",
+        "volatility_filter_v1",
+        "volume_filter_v1",
+        "trailing_exit_v1",
+        "time_exit_v1",
     }
 )
 
@@ -159,8 +164,13 @@ class EvidenceBridge:
                 # 否则重启后已 ACTIVE 因子不再可交易。
                 if record.has_authorized_active_evidence():
                     EvidenceBridge._register_expression_component(
-                        factor_id, expression_string, role,
-                        component_registry, entry_ids, filter_ids, exit_ids,
+                        factor_id,
+                        expression_string,
+                        role,
+                        component_registry,
+                        entry_ids,
+                        filter_ids,
+                        exit_ids,
                     )
                     report.applied.append(factor_id)  # 已 ACTIVE：幂等跳过
                     continue
@@ -169,8 +179,13 @@ class EvidenceBridge:
                 applied = EvidenceBridge._apply_chain(record, gate, chain, bundle, path, report)
                 if applied:
                     EvidenceBridge._register_expression_component(
-                        factor_id, expression_string, role,
-                        component_registry, entry_ids, filter_ids, exit_ids,
+                        factor_id,
+                        expression_string,
+                        role,
+                        component_registry,
+                        entry_ids,
+                        filter_ids,
+                        exit_ids,
                     )
             except Exception as exc:  # F1 隔离网：任何未预期异常只跳过该文件，不终止扫描
                 report.rejected.append((str(path), f"unhandled:{type(exc).__name__}"))
@@ -178,8 +193,9 @@ class EvidenceBridge:
         return report
 
     @staticmethod
-    def _apply_chain(record: FactorRecord, gate: Any, chain: list[dict], bundle: EvidenceBundle,
-                     path: Path, report: BridgeReport) -> bool:
+    def _apply_chain(
+        record: FactorRecord, gate: Any, chain: list[dict], bundle: EvidenceBundle, path: Path, report: BridgeReport
+    ) -> bool:
         from beidou_research.factors.factor import FactorPerformance, PromotionDecision
 
         for step in chain:

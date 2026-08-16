@@ -47,6 +47,28 @@ class FakeRestClient:
         return Result.success({"listenKey": listen_key})
 
 
+class PostGateTestAdapter(BinanceUsdmAdapter):
+    """Test-only seam for ACK/error parsing after the production hard hold."""
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict | None = None,
+        write_account_id: str | None = None,
+    ) -> Result:
+        del write_account_id
+        return await self._rest_client.request(method, path, signed=signed, params=params)
+
+
+def write_enabled_adapter(transport: FakeRestClient) -> BinanceUsdmAdapter:
+    return PostGateTestAdapter(
+        account_id=AccountId("dedicated-test-account"),
+        rest_client=transport,
+    )
+
+
 class TestBinanceReferenceData:
     def test_no_guessing_tick_from_price_decimals(self):
         ref = BinanceReferenceData(venue_id=VenueId("BINANCE"))
@@ -182,7 +204,7 @@ class TestBinanceAdapter:
                 "reduceOnly": True,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
         request = OrderRequest(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
@@ -216,7 +238,7 @@ class TestBinanceAdapter:
                 "reduceOnly": False,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
         request = OrderRequest(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
@@ -243,7 +265,7 @@ class TestBinanceAdapter:
         assert params["quantity"] == "0.01"
 
     @pytest.mark.asyncio
-    async def test_exit_only_write_is_not_blocked_by_unknown_venue_health(self):
+    async def test_post_gate_exit_ack_parsing_is_independent_of_health_probe(self):
         transport = FakeRestClient(
             {
                 "orderId": 18,
@@ -257,7 +279,7 @@ class TestBinanceAdapter:
                 "reduceOnly": True,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         request = OrderRequest(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
             account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
@@ -288,7 +310,7 @@ class TestBinanceAdapter:
                 "reduceOnly": True,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         request = OrderRequest(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
             account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
@@ -318,7 +340,7 @@ class TestBinanceAdapter:
                 source="binance_rest",
             )
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
         request = OrderRequest(
             venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT")),
@@ -338,7 +360,7 @@ class TestBinanceAdapter:
         assert response.raw_response["retryable"] is False
 
     @pytest.mark.asyncio
-    async def test_risk_increasing_write_remains_blocked_by_unknown_venue_health(self):
+    async def test_write_hold_precedes_unknown_venue_health(self):
         transport = FakeRestClient({"orderId": 19, "status": "NEW", "executedQty": "0"})
         adapter = BinanceUsdmAdapter(rest_client=transport)
         result = await adapter.request("POST", Endpoint.ORDER, signed=True, params={"symbol": "BTCUSDT"})
@@ -359,7 +381,7 @@ class TestBinanceAdapter:
                 "executedQty": "0.01",
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
         venue_instrument = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
 
@@ -386,7 +408,7 @@ class TestBinanceAdapter:
                 "executedQty": "0",
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
         venue_instrument = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
 
@@ -409,6 +431,20 @@ class TestBinanceAdapter:
         assert response.status.value == "UNKNOWN"
         assert response.raw_response is not None
         assert response.raw_response["reason"] == "CANCEL_ACK_NOT_TERMINAL"
+
+        transport.response = {
+            "orderId": 18,
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "status": "CANCELED",
+            "origQty": "0.01",
+            "executedQty": "0.005",
+        }
+        response = await adapter.cancel_order("18", venue_instrument)
+        assert response.status.value == "UNKNOWN"
+        assert response.raw_response is not None
+        assert response.raw_response["reason"] == "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_client_order_recovery_query_requires_bound_identity(self):
@@ -614,7 +650,7 @@ class TestBinanceAdapter:
                 "clientAlgoId": "bdp-fixed-id",
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         result = await adapter.create_algo_order(
             {
                 "symbol": "BTCUSDT",
@@ -644,7 +680,7 @@ class TestBinanceAdapter:
                 "reduceOnly": True,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
 
         result = await adapter.create_algo_order(
             {
@@ -677,7 +713,7 @@ class TestBinanceAdapter:
                 "reduceOnly": True,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
 
         result = await adapter.create_algo_order(
             {
@@ -708,9 +744,9 @@ class TestBinanceAdapter:
                 correlation_id="corr-algo-1",
             )
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
 
-        result = await adapter.create_algo_order({"symbol": "BTCUSDT", "reduceOnly": "true"})
+        result = await adapter.create_algo_order({"symbol": "BTCUSDT", "quantity": "0.01", "reduceOnly": "true"})
 
         assert result.is_success() is False
         assert result.error is not None
@@ -735,7 +771,7 @@ class TestBinanceAdapter:
                 "reduceOnly": False,
             }
         )
-        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter = write_enabled_adapter(transport)
         result = await adapter.create_algo_order(
             {
                 "symbol": "BTCUSDT",

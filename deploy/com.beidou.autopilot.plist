@@ -6,29 +6,20 @@
     <string>com.beidou.autopilot</string>
 
     <!--
-      Governed launchd template (M00-F07). 不自动安装/加载; 部署需操作者
-      显式执行 `launchctl bootstrap gui/501 <path>`。
+      Safety template only.  It is not installed or loaded automatically.
+      Credentials must come from an approved provider; no shell/eval or
+      secret values are embedded in this file.  Missing credentials fail the
+      preflight gate and therefore cannot enable trading.
 
-      1. 凭据: 由 wrapper 从 ~/beidou/.env 注入; plist 不内嵌密钥、不做
-         shell eval(旧实装 eval .zshrc 属漂移, doctor 会 WARN)。
-      2. 重启语义: KeepAlive={SuccessfulExit:false} —— 非零退出(崩溃)
-         自动重启; wrapper 把监督器终态退出码 5(LOCKED)/6(FAILED) 映射
-         为 0, 终态不重启(P0-02 崩溃-重启循环防护)。
-      3. symbols 启动参数必须与运行宇宙一致(当前宇宙见 .beidou/supervisor-state.json);
-         模板仅含最小示例集合, 部署时替换。
-      4. 需要代理时在 EnvironmentVariables 增加 HTTPS_PROXY/HTTP_PROXY/
-         NO_PROXY(网络配置, 非密钥)。
+      M22-F02: 模板不得携带 no-self-heal 参数 —— P0-01 教训:该参数
+      关闭故障自愈与 testnet 自动重新授权链,部署后控制面会卡
+      NO_NEW_RISK。自愈默认开启(CLI 默认 self-heal),需要显式关停时
+      由操作者在部署时决定。注: XML 注释禁双连字符,故不写出参数名。
     -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/maguannan/beidou/deploy/beidou_launchd_wrapper.sh</string>
         <string>/opt/homebrew/bin/beidou</string>
         <string>start</string>
-        <string>--mode</string>
-        <string>testnet</string>
-        <string>--symbols</string>
-        <string>BTCUSDT,ETHUSDT</string>
-        <string>--no-self-heal</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -37,28 +28,25 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>BEIDOU_ENV</key>
-        <string>testnet</string>
+        <string>safety_only</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>
 
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
 
-    <!-- 崩溃(非零退出)自动重启; LOCKED/FAILED 终态经 wrapper 映射为 0 不重启 -->
+    <!-- Never restart a failed/LOCKED process without a governed watchdog. -->
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <false/>
     <key>ThrottleInterval</key>
     <integer>30</integer>
     <key>ExitTimeOut</key>
     <integer>30</integer>
 
     <key>StandardOutPath</key>
-    <string>/private/tmp/beidou_launchd.log</string>
+    <string>/Users/maguannan/beidou/.beidou/launchd.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/private/tmp/beidou_launchd_err.log</string>
+    <string>/Users/maguannan/beidou/.beidou/launchd.stderr.log</string>
 </dict>
 </plist>

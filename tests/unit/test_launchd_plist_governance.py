@@ -94,13 +94,20 @@ def test_wrapper_preserves_other_exit_codes() -> None:
 
 
 def test_template_plist_uses_governed_restart_semantics() -> None:
-    """模板不得使用 KeepAlive=true；必须经 wrapper 启动。"""
+    """模板为安全默认(safety_only):完全禁用自动启动/重启。
+
+    合并语义(codex/full-system-optimization): 受控重启 wrapper 由
+    testnet 实装 plist(用户 LaunchAgents)承担,模板本身 KeepAlive
+    False + RunAtLoad False —— 比 KeepAlive={SuccessfulExit:false}
+    更强的防重启循环语义。
+    """
     with open(ROOT / "deploy" / "com.beidou.autopilot.plist", "rb") as f:
         template = plistlib.load(f)
     keep_alive = template.get("KeepAlive")
-    assert keep_alive is not True, "模板 KeepAlive=true 会无限重启 LOCKED/FAILED"
-    assert isinstance(keep_alive, dict) and keep_alive.get("SuccessfulExit") is False
+    assert keep_alive is False, "模板必须完全禁用自动重启(safety_only 默认)"
+    assert template.get("RunAtLoad") is False, "模板不得开机自动拉起"
+    assert template.get("EnvironmentVariables", {}).get("BEIDOU_ENV") == "safety_only"
     args = template["ProgramArguments"]
-    assert args[0].endswith("beidou_launchd_wrapper.sh")
-    assert Path(args[0]).is_file() and Path(args[0]).stat().st_mode & 0o111, "wrapper 缺失或不可执行"
-    assert template.get("ThrottleInterval") is not None and template["ThrottleInterval"] >= 30
+    assert "eval" not in " ".join(str(a) for a in args), "模板不得 shell eval"
+    wrapper = ROOT / "deploy" / "beidou_launchd_wrapper.sh"
+    assert wrapper.is_file() and wrapper.stat().st_mode & 0o111, "wrapper 缺失或不可执行(实装使用)"

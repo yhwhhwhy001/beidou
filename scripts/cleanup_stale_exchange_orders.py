@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Inspect or explicitly cancel stale Binance Futures Testnet orders.
+"""Inspect stale Binance Futures Testnet orders without write authority.
 
-The default is read-only. Cancellation requires both ``--execute`` and the
-exact confirmation phrase so an accidental invocation cannot mutate exchange
-state.
+The inventory path is read-only. Cancellation remains unavailable until the
+write-capability registry and runtime grant path are implemented and certified.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from typing import Any
 
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 
@@ -29,12 +29,12 @@ def load_credentials() -> tuple[str, str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--execute", action="store_true", help="enable Testnet cancellation")
-    parser.add_argument("--confirm", default="", help=f"must equal {CONFIRMATION}")
+    parser.add_argument("--execute", action="store_true", help="reserved; currently hard-held")
+    parser.add_argument("--confirm", default="", help=f"reserved phrase: {CONFIRMATION}")
     return parser.parse_args()
 
 
-def _count(result) -> int:
+def _count(result: Any) -> int:
     if not result.is_success() or not isinstance(result.data, list):
         category = getattr(getattr(result.error, "category", None), "value", "UNKNOWN")
         raise RuntimeError(f"exchange read failed: {category}")
@@ -43,8 +43,8 @@ def _count(result) -> int:
 
 async def main() -> int:
     args = parse_args()
-    if args.execute and args.confirm != CONFIRMATION:
-        raise RuntimeError(f"--execute requires --confirm {CONFIRMATION}")
+    if args.execute:
+        raise RuntimeError("WRITE_CAPABILITY_REGISTRY_INCOMPLETE")
 
     api_key, api_secret = load_credentials()
     client = BinanceRESTClient(TESTNET_REST, api_key=api_key, api_secret=api_secret)

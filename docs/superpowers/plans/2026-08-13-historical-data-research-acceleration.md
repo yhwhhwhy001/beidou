@@ -47,8 +47,13 @@ from beidou_research.data.kline_store import KlineStore
 
 def _kline(open_time: int, close: float) -> dict:
     return {
-        "open_time": open_time, "open": close, "high": close,
-        "low": close, "close": close, "volume": 100.0, "is_closed": True,
+        "open_time": open_time,
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": 100.0,
+        "is_closed": True,
     }
 
 
@@ -137,7 +142,9 @@ class KlineStore:
                 .reset_index(drop=True)
             )
         else:
-            merged = frame.drop_duplicates(subset=["open_time"], keep="last").sort_values("open_time").reset_index(drop=True)
+            merged = (
+                frame.drop_duplicates(subset=["open_time"], keep="last").sort_values("open_time").reset_index(drop=True)
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         merged.to_parquet(path, index=False)
         return int(len(merged))
@@ -222,8 +229,12 @@ def _frame():
     return pd.DataFrame(
         {
             "open_time": [1000, 2000],
-            "open": [1.0, 2.0], "high": [1.0, 2.0], "low": [1.0, 2.0],
-            "close": [1.0, 2.0], "volume": [10.0, 20.0], "is_closed": [True, True],
+            "open": [1.0, 2.0],
+            "high": [1.0, 2.0],
+            "low": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [10.0, 20.0],
+            "is_closed": [True, True],
         }
     )
 
@@ -365,8 +376,18 @@ INTERVAL_MS = 3_600_000
 def _raw_kline(open_time_ms: int) -> list:
     # Binance kline 数组 12 字段，index 0=openTime, 1=open, 2=high, 3=low, 4=close, 5=volume, 11=isClosed
     return [
-        open_time_ms, "100.0", "101.0", "99.0", "100.5", "10.0",
-        0, "0", "0", "0", "0", True,
+        open_time_ms,
+        "100.0",
+        "101.0",
+        "99.0",
+        "100.5",
+        "10.0",
+        0,
+        "0",
+        "0",
+        "0",
+        "0",
+        True,
     ]
 
 
@@ -564,8 +585,12 @@ def test_backfill_writes_parquet_and_manifest(tmp_path):
     feed = _FakeFeed()
     store = KlineStore(root=str(tmp_path / "klines"))
     report = backfill_symbol(
-        feed, store, "BTCUSDT", "1h",
-        start_ms=1_700_000_000_000, end_ms=1_700_000_000_000 + 10 * INTERVAL_MS,
+        feed,
+        store,
+        "BTCUSDT",
+        "1h",
+        start_ms=1_700_000_000_000,
+        end_ms=1_700_000_000_000 + 10 * INTERVAL_MS,
         page_pause_seconds=0,
     )
     assert report["rows"] == 3 and not report["errors"]
@@ -641,9 +666,7 @@ def backfill_symbol(
         page = None
         for attempt in range(3):
             try:
-                page = feed.fetch_klines(
-                    symbol, interval, start_time=cursor, end_time=end_ms, max_pages=1
-                )
+                page = feed.fetch_klines(symbol, interval, start_time=cursor, end_time=end_ms, max_pages=1)
                 break
             except Exception as exc:
                 if attempt == 2:
@@ -696,9 +719,14 @@ def backfill_all(
         for interval in intervals:
             reports.append(
                 backfill_symbol(
-                    feed, store, symbol, interval,
-                    start_ms=start_ms, end_ms=end_ms,
-                    max_pages=max_pages, page_pause_seconds=page_pause_seconds,
+                    feed,
+                    store,
+                    symbol,
+                    interval,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    max_pages=max_pages,
+                    page_pause_seconds=page_pause_seconds,
                 )
             )
     return reports
@@ -717,7 +745,9 @@ def backfill_all(
 @click.option("--max-pages", default=400, show_default=True, type=click.IntRange(1, 2000))
 @click.option("--data-root", default=".beidou/data/klines", show_default=True)
 @click.option("--dry-run", is_flag=True, help="仅打印计划，不拉取")
-def backfill(symbols: str, intervals: str, start: str, end: str | None, max_pages: int, data_root: str, dry_run: bool) -> None:
+def backfill(
+    symbols: str, intervals: str, start: str, end: str | None, max_pages: int, data_root: str, dry_run: bool
+) -> None:
     """批量回填历史 K 线到本地 parquet 存储。"""
     from datetime import datetime, timedelta, timezone
 
@@ -741,7 +771,14 @@ def backfill(symbols: str, intervals: str, start: str, end: str | None, max_page
         for symbol in symbols_list:
             for interval in intervals_list:
                 span_ms = end_ms - start_ms
-                bar_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}[interval]
+                bar_ms = {
+                    "1m": 60_000,
+                    "5m": 300_000,
+                    "15m": 900_000,
+                    "1h": 3_600_000,
+                    "4h": 14_400_000,
+                    "1d": 86_400_000,
+                }[interval]
                 click.echo(f"  {symbol} {interval}: ~{span_ms // bar_ms} 根 ≈ {span_ms // bar_ms // 1000 + 1} 页")
         return
 
@@ -752,7 +789,9 @@ def backfill(symbols: str, intervals: str, start: str, end: str | None, max_page
     failed = [r for r in reports if r["errors"]]
     for r in reports:
         state = "ERROR" if r["errors"] else "OK"
-        click.echo(f"  [{state}] {r['symbol']} {r['interval']}: pages={r['pages']} rows={r['rows']} manifest={r['manifest_hash'][:12]}")
+        click.echo(
+            f"  [{state}] {r['symbol']} {r['interval']}: pages={r['pages']} rows={r['rows']} manifest={r['manifest_hash'][:12]}"
+        )
     if failed:
         sys.exit(1)
 ```
@@ -793,8 +832,12 @@ def _frame():
     return pd.DataFrame(
         {
             "open_time": [1_700_000_000_000, 1_700_003_600_000],
-            "open": [1.0, 2.0], "high": [1.5, 2.5], "low": [0.9, 1.9],
-            "close": [1.2, 2.2], "volume": [10.0, 20.0], "is_closed": [True, True],
+            "open": [1.0, 2.0],
+            "high": [1.5, 2.5],
+            "low": [0.9, 1.9],
+            "close": [1.2, 2.2],
+            "volume": [10.0, 20.0],
+            "is_closed": [True, True],
         }
     )
 
@@ -1083,8 +1126,12 @@ def _klines(n: int, seed: int, base: float = 100.0) -> list[dict]:
         rows.append(
             {
                 "timestamp": t + timedelta(hours=i),
-                "close": price, "open": price, "high": price * 1.001,
-                "low": price * 0.999, "volume": 100.0 + i, "is_closed": True,
+                "close": price,
+                "open": price,
+                "high": price * 1.001,
+                "low": price * 0.999,
+                "volume": 100.0 + i,
+                "is_closed": True,
             }
         )
     return rows
@@ -1098,15 +1145,17 @@ def test_aux_stability_dimension_added_when_aux_provided():
     primary = _klines(400, seed=1)
     aux = _klines(400, seed=2)
     result = runner.run(
-        price_data=primary, venue="BINANCE", symbol="BTCUSDT", timeframe="1h",
+        price_data=primary,
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1h",
         aux_price_data=aux,
     )
     passed = [b for b in result.evidence_bundles if b.gate_decision == "PASS"]
     # 没有 PASS 是允许的（IC 可能不显著）；断言的是稳定性维度已写入所有评估过的 bundle
     assert result.evidence_bundles  # 至少评估了候选
     assert any(
-        any(s.get("dimension") == "timeframe_robustness" for s in b.stability_results)
-        for b in result.evidence_bundles
+        any(s.get("dimension") == "timeframe_robustness" for s in b.stability_results) for b in result.evidence_bundles
     )
 
 
@@ -1116,7 +1165,10 @@ def test_aux_insufficient_samples_marks_unstable():
     cfg.policy_version = "2.0.0"
     runner = MiningRunner(cfg)
     result = runner.run(
-        price_data=_klines(400, seed=1), venue="BINANCE", symbol="BTCUSDT", timeframe="1h",
+        price_data=_klines(400, seed=1),
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1h",
         aux_price_data=_klines(50, seed=2),  # < 200 有效样本
     )
     assert result.evidence_bundles
@@ -1177,41 +1229,54 @@ Expected: FAIL（`unexpected keyword argument 'aux_price_data'`）
 候选循环开头的 `price_points` 构建处，将 aux 价格点构建提到循环外（Phase 2 附近）：
 
 ```python
-        self._aux_price_points: list[PricePoint] = []
-        if aux_price_data:
-            self._aux_price_points = [
-                PricePoint(
-                    venue=ven, symbol=sym, timeframe=timeframe,
-                    timestamp=d["timestamp"], close=d["close"], mark=d.get("mark"),
-                    mid=d.get("mid"), vwap=d.get("vwap"), open=d.get("open"),
-                    high=d.get("high"), low=d.get("low"), volume=d.get("volume"),
-                    is_closed=bool(d.get("is_closed", False)),
-                )
-                for d in aux_price_data
-            ]
+self._aux_price_points: list[PricePoint] = []
+if aux_price_data:
+    self._aux_price_points = [
+        PricePoint(
+            venue=ven,
+            symbol=sym,
+            timeframe=timeframe,
+            timestamp=d["timestamp"],
+            close=d["close"],
+            mark=d.get("mark"),
+            mid=d.get("mid"),
+            vwap=d.get("vwap"),
+            open=d.get("open"),
+            high=d.get("high"),
+            low=d.get("low"),
+            volume=d.get("volume"),
+            is_closed=bool(d.get("is_closed", False)),
+        )
+        for d in aux_price_data
+    ]
 ```
 
 `_aligned_aux_samples` 闭包定义在 `_aligned_samples` 之后（复用 aux 标签需要 aux 标签构建——简化：aux 标签用相同 label_spec 构建，在 `self._aux_price_points` 构建处同步构建 `self._aux_labels = self._label_builder.build_labels(...)`）：
 
 ```python
-        self._aux_labels = []
-        if self._aux_price_points:
-            self._aux_labels = self._label_builder.build_labels(
-                price_series=self._aux_price_points,
-                label_spec=label_spec, venue=ven, symbol=sym, timeframe=timeframe,
-                factor_id=FactorId("pipeline"), factor_version=SchemaVersion("2.0.0"),
-            )
+self._aux_labels = []
+if self._aux_price_points:
+    self._aux_labels = self._label_builder.build_labels(
+        price_series=self._aux_price_points,
+        label_spec=label_spec,
+        venue=ven,
+        symbol=sym,
+        timeframe=timeframe,
+        factor_id=FactorId("pipeline"),
+        factor_version=SchemaVersion("2.0.0"),
+    )
 
-        def _aligned_aux_samples(factor_values: list[float]) -> list[tuple[int, float, float]]:
-            out: list[tuple[int, float, float]] = []
-            for index, label in enumerate(self._aux_labels):
-                if index >= len(factor_values) or not label.is_valid_for_evaluation():
-                    continue
-                value = factor_values[index]
-                if not _is_finite(value) or not _is_finite(label.label_value):
-                    continue
-                out.append((index, float(value), float(label.label_value)))
-            return out
+
+def _aligned_aux_samples(factor_values: list[float]) -> list[tuple[int, float, float]]:
+    out: list[tuple[int, float, float]] = []
+    for index, label in enumerate(self._aux_labels):
+        if index >= len(factor_values) or not label.is_valid_for_evaluation():
+            continue
+        value = factor_values[index]
+        if not _is_finite(value) or not _is_finite(label.label_value):
+            continue
+        out.append((index, float(value), float(label.label_value)))
+    return out
 ```
 
 `failure_reasons` 追加点：在 bundle 组装处 `failure_reasons=[] if ic > 0.02 else ["ic_below_threshold"]` 改为：
@@ -1354,7 +1419,7 @@ def simulate_paper_window(
         pos_next = positions[i + 1]
         if pos_prev != pos_next:
             trades += 1
-            equity *= (1.0 - cost_bps / 10000.0)
+            equity *= 1.0 - cost_bps / 10000.0
         if closes[i] <= 0:
             continue
         ret = pos_prev * (closes[i + 1] - closes[i]) / closes[i]
@@ -1391,11 +1456,7 @@ def simulate_paper_window(
             continue
         ic_series.append(factor_values[i] * ((closes[i + 1] - closes[i]) / closes[i]))
     mean_ic = sum(ic_series) / len(ic_series) if ic_series else 0.0
-    std_ic = (
-        math.sqrt(sum((v - mean_ic) ** 2 for v in ic_series) / (len(ic_series) - 1))
-        if len(ic_series) > 1
-        else 0.0
-    )
+    std_ic = math.sqrt(sum((v - mean_ic) ** 2 for v in ic_series) / (len(ic_series) - 1)) if len(ic_series) > 1 else 0.0
     icir = mean_ic / std_ic if std_ic > 0 else 0.0
 
     return PaperReplayResult(
@@ -1451,33 +1512,57 @@ from beidou_research.factors.factor import PROMOTION_EVIDENCE_REQUIREMENTS, FACT
 
 def _bundle() -> EvidenceBundle:
     return EvidenceBundle(
-        bundle_id="b-1", candidate_id="c-1", factor_id="tmpl_test_v1", factor_version="2.0.0",
-        candidate_hash="a" * 16, factor_code_hash="", factor_expression_hash="e" * 16,
-        dataset_manifest_hash="d" * 64, feature_manifest_hash="f" * 64,
-        label_spec_hash="l" * 16, cost_model_version="bf06-v1", policy_version="2.0.0",
-        random_seed=42, gate_decision="PASS",
+        bundle_id="b-1",
+        candidate_id="c-1",
+        factor_id="tmpl_test_v1",
+        factor_version="2.0.0",
+        candidate_hash="a" * 16,
+        factor_code_hash="",
+        factor_expression_hash="e" * 16,
+        dataset_manifest_hash="d" * 64,
+        feature_manifest_hash="f" * 64,
+        label_spec_hash="l" * 16,
+        cost_model_version="bf06-v1",
+        policy_version="2.0.0",
+        random_seed=42,
+        gate_decision="PASS",
     )
 
 
 def _replay() -> PaperReplayResult:
     return PaperReplayResult(
-        paper_sharpe=0.5, paper_drawdown_pct=-5.0, signal_consistency=0.6,
-        challenger_icir=0.25, window_bars=600, n_trades=10,
+        paper_sharpe=0.5,
+        paper_drawdown_pct=-5.0,
+        signal_consistency=0.6,
+        challenger_icir=0.25,
+        window_bars=600,
+        n_trades=10,
     )
 
 
 def test_chain_has_8_transitions_in_correct_order():
     chain = build_promotion_chain(
-        _bundle(), ic=0.05, icir=0.4, sample_count=600,
-        replay=_replay(), git_commit="abc123", expression_string="close",
+        _bundle(),
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=_replay(),
+        git_commit="abc123",
+        expression_string="close",
         role="entry",
     )
     assert chain is not None and len(chain) == 8
     states = [c["from"] for c in chain] + [chain[-1]["to"]]
     assert states == [
-        "IDEA", "GENERATED", "SANITY_PASSED", "RESEARCH_VALIDATED",
-        "OOS_VERIFIED", "COST_CAPACITY_VERIFIED", "PAPER_TRADING",
-        "CHALLENGER", "ACTIVE",
+        "IDEA",
+        "GENERATED",
+        "SANITY_PASSED",
+        "RESEARCH_VALIDATED",
+        "OOS_VERIFIED",
+        "COST_CAPACITY_VERIFIED",
+        "PAPER_TRADING",
+        "CHALLENGER",
+        "ACTIVE",
     ]
     for step in chain:
         assert step["to"] in FACTOR_LIFECYCLE_TRANSITIONS[step["from"]]
@@ -1485,8 +1570,13 @@ def test_chain_has_8_transitions_in_correct_order():
 
 def test_chain_evidence_ids_cover_requirements():
     chain = build_promotion_chain(
-        _bundle(), ic=0.05, icir=0.4, sample_count=600,
-        replay=_replay(), git_commit="abc123", expression_string="close",
+        _bundle(),
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=_replay(),
+        git_commit="abc123",
+        expression_string="close",
         role="entry",
     )
     assert chain is not None
@@ -1500,8 +1590,13 @@ def test_chain_evidence_ids_cover_requirements():
 
 def test_chain_bindings_nonempty():
     chain = build_promotion_chain(
-        _bundle(), ic=0.05, icir=0.4, sample_count=600,
-        replay=_replay(), git_commit="abc123", expression_string="close",
+        _bundle(),
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=_replay(),
+        git_commit="abc123",
+        expression_string="close",
         role="entry",
     )
     assert chain is not None
@@ -1513,8 +1608,14 @@ def test_chain_bindings_nonempty():
 def test_chain_none_without_replay():
     assert (
         build_promotion_chain(
-            _bundle(), ic=0.05, icir=0.4, sample_count=600,
-            replay=None, git_commit="abc123", expression_string="close", role="entry",
+            _bundle(),
+            ic=0.05,
+            icir=0.4,
+            sample_count=600,
+            replay=None,
+            git_commit="abc123",
+            expression_string="close",
+            role="entry",
         )
         is None
     )
@@ -1564,9 +1665,9 @@ def build_promotion_chain(
         return None
     chain: list[dict] = []
     for from_state, to_state in _PROMOTION_PATH:
-        requirements = PROMOTION_EVIDENCE_REQUIREMENTS[__import__(
-            "beidou_research.factors.factor", fromlist=["FactorLifecycle"]
-        ).FactorLifecycle(to_state)]
+        requirements = PROMOTION_EVIDENCE_REQUIREMENTS[
+            __import__("beidou_research.factors.factor", fromlist=["FactorLifecycle"]).FactorLifecycle(to_state)
+        ]
         evidence_ids = list(requirements["required_evidence"])
         step: dict = {
             "from": from_state,
@@ -1648,7 +1749,9 @@ def _current_git_commit() -> str:
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return out.stdout.strip()
     except Exception:
@@ -1812,7 +1915,11 @@ class ExpressionComponent(AlphaComponent):
             "FILTER": AlphaComponentType.FILTER,
             "EXIT": AlphaComponentType.EXIT,
         }.get((role or "ENTRY").upper(), AlphaComponentType.ENTRY)
-        super().__init__(component_type=component_type, component_id=factor_id or "expression_component", version=__import__("beidou_shared.types", fromlist=["SchemaVersion"]).SchemaVersion("2.0.0"))
+        super().__init__(
+            component_type=component_type,
+            component_id=factor_id or "expression_component",
+            version=__import__("beidou_shared.types", fromlist=["SchemaVersion"]).SchemaVersion("2.0.0"),
+        )
         self._factor_id = factor_id
         self._expression_string = expression_string
         self._strategy_id = strategy_id
@@ -1961,10 +2068,17 @@ from beidou_research.backtest.replay import PaperReplayResult
 
 def _valid_bundle() -> EvidenceBundle:
     b = EvidenceBundle(
-        bundle_id="b1", candidate_id="c1", factor_id="tmpl_x_v1", factor_version="2.0.0",
-        candidate_hash="a" * 16, factor_expression_hash="e" * 16,
-        dataset_manifest_hash="d" * 64, feature_manifest_hash="f" * 64,
-        label_spec_hash="l" * 16, cost_model_version="bf06-v1", policy_version="2.0.0",
+        bundle_id="b1",
+        candidate_id="c1",
+        factor_id="tmpl_x_v1",
+        factor_version="2.0.0",
+        candidate_hash="a" * 16,
+        factor_expression_hash="e" * 16,
+        dataset_manifest_hash="d" * 64,
+        feature_manifest_hash="f" * 64,
+        label_spec_hash="l" * 16,
+        cost_model_version="bf06-v1",
+        policy_version="2.0.0",
         random_seed=42,
         raw_metrics={"ic_mean": 0.05, "sharpe": 0.4, "sample_count": 600},
         gate_decision="PASS",
@@ -1974,10 +2088,24 @@ def _valid_bundle() -> EvidenceBundle:
 
 
 def _chain(b: EvidenceBundle) -> list[dict]:
-    replay = PaperReplayResult(paper_sharpe=0.5, paper_drawdown_pct=-3.0, signal_consistency=0.6,
-                               challenger_icir=0.25, window_bars=600, n_trades=5)
-    chain = build_promotion_chain(b, ic=0.05, icir=0.4, sample_count=600, replay=replay,
-                                  git_commit="abc123", expression_string="close", role="entry")
+    replay = PaperReplayResult(
+        paper_sharpe=0.5,
+        paper_drawdown_pct=-3.0,
+        signal_consistency=0.6,
+        challenger_icir=0.25,
+        window_bars=600,
+        n_trades=5,
+    )
+    chain = build_promotion_chain(
+        b,
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=replay,
+        git_commit="abc123",
+        expression_string="close",
+        role="entry",
+    )
     assert chain is not None
     return chain
 
@@ -1986,12 +2114,19 @@ def _write_evidence(tmp_path: Path, bundle: EvidenceBundle, chain: list[dict], e
     d = tmp_path / "evidence" / "factors"
     d.mkdir(parents=True)
     path = d / "bundle.json"
-    path.write_text(json.dumps({
-        "factor_id": f"BTCUSDT:{bundle.candidate_id}", "version": "2.0.0",
-        "data": bundle.to_dict(),
-        "promotion_chain": chain, "evidence_source": "historical_replay",
-        "expression_string": expression, "role": "entry",
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "factor_id": f"BTCUSDT:{bundle.candidate_id}",
+                "version": "2.0.0",
+                "data": bundle.to_dict(),
+                "promotion_chain": chain,
+                "evidence_source": "historical_replay",
+                "expression_string": expression,
+                "role": "entry",
+            }
+        )
+    )
     return d
 
 
@@ -2000,12 +2135,21 @@ def _registry():
     from beidou_research.factors.factor import FactorDefinition
     from beidou_shared.types import SchemaVersion, VenueId
 
-    reg.register(FactorDefinition(
-        factor_id="meanrev_entry_v1", name="mr", version=SchemaVersion("2.0.0"),
-        description="d", author="a", category="meanrev",
-        universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-        economic_rationale="r", lookback_period="1h", rebalance_interval="1h",
-    ))
+    reg.register(
+        FactorDefinition(
+            factor_id="meanrev_entry_v1",
+            name="mr",
+            version=SchemaVersion("2.0.0"),
+            description="d",
+            author="a",
+            category="meanrev",
+            universe=frozenset({VenueId("BINANCE")}),
+            instrument_types=frozenset({"perpetual"}),
+            economic_rationale="r",
+            lookback_period="1h",
+            rebalance_interval="1h",
+        )
+    )
     return reg
 
 
@@ -2016,8 +2160,13 @@ def test_valid_bundle_promotes_to_active(tmp_path):
     gate = FactorPromotionGate(strict=True)
     comp_reg: dict = {"meanrev_entry_v1": (object, ())}
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
-        component_registry=comp_reg, entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
+        component_registry=comp_reg,
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == ["tmpl_x_v1"]
@@ -2038,9 +2187,13 @@ def test_tampered_bundle_rejected(tmp_path):
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and report.rejected
@@ -2053,9 +2206,13 @@ def test_replay_evidence_rejected_in_canary(tmp_path):
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="canary",
+        registry=registry,
+        gate=gate,
+        env_mode="canary",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and any("replay" in reason for _, reason in report.rejected)
@@ -2071,9 +2228,13 @@ def test_old_format_without_chain_is_ignored(tmp_path):
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and registry.get("tmpl_x_v1") is None
@@ -2113,9 +2274,14 @@ from beidou_research.mining.evidence import EvidenceBundle
 REPLAY_REJECTED_ENV_MODES = frozenset({"canary", "live"})
 CORE_FACTOR_IDS = frozenset(
     {
-        "meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1",
-        "momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1",
-        "trailing_exit_v1", "time_exit_v1",
+        "meanrev_entry_v1",
+        "trend_entry_v1",
+        "breakout_entry_v1",
+        "momentum_filter_v1",
+        "volatility_filter_v1",
+        "volume_filter_v1",
+        "trailing_exit_v1",
+        "time_exit_v1",
     }
 )
 
@@ -2194,7 +2360,9 @@ class EvidenceBridge:
                 definition = FactorDefinition(
                     factor_id=factor_id,
                     name=f"mined-{factor_id}",
-                    version=__import__("beidou_shared.types", fromlist=["SchemaVersion"]).SchemaVersion(bundle.factor_version or "2.0.0"),
+                    version=__import__("beidou_shared.types", fromlist=["SchemaVersion"]).SchemaVersion(
+                        bundle.factor_version or "2.0.0"
+                    ),
                     description=f"Mined factor {factor_id} (evidence {bundle.artifact_hash[:12]})",
                     author="factor-miner",
                     category="mined",
@@ -2213,14 +2381,20 @@ class EvidenceBridge:
             applied = EvidenceBridge._apply_chain(record, gate, chain, bundle, path, report)
             if applied:
                 EvidenceBridge._register_expression_component(
-                    factor_id, expression_string, role,
-                    component_registry, entry_ids, filter_ids, exit_ids,
+                    factor_id,
+                    expression_string,
+                    role,
+                    component_registry,
+                    entry_ids,
+                    filter_ids,
+                    exit_ids,
                 )
         return report
 
     @staticmethod
-    def _apply_chain(record: FactorRecord, gate: Any, chain: list[dict], bundle: EvidenceBundle,
-                     path: Path, report: BridgeReport) -> bool:
+    def _apply_chain(
+        record: FactorRecord, gate: Any, chain: list[dict], bundle: EvidenceBundle, path: Path, report: BridgeReport
+    ) -> bool:
         from beidou_research.factors.factor import PromotionDecision
 
         for step in chain:
@@ -2389,18 +2563,27 @@ class _FakeEngine:
     def __init__(self) -> None:
         self._alpha_graph = _FakeGraph(
             [
-                "meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1",
-                "momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1",
-                "trailing_exit_v1", "time_exit_v1",
+                "meanrev_entry_v1",
+                "trend_entry_v1",
+                "breakout_entry_v1",
+                "momentum_filter_v1",
+                "volatility_filter_v1",
+                "volume_filter_v1",
+                "trailing_exit_v1",
+                "time_exit_v1",
                 "mined_factor_abc",  # 动态挖掘因子：合法扩展，不应 FAIL
             ]
         )
         self._factor_registry = _FakeRegistry(
             {
-                "meanrev_entry_v1": "ACTIVE", "trend_entry_v1": "ACTIVE",
-                "breakout_entry_v1": "ACTIVE", "momentum_filter_v1": "ACTIVE",
-                "volatility_filter_v1": "ACTIVE", "volume_filter_v1": "ACTIVE",
-                "trailing_exit_v1": "ACTIVE", "time_exit_v1": "ACTIVE",
+                "meanrev_entry_v1": "ACTIVE",
+                "trend_entry_v1": "ACTIVE",
+                "breakout_entry_v1": "ACTIVE",
+                "momentum_filter_v1": "ACTIVE",
+                "volatility_filter_v1": "ACTIVE",
+                "volume_filter_v1": "ACTIVE",
+                "trailing_exit_v1": "ACTIVE",
+                "time_exit_v1": "ACTIVE",
                 "mined_factor_abc": "ACTIVE",
             }
         )
@@ -2427,11 +2610,9 @@ Expected: FAIL（graph 检查因 extra_components 报 FAIL）
 `beidou_launcher/registry.py` 的 `inspect_engine_wiring`：
 
 ```python
-    # 动态挖掘因子是合法扩展：extra_components 不再构成 FAIL，
-    # 仅进 evidence 供审计。核心 8 个组件缺失仍 FAIL。
-    graph_failed = bool(
-        unexpected_missing or invalid_components or graph_error or topology_mismatch
-    )
+# 动态挖掘因子是合法扩展：extra_components 不再构成 FAIL，
+# 仅进 evidence 供审计。核心 8 个组件缺失仍 FAIL。
+graph_failed = bool(unexpected_missing or invalid_components or graph_error or topology_mismatch)
 ```
 
 消息文案改为：`f"Alpha DAG 缺失、校验失败或存在拓扑错误（extra={extra_components}）" if graph_failed else "8 个 Alpha 组件均已接线且拓扑可排序"`。

@@ -16,7 +16,7 @@ import math
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any
@@ -350,8 +350,8 @@ def _local_owned_symbols(engine: Any) -> set[str]:
     owned: set[str] = set()
     if protection is not None and callable(getattr(protection, "all_positions", None)):
         owned.update(str(pp.instrument_id) for pp in protection.all_positions().values())
-    owned.update(str(sym) for sym in getattr(engine, "_position_generation", {}).keys())
-    owned.update(str(sym) for sym in getattr(engine, "_position_projection", {}).keys())
+    owned.update(str(sym) for sym in getattr(engine, "_position_generation", {}))
+    owned.update(str(sym) for sym in getattr(engine, "_position_projection", {}))
     return owned
 
 
@@ -385,8 +385,10 @@ def _local_equity_estimate(engine: Any, shared_balance: float) -> float:
     if base is None:
         base = shared_balance - owned_notional
         engine._local_equity_base = base
-        print(f"[equity] local equity baseline: shared={shared_balance:.2f} "
-              f"owned_notional={owned_notional:.2f} base={base:.2f}")
+        print(
+            f"[equity] local equity baseline: shared={shared_balance:.2f} "
+            f"owned_notional={owned_notional:.2f} base={base:.2f}"
+        )
     return base + unreal
 
 
@@ -749,7 +751,6 @@ class TrendFollowingEntry(AlphaComponent):
     TREND_MIN_PCT = 0.5
     STRENGTH_BASE = 0.05
 
-
     def __init__(self) -> None:
         super().__init__(
             component_type=AlphaComponentType.ENTRY,
@@ -807,7 +808,11 @@ class TrendFollowingEntry(AlphaComponent):
 
     def validate(self) -> bool:
         """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
-        return bool(0.0 <= self.RSI_CONFIRM_MIN < self.RSI_ENTRY_MAX <= 100.0 and self.TREND_MIN_PCT >= 0.0 and 0.0 <= self.STRENGTH_BASE <= 1.0)
+        return bool(
+            0.0 <= self.RSI_CONFIRM_MIN < self.RSI_ENTRY_MAX <= 100.0
+            and self.TREND_MIN_PCT >= 0.0
+            and 0.0 <= self.STRENGTH_BASE <= 1.0
+        )
 
 
 class BreakoutEntry(AlphaComponent):
@@ -818,7 +823,6 @@ class BreakoutEntry(AlphaComponent):
     VOL_EXPANSION_MIN = 0.2
     VOL_RATIO_MIN = 1.2
     STRENGTH_BASE = 0.05
-
 
     def __init__(self) -> None:
         super().__init__(
@@ -894,7 +898,6 @@ class VolatilityFilter(AlphaComponent):
     RSI_OVERSOLD = 30.0
     RSI_OVERBOUGHT = 70.0
 
-
     def __init__(self) -> None:
         super().__init__(
             component_type=AlphaComponentType.FILTER,
@@ -958,7 +961,11 @@ class VolatilityFilter(AlphaComponent):
 
     def validate(self) -> bool:
         """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
-        return bool(0.0 <= self.RSI_OVERSOLD < self.RSI_OVERBOUGHT <= 100.0 and 0.0 <= self.VOL_MID <= self.VOL_HIGH and self.ATR_HIGH_PCT > 0.0)
+        return bool(
+            0.0 <= self.RSI_OVERSOLD < self.RSI_OVERBOUGHT <= 100.0
+            and 0.0 <= self.VOL_MID <= self.VOL_HIGH
+            and self.ATR_HIGH_PCT > 0.0
+        )
 
 
 class VolumeFilter(AlphaComponent):
@@ -970,7 +977,6 @@ class VolumeFilter(AlphaComponent):
     VOL_RATIO_LOW = 0.5
     VOL_RATIO_HIGH = 1.5
     STRENGTH_MIN = 0.08
-
 
     def __init__(self) -> None:
         super().__init__(
@@ -1035,7 +1041,10 @@ class VolumeFilter(AlphaComponent):
 
     def validate(self) -> bool:
         """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
-        return bool(0.0 <= self.VOL_RATIO_VERY_LOW <= self.VOL_RATIO_LOW <= self.VOL_RATIO_HIGH and 0.0 <= self.STRENGTH_MIN <= 1.0)
+        return bool(
+            0.0 <= self.VOL_RATIO_VERY_LOW <= self.VOL_RATIO_LOW <= self.VOL_RATIO_HIGH
+            and 0.0 <= self.STRENGTH_MIN <= 1.0
+        )
 
 
 class TrailingExit(AlphaComponent):
@@ -1044,7 +1053,6 @@ class TrailingExit(AlphaComponent):
     # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
     # 参数提取至签名策略属 M09)
     RSI_TAKE_PROFIT = 70.0
-
 
     def __init__(self) -> None:
         super().__init__(
@@ -1139,7 +1147,6 @@ class TimeExit(AlphaComponent):
     # 参数提取至签名策略属 M09)
     STRENGTH_SCHEDULE = (0.0, 0.4, 0.7, 0.95)
 
-
     def __init__(self) -> None:
         super().__init__(
             component_type=AlphaComponentType.EXIT,
@@ -1200,7 +1207,10 @@ class TimeExit(AlphaComponent):
 
     def validate(self) -> bool:
         """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
-        return bool(all(0.0 <= s <= 1.0 for s in self.STRENGTH_SCHEDULE) and self.STRENGTH_SCHEDULE == tuple(sorted(self.STRENGTH_SCHEDULE)))
+        return bool(
+            all(0.0 <= s <= 1.0 for s in self.STRENGTH_SCHEDULE)
+            and tuple(sorted(self.STRENGTH_SCHEDULE)) == self.STRENGTH_SCHEDULE
+        )
 
 
 # ================================================================
@@ -2146,8 +2156,7 @@ class AutonomousEngine:
                         "SIGNED_POLICY_INVALID_PARAM:champion_min_icir<=champion_degrade_icir"
                     )
                     print(
-                        f"[policy] ERROR: champion_min_icir({_champ_min}) must be > "
-                        f"champion_degrade_icir({_champ_deg})"
+                        f"[policy] ERROR: champion_min_icir({_champ_min}) must be > champion_degrade_icir({_champ_deg})"
                     )
             except (TypeError, ValueError):
                 pass  # 单键校验已置 _policy_error
@@ -2157,7 +2166,9 @@ class AutonomousEngine:
         # （0.6/0.4/0.2 反转配置实测通过旧校验且档位反转）。
         try:
             _tiers = [
-                float(self._policy_params[key]) for key in ("vol_tier_1", "vol_tier_2", "vol_tier_3") if key in self._policy_params
+                float(self._policy_params[key])
+                for key in ("vol_tier_1", "vol_tier_2", "vol_tier_3")
+                if key in self._policy_params
             ]
             if len(_tiers) == 3 and not (_tiers[0] < _tiers[1] < _tiers[2]):
                 self._policy_error = self._policy_error or "SIGNED_POLICY_INVALID_PARAM:vol_tiers_not_increasing"
@@ -2269,9 +2280,7 @@ class AutonomousEngine:
         )
         return risk_increasing, projected
 
-    def _portfolio_total_exposure(
-        self, exclude_symbol: str | None = None, only_symbol: str | None = None
-    ) -> float:
+    def _portfolio_total_exposure(self, exclude_symbol: str | None = None, only_symbol: str | None = None) -> float:
         """持仓名义敞口（M07-F01/R2）。
 
         组合级总敞口硬门的输入:单笔 R4 杠杆检查不约束跨 symbol 总敞口,
@@ -2917,7 +2926,7 @@ class AutonomousEngine:
         # 豁免仅限 testnet：live/canary 中"交易所有持仓但本地无记录"
         # 仍是严重缺口（丢仓），必须 fail-closed。
         _is_testnet = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-        _locally_owned_symbols = set(local_symbols) | {str(sym) for sym in getattr(self, "_position_generation", {}).keys()}
+        _locally_owned_symbols = set(local_symbols) | {str(sym) for sym in getattr(self, "_position_generation", {})}
         for position in exchange_positions:
             symbol = str(position.get("symbol", "")).strip()
             if not symbol:
@@ -3111,8 +3120,7 @@ class AutonomousEngine:
         allowed, reason = self._control.execute_authorized_resume(snap)
         if allowed and self._control.get_status() != ControlAction.RESUME:
             return False, (
-                "TruthSnapshot gate passed but RESUME overridden by supervisor "
-                "interlock (authorization not open)"
+                "TruthSnapshot gate passed but RESUME overridden by supervisor interlock (authorization not open)"
             )
         return allowed, reason
 
@@ -3935,9 +3943,7 @@ class AutonomousEngine:
             # 仅当库存提供具体 orderType/type 时才严格比较。
             _venue_typed = actual.get("orderType") or actual.get("type")
             actual_type = str(_venue_typed or "").strip().upper()
-            if not expected_type:
-                issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
-            elif _venue_typed and actual_type != expected_type:
+            if not expected_type or (_venue_typed and actual_type != expected_type):
                 issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
             expected_qty = _decimal(expected.get("quantity"))
             actual_qty = _decimal(actual.get("quantity"))
@@ -4337,7 +4343,7 @@ class AutonomousEngine:
             if _control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
                 _control.execute_action(ControlAction.NO_NEW_RISK)
         except Exception:
-            pass  # 降级动作失败不得掩盖原始故障；上层 incident/日志已记录
+            logger.warning("degraded action NO_NEW_RISK failed while handling primary fault", exc_info=True)
 
     def _record_execution_fact_failure_env_guarded(
         self,
@@ -4477,8 +4483,16 @@ class AutonomousEngine:
             ):
                 continue
             try:
-                OrderStatus(str(venue_order.get("status", "")))
-            except ValueError:
+                venue_status = OrderStatus(str(venue_order.get("status", "")))
+                venue_executed = Decimal(str(venue_order.get("executedQty", "")))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if not venue_executed.is_finite() or venue_executed < 0:
+                continue
+            if venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0:
+                self._record_execution_fact_failure_env_guarded(
+                    f"UNKNOWN_TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{intent_id}"
+                )
                 continue
             try:
                 store = getattr(self, "_store", None)
@@ -4615,8 +4629,11 @@ class AutonomousEngine:
             return False
         approval_id = str(getattr(intent, "risk_approval_id", "") or "")
         if approval_id == "RISK_EXEMPT_CLOSE":
-            # 仅允许明确标记为 reduce-only 的风险下降命令走紧急路径。
-            return bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
+            # M00-C01 containment: reduce-only/close-position flags do not
+            # prove account, position, owner, generation, or maximum safe
+            # quantity.  A future scoped capability must replace this legacy
+            # exemption before any terminal write can be re-enabled.
+            return False
         if not approval_id or not getattr(intent, "risk_approval_signature", None):
             return False
         intent_hash = str(getattr(intent, "risk_intent_hash", "") or "")
@@ -5095,9 +5112,7 @@ class AutonomousEngine:
                     except Exception as _fill_exc:
                         if fill_event_id_for_retry and not fill_committed:
                             self._mark_fill_retryable(exchange_order_id, fill_event_id_for_retry)
-                        logger.warning(
-                            "ACK partial-fill ledger commit failed: %s", type(_fill_exc).__name__
-                        )
+                        logger.warning("ACK partial-fill ledger commit failed: %s", type(_fill_exc).__name__)
                 execution_aggregate = self._outbox.transition_execution_child(
                     intent.intent_id,
                     idx,
@@ -5699,7 +5714,9 @@ class AutonomousEngine:
             oid_str = str(order["orderId"])
             slice_client_id = params.get("newClientOrderId", "")
             # 标记平仓订单（通过 client_order_id 中的 "-close-"/"-emergency-"/"-emg-" 模式识别）
-            if slice_client_id and ("-close-" in slice_client_id or "-emergency-" in slice_client_id or "-emg-" in slice_client_id):
+            if slice_client_id and (
+                "-close-" in slice_client_id or "-emergency-" in slice_client_id or "-emg-" in slice_client_id
+            ):
                 self._close_order_ids.add(oid_str)
                 print(f"[order] Marked as close order: {oid_str}")
             tracker = OrderStateTracker(order_id=OrderId(oid_str))
@@ -5853,28 +5870,17 @@ class AutonomousEngine:
                     await self._process_fill(order_id, order_sym or symbol, result)
 
                 elif status == "CANCELED" or status == "EXPIRED":
-                    # BD-FIX: 部分成交后 EXPIRED/CANCELED 的成交事实必须
-                    # 入账 —— IOC 切片在薄盘上"先部分成交后过期"时旧代码
-                    # 直接置终态，executedQty 从不进 ledger → 本地持仓被
-                    # 低估 → 对账恒 MISMATCH → 锁盘（C2 审查）。
                     if executed_qty > 0:
-                        delta_qty, partial_price, _fill_event_id = self._consume_cumulative_fill(
+                        # A terminal row with a partial fill spans order, fill,
+                        # position, and ledger authorities.  Preserve UNKNOWN
+                        # until independent reconciliation supplies the exact
+                        # fill facts; do not infer or book from one REST row.
+                        self._mark_order_unknown(
                             order_id,
                             order_sym or symbol,
-                            result,
-                            status=status,
+                            f"TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{order_id}",
                         )
-                        if delta_qty > 0 and partial_price > 0:
-                            self._record_partial_fill_to_ledger(
-                                order_id,
-                                order_sym or symbol,
-                                result,
-                                delta_qty,
-                                partial_price,
-                                executed_qty,
-                                _fill_event_id,
-                                status=status,
-                            )
+                        continue
                     tracker.apply(OrderEvent.CANCELED)
                     self._active_order_ids.discard(order_id)
                     self._store.save_order_state(
@@ -6688,8 +6694,7 @@ class AutonomousEngine:
             if (
                 result.status is UserProjectionStatus.ACCEPTED
                 and _order_id not in getattr(self, "_active_order_ids", set())
-                and str(getattr(getattr(update, "order_status", None), "value", ""))
-                in {"FILLED", "PARTIALLY_FILLED"}
+                and str(getattr(getattr(update, "order_status", None), "value", "")) in {"FILLED", "PARTIALLY_FILLED"}
             ):
                 try:
                     _result_payload = {
@@ -6719,7 +6724,9 @@ class AutonomousEngine:
                             status=str(getattr(getattr(update, "order_status", None), "value", "")),
                         )
                 except Exception as _event_fill_exc:
-                    logger.warning("event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__)
+                    logger.warning(
+                        "event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__
+                    )
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
@@ -7016,10 +7023,10 @@ class AutonomousEngine:
                     # BD-FIX: 共享 demo 账户的其他用户把共享保证金打到追缴线
                     # 也会推送 MARGIN_CALL —— testnet 按信息性事件处理
                     # （记录 + 保持流健康）；live 保持 terminal（自身仓位
-                # TESTNET-EXEMPT: EXEMPT-11
+                    # TESTNET-EXEMPT: EXEMPT-11
                     # 追缴必须停流复核）。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
-                        print(f"[user-stream] MARGIN_CALL received on testnet (shared account) — informational")
+                        print("[user-stream] MARGIN_CALL received on testnet (shared account) — informational")
                         self._update_user_stream_runtime(
                             status="HEALTHY",
                             last_event_mono=time.monotonic(),
@@ -7031,7 +7038,7 @@ class AutonomousEngine:
                     return
                 elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
                     # BD-FIX: 共享 demo 账户其他用户的策略/网格单更新属环境
-                # TESTNET-EXEMPT: EXEMPT-11
+                    # TESTNET-EXEMPT: EXEMPT-11
                     # 噪音 —— testnet 按信息性事件处理；live 保持 fault。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         print(f"[user-stream] {event_type} on testnet (shared account) — informational")
@@ -7047,7 +7054,7 @@ class AutonomousEngine:
                 else:
                     # PKG02 (BDS-P0-001): 所有环境统一 fail-closed；
                     # testnet 共享账户的未知事件（新格式/其他 worker 构造）
-                # TESTNET-EXEMPT: EXEMPT-11
+                    # TESTNET-EXEMPT: EXEMPT-11
                     # 按信息性处理，避免一次未知事件永久锁死交易（I5 审查）。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         print(
@@ -7438,8 +7445,7 @@ class AutonomousEngine:
         # live/canary 保持三方严格。
         if (
             # TESTNET-EXEMPT: EXEMPT-13
-            not result.matched
-            and str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
+            not result.matched and str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
         ):
             _diffs = [str(d) for d in getattr(result, "differences", []) or []]
             _two_way_diffs = [d for d in _diffs if str(d).startswith("system/exchange")]
@@ -7518,14 +7524,13 @@ class AutonomousEngine:
             try:
                 df = store.load(sym, "1d")
             except Exception:
+                logger.warning("historical seed: kline load failed for %s", sym, exc_info=True)
                 continue
             if df is None or len(df) < 100:
                 continue
             try:
                 closes = df["close"].astype(float).values
                 volumes = df["volume"].astype(float).values
-                highs = df["high"].astype(float).values
-                lows = df["low"].astype(float).values
                 if len(closes) < 100 or closes[-1] <= 0:
                     continue
                 # volume_score：日均成交额（与实时 log10/8 同构）
@@ -7556,6 +7561,7 @@ class AutonomousEngine:
                     seeded += 1
                     print(f"[pool] historical seed: {sym} quality={quality:.3f}")
             except Exception:
+                logger.warning("historical seed: feature computation failed for %s", sym, exc_info=True)
                 continue
         if seeded:
             print(f"[pool] historical pre-filter seeded {seeded}/{len(configured_symbols)} candidates")
@@ -7633,7 +7639,7 @@ class AutonomousEngine:
             if any(str(d).startswith("system/exchange") for d in differences):
                 return False
         if not bool(getattr(self, "_can_write", False)):
-        # TESTNET-EXEMPT: EXEMPT-13
+            # TESTNET-EXEMPT: EXEMPT-13
             return False
         if str(getattr(self._env_mode, "value", "")) != "testnet":
             return False
@@ -7720,7 +7726,7 @@ class AutonomousEngine:
             for algo_id in unowned_algo_ids:
                 symbol = ""
                 client_algo_id = ""
-                for item in (existing_algo_inventory or []):
+                for item in existing_algo_inventory or []:
                     if str(item.get("algoId")) == algo_id:
                         symbol = str(item.get("symbol", "")).strip().upper()
                         client_algo_id = str(item.get("clientAlgoId", "") or "")
@@ -7742,10 +7748,7 @@ class AutonomousEngine:
                 try:
                     await self._cancel_algo_order(symbol, int(algo_id))
                     cancelled += 1
-                    print(
-                        f"[beidou-autopilot] Cancelled unowned testnet Algo order "
-                        f"{algo_id} (symbol={symbol})"
-                    )
+                    print(f"[beidou-autopilot] Cancelled unowned testnet Algo order {algo_id} (symbol={symbol})")
                 except Exception as exc:
                     remaining.append(algo_id)
                     print(f"[beidou-autopilot] Failed to cancel unowned Algo {algo_id}: {exc}")
@@ -7756,9 +7759,7 @@ class AutonomousEngine:
                 )
                 # Refresh Algo inventory after cancellation
                 try:
-                    existing_algos = await asyncio.wait_for(
-                        self._get_open_algo_inventory(), timeout=30.0
-                    )
+                    existing_algos = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=30.0)
                     if isinstance(existing_algos, list):
                         existing_algo_inventory = existing_algos
                 except Exception as exc:
@@ -8042,9 +8043,7 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[nearline] Excess order cleanup error: {e}")
 
-    async def _maybe_emergency_close_unprotectable(
-        self, pos_id: str, symbol: str, pp: Any
-    ) -> bool:
+    async def _maybe_emergency_close_unprotectable(self, pos_id: str, symbol: str, pp: Any) -> bool:
         """SL 连续无法建立（-2021 立即触发 / adaptive blocked）→ 紧急平仓。
 
         BD-FIX (final83): 持仓深亏时基于入场价的止损已越过现价，交易所
@@ -8172,7 +8171,7 @@ class AutonomousEngine:
                     for aid in list(streaks):
                         if aid not in current_missing_ids:
                             streaks.pop(aid, None)
-                    for row in (store.restore_protections() if store else []):
+                    for row in store.restore_protections() if store else []:
                         algo_id = str(row.get("exchange_order_id", "")).strip()
                         if algo_id and algo_id in current_missing_ids:
                             streak = streaks.get(algo_id, 0) + 1
@@ -8186,7 +8185,11 @@ class AutonomousEngine:
                                     cleaned += 1
                                     streaks.pop(algo_id, None)
                                 except Exception:
-                                    pass
+                                    logger.warning(
+                                        "stale protection cleanup: remove_protection failed for %s",
+                                        pos_id,
+                                        exc_info=True,
+                                    )
                     self._venue_missing_streaks = streaks
                     if cleaned:
                         print(f"[nearline] Cleaned {cleaned} stale protection(s) (no longer on venue)")
@@ -8238,16 +8241,14 @@ class AutonomousEngine:
                 # SL → 不满足 covered → 进入 S33 重建/重试。旧逻辑 SL 缺失
                 # 不计 expected，TP 已覆盖品种被 covered skip 跳过 → SL
                 # 永不补发（final82d/e 实测死锁）。
-                expected_count = 1 + sum(
-                    1 for tp in pp.take_profits if _needs_exchange_protection(tp)
-                )
+                expected_count = 1 + sum(1 for tp in pp.take_profits if _needs_exchange_protection(tp))
                 server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
                     if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(
                             f"[nearline-diag] {symbol}: covered skip expected={expected_count} "
-                            f"server={server_count} sl_status={getattr(getattr(pp.stop_loss,'status',None),'value',None)}"
+                            f"server={server_count} sl_status={getattr(getattr(pp.stop_loss, 'status', None), 'value', None)}"
                         )
                     continue
 
@@ -8353,7 +8354,9 @@ class AutonomousEngine:
                                 instrument_id=InstrumentId(symbol),
                                 venue_id=VenueId("BINANCE"),
                                 side=sl_side,
-                                trigger_price=Price(amount=str(round(trigger_value, _prec.get("price", 0) if _prec else 4))),
+                                trigger_price=Price(
+                                    amount=str(round(trigger_value, _prec.get("price", 0) if _prec else 4))
+                                ),
                                 order_price=None,
                                 quantity=Quantity(amount=str(float(pp.quantity))),
                                 order_type="STOP_MARKET",
@@ -8440,7 +8443,10 @@ class AutonomousEngine:
                                                     and str(_row.get("status", "")).strip().upper() == "PENDING"
                                                     and (
                                                         str(_row.get("stop_type", "") or "").strip()
-                                                        or str(_row.get("order_type", "") or "").strip().upper().startswith("STOP")
+                                                        or str(_row.get("order_type", "") or "")
+                                                        .strip()
+                                                        .upper()
+                                                        .startswith("STOP")
                                                     )
                                                 ):
                                                     try:
@@ -8450,20 +8456,44 @@ class AutonomousEngine:
                                                             symbol=str(_row.get("symbol", "")),
                                                             side=str(_row.get("side", "")),
                                                             trigger_price=str(_row.get("trigger_price", "")),
-                                                            order_price=(str(_row["order_price"]) if _row.get("order_price") else None),
+                                                            order_price=(
+                                                                str(_row["order_price"])
+                                                                if _row.get("order_price")
+                                                                else None
+                                                            ),
                                                             quantity=str(_row.get("quantity", "")),
                                                             order_type=str(_row.get("order_type", "")),
                                                             status="CANCELLED",
-                                                            stop_type=(str(_row.get("stop_type")) if _row.get("stop_type") else None),
-                                                            take_profit_type=(str(_row.get("take_profit_type")) if _row.get("take_profit_type") else None),
+                                                            stop_type=(
+                                                                str(_row.get("stop_type"))
+                                                                if _row.get("stop_type")
+                                                                else None
+                                                            ),
+                                                            take_profit_type=(
+                                                                str(_row.get("take_profit_type"))
+                                                                if _row.get("take_profit_type")
+                                                                else None
+                                                            ),
                                                             owner_id=str(_row.get("owner_id", "")),
-                                                            position_generation=int(_row.get("position_generation") or 0),
+                                                            position_generation=int(
+                                                                _row.get("position_generation") or 0
+                                                            ),
                                                             session_id=str(_row.get("session_id", "")),
-                                                            exchange_order_id=(str(_row["exchange_order_id"]) if _row.get("exchange_order_id") else None),
+                                                            exchange_order_id=(
+                                                                str(_row["exchange_order_id"])
+                                                                if _row.get("exchange_order_id")
+                                                                else None
+                                                            ),
                                                         )
-                                                        print(f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}")
+                                                        print(
+                                                            f"[nearline] 🧹 Discarded stale PENDING stop loss for {symbol}"
+                                                        )
                                                     except Exception:
-                                                        pass
+                                                        logger.warning(
+                                                            "stale PENDING protection discard failed for %s",
+                                                            symbol,
+                                                            exc_info=True,
+                                                        )
                                                     break
                                     else:
                                         print(
@@ -8692,7 +8722,7 @@ class AutonomousEngine:
         # 用账户快照构建 symbol 集合。
         retry_symbols = exchange_symbols
         if not retry_symbols:
-            for ep in (self._last_account.get("positions", []) if isinstance(self._last_account, dict) else []):
+            for ep in self._last_account.get("positions", []) if isinstance(self._last_account, dict) else []:
                 try:
                     amt = float(ep.get("positionAmt", 0) or 0)
                 except (TypeError, ValueError):
@@ -8819,11 +8849,7 @@ class AutonomousEngine:
                             continue
                         typed_mode = kernel_result.get("kernel") == "typed_graph"
                         typed_proposal = kernel_result.get("proposal") if typed_mode else None
-                        all_signals = (
-                            list(kernel_result.get("signals", []))
-                            if not typed_mode
-                            else []
-                        )
+                        all_signals = list(kernel_result.get("signals", [])) if not typed_mode else []
                         # M06-F01 (P0-15): Exit 信号与入场流程严格分离 ——
                         # 旧代码把 exit_signals 混入 strength 排名,Exit 提案
                         # (side=None) 会被送进入场 sizing/BUY/SELL 流程。
@@ -8848,7 +8874,9 @@ class AutonomousEngine:
                             self._exit_signal_audit = audit
                             logger.warning(
                                 "nearline exit signals for %s@%s collected (execution pending M12): %s",
-                                symbol, tf, sig_ids[:5],
+                                symbol,
+                                tf,
+                                sig_ids[:5],
                             )
                         if not typed_proposal and not all_signals:
                             continue
@@ -9248,10 +9276,9 @@ class AutonomousEngine:
                         # 按无持仓处理（风控针对自有敞口；liq 价同步
                         # 置 None，避免"已平仓但有清算价"误判）
                         # TESTNET-EXEMPT: EXEMPT-17
-                        _foreign_position = (
-                            str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-                            and symbol not in _local_owned_symbols(self)
-                        )
+                        _foreign_position = str(
+                            getattr(getattr(self, "_env_mode", None), "value", "")
+                        ) == "testnet" and symbol not in _local_owned_symbols(self)
                         if _foreign_position:
                             position_qty = 0.0
                             break
@@ -9272,15 +9299,13 @@ class AutonomousEngine:
                         # live/canary 保持严格（缺失即 UNKNOWN）。
                         if (
                             liquidation_price is None
-                        # TESTNET-EXEMPT: EXEMPT-04
+                            # TESTNET-EXEMPT: EXEMPT-04
                             and raw_qty != 0
                             and str(getattr(self._env_mode, "value", "")) == "testnet"
                         ):
                             try:
                                 _entry = float(account_position.get("entryPrice"))
-                                liquidation_price = _derive_liquidation_price(
-                                    raw_qty, _entry, dyn_leverage
-                                )
+                                liquidation_price = _derive_liquidation_price(raw_qty, _entry, dyn_leverage)
                             except (TypeError, ValueError):
                                 liquidation_price = None
                         break
@@ -9405,9 +9430,7 @@ class AutonomousEngine:
                         snapshot_reconciliation_status = (
                             "MATCHED"
                             if (
-                                self._fresh_matched_reconciliation(
-                                    max_age_seconds=300.0 if _is_testnet_snap else 60.0
-                                )
+                                self._fresh_matched_reconciliation(max_age_seconds=300.0 if _is_testnet_snap else 60.0)
                                 or zero_write_snapshot
                             )
                             else "MISMATCHED"
@@ -9447,19 +9470,10 @@ class AutonomousEngine:
                                 # 反复 DEGRADED → R0 恒拒（final59 实测
                                 # auxskip 36 增长）。这些维度的安全由各自
                                 # 门禁负责；live/canary 保持完整 liveness。
-                                (
-                                    "HEALTHY"
-                                    if (
-                                        _is_testnet_snap
-                                        and self._running
-                                        and self._realtime_age_seconds() <= 15.0
-                                    )
-                                    or (
-                                        not _is_testnet_snap
-                                        and self._check_liveness() is HealthState.HEALTHY
-                                    )
-                                    else "UNSAFE"
-                                )
+                                "HEALTHY"
+                                if (_is_testnet_snap and self._running and self._realtime_age_seconds() <= 15.0)
+                                or (not _is_testnet_snap and self._check_liveness() is HealthState.HEALTHY)
+                                else "UNSAFE"
                             ),
                             portfolio_hash=account_hash,
                             policy_version=risk_policy_version,
@@ -9624,10 +9638,7 @@ class AutonomousEngine:
                 pre_results = await self._pre_risk.check(pre_context)
                 pre_rejections = [r for r in pre_results if r.decision != RiskDecision.APPROVED]
                 if pre_rejections:
-                    print(
-                        f"[nearline] {symbol}: ❌ Pre-risk REJECTED: "
-                        f"{[r.reason for r in pre_rejections]}"
-                    )
+                    print(f"[nearline] {symbol}: ❌ Pre-risk REJECTED: {[r.reason for r in pre_rejections]}")
                     continue
 
                 # P0 Gate 1: 控制面校验（Outbox 提交前）

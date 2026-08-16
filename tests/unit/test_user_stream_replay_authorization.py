@@ -429,9 +429,7 @@ def test_slice_quantity_unchanged_when_already_exact() -> None:
 
 def test_slice_quantity_none_on_unknown_snapshot() -> None:
     engine = _engine()
-    engine._adapter = SimpleNamespace(
-        get_rule_snapshot=lambda _s: InstrumentRuleSnapshot.unknown("BNBUSDT")
-    )
+    engine._adapter = SimpleNamespace(get_rule_snapshot=lambda _s: InstrumentRuleSnapshot.unknown("BNBUSDT"))
     assert engine._quantize_slice_quantity("BNBUSDT", "0.016") is None
 
 
@@ -463,8 +461,7 @@ def test_user_stream_fault_does_not_freeze_ledger_on_testnet() -> None:
     engine._ledger.freeze.assert_not_called()
     # user_stream incident 仍发送（自身 category）
     user_stream_calls = [
-        c for c in engine._alerts.send_incident.call_args_list
-        if c.kwargs.get("category") == "user_stream"
+        c for c in engine._alerts.send_incident.call_args_list if c.kwargs.get("category") == "user_stream"
     ]
     assert user_stream_calls, "user_stream incident must still be raised"
 

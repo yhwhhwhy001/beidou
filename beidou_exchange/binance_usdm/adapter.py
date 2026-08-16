@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_exchange.binance_usdm.write_guard import classify_terminal_write
 from beidou_exchange.core.error_taxonomy import ErrorNormalizer, Result
 from beidou_exchange.core.protocol import (
     AccountInfo,
@@ -28,6 +29,7 @@ from beidou_exchange.core.protocol import (
     UserStreamEvent,
 )
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
+from beidou_exchange.core.write_authority import TerminalWriteKind
 from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
     AccountId,
@@ -259,6 +261,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         path: str,
         signed: bool = False,
         params: dict[str, Any] | None = None,
+        write_account_id: str | None = None,
     ) -> Result[Any]:
         """唯一的底层传输边界。
 
@@ -274,6 +277,26 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             )
         method_upper = method.upper()
         params = params or {}
+
+        write_request = classify_terminal_write(
+            method_upper,
+            path,
+            params,
+            account_id=write_account_id or str(self._account_id),
+        )
+        if write_request is not None:
+            reason = (
+                "UNCLASSIFIED_TERMINAL_WRITE"
+                if write_request.kind is TerminalWriteKind.UNKNOWN
+                else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+            )
+            return Result.failure(
+                "Terminal writes are held until the capability registry is complete",
+                category=ErrorCategory.PERMISSION_DENIED,
+                retryable=False,
+                raw={"reason": reason, "kind": write_request.kind.value},
+                source="binance_adapter_write_hold",
+            )
 
         def enabled(value: Any) -> bool:
             if isinstance(value, bool):
@@ -609,7 +632,13 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     # Binance ONE_WAY safety invariant: reduce-only must be
                     # sent to the venue, not merely kept in local intent data.
                     order_params["reduceOnly"] = "true"
-                transport_result = await self.request("POST", Endpoint.ORDER, signed=True, params=order_params)
+                transport_result = await self.request(
+                    "POST",
+                    Endpoint.ORDER,
+                    signed=True,
+                    params=order_params,
+                    write_account_id=str(request.account_ref.account_id),
+                )
                 if not transport_result.is_success():
                     _err = transport_result.error
                     failure = _sanitized_adapter_error(_err, fallback="Order acknowledgement is UNKNOWN")
@@ -815,6 +844,8 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return False, "CANCEL_ACK_QUANTITY_INVALID"
         if executed > original:
             return False, "CANCEL_ACK_EXECUTED_QTY_INVALID"
+        if status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and executed > 0:
+            return False, "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
         try:
             OrderSide(str(response["side"]))
             OrderType(str(response["type"]))

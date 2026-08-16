@@ -1,21 +1,23 @@
-"""Retired legacy strategy-engine entry (Clock Domain: NEARLINE).
-
-M00-F06: 该入口直接实例化 AutonomousEngine（paper 模式硬编码）构成
-第二引擎启动路径，与唯一生产主链（beidou_launcher → supervisor →
-AutonomousEngine）冲突。保留 fail-closed 退役入口防止误执行，迁移
-目标：``beidou start --mode <mode>``（唯一主链）。
-"""
+"""Retired strategy-engine entrypoint delegated to the governed launcher."""
 
 from __future__ import annotations
 
+import sys
 
-def main() -> int:
-    print(
-        "apps.strategy_engine is retired: a second engine entry must not exist; "
-        "use the single production chain: `beidou start --mode paper`."
+
+def main() -> None:
+    """Start only the non-writing paper mode and require explicit symbols."""
+    if any(argument == "--mode" or argument.startswith("--mode=") for argument in sys.argv[1:]):
+        raise SystemExit("apps.strategy_engine fixes mode=paper; use beidou directly for another mode")
+
+    from beidou_launcher.cli import main as launcher_command
+
+    launcher_command.main(
+        args=["start", "--mode", "paper", *sys.argv[1:]],
+        prog_name="python -m apps.strategy_engine",
+        standalone_mode=True,
     )
-    return 2
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

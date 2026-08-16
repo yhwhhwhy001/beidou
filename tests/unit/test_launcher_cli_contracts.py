@@ -84,6 +84,9 @@ def test_preflight_checker_builds_non_ready_report_from_authoritative_checks(tmp
 
 
 def _prepare_cli_root(tmp_path: Path, monkeypatch) -> None:
+    # The real CLI changes into the project root for the lifetime of its
+    # process. Record the test process cwd so pytest restores it afterwards.
+    monkeypatch.chdir(Path.cwd())
     (tmp_path / ".env").write_text(
         '# comment\nFROM_DOTENV=loaded\nPRESERVED=from-file\nINVALID_LINE\nQUOTED="quoted-value"\n',
         encoding="utf-8",
@@ -101,12 +104,13 @@ def test_cli_doctor_status_and_stop_actions(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert '"status": "PASS"' in result.output
     assert cli_module.os.environ["BEIDOU_ENV"] == "paper"
-    assert cli_module.os.environ["FROM_DOTENV"] == "loaded"
+    assert "FROM_DOTENV" not in cli_module.os.environ
     assert cli_module.os.environ["PRESERVED"] == "from-process"
-    assert cli_module.os.environ["QUOTED"] == "quoted-value"
+    assert "QUOTED" not in cli_module.os.environ
 
     monkeypatch.setattr(cli_module, "run_preflight", lambda root, mode, port: ([_check(blocking=True)], None))
     assert runner.invoke(cli_module.main, ["doctor"]).exit_code == 2
+    assert cli_module.os.environ["BEIDOU_ENV"] == "safety_only"
 
     monkeypatch.setattr(cli_module, "inspect_runtime_status", lambda root: None)
     missing = runner.invoke(cli_module.main, ["status"])

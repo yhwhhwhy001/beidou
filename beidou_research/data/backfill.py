@@ -47,9 +47,7 @@ def backfill_symbol(
         page: Any = None
         for attempt in range(3):
             try:
-                page = feed.fetch_klines(
-                    symbol, interval, start_time=cursor, end_time=end_ms, max_pages=1
-                )
+                page = feed.fetch_klines(symbol, interval, start_time=cursor, end_time=end_ms, max_pages=1)
                 break
             except Exception as exc:
                 if attempt == 2:

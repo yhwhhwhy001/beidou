@@ -10,8 +10,12 @@ def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "open_time": [1_700_000_000_000, 1_700_003_600_000],
-            "open": [1.0, 2.0], "high": [1.5, 2.5], "low": [0.9, 1.9],
-            "close": [1.2, 2.2], "volume": [10.0, 20.0], "is_closed": [True, True],
+            "open": [1.0, 2.0],
+            "high": [1.5, 2.5],
+            "low": [0.9, 1.9],
+            "close": [1.2, 2.2],
+            "volume": [10.0, 20.0],
+            "is_closed": [True, True],
         }
     )
 

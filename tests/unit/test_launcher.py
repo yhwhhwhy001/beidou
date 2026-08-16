@@ -19,6 +19,18 @@ from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus, Star
 from beidou_launcher.registry import EXPECTED_ALPHA_COMPONENTS, EXPECTED_FACTORS, REQUIRED_PACKAGES
 from beidou_launcher.state import InstanceLock
 
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _restore_cwd():
+    """cli.main 经 runpy 执行会 os.chdir(tmp root),进程级副作用。"""
+    import os
+
+    original = Path.cwd()
+    yield
+    os.chdir(original)
+
 
 def test_registry_is_complete() -> None:
     assert len(REQUIRED_PACKAGES) == 19
@@ -478,27 +490,27 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
 
 
 def test_launchagent_template_is_direct_and_fail_closed() -> None:
-    # M00-F07 (P0-02): 设计升级 —— 模板经受治理 wrapper 启动
-    # （终态退出码 5/6 映射为 0 不重启），KeepAlive 采用
-    # {SuccessfulExit: false}（崩溃条件重启、终态不重启）。
+    # 合并语义(codex/full-system-optimization): deploy 模板 = 安全默认
+    # (safety_only/直接 beidou/不自动启动不自动重启);受控重启 wrapper
+    # 语义保留给 testnet 实装 plist(用户 LaunchAgents)。
     # 不变量不变: 无 shell/eval、无内嵌密钥、显式参数。
-    payload = plistlib.loads(Path("deploy/com.beidou.autopilot.plist").read_bytes())
+    payload = plistlib.loads((ROOT / "deploy" / "com.beidou.autopilot.plist").read_bytes())
     arguments = payload["ProgramArguments"]
 
-    assert arguments[0].endswith("beidou_launchd_wrapper.sh")
-    assert arguments[1:3] == ["/opt/homebrew/bin/beidou", "start"]
+    assert arguments[0] == "/opt/homebrew/bin/beidou"
+    # M22-F02: 模板不得携带 --no-self-heal（P0-01 教训:关闭自愈链导致
+    # 部署后控制面卡 NO_NEW_RISK）;自愈默认开启。
+    assert arguments[1:] == ["start"]
+    assert "--no-self-heal" not in arguments
+    assert "--self-heal" not in arguments
     assert "/bin/zsh" not in arguments
     assert "-c" not in arguments
     assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
-    symbols_index = arguments.index("--symbols")
-    configured_symbols = arguments[symbols_index + 1]
-    assert configured_symbols not in {"DEFAULT", "ALL"}
-    assert configured_symbols.split(",") == ["BTCUSDT", "ETHUSDT"]
-    # P0-02: 不得无条件重启（旧 KeepAlive=true 会把 LOCKED/FAILED 变成重启循环）
-    keep_alive = payload["KeepAlive"]
-    assert keep_alive is not True
-    assert keep_alive == {"SuccessfulExit": False}
-    assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}
+    assert "--mode" not in arguments
+    assert "--symbols" not in arguments
+    assert payload["KeepAlive"] is False
+    assert payload["RunAtLoad"] is False
+    assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "safety_only", "PYTHONUNBUFFERED": "1"}
 
 
 def test_stop_rejects_pid_state_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

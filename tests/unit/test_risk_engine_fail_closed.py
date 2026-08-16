@@ -323,10 +323,7 @@ def test_pre_risk_margin_missing_fail_closed_for_risk_increasing() -> None:
         risk_increasing=True,
     )
     results = asyncio.run(checker.check(context))
-    assert any(
-        r.decision != RiskDecision.APPROVED and "margin check unavailable" in r.reason.lower()
-        for r in results
-    )
+    assert any(r.decision != RiskDecision.APPROVED and "margin check unavailable" in r.reason.lower() for r in results)
 
 
 def test_pre_risk_margin_missing_does_not_block_reduce() -> None:
@@ -369,9 +366,7 @@ def test_projection_counts_extra_inflight_notional() -> None:
     engine._outbox = SimpleNamespace(inflight_signed_quantity=lambda sym: 0.0)
     engine._last_prices = {"BTCUSDT": 100.0}
     engine._protection = SimpleNamespace(all_positions=lambda: {})
-    risk_increasing, projected = engine._portfolio_exposure_projection(
-        "BTCUSDT", 100.0, extra_inflight_notional=500.0
-    )
+    risk_increasing, projected = engine._portfolio_exposure_projection("BTCUSDT", 100.0, extra_inflight_notional=500.0)
     assert risk_increasing is True
     assert projected == 600.0
 

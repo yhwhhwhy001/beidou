@@ -163,13 +163,10 @@ class BeidouSupervisor:
         from .g7_tracker import G7LiveTracker
 
         self._g7_tracker = G7LiveTracker()
-        # The live tracker is informational; the certification producer is
-        # the durable source used by the real G7 window.  It never creates or
-        # starts a window automatically, so a missing/legacy window remains
-        # NOT_VERIFIABLE rather than silently starting certification.
-        from beidou_certification.unattended import UnattendedCertification
-
-        self._g7_certification = UnattendedCertification(str(project_root / "artifacts" / "evidence" / "g7"))
+        # Startup cannot activate or refresh a certification producer. A
+        # separately authorized evidence workflow may inject one explicitly;
+        # the runtime default remains producer-free and HARD_HOLD.
+        self._g7_certification: Any | None = None
         self._g7_observed_incident_ids: set[str] = set()
 
     @staticmethod
@@ -203,26 +200,13 @@ class BeidouSupervisor:
             }
 
         def write_allowed(method: str, params: dict[str, Any] | None = None) -> bool:
-            # 环境变量 _can_write 只是能力上限，不是运行时授权。
-            # 只有监督器确认无阻断、控制面 RESUME 且本轮授权仍有效时才允许
-            # 新风险写入；NO_NEW_RISK/EXIT_ONLY 仍允许显式撤单和
-            # reduce-only/closePosition 退出，避免安全门禁反而阻断平仓。
-            if not bool(engine._can_write):
-                return False
-            if self._is_trading_ready():
-                return True
-            method_upper = method.upper()
-            params = params or {}
-
-            def enabled(value: Any) -> bool:
-                if isinstance(value, bool):
-                    return value
-                return str(value).strip().lower() in {"1", "true", "yes"}
-
-            reducing = enabled(params.get("reduceOnly")) or enabled(params.get("closePosition"))
-            return self._control_state() in {"NO_NEW_RISK", "EXIT_ONLY", "EMERGENCY_FLATTEN"} and (
-                method_upper == "DELETE" or reducing
-            )
+            # M00-C01 containment: runtime readiness, DELETE, reduceOnly, and
+            # closePosition classify intent but do not prove ownership or grant
+            # terminal-write authority.  Until a scoped capability producer is
+            # installed, every exchange mutation remains blocked here as well
+            # as at the adapter/REST choke points.
+            del method, params
+            return False
 
         async def guarded_async(
             path: str,
@@ -264,6 +248,7 @@ class BeidouSupervisor:
                 path: str,
                 signed: bool = False,
                 params: dict[str, Any] | None = None,
+                write_account_id: str | None = None,
             ) -> Any:
                 if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
                     record(path, method)
@@ -272,7 +257,13 @@ class BeidouSupervisor:
                         category=ErrorCategory.UNKNOWN,
                         source="beidou_supervisor_interlock",
                     )
-                return await adapter_request(method, path, signed=signed, params=params)
+                return await adapter_request(
+                    method,
+                    path,
+                    signed=signed,
+                    params=params,
+                    write_account_id=write_account_id,
+                )
 
             adapter.request = guarded_adapter_request
 
@@ -511,9 +502,11 @@ class BeidouSupervisor:
             # 反复失败 → UNKNOWN P0 持续 blocker → 自动重新授权被
             # blocker 条件卡住 → PAUSED + NO_NEW_RISK（final62 实测
             # 5.5h）。失败只记错误供审计，证据保留上次成功值。
-            if self._position_mode_evidence is None or str(
-                getattr(self._position_mode_evidence.mode, "value", self._position_mode_evidence.mode)
-            ) == "UNKNOWN":
+            if (
+                self._position_mode_evidence is None
+                or str(getattr(self._position_mode_evidence.mode, "value", self._position_mode_evidence.mode))
+                == "UNKNOWN"
+            ):
                 self._position_mode_evidence = PositionModeEvidence(
                     account_id="",
                     venue="BINANCE_USDM",
@@ -523,10 +516,7 @@ class BeidouSupervisor:
                     error=f"{type(exc).__name__}: {exc}",
                 )
             else:
-                print(
-                    f"[supervisor] position mode probe failed ({type(exc).__name__}) — "
-                    "keeping last known mode"
-                )
+                print(f"[supervisor] position mode probe failed ({type(exc).__name__}) — keeping last known mode")
 
     async def _refresh_exchange_algo_snapshot(self, *, force: bool = False) -> None:
         """读取交易所当前 openAlgoOrders；查询失败保持 UNKNOWN 并阻断。"""
@@ -585,6 +575,8 @@ class BeidouSupervisor:
 
     def _g7_certification_summary(self) -> dict[str, Any]:
         """Expose durable G7 producer state without certifying it."""
+        if self._g7_certification is None:
+            return {"active_windows": [], "state_load_errors": [], "producer_status": "HARD_HOLD"}
         try:
             windows = self._g7_certification.list_windows()
             active = [item for item in windows if item.get("status") in {"CREATED", "RUNNING", "PAUSED"}]
@@ -603,6 +595,9 @@ class BeidouSupervisor:
         check is recorded as a failed SLI; a P0 blocker also opens a durable
         P0 incident and resets the window through the certification engine.
         """
+        if self._g7_certification is None:
+            return
+
         from datetime import datetime, timezone
 
         from beidou_certification.unattended import (
@@ -1282,11 +1277,15 @@ class BeidouSupervisor:
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新
             try:
-                active_windows = [
-                    item
-                    for item in self._g7_certification.list_windows()
-                    if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
-                ]
+                active_windows = (
+                    [
+                        item
+                        for item in self._g7_certification.list_windows()
+                        if item.get("status") == "RUNNING" and bool(item.get("evidence_state_complete", False))
+                    ]
+                    if self._g7_certification is not None
+                    else []
+                )
                 set_window_state = getattr(self._g7_tracker, "set_durable_window_state", None)
                 if callable(set_window_state):
                     set_window_state(running=len(active_windows) == 1, evidence_state_complete=len(active_windows) == 1)
@@ -1323,27 +1322,29 @@ class BeidouSupervisor:
     async def run(self) -> int:
         os.chdir(self.project_root)
         os.environ["BEIDOU_ENV"] = self.mode
+        print("=" * 72)
+        print("北斗一键启动监督器 / Beidou One-Click Supervisor")
+        print(f"mode={self.mode} symbols={','.join(self.symbols)} port={self.port}")
+        print("=" * 72)
+
+        # Preflight is strictly read-only. Do not create a PID lock or write
+        # supervisor evidence until every blocking fact has passed.
+        preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
+        self.report.phase = "PREFLIGHT"
+        self.report.replace_phase_checks("preflight.", preflight)
+        self._print_checks(preflight)
+        if self.report.blockers:
+            self.report.supervisor_state = "BLOCKED"
+            print("❌ 启动前置检查未通过，系统未启动。")
+            return 2
+
         locked, lock_message = self.lock.acquire()
         if not locked:
             print(f"❌ {lock_message}")
             return 3
 
         try:
-            print("=" * 72)
-            print("北斗一键启动监督器 / Beidou One-Click Supervisor")
-            print(f"mode={self.mode} symbols={','.join(self.symbols)} port={self.port}")
-            print("=" * 72)
-
-            preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
-            self.report.phase = "PREFLIGHT"
-            self.report.replace_phase_checks("preflight.", preflight)
-            self._print_checks(preflight)
             self.writer.write(self.report)
-            if self.report.blockers:
-                self.report.supervisor_state = "BLOCKED"
-                self.writer.write(self.report)
-                print("❌ 启动前置检查未通过，系统未启动。")
-                return 2
 
             from beidou_core.engine import AutonomousEngine
 

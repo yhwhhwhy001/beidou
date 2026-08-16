@@ -45,9 +45,7 @@ class KlineStore:
             )
         else:
             merged = (
-                frame.drop_duplicates(subset=["open_time"], keep="last")
-                .sort_values("open_time")
-                .reset_index(drop=True)
+                frame.drop_duplicates(subset=["open_time"], keep="last").sort_values("open_time").reset_index(drop=True)
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         merged.to_parquet(path, index=False)

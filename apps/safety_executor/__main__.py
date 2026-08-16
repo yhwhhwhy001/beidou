@@ -1,20 +1,23 @@
-"""Retired legacy safety-executor entry (Clock Domain: REALTIME).
-
-M00-F06: 该入口直接实例化 AutonomousEngine（safety_only 硬编码）构成
-第二引擎启动路径，与唯一生产主链冲突。保留 fail-closed 退役入口防止
-误执行，迁移目标：``beidou start --mode <mode>``（唯一主链）。
-"""
+"""Retired safety-executor entrypoint delegated to the governed launcher."""
 
 from __future__ import annotations
 
+import sys
 
-def main() -> int:
-    print(
-        "apps.safety_executor is retired: a second engine entry must not exist; "
-        "use the single production chain: `beidou start --mode testnet`."
+
+def main() -> None:
+    """Start only safety-only mode and require explicit symbols."""
+    if any(argument == "--mode" or argument.startswith("--mode=") for argument in sys.argv[1:]):
+        raise SystemExit("apps.safety_executor fixes mode=safety_only; use beidou directly for another mode")
+
+    from beidou_launcher.cli import main as launcher_command
+
+    launcher_command.main(
+        args=["start", "--mode", "safety_only", *sys.argv[1:]],
+        prog_name="python -m apps.safety_executor",
+        standalone_mode=True,
     )
-    return 2
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

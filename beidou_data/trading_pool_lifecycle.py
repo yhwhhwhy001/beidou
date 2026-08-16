@@ -181,9 +181,7 @@ class TradingPool:
                         restored_scores: list[InstrumentScore] = []
                         for raw_score in raw_scores:
                             try:
-                                restored_scores.append(
-                                    InstrumentScore(instrument_id=inst_id, overall=float(raw_score))
-                                )
+                                restored_scores.append(InstrumentScore(instrument_id=inst_id, overall=float(raw_score)))
                             except (TypeError, ValueError):
                                 continue
                         entry.scores = restored_scores

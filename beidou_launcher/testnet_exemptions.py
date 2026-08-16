@@ -114,8 +114,7 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         rationale="demo 15:52 实测 FILLED 达成后 ALGO_UPDATE 触发 fault → NO_NEW_RISK；"
         "testnet 按信息性事件处理保持流健康；live/canary 保持 fault（自有算法单状态变化必须复核）。",
         reassessment_module="M13",
-        risk_note="MARGIN_CALL 追缴事件在 testnet 降级为信息 —— 真追缴风险信号被掩盖；"
-        "live/canary 语义不变。M13 复核。",
+        risk_note="MARGIN_CALL 追缴事件在 testnet 降级为信息 —— 真追缴风险信号被掩盖；live/canary 语义不变。M13 复核。",
     ),
     TestnetExemption(
         exemption_id="EXEMPT-12",
@@ -144,8 +143,7 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
     TestnetExemption(
         exemption_id="EXEMPT-15",
         title="提款权限（R9）testnet 豁免：不告警、风险视角按 False 结算",
-        rationale="testnet 测试资金由交易所默认开启提款权限；非 testnet 保持 CRITICAL 阻断"
-        "（PKG02 R9 统一检查）。",
+        rationale="testnet 测试资金由交易所默认开启提款权限；非 testnet 保持 CRITICAL 阻断（PKG02 R9 统一检查）。",
         reassessment_module="M10",
         risk_note="提款权限在 testnet 完全退出风控告警面 —— live/canary 语义不变；M10 复核 R9。",
     ),

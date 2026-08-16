@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 import urllib.error
 import urllib.request
@@ -21,19 +23,21 @@ from typing import Any
 from beidou_exchange.binance_usdm.endpoints import (
     CIRCUIT_BREAKER_COOLDOWN,
     CIRCUIT_BREAKER_THRESHOLD,
-    HIGH_WEIGHT_GET_CACHE_TTL,
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_RETRIES,
     DEFAULT_ORDER_LIMIT,
     DEFAULT_RECV_WINDOW_MS,
     DEFAULT_WEIGHT_LIMIT,
+    HIGH_WEIGHT_GET_CACHE_TTL,
     Endpoint,
 )
+from beidou_exchange.binance_usdm.write_guard import classify_terminal_write
 from beidou_exchange.core.error_taxonomy import (
     ErrorCategory,
     Result,
     classify_http_error,
 )
+from beidou_exchange.core.write_authority import TerminalWriteKind
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +75,14 @@ class BinanceRESTClient:
         api_secret: str = "",
         recv_window: int = DEFAULT_RECV_WINDOW_MS,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        account_id: str = "UNKNOWN",
     ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
         self._api_secret = api_secret
         self._recv_window = recv_window
         self._max_retries = max_retries
+        self._account_id = str(account_id or "UNKNOWN")
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
@@ -401,6 +407,32 @@ class BinanceRESTClient:
             cached = self._get_cache.get(cache_key)
             if cached is not None and time.monotonic() - cached[0] <= HIGH_WEIGHT_GET_CACHE_TTL:
                 return cached[1]
+        write_request = classify_terminal_write(
+            method,
+            path,
+            base_params,
+            account_id=self._account_id,
+        )
+        # 合并语义(codex/full-system-optimization + main testnet 实装):
+        # - 默认 HARD_HOLD(opt 安全语义):所有 terminal write 在 transport
+        #   层拦截,等待 write authority 接线(registry baseline_policy)
+        # - BEIDOU_TERMINAL_WRITE_HOLD=unknown-only(main testnet 实装):
+        #   仅未分类突变端点(UNKNOWN)hold,已知 kind 放行 —— 写能力
+        #   不退化(下单/取消/减仓),authority 接线属后续演进
+        _hold_mode = os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard")
+        if write_request is not None and (_hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN):
+            reason = (
+                "UNCLASSIFIED_TERMINAL_WRITE"
+                if write_request.kind is TerminalWriteKind.UNKNOWN
+                else "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+            )
+            return Result.failure(
+                "Terminal writes are held until the capability registry is complete",
+                category=ErrorCategory.PERMISSION_DENIED,
+                retryable=False,
+                raw={"reason": reason, "kind": write_request.kind.value},
+                source="binance_rest_write_hold",
+            )
 
         # A writable Testnet request has the same ambiguity and rate-limit
         # semantics as any other venue write.  Environment labels must never
@@ -582,10 +614,8 @@ class BinanceRESTClient:
                     # （I1 审查：demo 服务器时钟落后超 recvWindow 时
                     # 所有签名请求确定性 -1021）
                     if binance_code == -1021:
-                        try:
+                        with contextlib.suppress(Exception):
                             await self._resync_clock_offset()
-                        except Exception:
-                            pass
                     wait = 0.5 * (2**attempt)
                     await asyncio.sleep(wait)
                     continue

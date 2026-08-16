@@ -23,6 +23,7 @@ def _retired() -> NoReturn:
         "for the real statistical validation kernels"
     )
 
+
 # ============================================================================
 # Purged Walk-Forward Cross Validation
 # ============================================================================

@@ -106,16 +106,16 @@ class TestEnablePitrScript:
         pgdata = Path(tmp_path) / "pgdata"
         pgdata.mkdir()
         conf = pgdata / "postgresql.conf"
-        conf.write_text(
-            "#wal_level = replica\n"
-            "#archive_mode = off\n"
-            "#archive_timeout = 0\n"
-            "#max_wal_size = 1GB\n"
-        )
+        conf.write_text("#wal_level = replica\n#archive_mode = off\n#archive_timeout = 0\n#max_wal_size = 1GB\n")
         script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
         env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
-        proc = subprocess.run(
-            ["bash", str(script)], capture_output=True, text=True, env=env, timeout=60
+        # 仓库内受控 PITR 脚本（非不可信输入）；绝对路径规避 S607
+        proc = subprocess.run(  # noqa: S603
+            ["/bin/bash", str(script)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
         )
         return proc, conf
 
@@ -140,7 +140,12 @@ class TestEnablePitrScript:
         conf.chmod(0o444)
         script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
         env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
-        proc = subprocess.run(
-            ["bash", str(script)], capture_output=True, text=True, env=env, timeout=60
+        # 仓库内受控 PITR 脚本（非不可信输入）；绝对路径规避 S607
+        proc = subprocess.run(  # noqa: S603
+            ["/bin/bash", str(script)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
         )
         assert proc.returncode != 0

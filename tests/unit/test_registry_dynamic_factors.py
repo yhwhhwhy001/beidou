@@ -42,18 +42,27 @@ class _FakeEngine:
     def __init__(self) -> None:
         self._alpha_graph = _FakeGraph(
             [
-                "meanrev_entry_v1", "trend_entry_v1", "breakout_entry_v1",
-                "momentum_filter_v1", "volatility_filter_v1", "volume_filter_v1",
-                "trailing_exit_v1", "time_exit_v1",
+                "meanrev_entry_v1",
+                "trend_entry_v1",
+                "breakout_entry_v1",
+                "momentum_filter_v1",
+                "volatility_filter_v1",
+                "volume_filter_v1",
+                "trailing_exit_v1",
+                "time_exit_v1",
                 "mined_factor_abc",  # 动态挖掘因子：合法扩展，不应 FAIL
             ]
         )
         self._factor_registry = _FakeRegistry(
             {
-                "meanrev_entry_v1": "ACTIVE", "trend_entry_v1": "ACTIVE",
-                "breakout_entry_v1": "ACTIVE", "momentum_filter_v1": "ACTIVE",
-                "volatility_filter_v1": "ACTIVE", "volume_filter_v1": "ACTIVE",
-                "trailing_exit_v1": "ACTIVE", "time_exit_v1": "ACTIVE",
+                "meanrev_entry_v1": "ACTIVE",
+                "trend_entry_v1": "ACTIVE",
+                "breakout_entry_v1": "ACTIVE",
+                "momentum_filter_v1": "ACTIVE",
+                "volatility_filter_v1": "ACTIVE",
+                "volume_filter_v1": "ACTIVE",
+                "trailing_exit_v1": "ACTIVE",
+                "time_exit_v1": "ACTIVE",
                 "mined_factor_abc": "ACTIVE",
             }
         )

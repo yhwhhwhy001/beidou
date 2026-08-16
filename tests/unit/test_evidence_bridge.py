@@ -13,10 +13,17 @@ from beidou_research.mining.runner import build_promotion_chain
 
 def _valid_bundle() -> EvidenceBundle:
     b = EvidenceBundle(
-        bundle_id="b1", candidate_id="c1", factor_id="tmpl_x_v1", factor_version="2.0.0",
-        candidate_hash="a" * 16, factor_expression_hash="e" * 16,
-        dataset_manifest_hash="d" * 64, feature_manifest_hash="f" * 64,
-        label_spec_hash="l" * 16, cost_model_version="bf06-v1", policy_version="2.0.0",
+        bundle_id="b1",
+        candidate_id="c1",
+        factor_id="tmpl_x_v1",
+        factor_version="2.0.0",
+        candidate_hash="a" * 16,
+        factor_expression_hash="e" * 16,
+        dataset_manifest_hash="d" * 64,
+        feature_manifest_hash="f" * 64,
+        label_spec_hash="l" * 16,
+        cost_model_version="bf06-v1",
+        policy_version="2.0.0",
         random_seed=42,
         raw_metrics={"ic_mean": 0.05, "sharpe": 0.4, "sample_count": 600},
         gate_decision="PASS",
@@ -26,10 +33,19 @@ def _valid_bundle() -> EvidenceBundle:
 
 
 def _chain(b: EvidenceBundle) -> list[dict]:
-    replay = PaperReplayResult(paper_sharpe=0.5, paper_drawdown_pct=-3.0, signal_consistency=0.6,
-                               paper_ir=0.25, window_bars=600, n_trades=5)
-    chain = build_promotion_chain(b, ic=0.05, icir=0.4, sample_count=600, replay=replay,
-                                  git_commit="abc123", expression_string="close", role="entry")
+    replay = PaperReplayResult(
+        paper_sharpe=0.5, paper_drawdown_pct=-3.0, signal_consistency=0.6, paper_ir=0.25, window_bars=600, n_trades=5
+    )
+    chain = build_promotion_chain(
+        b,
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=replay,
+        git_commit="abc123",
+        expression_string="close",
+        role="entry",
+    )
     assert chain is not None
     return chain
 
@@ -45,15 +61,22 @@ def _write_evidence(tmp_path: Path, bundle: EvidenceBundle, chain: list[dict], e
     path = d / "bundle.json"
     # GAP-10: 与 JSONFileFactorStore.save_factor_version 透传格式一致 —
     # 扩展键（promotion_chain/hash/source/expression/role）全部在 data 内层
-    path.write_text(json.dumps({
-        "factor_id": f"BTCUSDT:{bundle.candidate_id}", "version": "2.0.0",
-        "data": {
-            **bundle.to_dict(),
-            "promotion_chain": chain, "promotion_chain_hash": _chain_hash(chain),
-            "evidence_source": "historical_replay",
-            "expression_string": expression, "role": "entry",
-        },
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "factor_id": f"BTCUSDT:{bundle.candidate_id}",
+                "version": "2.0.0",
+                "data": {
+                    **bundle.to_dict(),
+                    "promotion_chain": chain,
+                    "promotion_chain_hash": _chain_hash(chain),
+                    "evidence_source": "historical_replay",
+                    "expression_string": expression,
+                    "role": "entry",
+                },
+            }
+        )
+    )
     return d
 
 
@@ -62,12 +85,21 @@ def _registry() -> FactorRegistry:
     from beidou_research.factors.factor import FactorDefinition
     from beidou_shared.types import SchemaVersion, VenueId
 
-    reg.register(FactorDefinition(
-        factor_id="meanrev_entry_v1", name="mr", version=SchemaVersion("2.0.0"),
-        description="d", author="a", category="meanrev",
-        universe=frozenset({VenueId("BINANCE")}), instrument_types=frozenset({"perpetual"}),
-        economic_rationale="r", lookback_period="1h", rebalance_interval="1h",
-    ))
+    reg.register(
+        FactorDefinition(
+            factor_id="meanrev_entry_v1",
+            name="mr",
+            version=SchemaVersion("2.0.0"),
+            description="d",
+            author="a",
+            category="meanrev",
+            universe=frozenset({VenueId("BINANCE")}),
+            instrument_types=frozenset({"perpetual"}),
+            economic_rationale="r",
+            lookback_period="1h",
+            rebalance_interval="1h",
+        )
+    )
     return reg
 
 
@@ -78,8 +110,13 @@ def test_valid_bundle_promotes_to_active(tmp_path: Path) -> None:
     gate = FactorPromotionGate(strict=True)
     comp_reg: dict = {"meanrev_entry_v1": (object, ())}
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
-        component_registry=comp_reg, entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
+        component_registry=comp_reg,
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == ["tmpl_x_v1"]
@@ -100,9 +137,13 @@ def test_tampered_bundle_rejected(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and report.rejected
@@ -115,9 +156,13 @@ def test_replay_evidence_rejected_in_canary(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="canary",
+        registry=registry,
+        gate=gate,
+        env_mode="canary",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and any("replay" in reason for _, reason in report.rejected)
@@ -133,9 +178,13 @@ def test_old_format_without_chain_is_ignored(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == [] and registry.get("tmpl_x_v1") is None
@@ -155,9 +204,13 @@ def test_non_dict_payload_is_isolated_not_fatal(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == ["tmpl_x_v1"]  # 排序后 bundle.json 先于 malformed.json
@@ -175,9 +228,13 @@ def test_tampered_chain_rejected(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == []
@@ -200,9 +257,13 @@ def test_nan_chain_step_fail_closed(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == []
@@ -226,9 +287,13 @@ def test_top_level_chain_layout_rejected(tmp_path: Path) -> None:
     registry = _registry()
     gate = FactorPromotionGate(strict=True)
     report = EvidenceBridge.load_and_apply(
-        registry=registry, gate=gate, env_mode="testnet",
+        registry=registry,
+        gate=gate,
+        env_mode="testnet",
         component_registry={"meanrev_entry_v1": (object, ())},
-        entry_ids={"meanrev_entry_v1"}, filter_ids=set(), exit_ids=set(),
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
         evidence_dir=str(evidence_dir),
     )
     assert report.applied == []

@@ -367,11 +367,7 @@ class PreRiskCheckerImpl:
                     )
                 )
         else:
-            margin_used = (
-                float(context.current_margin.amount)
-                if context.current_margin is not None
-                else 0.0
-            )
+            margin_used = float(context.current_margin.amount) if context.current_margin is not None else 0.0
             effective_balance = context.account_balance - margin_used
             if effective_balance <= 0:
                 results.append(

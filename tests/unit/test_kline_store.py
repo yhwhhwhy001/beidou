@@ -5,8 +5,13 @@ from beidou_research.data.kline_store import KlineStore
 
 def _kline(open_time: int, close: float) -> dict:
     return {
-        "open_time": open_time, "open": close, "high": close,
-        "low": close, "close": close, "volume": 100.0, "is_closed": True,
+        "open_time": open_time,
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": 100.0,
+        "is_closed": True,
     }
 
 

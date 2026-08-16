@@ -124,9 +124,7 @@ def verify_g5_certificate(
     is_mainnet = parsed_host in ("fapi.binance.com", "api.binance.com")
     check(
         "testnet_url",
-        bool(parsed_host)
-        and not is_mainnet
-        and ("demo-fapi" in parsed_host or "testnet" in parsed_host),
+        bool(parsed_host) and not is_mainnet and ("demo-fapi" in parsed_host or "testnet" in parsed_host),
     )
     check("mainnet_prohibited", certificate.get("mainnet_prohibited") is True)
     check("simulation", certificate.get("is_simulated") is False)

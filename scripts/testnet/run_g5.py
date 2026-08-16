@@ -1,7 +1,7 @@
 """BD-T18: G5 Testnet 认证运行器 — 验证真实 Binance Testnet 协议层正确性。
 
 用法:
-    python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --confirm-testnet
+    python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --symbol SYMBOL --confirm-testnet
 
 前置条件:
     - BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_SIGNING_KEY 已设置
@@ -17,12 +17,15 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+from beidou_launcher.models import CheckResult
 
 
 def fail_fast(reason: str) -> None:
@@ -41,9 +44,40 @@ def fail_fast(reason: str) -> None:
     sys.exit(1)
 
 
+def blocking_preflight_checks(checks: list[CheckResult]) -> list[CheckResult]:
+    """Use the canonical fail-closed blocker semantics, including P1 UNKNOWN."""
+
+    return [check for check in checks if check.is_blocking]
+
+
+def validate_probe_symbol(raw_symbol: str) -> str:
+    """Return one normalized Binance symbol or fail before preflight/network access."""
+
+    symbol = raw_symbol.strip().upper()
+    if (
+        not re.fullmatch(r"[A-Z][A-Z0-9]{4,11}", symbol)
+        or symbol in {"ALL", "DEFAULT"}
+        or not any(character.isalpha() for character in symbol)
+    ):
+        raise ValueError("symbol must be one explicit 5-12 character alphanumeric market")
+    return symbol
+
+
+def require_exchange_symbol(probe_symbol: str, symbols: object) -> dict[str, object]:
+    """Require exchange-info to return the exact requested market."""
+
+    if not isinstance(symbols, list):
+        raise ValueError("exchange info symbols is UNKNOWN")
+    for candidate in symbols:
+        if isinstance(candidate, dict) and candidate.get("symbol") == probe_symbol:
+            return candidate
+    raise ValueError(f"requested symbol {probe_symbol} was not returned by exchange info")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
+    parser.add_argument("--symbol", required=True, help="显式指定只读协议探测品种")
     parser.add_argument("--confirm-testnet", action="store_true", help="确认连接到 Testnet（非 Mainnet）")
     parser.add_argument(
         "--max-notional",
@@ -52,6 +86,10 @@ def main() -> int:
         help="最大测试名义金额 (USDT)，默认读取 G5 plan；不得超过 plan 上限",
     )
     args = parser.parse_args()
+    try:
+        probe_symbol = validate_probe_symbol(args.symbol)
+    except ValueError as exc:
+        parser.error(f"--symbol 无效: {exc}")
 
     if not args.confirm_testnet:
         print("ERROR: 必须使用 --confirm-testnet 标志确认 Testnet 环境")
@@ -63,12 +101,10 @@ def main() -> int:
     # Never start a certification probe from an unreproducible artifact.  The
     # same preflight used by the launcher is a hard gate here, before any REST
     # client is constructed or any exchange request is attempted.
-    from beidou_launcher.preflight import run_preflight
+    from beidou_launcher.preflight import run_g5_producer_preflight
 
-    preflight_checks, _ = run_preflight(project_root, "testnet", 9090)
-    preflight_blockers = [
-        check for check in preflight_checks if check.status.value == "FAIL" and check.severity.value == "P0"
-    ]
+    preflight_checks, _ = run_g5_producer_preflight(project_root, 9090)
+    preflight_blockers = blocking_preflight_checks(preflight_checks)
     if preflight_blockers:
         details = "; ".join(f"{check.check_id}: {check.message}" for check in preflight_blockers)
         fail_fast(f"preflight blocked before network access: {details}")
@@ -142,7 +178,7 @@ def main() -> int:
     signing_key = os.environ.get("BEIDOU_SIGNING_KEY", "")
     if not signing_key:
         fail_fast("BEIDOU_SIGNING_KEY not set")
-    print(f"API Key: {'*' * 8}{api_key[-4:] if len(api_key) > 4 else ''}")
+    print("API key: configured (value withheld)")
 
     # 1e: Commit hash
     import subprocess
@@ -268,23 +304,12 @@ def main() -> int:
         # --- S3: Exchange Info (交易对信息) ---
         print("\n[S3] Exchange Info Check...")
         try:
-            ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": "BTCUSDT"})
+            ei_data = await exchange("GET", Endpoint.EXCHANGE_INFO, params={"symbol": probe_symbol})
             if not isinstance(ei_data, dict):
                 raise RuntimeError("exchange info response is not an object")
-            symbols = ei_data.get("symbols")
-            if not isinstance(symbols, list):
-                raise RuntimeError("exchange info symbols is UNKNOWN")
-            btc_info = None
-            for s in symbols:
-                if isinstance(s, dict) and s.get("symbol") == "BTCUSDT":
-                    btc_info = s
-                    break
-            if btc_info:
-                print(f"  PASS: BTCUSDT status={btc_info.get('status')}")
-                results["exchange_info"] = {"status": "PASS", "symbol": "BTCUSDT"}
-            else:
-                print("  PASS: exchange info retrieved")
-                results["exchange_info"] = {"status": "PASS"}
+            symbol_info = require_exchange_symbol(probe_symbol, ei_data.get("symbols"))
+            print(f"  PASS: {probe_symbol} status={symbol_info.get('status')}")
+            results["exchange_info"] = {"status": "PASS", "symbol": probe_symbol}
         except Exception as e:
             print(f"  FAIL: {e}")
             results["exchange_info"] = {"status": "FAIL", "error": str(e)}

@@ -384,9 +384,7 @@ class ReconciliationEngine:
                 # (STOP_LOSS_LIMIT/TAKE_PROFIT_LIMIT)双价都参与比较。
                 order_type_upper = str(s.get("type", "")).strip().upper()
 
-                def _compare_price_field(
-                    s_detail: dict, e_detail: dict, oid: str, field: str, label: str
-                ) -> None:
+                def _compare_price_field(s_detail: dict, e_detail: dict, oid: str, field: str, label: str) -> None:
                     s_val = str(s_detail.get(field, "") or "").strip()
                     e_val = str(e_detail.get(field, "") or "").strip()
                     if not s_val or not e_val:

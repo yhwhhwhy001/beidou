@@ -65,6 +65,7 @@ class ReplayValidator:
     def all_checks_pass(self, result: ReplayResult) -> bool:
         return all(result.cheat_checks.values())
 
+
 """历史 replay 模拟：为 PAPER_TRADING/CHALLENGER 级提供证据（仅 testnet 语义）。"""
 
 

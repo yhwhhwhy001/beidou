@@ -845,7 +845,12 @@ def test_engine_has_no_unreachable_builder_stubs() -> None:
 
 
 def test_no_second_engine_entry_outside_main_chain() -> None:
-    """M00-F06: 唯一生产主链之外的引擎实例化已退役（dev-only autopilot 除外）。"""
+    """M00-F06: 唯一生产主链之外的引擎实例化已退役（dev-only autopilot 除外）。
+
+    AST 判定真实构造调用（ast.Call + Name），注册表扫描器等工具里的
+    "AutonomousEngine(" 字符串 marker 不构成实例化（write_registry.py
+    的 _PYTHON_MARKERS 是检测特征清单，不是调用点）。
+    """
     allowed = {
         "beidou_launcher/supervisor.py",  # 唯一主链
         "apps/autopilot/__main__.py",  # dev-only 手动入口（launchd 不使用）
@@ -855,7 +860,17 @@ def test_no_second_engine_entry_outside_main_chain() -> None:
             continue
         rel = str(py_file.relative_to(ROOT))
         text = py_file.read_text(encoding="utf-8")
-        if "AutonomousEngine(" in text:
+        if "AutonomousEngine(" not in text:
+            continue
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError:
+            continue
+        instantiates = any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "AutonomousEngine"
+            for node in ast.walk(tree)
+        )
+        if instantiates:
             assert rel in allowed, f"M00-F06: 非主链入口实例化引擎: {rel}"
     for rel in (
         "apps/strategy_engine/__main__.py",
@@ -863,4 +878,5 @@ def test_no_second_engine_entry_outside_main_chain() -> None:
         "apps/research_lab/__main__.py",
     ):
         src = (ROOT / rel).read_text(encoding="utf-8")
-        assert "retired" in src, f"{rel} 缺退役标记"
+        # codex 合并语义: docstring 用 "Retired" 开头,大小写不敏感判定
+        assert "retired" in src.lower(), f"{rel} 缺退役标记"

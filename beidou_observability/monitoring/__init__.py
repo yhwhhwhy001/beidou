@@ -609,7 +609,9 @@ def collect_monitoring_checks(
             if strategy_risk is not None and autopilot_id is not None:
                 strategy_states = _strategy_snapshots(engine)
                 try:
-                    results.extend(_convert_multi(check_strategy_signal_silence(strategy_states), name="策略信号沉默检测"))
+                    results.extend(
+                        _convert_multi(check_strategy_signal_silence(strategy_states), name="策略信号沉默检测")
+                    )
                 except Exception as exc:
                     results.append(failure("runtime.strategy.silence", "策略信号沉默检测", CheckSeverity.P2, exc))
                 try:

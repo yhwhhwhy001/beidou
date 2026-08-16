@@ -73,9 +73,7 @@ class KLineGenerator:
             interval_start = interval_start.replace(minute=0)
         elif self.interval.endswith("m"):
             minutes = int(self.interval[:-1])
-            interval_start = interval_start.replace(
-                minute=interval_start.minute - interval_start.minute % minutes
-            )
+            interval_start = interval_start.replace(minute=interval_start.minute - interval_start.minute % minutes)
         if delta >= timedelta(hours=24):
             interval_start = interval_start.replace(hour=0)
         interval_end = interval_start + delta

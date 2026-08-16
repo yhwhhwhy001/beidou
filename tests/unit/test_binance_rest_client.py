@@ -106,8 +106,8 @@ def test_convenience_methods_share_one_request_boundary(monkeypatch: pytest.Monk
     assert calls[-1][1] == Endpoint.TICKER_24HR
 
 
-def test_keepalive_transport_preserves_put_method(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The convenience boundary is insufficient: the actual transport must send PUT."""
+def test_keepalive_transport_holds_put_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Listen-key PUT is session mutation and must not bypass the write hold."""
 
     client = BinanceRESTClient(
         "https://demo.example",
@@ -124,8 +124,11 @@ def test_keepalive_transport_preserves_put_method(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
     result = asyncio.run(client.keepalive_listen_key("listen-key-1"))
 
-    assert result.is_success() is True
-    assert methods == ["PUT"]
+    assert result.is_success() is False
+    assert result.error is not None
+    assert result.error.raw["reason"] == "WRITE_CAPABILITY_REGISTRY_INCOMPLETE"
+    assert result.error.raw["kind"] == "SESSION_CONTROL"
+    assert methods == []
 
 
 def test_signed_success_adds_timestamp_signature_and_auth_header(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,7 +258,14 @@ def test_http_5xx_retryable_error_and_business_rejection(monkeypatch: pytest.Mon
 def test_ambiguous_order_503_is_unknown_and_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     """A venue write may have succeeded despite a generic 503; query by client id first."""
 
-    client = BinanceRESTClient("https://demo.example", api_secret="secret", max_retries=3)  # noqa: S106
+    # This test exercises post-gate HTTP ambiguity only.  Production code has
+    # no positive authority injection surface while M00-C containment is active.
+    monkeypatch.setattr(rest_module, "classify_terminal_write", lambda *_args, **_kwargs: None)
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=3,
+    )
     calls = 0
 
     def unavailable(request, timeout, _session=None):
@@ -382,7 +392,7 @@ def test_high_weight_get_cache_keyed_by_params(monkeypatch: pytest.MonkeyPatch) 
 
     def fake_urlopen(request, timeout, _session=None):
         calls.append(request.full_url)
-        return b'[]', {}
+        return b"[]", {}
 
     monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
     asyncio.run(client.get_open_orders())
@@ -504,6 +514,9 @@ def test_delete_response_with_string_code_does_not_crash(monkeypatch: pytest.Mon
         api_secret="secret",  # noqa: S106 - deterministic test key
         max_retries=1,
     )
+    # 合并语义: 本测试验证响应解析(需真实 transport 路径);
+    # unknown-only 模式放行已知 kind(DELETE 取消)
+    monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "unknown-only")
 
     def fake_urlopen(request, timeout, _session=None):
         return b'{"algoId": 1000000168693137, "success": true, "code": "200"}', {}

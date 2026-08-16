@@ -55,9 +55,7 @@ def test_stop_loss_pct_defaults_clamp() -> None:
 
 
 def test_stop_loss_pct_policy_override() -> None:
-    engine = _bare_engine(
-        policy={"stop_loss_min_pct": 2.0, "stop_loss_max_pct": 10.0, "stop_loss_atr_multiplier": 3.0}
-    )
+    engine = _bare_engine(policy={"stop_loss_min_pct": 2.0, "stop_loss_max_pct": 10.0, "stop_loss_atr_multiplier": 3.0})
     assert engine._compute_stop_loss_pct(atr_pct=2.0) == 6.0
     assert engine._compute_stop_loss_pct(atr_pct=0.5) == 2.0  # 下限策略覆盖
     assert engine._compute_stop_loss_pct(atr_pct=10.0) == 10.0  # 上限策略覆盖
@@ -279,9 +277,7 @@ def test_champion_cross_constraint_min_must_exceed_degrade() -> None:
 
 
 def test_champion_valid_params_do_not_set_policy_error() -> None:
-    engine = _bare_engine(
-        policy={"champion_min_icir": 0.4, "champion_min_samples": 100, "champion_degrade_icir": 0.1}
-    )
+    engine = _bare_engine(policy={"champion_min_icir": 0.4, "champion_min_samples": 100, "champion_degrade_icir": 0.1})
     engine._validate_audited_policy_params()
     assert engine._policy_error is None
 

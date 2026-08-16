@@ -8,8 +8,18 @@ def _raw_kline(open_time_ms: int) -> list:
     # 5=volume, 6=closeTime, 7=quoteVolume, 8=trades, 11=isClosed。
     # closeTime 必须 > openTime（_parse_rest_kline 校验），且早于 now。
     return [
-        open_time_ms, "100.0", "101.0", "99.0", "100.5", "10.0",
-        open_time_ms + INTERVAL_MS - 1, "0", "0", "0", "0", True,
+        open_time_ms,
+        "100.0",
+        "101.0",
+        "99.0",
+        "100.5",
+        "10.0",
+        open_time_ms + INTERVAL_MS - 1,
+        "0",
+        "0",
+        "0",
+        "0",
+        True,
     ]
 
 

@@ -50,9 +50,7 @@ def test_replay_tool_is_deterministic() -> None:
     # 绝对路径锚定 __file__ —— 其他测试会 chdir（已知 CWD 污染,M21 修复），
     # 相对路径在组合运行时不可靠。
     repo_root = Path(__file__).resolve().parent.parent.parent
-    spec = importlib.util.spec_from_file_location(
-        "run_replay_fixture", repo_root / "scripts" / "run_replay_fixture.py"
-    )
+    spec = importlib.util.spec_from_file_location("run_replay_fixture", repo_root / "scripts" / "run_replay_fixture.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["run_replay_fixture"] = module

@@ -181,9 +181,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     unexpected_missing = sorted(set(missing_components) - inactive_factor_ids)
     # 动态挖掘因子是合法扩展：extra_components 不再构成 FAIL，
     # 仅进 evidence 供审计。核心 8 个组件缺失仍 FAIL。
-    graph_failed = bool(
-        unexpected_missing or invalid_components or graph_error or topology_mismatch
-    )
+    graph_failed = bool(unexpected_missing or invalid_components or graph_error or topology_mismatch)
     graph_degraded = bool(missing_components and not graph_failed)
     graph_status = CheckStatus.FAIL if graph_failed else (CheckStatus.WARN if graph_degraded else CheckStatus.PASS)
     graph_severity = CheckSeverity.P0 if graph_failed else CheckSeverity.P2

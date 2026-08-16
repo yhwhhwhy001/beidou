@@ -549,10 +549,7 @@ class AdaptiveSliceAlgorithm(BaseExecutionAlgorithm):
             # BD-FIX: net_alpha_bps<=0 时乘数取 1.0 —— 旧公式 0.8 使
             # 近线意图（从不设置 net_alpha_bps，恒 0）永远只执行批准量
             # 的 80%，20% 残差无声消失（I1 审查）。
-            if ctx.net_alpha_bps > 0:
-                qty = slice_qty * (0.8 + 0.4 * alpha_remaining / ctx.net_alpha_bps)
-            else:
-                qty = slice_qty
+            qty = slice_qty * (0.8 + 0.4 * alpha_remaining / ctx.net_alpha_bps) if ctx.net_alpha_bps > 0 else slice_qty
             # BD-FIX: 确保每个切片的名义价值不低于交易所最低限额。
             # 当 alpha 较弱时倍数可能降至 0.8x，导致切片 < min_notional。
             # 将切片数量钳制到 effective_min_qty 以上。

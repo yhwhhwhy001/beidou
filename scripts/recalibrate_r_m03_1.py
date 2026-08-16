@@ -36,7 +36,9 @@ from beidou_research.factors.rsi import compute_rsi_wilder
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KLINE_DIR = PROJECT_ROOT / ".beidou" / "data" / "klines"
-EVIDENCE_DIR = PROJECT_ROOT / "docs" / "optimization" / "runs" / "2026-08-16-deep-module-optimization" / "evidence" / "M03"
+EVIDENCE_DIR = (
+    PROJECT_ROOT / "docs" / "optimization" / "runs" / "2026-08-16-deep-module-optimization" / "evidence" / "M03"
+)
 
 RSI_PAIRS = [(70, 30), (65, 35), (75, 25), (60, 40), (80, 20)]
 TRAIL_MULTS = [1.5, 2.0, 2.5, 3.0]
@@ -121,7 +123,12 @@ def simulate(
             pnl_pct = (closes[i] / entry - 1) * 100 * pos
             trailing = trail_mult * atr_pct[i]
             exit_now = False
-            if pnl_pct < -trailing or (pnl_pct > 3.0 * atr_pct[i] and rsi[i] > 70) or (pos > 0 and closes[i] < sma20[i]) or (pos < 0 and closes[i] > sma20[i]):
+            if (
+                pnl_pct < -trailing
+                or (pnl_pct > 3.0 * atr_pct[i] and rsi[i] > 70)
+                or (pos > 0 and closes[i] < sma20[i])
+                or (pos < 0 and closes[i] > sma20[i])
+            ):
                 exit_now = True
             if exit_now:
                 pos = 0.0
@@ -156,23 +163,33 @@ def run_symbol(symbol: str, results: dict) -> None:
     rsi = wilder_rsi_series(closes)
     atr_pct = wilder_atr_pct_series(highs, lows, closes)
     print(f"[{symbol}] scanning {len(RSI_PAIRS)}x{len(TRAIL_MULTS)}x{len(COST_BPS)} configs...")
-    for (rsi_long, rsi_short) in RSI_PAIRS:
+    for rsi_long, rsi_short in RSI_PAIRS:
         for trail in TRAIL_MULTS:
             for cost in COST_BPS:
                 result = simulate(
-                    closes, sma5, sma20, rsi, atr_pct,
-                    rsi_long=rsi_long, rsi_short=rsi_short,
-                    trail_mult=trail, cost_bps=cost,
+                    closes,
+                    sma5,
+                    sma20,
+                    rsi,
+                    atr_pct,
+                    rsi_long=rsi_long,
+                    rsi_short=rsi_short,
+                    trail_mult=trail,
+                    cost_bps=cost,
                 )
                 key = f"rsi({rsi_long},{rsi_short})/trail{trail}/cost{cost}"
-                results.setdefault(symbol, {})[key] = None if result is None else {
-                    "paper_ir": result.paper_ir,
-                    "paper_sharpe": result.paper_sharpe,
-                    "paper_drawdown_pct": result.paper_drawdown_pct,
-                    "signal_consistency": result.signal_consistency,
-                    "n_trades": result.n_trades,
-                    "window_bars": result.window_bars,
-                }
+                results.setdefault(symbol, {})[key] = (
+                    None
+                    if result is None
+                    else {
+                        "paper_ir": result.paper_ir,
+                        "paper_sharpe": result.paper_sharpe,
+                        "paper_drawdown_pct": result.paper_drawdown_pct,
+                        "signal_consistency": result.signal_consistency,
+                        "n_trades": result.n_trades,
+                        "window_bars": result.window_bars,
+                    }
+                )
 
 
 def legacy_sma_rsi(prices_window: list[float], period: int = 14) -> float:
@@ -230,8 +247,7 @@ def rsi_mapping_analysis(symbol: str, results: dict) -> None:
     print(
         f"[{symbol}] RSI 映射: "
         + " | ".join(
-            f"old{old}→new median {v['new_rsi_median']} "
-            f"[p25 {v['new_rsi_p25']}, p75 {v['new_rsi_p75']}] n={v['n']}"
+            f"old{old}→new median {v['new_rsi_median']} [p25 {v['new_rsi_p25']}, p75 {v['new_rsi_p75']}] n={v['n']}"
             for old, v in mapping.items()
         )
     )

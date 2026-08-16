@@ -1079,8 +1079,7 @@ class MarketDataFeed:
 
         # M03-F03: Wilder ATR(14) —— 全序列 TR + Wilder 平滑（旧为 14 根简单均值）
         tr_list = [
-            max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
-            for i in range(1, n)
+            max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1])) for i in range(1, n)
         ]
         atr = _wilder_smooth_last(tr_list, 14)
         atr_pct = atr / closes[-1] * 100 if closes[-1] > 0 else 0

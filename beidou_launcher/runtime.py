@@ -607,9 +607,7 @@ def collect_runtime_checks(
             elif pending or dead_letter:
                 delivery_status = CheckStatus.WARN
                 delivery_severity = CheckSeverity.P1
-                delivery_message = (
-                    f"告警仍在重试队列: pending={pending}, dead_letter={dead_letter}（死信可重试）"
-                )
+                delivery_message = f"告警仍在重试队列: pending={pending}, dead_letter={dead_letter}（死信可重试）"
             elif not configured:
                 delivery_status = CheckStatus.WARN
                 delivery_severity = CheckSeverity.P1

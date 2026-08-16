@@ -93,8 +93,8 @@ def run(
     if not symbols_list or any(item in {"ALL", "DEFAULT"} for item in symbols_list):
         raise click.ClickException("固定 DEFAULT/ALL 交易池已禁用，请指定实际品种")
 
-    # 离线研究工具默认连 testnet
-    os.environ.setdefault("BEIDOU_ENV", "testnet")
+    # 研究入口只能默认进入零写的 research 环境。
+    os.environ.setdefault("BEIDOU_ENV", "research")
     os.makedirs(output_dir, exist_ok=True)
 
     click.echo(f"[factor_miner] 全量挖掘运行 (品种={symbols_list}, interval={interval}, limit={limit})...")
@@ -223,7 +223,7 @@ def backfill(
                 click.echo(f"  {symbol} {interval}: ~{span_ms // per_bar} 根 ≈ {span_ms // per_bar // 1000 + 1} 页")
         return
 
-    os.environ.setdefault("BEIDOU_ENV", "testnet")
+    os.environ.setdefault("BEIDOU_ENV", "research")
     feed = MarketDataFeed()
     store = KlineStore(root=data_root)
     reports = backfill_all(feed, store, symbols_list, intervals_list, start_ms, end_ms, max_pages=max_pages)
