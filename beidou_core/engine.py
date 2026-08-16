@@ -2163,16 +2163,45 @@ class AutonomousEngine:
             currency="USDT",
         )
 
-    def _portfolio_total_exposure(self, exclude_symbol: str | None = None) -> float:
-        """全部持仓(可排除指定 symbol)按最近价格计的总名义敞口（M07-F01）。
+    def _portfolio_exposure_projection(self, symbol: str, position_notional: float) -> tuple[bool, float]:
+        """组合敞口投影（M07-R2 可测试接缝）。
+
+        返回 (risk_increasing, projected_total):已成交(排除本 symbol) +
+        在途 inflight + 本单目标名义(仅风险增加时计入)。减仓/平仓意图
+        永远 risk_increasing=False(降杠杆不得被总敞口门封锁)。
+        """
+        current_exposure = self._portfolio_total_exposure(exclude_symbol=symbol)
+        current_symbol_notional = self._portfolio_total_exposure(only_symbol=symbol)
+        risk_increasing = position_notional > current_symbol_notional
+        inflight_total = 0.0
+        try:
+            for sym in self._symbols:
+                inflight_qty = self._outbox.inflight_signed_quantity(sym) or 0.0
+                ipx = float(self._last_prices.get(sym, 0.0) or 0.0)
+                if ipx > 0 and abs(float(inflight_qty)) > 0:
+                    inflight_total += abs(float(inflight_qty)) * ipx
+        except Exception as inflight_exc:
+            logger.warning("inflight exposure aggregation failed: %s", type(inflight_exc).__name__)
+            inflight_total = 0.0
+        projected = current_exposure + inflight_total + (position_notional if risk_increasing else 0.0)
+        return risk_increasing, projected
+
+    def _portfolio_total_exposure(
+        self, exclude_symbol: str | None = None, only_symbol: str | None = None
+    ) -> float:
+        """持仓名义敞口（M07-F01/R2）。
 
         组合级总敞口硬门的输入:单笔 R4 杠杆检查不约束跨 symbol 总敞口,
         旧实现 max_total_leverage 在组合层无任何执行点。
+        M07-R2: 价格保守取 max(last, entry) —— 陈旧/缺失行情价低估
+        敞口会放大门被绕过方向。
         """
         total = 0.0
         for pp in self._protection.all_positions().values():
             sym = str(pp.instrument_id)
             if exclude_symbol is not None and sym == exclude_symbol:
+                continue
+            if only_symbol is not None and sym != only_symbol:
                 continue
             try:
                 qty = float(pp.quantity)
@@ -2180,7 +2209,9 @@ class AutonomousEngine:
                 continue
             if qty <= 0:
                 continue
-            price = float(self._last_prices.get(sym, float(pp.entry_price)))
+            last_price = float(self._last_prices.get(sym, 0.0) or 0.0)
+            entry_price = float(pp.entry_price)
+            price = max(last_price, entry_price) if last_price > 0 else entry_price
             if math.isfinite(price) and price > 0:
                 total += qty * price
         return total
@@ -4885,16 +4916,19 @@ class AutonomousEngine:
             if actual_status in {"CANCELED", "EXPIRED"}:
                 # BD-FIX: ACK 即过期/撤销且带部分成交时，成交事实必须
                 # 入账（C2 审查 —— 与 _monitor_orders 同款修复）。
+                # M11-F01: order_id → exchange_order_id —— 旧代码引用
+                # 未定义变量,该分支(ACK 即 CANCELED/EXPIRED 且部分成交)
+                # 执行即 NameError 中止整个下单流程(F821 实锤)。
                 if cumulative_filled > 0:
                     _delta, _price, _fill_id = self._consume_cumulative_fill(
-                        order_id,
+                        exchange_order_id,
                         order_symbol,
                         order,
                         status=actual_status,
                     )
                     if _delta > 0 and _price > 0:
                         self._record_partial_fill_to_ledger(
-                            order_id,
+                            exchange_order_id,
                             order_symbol,
                             order,
                             _delta,
@@ -9027,9 +9061,9 @@ class AutonomousEngine:
                         for pp in self._protection.all_positions().values()
                         if pp.stop_loss is not None and pp.stop_loss.is_active()
                     ),
-                    # M07-F01: 组合级总敞口(排除本 symbol,按最近价计) ——
-                    # 供 R 规则与快照审计;总敞口硬门在下方执行。
-                    "total_exposure": self._portfolio_total_exposure(exclude_symbol=symbol),
+                    # M07-R2: 移除误导性 total_exposure 死字段(无规则消费
+                    # 且"排除本 symbol"语义易误读)—— 组合敞口审计由硬门的
+                    # SKIP 打印承担。
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
                     # PKG02 (BDS-P0-001): 使用交易所实际返回的 canWithdraw。
@@ -9039,18 +9073,22 @@ class AutonomousEngine:
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
 
-                # M07-F01: 组合级总敞口硬门 —— 现有敞口(排除本 symbol) +
-                # 新目标敞口不得超过 max_total_leverage × 账户权益。旧实现
-                # 只有单笔 R4 杠杆检查,组合层总敞口无任何执行点。
-                _current_exposure = self._portfolio_total_exposure(exclude_symbol=symbol)
+                # M07-F01/R2: 组合级总敞口硬门 —— 已成交 + 在途(outbox
+                # inflight)敞口 + 本单增量,不得超过 max_total_leverage ×
+                # 账户权益。R2(对抗审查): ① 同轮/跨轮 inflight 必须保留
+                # (旧门只看已成交,batch 12 标的可集体绕过);② 仅风险增加
+                # 意图受门约束 —— 减仓/平仓永远放行(旧门在超限后把一切
+                # 意图 SKIP,组合冻结在超限态无法降杠杆);③ 价格保守取
+                # max(last, entry)(陈旧价低估方向)。
+                _risk_increasing, _projected = self._portfolio_exposure_projection(symbol, position_notional)
                 _max_total_notional = (
                     self._policy_float("max_total_leverage", self._settings.production.max_total_leverage)
                     * account_balance
                 )
-                if _max_total_notional > 0 and _current_exposure + position_notional > _max_total_notional:
+                if _risk_increasing and _max_total_notional > 0 and _projected > _max_total_notional:
                     print(
                         f"[nearline] {symbol}: SKIP (portfolio total exposure "
-                        f"{_current_exposure + position_notional:.1f} > "
+                        f"{_projected:.1f} > "
                         f"{self._policy_float('max_total_leverage', 3.0)}x balance)"
                     )
                     continue
@@ -9285,27 +9323,28 @@ class AutonomousEngine:
                     risk_expires_at=approval_expires_at,
                 )
 
-                # P1修复: 内联 PreRisk 检查 — 避免 PreRiskCheckerImpl.check() 签名不匹配
-                # 检查 notional/leverage/集中度/在途订单上限
-                max_notional = self._policy_float(
-                    "max_position_notional", self._settings.production.max_position_notional
+                # M10-F01: PreRisk 收敛 —— 内联副本替换为真实
+                # PreRiskCheckerImpl.check()(经济性/杠杆/名义上限/保证金/
+                # 挂单上限),消除规则漂移双轨。
+                from beidou_safety.risk.engine import _PreRiskContext
+                from beidou_shared.types import AccountRef
+
+                pre_context = _PreRiskContext(
+                    account_ref=AccountRef("default"),
+                    instrument_id=InstrumentId(symbol),
+                    order_quantity=Quantity(amount=str(position_size)),
+                    order_price=MonetaryValue(amount=str(price), currency="USDT"),
+                    leverage=dyn_leverage,
+                    account_balance=account_balance,
+                    pending_orders=[str(oid) for oid in self._active_order_ids],
                 )
-                pre_risk_ok = True
-                pre_risk_reason = ""
-                if dyn_leverage > self._pre_risk.max_leverage:
-                    pre_risk_ok = False
-                    pre_risk_reason = f"leverage {dyn_leverage} > max {self._pre_risk.max_leverage}"
-                elif position_notional > max_notional:
-                    pre_risk_ok = False
-                    pre_risk_reason = f"notional {position_notional:.0f} > max {max_notional:.0f}"
-                elif position_notional > account_balance * dyn_leverage:
-                    pre_risk_ok = False
-                    pre_risk_reason = f"notional exceeds margin (balance={account_balance:.0f} lev={dyn_leverage}x)"
-                elif len(self._active_order_ids) >= 50:
-                    pre_risk_ok = False
-                    pre_risk_reason = f"too many pending orders ({len(self._active_order_ids)})"
-                if not pre_risk_ok:
-                    print(f"[nearline] {symbol}: ❌ Pre-risk REJECTED: {pre_risk_reason}")
+                pre_results = await self._pre_risk.check(pre_context)
+                pre_rejections = [r for r in pre_results if r.decision != RiskDecision.APPROVED]
+                if pre_rejections:
+                    print(
+                        f"[nearline] {symbol}: ❌ Pre-risk REJECTED: "
+                        f"{[r.reason for r in pre_rejections]}"
+                    )
                     continue
 
                 # P0 Gate 1: 控制面校验（Outbox 提交前）
