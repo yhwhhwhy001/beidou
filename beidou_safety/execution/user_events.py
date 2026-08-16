@@ -63,6 +63,9 @@ class UserStreamProjector:
         self._balances: dict[str, MonetaryValue] = {}
         self._cumulative_by_order: dict[str, Decimal] = {}
         self._open_orders: set[str] = set()
+        # M13 登记兑现: 订单参数明细(order_id → 参数),供三方对账
+        # 参数级比较 —— 事件侧此前不携带 detail,detail_degraded 常态
+        self._open_order_details: dict[str, dict[str, str]] = {}
         self._last_event_time_ms: int | None = None
         self._applied_event_ids: set[str] = set()
         self._frozen_reason: str | None = None
@@ -367,8 +370,30 @@ class UserStreamProjector:
         )
         if _owned and update.order_status.value in {"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"}:
             self._open_orders.add(order_id)
+            # M13 登记兑现: 记录参数明细(原始 payload 补齐 reduceOnly/
+            # stopPrice —— Binance fapi ORDER_TRADE_UPDATE 嵌套在 o.* )
+            _raw = getattr(getattr(update, "event", None), "raw_event", None)
+            _raw = _raw if isinstance(_raw, dict) else {}
+            _nested = _raw.get("o") if isinstance(_raw.get("o"), dict) else {}
+
+            def _raw_opt(top_key: str, nested_key: str) -> str:
+                value = _raw.get(top_key)
+                if value is None:
+                    value = _nested.get(nested_key)
+                return str(value) if value is not None else ""
+
+            self._open_order_details[order_id] = {
+                "symbol": str(symbol),
+                "side": str(update.side.value),
+                "qty": str(update.original_quantity.amount),
+                "price": str(update.last_price.amount) if update.last_price else "",
+                "type": str(update.order_type.value),
+                "reduce_only": _raw_opt("reduceOnly", "R"),
+                "stop_price": _raw_opt("stopPrice", "sp"),
+            }
         else:
             self._open_orders.discard(order_id)
+            self._open_order_details.pop(order_id, None)
 
     def fact_snapshot(self) -> AccountFactSnapshot:
         timestamp = (
@@ -390,6 +415,13 @@ class UserStreamProjector:
             balance=balance,
             positions={symbol: Quantity(amount=_decimal_text(amount)) for symbol, amount in self._positions.items()},
             open_orders=sorted(self._open_orders),
+            # M13 登记兑现: 参数明细随快照携带(两侧齐全时三方对账
+            # 参数级比较生效,detail_degraded 仅剩恢复路径)
+            open_orders_detail={
+                order_id: dict(detail)
+                for order_id, detail in self._open_order_details.items()
+                if order_id in self._open_orders
+            },
             timestamp=timestamp,
             source=source,
             fact_version=(

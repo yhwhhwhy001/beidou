@@ -346,3 +346,31 @@ def test_account_duplicate_gap_nonfinite_and_order_regression_are_blocked() -> N
     result = terminal.ingest(_update(sequence=1, update_id=3, cumulative="0", status="FILLED"))
     assert result.accepted
     assert terminal.fact_snapshot().open_orders == []
+
+
+def test_projection_carries_open_order_detail() -> None:
+    """M13 登记兑现:事件侧快照携带参数明细(三方对账参数级比较生效)。"""
+    store = PersistentStore(":memory:")
+    projector = UserStreamProjector(store=store, owned_client_order_prefix="cid")
+    update = _update(sequence=10, update_id=1, cumulative="0.05")
+    assert projector.ingest(update).status is UserProjectionStatus.ACCEPTED
+    snap = projector.fact_snapshot()
+    assert "123" in snap.open_orders  # raw 构造 o.i=123
+    detail = snap.open_orders_detail.get("123", {})
+    assert detail.get("symbol") == "BTCUSDT"
+    assert detail.get("side") in {"BUY", "SELL"}
+    assert detail.get("type") == "MARKET"
+    assert detail.get("qty") == "0.30"
+
+
+def test_projection_detail_removed_on_terminal_status() -> None:
+    store = PersistentStore(":memory:")
+    projector = UserStreamProjector(store=store, owned_client_order_prefix="cid")
+    active = _update(sequence=10, update_id=1, cumulative="0.05", status="NEW")
+    assert projector.ingest(active).status is UserProjectionStatus.ACCEPTED
+    order_id = next(iter(projector.fact_snapshot().open_orders))
+    terminal = _update(sequence=11, update_id=2, cumulative="0.10", status="FILLED")
+    assert projector.ingest(terminal).status is UserProjectionStatus.ACCEPTED
+    snap = projector.fact_snapshot()
+    assert order_id not in snap.open_orders
+    assert order_id not in snap.open_orders_detail
