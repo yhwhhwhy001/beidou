@@ -568,11 +568,13 @@ class BinanceRESTClient:
                     await asyncio.sleep(wait)
                     continue
 
-                # BD-FIX: 认证/地域类错误（-2015 间歇性抖动）不计入
-                # venue 熔断计数 —— 熔断只针对 venue 侧可恢复错误
-                # （I3 审查：5 次地域抖动即打开 30s 熔断，引擎连锁
-                # DEGRADED）
-                if category != ErrorCategory.AUTH_FAILURE:
+                # BD-FIX (rate-budget): 业务拒绝（订单不存在 -2013、参数
+                # 拒绝、余额/保证金不足等）是确定性的业务事实，不是 venue
+                # 故障 —— 不得计入熔断计数。启动解析遗留 UNKNOWN 意图时
+                # 每笔查询都是业务拒绝，旧逻辑 5 连败即打开熔断器并短路
+                # 全部请求（8-16 实测恶性循环）。熔断只针对 venue 侧
+                # 可恢复错误（5xx/网络/限频）。
+                if category == ErrorCategory.EXCHANGE_UNAVAILABLE:
                     self._rate_state.consecutive_failures += 1
                     print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                     if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:

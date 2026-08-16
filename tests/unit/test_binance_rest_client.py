@@ -438,3 +438,57 @@ def test_cached_get_serves_during_open_circuit_breaker(monkeypatch: pytest.Monke
     assert cached.is_success() is True
     assert cached.data == first.data
     assert calls == ["GET"]
+
+
+def test_business_rejection_does_not_count_toward_circuit_breaker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """订单不存在(-2013)/参数拒绝等业务事实不是 venue 故障。
+
+    启动解析遗留 UNKNOWN 意图时每笔查询都是业务拒绝;若计入熔断
+    计数,5 连败即打开熔断器并短路全部请求(实测 8-16 恶性循环)。
+    业务类错误必须零计数。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+
+    def order_not_exist(request, timeout, _session=None):
+        raise HTTPError(
+            "https://demo.example/fapi/v1/order",
+            400,
+            "Bad Request",
+            {"content-type": "application/json"},
+            BytesIO(b'{"code": -2013, "msg": "Order does not exist."}'),
+        )
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", order_not_exist)
+    for _ in range(6):
+        result = asyncio.run(client.get_order("BTCUSDT", 999999))
+        assert result.is_success() is False
+    assert client._rate_state.consecutive_failures == 0
+    assert client._rate_state.circuit_open is False
+
+
+def test_venue_failure_still_counts_toward_circuit_breaker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """venue 级故障(5xx)仍必须计入熔断计数——豁免只针对业务拒绝。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+
+    def unavailable(request, timeout, _session=None):
+        raise HTTPError(
+            "https://demo.example/fapi/v1/order",
+            503,
+            "Service Unavailable",
+            {"content-type": "application/json"},
+            BytesIO(b'{"msg":"unavailable"}'),
+        )
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", unavailable)
+    result = asyncio.run(client.get_order("BTCUSDT", 7))
+    assert result.is_success() is False
+    assert client._rate_state.consecutive_failures == 1
