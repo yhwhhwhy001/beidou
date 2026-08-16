@@ -241,7 +241,9 @@ def backfill(
 @click.option("--run-id", required=True, help="运行 ID")
 def resume(run_id: str) -> None:
     """从检查点恢复挖掘运行。"""
-    click.echo(f"[factor_miner] 恢复运行: {run_id}")
+    # M00-F06: 占位实现退役 —— 恢复逻辑从未实现，不得假装成功。
+    click.echo(f"[factor_miner] resume 尚未实现 (NOT_IMPLEMENTED): {run_id}")
+    sys.exit(2)
 
 
 @cli.command()
@@ -299,11 +301,9 @@ def validate_factor(factor_version: str) -> None:
 @click.option("--champion", required=True, help="冠军因子 ID")
 def compare(candidate: str, champion: str) -> None:
     """比较候选因子与冠军因子的增量贡献。"""
-    click.echo(f"[factor_miner] 比较: {candidate} vs {champion}")
-    click.echo("[factor_miner] 增量贡献分析:")
-    click.echo(f"  Candidate: {candidate}")
-    click.echo(f"  Champion:  {champion}")
-    click.echo("  使用 BF-02 metrics.compute_incremental_contribution() 进行评估")
+    # M00-F06: 占位实现退役 —— 比较逻辑从未实现，不得假装输出分析。
+    click.echo(f"[factor_miner] compare 尚未实现 (NOT_IMPLEMENTED): {candidate} vs {champion}")
+    sys.exit(2)
 
 
 if __name__ == "__main__":

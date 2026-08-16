@@ -32,14 +32,14 @@ def main() -> None:
     print("    离线研究请使用 apps.factor_miner CLI。")
     print()
 
-    # 可选: 如果提供了 --run 参数，直接启动因子挖掘
+    # M00-F06: --run 分支退役 —— 旧实现只构造 PipelineConfig 不执行任何
+    # 挖掘，属误导性占位。真实挖掘唯一入口是 factor_miner CLI。
     if "--run" in sys.argv:
-        print("[research_lab] 启动离线因子挖掘...")
-        from beidou_research.mining.runner import PipelineConfig
-
-        config = PipelineConfig(run_id=f"research-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}")
-        print(f"[research_lab] Run ID: {config.run_id}")
-        print("[research_lab] 请提供 price_data 参数调用 runner.run()")
+        print(
+            "[research_lab] --run is retired (placeholder that never executed a mining run); "
+            "use `python -m apps.factor_miner run --policy config/factor_mining_policy.yaml`."
+        )
+        sys.exit(2)
     else:
         print("[research_lab] 就绪。使用 --run 参数启动因子挖掘。")
 
