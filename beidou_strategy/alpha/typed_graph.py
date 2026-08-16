@@ -640,6 +640,18 @@ class TypedAlphaGraph:
 
             if isinstance(node, FilterNode) and node.is_mandatory:
                 if isinstance(output.data, FilterResult) and output.data.decision == FilterDecision.VETO:
+                    # M06-R2（对抗审查）: VETO 短路不得截断 EXIT 节点 ——
+                    # 有持仓时必选过滤器 veto 当轮,退出信号也必须照常
+                    # 产出(退出是降风险方向,不受入场 veto 约束)。
+                    for exit_node_id in order[order.index(node_id) + 1 :]:
+                        exit_node = self._nodes[exit_node_id]
+                        if exit_node.node_type != NodeType.EXIT:
+                            continue
+                        exit_upstream = {dep: outputs[dep] for dep in exit_node._input_nodes if dep in outputs}
+                        exit_output = await exit_node.execute(exit_upstream, context)
+                        outputs[exit_node_id] = exit_output
+                        if exit_output.data is not None:
+                            component_outputs[exit_node_id] = exit_output.data
                     return {
                         "proposal": None,
                         "component_outputs": component_outputs,

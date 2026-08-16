@@ -392,3 +392,39 @@ async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -
     # fail-closed：recon_ok=False → 不自动 RESUME、不触碰事实
     assert actions == []
     assert engine._error_count == 0
+
+
+def test_order_parameter_mismatch_detected_with_same_ids() -> None:
+    """M13-F01: 同 ID 订单参数漂移必须产生差异(旧实现只比 ID 集合)。"""
+    from datetime import datetime as _dt
+
+    from beidou_safety.execution.reconciliation import AccountFactSnapshot, ReconciliationEngine
+
+    now = _dt(2026, 8, 9, tzinfo=timezone.utc)
+    system_facts = AccountFactSnapshot(
+        account_id=AccountId("default"),
+        venue_id=VenueId("BINANCE"),
+        balance=MonetaryValue(amount="1000"),
+        positions={},
+        open_orders=["o1"],
+        open_orders_detail={"o1": {"symbol": "BTCUSDT", "side": "BUY", "qty": "1", "type": "LIMIT"}},
+        timestamp=now,
+        source="SYSTEM",
+        fact_version="v1",
+        complete=True,
+    )
+    exchange_facts = AccountFactSnapshot(
+        account_id=AccountId("default"),
+        venue_id=VenueId("BINANCE"),
+        balance=MonetaryValue(amount="1000"),
+        positions={},
+        open_orders=["o1"],
+        open_orders_detail={"o1": {"symbol": "BTCUSDT", "side": "SELL", "qty": "1", "type": "LIMIT"}},
+        timestamp=now,
+        source="EXCHANGE",
+        fact_version="v1",
+        complete=True,
+    )
+    result = ReconciliationEngine.compare(system_facts, exchange_facts, now=now)
+    assert not result.matched
+    assert any("parameter mismatch" in str(d) for d in result.differences)

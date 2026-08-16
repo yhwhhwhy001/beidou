@@ -150,15 +150,18 @@ def simulate_paper_window(
     if denom:
         consistency = hits / denom
 
-    # M08-F04: challenger_icir 字段语义修正 —— 旧实现把 signal×return
-    # 乘积序列的 mean/std 冒充 "IC 序列 IR"(不是相关系数,且单标的窗口
-    # 内无法构造 IC 序列)。诚实语义 = paper PnL 的信息比率(即 sharpe,
-    # 年化口径一致)。字段名保留兼容,含义更正。
+    # M08-R2（对抗审查）: challenger_icir = paper PnL 的 per-bar 信息
+    # 比率（mean/std,不年化）—— 与 CHALLENGER 门槛 0.1 的量级一致。
+    # 前一版改为年化 sharpe 后,1h 档放大 √8760≈93.6 倍,IC≡0 的常数
+    # 因子实测 1.886 通过门槛（旧代理口径 0.020 正确拒绝）——门槛
+    # 语义坍缩为"是否盈利"。旧 signal×return 乘积代理同样冒充 IC,
+    # 一并废弃;per-bar IR 是单标的窗口内唯一可诚实计算的量。
+    per_bar_ir = mean_ret / std_ret if std_ret > 0 else 0.0
     return PaperReplayResult(
         paper_sharpe=round(sharpe, 6),
         paper_drawdown_pct=round(max_dd * 100, 6),
         signal_consistency=round(consistency, 6),
-        challenger_icir=round(sharpe, 6),
+        challenger_icir=round(per_bar_ir, 6),
         window_bars=n,
         n_trades=trades,
     )

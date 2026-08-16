@@ -68,12 +68,12 @@ class ExchangeProtectionManager:
         instrument_id: str,
         venue_id: str,
         entry_price: float,
-        *,
-        price_precision: int | None = None,
         quantity: float,
         side: str,
         stop_pct: float = 2.0,
         take_profit_rr: float = 2.0,
+        *,
+        price_precision: int | None = None,
     ) -> list[ProtectionOrder]:
         """开仓后立即创建保护单对。"""
 

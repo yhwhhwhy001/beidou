@@ -2123,6 +2123,36 @@ class AutonomousEngine:
             except (TypeError, ValueError):
                 pass  # 单键校验已置 _policy_error
 
+        # M09-R2（对抗审查）: 波动阈值必须严格递增、杠杆档位必须非增
+        # —— 否则签名策略可静默注入与"波动率越高杠杆越低"相反的档位
+        # （0.6/0.4/0.2 反转配置实测通过旧校验且档位反转）。
+        try:
+            _tiers = [
+                float(self._policy_params[key]) for key in ("vol_tier_1", "vol_tier_2", "vol_tier_3") if key in self._policy_params
+            ]
+            if len(_tiers) == 3 and not (_tiers[0] < _tiers[1] < _tiers[2]):
+                self._policy_error = self._policy_error or "SIGNED_POLICY_INVALID_PARAM:vol_tiers_not_increasing"
+                print(f"[policy] ERROR: vol tiers must be strictly increasing, got {_tiers}")
+            _levels = [
+                float(self._policy_params[key])
+                for key in ("leverage_low_vol", "leverage_mid_vol", "leverage_high_vol", "leverage_extreme_vol")
+                if key in self._policy_params
+            ]
+            if len(_levels) == 4 and not (_levels[0] >= _levels[1] >= _levels[2] >= _levels[3]):
+                self._policy_error = self._policy_error or "SIGNED_POLICY_INVALID_PARAM:leverage_levels_not_decreasing"
+                print(f"[policy] ERROR: leverage levels must be non-increasing with vol, got {_levels}")
+            # 组合风险交叉约束: 最大单标的名义占账户比例上限
+            _base = float(self._policy_params.get("position_pct_base", 0.02))
+            _cap = float(self._policy_params.get("position_cap_ratio", 0.5))
+            _max_lev = max(_levels) if _levels else 3.0
+            if _base * _cap * _max_lev > 1.5:
+                self._policy_error = self._policy_error or (
+                    f"SIGNED_POLICY_INVALID_PARAM:combined_exposure_too_high(base={_base},cap={_cap},max_lev={_max_lev})"
+                )
+                print(f"[policy] ERROR: combined exposure base×cap×max_lev={_base * _cap * _max_lev:.2f} > 1.5")
+        except (TypeError, ValueError):
+            pass  # 单键校验已置 _policy_error
+
     def _policy_float_audited(self, key: str, default: float) -> float:
         """带审计的策略参数读取（M00-F08）。
 
@@ -7075,6 +7105,17 @@ class AutonomousEngine:
             ),
             positions=positions,
             open_orders=[str(row["order_id"]) for row in active_orders],
+            # M13-F01: 订单参数明细(系统侧)—— 参数级对账输入
+            open_orders_detail={
+                str(row["order_id"]): {
+                    "symbol": str(row.get("symbol", "")),
+                    "side": str(row.get("side", "")),
+                    "qty": str(row.get("quantity", "0")),
+                    "type": str(row.get("order_type", "")),
+                    "reduce_only": "",
+                }
+                for row in active_orders
+            },
             timestamp=datetime.now(timezone.utc),
             source=("LOCAL_DURABLE_PROJECTION+AUTHORIZED_OPENING" if opening_complete else "LOCAL_DURABLE_PROJECTION"),
             fact_version=f"position-v1/order-state-v1/opening:{opening_version}",
@@ -7179,6 +7220,17 @@ class AutonomousEngine:
             balance=MonetaryValue(amount=str(float(account["totalWalletBalance"]))),
             positions=exchange_positions,
             open_orders=[str(order["orderId"]) for order in open_orders],
+            # M13-F01: 订单参数明细(交易所侧)—— 参数级对账输入
+            open_orders_detail={
+                str(order["orderId"]): {
+                    "symbol": str(order.get("symbol", "")),
+                    "side": str(order.get("side", "")),
+                    "qty": str(order.get("origQty", "0")),
+                    "type": str(order.get("type", "")),
+                    "reduce_only": str(order.get("reduceOnly", "")),
+                }
+                for order in open_orders
+            },
             timestamp=datetime.now(timezone.utc),
             source="BINANCE_ACCOUNT_AND_OPEN_ORDERS",
             fact_version=str(account.get("updateTime", "")),
@@ -8582,8 +8634,15 @@ class AutonomousEngine:
                             audit = getattr(self, "_exit_signal_audit", {})
                             sig_ids: list[str] = []
                             for exit_signal in exit_signals:
-                                hash_fn = getattr(exit_signal, "hash", None)
-                                sig_id = str(hash_fn()) if callable(hash_fn) else str(getattr(exit_signal, "hash", "?"))
+                                # M06-R2（对抗审查）: 真实 exit data（AlphaSignal/
+                                # EntryProposal）没有 hash() 方法,旧逻辑恒回退
+                                # "?" 单桶匿名审计。改用类型+方向+标的构造
+                                # 可溯源身份。
+                                sig_id = (
+                                    f"{type(exit_signal).__name__}:"
+                                    f"{getattr(exit_signal, 'direction', '?')}:"
+                                    f"{getattr(exit_signal, 'instrument_id', '?')}"
+                                )
                                 sig_ids.append(sig_id)
                                 audit[sig_id] = audit.get(sig_id, 0) + 1
                             self._exit_signal_audit = audit
@@ -8728,7 +8787,10 @@ class AutonomousEngine:
                     signal_strength,
                     ann_vol,
                     spread_bps_val,
-                    base_pct=self._policy_float_audited("position_pct_base", 0.02),
+                    # M09-R2: 仅当签名策略实际提供键时才传 base_pct ——
+                    # 否则环境变量 BEIDOU_ADAPTIVE_BASE_PCT(EXEMPT-20)
+                    # 必须继续生效(旧实现恒传默认值使 env 分支死代码)。
+                    base_pct=self._policy_params.get("position_pct_base"),
                 )
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
                 if budget is None:
@@ -9496,11 +9558,18 @@ class AutonomousEngine:
                         existing_model.metrics = model_metrics
 
                     registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
+                    # M14-F01: Champion 晋级治理 —— 阈值/样本门槛经签名
+                    # 策略可覆盖(默认=旧行为);icir 必须有限(Inf 不再放行);
+                    # 更替历史由 ModelRegistry.champion_history 审计。
+                    _champion_min_icir = self._policy_float_audited("champion_min_icir", 0.3)
+                    _champion_min_samples = self._policy_float_audited("champion_min_samples", 50.0)
                     eligible = [
                         model
                         for model in registered_models
                         if model.status in (ModelStatus.CHALLENGER, ModelStatus.CHAMPION)
-                        and model.metrics.get("icir", 0.0) >= 0.3
+                        and math.isfinite(float(model.metrics.get("icir", 0.0)))
+                        and float(model.metrics.get("icir", 0.0)) >= _champion_min_icir
+                        and float(model.metrics.get("sample_count", 0.0)) >= _champion_min_samples
                         and model.metrics.get("scope") == scope_label
                     ]
                     if eligible:
@@ -9517,7 +9586,12 @@ class AutonomousEngine:
                 # isolated scope; all transitions still pass FactorPromotionGate.
                 if not single_scope:
                     continue
-                if record.lifecycle == FactorLifecycle.ACTIVE and min_n >= 50 and icir < 0.05:
+                # M14-F01: 降级阈值经签名策略可覆盖(默认 0.05)。
+                if (
+                    record.lifecycle == FactorLifecycle.ACTIVE
+                    and min_n >= 50
+                    and icir < self._policy_float_audited("champion_degrade_icir", 0.05)
+                ):
                     self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f} (n={min_n})")
                     self._alerts.send_incident(
                         AlertSeverity.WARNING,

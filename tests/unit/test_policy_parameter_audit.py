@@ -183,3 +183,63 @@ def test_position_cap_ratio_policy_key_validated() -> None:
     engine._validate_audited_policy_params()
     assert engine._policy_error is not None
     assert "position_cap_ratio" in engine._policy_error
+
+
+# --- M09-R2（对抗审查：排序约束/组合约束） ---
+
+
+def test_vol_tiers_must_be_strictly_increasing() -> None:
+    """反转的波动阈值(0.6/0.4/0.2)必须被策略校验拒绝。"""
+    engine = _bare_engine(policy={"vol_tier_1": 0.6, "vol_tier_2": 0.4, "vol_tier_3": 0.2})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "vol_tiers" in engine._policy_error
+
+
+def test_leverage_levels_must_be_non_increasing() -> None:
+    """反转的杠杆档位(低波动 0.5x/极端波动 3x)必须被拒绝。"""
+    engine = _bare_engine(
+        policy={
+            "leverage_low_vol": 0.5,
+            "leverage_mid_vol": 1.0,
+            "leverage_high_vol": 2.0,
+            "leverage_extreme_vol": 3.0,
+        }
+    )
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "leverage_levels" in engine._policy_error
+
+
+def test_combined_exposure_cross_constraint() -> None:
+    """base×cap×max_lev 组合约束(>1.5 拒绝)。"""
+    engine = _bare_engine(
+        policy={
+            "position_pct_base": 0.5,
+            "position_cap_ratio": 1.0,
+            "leverage_low_vol": 20.0,
+            "leverage_mid_vol": 10.0,
+            "leverage_high_vol": 5.0,
+            "leverage_extreme_vol": 2.0,
+        }
+    )
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "combined_exposure" in engine._policy_error
+
+
+def test_ordered_tiers_and_levels_pass_validation() -> None:
+    """合法排序的档位配置必须通过校验。"""
+    engine = _bare_engine(
+        policy={
+            "vol_tier_1": 0.2,
+            "vol_tier_2": 0.4,
+            "vol_tier_3": 0.6,
+            "leverage_low_vol": 3.0,
+            "leverage_mid_vol": 2.0,
+            "leverage_high_vol": 1.0,
+            "leverage_extreme_vol": 0.5,
+        }
+    )
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is None

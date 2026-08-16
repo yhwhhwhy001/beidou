@@ -182,3 +182,42 @@ async def test_typed_kernel_no_exit_outputs_empty_list() -> None:
     result = await kernel.evaluate({})
     assert result is not None
     assert result["exit_signals"] == []
+
+
+def test_veto_short_circuit_preserves_exit_outputs() -> None:
+    """M06-R2: 必选 Filter VETO 不得截断 EXIT 节点输出。"""
+    import asyncio
+
+    from beidou_strategy.alpha.contracts import FilterDecision, FilterResult
+    from beidou_strategy.alpha.typed_graph import ExitNode, FilterNode, TypedAlphaGraph
+
+    class _ExitProposal2:
+        side = None
+
+        def hash(self) -> str:
+            return "exit-hash-2"
+
+    async def _veto_fn(_inputs, _context):
+        return FilterResult(
+            decision=FilterDecision.VETO,
+            confidence_multiplier=0.0,
+            size_multiplier=0.0,
+            component_id="mandatory-filter",
+        )
+
+    async def _exit_fn(_context):
+        return _ExitProposal2()
+
+    graph = TypedAlphaGraph(strategy_id="veto-exit-test")
+    graph.add_node(FilterNode("f1", _veto_fn, is_mandatory=True))
+    graph.add_node(ExitNode("exit-1", exit_fn=_exit_fn))
+    graph.connect("f1", "exit-1")
+
+    async def _run():
+        detailed = await graph._execute_detailed({})
+        outputs = detailed.get("node_outputs", {})
+        exit_out = outputs.get("exit-1")
+        assert exit_out is not None, "EXIT 节点在 VETO 短路后未执行"
+        assert exit_out.data is not None
+
+    asyncio.run(_run())

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from beidou_shared.types import ModelId, SchemaVersion, StrategyId
 
@@ -34,6 +35,8 @@ class ModelRegistry:
     def __init__(self) -> None:
         self._models: dict[StrategyId, list[ModelRecord]] = {}
         self._champions: dict[StrategyId, ModelId] = {}
+        # M14-F01: Champion 更替历史审计（内存;持久化属 M15）
+        self.champion_history: list[dict[str, Any]] = []
 
     def register(self, model: ModelRecord) -> None:
         sid = model.strategy_id
@@ -61,6 +64,16 @@ class ModelRegistry:
                     for om in models:
                         if om.model_id == old_champ:
                             om.status = ModelStatus.ARCHIVED
+                # M14-F01: 更替历史审计（旧 champion/新 champion/指标快照）
+                self.champion_history.append(
+                    {
+                        "strategy_id": str(strategy_id),
+                        "previous_champion": str(old_champ) if old_champ else None,
+                        "new_champion": str(model_id),
+                        "promoted_at": datetime.now(timezone.utc).isoformat(),
+                        "new_metrics": dict(m.metrics),
+                    }
+                )
                 return True
         return False
 

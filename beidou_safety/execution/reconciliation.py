@@ -68,6 +68,10 @@ class AccountFactSnapshot:
     balance: MonetaryValue
     positions: dict[str, Quantity]
     open_orders: list[str]
+    # M13-F01: 订单参数明细（order_id → {symbol,side,qty,price,type,
+    # reduce_only}）。两侧都有明细时对账按参数比较;缺失时降级为
+    # ID 集合比较并显式 WARN（诚实降级,不静默）。
+    open_orders_detail: dict[str, dict[str, Any]] = field(default_factory=dict)
     margin_used: MonetaryValue | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: CorrelationId | None = None
@@ -302,7 +306,6 @@ class ReconciliationEngine:
             )
 
         # PKG20 (BDS-P1-032): OpenOrder 比较不只比较 ID，也比较参数
-        # 注意：此简化实现比较 set of IDs，完整实现应比较 symbol/side/qty/price/type/reduceOnly/generation
         sys_orders = set(system_facts.open_orders)
         ex_orders = set(exchange_facts.open_orders)
         if sys_orders != ex_orders:
@@ -315,6 +318,36 @@ class ReconciliationEngine:
                 parts.append(f"Orders on exchange but not in system: {sorted(extra_on_exchange)}")
             if parts:
                 diffs.append("Open orders mismatch: " + "; ".join(parts))
+
+        # M13-F01: 参数级比较（两侧明细齐全时）—— 同 ID 订单的
+        # symbol/side/qty/type 必须一致,否则即使 ID 集合一致也是
+        # 事实分歧（旧实现只比 ID,参数漂移静默通过）。
+        sys_detail = getattr(system_facts, "open_orders_detail", {}) or {}
+        ex_detail = getattr(exchange_facts, "open_orders_detail", {}) or {}
+        if sys_detail and ex_detail:
+            param_diffs: list[str] = []
+            for order_id in sorted(sys_orders & ex_orders):
+                s = sys_detail.get(order_id, {})
+                e = ex_detail.get(order_id, {})
+                for field in ("symbol", "side", "type", "reduce_only"):
+                    s_val = str(s.get(field, "")).strip().upper()
+                    e_val = str(e.get(field, "")).strip().upper()
+                    if s_val and e_val and s_val != e_val:
+                        param_diffs.append(f"{order_id}:{field}({s_val} vs {e_val})")
+                try:
+                    s_qty = float(s.get("qty", 0) or 0)
+                    e_qty = float(e.get("qty", 0) or 0)
+                except (TypeError, ValueError):
+                    s_qty = e_qty = 0.0
+                if abs(s_qty - e_qty) > 1e-9:
+                    param_diffs.append(f"{order_id}:qty({s_qty} vs {e_qty})")
+            if param_diffs:
+                diffs.append("Open order parameter mismatch: " + "; ".join(param_diffs[:20]))
+        elif sys_detail or ex_detail:
+            # 单侧缺明细:诚实降级并显式标注(不阻断,但审计可见)
+            diffs.append(
+                "Open order detail comparison unavailable (one-sided detail missing) — ID-only compared"
+            )
 
         def _position_map(facts: AccountFactSnapshot) -> dict[str, Decimal]:
             result: dict[str, Decimal] = {}
