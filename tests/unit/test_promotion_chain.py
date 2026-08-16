@@ -48,6 +48,9 @@ def _replay() -> PaperReplayResult:
 
 
 def test_chain_has_8_transitions_in_correct_order() -> None:
+    # M05-R2: runner 侧不传 evidence_bundle → ACTIVE 步恒拒 —— 链为
+    # 7 步通过 + 1 步拒绝(ACTIVE),最终 approved=False(桥侧带 bundle
+    # 复验可反向批准,runner 链的 approved 不是最终判定)。
     chain = build_promotion_chain(
         _bundle(),
         ic=0.05,
@@ -59,6 +62,8 @@ def test_chain_has_8_transitions_in_correct_order() -> None:
         role="entry",
     )
     assert chain is not None and len(chain) == 8
+    assert chain[-1]["to"] == "ACTIVE"
+    assert chain[-1]["approved"] is False
     states = [c["from"] for c in chain] + [chain[-1]["to"]]
     assert states == [
         "IDEA",
@@ -144,3 +149,29 @@ def test_chain_is_honest_for_below_threshold_icir() -> None:
     assert chain[0]["approved"] is True
     assert chain[1]["approved"] is False
     assert "ICIR" in chain[1]["reason"]
+
+
+def test_chain_rejects_bad_replay_values() -> None:
+    """M05-R2: replay 真实值校验 —— paper_sharpe<=0 不得自证到 PAPER_TRADING。"""
+    bad_replay = PaperReplayResult(
+        paper_sharpe=-0.2,
+        paper_drawdown_pct=-5.0,
+        signal_consistency=0.6,
+        challenger_icir=0.25,
+        window_bars=600,
+        n_trades=10,
+    )
+    chain = build_promotion_chain(
+        _bundle(),
+        ic=0.05,
+        icir=0.4,
+        sample_count=600,
+        replay=bad_replay,
+        git_commit="abc123",
+        expression_string="close",
+        role="entry",
+    )
+    assert chain is not None
+    paper_step = next(step for step in chain if step["to"] == "PAPER_TRADING")
+    assert paper_step["approved"] is False
+    assert "paper_sharpe" in paper_step["reason"]

@@ -65,6 +65,10 @@ class EvidenceBundle:
     failure_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
+    # M05-R2（对抗审查）: 方向翻转审计 —— 方向选择是全样本假设,翻转
+    # 必须持久化并纳入 seal hash(篡改检测覆盖翻转审计)。
+    direction_flipped: bool = False
+
     # 元数据
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     evaluator_version: str = "bf07-v1"
@@ -96,6 +100,7 @@ class EvidenceBundle:
                 "gate_decision": self.gate_decision,
                 "failure_reasons": self.failure_reasons,
                 "warnings": self.warnings,
+                "direction_flipped": self.direction_flipped,
                 "evaluator_version": self.evaluator_version,
             },
             sort_keys=True,
@@ -133,6 +138,7 @@ class EvidenceBundle:
             "gate_decision": self.gate_decision,
             "failure_reasons": self.failure_reasons,
             "warnings": self.warnings,
+            "direction_flipped": self.direction_flipped,
             "created_at": self.created_at.isoformat(),
             "evaluator_version": self.evaluator_version,
             "artifact_hash": self.artifact_hash,

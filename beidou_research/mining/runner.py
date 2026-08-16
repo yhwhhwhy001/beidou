@@ -721,6 +721,8 @@ class MiningRunner:
                 factor_version="2.0.0",
                 candidate_hash=candidate["hash"],
                 factor_expression_hash=expr_hash,
+                # M05-R2: 方向翻转审计进 seal hash(篡改检测覆盖方向选择)
+                direction_flipped=bool(flipped),
                 dataset_manifest_hash=dataset_manifest_hash,
                 feature_manifest_hash=feature_manifest_hash,
                 label_spec_hash=label_spec.to_hash(),
@@ -1517,6 +1519,17 @@ def build_promotion_chain(
         target = FactorLifecycle(to_state)
         requirements = PROMOTION_EVIDENCE_REQUIREMENTS[target]
         evidence_ids = list(requirements["required_evidence"])
+        # M05-R2（对抗审查）: replay 相关步骤必须校验 replay 的真实值
+        # （旧实现仅非 None 检查,paper_sharpe/drawdown/challenger_icir
+        # 从不验证,链可凭声明证据自证到 CHALLENGER）。
+        replay_failures: list[str] = []
+        if to_state == "PAPER_TRADING":
+            if float(getattr(replay, "paper_sharpe", -1.0) or -1.0) <= 0:
+                replay_failures.append(f"paper_sharpe={getattr(replay, 'paper_sharpe', None)} <= 0")
+            if float(getattr(replay, "paper_drawdown_pct", 0.0) or 0.0) < -50.0:
+                replay_failures.append(f"paper_drawdown_pct={getattr(replay, 'paper_drawdown_pct', None)} < -50%")
+        if to_state == "CHALLENGER" and float(getattr(replay, "challenger_icir", -1.0) or -1.0) < 0.1:
+            replay_failures.append(f"challenger_icir={getattr(replay, 'challenger_icir', None)} < 0.1")
         decision = gate.validate_evidence(
             factor_id=bundle.factor_id,
             current_state=FactorLifecycle(from_state),
@@ -1532,8 +1545,8 @@ def build_promotion_chain(
         step: dict = {
             "from": from_state,
             "to": to_state,
-            "approved": decision.approved,
-            "reason": decision.reason,
+            "approved": decision.approved and not replay_failures,
+            "reason": "; ".join([decision.reason, *replay_failures]) if replay_failures else decision.reason,
             "commit": git_commit,
             "dataset_hash": bundle.dataset_manifest_hash,
             "policy_version": bundle.policy_version,
@@ -1546,7 +1559,7 @@ def build_promotion_chain(
             "evidence_source": "historical_replay",
         }
         chain.append(step)
-        if not decision.approved:
+        if not decision.approved or replay_failures:
             break
     return chain
 

@@ -120,8 +120,14 @@ def holm_correction(pvalues: list[float], alpha: float = 0.05) -> HolmResult:
     adjusted = [0.0] * n
     rejected = [False] * n
 
+    # M05-R2（对抗审查）: Holm 步降必须单调 —— adjusted[k] 不得小于
+    # 前一个(按原始 p 升序)的 adjusted 值。旧实现缺 max(prev, ...),
+    # 反例 [0.03,0.04,0.049] 会把第三假设错拒(正确结果全部不拒)。
     for k, (orig_idx, pval) in enumerate(indexed):
-        adjusted[orig_idx] = min(1.0, pval * (n - k))
+        raw_adj = min(1.0, pval * (n - k))
+        if k > 0:
+            raw_adj = max(raw_adj, adjusted[indexed[k - 1][0]])
+        adjusted[orig_idx] = raw_adj
 
     for orig_idx, _ in indexed:
         rejected[orig_idx] = adjusted[orig_idx] < alpha
@@ -230,6 +236,11 @@ def compute_pbo(
     """Bailey et al. (2017) PBO 计算。
 
     通过组合子集比较 IS 和 OOS 性能排序的差异。
+    M05-R2（对抗审查）偏差声明: 本实现为 Bailey 原版的**近似** ——
+    每轮随机半数子集(固定种子)而非全组合 C(n,n/2) 枚举,比较对象为
+    子集内 OOS 中位数而非全集 OOS 中位数。null 下 PBO 无偏(≈0.5),
+    但分辨率受限于 min(n_splits, n//2) 轮,低分辨率噪声通过率由
+    DSR/BH 兜底。
 
     Args:
         in_sample_performances: 各参数组合的 IS 性能
