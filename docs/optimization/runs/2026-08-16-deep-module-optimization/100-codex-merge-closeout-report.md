@@ -40,3 +40,26 @@ codex 会话发起 merge 后中断，留下 2 个 UU 冲突文件（含已进入
 
 **PASS_WITH_CONDITIONS** —— 条件：引擎受控重启由操作者按既有 SOP 执行（SIGKILL 旧进程 +
 `launchctl kickstart gui/501/com.beidou.autopilot`），重启后观察 trading_ready 与 recon MATCHED。
+
+## 运行时回归修复（重启暴露，commit 4afecad + 并行会话 f65f7e6/d3cd398）
+
+重启验证发现 merge 引入的三处运行时回归，已全部修复并实测：
+
+1. **adapter 写 hold 无条件拦截**（codex 分支半成品）：adapter 层对所有 terminal write
+   一律 hold 且不读 `BEIDOU_TERMINAL_WRITE_HOLD`，与 rest_client 层的 unknown-only
+   机制不统一 → 生产写路径瘫痪。修复：adapter 对齐 rest_client 语义（unknown-only
+   放行已知 kind、UNKNOWN 恒 hold）。TDD：2 个新测试锁定（41 passed）。
+2. **G5 证书签发器与验证器不同步**：run_g5 签发的证书缺 certification_mode 字段，
+   验证器恒拒（缺失视为伪造）。修复：run_g5 增加 `--certification-mode` 参数显式
+   写入（DEV_BYPASS/FULL）。
+3. **DEV_FAST_START 豁免被删除致引擎无法重启**（codex 从旧 base 分叉未继承 main
+   的 M20 已登记豁免）：preflight 的 G5 检查恢复豁免语义，但保留 codex 收紧的
+   "检查永不缺席"——豁免仅降级阻断语义（P2+FAIL 不阻断），status 恒为真实判定。
+
+## 重启闭环验证（2026-08-17 凌晨实测）
+
+- 受控重启：SIGKILL 旧进程 → kickstart → 新代码引擎拉起（PID 63624）
+- 最终状态：`trading_ready: True`、liveness HEALTHY、lifecycle ACTIVE、
+  control RESUME、nearline 保护覆盖完好（sl_status=ACTIVE）、recon MATCHED
+- 实装 plist 已配 `BEIDOU_TERMINAL_WRITE_HOLD=unknown-only`（备份
+  `.bak-pre-writehold`）
