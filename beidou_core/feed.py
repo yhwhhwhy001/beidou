@@ -22,6 +22,7 @@ from beidou_data.quality import DataQualityGate, DQCheckResult, DQCheckType
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
 from beidou_exchange.binance_usdm.endpoints import DEFAULT_RECV_WINDOW_MS, Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_research.factors.rsi import compute_rsi_wilder  # M03-F01: Wilder RSI 权威实现
 from beidou_shared.config import ConfigProvider
 from beidou_shared.types import (
     DataQualityTier,
@@ -37,6 +38,52 @@ logger = logging.getLogger(__name__)
 
 # M01-F06: spread 回退审计集合（每 symbol 一次 WARN）
 _spread_fallback_warned: set[str] = set()
+
+# M03-F04: 每年 bar 数换算表（加密货币 24/7；未知 interval 保守 365）
+_BARS_PER_YEAR: dict[str, int] = {
+    "1m": 525600,
+    "5m": 105120,
+    "15m": 35040,
+    "30m": 17520,
+    "1h": 8760,
+    "2h": 4380,
+    "4h": 2190,
+    "6h": 1460,
+    "8h": 1095,
+    "12h": 730,
+    "1d": 365,
+    "3d": 122,
+    "1w": 52,
+}
+
+
+def _wilder_smooth_last(values: list[float], period: int) -> float:
+    """Wilder 平滑序列的末值（ATR 用）。不足 period 用简单均值。"""
+    if not values:
+        return 0.0
+    if len(values) < period:
+        return sum(values) / len(values)
+    smoothed = sum(values[:period]) / period
+    for value in values[period:]:
+        smoothed = (smoothed * (period - 1) + value) / period
+    return smoothed
+
+
+def _ema_series(values: list[float], period: int) -> list[float]:
+    """EMA 序列（标准实现：seed=前 period 简单均值，随后递归平滑）。"""
+    if not values:
+        return []
+    if len(values) < period:
+        mean = sum(values) / len(values)
+        return [mean] * len(values)
+    k = 2.0 / (period + 1)
+    seed = sum(values[:period]) / period
+    series = [seed] * period
+    ema = seed
+    for value in values[period:]:
+        ema = value * k + ema * (1 - k)
+        series.append(ema)
+    return series
 
 
 def _generated_bar_to_dict(bar: Any) -> dict[str, Any]:
@@ -1026,17 +1073,16 @@ class MarketDataFeed:
 
         recent_ret = returns[-20:] if len(returns) >= 20 else returns
         vol_20 = (sum(r**2 for r in recent_ret) / len(recent_ret)) ** 0.5
-        ann_vol = vol_20 * (365 * 24) ** 0.5 if interval == "1h" else vol_20 * (365) ** 0.5
+        # M03-F04: 年化波动率按 interval 换算每年 bar 数
+        # （旧实现仅 1h 正确，其余 interval 全部误用 √365）
+        ann_vol = vol_20 * _BARS_PER_YEAR.get(interval, 365) ** 0.5
 
-        tr_list = []
-        for i in range(1, min(15, len(highs))):
-            tr = max(
-                highs[-i] - lows[-i],
-                abs(highs[-i] - closes[-i - 1]),
-                abs(lows[-i] - closes[-i - 1]),
-            )
-            tr_list.append(tr)
-        atr = sum(tr_list) / len(tr_list) if tr_list else 0
+        # M03-F03: Wilder ATR(14) —— 全序列 TR + Wilder 平滑（旧为 14 根简单均值）
+        tr_list = [
+            max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+            for i in range(1, n)
+        ]
+        atr = _wilder_smooth_last(tr_list, 14)
         atr_pct = atr / closes[-1] * 100 if closes[-1] > 0 else 0
 
         vol_short = sum(volumes[-5:]) / 5
@@ -1046,11 +1092,11 @@ class MarketDataFeed:
         trend_5 = closes[-1] / closes[-5] - 1 if n >= 5 else 0
         trend_20 = closes[-1] / closes[-20] - 1 if n >= 20 else 0
 
-        gains = [max(r, 0) for r in returns[-15:]]
-        losses = [abs(min(r, 0)) for r in returns[-15:]]
-        avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else sum(gains) / max(len(gains), 1)
-        avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else sum(losses) / max(len(losses), 1)
-        rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+        # M03-F01: RSI 收敛到 Wilder 权威实现（beidou_research.factors.rsi）。
+        # 旧实现用 returns[-15:] 取 15 个收益率再取 14 个做简单均值 ——
+        # 窗口逻辑混乱且非 Wilder 平滑。
+        rsi_result = compute_rsi_wilder(closes, period=14)
+        rsi = rsi_result.value if rsi_result.is_valid else 50.0
 
         bb_std = (sum((c - sma_20) ** 2 for c in closes[-20:]) / 20) ** 0.5
         bb_upper = sma_20 + 2 * bb_std
@@ -1059,19 +1105,16 @@ class MarketDataFeed:
         highest_20 = max(highs[-20:])
         lowest_20 = min(lows[-20:])
 
-        def _ema(values: list[float], period: int) -> float:
-            if len(values) < period:
-                return sum(values) / len(values)
-            k = 2.0 / (period + 1)
-            ema = sum(values[:period]) / period
-            for v in values[period:]:
-                ema = v * k + ema * (1 - k)
-            return ema
-
-        ema_12 = _ema(closes, 12)
-        ema_26 = _ema(closes, 26)
-        macd = ema_12 - ema_26
-        macd_signal = ema_12 * 0.2 + ema_26 * 0.8 - (ema_12 - ema_26) * 0.2
+        # M03-F02: MACD 序列化标准实现 —— MACD 线 = EMA12-EMA26 序列,
+        # signal = MACD 线的 EMA9 末值。旧 macd_signal 公式代数化简
+        # 恒等于 EMA26（数学错误,且无生产消费者）。
+        ema12_series = _ema_series(closes, 12)
+        ema26_series = _ema_series(closes, 26)
+        macd_series = [a - b for a, b in zip(ema12_series, ema26_series, strict=True)]
+        macd = macd_series[-1]
+        macd_signal = _ema_series(macd_series, 9)[-1]
+        ema_12 = ema12_series[-1]
+        ema_26 = ema26_series[-1]
 
         spread_bps_val: float | None = None
         ticker = self._last_ticker.get(symbol, {})
