@@ -41,6 +41,9 @@ class KLineGenerator:
         self.interval = interval
         self._klines: dict[str, list[OHLCV]] = {}  # venue_instrument_key -> klines
         self._current: dict[str, OHLCV | None] = {}
+        # M01-F02 (P0-05): 迟到 tick 拒绝审计 —— 乱序事件绝不污染当前/已闭合 bar
+        self.rejected_ticks: int = 0
+        self.last_rejection: str | None = None
 
     def _interval_delta(self) -> timedelta:
         mapping = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
@@ -71,6 +74,23 @@ class KLineGenerator:
 
         current = self._current.get(key)
         completed = None
+
+        # M01-F02 (P0-05): 迟到 tick 防护 —— 时间戳早于当前 bar 起点或早于
+        # 最后一根已闭合 bar 起点的 tick 属于乱序/重放事件。合并它会改写
+        # 已供策略消费的 bar 事实（look-ahead 不一致）；拒绝并审计。
+        if current is not None and timestamp < current.open_time:
+            self.rejected_ticks += 1
+            self.last_rejection = (
+                f"late tick {timestamp.isoformat()} < current bar open {current.open_time.isoformat()}"
+            )
+            return None
+        last_closed = self._klines.get(key, [])[-1] if self._klines.get(key) else None
+        if current is None and last_closed is not None and timestamp < last_closed.open_time:
+            self.rejected_ticks += 1
+            self.last_rejection = (
+                f"late tick {timestamp.isoformat()} < last closed bar open {last_closed.open_time.isoformat()}"
+            )
+            return None
 
         if current is None or timestamp >= current.close_time:
             if current is not None:

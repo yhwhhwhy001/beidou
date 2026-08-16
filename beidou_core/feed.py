@@ -35,6 +35,29 @@ from beidou_shared.types import (
 
 logger = logging.getLogger(__name__)
 
+# M01-F06: spread 回退审计集合（每 symbol 一次 WARN）
+_spread_fallback_warned: set[str] = set()
+
+
+def _generated_bar_to_dict(bar: Any) -> dict[str, Any]:
+    """本地生成器 OHLCV → 特征 dict。is_closed 是第一类证据，必须显式携带。
+
+    M01-F01 (P0-04): 旧同步合并路径丢失 is_closed 字段 → ``bar_is_closed``
+    恒 False → 引擎闭合 bar 门禁误杀信号（或依赖 REST 伪造闭合）。
+    """
+    return {
+        "open_time": bar.open_time,
+        "open": float(bar.open.amount),
+        "high": float(bar.high.amount),
+        "low": float(bar.low.amount),
+        "close": float(bar.close.amount),
+        "volume": float(bar.volume.amount),
+        "close_time": bar.close_time,
+        "quote_volume": float(bar.quote_volume.amount) if bar.quote_volume else 0.0,
+        "trades": bar.trade_count,
+        "is_closed": bool(bar.is_closed),
+    }
+
 
 class MarketDataUnknownError(RuntimeError):
     """Raised when the feed cannot prove a usable market-data fact."""
@@ -85,6 +108,36 @@ class MarketDataFeed:
         self._ws_failure: str | None = None
         self._ws_last_update: dict[str, float] = {}  # symbol → last WS update time
         self._ws_stale_threshold = 60.0  # WS 数据超时阈值（秒）
+        # M01-F03 (P0-06): 事件时间缺失时的本地时钟回退计数（审计）
+        self._clock_fallback_ticks = 0
+
+    @staticmethod
+    def _parse_event_time(data: Any) -> datetime | None:
+        """从 Binance 负载提取事件时间 E（ms）并做时钟合理性校验。
+
+        M01-F03 (P0-06): bar 桶切分必须基于交易所时间而非本地时钟。
+        缺失/非法/未来超 5s（时钟异常）或早于 24h（重放/陈旧）→ None，
+        调用方回退本地时钟并计入审计计数。
+        """
+        if not isinstance(data, dict):
+            return None
+        raw = data.get("E")
+        if raw in (None, ""):
+            return None
+        try:
+            event_ms = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(event_ms):
+            return None
+        try:
+            event_time = datetime.fromtimestamp(event_ms / 1000, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+        skew = (event_time - datetime.now(timezone.utc)).total_seconds()
+        if skew > 5.0 or skew < -86400.0:
+            return None
+        return event_time
 
     def set_client(self, client: Any) -> None:
         """注入共享的 REST client（引擎启动时调用，替代独立实例）。"""
@@ -188,10 +241,14 @@ class MarketDataFeed:
                             kg_key = f"{symbol}:5m"
                             if kg_key not in self._kline_generators:
                                 self._kline_generators[kg_key] = KLineGenerator(interval="5m")
+                            # M01-F03: bar 桶按交易所事件时间切分
+                            event_time = self._parse_event_time(data)
+                            if event_time is None:
+                                self._clock_fallback_ticks += 1
                             self._kline_generators[kg_key].update(
                                 price=last_price,
                                 volume=per_tick_volume,
-                                timestamp=datetime.now(timezone.utc),
+                                timestamp=event_time or datetime.now(timezone.utc),
                                 symbol=symbol,
                             )
                     except Exception as exc:
@@ -410,8 +467,10 @@ class MarketDataFeed:
                 except (TypeError, ValueError):
                     is_closed_flag = None
         if include_closed and is_closed_flag is None:
-            # 无标志的兼容响应：按调用方声明处理（保留旧行为）
-            is_closed_flag = True
+            # M01-F01 (P0-04): 缺失闭合证据绝不制造 is_closed=True ——
+            # 与 ClosedBarNormalizer 的"missing close evidence is never
+            # closed"不变量一致。未闭合行由下游闭合 bar 门禁拒绝。
+            is_closed_flag = False
         if is_closed_flag is not None:
             parsed_row["is_closed"] = is_closed_flag
         return parsed_row
@@ -529,6 +588,11 @@ class MarketDataFeed:
         self._last_orderbook[symbol] = orderbook
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
+        # M01-F03 (P0-06): bar 桶按交易所事件时间切分（缺失时本地回退+审计）
+        event_time = self._parse_event_time(ticker)
+        if event_time is None:
+            self._clock_fallback_ticks += 1
+        tick_ts = event_time or datetime.now(timezone.utc)
         try:
             last_price = float(ticker["lastPrice"])
             # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量
@@ -540,7 +604,7 @@ class MarketDataFeed:
             kg.update(
                 price=last_price,
                 volume=per_tick_volume if per_tick_volume > 0 else float(ticker.get("volume", 0)),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=tick_ts,
             )
         except Exception as exc:
             logger.warning("5m kline aggregation failed for %s: %s: %s", symbol, type(exc).__name__, str(exc)[:120])
@@ -583,7 +647,7 @@ class MarketDataFeed:
                 vi,
                 Price(amount=str(last_price)),
                 Quantity(amount=str(ticker.get("lastQty", "0")) or "0"),
-                datetime.now(timezone.utc),
+                tick_ts,
                 is_taker_buy=True,
             )
         except Exception as exc:
@@ -591,6 +655,8 @@ class MarketDataFeed:
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
             self._last_error_time = time.monotonic()
 
+        # M01-F04 (P0-07): DQ 门禁真实接线 —— 检查项真实、结果被求值、
+        # FAIL 阻断（raise），tier 持久化到 FeatureVector。
         gate = DataQualityGate(venue_instrument=vi)
         gate.checks.append(
             DQCheckResult(
@@ -607,6 +673,29 @@ class MarketDataFeed:
                     detail=f"spread={spread_bps:.1f}bps",
                 )
             )
+        else:
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.COMPLETENESS,
+                    tier=DataQualityTier.CONDITIONAL,
+                    detail=f"spread={spread_bps:.1f}bps",
+                )
+            )
+        if event_time is not None:
+            skew_ms = int((datetime.now(timezone.utc) - event_time).total_seconds() * 1000)
+            gate.add_clock_skew_check(skew_ms)
+        else:
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.CLOCK_SKEW,
+                    tier=DataQualityTier.CONDITIONAL,
+                    detail="event_time_unavailable",
+                )
+            )
+        dq_tier = gate.overall_tier()
+        if dq_tier == DataQualityTier.FAIL:
+            raise MarketDataUnknownError(f"data quality gate FAIL for {symbol}: {[c.detail for c in gate.checks]}")
+        features["dq_tier"] = dq_tier.value
 
         self._feature_store.store(
             FeatureVector(
@@ -616,6 +705,7 @@ class MarketDataFeed:
                 instrument_id=instrument_id,
                 venue_id=venue_id,
                 version=SchemaVersion("2.0.0"),
+                data_quality_tier=dq_tier.value,
             )
         )
 
@@ -644,34 +734,9 @@ class MarketDataFeed:
         if gen_klines and klines:
             gen_last = gen_klines[-1]
             if gen_last.open_time >= klines[-1]["open_time"]:
-                klines[-1] = {
-                    "open_time": gen_last.open_time,
-                    "open": float(gen_last.open.amount),
-                    "high": float(gen_last.high.amount),
-                    "low": float(gen_last.low.amount),
-                    "close": float(gen_last.close.amount),
-                    "volume": float(gen_last.volume.amount),
-                    "close_time": gen_last.close_time,
-                    "quote_volume": float(gen_last.quote_volume.amount) if gen_last.quote_volume else 0.0,
-                    "trades": gen_last.trade_count,
-                    "is_closed": bool(gen_last.is_closed),
-                }
+                klines[-1] = _generated_bar_to_dict(gen_last)
         elif not klines and len(gen_klines) >= 20:
-            klines = [
-                {
-                    "open_time": k.open_time,
-                    "open": float(k.open.amount),
-                    "high": float(k.high.amount),
-                    "low": float(k.low.amount),
-                    "close": float(k.close.amount),
-                    "volume": float(k.volume.amount),
-                    "close_time": k.close_time,
-                    "quote_volume": float(k.quote_volume.amount) if k.quote_volume else 0.0,
-                    "trades": k.trade_count,
-                    "is_closed": bool(k.is_closed),
-                }
-                for k in gen_klines
-            ]
+            klines = [_generated_bar_to_dict(k) for k in gen_klines]
         features = self._compute_kline_features(symbol, interval, klines)
         if not features:
             raise MarketDataUnknownError(f"insufficient valid closed bars for {symbol}")
@@ -769,6 +834,10 @@ class MarketDataFeed:
             raise MarketDataUnknownError(f"ticker/order book for {symbol} is incomplete")
 
         # BD-FIX: KLineGenerator — 用实时 ticker 价格生成 OHLCV bar
+        # M01-F03 (P0-06): 事件时间切分（缺失时本地回退+审计）
+        _sync_event_time = self._parse_event_time(ticker)
+        if _sync_event_time is None:
+            self._clock_fallback_ticks += 1
         try:
             last_price = float(ticker["lastPrice"])
             # PKG22 (BDS-P1-040): 使用 lastQty 作为逐笔成交量
@@ -780,7 +849,7 @@ class MarketDataFeed:
             kg.update(
                 price=last_price,
                 volume=per_tick_volume if per_tick_volume > 0 else float(ticker.get("volume", 0)),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=_sync_event_time or datetime.now(timezone.utc),
             )
         except Exception as exc:
             logger.warning("5m kline aggregation failed for %s: %s", symbol, type(exc).__name__)
@@ -824,7 +893,7 @@ class MarketDataFeed:
                 vi,
                 Price(amount=str(last_price)),
                 Quantity(amount=str(ticker.get("lastQty", "0")) or "0"),
-                datetime.now(timezone.utc),
+                _sync_event_time or datetime.now(timezone.utc),
                 is_taker_buy=True,
             )
         except Exception as exc:
@@ -833,6 +902,7 @@ class MarketDataFeed:
             self._error_count["kline_gen"] = self._error_count.get("kline_gen", 0) + 1
             self._last_error_time = time.monotonic()
 
+        # M01-F04 (P0-07): DQ 门禁真实接线（同步路径）
         gate = DataQualityGate(venue_instrument=vi)
         gate.checks.append(
             DQCheckResult(
@@ -849,6 +919,29 @@ class MarketDataFeed:
                     detail=f"spread={spread_bps:.1f}bps",
                 )
             )
+        else:
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.COMPLETENESS,
+                    tier=DataQualityTier.CONDITIONAL,
+                    detail=f"spread={spread_bps:.1f}bps",
+                )
+            )
+        if _sync_event_time is not None:
+            skew_ms = int((datetime.now(timezone.utc) - _sync_event_time).total_seconds() * 1000)
+            gate.add_clock_skew_check(skew_ms)
+        else:
+            gate.checks.append(
+                DQCheckResult(
+                    check_type=DQCheckType.CLOCK_SKEW,
+                    tier=DataQualityTier.CONDITIONAL,
+                    detail="event_time_unavailable",
+                )
+            )
+        dq_tier = gate.overall_tier()
+        if dq_tier == DataQualityTier.FAIL:
+            raise MarketDataUnknownError(f"data quality gate FAIL for {symbol}: {[c.detail for c in gate.checks]}")
+        features["dq_tier"] = dq_tier.value
 
         self._feature_store.store(
             FeatureVector(
@@ -858,6 +951,7 @@ class MarketDataFeed:
                 instrument_id=instrument_id,
                 venue_id=venue_id,
                 version=SchemaVersion("2.0.0"),
+                data_quality_tier=dq_tier.value,
             )
         )
 
@@ -871,32 +965,9 @@ class MarketDataFeed:
         if gen_klines and klines:
             gen_last = gen_klines[-1]
             if gen_last.open_time >= klines[-1]["open_time"]:
-                klines[-1] = {
-                    "open_time": gen_last.open_time,
-                    "open": float(gen_last.open.amount),
-                    "high": float(gen_last.high.amount),
-                    "low": float(gen_last.low.amount),
-                    "close": float(gen_last.close.amount),
-                    "volume": float(gen_last.volume.amount),
-                    "close_time": gen_last.close_time,
-                    "quote_volume": float(gen_last.quote_volume.amount) if gen_last.quote_volume else 0.0,
-                    "trades": gen_last.trade_count,
-                }
+                klines[-1] = _generated_bar_to_dict(gen_last)
         elif not klines and len(gen_klines) >= 20:
-            klines = [
-                {
-                    "open_time": k.open_time,
-                    "open": float(k.open.amount),
-                    "high": float(k.high.amount),
-                    "low": float(k.low.amount),
-                    "close": float(k.close.amount),
-                    "volume": float(k.volume.amount),
-                    "close_time": k.close_time,
-                    "quote_volume": float(k.quote_volume.amount) if k.quote_volume else 0.0,
-                    "trades": k.trade_count,
-                }
-                for k in gen_klines
-            ]
+            klines = [_generated_bar_to_dict(k) for k in gen_klines]
         features = self._compute_kline_features(symbol, interval, klines)
         if not features:
             raise MarketDataUnknownError(f"insufficient valid closed bars for {symbol}")
@@ -977,6 +1048,15 @@ class MarketDataFeed:
                 spread_bps_val = (ask - bid) / ((bid + ask) / 2) * 10000
 
         latest = klines[-1]
+        # M01-F06: spread 回退审计 —— 缺失真实点差时使用保守默认 2bps,
+        # 每个 symbol 仅 WARN 一次（绝不静默制造市场事实）。
+        if spread_bps_val is None and symbol not in _spread_fallback_warned:
+            _spread_fallback_warned.add(symbol)
+            logger.warning(
+                "spread fallback 2.0bps used for %s (no valid two-sided quote); "
+                "cost/adaptive-sizing inputs are synthetic",
+                symbol,
+            )
         features: dict[str, Any] = {
             "close": closes[-1],
             "prices": closes,  # 完整收盘价序列 — 供 alpha 因子（z-score / half-life）使用
@@ -999,7 +1079,9 @@ class MarketDataFeed:
             "ema_26": ema_26,
             "macd": macd,
             "macd_signal": macd_signal,
-            "spread_bps": spread_bps_val if spread_bps_val is not None else 2.0,  # 默认 2bps，不阻断信号生成
+            # M01-F06: 回退值保留但显式标记来源;消费者侧收紧由 M09/M10 处理
+            "spread_bps": spread_bps_val if spread_bps_val is not None else 2.0,
+            "spread_bps_source": "ticker" if spread_bps_val is not None else "fallback",
         }
         # Strategy execution is allowed only from an explicitly closed bar.
         # These fields are first-class evidence, not inferred defaults.  The

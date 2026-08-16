@@ -332,11 +332,13 @@ class ClosedBarNormalizer:
             if audit_key in self._seen:
                 return ClosedBarResult(bar, BarIntegrity.DUPLICATE, f"Duplicate bar: {audit_key}", cid)
 
-            self._seen[audit_key] = bar.sequence
-
+            # M01-F05 (P1-08): 未闭合 bar 不注册 _seen —— 同一 bar 先到
+            # NOT_CLOSED、后到闭合态是正常演进（修订路径），旧实现把
+            # 第二次标为 DUPLICATE 导致闭合事实永远无法进入。
             if not bar.is_closed:
                 return ClosedBarResult(bar, BarIntegrity.NOT_CLOSED, "Bar is not yet closed", cid)
 
+            self._seen[audit_key] = bar.sequence
             return ClosedBarResult(bar, BarIntegrity.OK, f"Normalized: {audit_key}", cid)
 
         except Exception as e:

@@ -390,3 +390,131 @@ class TestAutoRepair:
         series = [{"ts": t0}, {"ts": t0 + timedelta(seconds=5)}]
         _, gaps = AutoRepair.repair_gap(series, "ts", 1000)
         assert isinstance(gaps, list), f"Expected list, got {type(gaps)}"  # gap detection works
+
+
+def test_parse_rest_kline_missing_close_flag_is_not_closed():
+    """M01-F01 (P0-04): x 标志缺失时绝不伪造 is_closed=True（闭合证据诚实性）。"""
+    from beidou_core.feed import MarketDataFeed
+
+    now = datetime.now(timezone.utc)
+    open_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
+    close_ms = int((now - timedelta(minutes=1)).timestamp() * 1000)
+    row = [open_ms, "100", "101", "99", "100.5", "10", close_ms, "1000", 5]  # 无 x 字段
+    parsed = MarketDataFeed._parse_rest_kline(row, now, include_closed=True)
+    assert parsed is not None
+    assert parsed["is_closed"] is False  # 缺失闭合证据 = 未闭合,绝不制造 True
+
+
+def test_parse_rest_kline_explicit_close_flag_is_honored():
+    from beidou_core.feed import MarketDataFeed
+
+    now = datetime.now(timezone.utc)
+    open_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
+    close_ms = int((now - timedelta(minutes=1)).timestamp() * 1000)
+    row = [open_ms, "100", "101", "99", "100.5", "10", close_ms, "1000", 5, "0", "0", "0", True]
+    parsed = MarketDataFeed._parse_rest_kline(row, now, include_closed=True)
+    assert parsed["is_closed"] is True
+
+
+def test_sync_kline_merge_preserves_closed_evidence():
+    """M01-F01: 本地 bar→dict 转换必须携带 is_closed(对抗审查发现的证据丢失点)。"""
+    from beidou_core.feed import _generated_bar_to_dict
+    from beidou_data.klines import OHLCV
+
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    bar = OHLCV(
+        venue_instrument=vi,
+        interval="1h",
+        open_time=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        close_time=datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc),
+        open=Price(amount="100"),
+        high=Price(amount="101"),
+        low=Price(amount="99"),
+        close=Price(amount="100.5"),
+        volume=Quantity(amount="10"),
+        trade_count=5,
+        is_closed=True,
+    )
+    as_dict = _generated_bar_to_dict(bar)
+    assert as_dict["is_closed"] is True
+    assert as_dict["open_time"] == datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+    unclosed = OHLCV(
+        venue_instrument=vi,
+        interval="1h",
+        open_time=datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc),
+        close_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+        open=Price(amount="101"),
+        high=Price(amount="102"),
+        low=Price(amount="100"),
+        close=Price(amount="101.5"),
+        volume=Quantity(amount="3"),
+        trade_count=2,
+        is_closed=False,
+    )
+    assert _generated_bar_to_dict(unclosed)["is_closed"] is False
+
+
+def test_parse_event_time_valid_and_invalid():
+    """M01-F03 (P0-06): E 事件时间解析 —— 缺失/未来/过旧/非法均拒绝。"""
+    from beidou_core.feed import MarketDataFeed
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    parsed = MarketDataFeed._parse_event_time({"E": now_ms - 1000})
+    assert parsed is not None
+    assert abs((parsed - datetime.now(timezone.utc)).total_seconds()) < 60
+
+    assert MarketDataFeed._parse_event_time({"E": None}) is None
+    assert MarketDataFeed._parse_event_time({}) is None
+    assert MarketDataFeed._parse_event_time({"E": "not-a-number"}) is None
+    assert MarketDataFeed._parse_event_time({"E": now_ms + 10_000}) is None  # 未来 10s → 时钟异常
+    assert MarketDataFeed._parse_event_time({"E": now_ms - 2 * 86_400_000}) is None  # 2 天前
+
+
+class _EventTimeKlineClient:
+    """ticker 携带固定 E 事件时间的假客户端。"""
+
+    def __init__(self, event_ms: int) -> None:
+        self._event_ms = event_ms
+
+    async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None):
+        from beidou_exchange.binance_usdm.endpoints import Endpoint
+
+        if path == Endpoint.TICKER_24HR:
+            return {
+                "lastPrice": "100",
+                "priceChangePercent": "1.5",
+                "volume": "1000",
+                "quoteVolume": "100000",
+                "highPrice": "102",
+                "lowPrice": "98",
+                "lastQty": "2",
+                "E": self._event_ms,
+            }
+        if path == Endpoint.DEPTH:
+            return {"bids": [["99.9", "1"]], "asks": [["100.1", "1"]]}
+        raise AssertionError(f"unexpected path: {path}")
+
+
+@pytest.mark.asyncio
+async def test_async_update_features_buckets_bars_by_exchange_event_time():
+    """M01-F03 (P0-06): bar 桶切分基于交易所事件时间而非本地时钟。"""
+    from beidou_core.feed import MarketDataFeed
+
+    # E = 1 秒前(时钟检查 tolerance 内),桶起点按 E 的小时桶推算
+    event_time = datetime.now(timezone.utc) - timedelta(seconds=1)
+    feed = MarketDataFeed(client=_EventTimeKlineClient(int(event_time.timestamp() * 1000)))
+    features = await feed.async_update_features("BTCUSDT")
+
+    generator = feed._get_kline_generator("BTCUSDT", "1h")
+    vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))
+    current = generator.get_current_bar(vi)
+    assert current is not None
+    expected_bucket = event_time.replace(minute=0, second=0, microsecond=0)
+    assert current.open_time == expected_bucket  # 桶起点 = E 的小时桶(交易所时间)
+    assert "dq_tier" in features
+    assert features["dq_tier"] == "PASS"
+    # FeatureVector 持久化 data_quality_tier（P1-08）
+    stored = feed.get_feature_store().get_latest("btcusdt_live", InstrumentId("BTCUSDT"))
+    assert stored is not None
+    assert stored.data_quality_tier == "PASS"
