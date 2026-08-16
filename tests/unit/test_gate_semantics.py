@@ -295,8 +295,11 @@ def test_multiple_testing_denominator_covers_all_candidates(tmp_path: Path) -> N
 
     for bundle in result.evidence_bundles:
         mt = bundle.multiple_testing_results
-        assert mt["n_total_trials"] == n_candidates
-        assert mt["n_evaluated"] == n_candidates, "pvalues 长度必须 == len(candidates)"
+        # M05-F01: 方向翻转计入试验预算 —— 分母 >= 生成候选数(翻转是额外
+        # 假设,不得从分母漏掉)。
+        assert mt["n_total_trials"] >= n_candidates
+        # M05-F01: pvalues 数组含翻转保守项(1.0)—— 评估数 >= 候选数
+        assert mt["n_evaluated"] >= n_candidates, "评估数(含翻转保守项)必须覆盖所有候选"
         assert "trials_not_fully_evaluated" not in mt["failure_reasons"], (
             f"分母覆盖后不应出现 trials_not_fully_evaluated: {bundle.factor_id}"
         )

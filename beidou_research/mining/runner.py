@@ -804,6 +804,11 @@ class MiningRunner:
                 if record["candidate"].get("_candidate_index") is not None
             }
             pvalues = [evaluated_pvalues.get(index, c.get("_p_value", 1.0)) for index, c in enumerate(candidates)]
+            # M05-F01: 每个方向翻转 = 一次额外假设 —— 以保守 p=1.0 计入
+            # p 值数组（被舍弃的未翻转方向没有独立检验,保守处理),使
+            # BH/Holm 分母与 n_trials 一致(翻转不得从分母漏掉)。
+            if flip_count > 0:
+                pvalues = [*pvalues, *([1.0] * flip_count)]
             train_sharpes = [
                 sum(r["train_sharpes"]) / len(r["train_sharpes"]) if r["train_sharpes"] else 0.0
                 for r in evaluation_records
@@ -1000,7 +1005,6 @@ class MiningRunner:
                     ]
                     if len(res_pairs) >= 50:
                         res_vals = [p[0] for p in res_pairs]
-                        res_rets = [p[1] for p in res_pairs]
                         res_id = f"residual_{top_pass[0].get('factor_id', 'a')}"
                         res_hash = hashlib.sha256(res_id.encode()).hexdigest()[:20]
                         bundle = EvidenceBundle(
