@@ -2055,6 +2055,8 @@ class AutonomousEngine:
         # (exit-ready 恒 503 "NOT_CONFIGURED",factors 恒空列表)
         self._health.set_exit_readiness(self._check_exit_ready)
         self._health.set_factor_provider(self._list_factors_for_api)
+        # M19-F02: 人工 RESUME 入口 —— 唯一 HTTP 恢复通道,过授权门禁
+        self._health.set_resume_handler(self._manual_resume)
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
 
@@ -3097,6 +3099,22 @@ class AutonomousEngine:
         if not user_stream_ready:
             return False
         return self._realtime_age_seconds() <= 15.0
+
+    def _manual_resume(self) -> tuple[bool, str]:
+        """M19-F02: 人工 RESUME 入口 —— TruthSnapshot 授权门禁。
+
+        快照由引擎实时构建(非外部传入);supervisor interlock 未授权时
+        RESUME 动作会被改写为 NO_NEW_RISK —— 执行后回读状态,诚实
+        报告被拦截(不假装恢复成功)。
+        """
+        snap = self.build_truth_snapshot()
+        allowed, reason = self._control.execute_authorized_resume(snap)
+        if allowed and self._control.get_status() != ControlAction.RESUME:
+            return False, (
+                "TruthSnapshot gate passed but RESUME overridden by supervisor "
+                "interlock (authorization not open)"
+            )
+        return allowed, reason
 
     def _check_exit_ready(self) -> tuple[bool, str]:
         """M17-F01: /exit-ready 真实接线 —— 控制面允许退出方向时可用。

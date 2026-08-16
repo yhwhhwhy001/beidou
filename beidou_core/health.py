@@ -87,6 +87,14 @@ class HealthServer:
     def set_factor_provider(self, fn: Callable[[], list[dict]]) -> None:
         self._factor_provider = fn
 
+    def set_resume_handler(self, fn: Callable[[], tuple[bool, str]]) -> None:
+        """M19-F02: 人工 RESUME 入口回执 —— 返回 (allowed, reason)。
+
+        处理函数必须经过 TruthSnapshot 授权门禁(BD-CV02 AC-02-04),
+        裸 RESUME 不允许暴露到 HTTP。
+        """
+        self._resume_handler = fn
+
     def uptime_seconds(self) -> float:
         return time.monotonic() - self._start_time
 
@@ -162,6 +170,18 @@ class HealthServer:
                     provider = getattr(server, "_factor_provider", None)
                     factors = provider() if provider else []
                     self._send_json(200, {"factors": factors, "count": len(factors)})
+                elif self.path == "/resume":
+                    # M19-F02: 人工 RESUME —— 必须过 TruthSnapshot 授权
+                    # 门禁;未接线时 fail-closed
+                    handler = getattr(server, "_resume_handler", None)
+                    if handler is None:
+                        self._send_json(503, {"resumed": False, "reason": "RESUME_HANDLER_NOT_WIRED"})
+                    else:
+                        allowed, reason = handler()
+                        self._send_json(
+                            200 if allowed else 403,
+                            {"resumed": allowed, "reason": reason},
+                        )
                 else:
                     self._send_json(404, {"error": "not found"})
 

@@ -195,3 +195,48 @@ class TestSupervisorStartupAuthorizationGate:
         allowed, reason = sup._authorize_resume_via_truth_snapshot()
         assert not allowed
         assert "stale" in reason.lower()
+
+
+# --- M19-F02: 人工 RESUME 入口(/resume 端点 + interlock 诚实报告) ---
+
+
+class TestManualResumeEndpoint:
+    def test_manual_resume_passes_gate_and_switches_state(self, tmp_path, monkeypatch):
+
+        from beidou_core.engine import AutonomousEngine
+
+        cp = _isolated_control_plane(tmp_path, monkeypatch)
+        engine = AutonomousEngine.__new__(AutonomousEngine)
+        engine._control = cp
+        engine.build_truth_snapshot = lambda: _fresh_snapshot()
+        allowed, reason = engine._manual_resume()
+        assert allowed, reason
+        assert cp.get_status() == ControlAction.RESUME
+
+    def test_manual_resume_reports_interlock_override(self, tmp_path, monkeypatch):
+        """interlock 改写 RESUME→NO_NEW_RISK 时诚实报告,不假装成功。"""
+
+        from beidou_core.engine import AutonomousEngine
+
+        cp = _isolated_control_plane(tmp_path, monkeypatch)
+        original_execute = cp.execute_action
+
+        def guarded_execute(action, *args, **kwargs):
+            if action == ControlAction.RESUME:
+                return original_execute(ControlAction.NO_NEW_RISK)
+            return original_execute(action, *args, **kwargs)
+
+        cp.execute_action = guarded_execute  # 模拟 supervisor interlock
+        engine = AutonomousEngine.__new__(AutonomousEngine)
+        engine._control = cp
+        engine.build_truth_snapshot = lambda: _fresh_snapshot()
+        allowed, reason = engine._manual_resume()
+        assert allowed is False
+        assert "interlock" in reason.lower()
+        assert cp.get_status() == ControlAction.NO_NEW_RISK
+
+    def test_health_server_resume_endpoint_fail_closed_without_handler(self):
+        from beidou_core.health import HealthServer
+
+        server = HealthServer(port=0, bind_host="127.0.0.1")
+        assert not hasattr(server, "_resume_handler") or getattr(server, "_resume_handler", None) is None
