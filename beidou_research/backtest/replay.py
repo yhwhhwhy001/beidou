@@ -85,6 +85,7 @@ def simulate_paper_window(
     cost_bps: float,
     *,
     min_window_bars: int = 500,
+    bars_per_year: int = 24 * 365,
 ) -> PaperReplayResult | None:
     """历史窗口 paper 模拟。
 
@@ -132,7 +133,8 @@ def simulate_paper_window(
     mean_ret = sum(returns) / len(returns) if returns else 0.0
     var_ret = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1) if len(returns) > 1 else 0.0
     std_ret = math.sqrt(max(var_ret, 0.0))
-    sharpe = (mean_ret / std_ret) * math.sqrt(24) if std_ret > 0 else 0.0
+    # M08-F04: 年化频率参数化 —— 旧实现硬编码 √24(仅 1h 正确)。
+    sharpe = (mean_ret / std_ret) * math.sqrt(bars_per_year) if std_ret > 0 else 0.0
 
     consistency = 0.0
     forward_bars = 4
@@ -148,25 +150,15 @@ def simulate_paper_window(
     if denom:
         consistency = hits / denom
 
-    # challenger ICIR：窗口内 factor 值 vs 1-bar forward return 的 IC 序列
-    ic_series: list[float] = []
-    for i in range(n - 1):
-        if closes[i] <= 0:
-            continue
-        ic_series.append(factor_values[i] * ((closes[i + 1] - closes[i]) / closes[i]))
-    mean_ic = sum(ic_series) / len(ic_series) if ic_series else 0.0
-    std_ic = (
-        math.sqrt(sum((v - mean_ic) ** 2 for v in ic_series) / (len(ic_series) - 1))
-        if len(ic_series) > 1
-        else 0.0
-    )
-    icir = mean_ic / std_ic if std_ic > 0 else 0.0
-
+    # M08-F04: challenger_icir 字段语义修正 —— 旧实现把 signal×return
+    # 乘积序列的 mean/std 冒充 "IC 序列 IR"(不是相关系数,且单标的窗口
+    # 内无法构造 IC 序列)。诚实语义 = paper PnL 的信息比率(即 sharpe,
+    # 年化口径一致)。字段名保留兼容,含义更正。
     return PaperReplayResult(
         paper_sharpe=round(sharpe, 6),
         paper_drawdown_pct=round(max_dd * 100, 6),
         signal_consistency=round(consistency, 6),
-        challenger_icir=round(icir, 6),
+        challenger_icir=round(sharpe, 6),
         window_bars=n,
         n_trades=trades,
     )

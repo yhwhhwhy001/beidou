@@ -49,16 +49,23 @@ class StrategyPnL:
 
     @property
     def total_return(self) -> float:
-        """累计净收益（对数累加）。"""
-        return math.log(1 + sum(self.net_returns)) if self.net_returns else 0.0
+        """累计净收益（对数复利）。
+
+        M08-F01: 旧实现 log(1 + Σr) 是数学错误 —— 对数收益应累加
+        Σlog(1+r)(且 Σr < -1 时旧实现域错误)。
+        """
+        return sum(math.log1p(r) for r in self.net_returns) if self.net_returns else 0.0
 
     @property
     def annualized_return(self) -> float:
-        """年化收益率。"""
+        """年化收益率（默认日频 252；其他频率用 annualized_return_for）。"""
+        return self.annualized_return_for(252)
+
+    def annualized_return_for(self, periods_per_year: int) -> float:
+        """按频率年化的收益率（M08-F02: 频率参数化,252 不再隐藏在各处）。"""
         if not self.net_returns:
             return 0.0
-        mean_r = _mean(list(self.net_returns))
-        return mean_r * 252  # 假设每日数据
+        return _mean(list(self.net_returns)) * periods_per_year
 
     @property
     def is_valid(self) -> bool:
@@ -218,6 +225,7 @@ class StrategyPnLKernel:
         predictions: Sequence[float] | None = None,
         returns: Sequence[float] | None = None,
         positions: Sequence[float] | None = None,
+        periods_per_year: int = 252,
     ) -> StrategyMetrics:
         """PKG04: 从 StrategyPnL 生成统一的策略评估指标。
 
@@ -237,11 +245,16 @@ class StrategyPnLKernel:
             return StrategyMetrics.not_verifiable()
 
         net_returns = list(pnl.net_returns)
+        sqrt_ppy = math.sqrt(periods_per_year)
 
         # 核心指标（从 net_returns 推导）
-        ann_return = pnl.annualized_return
-        ann_vol = _std(net_returns) * math.sqrt(252)
-        sharpe = _sharpe(net_returns)
+        # M08-F02: Sharpe 与 Sortino/Calmar/年化波动率量纲统一 ——
+        # 旧 sharpe 是 per-bar 值(均值/标准差),而其他指标全部年化,
+        # 同一报告内量纲分裂。
+        ann_return = _mean(net_returns) * periods_per_year
+        ann_vol = _std(net_returns) * sqrt_ppy
+        per_bar_sharpe = _sharpe(net_returns)
+        sharpe = per_bar_sharpe * sqrt_ppy if per_bar_sharpe is not None else None
 
         # Sortino: 只考虑下行波动
         downside = [r for r in net_returns if r < 0]
@@ -249,9 +262,9 @@ class StrategyPnLKernel:
         if len(downside) >= 2:
             d_std = _std(downside)
             if d_std > 1e-12:
-                sortino = _mean(net_returns) * 252 / (d_std * math.sqrt(252))
+                sortino = _mean(net_returns) * periods_per_year / (d_std * sqrt_ppy)
 
-        # 最大回撤
+        # 最大回撤（M08-F03: 复利权益曲线,非算术累计）
         max_dd = self._compute_max_drawdown(net_returns)
 
         # Calmar
@@ -298,33 +311,44 @@ class StrategyPnLKernel:
 
     @staticmethod
     def _compute_max_drawdown(returns: list[float]) -> float:
-        """计算最大回撤。"""
+        """计算最大回撤（复利权益曲线）。
+
+        M08-F03: 旧实现对收益率做算术累计 —— 大波动下与真实权益
+        曲线显著偏离;且 peak 为负时回撤分母失真。新实现:
+        equity = ∏(1+r),dd = (peak - equity) / peak(peak > 0)。
+        """
         if not returns:
             return 0.0
-        peak = returns[0]
+        equity = 1.0
+        peak = 1.0
         max_dd = 0.0
-        cumulative = 0.0
         for r in returns:
-            cumulative += r
-            if cumulative > peak:
-                peak = cumulative
-            dd = (peak - cumulative) / max(abs(peak), 1e-12)
-            if dd > max_dd:
-                max_dd = dd
+            equity *= 1.0 + r
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                dd = (peak - equity) / peak
+                if dd > max_dd:
+                    max_dd = dd
         return max_dd
 
-    def compute_sharpe_from_pnl(self, pnl: StrategyPnL) -> float | None:
-        """直接从 StrategyPnL 计算 Sharpe（供 DSR/PBO 等使用）。
+    def compute_sharpe_from_pnl(self, pnl: StrategyPnL, periods_per_year: int = 252) -> float | None:
+        """直接从 StrategyPnL 计算年化 Sharpe（供 DSR/PBO 等使用）。
 
         PKG04 (BDS-P0-004): DSR/PBO 只能通过此方法获取 Sharpe，
         不得使用其他来源的 Sharpe 值。
+        M08-F02: 年化口径（per-bar × √periods_per_year）,与
+        evaluate() 一致;频率参数化。
         """
         if not pnl.is_valid:
             return None
-        return _sharpe(list(pnl.net_returns))
+        per_bar = _sharpe(list(pnl.net_returns))
+        if per_bar is None:
+            return None
+        return per_bar * math.sqrt(periods_per_year)
 
-    def compute_sortino_from_pnl(self, pnl: StrategyPnL) -> float | None:
-        """直接从 StrategyPnL 计算 Sortino。"""
+    def compute_sortino_from_pnl(self, pnl: StrategyPnL, periods_per_year: int = 252) -> float | None:
+        """直接从 StrategyPnL 计算年化 Sortino。"""
         if not pnl.is_valid:
             return None
         net_returns = list(pnl.net_returns)
@@ -334,7 +358,7 @@ class StrategyPnLKernel:
         d_std = _std(downside)
         if d_std <= 1e-12:
             return None
-        return _mean(net_returns) * 252 / (d_std * math.sqrt(252))
+        return _mean(net_returns) * periods_per_year / (d_std * math.sqrt(periods_per_year))
 
 
 # ================================================================

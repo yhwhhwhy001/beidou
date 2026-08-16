@@ -711,7 +711,14 @@ class MiningRunner:
             # 返回 None 时 promotion_chain 不产出（fail-closed）。
             all_closes = [float(p.close or 0.0) for p in price_points]
             replay_vals = [-v for v in candidate["factor_values"]] if flipped else candidate["factor_values"]
-            replay_result = simulate_paper_window(replay_vals, all_closes, cost_bps=8.0)
+            # M08-F04: 成本与年化频率从配置绑定 —— 旧实现硬编码
+            # cost_bps=8.0 与 √24(仅 1h 正确),证据与成本模型脱节。
+            replay_result = simulate_paper_window(
+                replay_vals,
+                all_closes,
+                cost_bps=float(self.config.cost_model.avg_spread_bps) if self.config.cost_model else 8.0,
+                bars_per_year=_bars_per_year_for_timeframe(timeframe),
+            )
 
             # 构造证据包
             bundle = EvidenceBundle(
