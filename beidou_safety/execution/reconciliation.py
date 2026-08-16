@@ -88,6 +88,20 @@ class AccountFactSnapshot:
     position_step_sizes: dict[str, str] = field(default_factory=dict)
 
 
+# M16-R2: STOP 类订单显式集合 —— 有效价位在 stop_price;"STOP" in type
+# 子串判定会漏掉 TAKE_PROFIT/TRAILING_STOP 变体(对抗审查 BUG-4)
+_STOP_LIKE_ORDER_TYPES = frozenset(
+    {
+        "STOP_MARKET",
+        "STOP_LOSS_MARKET",
+        "STOP_LOSS_LIMIT",
+        "TAKE_PROFIT_MARKET",
+        "TAKE_PROFIT_LIMIT",
+        "TRAILING_STOP_MARKET",
+    }
+)
+
+
 class ReconciliationEngine:
     """对账引擎。比较系统事实与交易所事实，差异需修复。"""
 
@@ -363,28 +377,37 @@ class ReconciliationEngine:
                     continue
                 if abs(s_qty - e_qty) > Decimal("1e-9"):
                     param_diffs.append(f"{order_id}:qty({s_qty} vs {e_qty})")
-                # M16-F02: STOP 类单比较 stop_price(有效价位),普通单比较
-                # price;任一侧为 0/空时跳过(STOP 单 price=0 为无效价位)
+                # M16-F02/R2: STOP 类单比较 stop_price(有效价位),普通单
+                # 比较 price;任一侧为 0/空时跳过。R2(对抗审查):显式
+                # 集合判定 —— 旧实现 "STOP" in type 漏掉
+                # TAKE_PROFIT_MARKET/TRAILING_STOP 等变体;LIMIT 变体
+                # (STOP_LOSS_LIMIT/TAKE_PROFIT_LIMIT)双价都参与比较。
                 order_type_upper = str(s.get("type", "")).strip().upper()
-                if "STOP" in order_type_upper:
-                    s_price = str(s.get("stop_price", "") or "").strip()
-                    e_price = str(e.get("stop_price", "") or "").strip()
-                else:
-                    s_price = str(s.get("price", "") or "").strip()
-                    e_price = str(e.get("price", "") or "").strip()
-                if s_price and e_price:
+
+                def _compare_price_field(
+                    s_detail: dict, e_detail: dict, oid: str, field: str, label: str
+                ) -> None:
+                    s_val = str(s_detail.get(field, "") or "").strip()
+                    e_val = str(e_detail.get(field, "") or "").strip()
+                    if not s_val or not e_val:
+                        return  # 单侧缺值不比较(不造假)
                     try:
-                        s_p = Decimal(s_price)
-                        e_p = Decimal(e_price)
+                        s_p = Decimal(s_val)
+                        e_p = Decimal(e_val)
                         if not s_p.is_finite() or not e_p.is_finite():
                             raise InvalidOperation("order price is not finite")
                     except (InvalidOperation, TypeError, ValueError):
-                        param_diffs.append(f"{order_id}:price(INVALID_PRICE_FACT)")
-                    else:
-                        # STOP 类单 price=0 为无效价位(有效价位在
-                        # stopPrice,系统侧无列) —— 任一侧为 0 时跳过
-                        if s_p > 0 and e_p > 0 and s_p != e_p:
-                            param_diffs.append(f"{order_id}:price({s_price} vs {e_price})")
+                        param_diffs.append(f"{oid}:{label}(INVALID_PRICE_FACT)")
+                        return
+                    if s_p > 0 and e_p > 0 and s_p != e_p:
+                        param_diffs.append(f"{oid}:{label}({s_val} vs {e_val})")
+
+                if order_type_upper in _STOP_LIKE_ORDER_TYPES:
+                    _compare_price_field(s, e, order_id, "stop_price", "stop_price")
+                    if order_type_upper.endswith("_LIMIT"):
+                        _compare_price_field(s, e, order_id, "price", "price")
+                else:
+                    _compare_price_field(s, e, order_id, "price", "price")
             if param_diffs:
                 diffs.append("Open order parameter mismatch: " + "; ".join(param_diffs[:20]))
         elif sys_detail or ex_detail:

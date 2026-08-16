@@ -506,9 +506,10 @@ class PersistentStore:
                 json.dumps({str(k): str(v.amount) for k, v in facts.positions.items()}, sort_keys=True),
                 json.dumps([str(order_id) for order_id in facts.open_orders], sort_keys=True),
                 # M16-F01: 参数级明细随快照持久化(与 PG 版 M13-R2 对齐)
+                # M16-R2: None 值落空串(字面量 "None" 会触发 INVALID_PRICE_FACT 假阳性)
                 json.dumps(
                     {
-                        str(order_id): {str(k): str(v) for k, v in detail.items()}
+                        str(order_id): {str(k): (str(v) if v is not None else "") for k, v in detail.items()}
                         for order_id, detail in getattr(facts, "open_orders_detail", {}).items()
                     },
                     sort_keys=True,
@@ -1018,8 +1019,11 @@ class PersistentStore:
             if prev_status == "PARTIALLY_FILLED" and status == "NEW":
                 return
         now = datetime.now(timezone.utc).isoformat()
+        # M16-R2: reduce_only/stop_price 缺省时保留旧值 —— INSERT OR
+        # REPLACE 全行替换会抹除先前落库的防线值(部分成交/UNKNOWN
+        # 等更新路径不传 kwargs,抹值后防线再次死代码)
         conn.execute(
-            "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, reduce_only, stop_price, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",
+            "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, reduce_only, stop_price, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE(?,(SELECT reduce_only FROM order_states WHERE order_id=?)),COALESCE(?,(SELECT stop_price FROM order_states WHERE order_id=?)),COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",
             (
                 order_id,
                 symbol,
@@ -1032,7 +1036,9 @@ class PersistentStore:
                 avg_price,
                 client_order_id,
                 reduce_only,
+                order_id,
                 stop_price,
+                order_id,
                 order_id,
                 now,
                 now,

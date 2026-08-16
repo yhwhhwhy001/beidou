@@ -550,3 +550,40 @@ def test_stop_order_compares_stop_price_not_price() -> None:
     )
     result2 = ReconciliationEngine.compare(matched_system, matched_exchange, now=now)
     assert result2.status is ReconciliationStatus.MATCHED
+
+
+# --- M16-R2: STOP 类订单类型判定(对抗审查 BUG-4) ---
+
+
+def test_take_profit_market_stop_price_drift_detected() -> None:
+    """TAKE_PROFIT_MARKET 不含 "STOP" 子串,旧判定走 price 分支漏检。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(type="TAKE_PROFIT_MARKET", price="0", stop_price="90000"))
+    exchange = _facts(
+        timestamp=now, source="EXCHANGE", detail=_detail(type="TAKE_PROFIT_MARKET", price="0", stop_price="85000")
+    )
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("stop_price" in str(d) for d in result.differences)
+
+
+def test_stop_loss_limit_compares_both_prices() -> None:
+    """STOP_LOSS_LIMIT 双价:limit price 与 stop_price 都参与比较。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(type="STOP_LOSS_LIMIT", price="49000", stop_price="50000"))
+    exchange = _facts(
+        timestamp=now, source="EXCHANGE", detail=_detail(type="STOP_LOSS_LIMIT", price="49500", stop_price="50000")
+    )
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("price" in str(d) for d in result.differences)
+
+
+def test_production_shape_reduce_only_drift_detected() -> None:
+    """生产形态:系统侧 reduce_only 真实值(扩列后)vs 交换侧 reduceOnly。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(reduce_only="true"))
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail(reduce_only="false"))
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("reduce_only" in str(d) for d in result.differences)

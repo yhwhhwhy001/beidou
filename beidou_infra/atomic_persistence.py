@@ -74,10 +74,12 @@ class AtomicOrderAggregate:
 
 
 class AtomicPersistence:
-    """BD-CV41: PostgreSQL 原子持久化。
+    """BD-CV41: 原子持久化(内存参考实现,未接线)。
 
-    Intent→Outbox→OrderAggregate 在同一事务中。
-    client_order_id 全局唯一。
+    M16-F01/R2 诚实化:dict 实现、无事务、无 PG 落盘;生产原子持久化
+    由 PostgresPersistentStore/PostgresIntentOutbox 承担。契约(幂等/
+    UNKNOWN 恢复/client_order_id 确定性)由单测锁定,接线前不得视为
+    PostgreSQL 持久化。
     """
 
     def __init__(self, db_path: str = "beidou_state.db") -> None:

@@ -327,3 +327,24 @@ def test_sqlite_reconciliation_snapshot_without_detail_defaults_empty(tmp_path) 
     latest = store.restore_latest_reconciliation_snapshot("account", "BINANCE", "SYSTEM")
     assert latest is not None
     assert latest["open_orders_detail"] == {}
+
+
+def test_order_state_update_preserves_reduce_only_when_kwargs_omitted(tmp_path) -> None:
+    """M16-R2: INSERT OR REPLACE 不得抹除已落库的防线值(部分成交/UNKNOWN
+    等更新路径不传 kwargs 时保留旧值)。"""
+    store = PersistentStore(str(tmp_path / "wipe.db"))
+    store.save_order_state("o1", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW", reduce_only="true", stop_price="")
+    store.save_order_state("o1", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "PARTIALLY_FILLED", "0.05", "49900")
+    with store._get_conn() as conn:
+        row = conn.execute("SELECT reduce_only, stop_price FROM order_states WHERE order_id='o1'").fetchone()
+    assert row["reduce_only"] == "true"
+
+
+def test_order_state_explicit_update_overrides_reduce_only(tmp_path) -> None:
+    """显式传值时覆盖旧值(不为 None 即真实写入)。"""
+    store = PersistentStore(str(tmp_path / "override.db"))
+    store.save_order_state("o1", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW", reduce_only="false")
+    store.save_order_state("o1", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW", reduce_only="true")
+    with store._get_conn() as conn:
+        row = conn.execute("SELECT reduce_only FROM order_states WHERE order_id='o1'").fetchone()
+    assert row["reduce_only"] == "true"

@@ -7,7 +7,7 @@
 # 执行,部署阶段 M22 负责)。
 set -euo pipefail
 
-PGDATA="/opt/homebrew/var/postgresql@16"
+PGDATA="${BEIDOU_PGDATA:-/opt/homebrew/var/postgresql@16}"
 CONF="${PGDATA}/postgresql.conf"
 ARCHIVE_DIR="${PGDATA}/wal_archive"
 
@@ -21,11 +21,17 @@ chmod 700 "$ARCHIVE_DIR"
 
 set_conf() {
     local key="$1" value="$2"
-    if grep -qE "^#?\s*${key}\s*=" "$CONF"; then
-        sed -i '' -E "s|^#?\s*${key}\s*=.*|${key} = ${value}|" "$CONF"
+    # M16-R2: macOS BSD sed -E 不支持 \s(实测静默 no-op 仍打印 OK)——
+    # 用 [[:space:]] 字符类;写后 grep -F 校验生效,未生效非零退出
+    if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]*=" "$CONF"; then
+        sed -i '' -E "s|^([[:space:]]*)#?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$CONF"
     else
         echo "${key} = ${value}" >> "$CONF"
     fi
+    grep -Fq "${key} = ${value}" "$CONF" || {
+        echo "ERROR: failed to set ${key} in ${CONF}" >&2
+        exit 1
+    }
 }
 
 # replica 级别已足够(archive 命令需要 archive_mode);PITR 恢复需

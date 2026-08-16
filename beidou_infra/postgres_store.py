@@ -361,7 +361,7 @@ class PostgresPersistentStore:
             # M13-R2: 参数级明细必须随快照持久化 —— 旧序列化丢弃
             # open_orders_detail,快照恢复路径双侧缺明细且无审计标注
             "open_orders_detail": {
-                str(order_id): {str(k): str(v) for k, v in detail.items()}
+                str(order_id): {str(k): (str(v) if v is not None else "") for k, v in detail.items()}
                 for order_id, detail in getattr(facts, "open_orders_detail", {}).items()
             },
             "margin_amount": str(margin.amount) if margin is not None else None,
@@ -696,8 +696,10 @@ class PostgresPersistentStore:
                 "filled_qty": str(filled_qty),
                 "avg_price": avg_price,
                 "client_order_id": client_order_id,
-                "reduce_only": reduce_only,
-                "stop_price": stop_price,
+                # M16-R2: 缺省保留旧值 —— payload 全量替换会抹除先前
+                # 落库的防线值(与 SQLite 版同语义)
+                "reduce_only": reduce_only if reduce_only is not None else (existing or {}).get("reduce_only"),
+                "stop_price": stop_price if stop_price is not None else (existing or {}).get("stop_price"),
                 "created_at": str(existing.get("created_at")) if existing else datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },

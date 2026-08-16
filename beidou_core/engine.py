@@ -4480,6 +4480,9 @@ class AutonomousEngine:
                         str(venue_order["avgPrice"]) if venue_order.get("avgPrice") not in (None, "", "0") else None
                     ),
                     client_order_id=client_id,
+                    # M16-R2: UNKNOWN 恢复路径补防线字段
+                    reduce_only=str(venue_order.get("reduceOnly", "")),
+                    stop_price=str(venue_order.get("stopPrice", "")),
                 )
             except Exception as exc:
                 self._record_execution_fact_failure_env_guarded(
@@ -5712,6 +5715,10 @@ class AutonomousEngine:
                     params.get("price"),
                     actual_status,
                     client_order_id=slice_client_id,
+                    # M16-R2: 活跃单写入路径补防线字段(此前恒 NULL,
+                    # 对账防线死代码)
+                    reduce_only=str(order.get("reduceOnly", "")),
+                    stop_price=str(order.get("stopPrice", "")),
                 )
             return order
 
@@ -5763,6 +5770,9 @@ class AutonomousEngine:
                                     params.get("price"),
                                     actual_status,
                                     client_order_id=client_id,
+                                    # M16-R2: 恢复路径补防线字段
+                                    reduce_only=str(existing.get("reduceOnly", "")),
+                                    stop_price=str(existing.get("stopPrice", "")),
                                 )
                             except Exception as _pe:
                                 print(f"[order] Failed to persist recovered order {oid_str}: {_pe}")
@@ -5958,6 +5968,9 @@ class AutonomousEngine:
             status,
             str(executed_qty),
             str(price),
+            # M16-R2: 部分成交路径补防线字段(此前抹除已落库值)
+            reduce_only=str(result.get("reduceOnly", "")),
+            stop_price=str(result.get("stopPrice", "")),
         )
         print(
             f"[order] PARTIAL FILL recorded: {symbol} {side_desc} "
@@ -6181,6 +6194,9 @@ class AutonomousEngine:
                 "FILLED",
                 str(executed_qty),
                 str(avg_price),
+                # M16-R2: FILLED 终态写入补防线字段(数据完整)
+                reduce_only=str(result.get("reduceOnly", "")),
+                stop_price=str(result.get("stopPrice", "")),
             )
         except Exception as exc:
             self._record_execution_fact_failure_env_guarded(
@@ -7341,6 +7357,8 @@ class AutonomousEngine:
             # M13-F01: 订单参数明细(交易所侧)—— 参数级对账输入
             # M13-R2: 加 price/stop_price(审计证据;stop_price 系统侧无列,
             # 不参与比较,登记 M16 扩表)
+            # M16-R2: 补回 reduce_only 键 —— M13-R2 移除比较域时误删,
+            # 系统侧扩列后防线需要双侧真实值(对抗审查 BUG-1)
             open_orders_detail={
                 str(order["orderId"]): {
                     "symbol": str(order.get("symbol", "")),
@@ -7348,6 +7366,7 @@ class AutonomousEngine:
                     "qty": str(order.get("origQty", "0")),
                     "price": str(order.get("price", "")),
                     "type": str(order.get("type", "")),
+                    "reduce_only": str(order.get("reduceOnly", "")),
                     "stop_price": str(order.get("stopPrice", "")),
                 }
                 for order in open_orders
@@ -10583,6 +10602,9 @@ class AutonomousEngine:
                             filled_qty=str(o.get("executedQty", "0")),
                             avg_price=str(o.get("avgPrice", "0")) if o.get("avgPrice") else None,
                             client_order_id=str(o.get("clientOrderId", "")) or None,
+                            # M16-R2: autopilot 恢复路径补防线字段
+                            reduce_only=str(o.get("reduceOnly", "")),
+                            stop_price=str(o.get("stopPrice", "")),
                         )
                     except Exception as _persist_exc:
                         print(f"[beidou-autopilot] Warning: Failed to persist restored order {oid}: {_persist_exc}")

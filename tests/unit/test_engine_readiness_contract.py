@@ -250,6 +250,8 @@ async def test_unknown_intent_identity_bound_venue_fact_is_acknowledged() -> Non
         "filled_qty": "0.01",
         "avg_price": "95000",
         "client_order_id": "beidou-intent-unknown-2",
+        "reduce_only": "",
+        "stop_price": "",
     }
 
 

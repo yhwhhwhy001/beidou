@@ -93,3 +93,54 @@ class TestFlushPendingProtectionPersist:
         engine._flush_pending_protection_persist()
         assert persisted == []  # 非 ACTIVE 不补写
         assert "pos-1" not in engine._pending_protection_persist
+
+
+class TestEnablePitrScript:
+    """M16-R2: enable_pitr.sh 在 BSD sed 上的生效校验。"""
+
+    @staticmethod
+    def _run_script(tmp_path):
+        import subprocess
+        from pathlib import Path
+
+        pgdata = Path(tmp_path) / "pgdata"
+        pgdata.mkdir()
+        conf = pgdata / "postgresql.conf"
+        conf.write_text(
+            "#wal_level = replica\n"
+            "#archive_mode = off\n"
+            "#archive_timeout = 0\n"
+            "#max_wal_size = 1GB\n"
+        )
+        script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
+        env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
+        proc = subprocess.run(
+            ["bash", str(script)], capture_output=True, text=True, env=env, timeout=60
+        )
+        return proc, conf
+
+    def test_script_rewrites_commented_keys_and_verifies(self, tmp_path):
+        proc, conf = self._run_script(tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        content = conf.read_text()
+        # 注释行被真实改写(BSD sed 下不再静默 no-op)
+        assert "archive_mode = on" in content
+        assert "wal_level = replica" in content
+        assert "archive_timeout = 300" in content
+
+    def test_script_fails_loudly_when_set_fails(self, tmp_path):
+        import subprocess
+        from pathlib import Path
+
+        pgdata = Path(tmp_path) / "pgdata"
+        pgdata.mkdir()
+        conf = pgdata / "postgresql.conf"
+        # 只读目录无法写 —— sed -i 失败但 grep 校验必须兜底非零退出
+        conf.write_text("#archive_mode = off\n")
+        conf.chmod(0o444)
+        script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
+        env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
+        proc = subprocess.run(
+            ["bash", str(script)], capture_output=True, text=True, env=env, timeout=60
+        )
+        assert proc.returncode != 0
