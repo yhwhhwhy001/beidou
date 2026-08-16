@@ -502,6 +502,8 @@ class MiningRunner:
                 out.append((index, float(value), float(label.label_value)))
             return out
 
+        flip_count = 0  # M05-F01 (P0): 翻转数计入多重检验试验预算
+
         for candidate in screened[:50]:  # 限制评估数量
             factor_vals = candidate["factor_values"]
             samples = _aligned_samples(factor_vals)
@@ -521,10 +523,14 @@ class MiningRunner:
             # 因子值取负后重算 IC，后续 WFO/CPCV/稳定性/容量评估与
             # replay 一律使用翻转后的信号；bundle 表达式与 hash 同步
             # 绑定为 -(expr) 形式（PrimitiveRegistry 可解析 Neg 节点）。
+            # M05-F01 (P0-08): 方向选择（全样本 IC 符号）本身是一次
+            # 额外假设 —— 翻转必须计入多重检验分母,否则 p 值系统性
+            # 低估（数据窥探）。
             # ============================================================
             ic = _compute_ic(valid_vals, valid_returns)
             flipped = ic < 0
             if flipped:
+                flip_count += 1
                 # NaN 取负仍为 NaN，安全；此处 valid_vals 已无 NaN（对齐时过滤）
                 valid_vals = [-v for v in valid_vals]
                 ic = _compute_ic(valid_vals, valid_returns)
@@ -780,6 +786,8 @@ class MiningRunner:
                     "replay_result": replay_result,
                     # 翻转候选绑定 -(expr) 形式的表达式（hash 与之一致）
                     "expression_string": expr_string,
+                    # M05-F01: 方向翻转审计（方向选择计入试验预算的证据）
+                    "direction_flipped": flipped,
                 }
             )
             evidence_bundles.append(bundle)
@@ -811,6 +819,9 @@ class MiningRunner:
             # 恒不显著。PBO 的 IS/OOS 序列保持 per-bar 不动（相对比较，
             # 口径组内一致即可；当前 PBO=0.0 已正常）。
             bars_per_year = _bars_per_year_for_timeframe(timeframe)
+            # M05-F01 (P0-08): 试验预算 = 生成候选数 + 方向翻转次数 ——
+            # 方向选择是全样本假设,必须计入 BH/Holm/DSR/PBO 的分母。
+            n_trials_effective = len(candidates) + flip_count
             for record in evaluation_records:
                 bundle = record["bundle"]
                 # candidate_index 用该候选在全量 candidates 列表中的位置
@@ -818,7 +829,7 @@ class MiningRunner:
                 report = evaluate_multiple_testing(
                     pvalues,
                     observed_sharpe=record["sharpe"] * math.sqrt(bars_per_year),
-                    n_trials=max(len(candidates), 1),
+                    n_trials=max(n_trials_effective, 1),
                     in_sample_sharpes=train_sharpes,
                     out_of_sample_sharpes=test_sharpes,
                     sample_length=max(1, round(len(label_returns) / bars_per_year)),
@@ -990,7 +1001,6 @@ class MiningRunner:
                     if len(res_pairs) >= 50:
                         res_vals = [p[0] for p in res_pairs]
                         res_rets = [p[1] for p in res_pairs]
-                        ic = _compute_ic(res_vals, res_rets)
                         res_id = f"residual_{top_pass[0].get('factor_id', 'a')}"
                         res_hash = hashlib.sha256(res_id.encode()).hexdigest()[:20]
                         bundle = EvidenceBundle(
@@ -1006,9 +1016,11 @@ class MiningRunner:
                             cost_model_version=self._label_builder.cost_model_version,
                             policy_version=self.config.policy_version,
                             random_seed=self.config.random_seed,
+                            # M05-F06 (P1): 残差因子用全样本 OLS 系数 ——
+                            # 系数含未来信息(look-ahead),raw IC 基于泄漏
+                            # 数据,不再产出 ic_mean/sharpe,只保留样本计数。
+                            # 滚动/扩展窗口系数(PIT 安全)登记 M05-R2。
                             raw_metrics={
-                                "ic_mean": round(ic, 6),
-                                "sharpe": round(_compute_sharpe(res_rets), 4),
                                 "sample_count": len(res_vals),
                             },
                             stability_results=[],
@@ -1478,16 +1490,46 @@ def build_promotion_chain(
     """
     if replay is None:
         return None
+    # M05-F04 (P1): 晋级链逐级经 FactorPromotionGate 验证 —— 旧实现全部
+    # approved=True 自证,证据链沦为展示产物(消费方以 approved 记录作为
+    # 晋级历史,等于绕过门禁)。现在每级用真实 performance 跑门禁,失败
+    # 步 approved=False 且链终止(后续晋级不可能合法)。
+    from beidou_research.factors.factor import FactorPerformance, FactorPromotionGate
+
+    gate = FactorPromotionGate()
+    performance = FactorPerformance(
+        factor_id=bundle.factor_id,
+        evaluation_period="historical_replay",
+        sample_count=int(sample_count),
+        ic_mean=float(ic),
+        ic_std=0.0,
+        icir=float(icir),
+        rank_ic_mean=float(ic),
+        rank_ic_std=0.0,
+        rank_icir=float(icir),
+    )
     chain: list[dict] = []
     for from_state, to_state in _PROMOTION_PATH:
         target = FactorLifecycle(to_state)
         requirements = PROMOTION_EVIDENCE_REQUIREMENTS[target]
         evidence_ids = list(requirements["required_evidence"])
+        decision = gate.validate_evidence(
+            factor_id=bundle.factor_id,
+            current_state=FactorLifecycle(from_state),
+            target_state=target,
+            performance=performance,
+            evidence_ids=evidence_ids,
+            factor_version=bundle.factor_version,
+            commit=git_commit,
+            dataset_hash=bundle.dataset_manifest_hash,
+            policy_version=bundle.policy_version,
+            falsifier="factor-miner",
+        )
         step: dict = {
             "from": from_state,
             "to": to_state,
-            "approved": True,
-            "reason": f"research evidence for {to_state}",
+            "approved": decision.approved,
+            "reason": decision.reason,
             "commit": git_commit,
             "dataset_hash": bundle.dataset_manifest_hash,
             "policy_version": bundle.policy_version,
@@ -1500,6 +1542,8 @@ def build_promotion_chain(
             "evidence_source": "historical_replay",
         }
         chain.append(step)
+        if not decision.approved:
+            break
     return chain
 
 

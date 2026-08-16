@@ -125,3 +125,22 @@ def test_chain_none_without_replay() -> None:
         )
         is None
     )
+
+
+def test_chain_is_honest_for_below_threshold_icir() -> None:
+    """M05-F04: 低于 SANITY_PASSED 阈值的 icir 不得产生全链自证 approved=True。"""
+    chain = build_promotion_chain(
+        _bundle(),
+        ic=0.02,
+        icir=0.05,  # < 0.3 阈值
+        sample_count=600,
+        replay=_replay(),
+        git_commit="abc123",
+        expression_string="close",
+        role="entry",
+    )
+    assert chain is not None
+    assert len(chain) == 2  # IDEA→GENERATED→SANITY_PASSED(拒绝) 后终止
+    assert chain[0]["approved"] is True
+    assert chain[1]["approved"] is False
+    assert "ICIR" in chain[1]["reason"]

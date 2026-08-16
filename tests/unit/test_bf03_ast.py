@@ -267,15 +267,19 @@ class TestCanonicalization:
         assert isinstance(zero, Constant) and zero.value == 0.0
 
     def test_sub_self_is_zero(self):
-        zero = Sub(close(), close()).canonicalize()
-        assert isinstance(zero, Constant) and zero.value == 0.0
+        # M05-F05: NaN 语义下 x-x 不再自简化为 0 —— warmup 期 NaN-NaN
+        # 不得被改写为零值信号。
+        expr = Sub(close(), close()).canonicalize()
+        assert isinstance(expr, Sub)
 
     def test_sub_zero(self):
         assert Sub(close(), Constant(0.0)).canonicalize() == close()
 
     def test_safe_div_self_is_one(self):
-        one = SafeDiv(close(), close()).canonicalize()
-        assert isinstance(one, Constant) and one.value == 1.0
+        # M05-F05: NaN 语义下 SafeDiv(x,x) 不再自简化为 1.0 —— warmup 期
+        # NaN/NaN 不得被改写为有效值。运行期 epsilon 语义诚实传播。
+        expr = SafeDiv(close(), close()).canonicalize()
+        assert isinstance(expr, SafeDiv)
 
     def test_safe_div_zero_zero_is_zero(self):
         zero = SafeDiv(Constant(0.0), Constant(0.0)).canonicalize()

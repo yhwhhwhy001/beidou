@@ -1,7 +1,12 @@
-"""BD-CV20: 统计验证内核实现。
+"""BD-CV20 统计验证模块 — **已退役为 fail-closed 桩**（M05-F02）。
 
-Purged Walk-Forward CV / CPCV / PBO / Deflated Sharpe Ratio / Holm correction.
-所有实现 deterministic seed、nan policy、small-sample policy。
+历史实现为占位（PurgedWFCV 全零分、scores_fn 从不调用、CPCV 全零分、
+PBO 简化近似）—— 任何下游若接线会静默放行假证据。真实实现位于:
+- beidou_research.mining.evaluation.purged_walk_forward（Purged WF）
+- beidou_research.mining.evaluation.cpcv（CPCV）
+- beidou_research.mining.evaluation.multiple_testing（PBO/DSR/Holm/BH）
+
+本模块全部入口 raise NotImplementedError 并指明迁移目标,防止误接。
 """
 
 from __future__ import annotations
@@ -9,6 +14,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import Any
+
+
+def _retired() -> None:
+    raise NotImplementedError(
+        "statistics/validation.py is retired (M05-F02): use "
+        "beidou_research.mining.evaluation.{purged_walk_forward,cpcv,multiple_testing} "
+        "for the real statistical validation kernels"
+    )
 
 # ============================================================================
 # Purged Walk-Forward Cross Validation
@@ -56,29 +69,7 @@ class PurgedWFCVResult:
                 is_significant=False,
             )
 
-        embargo = max(1, int(n_samples * embargo_pct))
-        purge = max(1, int(n_samples * purge_pct))
-        test_len = max(1, int(n_samples * test_size / n_splits))
-        total_per_fold = test_len + embargo + purge
-
-        train_sizes: list[int] = []
-        test_sizes: list[int] = []
-        oos_scores: list[float] = []
-
-        for i in range(n_splits):
-            test_start = n_samples - (n_splits - i) * total_per_fold
-            test_end = min(test_start + test_len, n_samples)
-            train_end = max(0, test_start - embargo - purge)
-            train_start = 0
-
-            if train_end <= 0 or test_end <= test_start:
-                continue
-
-            train_sizes.append(train_end - train_start)
-            test_sizes.append(test_end - test_start)
-            oos_scores.append(0.0)  # placeholder — 实际分数由 scores_fn 计算
-
-        if not oos_scores:
+        if n_samples < 10 or n_splits < 1:
             return cls(
                 n_splits=0,
                 train_sizes=[],
@@ -89,21 +80,7 @@ class PurgedWFCVResult:
                 std_score=float("nan"),
                 is_significant=False,
             )
-
-        mean_score = sum(oos_scores) / len(oos_scores)
-        variance = sum((s - mean_score) ** 2 for s in oos_scores) / max(1, len(oos_scores) - 1)
-        std_score = math.sqrt(variance) if variance > 0 else 0.0
-
-        return cls(
-            n_splits=len(oos_scores),
-            train_sizes=train_sizes,
-            test_sizes=test_sizes,
-            embargo_sizes=[embargo] * len(oos_scores),
-            oos_scores=oos_scores,
-            mean_score=mean_score,
-            std_score=std_score,
-            is_significant=mean_score > std_score * 2.0 if std_score > 0 else False,
-        )
+        _retired()
 
 
 # ============================================================================
@@ -127,21 +104,9 @@ class CPCVResult:
 
         n_combos = C(n_groups, test_groups)
         """
-        import math as _math
-
         if n_groups < 2 or test_groups >= n_groups or n_samples < n_groups:
             return cls(n_groups=0, n_combinations=0, scores=[], mean_score=float("nan"), std_score=float("nan"))
-
-        n_combos = _math.comb(n_groups, test_groups)
-        if n_combos > 100:
-            n_combos = 100  # limit for practical use
-
-        scores = [0.0] * n_combos  # placeholder
-        mean_score = 0.0
-        std_score = 0.0
-        return cls(
-            n_groups=n_groups, n_combinations=n_combos, scores=scores, mean_score=mean_score, std_score=std_score
-        )
+        _retired()
 
 
 # ============================================================================
@@ -168,31 +133,7 @@ class PBOResult:
         n = min(len(is_scores), len(oos_scores))
         if n < 2:
             return cls(n_combos=0, pbo=1.0, performance_degradation=0.0, is_overfit=True)
-
-        # 计算相对排名退化
-        is_ranked = sorted(range(n), key=lambda i: is_scores[i], reverse=True)
-        oos_ranked = sorted(range(n), key=lambda i: oos_scores[i], reverse=True)
-
-        # PBO = proportion where top-IS performer is below median OOS
-        top_is_idx = is_ranked[0]
-        oos_rank_of_top_is = oos_ranked.index(top_is_idx)
-        pbo = oos_rank_of_top_is / max(1, n - 1)
-
-        # Performance degradation
-        is_best = is_scores[is_ranked[0]]
-        oos_of_is_best = oos_scores[is_ranked[0]]
-        degradation = (is_best - oos_of_is_best) / max(abs(is_best), 0.01)
-
-        is_overfit = pbo > 0.5 or degradation > 0.3
-        actual_combos = n_combos if n_combos > 0 else n
-
-        return cls(
-            n_combos=actual_combos,
-            pbo=pbo,
-            performance_degradation=degradation,
-            is_overfit=is_overfit,
-            logits=[],
-        )
+        _retired()
 
 
 # ============================================================================
@@ -228,7 +169,8 @@ class DSRResult:
         E[max(SR)] ≈ sqrt(2 * log(n_trials)) * (1 - gamma * skewness / 6 + ...)
         简化: 使用 Bailey & Lopez de Prado (2014) 近似。
         """
-        if sample_size < 2 or n_trials < 1:
+        if sample_size < 2 or n_trials <= 1:
+            # 单次试验无需 deflation —— 保守返回不显著（退役桩语义）
             return cls(
                 observed_sharpe=observed_sharpe,
                 expected_max_sharpe=0.0,
@@ -236,43 +178,7 @@ class DSRResult:
                 p_value=1.0,
                 is_significant=False,
             )
-
-        # Variance of SR under null
-        sr_var = 1.0 / sample_size
-
-        # Expected max SR under multiple testing
-        # E[max] ≈ sqrt(2 * Var(SR) * log(N))
-        expected_max = 0.0 if n_trials == 1 else math.sqrt(2.0 * sr_var * math.log(n_trials))
-
-        # Skewness adjustment (optional)
-        if skewness is not None and math.isfinite(skewness):
-            expected_max *= max(0.8, 1.0 - skewness / 6.0)
-
-        # Kurtosis adjustment (optional)
-        if kurtosis is not None and math.isfinite(kurtosis):
-            excess_kurt = kurtosis - 3.0
-            expected_max *= max(0.7, 1.0 - excess_kurt / 24.0)
-
-        # Deflated SR
-        deflated = observed_sharpe - expected_max
-        # Std of max SR
-        std_max = math.sqrt(sr_var * (1.0 + 1.0 / (2.0 * math.log(max(n_trials, 2)))))
-
-        # P-value: Prob(SR > observed | null)
-        if std_max > 0:
-            z_score = deflated / std_max
-            p_value = 2.0 * (1.0 - _normal_cdf(abs(z_score)))
-        else:
-            p_value = 1.0
-
-        p_value = max(0.0, min(1.0, p_value))
-        return cls(
-            observed_sharpe=observed_sharpe,
-            expected_max_sharpe=expected_max,
-            deflated_sharpe=deflated,
-            p_value=p_value,
-            is_significant=p_value < 0.05,
-        )
+        _retired()
 
 
 # ============================================================================

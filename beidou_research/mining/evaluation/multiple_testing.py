@@ -225,6 +225,7 @@ def compute_pbo(
     in_sample_performances: list[float],
     out_of_sample_performances: list[float],
     n_splits: int = 16,
+    seed: int = 42,
 ) -> PBOResult:
     """Bailey et al. (2017) PBO 计算。
 
@@ -252,27 +253,25 @@ def compute_pbo(
     is_ranked = _rank(in_sample_performances)
     oos_ranked = _rank(out_of_sample_performances)
 
-    # 组合子集比较
-    # 将数据分成两半，比较排名一致性
+    # 组合子集比较（Bailey et al. 2017 PBO 语义）
+    # M05-F03 (P1): 每轮随机半数子集（固定种子,确定性）内比较 —— 旧实现
+    # 循环体零随机性,n_combos 次循环是同一次全量比较的重复,PBO 退化为
+    # 0/1 单次判定。正确语义: 子集内按 IS 选最优,看其 OOS 排名是否
+    # 低于该子集的 OOS 中位数（IS 选优在 OOS 上失效 = 过拟合计数）。
+    import random
+
     n_combos = min(n_splits, n // 2)
     pbo_count = 0
     total_comparisons = 0
+    rng = random.Random(seed)
+    half = n // 2
 
     for _ in range(n_combos):
-        # 随机采样一半
-        half = n // 2
-        indices_is_best = sorted(range(n), key=lambda i: in_sample_performances[i], reverse=True)[:half]
-
-        # IS 最优子集的 OOS 排名
-        avg_oos_rank_is_best = sum(oos_ranked[i] for i in indices_is_best) / half
-
-        # 全集的 OOS 排名中位数
-        median_oos_rank = sorted(oos_ranked)[n // 2]
-
-        # Ranks are ascending (1 = worst, n = best).  Overfitting occurs
-        # when the IS-selected subset falls below the OOS median, not when it
-        # remains the best subset as the old comparison incorrectly implied.
-        if avg_oos_rank_is_best < median_oos_rank:
+        subset = rng.sample(range(n), half)
+        is_best_in_subset = max(subset, key=lambda i: in_sample_performances[i])
+        subset_oos_ranks = sorted(oos_ranked[i] for i in subset)
+        median_rank_in_subset = subset_oos_ranks[len(subset_oos_ranks) // 2]
+        if oos_ranked[is_best_in_subset] < median_rank_in_subset:
             pbo_count += 1
         total_comparisons += 1
 

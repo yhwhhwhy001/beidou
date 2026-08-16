@@ -1070,9 +1070,9 @@ class SafeDiv(Expression):
             if abs(den) > self.epsilon:
                 return Constant(float(a.value) / den, self.output_type())
             return Constant(0.0, self.output_type())
-        # SafeDiv(x, x) → 1.0（x 非零常量已由常数折叠处理）
-        if a == b and not isinstance(a, Constant):
-            return Constant(1.0, self.output_type())
+        # M05-F05: SafeDiv(x,x) → 1.0 的自简化已移除 —— x 在 warmup 期
+        # 可为 NaN,NaN/NaN 不得被改写为 1.0(会把未知伪装成有效信号)。
+        # 运行期 SafeDiv 对 NaN 分母返回 0.0(epsilon 语义),诚实传播。
         return SafeDiv(a, b, self.epsilon)
 
     @property
@@ -1546,9 +1546,8 @@ class Sub(Expression):
         # 0 - b → -b
         if isinstance(a, Constant) and a.dtype.is_numeric and float(a.value) == 0.0:
             return Neg(b)
-        # x - x → 0
-        if a == b:
-            return Constant(0.0, a.output_type())
+        # M05-F05: x - x → 0 的自简化已移除 —— NaN-NaN 不得被改写为 0
+        # （warmup 期的"未知"会被伪装成零值信号）。
         # 常数折叠
         if isinstance(a, Constant) and isinstance(b, Constant) and a.dtype is b.dtype and a.dtype.is_numeric:
             return Constant(float(a.value) - float(b.value), a.dtype)
@@ -1869,9 +1868,8 @@ class Eq(Expression):
     def canonicalize(self) -> Expression:
         a = self.a.canonicalize()
         b = self.b.canonicalize()
-        # x == x → True
-        if a == b:
-            return Constant(True, ExprType.BOOLEAN)
+        # M05-F05: x == x → True 的自简化已移除 —— NaN == NaN 在语义上
+        # 不得为 True(warmup 期的未知值不能伪装成恒真条件)。
         if isinstance(a, Constant) and isinstance(b, Constant):
             return Constant(float(a.value) == float(b.value), ExprType.BOOLEAN)
         # 交换律排序
@@ -1914,9 +1912,8 @@ class Ne(Expression):
     def canonicalize(self) -> Expression:
         a = self.a.canonicalize()
         b = self.b.canonicalize()
-        # x != x → False
-        if a == b:
-            return Constant(False, ExprType.BOOLEAN)
+        # M05-F05: x != x → False 的自简化已移除 —— NaN != NaN 语义上
+        # 不得为 False(warmup 期未知值不能伪装成恒假条件)。
         if isinstance(a, Constant) and isinstance(b, Constant):
             return Constant(float(a.value) != float(b.value), ExprType.BOOLEAN)
         if _canon_key(b) < _canon_key(a):

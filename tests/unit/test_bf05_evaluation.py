@@ -431,3 +431,31 @@ class TestCapacityEvaluator:
         evaluator = CapacityEvaluator()
         viable, _reason = evaluator.is_cost_viable(0.01, 0.015)
         assert viable
+
+
+class TestPBOSemantics:
+    def test_identical_rankings_pbo_zero_and_deterministic(self):
+        """M05-F03: 完全相关 → PBO=0;固定种子下两次计算一致（旧实现退化为单次比较）。"""
+        perf = list(range(1, 17))
+        pbo_a = compute_pbo(perf, perf, n_splits=16, seed=7)
+        pbo_b = compute_pbo(perf, perf, n_splits=16, seed=7)
+        assert pbo_a.pbo == 0.0
+        assert pbo_a.pbo == pbo_b.pbo
+
+    def test_reversed_rankings_pbo_one(self):
+        """反向相关 → 子集内 IS 选优在 OOS 恒低于中位数 → PBO=1。"""
+        is_perf = list(range(1, 17))
+        oos_perf = list(range(16, 0, -1))
+        pbo = compute_pbo(is_perf, oos_perf, n_splits=16, seed=7)
+        assert pbo.pbo == 1.0
+
+    def test_pbo_counts_multiple_combinations(self):
+        """随机数据下 PBO 落在 (0,1) 且组合计数真实（非重复单次比较）。"""
+        import random as _random
+
+        rng = _random.Random(3)
+        is_perf = [rng.random() for _ in range(16)]
+        oos_perf = [rng.random() for _ in range(16)]
+        pbo = compute_pbo(is_perf, oos_perf, n_splits=16, seed=7)
+        assert 0.0 < pbo.pbo < 1.0
+        assert pbo.n_combinations == 8  # min(n_splits, n//2)
