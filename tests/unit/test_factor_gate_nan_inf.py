@@ -7,8 +7,6 @@ compute_icir 零方差返回 ±inf 穿透阈值。修复: 非有限指标显式�
 
 from __future__ import annotations
 
-import math
-
 from beidou_research.factors.factor import (
     FactorEvaluator,
     FactorLifecycle,
