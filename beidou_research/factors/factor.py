@@ -427,29 +427,88 @@ class FactorPromotionGate:
             failures.append(f"Missing required evidence: {missing}")
 
         # 检查 ICIR 阈值
+        # M04-R2（对抗审查）: 旧检查只覆盖 3 个字段且对 str/None 类型
+        # 崩溃（float(None) TypeError → API 500）、str 值经比较分支
+        # TypeError、字符串还可原样写入 sealed decision。修复:
+        # 全字段类型归一 + 非有限拒绝 + 短路,后续比较只用归一值。
         if performance is not None:
-            # M04-F01 (P0): NaN/Inf 不得通过晋级门禁 —— NaN < threshold 在
-            # Python 中恒 False（直接通过），Inf 同理。非有限指标必须显式
-            # 拒绝并记录,绝不能进入生命周期推进。
-            non_finite_metrics = []
-            if not math.isfinite(float(performance.icir)):
-                non_finite_metrics.append(f"icir={performance.icir!r}")
-            if not math.isfinite(float(performance.ic_mean)):
-                non_finite_metrics.append(f"ic_mean={performance.ic_mean!r}")
-            if isinstance(performance.sample_count, (int, float)) and not math.isfinite(
-                float(performance.sample_count)
-            ):
-                non_finite_metrics.append(f"sample_count={performance.sample_count!r}")
-            if non_finite_metrics:
-                failures.append("Non-finite metrics rejected: " + ", ".join(non_finite_metrics))
+            normalized: dict[str, float] = {}
+            invalid_metrics: list[str] = []
+            numeric_fields = (
+                "icir",
+                "ic_mean",
+                "ic_std",
+                "rank_ic_mean",
+                "rank_ic_std",
+                "rank_icir",
+                "long_short_spread",
+                "top_bottom_decile_spread",
+                "turnover_pct",
+                "hit_rate",
+                "cost_adjusted_ic",
+                "sharpe_contribution",
+                "max_drawdown_pct",
+            )
+            for field in numeric_fields:
+                raw = getattr(performance, field, None)
+                if raw is None:
+                    continue  # 可选字段缺失不算非法
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    invalid_metrics.append(f"{field}={raw!r}(not numeric)")
+                    continue
+                if not math.isfinite(value):
+                    invalid_metrics.append(f"{field}={raw!r}(non-finite)")
+                    continue
+                normalized[field] = value
+            try:
+                sample_count = int(float(performance.sample_count))
+            except (TypeError, ValueError):
+                sample_count = None
+                invalid_metrics.append(f"sample_count={performance.sample_count!r}(not numeric)")
+            else:
+                if not math.isfinite(float(sample_count)):
+                    sample_count = None
+                    invalid_metrics.append(f"sample_count={performance.sample_count!r}(non-finite)")
+            if invalid_metrics:
+                failures.append("Invalid metrics rejected: " + ", ".join(invalid_metrics))
+                # 短路: 类型/数值非法的 performance 不得进入任何阈值比较
+                return PromotionDecision(
+                    decision_id=decision_id,
+                    factor_id=factor_id,
+                    from_state=current_state,
+                    to_state=target_state,
+                    approved=False,
+                    reason="; ".join(failures),
+                    factor_version=factor_version,
+                    commit=commit,
+                    dataset_hash=dataset_hash,
+                    evidence_ids=evidence_ids or [],
+                    policy_version=policy_version,
+                    falsifier=falsifier,
+                    evidence_artifact_hash=evidence_artifact_hash,
+                    ic=0.0,
+                    icir=0.0,
+                    sample_count=0,
+                )
 
             min_icir = requirements.get("min_icir")
-            if min_icir is not None and performance.icir < min_icir:
-                failures.append(f"ICIR {performance.icir:.3f} < threshold {min_icir}")
+            if min_icir is not None and "icir" not in normalized:
+                failures.append("icir_required: metric missing for threshold check")
+            elif min_icir is not None and normalized["icir"] < min_icir:
+                failures.append(f"ICIR {normalized['icir']:.3f} < threshold {min_icir}")
 
             min_samples = requirements.get("min_sample_count", 0)
-            if performance.sample_count < min_samples:
-                failures.append(f"Sample count {performance.sample_count} < required {min_samples}")
+            if min_samples > 0 and sample_count is None:
+                failures.append("sample_count_required: metric missing for threshold check")
+            elif sample_count is not None and sample_count < min_samples:
+                failures.append(f"Sample count {sample_count} < required {min_samples}")
+        else:
+            # M04-R2: 有指标门槛的状态必须提供 performance —— 旧实现
+            # performance=None 时跳过全部指标检查,零指标即可晋级。
+            if requirements.get("min_icir") is not None or requirements.get("min_sample_count", 0) > 0:
+                failures.append("performance_required: metrics are mandatory for this transition")
 
         if failures:
             return PromotionDecision(
@@ -472,6 +531,8 @@ class FactorPromotionGate:
             )
 
         # 通过
+        # M04-R2: decision 字段写入归一后的数值（str "0.5" 经归一为 0.5,
+        # 不再有字符串入证）;performance=None 时保持零值。
         return PromotionDecision(
             decision_id=decision_id,
             factor_id=factor_id,
@@ -486,9 +547,9 @@ class FactorPromotionGate:
             policy_version=policy_version,
             falsifier=falsifier,
             evidence_artifact_hash=evidence_artifact_hash,
-            ic=performance.ic_mean if performance else 0.0,
-            icir=performance.icir if performance else 0.0,
-            sample_count=performance.sample_count if performance else 0,
+            ic=normalized.get("ic_mean", 0.0) if performance is not None else 0.0,
+            icir=normalized.get("icir", 0.0) if performance is not None else 0.0,
+            sample_count=sample_count if performance is not None and sample_count is not None else 0,
         )
 
     def promote(
@@ -525,8 +586,13 @@ class FactorEvaluator:
 
     M04-F04: **deprecated 评估器** —— 统计推断请用
     ``beidou_research.mining.evaluation.metrics``（Newey-West 标准误、
-    block bootstrap、VIF 等生产评估实现）。本类保留给 FactorRegistry
-    的旧调用路径,迁移（M14 生命周期联动）完成后删除。
+    block bootstrap、VIF 等生产评估实现）。
+    M04-R2（对抗审查）: 修正消费者声明 —— 真实生产消费者是
+    ``beidou_core.engine.py`` offline 循环（compute_ic/compute_rank_ic/
+    compute_decile_spread/compute_icir,~5 处）与
+    ``tools/historical_simulation_diagnostic.py``;FactorRegistry.evaluate
+    不调用本类。迁移需适配器（metrics.compute_ic 返回 dict 而本类返回
+    tuple,直接替换会静默解出键名）—— 迁移条目登记 M14。
     """
 
     @staticmethod
@@ -594,20 +660,35 @@ class FactorEvaluator:
     def compute_icir(ic_series: list[float]) -> float:
         """ICIR = mean(IC) / std(IC)。
 
-        M04-F02 (P0): 零方差（全同 IC 序列）返回 0.0 —— 旧实现返回
-        ±inf,穿透下游 `icir < threshold` 门禁（Inf 恒通过）。
-        无法从全同样本推断信息比,0.0 是保守中性值。
+        M04-F02 (P0): 零方差返回 0.0（旧实现 ±inf 穿透门禁）。
+        M04-R2（对抗审查）: ① 源头过滤 NaN/Inf（含 NaN 的序列不得
+        产出 NaN 穿透下游）;② 容差锚定数据自身偏差量级（旧容差锚在
+        mean 上,微小序列被误杀、近退化序列产出 3.9e11 悬崖值）;
+        ③ |ICIR| 钳制到 1e4（防退化 std 制造超级因子/Champion）。
         """
-        if len(ic_series) < 2:
+        clean: list[float] = []
+        for ic in ic_series:
+            try:
+                value = float(ic)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                clean.append(value)
+        if len(clean) < 2:
             return 0.0
-        mean_ic = sum(ic_series) / len(ic_series)
-        var = sum((ic - mean_ic) ** 2 for ic in ic_series) / (len(ic_series) - 1)
+        mean_ic = sum(clean) / len(clean)
+        var = sum((ic - mean_ic) ** 2 for ic in clean) / (len(clean) - 1)
         std_ic = var**0.5
-        # M04-F02: 浮点精度下全同序列的 std 可能为 ~1e-17 而非精确 0 ——
-        # 用相对容差判定"不可推断"（保守 0.0）。
-        if std_ic < 1e-12 * max(1.0, abs(mean_ic)):
+        # M04-R2: 容差锚定 IC 自身量级（abs 下限 1.0）—— 全同序列的
+        # fp 噪声（~ulp(ic)）与近退化序列（std 相对 IC 量级 < 1e-9）
+        # 统一保守归零（信息比不可信,归零防止其经 max(icir) 赢得
+        # Champion 比较）;真实 IC（std 与 IC 同量级）不受影响。
+        # 剩余极端值再钳制 ±1e4 双保险。
+        tolerance = 1e-9 * max(1.0, max(abs(ic) for ic in clean))
+        if std_ic < tolerance:
             return 0.0
-        return mean_ic / std_ic
+        icir = mean_ic / std_ic
+        return max(-1e4, min(1e4, icir))
 
     @staticmethod
     def compute_decile_spread(predictions: list[float], returns: list[float]) -> float:

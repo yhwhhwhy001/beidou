@@ -43,19 +43,19 @@ def _decide(perf: FactorPerformance) -> object:
 def test_nan_icir_rejected() -> None:
     decision = _decide(_perf(icir=float("nan")))
     assert decision.approved is False
-    assert "Non-finite" in decision.reason
+    assert "non-finite" in decision.reason
 
 
 def test_inf_icir_rejected() -> None:
     decision = _decide(_perf(icir=float("inf")))
     assert decision.approved is False
-    assert "Non-finite" in decision.reason
+    assert "non-finite" in decision.reason
 
 
 def test_nan_ic_mean_rejected() -> None:
     decision = _decide(_perf(icir=0.5, ic_mean=float("nan")))
     assert decision.approved is False
-    assert "Non-finite" in decision.reason
+    assert "non-finite" in decision.reason
 
 
 def test_nan_sample_count_rejected() -> None:
@@ -96,3 +96,73 @@ def test_ic_perfectly_correlated_is_one() -> None:
 def test_icir_short_series_returns_zero() -> None:
     assert FactorEvaluator.compute_icir([0.5]) == 0.0
     assert FactorEvaluator.compute_icir([]) == 0.0
+
+
+# --- M04-R2（对抗审查反例固化） ---
+
+
+def test_rank_icir_inf_rejected() -> None:
+    """对抗审查: 非有限检查必须覆盖全部数值字段(旧实现仅查 3 字段)。"""
+    import dataclasses
+
+    perf = dataclasses.replace(_perf(icir=0.5), rank_icir=float("inf"))
+    decision = _decide(perf)
+    assert decision.approved is False
+    assert "rank_icir" in decision.reason
+
+
+def test_cost_adjusted_ic_nan_rejected() -> None:
+    import dataclasses
+
+    perf = dataclasses.replace(_perf(icir=0.5), cost_adjusted_ic=float("nan"))
+    assert _decide(perf).approved is False
+
+
+def test_string_metrics_normalized_not_crash() -> None:
+    """对抗审查: str '0.5' 应归一为 0.5 通过(而非 str 入证),且不 crash。"""
+    perf = _perf(icir="0.5")  # type: ignore[arg-type]
+    decision = _decide(perf)
+    assert decision.approved is True
+    assert decision.icir == 0.5
+    assert isinstance(decision.icir, float)
+
+
+def test_string_nan_rejected_without_crash() -> None:
+    perf = _perf(icir="nan")  # type: ignore[arg-type]
+    decision = _decide(perf)
+    assert decision.approved is False
+    assert "icir" in decision.reason
+
+
+def test_none_icir_rejected_without_crash() -> None:
+    perf = _perf(icir=None)  # type: ignore[arg-type]
+    decision = _decide(perf)
+    assert decision.approved is False
+
+
+def test_performance_none_required_for_threshold_states() -> None:
+    """对抗审查: 有指标门槛的状态不得在 performance=None 时晋级。"""
+    gate = FactorPromotionGate()
+    decision = gate.validate_evidence(
+        factor_id="f1",
+        current_state=FactorLifecycle.GENERATED,
+        target_state=FactorLifecycle.SANITY_PASSED,
+        performance=None,
+        evidence_ids=["ic_significant", "rank_ic_significant", "decile_spread_positive"],
+    )
+    assert decision.approved is False
+    assert "performance_required" in decision.reason
+
+
+def test_icir_degenerate_series_clamped() -> None:
+    """对抗审查: 近退化序列不得产出 3.9e11 超级 ICIR(钳制/归零)。"""
+    series = [0.5, 0.500000000002, 0.500000000001, 0.500000000003, 0.5]
+    value = FactorEvaluator.compute_icir(series)
+    assert abs(value) <= 1e4
+    assert value == 0.0  # std 远小于容差 → 保守归零
+
+
+def test_icir_nan_input_filtered() -> None:
+    """对抗审查: 含 NaN 的 IC 序列不得产出 NaN。"""
+    assert FactorEvaluator.compute_icir([0.5, float("nan"), 0.5, 0.6]) != float("nan")
+    assert FactorEvaluator.compute_icir([0.5, float("nan")]) == 0.0  # 过滤后 <2
