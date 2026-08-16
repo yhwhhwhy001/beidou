@@ -85,6 +85,12 @@ def main() -> int:
         default=None,
         help="最大测试名义金额 (USDT)，默认读取 G5 plan；不得超过 plan 上限",
     )
+    parser.add_argument(
+        "--certification-mode",
+        choices=("DEV_BYPASS", "FULL"),
+        default="DEV_BYPASS",
+        help="证书认证模式(M20-F02 显式化): DEV_BYPASS=单次协议探测; FULL=72h 认证流程",
+    )
     args = parser.parse_args()
     try:
         probe_symbol = validate_probe_symbol(args.symbol)
@@ -422,6 +428,9 @@ def main() -> int:
 
         certificate = {
             "gate": "G5",
+            # M20-F02: 认证模式必须显式标注,缺失视为伪造拒绝(验证器恒拒)。
+            # DEV_BYPASS=开发便利证书(单次协议探测);FULL=72h 真实认证流程。
+            "certification_mode": args.certification_mode,
             "status": "FAIL" if has_fail else ("NOT_VERIFIABLE" if has_not_verifiable else "PASS"),
             "commit": commit,
             "environment": plan_environment,

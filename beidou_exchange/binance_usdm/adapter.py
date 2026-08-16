@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -284,7 +285,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             params,
             account_id=write_account_id or str(self._account_id),
         )
-        if write_request is not None:
+        # 与 rest_client 层保持同一 hold 语义(M22-F03):
+        # - 默认 hard: 所有 terminal write 在 transport 层拦截,
+        #   等待 write authority 接线
+        # - BEIDOU_TERMINAL_WRITE_HOLD=unknown-only(testnet 实装):
+        #   仅未分类突变端点(UNKNOWN) hold,已知 kind(下单/取消/
+        #   减仓/保护/listen key)放行 —— 写能力不退化
+        _hold_mode = os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard")
+        if write_request is not None and (
+            _hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN
+        ):
             reason = (
                 "UNCLASSIFIED_TERMINAL_WRITE"
                 if write_request.kind is TerminalWriteKind.UNKNOWN

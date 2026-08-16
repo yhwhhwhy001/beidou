@@ -369,6 +369,31 @@ class TestBinanceAdapter:
         assert transport.calls == []
 
     @pytest.mark.asyncio
+    async def test_unknown_only_hold_mode_allows_known_write_kinds(self, monkeypatch: pytest.MonkeyPatch):
+        # 合并语义与 rest_client 一致:unknown-only 下已知 kind(下单/取消)
+        # 放行,仅 UNKNOWN 突变端点 hold —— 生产写能力不退化。
+        monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "unknown-only")
+        transport = FakeRestClient({"orderId": 19, "status": "NEW", "executedQty": "0"})
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+        adapter.health_monitor.update_venue_health(HealthStatus.HEALTHY)
+
+        order_result = await adapter.request("POST", Endpoint.ORDER, signed=True, params={"symbol": "BTCUSDT"})
+        assert order_result.is_success() is True
+        cancel_result = await adapter.request("DELETE", Endpoint.ORDER, signed=True, params={"symbol": "BTCUSDT"})
+        assert cancel_result.is_success() is True
+        assert len(transport.calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_unknown_only_hold_mode_still_holds_unknown_mutations(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "unknown-only")
+        transport = FakeRestClient({"ok": True})
+        adapter = BinanceUsdmAdapter(rest_client=transport)
+
+        result = await adapter.request("POST", "/unregistered/mutation", signed=True, params={})
+        assert result.is_success() is False
+        assert transport.calls == []
+
+    @pytest.mark.asyncio
     async def test_cancel_and_status_use_adapter_transport(self):
         transport = FakeRestClient(
             {
