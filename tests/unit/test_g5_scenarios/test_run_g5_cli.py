@@ -17,7 +17,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioResult,
     ScenarioStatus,
 )
-from scripts.testnet.run_g5 import build_context, main
+from scripts.testnet.run_g5 import _extract_account_access, build_context, main
 
 
 class _FakeScenario(ScenarioBase):
@@ -43,6 +43,26 @@ def test_build_context_shape() -> None:
     assert ctx.evidence_dir == Path("/tmp/e")
     assert ctx.symbol == "BTCUSDT"
     assert ctx.dry_run
+
+
+def test_extract_account_access_measured() -> None:
+    observations = {
+        "account_access": {
+            "status": "PASS",
+            "can_trade": True,
+            "can_withdraw": False,
+            "permission_status": "OK",
+            "has_balance": True,
+        }
+    }
+    assert _extract_account_access(observations) == {"can_trade": True, "can_withdraw": False, "has_balance": True}
+
+
+def test_extract_account_access_missing_keys_returns_none() -> None:
+    # 三键任一缺失(S2 失败/部分字段)即视为未测量,返回 None → build_certificate 保守默认
+    assert _extract_account_access({}) is None
+    assert _extract_account_access({"account_access": {"status": "FAIL", "error": "boom"}}) is None
+    assert _extract_account_access({"account_access": {"status": "PASS", "can_trade": True}}) is None
 
 
 def test_list_flag_prints_registry(capsys, monkeypatch) -> None:

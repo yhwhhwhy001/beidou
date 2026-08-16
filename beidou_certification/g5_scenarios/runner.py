@@ -128,9 +128,11 @@ class G5Runner:
             "max_notional_usdt": self.ledger.limit_usdt,
             "scenarios": scenarios,
             "summary": {**summary, "p0": 0},
+            # 未测量时占位默认必须是保守声明(不肯定性声称可交易/有余额),
+            # 防止 partial probe 生成 PASS 证书
             "account_access": account_access
             if account_access is not None
-            else {"can_trade": True, "can_withdraw": False, "has_balance": True},
+            else {"can_trade": False, "can_withdraw": None, "has_balance": False},
             "blockers": [],
             "p0_failures": [],
         }

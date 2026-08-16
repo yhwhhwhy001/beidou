@@ -100,6 +100,23 @@ def build_context(
     )
 
 
+def _extract_account_access(observations: dict) -> dict | None:
+    """从 S2 观察提取账户事实;三键任一缺失即视为未测量,返回 None。
+
+    None 由 build_certificate 的保守占位默认兜底(can_trade=False /
+    can_withdraw=None / has_balance=False),绝不肯定性声称可交易或有余额。
+    """
+
+    s2 = observations.get("account_access") or {}
+    if not all(key in s2 for key in ("can_trade", "can_withdraw", "has_balance")):
+        return None
+    return {
+        "can_trade": s2["can_trade"],
+        "can_withdraw": s2["can_withdraw"],
+        "has_balance": s2["has_balance"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
@@ -505,15 +522,8 @@ def main() -> int:
         write_scenario_evidence(make_context(), result)
         print(f"[{sid}] {result.status.value}")
 
-    # S2 实测账户事实覆盖 runner 占位默认;S2 失败(无实测值)时退回占位默认
-    account_access = None
-    s2 = observations.get("account_access") or {}
-    if all(key in s2 for key in ("can_trade", "can_withdraw", "has_balance")):
-        account_access = {
-            "can_trade": s2["can_trade"],
-            "can_withdraw": s2["can_withdraw"],
-            "has_balance": s2["has_balance"],
-        }
+    # S2 实测账户事实覆盖 runner 占位默认;未测量时返回 None,由 runner 保守默认兜底
+    account_access = _extract_account_access(observations)
 
     certificate = runner.build_certificate(
         results,

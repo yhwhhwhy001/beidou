@@ -179,7 +179,7 @@ def test_build_certificate_shape_and_account_access_override(tmp_path):
     assert cert["gate"] == "G5" and cert["mainnet_prohibited"] is True
     assert cert["commit"] == "abc1234"
     assert cert["max_notional_usdt"] == 1000.0
-    assert cert["account_access"] == {"can_trade": True, "can_withdraw": False, "has_balance": True}
+    assert cert["account_access"] == {"can_trade": False, "can_withdraw": None, "has_balance": False}
     assert cert["summary"] == {"total": 2, "pass": 1, "warn": 1, "fail": 0, "not_verifiable": 0, "p0": 0}
     assert cert["scenarios"]["a"]["status"] == "PASS"
     assert cert["evidence_hash"] == aggregate_evidence_hash(results)
@@ -190,6 +190,13 @@ def test_build_certificate_shape_and_account_access_override(tmp_path):
         account_access={"can_trade": False, "can_withdraw": True, "has_balance": False},
     )
     assert overridden["account_access"] == {"can_trade": False, "can_withdraw": True, "has_balance": False}
+
+
+def test_build_certificate_account_access_default_is_conservative(tmp_path):
+    """账户事实未测量时,占位默认必须是保守声明,不得肯定性声称可交易/有余额。"""
+    runner, _ = _make_runner(tmp_path)
+    cert = runner.build_certificate({"a": _r("a", ScenarioStatus.PASS)}, started_at="t", ended_at="t")
+    assert cert["account_access"] == {"can_trade": False, "can_withdraw": None, "has_balance": False}
 
 
 def test_build_certificate_status_reflects_fail_and_restart_skip(tmp_path):
