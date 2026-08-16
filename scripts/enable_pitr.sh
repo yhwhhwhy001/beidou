@@ -22,9 +22,13 @@ chmod 700 "$ARCHIVE_DIR"
 set_conf() {
     local key="$1" value="$2"
     # M16-R2: macOS BSD sed -E 不支持 \s(实测静默 no-op 仍打印 OK)——
-    # 用 [[:space:]] 字符类;写后 grep -F 校验生效,未生效非零退出
+    # 用 [[:space:]] 字符类;写后 grep -F 校验生效,未生效非零退出。
+    # M22-F01: 替换文本中的 & 必须转义 —— sed 里 & 展开为整个匹配
+    # 文本,archive_command 的 && 曾把原注释拼进值(实测 conf 写坏)。
+    local escaped
+    escaped=$(printf '%s' "$value" | sed 's/[&\\]/\\&/g')
     if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]*=" "$CONF"; then
-        sed -i '' -E "s|^([[:space:]]*)#?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${value}|" "$CONF"
+        sed -i '' -E "s|^([[:space:]]*)#?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${escaped}|" "$CONF"
     else
         echo "${key} = ${value}" >> "$CONF"
     fi
