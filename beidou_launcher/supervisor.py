@@ -63,6 +63,28 @@ async def _refresh_snapshot_safe(coro: Any, *, timeout: float = 25.0) -> None:
         return
 
 
+def summarize_blockers(blockers: list) -> str:
+    """聚合重复 blocker：同 (check_id, message) 合并为 check_id(×N)。
+
+    M00-F03（P0-19）：保护覆盖类检查按持仓逐条产出相同条目（15 持仓
+    MISSING_SL = 15 条重复 P0），全部拼进 _fail_closed 理由与告警文本
+    造成日志/webhook 风暴。聚合后保留 entity_id 计数；完整明细仍在
+    supervisor-state.json 的 blockers 字段（models.StartupReport）。
+    """
+    if not blockers:
+        return "(none)"
+    groups: dict[tuple[str, str], list] = {}
+    for item in blockers:
+        groups.setdefault((item.check_id, item.message), []).append(item)
+    parts: list[str] = []
+    for (check_id, message), items in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0][0])):
+        entity_ids = sorted({str((item.evidence or {}).get("entity_id", "")) for item in items} - {""})
+        entity_part = f" entities={len(entity_ids)}" if entity_ids else ""
+        parts.append(f"{check_id}(×{len(items)}){entity_part}: {message[:80]}")
+    text = "; ".join(parts)
+    return text if len(text) <= 400 else text[:397] + "..."
+
+
 class BeidouSupervisor:
     def __init__(
         self,
@@ -859,22 +881,85 @@ class BeidouSupervisor:
         return False
 
     def _send_supervisor_alert(self, state: str, blockers: list) -> None:
-        """BD-FIX (O2): 监督器 DEGRADED/LOCKED 状态推送告警。"""
+        """BD-FIX (O2): 监督器 DEGRADED/LOCKED 状态推送告警。
+
+        M00-F03: 告警文本使用聚合摘要（同 check_id 条目合并为 ×N），
+        不再把逐持仓条目全量拼进描述（P0-19 告警风暴治理）。
+        """
         try:
             if self.engine is not None:
                 from beidou_observability.telemetry import AlertSeverity
 
                 severity = AlertSeverity.CRITICAL if state == "LOCKED" else AlertSeverity.HIGH
-                blocker_ids = [b.check_id for b in blockers]
+                blocker_summary = summarize_blockers(blockers)
                 self.engine._alerts.send_incident(
                     severity=severity,
                     title=f"Supervisor {state}",
-                    description=f"Blockers: {blocker_ids}",
+                    description=f"Blockers: {blocker_summary}",
                     category="supervisor",
                 )
-                print(f"[supervisor] Alert sent: {severity.value} — Supervisor {state}: {blocker_ids}")
+                print(f"[supervisor] Alert sent: {severity.value} — Supervisor {state}: {blocker_summary}")
         except Exception as e:
             print(f"[supervisor] Alert send failed: {e}")
+
+    async def _apply_debounce_action(
+        self, debounce_action: str, persistent_blockers: list[CheckResult], has_persistent: bool
+    ) -> None:
+        """健康防抖器动作执行（M00-F03 抽出以便独立测试）。
+
+        降级/告警只在状态转移时执行一次；已在 DEGRADED 期间保留静默
+        fail-closed 背压（控制面被意外 RESUME 时拉回 NO_NEW_RISK）。
+        """
+        if debounce_action == "LOCKED":
+            # 防抖器判定: 连续 lock_after 次持久阻断 → LOCKED（终态）。
+            # M00-F03: LOCKED 后不再重复 _fail_closed/告警（终态只需一次）。
+            if self.report.supervisor_state != "LOCKED":
+                await self._fail_closed(
+                    "防抖器: 连续持久阻断 → LOCKED: " + summarize_blockers(persistent_blockers),
+                    fatal=True,
+                )
+                self.report.supervisor_state = "LOCKED"
+                self._send_supervisor_alert("LOCKED", persistent_blockers)
+        elif debounce_action == "DEGRADED":
+            # PKG02 (BDS-P0-001): 所有环境统一降级行为。
+            if self.report.supervisor_state != "DEGRADED":
+                await self._fail_closed(
+                    "防抖器: 连续持久阻断 → DEGRADED: " + summarize_blockers(persistent_blockers),
+                    fatal=False,
+                )
+                self.report.supervisor_state = "DEGRADED"
+                self._send_supervisor_alert("DEGRADED", persistent_blockers)
+            else:
+                # M00-F03: 已在 DEGRADED —— 不再重复降级/打印/告警，但保留
+                # 静默 fail-closed 背压：降级期间持久阻断存在，控制面不允许
+                # 任何风险增加；若被外部意外 RESUME，立即拉回 NO_NEW_RISK。
+                if self._control_state() == "RESUME":
+                    from beidou_control.plane import ControlAction
+
+                    with suppress(Exception):
+                        self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
+        elif debounce_action == "RUNNING":
+            if self._control_state() != "RESUME":
+                self.report.supervisor_state = "PAUSED"
+            else:
+                self.report.supervisor_state = "RUNNING"
+            # BD-FIX: testnet 故障自愈后自动重新授权 RESUME；live/canary/
+            # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
+            # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
+            # 非 RESUME、无 blocker、lifecycle 为 DEGRADED 才动作。
+            if self.mode == "testnet" and not self._resume_authorized:
+                self._maybe_testnet_auto_reauthorize()
+        else:
+            # UNCHANGED: 防抖器计数中。
+            if has_persistent:
+                previous_state = self.report.supervisor_state
+                await self._fail_closed(
+                    "持久阻断检测（防抖计数中）: " + summarize_blockers(persistent_blockers),
+                    fatal=False,
+                )
+                self.report.supervisor_state = _state_after_persistent_block(previous_state, True)
+                if self.report.supervisor_state == "DEGRADED" and previous_state != "DEGRADED":
+                    self._send_supervisor_alert("DEGRADED", persistent_blockers)
 
     async def _fail_closed(self, reason: str, fatal: bool = False) -> None:
         if self.engine is None:
@@ -1130,48 +1215,9 @@ class BeidouSupervisor:
             has_persistent = bool(persistent_blockers)
 
             debounce_action = self._health_debounce.feed(has_persistent)
-
-            if debounce_action == "LOCKED":
-                # 防抖器判定: 连续 lock_after 次持久阻断 → LOCKED
-                await self._fail_closed(
-                    "防抖器: 连续持久阻断 → LOCKED: "
-                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                    fatal=True,
-                )
-                self.report.supervisor_state = "LOCKED"
-                self._send_supervisor_alert("LOCKED", persistent_blockers)
-            elif debounce_action == "DEGRADED":
-                # PKG02 (BDS-P0-001): 所有环境统一降级行为。
-                await self._fail_closed(
-                    "防抖器: 连续持久阻断 → DEGRADED: "
-                    + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                    fatal=False,
-                )
-                self.report.supervisor_state = "DEGRADED"
-                self._send_supervisor_alert("DEGRADED", persistent_blockers)
-            elif debounce_action == "RUNNING":
-                if self._control_state() != "RESUME":
-                    self.report.supervisor_state = "PAUSED"
-                else:
-                    self.report.supervisor_state = "RUNNING"
-                # BD-FIX: testnet 故障自愈后自动重新授权 RESUME；live/canary/
-                # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
-                # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
-                # 非 RESUME、无 blocker、lifecycle 为 DEGRADED 才动作。
-                if self.mode == "testnet" and not self._resume_authorized:
-                    self._maybe_testnet_auto_reauthorize()
-            else:
-                # UNCHANGED: 防抖器计数中。
-                if has_persistent:
-                    previous_state = self.report.supervisor_state
-                    await self._fail_closed(
-                        "持久阻断检测（防抖计数中）: "
-                        + "; ".join(f"{b.check_id}:{b.message}" for b in persistent_blockers),
-                        fatal=False,
-                    )
-                    self.report.supervisor_state = _state_after_persistent_block(previous_state, True)
-                    if self.report.supervisor_state == "DEGRADED" and previous_state != "DEGRADED":
-                        self._send_supervisor_alert("DEGRADED", persistent_blockers)
+            # M00-F03: 分支链抽至 _apply_debounce_action（转移门控 + 静默背压，
+            # 可独立测试）。
+            await self._apply_debounce_action(debounce_action, persistent_blockers, has_persistent)
 
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新

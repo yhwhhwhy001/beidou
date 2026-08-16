@@ -72,6 +72,31 @@ class StartupReport:
         return [item for item in self.checks if item.is_blocking]
 
     @property
+    def blocker_summary(self) -> list[dict[str, Any]]:
+        """聚合当前 blockers：同 (check_id, message) 合并为一条摘要（M00-F03）。
+
+        保护覆盖类检查按持仓逐条产出相同条目（如 15 持仓 MISSING_SL 即 15
+        条重复 P0）。明细保留在 ``blockers`` 字段；本字段供状态文件与告警
+        文本使用，避免日志/webhook 风暴（P0-19）。
+        """
+        groups: dict[tuple[str, str], list[CheckResult]] = {}
+        for item in self.blockers:
+            groups.setdefault((item.check_id, item.message), []).append(item)
+        summary: list[dict[str, Any]] = []
+        for (check_id, message), items in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0][0])):
+            entity_ids = sorted({str((item.evidence or {}).get("entity_id", "")) for item in items} - {""})
+            summary.append(
+                {
+                    "check_id": check_id,
+                    "message": message,
+                    "count": len(items),
+                    "entity_ids": entity_ids[:50],
+                    "severity": items[0].severity.value,
+                }
+            )
+        return summary
+
+    @property
     def passed(self) -> bool:
         # An empty check list during PREFLIGHT/ENGINE_STARTING is not a
         # successful run.  ``passed`` is a certificate field, so it requires
@@ -96,6 +121,7 @@ class StartupReport:
             "supervisor_state": self.supervisor_state,
             "passed": self.passed,
             "blockers": [item.to_dict() for item in self.blockers],
+            "blocker_summary": self.blocker_summary,
             "checks": [item.to_dict() for item in self.checks],
         }
 
