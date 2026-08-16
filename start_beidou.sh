@@ -153,15 +153,16 @@ if $DOCKER_AVAILABLE && (! $PG_OK || ! $REDIS_OK); then
     info "尝试启动 Docker Compose 基础设施..."
 
     # 确保有必需的密码变量
+    # M20-F01: 时间戳后缀可预测(本地攻击者可猜测) → 加密随机
     if [ -z "${BEIDOU_POSTGRES_PASSWORD:-}" ]; then
-        export BEIDOU_POSTGRES_PASSWORD="${BEIDOU_POSTGRES_PASSWORD:-beidou_dev_$(date +%s)}"
-        warn "BEIDOU_POSTGRES_PASSWORD 未设置，使用自动生成值"
+        export BEIDOU_POSTGRES_PASSWORD="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        warn "BEIDOU_POSTGRES_PASSWORD 未设置，使用随机生成值"
     fi
     if [ -z "${BEIDOU_MINIO_ROOT_USER:-}" ]; then
         export BEIDOU_MINIO_ROOT_USER="beidou_admin"
     fi
     if [ -z "${BEIDOU_MINIO_ROOT_PASSWORD:-}" ]; then
-        export BEIDOU_MINIO_ROOT_PASSWORD="beidou_minio_$(date +%s)"
+        export BEIDOU_MINIO_ROOT_PASSWORD="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
     fi
 
     # 先启动 postgres + redis
@@ -271,6 +272,10 @@ cert = {
     'gate': 'G5', 'status': 'PASS', 'commit': c,
     'testnet_url': 'https://testnet.binancefuture.com',
     'mainnet_prohibited': True, 'is_simulated': False,
+    # M20-F02: 显式标注认证模式 —— 本脚本生成的是开发便利证书,
+    # 非 72h 真实认证流程产物。验证器必须检查此字段,伪造器与
+    # 验证器共享同一语义的历史结束。
+    'certification_mode': 'DEV_BYPASS',
     'evidence_hash': hashlib.sha256(json.dumps({'gate': 'G5', 'commit': c}, sort_keys=True).encode()).hexdigest(),
     'started_at': '2026-08-09T00:00:00+00:00',
     'ended_at': datetime.now(timezone.utc).isoformat(),

@@ -46,6 +46,8 @@ def _g5(**overrides: object) -> dict[str, object]:
         "testnet_url": "https://demo-fapi.binance.com",
         "mainnet_prohibited": True,
         "is_simulated": False,
+        # M20-F02: 认证模式必须显式标注
+        "certification_mode": "DEV_BYPASS",
         "started_at": started,
         "ended_at": ended,
         "evidence_hash": "e" * 64,
@@ -149,3 +151,28 @@ def test_real_g7_certificate_with_bound_evidence_passes() -> None:
     assert result.status == "PASS"
     assert result.passed
     assert result.failures == []
+
+
+def test_g5_certificate_without_certification_mode_is_not_verifiable() -> None:
+    """M20-F02: 缺失认证模式标注的证书视为伪造拒绝。"""
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    verification = verify_g5_certificate(
+        _g5(certification_mode=None),
+        expected_commit="abc123",
+        expected_scenarios=EXPECTED_SCENARIOS,
+    )
+    assert verification.passed is False
+    assert "certification_mode" in verification.failures
+
+
+def test_g5_dev_bypass_mode_passes_with_explicit_label() -> None:
+    """DEV_BYPASS 显式标注的证书可通过(妥协可审计,不再静默伪造)。"""
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    verification = verify_g5_certificate(
+        _g5(certification_mode="DEV_BYPASS"),
+        expected_commit="abc123",
+        expected_scenarios=EXPECTED_SCENARIOS,
+    )
+    assert verification.passed is True

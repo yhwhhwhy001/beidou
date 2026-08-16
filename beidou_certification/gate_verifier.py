@@ -101,6 +101,12 @@ def verify_g5_certificate(
 
     check("gate", certificate.get("gate") == "G5")
     check("status", certificate.get("status") == "PASS")
+    # M20-F02: 认证模式必须显式标注 —— DEV_BYPASS(开发便利证书)与
+    # FULL(72h 真实认证流程产物)二选一;缺失视为伪造拒绝。
+    check(
+        "certification_mode",
+        certificate.get("certification_mode") in ("DEV_BYPASS", "FULL"),
+    )
     check(
         "commit",
         bool(expected_commit)
@@ -110,8 +116,18 @@ def verify_g5_certificate(
 
     testnet_url = certificate.get("testnet_url")
     url = testnet_url.lower() if isinstance(testnet_url, str) else ""
-    is_mainnet = any(host in url for host in ("fapi.binance.com", "api.binance.com"))
-    check("testnet_url", bool(url) and not is_mainnet and ("demo-fapi" in url or "testnet" in url))
+    # M20-F02: host 精确匹配 —— 子串匹配把 demo-fapi.binance.com
+    # 误判为 mainnet(嵌有 fapi.binance.com 子串),testnet 证书恒拒
+    from urllib.parse import urlparse
+
+    parsed_host = (urlparse(url).hostname or "") if url else ""
+    is_mainnet = parsed_host in ("fapi.binance.com", "api.binance.com")
+    check(
+        "testnet_url",
+        bool(parsed_host)
+        and not is_mainnet
+        and ("demo-fapi" in parsed_host or "testnet" in parsed_host),
+    )
     check("mainnet_prohibited", certificate.get("mainnet_prohibited") is True)
     check("simulation", certificate.get("is_simulated") is False)
     check("evidence_hash", isinstance(certificate.get("evidence_hash"), str) and bool(certificate.get("evidence_hash")))
