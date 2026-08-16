@@ -162,10 +162,10 @@ class StrategyKernel:
         self._alpha_graph = None  # 旧 DAG
         self._typed_graph = None  # 新 DAG (BD-T05)
 
-    def set_alpha_graph(self, graph) -> None:
+    def set_alpha_graph(self, graph: Any) -> None:
         self._alpha_graph = graph
 
-    def set_typed_graph(self, graph) -> None:
+    def set_typed_graph(self, graph: Any) -> None:
         self._typed_graph = graph
 
     async def evaluate(self, context: dict) -> dict | None:
@@ -247,9 +247,9 @@ class StrategyKernel:
 
 
 def parity_check(
-    backtest_proposal=None,
-    paper_proposal=None,
-    testnet_proposal=None,
+    backtest_proposal: Any = None,
+    paper_proposal: Any = None,
+    testnet_proposal: Any = None,
 ) -> tuple[bool, ParityResult]:
     """便捷函数：执行 parity 检查。
 

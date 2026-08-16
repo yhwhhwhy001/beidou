@@ -19,7 +19,9 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
+
+import numpy as np
 
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
 from beidou_control.plane import ControlAction, ControlPlane
@@ -612,9 +614,9 @@ class MeanReversionEntry(AlphaComponent):
             reason=f"z_score={result.z_score:.3f} hl={result.half_life_hours:.1f}h",
         )
         if _contract_signal.is_blocking():
-            signal.direction = SignalDirection.NO_ACTION
-            signal.strength = 0.0
-            signal.confidence = 0.0
+            object.__setattr__(signal, "direction", SignalDirection.NO_ACTION)
+            object.__setattr__(signal, "strength", 0.0)
+            object.__setattr__(signal, "confidence", 0.0)
 
         # Store prediction for factor evaluation
         context["_predictions"] = context.get("_predictions", {})
@@ -1436,8 +1438,8 @@ class AutonomousEngine:
         if database_url.startswith("sqlite:///"):
             durable_db_path = database_url.removeprefix("sqlite:///")
             self._state_backend_supported = bool(durable_db_path)
-            self._store = PersistentStore.get_instance(durable_db_path)
-            self._outbox = IntentOutbox(db_path=durable_db_path)
+            self._store: Any = PersistentStore.get_instance(durable_db_path)
+            self._outbox: Any = IntentOutbox(db_path=durable_db_path)
         elif database_url.lower().startswith(("postgresql://", "postgres://")):
             # Testnet/production must use one configured PostgreSQL authority.
             # A diagnostic SQLite fallback is allowed only as an explicitly
@@ -1522,7 +1524,7 @@ class AutonomousEngine:
 
         # Business modules
         self._protection = ProtectionManager()
-        self._protection_retries: dict[str, int] = {}  # 保护单重试计数
+        self._protection_retries: dict[str, Any] = {}  # 保护单重试计数(含 _last 时间戳)
         self._pending_protection_persist: dict[str, list] = {}  # M11-R2: persist 失败待补写(不重新下单)
         # Protection IDs are durable facts, not process-local discovery state.
         # Initialise these collections before any recovery/cleanup path can run.
@@ -1611,7 +1613,7 @@ class AutonomousEngine:
             try:
                 approval_id = RiskApprovalId(str(approval["approval_id"]))
                 signature = str(approval["signature"])
-                expires_at = float(approval["expires_at"])
+                expires_at = float(cast(Any, approval["expires_at"]))
                 if self._approval.restore_signature(signature, expires_at):
                     self._risk_sm.approve(
                         approval_id,
@@ -2389,7 +2391,7 @@ class AutonomousEngine:
             _err = result.error
             print(
                 f"[api] open Algo inventory UNKNOWN: "
-                f"{getattr(_err, 'category', None) and _err.category.value} "
+                f"{(getattr(_err, 'category', None) and _err.category.value) if _err is not None else 'N/A'} "
                 f"{_err.message if _err else 'data-is-None'}"
             )
             if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
@@ -2469,7 +2471,10 @@ class AutonomousEngine:
         if result.is_success():
             return result.data
         err = result.error
-        return {"error": err.http_status or -1, "msg": str(err.message) if err else "unknown"}
+        return {
+            "error": (err.http_status if err is not None else -1) or -1,
+            "msg": str(err.message) if err else "unknown",
+        }
 
     async def enqueue_reduce_only_market(
         self,
@@ -3644,10 +3649,10 @@ class AutonomousEngine:
             unacked = self._outbox.unacked()
             pending = self._outbox.pending_count()
             if self._tick_count % 5 == 0:
-                ob = self._outbox
-                raw_outbox = len(ob._outbox)
-                raw_processed = len(ob._processed)
-                raw_inbox = len(ob._inbox)
+                _outbox_view = self._outbox
+                raw_outbox = len(_outbox_view._outbox)
+                raw_processed = len(_outbox_view._processed)
+                raw_inbox = len(_outbox_view._inbox)
                 print(
                     f"[realtime] Intent check: unacked={len(unacked)} pending={pending} raw_outbox={raw_outbox} processed={raw_processed} inbox={raw_inbox} can_write={self._can_write}"
                 )
@@ -4606,7 +4611,7 @@ class AutonomousEngine:
             )
             raise
 
-    async def _verify_intent_at_send(self, intent, *, consume_nonce: bool = False) -> bool:
+    async def _verify_intent_at_send(self, intent: Any, *, consume_nonce: bool = False) -> bool:
         """最终写边界复核审批、nonce、策略版本和风险下降语义。"""
 
         if not self._can_write:
@@ -4672,7 +4677,7 @@ class AutonomousEngine:
         except (RuntimeError, TypeError, ValueError):
             return False
 
-    async def _place_order(self, intent, symbol: str = "") -> None:
+    async def _place_order(self, intent: Any, symbol: str = "") -> None:
         """向交易所发送订单。"""
 
         # Keep the backend gate visible at the executor boundary so an engine
@@ -5165,7 +5170,7 @@ class AutonomousEngine:
         # Execution quality is updated only from authoritative fills.  Planning
         # estimates are not relabelled as realized cost or slippage here.
 
-    async def _plan_execution(self, intent, order_symbol: str, client_id: str):
+    async def _plan_execution(self, intent: Any, order_symbol: str, client_id: str) -> Any:
         """构建 ExecutionContext → 选择执行算法 → 生成切片计划。
 
         返回 (slices, algorithm_type, ctx)：
@@ -5424,7 +5429,7 @@ class AutonomousEngine:
         if snap is None or not snap.is_known:
             return None
         try:
-            return snap.quantize_quantity(qty_text)
+            return cast(str | None, snap.quantize_quantity(qty_text))
         except ValueError:
             return None
 
@@ -5549,7 +5554,7 @@ class AutonomousEngine:
 
     async def _submit_order_slice(
         self,
-        intent,
+        intent: Any,
         params: dict,
         order_symbol: str,
         side: str,
@@ -5566,7 +5571,7 @@ class AutonomousEngine:
 
         # BD-CV10: 量化精度从 adapter 的唯一 InstrumentRuleSnapshot 获取。
         if not hasattr(self, "_symbol_precision"):
-            self._symbol_precision: dict[str, dict[str, int]] = {}
+            self._symbol_precision: dict[str, dict[str, Any]] = {}
         if not hasattr(self, "_rule_snapshot_hashes"):
             self._rule_snapshot_hashes: dict[str, str] = {}
         if not hasattr(self, "_rule_change_detected"):
@@ -6426,7 +6431,7 @@ class AutonomousEngine:
             print(
                 f"[protection] ┌ {'=' * 60}\n"
                 f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
-                f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{pp.stop_loss.stop_type.value if pp.stop_loss else 'N/A'}]\n"
+                f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{(pp.stop_loss.stop_type.value if pp.stop_loss and pp.stop_loss.stop_type else 'N/A')}]\n"
                 f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts, strict=False))}\n"
                 f"[protection] ├─ 📊 {adaptive_info}\n"
                 f"[protection] └ {'=' * 60}"
@@ -6439,7 +6444,7 @@ class AutonomousEngine:
                 if p_order is None:
                     continue
                 if not hasattr(self, "_protection_exchange_attempted"):
-                    self._protection_exchange_attempted: set[str] = set()
+                    self._protection_exchange_attempted = set()
                 if p_order.protection_id in self._protection_exchange_attempted:
                     continue
                 self._protection_exchange_attempted.add(p_order.protection_id)
@@ -6482,7 +6487,7 @@ class AutonomousEngine:
                     exchange_protection_count += 1
                     algo_id = str(algo_resp["algoId"])
                     if not hasattr(self, "_active_algo_ids"):
-                        self._active_algo_ids: dict[str, set[str]] = {}
+                        self._active_algo_ids = {}
                     self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
                     p_order.exchange_order_id = algo_id
                     p_order.status = ProtectionStatus.ACTIVE
@@ -6506,7 +6511,7 @@ class AutonomousEngine:
                 print("[protection] ❌ 0 protection orders placed — all attempts failed, will retry in nearline cycle")
                 # 标记待重试，确保 _retry_missing_protections 优先处理
                 if not hasattr(self, "_pending_protection_retry"):
-                    self._pending_protection_retry: set[str] = set()
+                    self._pending_protection_retry = set()
                 self._pending_protection_retry.add(pos_id)
 
             # A filled entry without complete venue-backed protection is not
@@ -6549,7 +6554,7 @@ class AutonomousEngine:
             return 0.0
         if fact_dt.tzinfo is None:
             fact_dt = fact_dt.replace(tzinfo=timezone.utc)
-        return fact_dt.timestamp()
+        return float(fact_dt.timestamp())
 
     def _record_reconciliation_truth(
         self,
@@ -6948,8 +6953,8 @@ class AutonomousEngine:
             websocket = BinanceUsdmWebSocketClient(
                 base_url=FSTREAM_TESTNET_URL if self._env_mode.value == "testnet" else FSTREAM_PRODUCTION_URL
             )
-            self._user_ws_client = websocket
-            self._user_stream_listen_key = listen_key
+            self._user_ws_client: BinanceUsdmWebSocketClient | None = websocket
+            self._user_stream_listen_key: str | None = listen_key
             self._user_stream_stopping = False
 
             def _on_state_change(_old: Any, new: Any, _group_id: int) -> None:
@@ -6991,8 +6996,8 @@ class AutonomousEngine:
                         return
                     accepted = self.ingest_user_order_update(parsed.data)
                 elif event_type == "ACCOUNT_UPDATE":
-                    parsed = BinanceUsdmAdapter.parse_user_account_update(data)
-                    if not parsed.is_success() or parsed.data is None:
+                    _parsed_account = BinanceUsdmAdapter.parse_user_account_update(data)
+                    if not _parsed_account.is_success() or _parsed_account.data is None:
                         self._user_stream_fault("ACCOUNT_EVENT_PARSE_UNKNOWN")
                         return
                     accepted = self.ingest_user_account_update(parsed.data)
@@ -7082,8 +7087,10 @@ class AutonomousEngine:
 
             await websocket.subscribe(listen_key, _on_user_event)
             self._update_user_stream_runtime(status="CONNECTED", listen_key_active=True)
-            self._user_ws_task = asyncio.create_task(websocket.run())
-            self._user_stream_keepalive_task = asyncio.create_task(self._user_stream_keepalive_loop(listen_key))
+            self._user_ws_task: asyncio.Task[Any] | None = asyncio.create_task(websocket.run())
+            self._user_stream_keepalive_task: asyncio.Task[Any] | None = asyncio.create_task(
+                self._user_stream_keepalive_loop(listen_key)
+            )
             return True
         except Exception as exc:
             self._user_stream_fault(f"USER_STREAM_START_FAILED:{type(exc).__name__}", terminal=True)
@@ -7256,7 +7263,7 @@ class AutonomousEngine:
                 currency=balance_currency,
                 decimals=balance_decimals,
             ),
-            positions=positions,
+            positions=cast(Any, positions),
             open_orders=[str(row["order_id"]) for row in active_orders],
             # M13-F01: 订单参数明细(系统侧)—— 参数级对账输入
             # M13-R2: 加 price(order_states 已有列);reduce_only 移除
@@ -7377,7 +7384,7 @@ class AutonomousEngine:
             account_id=AccountId("default"),
             venue_id=VenueId("BINANCE"),
             balance=MonetaryValue(amount=str(float(account["totalWalletBalance"]))),
-            positions=exchange_positions,
+            positions=cast(Any, exchange_positions),
             open_orders=[str(order["orderId"]) for order in open_orders],
             # M13-F01: 订单参数明细(交易所侧)—— 参数级对账输入
             # M13-R2: 加 price/stop_price(审计证据;stop_price 系统侧无列,
@@ -7529,8 +7536,8 @@ class AutonomousEngine:
             if df is None or len(df) < 100:
                 continue
             try:
-                closes = df["close"].astype(float).values
-                volumes = df["volume"].astype(float).values
+                closes = np.asarray(df["close"].astype(float))
+                volumes = np.asarray(df["volume"].astype(float))
                 if len(closes) < 100 or closes[-1] <= 0:
                     continue
                 # volume_score：日均成交额（与实时 log10/8 同构）
@@ -7796,6 +7803,7 @@ class AutonomousEngine:
             account = self._last_account
             if not account or "positions" not in account:
                 return
+            assert isinstance(account, dict)
             positions_list = account.get("positions", [])
             exchange_positions: dict[str, dict] = {}
             for p in positions_list:
@@ -8181,7 +8189,8 @@ class AutonomousEngine:
                             pos_id = str(row.get("position_id", "")).strip()
                             if pos_id:
                                 try:
-                                    store.remove_protection(pos_id)
+                                    if store is not None:
+                                        store.remove_protection(pos_id)
                                     cleaned += 1
                                     streaks.pop(algo_id, None)
                                 except Exception:
@@ -8216,7 +8225,7 @@ class AutonomousEngine:
                         exchange_algo_symbols.setdefault(sym, set()).add(aid)
 
             # 优先处理提交失败的待重试持仓
-            pending = getattr(self, "_pending_protection_retry", set())
+            pending: set[str] = getattr(self, "_pending_protection_retry", set())
             positions = sorted(
                 self._protection.all_positions().items(),
                 key=lambda x: (x[0] not in pending, x[0]),  # pending first
@@ -8537,6 +8546,7 @@ class AutonomousEngine:
                     if "algoId" in algo_resp:
                         algo_id = str(algo_resp["algoId"])
                         self._active_algo_ids.setdefault(pos_id, set()).add(algo_id)
+                        assert pp.stop_loss is not None
                         pp.stop_loss.exchange_order_id = algo_id
                         pp.stop_loss.status = ProtectionStatus.ACTIVE
                         self._persist_protection_order(pp.stop_loss, status="ACTIVE")
@@ -9263,11 +9273,12 @@ class AutonomousEngine:
                         if not isinstance(account_position, dict) or account_position.get("symbol") != symbol:
                             continue
                         try:
-                            raw_qty = float(account_position.get("positionAmt"))
+                            _raw_qty_any: Any = account_position.get("positionAmt")
+                            raw_qty = float(_raw_qty_any) if _raw_qty_any is not None else None
                         except (TypeError, ValueError):
                             position_qty = None
                             break
-                        if not math.isfinite(raw_qty):
+                        if raw_qty is None or not math.isfinite(raw_qty):
                             position_qty = None
                             break
                         position_qty = raw_qty
@@ -9304,8 +9315,10 @@ class AutonomousEngine:
                             and str(getattr(self._env_mode, "value", "")) == "testnet"
                         ):
                             try:
-                                _entry = float(account_position.get("entryPrice"))
-                                liquidation_price = _derive_liquidation_price(raw_qty, _entry, dyn_leverage)
+                                _entry_any: Any = account_position.get("entryPrice")
+                                _entry = float(_entry_any) if _entry_any is not None else 0.0
+                                if raw_qty is not None:
+                                    liquidation_price = _derive_liquidation_price(raw_qty, _entry, dyn_leverage)
                             except (TypeError, ValueError):
                                 liquidation_price = None
                         break
@@ -9524,7 +9537,7 @@ class AutonomousEngine:
                 # 执行器拒绝"量化后与签名不一致"的数量（审批绑定语义），
                 # 未量化的原始 sizing 值会导致所有订单被
                 # PLANNED_QUANTITY_NOT_VENUE_EXACT 拒绝。
-                _venue_exact = self._venue_exact_quantity(symbol, position_size)
+                _venue_exact = self._venue_exact_quantity(symbol, float(position_size))
                 if _venue_exact is None:
                     continue
                 position_size = _venue_exact
@@ -9632,7 +9645,7 @@ class AutonomousEngine:
                     order_price=MonetaryValue(amount=str(price), currency="USDT"),
                     leverage=dyn_leverage,
                     account_balance=account_balance,
-                    pending_orders=[str(oid) for oid in self._active_order_ids],
+                    pending_orders=list(cast(list[Any], self._active_order_ids)),
                     risk_increasing=_risk_increasing,
                 )
                 pre_results = await self._pre_risk.check(pre_context)
@@ -9778,12 +9791,12 @@ class AutonomousEngine:
                                 status=ModelStatus.CHALLENGER,
                                 version=model_version,
                                 deployed_at=now,
-                                metrics=model_metrics,
+                                metrics=cast(dict[str, float], model_metrics),
                                 training_dataset_version=f"live-{scope_label}-{now.strftime('%Y%m%d-%H')}",
                             )
                         )
                     else:
-                        existing_model.metrics = model_metrics
+                        existing_model.metrics = cast(dict[str, float], model_metrics)
 
                     registered_models = self._model_registry.list_models(self._autopilot_strategy_id)
                     # M14-F01: Champion 晋级治理 —— 阈值/样本门槛经签名
@@ -9806,7 +9819,7 @@ class AutonomousEngine:
                         and math.isfinite(float(model.metrics.get("icir", 0.0)))
                         and float(model.metrics.get("icir", 0.0)) >= _champion_min_icir
                         and float(model.metrics.get("sample_count", 0.0)) >= _champion_min_samples
-                        and model.metrics.get("scope") == scope_label
+                        and model.metrics.get("scope") == scope_label  # type: ignore[comparison-overlap]
                     ]
                     if eligible:
                         best_model = max(eligible, key=lambda model: model.metrics.get("icir", 0.0))
@@ -10080,7 +10093,7 @@ class AutonomousEngine:
 
             # === 5. MAPE-K Self-Healing Cycle ===
             # Monitor: collect system metrics
-            system_metrics = {
+            system_metrics: dict[str, Any] = {
                 "tick_count": self._tick_count,
                 "order_count": self._order_count,
                 "error_count": self._error_count,
@@ -10107,7 +10120,7 @@ class AutonomousEngine:
             # 演进方向(beidou_research 链),不在生产自进化范围内。
             if anomaly_detected:
                 symptom_vector = {
-                    "error_count": float(system_metrics["error_count"]),
+                    "error_count": float(cast(Any, system_metrics["error_count"])),
                     "ledger_balanced": 0.0 if system_metrics["ledger_balanced"] else 1.0,
                 }
                 recovery_action, reason = self._mapek.decide_action(symptom_vector, "autopilot")
@@ -10117,13 +10130,13 @@ class AutonomousEngine:
                         # M15-F01 (P0-13): 接线真实控制面动作(execute_with_authority),
                         # LOCK 经治理过滤(无指纹 LOCK → NO_NEW_RISK fail-closed
                         # 但不锁死;超重启 LOCK 保留终态阻断)。
-                        result = self._mapek.execute_recovery_governed(
+                        recovery_result = self._mapek.execute_recovery_governed(
                             recovery_action,
                             "autopilot",
                             reason=reason,
                             control_plane=self._control,
                         )
-                        print(f"[offline] MAPE-K: recovery result = {result.value}")
+                        print(f"[offline] MAPE-K: recovery result = {recovery_result.value}")
                         invariants = {
                             "error_count_ok": system_metrics["error_count"] < 50,
                             "ledger_balanced": system_metrics["ledger_balanced"],
@@ -10696,8 +10709,8 @@ class AutonomousEngine:
                 try:
                     min_quantity = float(min_qty) if min_qty else float(quantity_step)
                     self._symbol_precision[sym] = {
-                        "quantity": max(0, -Decimal(quantity_step).as_tuple().exponent),
-                        "price": max(0, -Decimal(price_tick).as_tuple().exponent),
+                        "quantity": max(0, -int(Decimal(quantity_step).as_tuple().exponent)),
+                        "price": max(0, -int(Decimal(price_tick).as_tuple().exponent)),
                         "step_size": quantity_step,
                         "tick_size": price_tick,
                         "min_quantity": min_quantity,
@@ -10750,7 +10763,7 @@ class AutonomousEngine:
         try:
             # 使用 _api_async_safe 防止熔断返回空数据导致跳过保护恢复
             account, ok = await asyncio.wait_for(self._api_async_safe(Endpoint.ACCOUNT, signed=True), timeout=30.0)
-            if not ok or "positions" not in account:
+            if not ok or not isinstance(account, dict) or "positions" not in account:
                 print("[beidou-autopilot] WARNING: Cannot query account for position recovery — retrying once...")
                 await asyncio.sleep(3)
                 if self._adapter.is_circuit_breaker_open():
@@ -10768,6 +10781,7 @@ class AutonomousEngine:
                         self._health.start()
                         self._health_started = True
                     return
+            assert isinstance(account, dict)
             positions_list = account.get("positions", [])
             # BD-FIX (S2): Testnet 模式下，无持仓时自动取消残留的无主 Algo 订单。
             unowned_algo_ids, existing_algo_inventory = await self._safe_recover_unowned_testnet_algos(
@@ -10943,7 +10957,7 @@ class AutonomousEngine:
                 print("[startup] Protection placement blocked: existing conditional-order ownership is UNKNOWN")
             if pending_submissions:
 
-                async def _submit_algo(sub: dict):
+                async def _submit_algo(sub: dict) -> dict:
                     sub["result"] = await self._create_algo_order(sub["algo_params"])
                     return sub
 
@@ -11216,8 +11230,8 @@ class AutonomousEngine:
             )
             # 检查是否有异常退出的 task
             for t in done:
-                exc = t.exception()
-                if exc is not None:
+                _task_exc = t.exception()
+                if _task_exc is not None:
                     self._error_count += 1
         except asyncio.CancelledError:
             self._running = False

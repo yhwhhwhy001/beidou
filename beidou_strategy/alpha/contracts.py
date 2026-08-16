@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any  # M21: mypy 清偿
 
 from beidou_shared.types import (
     InstrumentId,
@@ -146,7 +147,7 @@ class StrategyProposal:
     def hash(self) -> str:
         """BD-T05: stable hash over the complete final proposal contract."""
 
-        def canonical(value):
+        def canonical(value: Any) -> Any:
             if isinstance(value, Enum):
                 return value.value
             if isinstance(value, dict):

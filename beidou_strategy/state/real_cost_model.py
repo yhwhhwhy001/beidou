@@ -70,7 +70,7 @@ class RealCostModel:
     - 预测-实际残差追踪和 OOS 校准
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._fee_tiers: dict[str, tuple[float, float]] = {}  # venue → (maker_bps, taker_bps)
         self._predictions: list[tuple[CostEstimate, float]] = []  # (pred, actual_total_bps)
         self._calibration: CostCalibration | None = None

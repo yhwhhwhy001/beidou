@@ -28,7 +28,7 @@ import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 # ================================================================
 # 类型系统
@@ -110,7 +110,7 @@ def _canon_key(node: "Expression") -> str:
     return _stable_dumps(node.to_dict())
 
 
-def _rolling_apply(row: Sequence[float], window: int, fn) -> list[float]:
+def _rolling_apply(row: Sequence[float], window: int, fn: Callable[..., float]) -> list[float]:
     """按完整窗口（含当前值）应用滚动函数。
 
     窗口不满（i < window - 1）或窗口内有效值不足 window 个时
@@ -1690,7 +1690,7 @@ class Neg(Expression):
 def _binary_eval(
     ra: list[list[float]],
     rb: list[list[float]],
-    op,
+    op: Any,
 ) -> list[list[float]]:
     """逐单元格二元运算（NaN 自然传播）。"""
     return [[op(ra[s][t], rb[s][t]) for t in range(len(ra[s]))] for s in range(len(ra))]

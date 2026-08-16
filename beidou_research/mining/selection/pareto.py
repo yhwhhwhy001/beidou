@@ -89,7 +89,7 @@ class ParetoSelector:
         # Fast Non-dominated Sort (NDS)
         n = len(pc_list)
         dominated_by = [0] * n
-        dominates = [[] for _ in range(n)]
+        dominates: list[list[int]] = [[] for _ in range(n)]
 
         for i in range(n):
             for j in range(n):
@@ -171,4 +171,4 @@ class ParetoSelector:
             va = a.metrics.get(k, 0.0)
             vb = b.metrics.get(k, 0.0)
             dist += (va - vb) ** 2
-        return dist**0.5
+        return float(dist**0.5)

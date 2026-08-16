@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 # 订单终态集合 —— save_order_state 单调守卫共用(BD-FIX: 竞态回写防护)
 _TERMINAL_ORDER_STATUSES = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
@@ -50,7 +50,7 @@ class PersistentStore:
             self._local.conn.execute("PRAGMA synchronous=FULL")
             self._local.conn.execute("PRAGMA busy_timeout=10000")  # BD-FIX: 10s 忙等
             self._local.conn.row_factory = sqlite3.Row
-        return self._local.conn
+        return cast(sqlite3.Connection, self._local.conn)
 
     def _init_db(self) -> None:
         conn = self._get_conn()

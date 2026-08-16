@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 
 
 class OutboxStatus(str, Enum):
@@ -48,7 +48,7 @@ class OutboxMessage:
     sent_at: datetime | None = None
     dead_letter_reason: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.idempotency_key:
             content = f"{self.aggregate_type}:{self.aggregate_id}:{self.event_type}:{json.dumps(self.payload, sort_keys=True, default=str)}"
             self.idempotency_key = hashlib.sha256(content.encode()).hexdigest()[:32]
@@ -762,7 +762,7 @@ class PostgresIntentOutbox:
     def _intent_payload(intent: Any, key: str) -> dict[str, Any]:
         from beidou_safety.execution.intent import IntentOutbox
 
-        return json.loads(IntentOutbox._serialize_intent(intent, key))
+        return cast(dict[str, Any], json.loads(IntentOutbox._serialize_intent(intent, key)))
 
     def commit(self, intent: Any) -> str:
         """Atomically persist one approved intent and its send command."""

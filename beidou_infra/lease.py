@@ -39,7 +39,7 @@ class FencingLease:
         """租约是否仍然有效。UNKNOWN 状态视为无效（fail-closed）。"""
         if self.state != LeaseState.ACQUIRED:
             return False
-        if self.state == LeaseState.UNKNOWN:
+        if self.state == LeaseState.UNKNOWN:  # type: ignore[comparison-overlap]  # 状态机防回归断言
             return False  # 显式拒绝
         if time.monotonic() - self.acquired_at > self.ttl_seconds:
             self.state = LeaseState.EXPIRED
@@ -119,7 +119,7 @@ class LeaseManager:
         否则回退到 BEIDOU_REDIS_HOST / BEIDOU_REDIS_PORT。
         """
         try:
-            import redis
+            import redis  # type: ignore[import-not-found]  # 可选依赖
 
             redis_url = os.environ.get("REDIS_URL", "")
             if redis_url:
@@ -149,7 +149,9 @@ class LeaseManager:
                 "SELECT pg_try_advisory_lock(%s)",
                 (LeaseManager.LEASE_KEY,),
             )
-            acquired = cur.fetchone()[0]
+            _row = cur.fetchone()
+            assert _row is not None
+            acquired = _row[0]
             if acquired:
                 lease.state = LeaseState.ACQUIRED
             else:

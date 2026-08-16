@@ -13,7 +13,7 @@ import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from beidou_data.canonical_bars import CanonicalBarBuilder, get_canonical_bar_builder  # BD-CV11
 from beidou_data.feature_store import FeatureStore, FeatureVector
@@ -442,7 +442,7 @@ class MarketDataFeed:
             self._ws_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._ws_task
-            self._ws_task = None
+            self._ws_task = None  # type: ignore[assignment]
         self._ws_active = False
 
     def is_ws_data_fresh(self, symbol: str) -> bool:
@@ -509,7 +509,7 @@ class MarketDataFeed:
             if isinstance(value, bool):
                 return None
             try:
-                parsed = float(value)
+                parsed = float(cast(float, value))
             except (TypeError, ValueError, OverflowError):
                 return None
             return parsed if math.isfinite(parsed) else None
@@ -601,7 +601,7 @@ class MarketDataFeed:
         values: dict[str, float] = {}
         for name in ("open", "high", "low", "close", "volume"):
             value = bar.get(name)
-            if isinstance(value, bool):
+            if value is None or isinstance(value, bool):
                 return False
             try:
                 parsed = float(value)
@@ -937,7 +937,7 @@ class MarketDataFeed:
         return [collected[t] for t in sorted(collected)]
 
     def fetch_account(self) -> dict:
-        return self._api(Endpoint.ACCOUNT, signed=True)
+        return cast(dict, self._api(Endpoint.ACCOUNT, signed=True))
 
     # --- Feature computation ---
 

@@ -32,7 +32,7 @@ class ReplayResult:
 class ReplayValidator:
     """Replay 反作弊验证器。检查未来函数、幸存者偏差等。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._baseline_hash: str | None = None
 
     def set_baseline(self, result_hash: str) -> None:

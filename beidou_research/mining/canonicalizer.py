@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import Any, cast
 
 
 class ExpressionCanonicalizer:
@@ -35,7 +35,7 @@ class ExpressionCanonicalizer:
     def compute_hash(self, expression: Any) -> str:
         """计算表达式的规范化哈希。"""
         if hasattr(expression, "canonical_hash"):
-            return expression.canonical_hash()
+            return cast(str, expression.canonical_hash())
         # 回退到字符串哈希
         content = str(expression)
         return hashlib.sha256(content.encode()).hexdigest()[:20]

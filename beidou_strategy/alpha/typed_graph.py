@@ -22,7 +22,7 @@ import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from beidou_shared.types import (
     InstrumentId,
@@ -622,7 +622,7 @@ class TypedAlphaGraph:
     async def execute(self, context: dict) -> StrategyProposal | None:
         """执行完整 DAG。返回最终融合提案。"""
         result = await self._execute_detailed(context)
-        return result["proposal"] if isinstance(result, dict) else result
+        return cast(StrategyProposal | None, result["proposal"] if isinstance(result, dict) else result)
 
     async def _execute_detailed(self, context: dict) -> dict:
         """执行完整 DAG 并返回每个组件的诊断输出。"""

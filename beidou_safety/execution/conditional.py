@@ -49,7 +49,7 @@ class ConditionalOrder:
 class PositionManager:
     """仓位生命周期管理器。资金费感知，应急平仓。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._positions: dict[str, dict] = {}
 
     def update_position(

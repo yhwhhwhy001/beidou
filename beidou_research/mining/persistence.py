@@ -18,7 +18,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 
 def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:
@@ -90,7 +90,7 @@ class PostgreSQLFactorStore:
 
     def __init__(self, conn_string: str = "", auto_connect: bool = True) -> None:
         self.conn_string = (conn_string or os.environ.get("BEIDOU_DATABASE_URL", "")).strip()
-        self._conn = None
+        self._conn: Any = None
         self._available = False
         self._last_error = ""
         if auto_connect:
@@ -175,7 +175,7 @@ class PostgreSQLFactorStore:
                 )
                 row = cur.fetchone()
             if row:
-                return json.loads(row[0])
+                return cast(dict[Any, Any] | None, json.loads(row[0]))
             return None
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -321,7 +321,7 @@ class SQLiteFactorStore:
                     (factor_id, version),
                 ).fetchone()
             if row:
-                return json.loads(row[0])
+                return cast(dict[Any, Any] | None, json.loads(row[0]))
             return None
         except Exception:
             return None
@@ -426,7 +426,7 @@ class JSONFileFactorStore:
         )
         try:
             with open(path) as f:
-                return json.load(f).get("data")
+                return cast(dict[Any, Any] | None, json.load(f).get("data"))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 

@@ -26,8 +26,8 @@ class PortfolioOptimizerImpl:
 
     def _enforce_leverage_constraint(self, targets: list[PortfolioTarget]) -> list[PortfolioTarget]:
         """P1-008: 强制杠杆约束 — 总杠杆超限时等比缩放。"""
-        total_notional = sum(float(t.target_notional.amount) for t in targets if t.target_notional)
-        total_capital = sum(float(t.capital_budget.amount) for t in targets if t.capital_budget)
+        total_notional = sum(float(t.target_notional.amount) for t in targets if t.target_notional is not None)
+        total_capital = sum(float(t.capital_budget.amount) for t in targets if t.capital_budget is not None)
         if total_capital <= 0:
             return targets
         current_leverage = total_notional / total_capital

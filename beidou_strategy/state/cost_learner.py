@@ -63,8 +63,8 @@ class CostLearner:
         avg_rewards = {algo: sum(rs) / max(len(rs), 1) for algo, rs in self.algorithm_rewards.items()}
         if not avg_rewards:
             return False
-        best_algo = max(avg_rewards, key=avg_rewards.get)
-        worst_algo = min(avg_rewards, key=avg_rewards.get)
+        best_algo = max(avg_rewards, key=lambda k: float(avg_rewards[k]))
+        worst_algo = min(avg_rewards, key=lambda k: float(avg_rewards[k]))
         # Best must be significantly better than worst
         improvement = avg_rewards[best_algo] - avg_rewards[worst_algo]
         self._shadow_verified = improvement > 0.1

@@ -100,7 +100,7 @@ class MiningOrchestrator:
         self.state.status = MiningRunStatus.GENERATING
         self.state.start_time = datetime.now(timezone.utc)
 
-        all_candidates = []
+        all_candidates: list[Any] = []
         for gen_name, gen_func in generators.items():
             if gen_name not in self.config.generators:
                 continue

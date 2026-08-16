@@ -95,7 +95,7 @@ class TestBinanceReferenceData:
         changes = new.detect_rule_changes(old)
         assert len(changes) == 1
         assert changes[0].instrument_id == InstrumentId("BTCUSDT")
-        assert changes[0].field == "minQty"
+        assert changes[0].field_name == "minQty"
 
 
 class TestBinanceHealthMonitor:

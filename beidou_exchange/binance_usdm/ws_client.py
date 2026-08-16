@@ -156,6 +156,8 @@ class WebSocketConnection:
             f"Sec-WebSocket-Key: {key}",
             "Sec-WebSocket-Version: 13",
         ]
+        assert self._writer is not None, "connect() must precede handshake"
+        assert self._writer is not None, "connect() must precede handshake"
         self._writer.write(("\r\n".join(lines) + "\r\n\r\n").encode())
         await self._writer.drain()
 
@@ -179,12 +181,14 @@ class WebSocketConnection:
     # === 收发 ===
 
     async def _read_exact(self, n: int) -> bytes:
+        assert self._reader is not None, "connect() must precede reads"
         try:
             return await self._reader.readexactly(n)
         except asyncio.IncompleteReadError as exc:
             raise ConnectionError("connection closed by peer") from exc
 
     async def _read_line(self) -> bytes:
+        assert self._reader is not None, "connect() must precede reads"
         line = await self._reader.readline()
         if not line:
             raise ConnectionError("connection closed during handshake")
@@ -220,8 +224,10 @@ class WebSocketConnection:
                     return opcode, payload
                 if opcode != OP_CONT:
                     raise WebSocketError(f"expected continuation, got opcode {opcode}")
+                assert self._fragment_chunks is not None
                 self._fragment_chunks.append(payload)
                 if fin:
+                    assert self._fragment_chunks is not None
                     opcode, payload = self._fragment_opcode, b"".join(self._fragment_chunks)
                     self._fragment_opcode = None
                     self._fragment_chunks = None
@@ -251,6 +257,7 @@ class WebSocketConnection:
             header.append(0x80 | 127)
             header += n.to_bytes(8, "big")
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        assert self._writer is not None, "connect() must precede writes"
         self._writer.write(bytes(header) + mask + masked)
         await self._writer.drain()
 
@@ -395,6 +402,8 @@ class _StreamGroup:
             data = msg.get("data", msg)
         if not stream:
             stream = next(iter(self._streams), None)  # 裸流消息回退到组内唯一流
+        if stream is None:
+            return  # 无流可路由 —— 丢弃(消息不可归属)
         await self.owner._dispatch(stream, data)
 
     # === 状态与资源 ===
@@ -445,7 +454,7 @@ class BinanceUsdmWebSocketClient:
         self._max_streams = max_streams_per_connection
         self._groups: list[_StreamGroup] = []
         self._global_callbacks: list[Callback] = []
-        self._state_change_callbacks: list[Callback] = []
+        self._state_change_callbacks: list[Callable[[ConnectionState, ConnectionState, int], Any]] = []
         self._hooks_lock = threading.Lock()
         self._state_change_tasks: set[asyncio.Task] = set()
         self._stopped = asyncio.Event()
@@ -627,7 +636,8 @@ class BinanceUsdmWebSocketClient:
             try:
                 result = cb(old, new, group.group_id)
                 if inspect.isawaitable(result):
-                    task = asyncio.create_task(result)
+                    _coro: Any = result
+                    task = asyncio.create_task(_coro)
                     self._state_change_tasks.add(task)
                     task.add_done_callback(self._state_change_tasks.discard)
             except Exception:

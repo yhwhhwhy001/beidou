@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 from dataclasses import dataclass, field
+from typing import Any  # M21: mypy 清偿
 
 
 @dataclass
@@ -83,7 +84,7 @@ class InteractionGenerator:
             base_factors = self.config.base_factors
 
         cfg = self.config
-        interactions = []
+        interactions: list[Any] = []
         seen: set[str] = set()
 
         if cfg.max_order < 2:

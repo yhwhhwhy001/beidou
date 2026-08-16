@@ -59,7 +59,7 @@ class DecisionSnapshot:
     # 可验证性
     checksum: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.checksum:
             object.__setattr__(self, "checksum", self._compute_checksum())
 
@@ -95,7 +95,7 @@ class DecisionStore:
     所有决策 append-only 保存，支持独立审计和重算。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._decisions: list[DecisionSnapshot] = []
         self._checksums: set[str] = set()
 

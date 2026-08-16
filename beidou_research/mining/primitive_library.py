@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import ast as py_ast
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 from .expression_ast import (
     EMA,
@@ -329,7 +329,8 @@ def _parse_node(node: py_ast.AST, features: dict[str, ExprType]) -> Expression:
         if node.keywords:
             raise UnsupportedExpressionError("不支持关键字参数调用")
         parsed = [_parse_node(arg, features) for arg in node.args]
-        return builder(parsed)
+        builder_fn: Any = builder  # 动态注册表
+        return cast(Expression, builder_fn(parsed))
 
     # 其余节点一律拒绝
     raise UnsupportedExpressionError(f"不支持的表达式构造: {type(node).__name__}")

@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any  # M21: mypy 清偿
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +33,7 @@ class DomainEvent:
     causation_id: str | None = None
     checksum: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.checksum:
             object.__setattr__(self, "checksum", self._compute_checksum())
 
@@ -66,7 +67,7 @@ class EventStore:
     - checksum 完整性验证
     """
 
-    def __init__(self, connection_pool=None):
+    def __init__(self, connection_pool: Any = None) -> None:
         self._conn = connection_pool
         self._events: list[DomainEvent] = []  # 内存回退 (SQLite/Paper模式)
 

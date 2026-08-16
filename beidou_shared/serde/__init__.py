@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-import msgpack
+import msgpack  # type: ignore[import-untyped]  # 无 stub
 
 from ..envelope import EventEnvelope, EventMetadata
 
@@ -25,17 +25,20 @@ def serialize_json(envelope: EventEnvelope[Any]) -> bytes:
 def deserialize_json(data: bytes | str) -> dict[str, Any]:
     if isinstance(data, bytes):
         data = data.decode("utf-8")
-    return json.loads(data)
+    return cast(dict[str, Any], json.loads(data))
 
 
 def serialize_msgpack(envelope: EventEnvelope[Any]) -> bytes:
-    return msgpack.packb(
-        envelope.model_dump(mode="json"), default=lambda o: o.isoformat() if isinstance(o, datetime) else o
+    return cast(
+        bytes,
+        msgpack.packb(
+            envelope.model_dump(mode="json"), default=lambda o: o.isoformat() if isinstance(o, datetime) else o
+        ),
     )
 
 
 def deserialize_msgpack(data: bytes) -> dict[str, Any]:
-    return msgpack.unpackb(data, raw=False)
+    return cast(dict[str, Any], msgpack.unpackb(data, raw=False))
 
 
 def create_metadata(envelope: EventEnvelope[Any]) -> EventMetadata:

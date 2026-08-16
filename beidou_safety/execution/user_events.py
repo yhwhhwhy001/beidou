@@ -95,6 +95,7 @@ class UserStreamProjector:
         return UserProjectionResult(UserProjectionStatus.ERROR, "", reason=reason)
 
     def _restore_projection(self) -> None:
+        assert self._store is not None, "store required for projection restore"
         row = self._store.restore_user_stream_projection(str(self._account_id), str(self._venue_id))
         if row is None:
             return
@@ -115,6 +116,7 @@ class UserStreamProjector:
         if last_sequence is not None:
             self._sequencer.restore(int(last_sequence))
 
+        assert self._store is not None
         all_events = self._store.restore_user_stream_events(applied_only=False)
         for event in all_events:
             event_id = str(event.get("event_id", ""))
@@ -130,6 +132,7 @@ class UserStreamProjector:
                 )
             )
             if pending_already_projected and event_id:
+                assert self._store is not None
                 self._store.mark_user_stream_event_applied(event_id)
                 applied_state = "APPLIED"
             if applied_state == "APPLIED" and event_id:
@@ -372,7 +375,7 @@ class UserStreamProjector:
             self._open_orders.add(order_id)
             # M13 登记兑现: 记录参数明细(原始 payload 补齐 reduceOnly/
             # stopPrice —— Binance fapi ORDER_TRADE_UPDATE 嵌套在 o.* )
-            _raw = getattr(getattr(update, "event", None), "raw_event", None)
+            _raw: Any = getattr(getattr(update, "event", None), "raw_event", None)
             _raw = _raw if isinstance(_raw, dict) else {}
             _nested = _raw.get("o") if isinstance(_raw.get("o"), dict) else {}
 

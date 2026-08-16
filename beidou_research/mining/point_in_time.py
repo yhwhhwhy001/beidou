@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Callable, cast
 
 from beidou_shared.types import InstrumentId, VenueId
 
@@ -22,6 +22,7 @@ from .contracts import (
     LabelRecord,
     PredictionKey,
     PredictionRecord,
+    PriceType,
 )
 
 # ================================================================
@@ -359,11 +360,14 @@ class ClosedBarEnforcer:
         pk = prediction.prediction_key
 
         if bar_provider is not None:
-            return bar_provider(
-                venue=pk.venue,
-                symbol=pk.symbol,
-                timeframe=pk.timeframe,
-                query_time=pk.data_available_time,
+            return cast(
+                bool,
+                bar_provider(
+                    venue=pk.venue,
+                    symbol=pk.symbol,
+                    timeframe=pk.timeframe,
+                    query_time=pk.data_available_time,
+                ),
             )
 
         # 使用内部注册：查找 prediction_time 之前最近的已闭合 K 线
@@ -391,7 +395,7 @@ class IsolationValidator:
     @staticmethod
     def validate_batch(predictions: list[PredictionRecord]) -> list[str]:
         """验证一批预测是否存在跨品种/跨周期混合。"""
-        violations = []
+        violations: list[str] = []
 
         if not predictions:
             return violations
@@ -428,8 +432,8 @@ class IsolationValidator:
 
     @staticmethod
     def validate_timeframe_isolation(
-        group_1h: list[PredictionRecord],
-        group_5m: list[PredictionRecord],
+        group_1h: list[LabelRecord],
+        group_5m: list[LabelRecord],
     ) -> bool:
         """验证不同 timeframe 的数据没有交叉使用。
 
@@ -499,8 +503,8 @@ def _make_placeholder_label(pk: PredictionKey) -> LabelRecord:
         label_start_time=pk.prediction_time,
         label_end_time=pk.prediction_time + timedelta(hours=pk.horizon or 1),
         label_available_time=pk.prediction_time + timedelta(hours=pk.horizon or 1),
-        entry_price_type="close",
-        exit_price_type="close",
+        entry_price_type=PriceType.CLOSE,
+        exit_price_type=PriceType.CLOSE,
         cost_model_version="0",
         label_value=0.0,
         quality_status=LabelQuality.MISSING_PRICE,

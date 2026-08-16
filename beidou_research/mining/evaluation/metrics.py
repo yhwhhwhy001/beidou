@@ -27,7 +27,7 @@ import itertools
 import math
 import random
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 # 与数据层契约类型保持引用关系（本模块输入为纯数值列表，
 # 上层负责将 LabelRecord / PredictionKey 记录转换为数值序列）
@@ -144,7 +144,7 @@ def _check_lengths(a: Sequence[Any], b: Sequence[Any]) -> None:
         raise ValueError(f"两个序列长度不一致: {len(a)} vs {len(b)}")
 
 
-def _as_periods(predictions: SignalInput, returns: SignalInput) -> List[Tuple[Sequence[Value], Sequence[Value]]]:
+def _as_periods(predictions: SignalInput, returns: SignalInput) -> List[Tuple[List[Value], List[Value]]]:
     """归一化为「每期一个 (预测, 收益) 对」的列表。
 
     扁平输入视为单期；嵌套输入视为多期。
@@ -158,13 +158,17 @@ def _as_periods(predictions: SignalInput, returns: SignalInput) -> List[Tuple[Se
             raise ValueError(f"期数不一致: {len(predictions)} vs {len(returns)}")
         periods = [
             (list(p), list(r))
-            for p, r in zip(predictions, returns, strict=True)  # type: ignore[arg-type]
+            for p, r in zip(
+                cast(Sequence[Sequence[Value]], predictions),
+                cast(Sequence[Sequence[Value]], returns),
+                strict=True,
+            )
         ]
         for p, r in periods:
             _check_lengths(p, r)
         return periods
     _check_lengths(predictions, returns)
-    return [(list(predictions), list(returns))]  # type: ignore[arg-type]
+    return [(list(cast(Sequence[Value], predictions)), list(cast(Sequence[Value], returns)))]
 
 
 def _period_starts(n: int, period_indices_or_size: Union[int, Sequence[int]]) -> List[int]:
@@ -819,6 +823,7 @@ def compute_cost_adjusted_metrics(returns: Sequence[Value], costs_bps: Union[Val
     if isinstance(costs_bps, (int, float)):
         cost_series = [float(costs_bps) / 10000.0] * len(raw_returns)
     else:
+        assert costs_bps is not None
         if len(costs_bps) != len(raw_returns):
             raise ValueError(f"成本序列长度不一致: {len(costs_bps)} vs {len(raw_returns)}")
         # 缺失成本按 0 处理，与收益成对清洗

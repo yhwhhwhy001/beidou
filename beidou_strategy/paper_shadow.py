@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from types import MappingProxyType
+from typing import Any, cast
 
 from beidou_shared.types import GateResult, StrategyId
 
@@ -154,7 +156,7 @@ class PaperShadowRunner:
             if not str(outcome_source or "").strip():
                 raise ValueError("INDEPENDENT_FORWARD_LABEL_SOURCE_REQUIRED")
             try:
-                available_at = float(outcome_available_at)
+                available_at = float(outcome_available_at) if outcome_available_at is not None else 0.0
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError("forward outcome timestamp/strength is invalid") from exc
             if not math.isfinite(available_at) or available_at <= decision_at:
@@ -206,8 +208,8 @@ class PaperShadowRunner:
         if not source:
             raise ValueError("INDEPENDENT_FORWARD_LABEL_SOURCE_REQUIRED")
         try:
-            available_at = float(outcome_available_at)
-            strength = float(actual_strength)
+            available_at = float(outcome_available_at) if outcome_available_at is not None else 0.0
+            strength = float(actual_strength) if actual_strength is not None else 0.0
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("forward outcome timestamp/strength is invalid") from exc
         if not math.isfinite(available_at) or not math.isfinite(strength):
@@ -284,7 +286,7 @@ class PaperShadowRunner:
 
     def record_fill_to_ledger(
         self,
-        ledger,
+        ledger: Any,
         symbol: str,
         side: str,
         qty: float,
@@ -361,12 +363,12 @@ class PaperShadowRunner:
             source_event_id=f"paper-fill-{tx_id}",
             postings=tuple(postings),
             correlation_id=CorrelationId(f"paper-{tx_id}"),
-            metadata={"paper": True, "spread_cost": spread_cost, "slippage_cost": slippage_cost},
+            metadata=MappingProxyType({"paper": True, "spread_cost": spread_cost, "slippage_cost": slippage_cost}),
         )
         try:
             result = ledger.post(tx)
             self.metrics.total_simulated_fills += 1  # PKG28 (BDS-P1-061)
-            return result
+            return cast(str | None, result)
         except Exception:
             # PKG28 (BDS-P1-060): 账本写失败必须记录，不可静默吞掉
             self.metrics.ledger_write_failures += 1
@@ -390,7 +392,7 @@ class PaperShadowRunner:
 
         # PKG28 (BDS-P1-060): 账本写失败 → 运行无效
         if self.metrics.ledger_write_failures > 0:
-            report.gate_result = GateResult.INVALID
+            report.gate_result = cast(Any, GateResult).INVALID
             report.status = ShadowStatus.INVALID
             report.discrepancies.append(f"ledger_write_failures: {self.metrics.ledger_write_failures}")
 
@@ -681,7 +683,7 @@ class CostPressureSimulator:
     压力增加时净收益降低而非提高。
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._pressure_level: float = 0.0
 
     def set_pressure(self, level: float) -> None:

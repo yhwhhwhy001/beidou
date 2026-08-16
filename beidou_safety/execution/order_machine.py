@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any  # M21: mypy 清偿
 
 
 class OrderState(str, Enum):
@@ -124,7 +125,7 @@ class OrderAggregate:
     @classmethod
     def from_tracker(
         cls,
-        tracker,
+        tracker: Any,
         *,
         client_order_id: str,
         instrument_id: str,
@@ -195,7 +196,7 @@ class OrderStateMachine:
     - UNKNOWN 未闭合时同 symbol 新风险冻结
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._orders: dict[str, OrderAggregate] = {}
 
     def create(self, order: OrderAggregate) -> OrderAggregate:

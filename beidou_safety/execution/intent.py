@@ -677,9 +677,9 @@ class IntentOutbox:
                 # ambiguous execution fact.
                 "state_counts": state_counts,
             }
-        state_counts: dict[str, int] = {}
+        state_counts_memory: dict[str, int] = {}
         for state in self._states.values():
-            state_counts[state.value] = state_counts.get(state.value, 0) + 1
+            state_counts_memory[state.value] = state_counts_memory.get(state.value, 0) + 1
         return {
             "outbox_size": len(self._memory_outbox),
             "inbox_size": len(self._inbox),
@@ -688,7 +688,8 @@ class IntentOutbox:
             "total_committed": self._total_committed,
             "total_acked": self._total_acked,
             "pending_count": self.pending_count(),
-            "state_counts": state_counts,
+            # memory 分支必须用 memory 统计(UnboundLocalError 修复)
+            "state_counts": state_counts_memory,
         }
 
     def commit(self, intent: OrderIntent) -> str:

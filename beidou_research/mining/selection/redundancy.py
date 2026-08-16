@@ -60,8 +60,8 @@ class RedundancyDetector:
                 corr_matrix[n1][n2] = corr
                 corr_matrix[n2][n1] = corr
 
-        for n in names:
-            corr_matrix[n][n] = 1.0
+        for name in names:
+            corr_matrix[name][name] = 1.0
 
         return corr_matrix
 
@@ -193,7 +193,7 @@ def _pearson(x: list[float], y: list[float]) -> float:
     sy = (sum((yi - my) ** 2 for yi in y) / (n - 1)) ** 0.5
     if sx == 0 or sy == 0:
         return 0.0
-    return cov / (sx * sy)
+    return float(cov / (sx * sy))
 
 
 def _ols_r_squared(y: list[float], X: list[list[float]]) -> float:

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.write_guard import classify_terminal_write
@@ -118,7 +118,7 @@ class InstrumentStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class TradingRuleChange:
     instrument_id: InstrumentId
-    field: str
+    field_name: str
     old_value: Any
     new_value: Any
     detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -138,21 +138,21 @@ class BinanceReferenceData:
         inst = self.instruments.get(instrument_id, {})
         for f in inst.get("filters", []):
             if f.get("filterType") == "PRICE_FILTER":
-                return f.get("tickSize")
+                return cast(str | None, f.get("tickSize"))
         return None
 
     def get_step_size(self, instrument_id: InstrumentId) -> str | None:
         inst = self.instruments.get(instrument_id, {})
         for f in inst.get("filters", []):
             if f.get("filterType") == "LOT_SIZE":
-                return f.get("stepSize")
+                return cast(str | None, f.get("stepSize"))
         return None
 
     def get_min_notional(self, instrument_id: InstrumentId) -> str | None:
         inst = self.instruments.get(instrument_id, {})
         for f in inst.get("filters", []):
             if f.get("filterType") == "MIN_NOTIONAL":
-                return f.get("notional")
+                return cast(str | None, f.get("notional"))
         return None
 
     def detect_rule_changes(self, old: BinanceReferenceData) -> list[TradingRuleChange]:
@@ -163,7 +163,9 @@ class BinanceReferenceData:
                 old_val = old_rules.get(key)
                 if old_val is not None and old_val != val:
                     changes.append(
-                        TradingRuleChange(instrument_id=inst_id, field=key, old_value=old_val, new_value=val)
+                        TradingRuleChange(
+                            instrument_id=InstrumentId(str(inst_id)), field_name=key, old_value=old_val, new_value=val
+                        )
                     )
         return changes
 
@@ -219,7 +221,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         self,
         venue_id: VenueId = VenueId("BINANCE"),
         account_id: AccountId = AccountId("default"),
-        rest_client=None,  # BD-T18: BinanceRESTClient 注入
+        rest_client: Any = None,  # BD-T18: BinanceRESTClient 注入
     ) -> None:
         self._venue_id = venue_id
         self._account_id = account_id
@@ -333,7 +335,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         result = await self._rest_client.request(method, path, signed=signed, params=params)
         if path == Endpoint.SERVER_TIME and result.is_success():
             self._health_monitor.update_venue_health(HealthStatus.HEALTHY)
-        return result
+        return cast(Result[Any], result)
 
     def reset_circuit_breaker(self) -> None:
         """通过 Adapter 暴露受控的传输熔断恢复。"""
@@ -345,7 +347,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         """检查传输断路器是否打开。"""
         if self._rest_client is None:
             return False
-        return self._rest_client.is_circuit_breaker_open()
+        return cast(bool, self._rest_client.is_circuit_breaker_open())
 
     async def create_user_listen_key(self) -> Result[dict[str, Any]]:
         """Create a user-data listen key through the adapter-owned transport.
@@ -804,6 +806,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             account_ref=AccountRef(venue_id=self._venue_id, account_id=self._account_id),
             order_id=order_id,
             client_order_id=None,
+            correlation_id=None,
             status=OrderStatus.UNKNOWN,
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
@@ -1211,6 +1214,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_user_stream_adapter",
             )
         execution = raw.get("o") if isinstance(raw.get("o"), dict) else raw
+        assert isinstance(execution, dict)
         if execution.get("i") is not None and execution.get("I") is not None:
             event_id = f"{event_type}:{execution.get('i')}:{execution.get('I')}"
         else:

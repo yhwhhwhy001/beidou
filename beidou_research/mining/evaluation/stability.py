@@ -281,7 +281,7 @@ def _compute_ic(predictions: list[float], returns: list[float]) -> float:
     sr = (sum((x - mr) ** 2 for x in r) / (n - 1)) ** 0.5
     if sp == 0 or sr == 0:
         return 0.0
-    return cov / (sp * sr)
+    return float(cov / (sp * sr))
 
 
 def _compute_sharpe(returns: list[float]) -> float:
@@ -294,4 +294,4 @@ def _compute_sharpe(returns: list[float]) -> float:
     std = var**0.5
     if std == 0:
         return 0.0
-    return mean / std
+    return float(mean / std)

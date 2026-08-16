@@ -142,7 +142,7 @@ class CPCVEvaluator:
             if test_indices and (cfg.purge_bars > 0 or cfg.embargo_bars > 0):
                 test_index_set = set(test_indices)
 
-                def _overlaps_barrier(index: int, *, _test_index_set=test_index_set) -> bool:
+                def _overlaps_barrier(index: int, *, _test_index_set: set[int] = test_index_set) -> bool:
                     return (
                         cfg.purge_bars > 0
                         and any(abs(index - test_index) <= cfg.purge_bars for test_index in _test_index_set)
@@ -312,7 +312,7 @@ def _default_ic(predictions: list[float], returns: list[float]) -> float:
     sr = (sum((x - mr) ** 2 for x in r) / (n - 1)) ** 0.5
     if sp == 0 or sr == 0:
         return 0.0
-    return cov / (sp * sr)
+    return float(cov / (sp * sr))
 
 
 def _is_finite(value: float) -> bool:

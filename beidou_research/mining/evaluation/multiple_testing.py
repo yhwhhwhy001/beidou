@@ -362,7 +362,7 @@ def _spearman_rank_corr(x: list[float], y: list[float]) -> float:
     std_ry = (sum((ry - mean_ry) ** 2 for ry in rank_y) / (n - 1)) ** 0.5
     if std_rx == 0 or std_ry == 0:
         return 0.0
-    return cov / (std_rx * std_ry)
+    return float(cov / (std_rx * std_ry))
 
 
 # ================================================================

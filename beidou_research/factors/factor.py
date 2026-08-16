@@ -468,7 +468,7 @@ class FactorPromotionGate:
                 sample_count = None
                 invalid_metrics.append(f"sample_count={performance.sample_count!r}(not numeric)")
             else:
-                if not math.isfinite(float(sample_count)):
+                if sample_count is None or not math.isfinite(float(sample_count)):
                     sample_count = None
                     invalid_metrics.append(f"sample_count={performance.sample_count!r}(non-finite)")
             if invalid_metrics:
@@ -558,7 +558,7 @@ class FactorPromotionGate:
         target_state: FactorLifecycle,
         performance: FactorPerformance | None = None,
         evidence_ids: list[str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> PromotionDecision:
         """执行因子晋级：验证证据 → 创建 PromotionDecision → 推进生命周期。
 
@@ -654,7 +654,7 @@ class FactorEvaluator:
 
         if std_rp == 0 or std_rr == 0:
             return 0.0
-        return cov / (std_rp * std_rr)
+        return float(cov / (std_rp * std_rr))
 
     @staticmethod
     def compute_icir(ic_series: list[float]) -> float:
@@ -688,7 +688,7 @@ class FactorEvaluator:
         if std_ic < tolerance:
             return 0.0
         icir = mean_ic / std_ic
-        return max(-1e4, min(1e4, icir))
+        return float(max(-1e4, min(1e4, icir)))
 
     @staticmethod
     def compute_decile_spread(predictions: list[float], returns: list[float]) -> float:
@@ -734,7 +734,7 @@ class FactorEvaluator:
     ) -> MarginalContribution:
         """计算因子对现有组合的边际贡献。"""
         factor_id = factor_performance.factor_id
-        existing_ids = frozenset(f.id for f in existing_factors)
+        existing_ids = frozenset(getattr(f, "id", "") for f in existing_factors)
         vif = FactorEvaluator.compute_vif(correlation_matrix, factor_id)
 
         collinear_with = [fid for fid, corr in correlation_matrix.get(factor_id, {}).items() if abs(corr) > 0.7]
@@ -833,7 +833,7 @@ class FactorRegistry:
             decision.approved and decision.to_state == FactorLifecycle.ACTIVE for decision in record.promotion_history
         ):
             return False
-        return record.lifecycle == FactorLifecycle.ACTIVE
+        return record.lifecycle == FactorLifecycle.ACTIVE  # type: ignore[comparison-overlap]  # 状态机分支
 
     def degrade(self, factor_id: str, reason: str) -> bool:
         record = self._factors.get(factor_id)

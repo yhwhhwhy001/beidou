@@ -244,41 +244,16 @@ line-length = 120
 profile = "black"
 line_length = 120
 
-# === Mypy overrides: BD-T15 收紧豁免 ===
-# P0 核心链 (beidou_safety.risk, beidou_safety.protection, beidou_exchange.core)
-# 不再享有 ignore_errors — 错误已逐行修复或标注 type: ignore。
-#
-# 以下模块保留豁免，每个带 issue/owner/expiry：
-# - beidou_core.engine: ~30+ 类型错误（4597 行遗留代码），BD-T05 重构中解决
-# - beidou_safety/execution/*: no-untyped-def 遗留，BD-T08-T10 重构中解决
-# - beidou_observability.monitoring.*: 无类型注解遗留代码
-# - beidou_strategy/*: 少量遗留
-# - beidou_data/*, beidou_lifecycle/*: no-untyped-def 遗留
+# === Mypy: 豁免治理(2026-08-17 清偿进展) ===
+# 已清偿(全量 0 errors 验证): beidou_core.health/store/alerts/feed、
+# beidou_control.api/plane、beidou_shared.serde、beidou_exchange.
+# binance_usdm(ws_client 等)、beidou_infra、beidou_strategy、
+# beidou_safety.execution、beidou_research.*
+# 剩余豁免: 纯注解类遗留(实测 2026-08-17: 214 no-untyped-def/call),
+# 逐函数补注解属机械工作量,分批清偿。
 [[tool.mypy.overrides]]
-module = [
-    "beidou_core.engine",                   # ~30+ errors / owner: core / expiry: 2026-11-30 (BD-T05 StrategyKernel)
-    "beidou_core.health",                    # no-untyped-def / owner: core / expiry: 2026-09-30
-    "beidou_core.store",                     # no-any-return / owner: core / expiry: 2026-09-30
-    "beidou_core.feed",                      # no-untyped-def / owner: core / expiry: 2026-10-31
-    "beidou_core.alerts",                    # dict-item / owner: core / expiry: 2026-09-30
-    "beidou_safety.execution.*",            # no-untyped-def / owner: safety / expiry: 2026-11-30 (BD-T08-T10)
-    "beidou_observability.monitoring.*",     # 无类型注解 / owner: infra / expiry: 2026-09-30
-    "beidou_strategy.*",                     # 少量遗留 / owner: strategy / expiry: 2026-10-31 (BD-T05)
-    "beidou_research.mining.*",             # pandas/numpy / owner: research / expiry: 2026-10-31
-    "beidou_research.factors.*",            # pandas/numpy / owner: research / expiry: 2026-10-31
-    "beidou_research.backtest.*",           # pandas/numpy / owner: research / expiry: 2026-10-31
-    "beidou_research.data.*",               # pandas/pyarrow / owner: research / expiry: 2026-10-31
-    "beidou_shared.serde.*",                # msgpack 无 stub / owner: infra / expiry: 2026-09-30
-    "beidou_exchange.binance_usdm.*",       # ws/rest client / owner: exchange / expiry: 2026-10-31
-    "beidou_infra.*",                        # Connection/redis stub / owner: infra / expiry: 2026-10-31
-    "beidou_control.api",                    # FastAPI 装饰器 (@app.get) 类型推断限制 / owner: infra / expiry: 2026-10-31
-]
+module = ["beidou_observability.monitoring.*"]
 ignore_errors = true
-
-# BD-T15: 已从豁免中移除的模块（类型错误已修复）：
-# ✅ beidou_safety.risk.*, beidou_safety.protection.*, beidou_exchange.core.*
-# ✅ beidou_launcher.* (含 cli), beidou_lifecycle.*, beidou_certification.*
-# ✅ beidou_control.plane, beidou_data.*, beidou_production.*, beidou_exchange.router.*
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

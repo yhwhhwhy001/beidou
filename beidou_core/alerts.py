@@ -78,7 +78,7 @@ class AlertDispatcher:
                 if existing_key == dedup_key:
                     # Update the existing incident in place
                     existing_inc.description = description
-                    existing_inc._last_updated = datetime.now(timezone.utc)
+                    existing_inc._last_updated = datetime.now(timezone.utc)  # M21: 运行时字段
                     return existing_inc
 
         incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S%f')}-{category}"
@@ -168,7 +168,7 @@ class AlertDispatcher:
         try:
             if "open.feishu.cn" in url or "open.larksuite.com" in url:
                 # 飞书卡片
-                elements = [
+                elements: list[dict[str, Any]] = [
                     {"tag": "markdown", "content": body},
                 ]
                 if portfolio:
@@ -180,18 +180,17 @@ class AlertDispatcher:
                         "elements": [{"tag": "plain_text", "content": f"北斗 V2.0 | {incident.incident_id} | {ts}"}],
                     }
                 )
-                payload = json.dumps(
-                    {
-                        "msg_type": "interactive",
-                        "card": {
-                            "header": {
-                                "title": {"content": title, "tag": "plain_text"},
-                                "template": "red" if incident.severity.value in ("CRITICAL", "LOCKDOWN") else "yellow",
-                            },
-                            "elements": elements,
+                card_payload: dict[str, Any] = {
+                    "msg_type": "interactive",
+                    "card": {
+                        "header": {
+                            "title": {"content": title, "tag": "plain_text"},
+                            "template": "red" if incident.severity.value in ("CRITICAL", "LOCKDOWN") else "yellow",
                         },
-                    }
-                ).encode()
+                        "elements": elements,
+                    },
+                }
+                payload = json.dumps(card_payload).encode()
             elif "sctapi.ftqq.com" in url:
                 payload = json.dumps({"title": title, "desp": f"{body}\n\n{portfolio}"}).encode()
             elif "pushplus.plus" in url:
@@ -224,18 +223,18 @@ class AlertDispatcher:
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=5) as response:
-                status = int(getattr(response, "status", 200))
-                if status < 200 or status >= 300:
-                    raise RuntimeError(f"webhook HTTP status {status}")
+                http_status = int(getattr(response, "status", 200))
+                if http_status < 200 or http_status >= 300:
+                    raise RuntimeError(f"webhook HTTP status {http_status}")
             self._record_delivery_event(incident, "DELIVERED", attempts=attempts)
             return True
         except Exception as exc:
             logger.error("webhook delivery failed for alert %s: %s", incident.incident_id, type(exc).__name__)
-            status = "DEAD_LETTER" if attempts >= self._max_delivery_attempts else "FAILED"
+            delivery_status = "DEAD_LETTER" if attempts >= self._max_delivery_attempts else "FAILED"
             backoff_seconds = min(300.0, float(2 ** min(attempts, 8)))
             self._record_delivery_event(
                 incident,
-                status,
+                delivery_status,
                 attempts=attempts,
                 error=type(exc).__name__,
                 next_retry_at=datetime.now(timezone.utc).timestamp() + backoff_seconds,

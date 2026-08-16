@@ -95,7 +95,7 @@ def _std(values: list[float]) -> float:
     if n < 2:
         return 0.0
     m = _mean(values)
-    return (sum((v - m) ** 2 for v in values) / (n - 1)) ** 0.5
+    return float((sum((v - m) ** 2 for v in values) / (n - 1)) ** 0.5)
 
 
 def _sharpe(returns: list[float]) -> float:

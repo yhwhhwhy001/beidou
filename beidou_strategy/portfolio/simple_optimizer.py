@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -85,7 +86,7 @@ def optimize_portfolio(inputs: OptimizerInput) -> OptimizerOutput:
     # Simple mean-variance with constraints
     # weights = returns / (risk_aversion * variance + epsilon)
     weights = [0.0] * n
-    diagnostics = {"method": "mean_variance_constrained"}
+    diagnostics: dict[str, Any] = {"method": "mean_variance_constrained"}
     violations: list[str] = []
     shadows: dict[str, float] = {}
 

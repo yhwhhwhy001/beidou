@@ -55,7 +55,7 @@ class SQLiteBackend(StorageBackend):
 
     def __init__(self, db_path: str = ":memory:"):
         self._db_path = db_path
-        self._conn = None
+        self._conn: Any = None
 
     def connect(self, connection_string: str = "") -> bool:
         candidate = None
@@ -163,8 +163,9 @@ class PostgresBackend(StorageBackend):
             if not self._dsn:
                 return False
             candidate = psycopg.connect(self._dsn, autocommit=True)
+            assert candidate is not None
             candidate.execute("SELECT 1")
-            self._conn = candidate
+            self._conn = candidate  # type: ignore[assignment]  # psycopg Connection
             return True
         except Exception:
             if candidate is not None:

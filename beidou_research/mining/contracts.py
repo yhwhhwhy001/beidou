@@ -238,7 +238,7 @@ class PredictionRecord:
     code_hash: str = ""
     parameter_hash: str = ""
     factor_expression_hash: str = ""
-    dq_tier: DataQualityTier = DataQualityTier.UNKNOWN if hasattr(DataQualityTier, "UNKNOWN") else DataQualityTier.PASS
+    dq_tier: DataQualityTier = DataQualityTier.PASS
     revision: int = 0
 
     def can_be_evaluated(self) -> bool:

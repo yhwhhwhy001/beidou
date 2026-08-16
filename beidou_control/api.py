@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 class SystemStatus(str, Enum):
@@ -203,7 +204,7 @@ class ControlPlaneAPI:
             return {"action": "RESUME", "success": True, "new_status": str(self._control_plane.get_status())}
         return {"action": "RESUME", "success": False, "error": "control_plane not wired"}
 
-    def wire_control_plane(self, control_plane) -> None:
+    def wire_control_plane(self, control_plane: Any) -> None:
         """BD-T14: 注入控制平面引用。"""
         self._control_plane = control_plane
 
@@ -211,7 +212,7 @@ class ControlPlaneAPI:
 
     _factor_registry = None
 
-    def wire_factor_registry(self, registry) -> None:
+    def wire_factor_registry(self, registry: Any) -> None:
         self._factor_registry = registry
 
     def list_factors(self) -> list[dict]:
@@ -235,7 +236,7 @@ class ControlPlaneAPI:
         factor_id: str,
         target_state: str,
         *,
-        performance=None,
+        performance: Any = None,
         evidence_ids: list[str] | None = None,
         factor_version: str = "",
         commit: str = "",
@@ -293,48 +294,52 @@ class ControlPlaneAPI:
         }
 
 
-def create_app(api: ControlPlaneAPI):
+def create_app(api: ControlPlaneAPI) -> Any | None:
     """创建 FastAPI 应用。"""
     try:
-        from fastapi import FastAPI, HTTPException, Request
-        from fastapi.middleware.cors import CORSMiddleware
+        from fastapi import (  # type: ignore[import-not-found]  # 未接线参考实现,venv 未安装
+            FastAPI,
+            HTTPException,
+            Request,
+        )
+        from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-not-found]
     except ImportError:
         return None
 
     app = FastAPI(title="北斗 V2.0 Control Plane", version="2.0.0")
 
-    @app.get("/health")
-    async def health_endpoint():
+    @app.get("/health")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    async def health_endpoint() -> dict:
         return api.health().__dict__
 
-    @app.get("/ready")
-    async def ready_endpoint():
+    @app.get("/ready")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    async def ready_endpoint() -> dict:
         r = api.readiness()
         if not r.ready:
             raise HTTPException(status_code=503, detail="Not ready")
         return r.__dict__
 
-    @app.get("/trading-eligibility")
+    @app.get("/trading-eligibility")  # type: ignore[untyped-decorator]  # FastAPI 装饰器
     async def eligibility_endpoint() -> dict:
         return api.trading_eligibility().__dict__
 
-    @app.get("/facts")
+    @app.get("/facts")  # type: ignore[untyped-decorator]  # FastAPI 装饰器
     async def facts_endpoint() -> dict:
         return {"status": "NOT_VERIFIABLE", "message": "Use dedicated facts endpoint"}
 
-    @app.get("/factors")
+    @app.get("/factors")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
     async def factors_list_endpoint() -> list[dict]:
         return api.list_factors()
 
-    @app.post("/factors/promote-all")
+    @app.post("/factors/promote-all")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
     async def factors_promote_all_endpoint() -> dict:
         return api.promote_all_to_active()
 
-    @app.post("/factors/promote/{factor_id}")
+    @app.post("/factors/promote/{factor_id}")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
     async def factors_promote_endpoint(factor_id: str, target: str = "ACTIVE") -> dict:
         return api.promote_factor(factor_id, target)
 
-    @app.post("/emergency/{action}")
+    @app.post("/emergency/{action}")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
     async def emergency_endpoint(action: str, request: Request) -> dict:
         ea = api.emergency(action, "api-user", "api-call")
         if not ea.success:

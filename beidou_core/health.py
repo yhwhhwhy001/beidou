@@ -19,7 +19,7 @@ import threading
 import time
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Callable
+from typing import Any, Callable
 
 
 class HealthState(str, Enum):
@@ -102,10 +102,10 @@ class HealthServer:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
-            def log_message(self, format, *args):
+            def log_message(self, format: str, *args: Any) -> None:
                 return None  # Suppress access logs
 
-            def do_GET(self):
+            def do_GET(self) -> None:
                 if self.path == "/health":
                     # BD-P1-15: Liveness — 进程存活
                     liveness = server._liveness_check()

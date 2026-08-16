@@ -30,7 +30,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import numpy as np
 
@@ -149,6 +149,8 @@ class PipelineConfig:
         cost = cfg.get("cost")
         if not all(isinstance(section, dict) for section in (generation, fast_screen, walk_forward, cost)):
             raise ValueError("MINING_POLICY_REQUIRED_SECTIONS_MISSING")
+        assert isinstance(generation, dict) and isinstance(fast_screen, dict)
+        assert isinstance(walk_forward, dict) and isinstance(cost, dict)
 
         template_grid = generation.get("template_grid")
         if not isinstance(template_grid, dict):
@@ -636,14 +638,17 @@ class MiningRunner:
                 aux_samples = _aligned_aux_samples(aux_values)
                 if len(aux_samples) < 200:
                     stability_results.append(
-                        {
-                            "dimension": "timeframe_robustness",
-                            "ic_primary": ic,
-                            "ic_aux": 0.0,
-                            "degradation_pct": 1.0,
-                            "is_stable": False,
-                            "aux_samples": len(aux_samples),
-                        }
+                        cast(
+                            Any,
+                            {
+                                "dimension": "timeframe_robustness",
+                                "ic_primary": ic,
+                                "ic_aux": 0.0,
+                                "degradation_pct": 1.0,
+                                "is_stable": False,
+                                "aux_samples": len(aux_samples),
+                            },
+                        )
                     )
                     failure_reasons_aux = "aux_insufficient_samples"
                 else:
@@ -653,14 +658,17 @@ class MiningRunner:
                     degradation = abs(ic - ic_aux) / max(abs(ic), 1e-9)
                     stable_aux = (ic * ic_aux > 0) and degradation <= 0.5
                     stability_results.append(
-                        {
-                            "dimension": "timeframe_robustness",
-                            "ic_primary": ic,
-                            "ic_aux": ic_aux,
-                            "degradation_pct": degradation,
-                            "is_stable": stable_aux,
-                            "aux_samples": len(aux_samples),
-                        }
+                        cast(
+                            Any,
+                            {
+                                "dimension": "timeframe_robustness",
+                                "ic_primary": ic,
+                                "ic_aux": ic_aux,
+                                "degradation_pct": degradation,
+                                "is_stable": stable_aux,
+                                "aux_samples": len(aux_samples),
+                            },
+                        )
                     )
                     failure_reasons_aux = "" if stable_aux else "timeframe_unstable"
             else:
@@ -988,7 +996,7 @@ class MiningRunner:
             )[:3]
             if len(top_pass) >= 2:
                 try:
-                    from .generators.residual import compute_residual_values
+                    from .generators.residual import compute_residual_values  # type: ignore[attr-defined]  # 可选生成器
 
                     aligned_maps = [
                         {sample[0]: sample for sample in candidate.get("_aligned_samples", [])}
@@ -1069,7 +1077,7 @@ class MiningRunner:
             else "NOT_VERIFIABLE"
         )
 
-        result = MiningResult(
+        mining_result = MiningResult(
             run_id=run_id,
             candidates_generated=len(candidates),
             candidates_screened=len(screened),
@@ -1082,7 +1090,7 @@ class MiningRunner:
         )
 
         self._notify(progress_callback, "complete", 5, 5)
-        return result
+        return mining_result
 
     # ================================================================
     # 表达式引擎 & 特征字典（懒初始化）
@@ -1355,7 +1363,7 @@ class MiningRunner:
             logger.warning("factor expression evaluation failed; candidate rejected: %s", type(exc).__name__)
             return []
 
-        return values
+        return cast(list[float], values)
 
     def _notify(
         self,
@@ -1604,7 +1612,7 @@ def _compute_ic(predictions: list[float], returns: list[float]) -> float:
     sr = (sum((x - mr) ** 2 for x in r) / (n - 1)) ** 0.5
     if sp == 0 or sr == 0:
         return 0.0
-    return cov / (sp * sr)
+    return float(cov / (sp * sr))
 
 
 def _compute_sharpe(returns: list[float]) -> float:
@@ -1616,7 +1624,7 @@ def _compute_sharpe(returns: list[float]) -> float:
     std = var**0.5
     if std == 0:
         return 0.0
-    return mean / std
+    return float(mean / std)
 
 
 def _compute_ic_np(preds: np.ndarray, rets: np.ndarray) -> float:

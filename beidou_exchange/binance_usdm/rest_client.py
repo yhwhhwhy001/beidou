@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any
+from typing import Any, cast
 
 from beidou_exchange.binance_usdm.endpoints import (
     CIRCUIT_BREAKER_COOLDOWN,
@@ -129,7 +129,7 @@ class BinanceRESTClient:
         """
         time_result = await self.get_server_time()
         if time_result.is_success():
-            server_time = int(time_result.data.get("serverTime", 0))
+            server_time = int(cast(Any, (time_result.data or {}).get("serverTime", 0)))
             local_time = int(time.time() * 1000)
             if server_time > 0:
                 self._clock_offset_ms = server_time - local_time
@@ -303,7 +303,7 @@ class BinanceRESTClient:
         # 1. 时钟偏差
         time_result = await self.get_server_time()
         if time_result.is_success():
-            server_time = time_result.data.get("serverTime", 0)
+            server_time = (time_result.data or {}).get("serverTime", 0)
             local_time = int(time.time() * 1000)
             skew = server_time - local_time
             capabilities["clock_skew_ms"] = skew
@@ -734,7 +734,7 @@ def _sync_urlopen(req: urllib.request.Request, timeout: int, _session: Any = Non
             req.full_url,
             response.status_code,
             response.reason_phrase,
-            dict(response.headers),
+            cast(Any, dict(response.headers)),
             BytesIO(response.content),
         )
         if close_after and client is not None:
