@@ -143,8 +143,8 @@ def simulate(
     )
 
 
-def load_symbol(symbol: str) -> pd.DataFrame:
-    path = KLINE_DIR / symbol / "1h.parquet"
+def load_symbol(symbol: str, interval: str = "1h") -> pd.DataFrame:
+    path = KLINE_DIR / symbol / f"{interval}.parquet"
     if not path.is_file():
         raise FileNotFoundError(f"{path} missing — run backfill first")
     df = pd.read_parquet(path)
@@ -253,14 +253,15 @@ def rsi_mapping_analysis(symbol: str, results: dict) -> None:
     )
 
 
-def vol_tier_analysis(symbol: str, results: dict) -> None:
+def vol_tier_analysis(symbol: str, results: dict, interval: str = "1h") -> None:
     """R-M03-3: 年化修正后 adaptive_leverage 档位失效量化。
 
-    旧口径 ann_vol_old = vol_20×√365(1h 误用日频年化);
-    新口径 ann_vol_new = vol_20×√8760 = old×√24。
+    旧口径 ann_vol_old = vol_20×√365(非 1d 档误用日频年化);
+    新口径 ann_vol_new = vol_20×√bars_per_year = old×√(bars/365)。
     统计:旧档位(0.2/0.4/0.6)在新/旧口径下的时间占比与杠杆分布。
     """
-    df = load_symbol(symbol)
+    bars_per_year = {"1h": 8760, "5m": 105120, "1m": 525600}[interval]
+    df = load_symbol(symbol, interval)
     closes = df["close"].tolist()
     rows: list[dict] = []
     for i in range(20, len(closes)):
@@ -271,7 +272,7 @@ def vol_tier_analysis(symbol: str, results: dict) -> None:
         rows.append(
             {
                 "old": vol_20 * (365**0.5),
-                "new": vol_20 * (8760**0.5),
+                "new": vol_20 * (bars_per_year**0.5),
             }
         )
     if not rows:
@@ -296,7 +297,7 @@ def vol_tier_analysis(symbol: str, results: dict) -> None:
 
     old_bucket = bucket_pct(frame["old"])
     new_old_threshold = bucket_pct(frame["new"])  # 新口径 + 旧阈值
-    equivalent_tiers = tuple(t * (24**0.5) for t in tiers)
+    equivalent_tiers = tuple(t * ((bars_per_year / 365) ** 0.5) for t in tiers)
     eq_bucket = {}
     for idx, level in enumerate(levels):
         if idx == 0:
@@ -306,7 +307,7 @@ def vol_tier_analysis(symbol: str, results: dict) -> None:
         else:
             mask = (frame["new"] >= equivalent_tiers[idx - 1]) & (frame["new"] < equivalent_tiers[idx])
         eq_bucket[str(level)] = round(float(mask.mean() * 100), 2)
-    results.setdefault("_vol_tiers", {})[symbol] = {
+    results.setdefault("_vol_tiers", {}).setdefault(interval, {})[symbol] = {
         "old_ann_vol_bucket_pct": old_bucket,
         "new_ann_vol_with_old_thresholds_pct": new_old_threshold,
         "new_ann_vol_with_equivalent_thresholds_pct": eq_bucket,
@@ -325,7 +326,8 @@ def main() -> None:
     for symbol in symbols:
         run_symbol(symbol, results)
         rsi_mapping_analysis(symbol, results)
-        vol_tier_analysis(symbol, results)
+        for interval in ("1h", "5m", "1m"):
+            vol_tier_analysis(symbol, results, interval)
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     evidence = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
