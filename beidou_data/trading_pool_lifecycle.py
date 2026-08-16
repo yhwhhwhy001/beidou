@@ -63,6 +63,9 @@ def _default_observation_hours() -> float:
 
     TESTNET-EXEMPT: EXEMPT-19（M02-F02）—— 环境变量覆盖属 operator
     显式配置，加载时审计日志；晋级权仍在实时评分规则。
+    M02-R2（对抗审查 CE-2）: 值域下限 1.0 小时 —— 0 或负值会让全新
+    未观察标的首次评分即 ACTIVE（观察期完全绕过），显式钳制；
+    审计日志每进程仅打印一次（防 PoolEntry 构造风暴）。
     """
     import logging
     import os
@@ -71,11 +74,17 @@ def _default_observation_hours() -> float:
     try:
         hours = float(raw)
     except ValueError:
-        logging.getLogger("beidou.trading_pool").warning(
-            "BEIDOU_MIN_OBSERVATION_HOURS=%r invalid, falling back to 24.0", raw
-        )
-        return 24.0
-    if hours != 24.0:
+        hours = 24.0
+    if hours < 1.0:
+        if not getattr(_default_observation_hours, "_clamped_logged", False):
+            _default_observation_hours._clamped_logged = True
+            logging.getLogger("beidou.trading_pool").warning(
+                "BEIDOU_MIN_OBSERVATION_HOURS=%r below 1.0h clamped to 1.0 (observation gate must not be bypassable)",
+                raw,
+            )
+        hours = 1.0
+    elif hours != 24.0 and not getattr(_default_observation_hours, "_override_logged", False):
+        _default_observation_hours._override_logged = True
         logging.getLogger("beidou.trading_pool").warning(
             "observation hours overridden by env: BEIDOU_MIN_OBSERVATION_HOURS=%s", raw
         )
@@ -164,6 +173,9 @@ class TradingPool:
                             pass
                     if detail.get("quarantine_reason"):
                         entry.quarantine_reason = str(detail["quarantine_reason"])
+                    # M02-R2（CE-4）: 恢复历史种子证据
+                    if isinstance(detail.get("historical_seed"), dict):
+                        entry.historical_seed = detail["historical_seed"]
                     raw_scores = detail.get("scores")
                     if isinstance(raw_scores, list):
                         restored_scores: list[InstrumentScore] = []
@@ -198,6 +210,9 @@ class TradingPool:
                 "promoted_at": entry.promoted_at.isoformat() if entry.promoted_at else None,
                 "quarantine_reason": entry.quarantine_reason,
                 "scores": [float(s.overall) for s in entry.scores[-20:]],
+                # M02-R2（CE-4）: 历史种子证据必须持久化 —— 重启后审计链
+                # 不得只剩被回拨的 observing_since 本身。
+                "historical_seed": entry.historical_seed,
             }
             self._event_sink(
                 {
@@ -237,11 +252,6 @@ class TradingPool:
         if quality_score < _threshold:
             return False
         evidence = evidence or {}
-        entry.historical_seed = {
-            "quality_score": round(quality_score, 4),
-            "evidence": evidence,
-            "seeded_at": datetime.now(timezone.utc).isoformat(),
-        }
         # M02-F01: 观察期起点派生自证据的数据天数（evidence["days"]）——
         # 旧实现用 365d 魔数捷径，与证据覆盖范围无关（审计失真）。
         # 无天数证据时保持保守 24h（不加速）。
@@ -249,11 +259,18 @@ class TradingPool:
             evidence_days = float(evidence.get("days", 0) or 0)
         except (TypeError, ValueError):
             evidence_days = 0.0
+        # M02-R2（对抗审查 CE-4）: 校验失败不得留下任何历史种子记录 ——
+        # 旧实现先写 historical_seed 再校验 days,失败路径留下"已种子"假审计。
         if evidence_days <= 0:
             return False
         backdated_hours = min(evidence_days * 24.0, 365.0 * 24.0)
+        entry.historical_seed = {
+            "quality_score": round(quality_score, 4),
+            "evidence": evidence,
+            "seeded_at": datetime.now(timezone.utc).isoformat(),
+            "observation_backdate_hours": round(backdated_hours, 1),
+        }
         entry.observing_since = datetime.now(timezone.utc) - timedelta(hours=backdated_hours)
-        entry.historical_seed["observation_backdate_hours"] = round(backdated_hours, 1)
         self._persist(entry)
         return True
 
@@ -270,8 +287,19 @@ class TradingPool:
         except (TypeError, ValueError):
             logging.getLogger("beidou.trading_pool").warning("non-numeric score weights ignored: %r", weights)
             return
-        if any(not (0.0 <= v <= 1.0) for v in parsed.values()) or sum(parsed.values()) <= 0:
-            logging.getLogger("beidou.trading_pool").warning("out-of-range score weights ignored: %r", parsed)
+        # M02-R2（对抗审查 CE-1）: 权重和必须落在 [PROMOTE_THRESHOLD, 1.0]
+        # —— 满分标的的 overall = sum(weights×1.0) = 权重和。和 <0.6 时
+        # 满分也永远无法达到晋级阈值（宇宙死锁）;和 >1.0 时 overall 越界
+        # 触发 range 检查（同样死锁）。ACTIVE 标的在死锁区间会永久
+        # QUARANTINED 且无回归路径。
+        total = sum(parsed.values())
+        if any(not (0.0 <= v <= 1.0) for v in parsed.values()) or not (self.PROMOTE_THRESHOLD <= total <= 1.0):
+            logging.getLogger("beidou.trading_pool").warning(
+                "score weights out of legal range (sum must be in [%s, 1.0]): %r sum=%s",
+                self.PROMOTE_THRESHOLD,
+                parsed,
+                total,
+            )
             return
         self._score_weights = parsed
 
@@ -314,6 +342,9 @@ class TradingPool:
                 entry.status = PoolStatus.OBSERVING
                 entry.quarantine_reason = None
                 entry.observing_since = datetime.now(timezone.utc)
+                # M02-R2（CE-5）: 回归后重新计时 —— 历史种子证据不再适用,
+                # 清除以免审计叙事自相矛盾（8760h 证据 + 24h 观察起点并存）。
+                entry.historical_seed = None
                 self._persist(entry)
             else:
                 return False

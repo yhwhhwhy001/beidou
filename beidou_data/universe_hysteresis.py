@@ -14,8 +14,10 @@ class UniverseEntry:
     symbol: str
     listing_age_days: float = 0.0
     daily_volume: float = 0.0
-    funding_rate: float = 0.0
-    open_interest: float = 0.0
+    # M02-R2（对抗审查 CE-3）: None = 未知/未提供 —— 旧实现用 0.0 作
+    # UNKNOWN 哨兵,把合法零费率/零 OI 误判为关键字段缺失阻断晋级。
+    funding_rate: float | None = None
+    open_interest: float | None = None
     dq_ok: bool = False
     capacity_score: float = 0.0  # 0.0-1.0
     is_executable: bool = False
@@ -24,8 +26,8 @@ class UniverseEntry:
     source: str = ""
 
     def is_promotable(self) -> bool:
-        """BD-CV13 AC-13-02: 关键字段 UNKNOWN → 不允许晋级。"""
-        if self.funding_rate == 0.0 and self.open_interest == 0.0:
+        """BD-CV13 AC-13-02: 关键字段 UNKNOWN（None）→ 不允许晋级。"""
+        if self.funding_rate is None or self.open_interest is None:
             return False
         if self.capacity_score <= 0.0:
             return False
