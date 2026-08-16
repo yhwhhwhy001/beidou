@@ -61,6 +61,12 @@ class ControlPlaneAPI:
     使用 FastAPI 提供 structured endpoints。
     单操作员模式只监听 localhost。
     远程访问必须 OIDC + TLS。
+
+    M17-F03 诚实化:本类为**未接线参考实现** —— 生产 HTTP 服务由
+    beidou_core.health.HealthServer 承担(四层健康状态回调制,引擎
+    真实接线)。本类的 create_app 从未在生产启动;health/readiness/
+    trading_eligibility/facts 端点无真实数据源时按 fail-closed 语义
+    返回(health 例外:进程存活语义)。接线前不得视为生产 API 面。
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9090):

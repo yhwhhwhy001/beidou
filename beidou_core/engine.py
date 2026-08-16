@@ -2051,6 +2051,10 @@ class AutonomousEngine:
         self._health.set_liveness_check(self._check_liveness)
         self._health.set_readiness_check(self._check_ready)
         self._health.set_trading_readiness(self._check_trading_ready)
+        # M17-F01/F02: /exit-ready 与 /factors 真实接线 —— 此前无回调
+        # (exit-ready 恒 503 "NOT_CONFIGURED",factors 恒空列表)
+        self._health.set_exit_readiness(self._check_exit_ready)
+        self._health.set_factor_provider(self._list_factors_for_api)
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
 
@@ -3093,6 +3097,37 @@ class AutonomousEngine:
         if not user_stream_ready:
             return False
         return self._realtime_age_seconds() <= 15.0
+
+    def _check_exit_ready(self) -> tuple[bool, str]:
+        """M17-F01: /exit-ready 真实接线 —— 控制面允许退出方向时可用。
+
+        退出订单(止损/止盈触发)属 REDUCE/FLATTEN 方向;控制面按
+        CONTROL_ALLOW_MATRIX 判定。LOCK 全冻结(需人工签名先转
+        EMERGENCY_FLATTEN),其余状态均允许退出方向。
+        """
+        from beidou_control.plane import CONTROL_ALLOW_MATRIX, RiskDirection
+
+        allowed = CONTROL_ALLOW_MATRIX.get(self._control.get_status(), set())
+        if RiskDirection.FLATTEN in allowed or RiskDirection.REDUCE in allowed:
+            return True, "EXIT_DIRECTION_ALLOWED"
+        return False, f"CONTROL_{self._control.get_status().value}_BLOCKS_EXIT"
+
+    def _list_factors_for_api(self) -> list[dict]:
+        """M17-F02: /factors 真实接线 —— 因子注册表公开快照。"""
+        registry = getattr(self, "_factor_registry", None)
+        if registry is None:
+            return []
+        try:
+            records = list(registry.get_active()) + list(registry.get_challengers())
+        except Exception:
+            return []
+        return [
+            {
+                "factor_id": str(rec.factor_id),
+                "lifecycle": str(getattr(getattr(rec, "lifecycle", None), "value", rec.lifecycle)),
+            }
+            for rec in records
+        ]
 
     def _check_trading_ready(self) -> tuple[bool, str]:
         if getattr(self, "_can_write", False) and getattr(self, "_policy_error", None):

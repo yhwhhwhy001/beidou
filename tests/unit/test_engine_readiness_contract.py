@@ -1256,3 +1256,63 @@ def test_realtime_liveness_uses_monotonic_age_not_wall_clock() -> None:
     engine._last_realtime_mono = time.monotonic() - 20.0
 
     assert engine._check_liveness().value == "UNHEALTHY"
+
+
+# --- M17: exit-ready 与 factors 端点真实接线 ---
+
+
+def _engine_with_control(status: ControlAction) -> AutonomousEngine:
+    engine = object.__new__(AutonomousEngine)
+    engine._control = SimpleNamespace(get_status=lambda: status)
+    return engine
+
+
+def test_exit_ready_allowed_when_control_permits_exit_direction() -> None:
+    for status in (
+        ControlAction.RESUME,
+        ControlAction.NO_NEW_RISK,
+        ControlAction.EXIT_ONLY,
+        ControlAction.EMERGENCY_FLATTEN,
+    ):
+        engine = _engine_with_control(status)
+        ready, reason = engine._check_exit_ready()
+        assert ready is True, f"{status} should permit exits, got {reason}"
+
+
+def test_exit_ready_blocked_under_lock() -> None:
+    engine = _engine_with_control(ControlAction.LOCK)
+    ready, reason = engine._check_exit_ready()
+    assert ready is False
+    assert "BLOCKS_EXIT" in reason
+
+
+def test_list_factors_for_api_empty_without_registry() -> None:
+    engine = object.__new__(AutonomousEngine)
+    assert engine._list_factors_for_api() == []
+
+
+def test_list_factors_for_api_returns_active_and_challengers() -> None:
+    engine = object.__new__(AutonomousEngine)
+
+    class _Lifecycle:
+        value = "ACTIVE"
+
+    rec_a = SimpleNamespace(factor_id="a", lifecycle=_Lifecycle())
+    rec_b = SimpleNamespace(factor_id="b", lifecycle=_Lifecycle())
+    engine._factor_registry = SimpleNamespace(
+        get_active=lambda: [rec_a],
+        get_challengers=lambda: [rec_b],
+    )
+    factors = engine._list_factors_for_api()
+    assert {f["factor_id"] for f in factors} == {"a", "b"}
+    assert all(f["lifecycle"] == "ACTIVE" for f in factors)
+
+
+def test_list_factors_for_api_survives_registry_failure() -> None:
+    engine = object.__new__(AutonomousEngine)
+
+    def _boom():
+        raise RuntimeError("registry unavailable")
+
+    engine._factor_registry = SimpleNamespace(get_active=_boom, get_challengers=_boom)
+    assert engine._list_factors_for_api() == []
