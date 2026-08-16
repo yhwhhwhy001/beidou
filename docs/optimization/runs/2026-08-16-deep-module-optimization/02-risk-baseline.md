@@ -80,3 +80,12 @@
 - INV-006（Paper/Testnet/Production 语义一致）：testnet 特赦 8 类（P0-20）；53 个旧测试曾把 testnet 自动 RESUME/陈旧事实 ready 编码为期望（上轮审查，待 M21 复查这些测试当前是否仍存在）
 - INV-008（自动恢复不得绕过风险状态机）：被 testnet 自动 RESUME 绕过（P0-12）
 - INV-009（健康状态必须来自真实观测）：因子 stale 检查 last_evaluation=0 例外（P1-13）
+
+## M03 对抗审查新增登记（2026-08-16 晚）
+
+| # | 模块 | 风险 | 证据 |
+|---|---|---|---|
+| R-M03-1 | M06 | **策略阈值重标定缺口（P0 级行为变更）**：Wilder RSI 与旧 SMA-RSI 差 max 22.7 点（>5 点占 56.5%）→ engine.py:719/722/1002 的 rsi<70/rsi>30/rsi>70 门、adaptive.py:232-241 档位整体偏移，入场/止盈判定翻转（实测 400 路径翻转 41 次）；ATR 全历史 Wilder 使波动 regime 切换期停损滞后 ±52%（TrailingExit 2×ATR、AdaptiveProtection stop_pct）；1m/5m 年化修正使 ann_vol 跳变 17-38× → leverage 档位/stress 门/1m/5m 信号流整流变化。**数学已正确，但旧阈值基于旧数学标定 —— M06 必须用回测证据重标定或显式登记风险接受** | M03 审查 exp 实测 |
+| R-M03-2 | M03 | rsi.py 扁平序列→100 误判 + NaN/负价伪造 VERIFIED —— **已修复**（扁平→50、非有限→NOT_VERIFIABLE）+ 测试循环自引用已重写为独立实现收敛断言 | 已闭合 |
+| R-M03-3 | M09 | 1m/5m 年化修正后 adaptive_leverage 档位（0.2/0.4/0.6/0.8 vol 阈值）未重标定 —— 与 R-M03-1 同族，M09 联动 | M03 审查 |
+| R-M03-4 | M03 | MACD 20-bar 冷启动非标准值（<26 bar 时 EMA26 退化纯 SMA，与标准语义符号级差异）—— 无生产消费者，登记观察 | feed.py |

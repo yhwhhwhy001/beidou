@@ -80,12 +80,19 @@ def compute_rsi_wilder(
         )
 
     # Step 1: 计算价格变化
+    # M03-R2（对抗审查反例）: 非有限/非正价格 → NOT_VERIFIABLE,绝不伪造
+    # 0.0 变化后继续计算（旧实现对 NaN/负价序列照常返回 VERIFIED）。
     changes: list[float] = []
     for i in range(1, n):
-        if math.isfinite(prices[i]) and math.isfinite(prices[i - 1]) and prices[i - 1] > 0:
-            changes.append(prices[i] - prices[i - 1])
-        else:
-            changes.append(0.0)
+        if not math.isfinite(prices[i]) or not math.isfinite(prices[i - 1]) or prices[i - 1] <= 0:
+            return RSIResult(
+                value=50.0,
+                avg_gain=0.0,
+                avg_loss=0.0,
+                n_periods_used=n,
+                verifiability=RSIVerifiability.NOT_VERIFIABLE,
+            )
+        changes.append(prices[i] - prices[i - 1])
 
     if len(changes) < period:
         return RSIResult(
@@ -111,7 +118,11 @@ def compute_rsi_wilder(
         avg_loss = (avg_loss * (period - 1) + loss) / period
 
     # Step 4: Calculate RSI
-    if avg_loss < 1e-15:
+    # M03-R2: 扁平序列（avg_gain==avg_loss==0）→ 中性 50,先于全涨/全跌
+    # 判定（旧实现只有 avg_loss<1e-15 → 100 分支,扁平市场被误判超买）。
+    if avg_loss < 1e-15 and avg_gain < 1e-15:
+        rsi = 50.0
+    elif avg_loss < 1e-15:
         # All gains, no losses → RSI = 100
         rsi = 100.0
     elif avg_gain < 1e-15:
@@ -154,10 +165,16 @@ def compute_rsi_simple(
 
     changes: list[float] = []
     for i in range(1, n):
-        if math.isfinite(prices[i]) and math.isfinite(prices[i - 1]) and prices[i - 1] > 0:
-            changes.append(prices[i] - prices[i - 1])
-        else:
-            changes.append(0.0)
+        # M03-R2: 非有限/非正价格 → NOT_VERIFIABLE（与 Wilder 版一致）
+        if not math.isfinite(prices[i]) or not math.isfinite(prices[i - 1]) or prices[i - 1] <= 0:
+            return RSIResult(
+                value=50.0,
+                avg_gain=0.0,
+                avg_loss=0.0,
+                n_periods_used=n,
+                verifiability=RSIVerifiability.NOT_VERIFIABLE,
+            )
+        changes.append(prices[i] - prices[i - 1])
 
     gains = [max(c, 0.0) for c in changes]
     losses = [abs(min(c, 0.0)) for c in changes]
@@ -169,7 +186,10 @@ def compute_rsi_simple(
     avg_gain = sum(recent_gains) / period
     avg_loss = sum(recent_losses) / period
 
-    if avg_loss < 1e-15:
+    # M03-R2: 扁平序列 → 中性 50（旧实现误判 100）
+    if avg_loss < 1e-15 and avg_gain < 1e-15:
+        rsi = 50.0
+    elif avg_loss < 1e-15:
         rsi = 100.0
     elif avg_gain < 1e-15:
         rsi = 0.0
