@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import dataclasses
 import os
 import signal
 import time
@@ -83,6 +84,25 @@ def summarize_blockers(blockers: list) -> str:
         parts.append(f"{check_id}(×{len(items)}){entity_part}: {message[:80]}")
     text = "; ".join(parts)
     return text if len(text) <= 400 else text[:397] + "..."
+
+
+def _apply_dev_fast_start_g5_exemption(checks: list[CheckResult], mode: str) -> list[CheckResult]:
+    """M22-F05 (codex merge 回归修复): 已登记 dev 便利豁免的启动层应用。
+
+    BEIDOU_DEV_FAST_START 是 M20 时代已登记的显式 dev 便利豁免
+    (.env 配置、wrapper 注入)。preflight 保持严格 —— G5 检查永不
+    缺席、status 恒为真实判定;启动层仅在豁免登记时把 G5 阻断语义
+    降级为 P2(FAIL+P2 不阻断,证据与输出保留)。未登记豁免时任何
+    G5 缺失仍硬阻断。豁免只作用于 testnet 写模式。
+    """
+    if not (os.environ.get("BEIDOU_DEV_FAST_START") and mode == "testnet"):
+        return checks
+    return [
+        dataclasses.replace(check, severity=CheckSeverity.P2)
+        if check.check_id == "preflight.g5_certificate"
+        else check
+        for check in checks
+    ]
 
 
 class BeidouSupervisor:
@@ -1330,6 +1350,7 @@ class BeidouSupervisor:
         # Preflight is strictly read-only. Do not create a PID lock or write
         # supervisor evidence until every blocking fact has passed.
         preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
+        preflight = _apply_dev_fast_start_g5_exemption(preflight, self.mode)
         self.report.phase = "PREFLIGHT"
         self.report.replace_phase_checks("preflight.", preflight)
         self._print_checks(preflight)

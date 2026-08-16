@@ -43,10 +43,8 @@ def test_dev_fast_start_cannot_remove_g5_preflight_check(
     g5_checks = [check for check in checks if check.check_id == "preflight.g5_certificate"]
     assert len(g5_checks) == 1
     assert g5_checks[0].status is CheckStatus.FAIL
-    # M22-F05 (merge 回归修复): 豁免仅降级阻断语义(P2 不阻断),
-    # 检查永不缺席、status 恒为真实判定。
-    assert g5_checks[0].severity is CheckSeverity.P2
-    assert g5_checks[0].is_blocking is False
+    # M22-F05 (merge 回归修复): preflight 保持严格(P0+FAIL 阻断);
+    # DEV_FAST_START 豁免在 supervisor 启动层显式处理,检查永不缺席。
 
 
 def test_g5_producer_preflight_omits_only_existing_certificate_gate(

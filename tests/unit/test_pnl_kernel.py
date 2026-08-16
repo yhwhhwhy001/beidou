@@ -171,7 +171,7 @@ class TestProfitFactor:
     """M08 登记兑现: Profit Factor 从 net_returns 推导。"""
 
     def test_profit_factor_positive_and_negative_returns(self) -> None:
-        from beidou_research.mining.evaluation.pnl_kernel import StrategyMetrics, StrategyPnL
+        from beidou_research.mining.evaluation.pnl_kernel import StrategyPnL
 
         pnl = StrategyPnL(net_returns=[0.02, 0.01, -0.005, 0.03, -0.01] * 3)  # ≥MIN_PERIODS
         kernel = StrategyPnLKernel()
