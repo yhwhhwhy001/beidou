@@ -516,6 +516,7 @@ class BinanceRESTClient:
                         }
                     )
                     self._rate_state.consecutive_failures += 1
+                    print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                     return Result.failure(
                         f"WRITE_UNKNOWN: {error_message or f'HTTP {http_status}'}",
                         http_status=http_status,
@@ -540,6 +541,7 @@ class BinanceRESTClient:
                         await asyncio.sleep(retry_after)
                         continue
                     self._rate_state.consecutive_failures += 1
+                    print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                     if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
                         self._rate_state.circuit_open = True
                         self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
@@ -572,6 +574,7 @@ class BinanceRESTClient:
                 # DEGRADED）
                 if category != ErrorCategory.AUTH_FAILURE:
                     self._rate_state.consecutive_failures += 1
+                    print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                     if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
                         self._rate_state.circuit_open = True
                         self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
@@ -592,6 +595,7 @@ class BinanceRESTClient:
                 is_write = method in ("POST", "PUT", "DELETE")
                 if is_write and attempt >= 0:  # 写请求第一次失败即停止
                     self._rate_state.consecutive_failures += 1
+                    print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                     return Result.failure(
                         f"WRITE_UNKNOWN: {str(e)[:180]}",
                         category=ErrorCategory.NETWORK,
@@ -608,6 +612,7 @@ class BinanceRESTClient:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 self._rate_state.consecutive_failures += 1
+                print(f"[rest] FAIL x{self._rate_state.consecutive_failures}: {method} {path} -> {str(locals().get('error_message', 'n/a'))[:100]}")
                 return Result.failure(
                     str(e)[:200],
                     category=ErrorCategory.NETWORK,
