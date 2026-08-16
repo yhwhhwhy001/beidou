@@ -27,7 +27,7 @@ def _valid_bundle() -> EvidenceBundle:
 
 def _chain(b: EvidenceBundle) -> list[dict]:
     replay = PaperReplayResult(paper_sharpe=0.5, paper_drawdown_pct=-3.0, signal_consistency=0.6,
-                               challenger_icir=0.25, window_bars=600, n_trades=5)
+                               paper_ir=0.25, window_bars=600, n_trades=5)
     chain = build_promotion_chain(b, ic=0.05, icir=0.4, sample_count=600, replay=replay,
                                   git_commit="abc123", expression_string="close", role="entry")
     assert chain is not None

@@ -1527,7 +1527,7 @@ def build_promotion_chain(
         requirements = PROMOTION_EVIDENCE_REQUIREMENTS[target]
         evidence_ids = list(requirements["required_evidence"])
         # M05-R2（对抗审查）: replay 相关步骤必须校验 replay 的真实值
-        # （旧实现仅非 None 检查,paper_sharpe/drawdown/challenger_icir
+        # （旧实现仅非 None 检查,paper_sharpe/drawdown/paper_ir
         # 从不验证,链可凭声明证据自证到 CHALLENGER）。
         replay_failures: list[str] = []
         if to_state == "PAPER_TRADING":
@@ -1535,8 +1535,12 @@ def build_promotion_chain(
                 replay_failures.append(f"paper_sharpe={getattr(replay, 'paper_sharpe', None)} <= 0")
             if float(getattr(replay, "paper_drawdown_pct", 0.0) or 0.0) < -50.0:
                 replay_failures.append(f"paper_drawdown_pct={getattr(replay, 'paper_drawdown_pct', None)} < -50%")
-        if to_state == "CHALLENGER" and float(getattr(replay, "challenger_icir", -1.0) or -1.0) < 0.1:
-            replay_failures.append(f"challenger_icir={getattr(replay, 'challenger_icir', None)} < 0.1")
+        # M14-R2: paper_ir(paper PnL 的 per-bar 信息比率)门槛 0.1 ——
+        # 仅约束"paper 盈利有信息量",不冒充 IC 选股能力;真实 IC 拦截
+        # 由 engine 侧 FactorEvaluator ICIR 门槛(0.3)承担。门槛签名
+        # 策略化属研究链演进,登记。
+        if to_state == "CHALLENGER" and float(getattr(replay, "paper_ir", -1.0) or -1.0) < 0.1:
+            replay_failures.append(f"paper_ir={getattr(replay, 'paper_ir', None)} < 0.1")
         decision = gate.validate_evidence(
             factor_id=bundle.factor_id,
             current_state=FactorLifecycle(from_state),

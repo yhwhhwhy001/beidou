@@ -2097,6 +2097,11 @@ class AutonomousEngine:
             "vol_tier_3": (0.01, 5.0),
             "position_pct_base": (0.0001, 0.5),
             "position_cap_ratio": (0.01, 1.0),
+            # M14-R2: Champion 晋级治理三键纳入值域校验 —— 非法值此前
+            # 静默瘫痪整个离线治理(对抗审查 P1)
+            "champion_min_icir": (0.0, 100.0),
+            "champion_min_samples": (0.0, 1e6),
+            "champion_degrade_icir": (0.0, 10.0),
         }
         for key, (lo, hi) in spec.items():
             raw = self._policy_params.get(key)
@@ -2121,6 +2126,23 @@ class AutonomousEngine:
                         f"SIGNED_POLICY_INVALID_PARAM:stop_loss_min_pct>={_max_pct}"
                     )
                     print(f"[policy] ERROR: stop_loss_min_pct({_min_pct}) must be < stop_loss_max_pct({_max_pct})")
+            except (TypeError, ValueError):
+                pass  # 单键校验已置 _policy_error
+
+        # M14-R2: Champion 晋级门槛必须高于降级门槛 —— 否则晋级即
+        # 降级抖振(同一模型在两个门槛间反复横跳)
+        _champ_min = self._policy_params.get("champion_min_icir")
+        _champ_deg = self._policy_params.get("champion_degrade_icir")
+        if _champ_min is not None and _champ_deg is not None:
+            try:
+                if float(_champ_min) <= float(_champ_deg):
+                    self._policy_error = self._policy_error or (
+                        "SIGNED_POLICY_INVALID_PARAM:champion_min_icir<=champion_degrade_icir"
+                    )
+                    print(
+                        f"[policy] ERROR: champion_min_icir({_champ_min}) must be > "
+                        f"champion_degrade_icir({_champ_deg})"
+                    )
             except (TypeError, ValueError):
                 pass  # 单键校验已置 _policy_error
 
@@ -2159,9 +2181,23 @@ class AutonomousEngine:
 
         策略提供字段 → 生效；缺失 → 采用保守默认并首次 WARN 打印
         （绝不静默使用代码常量）。策略文件补齐对应键后默认值自然失效。
+        M14-R2: 非法/非有限值不再向调用方抛 ValueError —— 置
+        _policy_error(fail-closed 写阻断)并返回保守默认,防止单键
+        非法值经调用链冒泡瘫痪整个 offline tick。
         """
         if key in self._policy_params:
-            return float(self._policy_params[key])
+            raw = self._policy_params[key]
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                self._policy_error = self._policy_error or f"SIGNED_POLICY_INVALID_PARAM:{key}={raw!r}"
+                print(f"[policy] ERROR: invalid parameter {key}={raw!r} — policy unusable, using default {default}")
+                return default
+            if not math.isfinite(value):
+                self._policy_error = self._policy_error or f"SIGNED_POLICY_INVALID_PARAM:{key}={value}"
+                print(f"[policy] ERROR: non-finite parameter {key}={value} — policy unusable, using default {default}")
+                return default
+            return value
         _flag = f"_policy_fallback_warned_{key}"
         if not getattr(self, _flag, False):
             setattr(self, _flag, True)
@@ -9666,6 +9702,14 @@ class AutonomousEngine:
                     # 更替历史由 ModelRegistry.champion_history 审计。
                     _champion_min_icir = self._policy_float_audited("champion_min_icir", 0.3)
                     _champion_min_samples = self._policy_float_audited("champion_min_samples", 50.0)
+                    # M14-R2: 门槛高于评估窗口(原始 pairs 截断 500)时晋级
+                    # 不可达 —— 显式 WARN,不静默 fail-closed
+                    if _champion_min_samples > len(pairs):
+                        print(
+                            f"[offline] WARN: champion_min_samples={_champion_min_samples:.0f} "
+                            f"exceeds evaluation window {len(pairs)} (raw_pairs truncated at 500) "
+                            f"— promotion unreachable"
+                        )
                     eligible = [
                         model
                         for model in registered_models
@@ -9684,6 +9728,26 @@ class AutonomousEngine:
                         champion = self._model_registry.get_champion(self._autopilot_strategy_id)
                         if champion and str(champion.model_id) != self._active_champion_id:
                             self._active_champion_id = str(champion.model_id)
+
+                    # M14-R2: Champion 降级路径(与晋级解耦,eligible 为空
+                    # 时同样评估)—— 跌破 champion_degrade_icir 归档
+                    # (审计台账;部署由因子生命周期驱动,因子降级另走
+                    # 下方 lifecycle 逻辑)
+                    champion = self._model_registry.get_champion(self._autopilot_strategy_id)
+                    if champion:
+                        _champ_icir = float(champion.metrics.get("icir", 0.0))
+                        _champ_samples = float(champion.metrics.get("sample_count", 0.0))
+                        if (
+                            math.isfinite(_champ_icir)
+                            and _champ_samples >= _champion_min_samples
+                            and _champ_icir < self._policy_float_audited("champion_degrade_icir", 0.05)
+                        ):
+                            self._model_registry.demote_champion(
+                                self._autopilot_strategy_id,
+                                f"ICIR {_champ_icir:.3f} < champion_degrade_icir (n={_champ_samples:.0f})",
+                            )
+                            self._active_champion_id = ""
+                            lifecycle_changed = True
 
                 # Lifecycle transitions remain conservative and require one
                 # isolated scope; all transitions still pass FactorPromotionGate.

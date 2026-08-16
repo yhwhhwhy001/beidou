@@ -41,7 +41,7 @@ def _replay() -> PaperReplayResult:
         paper_sharpe=0.5,
         paper_drawdown_pct=-5.0,
         signal_consistency=0.6,
-        challenger_icir=0.25,
+        paper_ir=0.25,
         window_bars=600,
         n_trades=10,
     )
@@ -157,7 +157,7 @@ def test_chain_rejects_bad_replay_values() -> None:
         paper_sharpe=-0.2,
         paper_drawdown_pct=-5.0,
         signal_consistency=0.6,
-        challenger_icir=0.25,
+        paper_ir=0.25,
         window_bars=600,
         n_trades=10,
     )

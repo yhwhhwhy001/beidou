@@ -54,9 +54,14 @@ class ModelRegistry:
 
     def promote_to_champion(self, strategy_id: StrategyId, model_id: ModelId) -> bool:
         models = self._models.get(strategy_id, [])
+        old_champ = self._champions.get(strategy_id)
+        # M14-R2: 幂等短路 —— 对当前 Champion 重复晋级会命中归档循环
+        # (old_champ == model_id 时把自身 ARCHIVED),公开 API 踩中即
+        # 破坏账本(对抗审查运行时复现)。
+        if old_champ == model_id:
+            return True
         for m in models:
             if m.model_id == model_id:
-                old_champ = self._champions.get(strategy_id)
                 m.status = ModelStatus.CHAMPION
                 m.champion_since = datetime.now(timezone.utc)
                 self._champions[strategy_id] = model_id
@@ -76,6 +81,31 @@ class ModelRegistry:
                 )
                 return True
         return False
+
+    def demote_champion(self, strategy_id: StrategyId, reason: str = "") -> bool:
+        """M14-R2: Champion 降级 —— 归档当前 Champion 并清空席位。
+
+        降级事件计入 champion_history(含 reason)。账本与部署解耦:
+        部署由因子生命周期驱动,此处只维护审计台账。
+        """
+        champ_id = self._champions.get(strategy_id)
+        if champ_id is None:
+            return False
+        for m in self._models.get(strategy_id, []):
+            if m.model_id == champ_id:
+                m.status = ModelStatus.ARCHIVED
+        self.champion_history.append(
+            {
+                "strategy_id": str(strategy_id),
+                "event": "DEMOTED",
+                "previous_champion": str(champ_id),
+                "new_champion": None,
+                "demoted_at": datetime.now(timezone.utc).isoformat(),
+                "reason": reason,
+            }
+        )
+        self._champions.pop(strategy_id, None)
+        return True
 
     def get_champion(self, strategy_id: StrategyId) -> ModelRecord | None:
         champ_id = self._champions.get(strategy_id)

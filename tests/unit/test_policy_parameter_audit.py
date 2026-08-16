@@ -243,3 +243,51 @@ def test_ordered_tiers_and_levels_pass_validation() -> None:
     )
     engine._validate_audited_policy_params()
     assert engine._policy_error is None
+
+
+# --- M14-R2: Champion 晋级治理三键值域与交叉约束 ---
+
+
+def test_champion_non_numeric_param_sets_policy_error() -> None:
+    """champion_min_icir: "abc" → _policy_error(fail-closed),不再冒泡瘫痪离线治理。"""
+    engine = _bare_engine(policy={"champion_min_icir": "abc"})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "champion_min_icir" in str(engine._policy_error)
+
+
+def test_champion_non_finite_param_sets_policy_error() -> None:
+    engine = _bare_engine(policy={"champion_min_icir": "-inf"})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "champion_min_icir" in str(engine._policy_error)
+
+
+def test_champion_out_of_range_param_sets_policy_error() -> None:
+    engine = _bare_engine(policy={"champion_min_samples": 2_000_000})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "champion_min_samples" in str(engine._policy_error)
+
+
+def test_champion_cross_constraint_min_must_exceed_degrade() -> None:
+    """晋级门槛 <= 降级门槛 → 政策不可用(晋级即降级抖振)。"""
+    engine = _bare_engine(policy={"champion_min_icir": 0.05, "champion_degrade_icir": 0.3})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "champion_min_icir" in str(engine._policy_error)
+
+
+def test_champion_valid_params_do_not_set_policy_error() -> None:
+    engine = _bare_engine(
+        policy={"champion_min_icir": 0.4, "champion_min_samples": 100, "champion_degrade_icir": 0.1}
+    )
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is None
+
+
+def test_policy_float_audited_invalid_value_returns_default_not_raises() -> None:
+    """非法值 → 置 _policy_error + 返回保守默认,不再向调用方抛 ValueError。"""
+    engine = _bare_engine(policy={"champion_min_icir": "abc"})
+    assert engine._policy_float_audited("champion_min_icir", 0.3) == 0.3
+    assert engine._policy_error is not None

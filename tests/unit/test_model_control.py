@@ -178,3 +178,74 @@ class TestReplayValidator:
         v.set_baseline("abc")
         assert v.all_checks_pass(result)
         assert v.verify_determinism(result)
+
+
+# --- M14-R2: Champion 治理幂等与降级 ---
+
+
+def test_promote_to_champion_idempotent_no_self_archive() -> None:
+    """对当前 Champion 重复晋级必须幂等 —— 回归:自归档 bug 破坏账本。"""
+    from beidou_shared.types import ModelId, StrategyId
+    from beidou_strategy.alpha.model_registry import ModelRecord, ModelRegistry, ModelStatus
+
+    registry = ModelRegistry()
+    sid = StrategyId("s1")
+    a = ModelRecord(
+        model_id=ModelId("A"),
+        strategy_id=sid,
+        status=ModelStatus.CHALLENGER,
+        version="v1",
+        metrics={"icir": 0.3, "sample_count": 60},
+    )
+    b = ModelRecord(
+        model_id=ModelId("B"),
+        strategy_id=sid,
+        status=ModelStatus.CHALLENGER,
+        version="v1",
+        metrics={"icir": 0.5, "sample_count": 60},
+    )
+    registry.register(a)
+    registry.register(b)
+
+    assert registry.promote_to_champion(sid, ModelId("A")) is True
+    assert registry.promote_to_champion(sid, ModelId("B")) is True  # 更替
+    assert registry.promote_to_champion(sid, ModelId("B")) is True  # 重复晋级 → 幂等
+
+    champion = registry.get_champion(sid)
+    assert champion is not None
+    assert str(champion.model_id) == "B"
+    assert champion.status is ModelStatus.CHAMPION  # 未被自归档
+    assert len(registry.champion_history) == 2  # 更替两次,幂等调用不产生第三条
+
+
+def test_demote_champion_archives_and_records_history() -> None:
+    from beidou_shared.types import ModelId, StrategyId
+    from beidou_strategy.alpha.model_registry import ModelRecord, ModelRegistry, ModelStatus
+
+    registry = ModelRegistry()
+    sid = StrategyId("s1")
+    a = ModelRecord(
+        model_id=ModelId("A"),
+        strategy_id=sid,
+        status=ModelStatus.CHALLENGER,
+        version="v1",
+        metrics={"icir": 0.4},
+    )
+    registry.register(a)
+    registry.promote_to_champion(sid, ModelId("A"))
+
+    assert registry.demote_champion(sid, "ICIR 0.02 < threshold") is True
+    assert registry.get_champion(sid) is None
+    assert a.status is ModelStatus.ARCHIVED
+    assert any(
+        entry.get("event") == "DEMOTED" and "ICIR 0.02" in str(entry.get("reason", ""))
+        for entry in registry.champion_history
+    )
+
+
+def test_demote_champion_without_champion_is_noop() -> None:
+    from beidou_shared.types import StrategyId
+    from beidou_strategy.alpha.model_registry import ModelRegistry
+
+    registry = ModelRegistry()
+    assert registry.demote_champion(StrategyId("s1"), "no champion") is False

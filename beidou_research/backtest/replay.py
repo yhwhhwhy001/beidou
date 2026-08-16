@@ -73,7 +73,11 @@ class PaperReplayResult:
     paper_sharpe: float = 0.0
     paper_drawdown_pct: float = 0.0
     signal_consistency: float = 0.0
-    challenger_icir: float = 0.0
+    # M14-R2: challenger_icir → paper_ir 语义诚实化 —— 该字段是 paper
+    # PnL 的 per-bar 信息比率,不是 IC 的信息系数 IR(对抗审查实测
+    # IC≡0 常数因子在上涨趋势下 per-bar IR 2.608 通过门槛,趋势红利
+    # 冒充选股能力)。字段名不得暗示 IC。
+    paper_ir: float = 0.0
     window_bars: int = 0
     n_trades: int = 0
     evidence_source: str = "historical_replay"
@@ -161,7 +165,7 @@ def simulate_paper_window(
         paper_sharpe=round(sharpe, 6),
         paper_drawdown_pct=round(max_dd * 100, 6),
         signal_consistency=round(consistency, 6),
-        challenger_icir=round(per_bar_ir, 6),
+        paper_ir=round(per_bar_ir, 6),
         window_bars=n,
         n_trades=trades,
     )
