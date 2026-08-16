@@ -92,6 +92,9 @@ class StrategyMetrics:
     rank_ic_mean: float
     turnover: float = 0.0
     is_verifiable: bool = True
+    # M08 登记兑现: Profit Factor = 毛利/毛损(从 net_returns 推导,
+    # 口径与 M08 修正后 PnL 内核一致;无亏损期时 None)
+    profit_factor: float | None = None
 
     @classmethod
     def not_verifiable(cls) -> StrategyMetrics:
@@ -294,6 +297,17 @@ class StrategyPnLKernel:
                 list(positions[1:]),
             )
 
+        # Profit Factor (M08 登记兑现): 毛利/毛损;全盈利期无限(None),
+        # 零亏损仅当无盈利期为 0.0
+        gross_profit = sum(max(r, 0.0) for r in net_returns)
+        gross_loss = sum(max(-r, 0.0) for r in net_returns)
+        if gross_loss > 1e-12:
+            profit_factor = gross_profit / gross_loss
+        elif gross_profit > 1e-12:
+            profit_factor = None  # 无亏损期 —— 不定义有限比值
+        else:
+            profit_factor = 0.0
+
         return StrategyMetrics(
             sharpe=round(sharpe, 4) if sharpe is not None else None,
             sortino=round(sortino, 4) if sortino is not None else None,
@@ -307,6 +321,7 @@ class StrategyPnLKernel:
             rank_ic_mean=round(rank_ic_mean, 4),
             turnover=round(turnover, 4),
             is_verifiable=True,
+            profit_factor=round(profit_factor, 4) if profit_factor is not None else None,
         )
 
     @staticmethod

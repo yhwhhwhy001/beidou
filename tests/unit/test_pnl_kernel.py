@@ -165,3 +165,33 @@ class TestMutationPnLKernel:
 
         # 原始收益 Sharpe ≠ 策略 PnL Sharpe — 证明两者不能混用
         assert raw_sharpe != strategy_sharpe, "原始收益与策略 PnL 的 Sharpe 应不同"
+
+
+class TestProfitFactor:
+    """M08 登记兑现: Profit Factor 从 net_returns 推导。"""
+
+    def test_profit_factor_positive_and_negative_returns(self) -> None:
+        from beidou_research.mining.evaluation.pnl_kernel import StrategyMetrics, StrategyPnL
+
+        pnl = StrategyPnL(net_returns=[0.02, 0.01, -0.005, 0.03, -0.01] * 3)  # ≥MIN_PERIODS
+        kernel = StrategyPnLKernel()
+        metrics = kernel.evaluate(pnl, periods_per_year=252)
+        assert metrics.profit_factor is not None
+        # (0.02+0.01+0.03) / (0.005+0.01) = 0.06/0.015 = 4.0
+        assert abs(metrics.profit_factor - 4.0) < 1e-3
+
+    def test_profit_factor_all_profitable_is_none(self) -> None:
+        from beidou_research.mining.evaluation.pnl_kernel import StrategyPnL
+
+        pnl = StrategyPnL(net_returns=[0.02, 0.01, 0.03] * 4)  # ≥MIN_PERIODS
+        kernel = StrategyPnLKernel()
+        metrics = kernel.evaluate(pnl, periods_per_year=252)
+        assert metrics.profit_factor is None
+
+    def test_profit_factor_all_losing_is_zero(self) -> None:
+        from beidou_research.mining.evaluation.pnl_kernel import StrategyPnL
+
+        pnl = StrategyPnL(net_returns=[-0.02, -0.01, -0.03] * 4)  # ≥MIN_PERIODS
+        kernel = StrategyPnLKernel()
+        metrics = kernel.evaluate(pnl, periods_per_year=252)
+        assert metrics.profit_factor == 0.0
