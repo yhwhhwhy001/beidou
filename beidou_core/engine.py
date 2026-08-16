@@ -1513,6 +1513,7 @@ class AutonomousEngine:
         # Business modules
         self._protection = ProtectionManager()
         self._protection_retries: dict[str, int] = {}  # 保护单重试计数
+        self._pending_protection_persist: dict[str, list] = {}  # M11-R2: persist 失败待补写(不重新下单)
         # Protection IDs are durable facts, not process-local discovery state.
         # Initialise these collections before any recovery/cleanup path can run.
         self._protection_exchange_attempted: set[str] = set()
@@ -3737,6 +3738,21 @@ class AutonomousEngine:
             exchange_order_id=str(exchange_order_id) if exchange_order_id else None,
         )
 
+    def _resolve_position_generation(self, symbol: str, pp: Any) -> int:
+        """M11-R2: S33 重建止损的持仓代数解析(可测试接缝)。
+
+        gen-0 保护行会在重启恢复被硬阻断(3981)且覆盖门(2923)恒跳过,
+        重建必须继承持仓真实代数;持仓代数缺失(外部持仓恢复边界)时
+        分配并登记新代数 —— gen-0 行不可持久化。
+        """
+        generation = max(
+            int(getattr(pp, "position_generation", 0) or 0),
+            int(self._position_generation.get(symbol, 0) or 0),
+        )
+        if generation <= 0:
+            generation = self._next_position_generation(symbol)
+        return generation
+
     def _next_position_generation(self, symbol: str) -> int:
         """Advance a durable owner-generation counter for one symbol."""
 
@@ -4960,22 +4976,35 @@ class AutonomousEngine:
                 # 未定义变量,该分支(ACK 即 CANCELED/EXPIRED 且部分成交)
                 # 执行即 NameError 中止整个下单流程(F821 实锤)。
                 if cumulative_filled > 0:
-                    _delta, _price, _fill_id = self._consume_cumulative_fill(
-                        exchange_order_id,
-                        order_symbol,
-                        order,
-                        status=actual_status,
-                    )
-                    if _delta > 0 and _price > 0:
-                        self._record_partial_fill_to_ledger(
+                    # M11-R2: 对齐 _monitor_orders PARTIALLY_FILLED 路径 ——
+                    # store 写失败时标记 retryable,防止成交滞留 PENDING
+                    # 永不入账(本地持仓低估 → 对账 MISMATCH)。
+                    fill_event_id_for_retry = ""
+                    fill_committed = False
+                    try:
+                        _delta, _price, _fill_id = self._consume_cumulative_fill(
                             exchange_order_id,
                             order_symbol,
                             order,
-                            _delta,
-                            _price,
-                            float(cumulative_filled),
-                            _fill_id,
                             status=actual_status,
+                        )
+                        fill_event_id_for_retry = _fill_id
+                        if _delta > 0 and _price > 0:
+                            fill_committed = self._record_partial_fill_to_ledger(
+                                exchange_order_id,
+                                order_symbol,
+                                order,
+                                _delta,
+                                _price,
+                                float(cumulative_filled),
+                                _fill_id,
+                                status=actual_status,
+                            )
+                    except Exception as _fill_exc:
+                        if fill_event_id_for_retry and not fill_committed:
+                            self._mark_fill_retryable(exchange_order_id, fill_event_id_for_retry)
+                        logger.warning(
+                            "ACK partial-fill ledger commit failed: %s", type(_fill_exc).__name__
                         )
                 execution_aggregate = self._outbox.transition_execution_child(
                     intent.intent_id,
@@ -7933,12 +7962,36 @@ class AutonomousEngine:
         print(f"[nearline] ⚠️ Emergency close intent rejected for {symbol}")
         return False
 
+    def _flush_pending_protection_persist(self) -> None:
+        """M11-R2: 补写 persist 失败的 ACTIVE 保护行(不重新下单)。
+
+        venue 上 algo 单已创建成功,仅 PG 落盘失败;回滚内存 ACTIVE 会造成
+        投影/对账与交易所事实分叉,故保留内存状态并每轮重试持久化。
+        """
+        pending = getattr(self, "_pending_protection_persist", {})
+        if not pending:
+            return
+        for pos_id, orders in list(pending.items()):
+            remaining = []
+            for p_order in orders:
+                try:
+                    if getattr(p_order, "status", None) == ProtectionStatus.ACTIVE:
+                        self._persist_protection_order(p_order, status="ACTIVE")
+                except Exception as exc:
+                    remaining.append(p_order)
+                    logger.warning("protection persist retry failed: %s", type(exc).__name__)
+            if remaining:
+                pending[pos_id] = remaining
+            else:
+                pending.pop(pos_id, None)
+
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
         """对保护单缺失的持仓进行重试；同时覆盖止损单和止盈单。
 
         与保护覆盖检查使用相同的 >= 语义：交易所保护单数量 >= 期望数量
         即视为已覆盖，避免重复下单。仅对确实缺失的订单类型进行补发。
         """
+        self._flush_pending_protection_persist()
         if not self._can_write:
             return
         # P2修复: LOCK 状态下跳过所有 API 操作（系统完全冻结）
@@ -8153,6 +8206,11 @@ class AutonomousEngine:
                             # BD-FIX (final82f): 投影已存在（stop_loss=None 恢复
                             # 场景）—— create_protection 会抛 "already exists"。
                             # 直接构建新止损单补挂投影，再走下方提交循环。
+                            # M11-R2: S33 重建必须继承持仓真实代数 —— 硬编码
+                            # gen-0 行会在重启恢复硬阻断(3981)且覆盖门(2923)
+                            # 恒跳过 → NO_NEW_RISK 死锁(对抗审查
+                            # CONFIRMED_BUG,运行时复刻)。
+                            _position_generation = self._resolve_position_generation(symbol, pp)
                             from beidou_safety.protection.engine import StopLossCalculator
 
                             sl_type = StopLossType(adaptive_cfg.stop_loss_config.get("type", "FIXED_PERCENT"))
@@ -8185,7 +8243,7 @@ class AutonomousEngine:
                                 stop_type=sl_type,
                                 reason=f"Stop Loss: {sl_type.value} (S33 rebuild)",
                                 owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
-                                position_generation=0,
+                                position_generation=_position_generation,
                                 session_id=str(getattr(self, "_session_id", "")),
                             )
                             print(f"[nearline] 🔧 S33 rebuilt stop loss for {symbol} at {trigger_value}")
@@ -8200,7 +8258,9 @@ class AutonomousEngine:
                                 stop_loss_config=adaptive_cfg.stop_loss_config,
                                 take_profit_config=adaptive_cfg.take_profit_config,
                                 owner_id=str(getattr(self, "_protection_owner_id", "beidou-testnet")),
-                                position_generation=0,
+                                # M11-R2: 全新持仓分配新代数(gen-0 行会触发
+                                # 恢复硬阻断与覆盖门跳过)
+                                position_generation=self._next_position_generation(symbol),
                                 session_id=str(getattr(self, "_session_id", "")),
                             )
                         # 立即提交到交易所
@@ -8233,7 +8293,18 @@ class AutonomousEngine:
                                         # M11-F02 (S33 持久化缺口): 新保护必须
                                         # 落 PG —— 旧实现只改内存,重启后投影
                                         # 丢失该 SL(并行会话实测需手工补写)。
-                                        self._persist_protection_order(p_order, status="ACTIVE")
+                                        # M11-R2: persist 失败不静默 —— 记入补写
+                                        # 集合,后续近线轮重试持久化(不重新下单,
+                                        # venue 单已存在;回滚内存会造成
+                                        # 对账/投影与交易所事实分叉)。
+                                        try:
+                                            self._persist_protection_order(p_order, status="ACTIVE")
+                                        except Exception as _persist_exc:
+                                            self._pending_protection_persist.setdefault(pos_id, []).append(p_order)
+                                            logger.warning(
+                                                "protection persist failed (queued for retry): %s",
+                                                type(_persist_exc).__name__,
+                                            )
                                         print(
                                             f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}"
                                         )
