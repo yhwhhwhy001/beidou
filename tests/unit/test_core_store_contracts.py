@@ -307,3 +307,23 @@ def test_core_store_close_suppresses_driver_failure(tmp_path) -> None:
     store._local.conn = BrokenConnection()
     store.close()
     assert store._local.conn is None
+
+
+def test_sqlite_reconciliation_snapshot_persists_order_detail(tmp_path) -> None:
+    """M16-F01: SQLite 版快照持久化参数级明细(与 PG 版 M13-R2 镜像对称)。"""
+    store = PersistentStore(str(tmp_path / "detail.db"))
+    snapshot = _snapshot()
+    snapshot.open_orders_detail = {"order-1": {"symbol": "BTCUSDT", "qty": "0.1", "price": "50000"}}
+    store.save_reconciliation_snapshot("snap-1", "SYSTEM", snapshot)
+    latest = store.restore_latest_reconciliation_snapshot("account", "BINANCE", "SYSTEM")
+    assert latest is not None
+    assert latest["open_orders_detail"] == {"order-1": {"symbol": "BTCUSDT", "qty": "0.1", "price": "50000"}}
+
+
+def test_sqlite_reconciliation_snapshot_without_detail_defaults_empty(tmp_path) -> None:
+    """旧快照/无明细快照恢复时 detail 缺省空 dict(向后兼容)。"""
+    store = PersistentStore(str(tmp_path / "nodetail.db"))
+    store.save_reconciliation_snapshot("snap-1", "SYSTEM", _snapshot())
+    latest = store.restore_latest_reconciliation_snapshot("account", "BINANCE", "SYSTEM")
+    assert latest is not None
+    assert latest["open_orders_detail"] == {}

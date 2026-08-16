@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+from typing import Any
 
 from beidou_safety.execution.contracts import TripleReconciliation  # BD-CV44
 from beidou_shared.types import AccountId, CorrelationId, MonetaryValue, Quantity, VenueId
@@ -334,10 +335,10 @@ class ReconciliationEngine:
         # - qty 解析失败不再双侧清零放行(fail-open)—— Decimal 解析
         #   失败产生阻断差异,与余额/仓位路径同构 fail-closed。
         # - price 加入比较域(任一侧为 0/空时跳过 —— STOP 类单 price=0
-        #   为无效价位)。stopPrice 系统侧无列(order_states),登记 M16
-        #   扩表 —— 不造假比较。
-        # - reduce_only 移除:系统侧 order_state 无该列,原实现恒空串
-        #   死代码(恒不触发),登记 M16 扩表。
+        #   为无效价位)。
+        # - reduce_only(M13-R2 因 order_states 无列移除;M16-F02 扩列
+        #   reduce_only/stop_price 后防线恢复,STOP 类单比较 stop_price);
+        #   单侧缺值仍跳过 —— 不造假比较。
         sys_detail = getattr(system_facts, "open_orders_detail", {}) or {}
         ex_detail = getattr(exchange_facts, "open_orders_detail", {}) or {}
         if sys_detail and ex_detail:
@@ -345,7 +346,9 @@ class ReconciliationEngine:
             for order_id in sorted(sys_orders & ex_orders):
                 s = sys_detail.get(order_id, {})
                 e = ex_detail.get(order_id, {})
-                for field in ("symbol", "side", "type"):
+                for field in ("symbol", "side", "type", "reduce_only"):
+                    # M16-F02: reduce_only 防线恢复 —— order_states 扩列后
+                    # 系统侧有真实来源;单侧缺值仍跳过(不造假比较)
                     s_val = str(s.get(field, "")).strip().upper()
                     e_val = str(e.get(field, "")).strip().upper()
                     if s_val and e_val and s_val != e_val:
@@ -356,14 +359,19 @@ class ReconciliationEngine:
                     if not s_qty.is_finite() or not e_qty.is_finite():
                         raise InvalidOperation("order qty is not finite")
                 except (InvalidOperation, TypeError, ValueError):
-                    param_diffs.append(
-                        f"{order_id}:qty(INVALID_ORDER_QTY_FACT: {s.get('qty')!r} vs {e.get('qty')!r})"
-                    )
+                    param_diffs.append(f"{order_id}:qty(INVALID_ORDER_QTY_FACT: {s.get('qty')!r} vs {e.get('qty')!r})")
                     continue
                 if abs(s_qty - e_qty) > Decimal("1e-9"):
                     param_diffs.append(f"{order_id}:qty({s_qty} vs {e_qty})")
-                s_price = str(s.get("price", "") or "").strip()
-                e_price = str(e.get("price", "") or "").strip()
+                # M16-F02: STOP 类单比较 stop_price(有效价位),普通单比较
+                # price;任一侧为 0/空时跳过(STOP 单 price=0 为无效价位)
+                order_type_upper = str(s.get("type", "")).strip().upper()
+                if "STOP" in order_type_upper:
+                    s_price = str(s.get("stop_price", "") or "").strip()
+                    e_price = str(e.get("stop_price", "") or "").strip()
+                else:
+                    s_price = str(s.get("price", "") or "").strip()
+                    e_price = str(e.get("price", "") or "").strip()
                 if s_price and e_price:
                     try:
                         s_p = Decimal(s_price)

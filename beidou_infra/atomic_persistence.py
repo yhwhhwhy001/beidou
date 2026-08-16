@@ -1,8 +1,10 @@
-"""BD-CV41: PostgreSQL 原子持久化层。
+"""BD-CV41: 原子持久化层 — 内存实现(未接线组件)。
 
-Intent/Outbox/OrderAggregate 原子写入。
-client_order_id 全局确定性且唯一。
-idempotency key 防重复。
+M16-F01 诚实化:本类为纯内存实现(dict),生产零接线 —— 引擎真实
+原子持久化由 PostgresPersistentStore/PostgresIntentOutbox 承担
+(BD-CV41 语义以幂等键 + fencing token + 事务写入实现)。本类契约
+(幂等/UNKNOWN 恢复/client_order_id 确定性)由单测锁定,属 BD-CV41
+的独立参考实现,接线前不得宣称 PostgreSQL 持久化。
 """
 
 from __future__ import annotations

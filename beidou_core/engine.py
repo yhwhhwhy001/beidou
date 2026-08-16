@@ -5822,6 +5822,8 @@ class AutonomousEngine:
                         result.get("origQty", "0"),
                         result.get("price"),
                         status,
+                        reduce_only=str(result.get("reduceOnly", "")),  # M16-F02
+                        stop_price=str(result.get("stopPrice", "")),  # M16-F02
                     )
 
                 elif status == "PARTIALLY_FILLED":
@@ -7182,7 +7184,9 @@ class AutonomousEngine:
             open_orders=[str(row["order_id"]) for row in active_orders],
             # M13-F01: 订单参数明细(系统侧)—— 参数级对账输入
             # M13-R2: 加 price(order_states 已有列);reduce_only 移除
-            # (order_states 无该列,原恒空串死代码,登记 M16 扩表)
+            # (order_states 无该列,原恒空串死代码)
+            # M16-F02: order_states 扩列 reduce_only/stop_price ——
+            # 防线恢复,比较循环重新启用
             open_orders_detail={
                 str(row["order_id"]): {
                     "symbol": str(row.get("symbol", "")),
@@ -7190,6 +7194,8 @@ class AutonomousEngine:
                     "qty": str(row.get("quantity", "0")),
                     "price": str(row.get("price", "")),
                     "type": str(row.get("order_type", "")),
+                    "reduce_only": str(row.get("reduce_only", "") or ""),
+                    "stop_price": str(row.get("stop_price", "") or ""),
                 }
                 for row in active_orders
             },

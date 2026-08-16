@@ -518,3 +518,35 @@ def test_three_way_aggregates_detail_degraded() -> None:
     result = ReconciliationEngine.compare_three_way(system, exchange, event, now=now)
     assert result.status is ReconciliationStatus.MATCHED
     assert result.detail_degraded is True
+
+
+# --- M16-F02: order_states 扩列后防线恢复 ---
+
+
+def test_reduce_only_drift_detected_when_both_sides_present() -> None:
+    """两侧都提供 reduce_only 且不一致 → 阻断(M16-F02 防线恢复)。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(reduce_only="true"))
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail(reduce_only="false"))
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("reduce_only" in str(d) for d in result.differences)
+
+
+def test_stop_order_compares_stop_price_not_price() -> None:
+    """STOP 类单比较 stop_price(有效价位),price=0 不参与。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(type="STOP_MARKET", price="0", stop_price="90000"))
+    exchange = _facts(
+        timestamp=now, source="EXCHANGE", detail=_detail(type="STOP_MARKET", price="0", stop_price="85000")
+    )
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("price" in str(d) for d in result.differences)
+
+    matched_system = _facts(timestamp=now, detail=_detail(type="STOP_MARKET", price="0", stop_price="85000"))
+    matched_exchange = _facts(
+        timestamp=now, source="EXCHANGE", detail=_detail(type="STOP_MARKET", price="0", stop_price="85000")
+    )
+    result2 = ReconciliationEngine.compare(matched_system, matched_exchange, now=now)
+    assert result2.status is ReconciliationStatus.MATCHED

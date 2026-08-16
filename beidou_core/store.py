@@ -103,6 +103,8 @@ class PersistentStore:
                 filled_qty TEXT DEFAULT '0',
                 avg_price TEXT,
                 client_order_id TEXT,
+                reduce_only TEXT,   -- M16-F02: 参数级对账防线
+                stop_price TEXT,    -- M16-F02: STOP 单有效价位
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -172,6 +174,7 @@ class PersistentStore:
                 balance_decimals INTEGER NOT NULL DEFAULT 8,
                 positions TEXT NOT NULL,
                 open_orders TEXT NOT NULL,
+                open_orders_detail TEXT,  -- M16-F01: 参数级明细(M13-R2 PG 对称)
                 margin_amount TEXT,
                 margin_currency TEXT,
                 margin_decimals INTEGER,
@@ -319,6 +322,13 @@ class PersistentStore:
         self._ensure_column(conn, "fill_events", "processing_state", "TEXT NOT NULL DEFAULT 'COMMITTED'")
         self._ensure_column(conn, "fill_events", "committed_at", "TEXT")
         self._ensure_column(conn, "reconciliation_results", "event_snapshot_id", "TEXT")
+        # M16-F01: 镜像漂移 —— PG 版(M13-R2)已序列化 open_orders_detail,
+        # SQLite 版同步(否则双 store 快照审计证据不对称)
+        self._ensure_column(conn, "reconciliation_snapshots", "open_orders_detail", "TEXT")
+        # M16-F02: order_states 扩列 —— 参数级对账的 reduce_only/stopPrice
+        # 防线(M13-R2 因无列移除比较,此处兑现登记项)
+        self._ensure_column(conn, "order_states", "reduce_only", "TEXT")
+        self._ensure_column(conn, "order_states", "stop_price", "TEXT")
         conn.commit()
 
     @staticmethod
@@ -481,9 +491,10 @@ class PersistentStore:
             """INSERT OR IGNORE INTO reconciliation_snapshots
                (snapshot_id, side, account_id, venue_id, balance_amount,
                 balance_currency, balance_decimals, positions, open_orders,
-                margin_amount, margin_currency, margin_decimals, timestamp,
-                correlation_id, source, fact_version, complete)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                open_orders_detail, margin_amount, margin_currency,
+                margin_decimals, timestamp, correlation_id, source,
+                fact_version, complete)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 str(snapshot_id),
                 str(side),
@@ -494,6 +505,14 @@ class PersistentStore:
                 int(facts.balance.decimals),
                 json.dumps({str(k): str(v.amount) for k, v in facts.positions.items()}, sort_keys=True),
                 json.dumps([str(order_id) for order_id in facts.open_orders], sort_keys=True),
+                # M16-F01: 参数级明细随快照持久化(与 PG 版 M13-R2 对齐)
+                json.dumps(
+                    {
+                        str(order_id): {str(k): str(v) for k, v in detail.items()}
+                        for order_id, detail in getattr(facts, "open_orders_detail", {}).items()
+                    },
+                    sort_keys=True,
+                ),
                 str(margin.amount) if margin is not None else None,
                 str(margin.currency) if margin is not None else None,
                 int(margin.decimals) if margin is not None else None,
@@ -549,6 +568,9 @@ class PersistentStore:
         data = dict(row)
         data["positions"] = json.loads(str(data["positions"]))
         data["open_orders"] = json.loads(str(data["open_orders"]))
+        # M16-F01: 解析参数级明细(与 PG 版镜像对称)
+        _detail = data.get("open_orders_detail")
+        data["open_orders_detail"] = json.loads(str(_detail)) if _detail else {}
         return data
 
     # --- User-stream event journal ---
@@ -980,6 +1002,9 @@ class PersistentStore:
         filled_qty: str = "0",
         avg_price: str | None = None,
         client_order_id: str | None = None,
+        *,
+        reduce_only: str | None = None,  # M16-F02: 参数级对账防线
+        stop_price: str | None = None,  # M16-F02: STOP 单有效价位
     ) -> None:
         conn = self._get_conn()
         # BD-FIX: 终态/部分成交不得被迟到的下单响应回写。实测 14:07
@@ -994,7 +1019,7 @@ class PersistentStore:
                 return
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",
+            "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, reduce_only, stop_price, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",
             (
                 order_id,
                 symbol,
@@ -1006,6 +1031,8 @@ class PersistentStore:
                 filled_qty,
                 avg_price,
                 client_order_id,
+                reduce_only,
+                stop_price,
                 order_id,
                 now,
                 now,

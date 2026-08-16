@@ -668,6 +668,9 @@ class PostgresPersistentStore:
         filled_qty: str = "0",
         avg_price: str | None = None,
         client_order_id: str | None = None,
+        *,
+        reduce_only: str | None = None,  # M16-F02: 参数级对账防线
+        stop_price: str | None = None,  # M16-F02: STOP 单有效价位
     ) -> None:
         existing = self._get_record("order_state", str(order_id))
         # BD-FIX: 终态/部分成交不得被迟到的下单响应回写。实测 14:07
@@ -693,6 +696,8 @@ class PostgresPersistentStore:
                 "filled_qty": str(filled_qty),
                 "avg_price": avg_price,
                 "client_order_id": client_order_id,
+                "reduce_only": reduce_only,
+                "stop_price": stop_price,
                 "created_at": str(existing.get("created_at")) if existing else datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },

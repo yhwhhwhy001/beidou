@@ -1,5 +1,9 @@
-"""Append-only 事件存储 — BD-03 PostgreSQL 持久化基础。
+"""Append-only 事件存储 — 内存实现(未接线组件)。
 
+M16-F01 诚实化:本类为纯内存实现(``_events`` 列表),生产零接线
+(engine 的持久化由 PostgresPersistentStore/IntentOutbox 承担,非事件
+溯源模型)。append-only/乐观并发/checksum 契约由单测锁定,事件溯源
+持久化(BD-03)属架构演进,接线前不得宣称 PostgreSQL 持久化。
 所有历史事实只追加(INSERT)，更新通过新事件表达。禁止 UPDATE/DELETE 历史记录。
 """
 
