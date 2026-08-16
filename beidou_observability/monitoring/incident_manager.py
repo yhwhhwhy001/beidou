@@ -1,4 +1,9 @@
-"""Incident FSM+dedupe+remediation allowlist (MON09)。"""
+"""Incident FSM+dedupe+remediation allowlist (MON09)。
+
+M18-F03 诚实化:本模块为监控子系统的**未接线组件** —— 生产事故管理
+由引擎的 AlertDispatcher(告警分发器)承担,IncidentManager 无生产
+实例化。契约由单测锁定,接线前不得视为生产事故路径。
+"""
 
 import time
 from dataclasses import dataclass, field

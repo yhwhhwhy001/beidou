@@ -757,7 +757,14 @@ class BeidouSupervisor:
             open_p1 = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
-            self._monitoring_scheduler.tick(scheduler_results, open_p0=open_p0, open_p1=open_p1)  # type: ignore[no-untyped-call]
+            # M18-F01: 自愈活动信号真实传入(此前恒默认 False —— 频率
+            # 策略对恢复/重启场景失明)
+            self._monitoring_scheduler.tick(
+                scheduler_results,
+                open_p0=open_p0,
+                open_p1=open_p1,
+                self_heal=self._recovery_count > 0,
+            )  # type: ignore[no-untyped-call]
         except Exception as exc:
             logger.warning("monitoring scheduler update failed: %s: %s", type(exc).__name__, exc)
         self._monitoring_state = {
@@ -786,6 +793,9 @@ class BeidouSupervisor:
         # 同 check_id 的多个条目（多模块/多持仓/多订单）全部保留，避免遮蔽单项失败。
         monitoring_ids = {item.check_id for item in monitoring_checks}
         retained_runtime = [item for item in runtime_checks if item.check_id not in monitoring_ids]
+        # M18-F01: 缓存 monitoring 深度检查结果 —— MON08 稀疏轮复用
+        # (深度审计按调度器节奏执行,不重新 gather)
+        self._cached_monitoring_checks = list(monitoring_checks)
         return retained_runtime + monitoring_checks
 
     # 启动阶段只要求关键检查通过；行情、对账、心跳等运行时检查
@@ -1207,17 +1217,28 @@ class BeidouSupervisor:
             # check_monitor_loop_health 误判为循环 STALL（Main loop STALL 误报）。
             # 醒来即证明主循环存活，慢网络快照不计入心跳间隔。
             self._last_monitor_loop_ts = time.monotonic()
-            # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）；
-            # 每路快照带超时保护，慢网络不拖住循环心跳，超时下轮重试。
-            await asyncio.gather(
-                _refresh_snapshot_safe(self._refresh_exchange_account_snapshot()),
-                _refresh_snapshot_safe(self._refresh_position_mode()),
-                _refresh_snapshot_safe(self._refresh_exchange_algo_snapshot()),
-            )
-            # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
-            # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
-            checks = self._runtime_checks()
-            checks = self._merge_monitoring_checks(checks)
+            # M18-F01: MON08 频率策略门控实际节奏 —— 深度审计(外部事实
+            # monitoring checks + 交易所快照 gather)按调度器节奏执行
+            # (ALERT 600s / NORMAL 1800s / STABLE 3600s);runtime checks
+            # (引擎内部状态)每轮执行,安全门禁不稀疏。非 RESUME 或存在
+            # blocker 时保持每轮全查 —— P0 不被稀释,故障响应不退化。
+            _deep_due = self._monitoring_scheduler.should_run_deep_audit()  # type: ignore[no-untyped-call]
+            if _deep_due or self.report.blockers or self._control_state() != "RESUME":
+                # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）；
+                # 每路快照带超时保护，慢网络不拖住循环心跳，超时下轮重试。
+                await asyncio.gather(
+                    _refresh_snapshot_safe(self._refresh_exchange_account_snapshot()),
+                    _refresh_snapshot_safe(self._refresh_position_mode()),
+                    _refresh_snapshot_safe(self._refresh_exchange_algo_snapshot()),
+                )
+                # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
+                # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
+                checks = self._runtime_checks()
+                checks = self._merge_monitoring_checks(checks)
+            else:
+                # 稀疏轮:runtime checks + 上一轮 monitoring 深度检查缓存
+                checks = self._runtime_checks()
+                checks = checks + list(getattr(self, "_cached_monitoring_checks", []))
             try:
                 self._record_g7_certification_evidence(checks)
             except Exception as exc:

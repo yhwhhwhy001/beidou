@@ -532,3 +532,33 @@ class TestRepo:
     def test_incident(self, repo):
         repo.write_incident(Incident(incident_id="i1", dedupe_key="k1", detected_at=time.time()))
         assert repo.find_incident_by_dedupe_key("k1") is not None
+
+
+# --- M18-F02: 因子 stale 检查 0 值语义 ---
+
+
+def test_check_factors_zero_last_evaluation_warns_not_skips() -> None:
+    """last_evaluation=0(从未评估)不再静默跳过 —— 显式 WARN 审计可见。"""
+    results = check_factors([FactorState(factor_id="f1", value=0.5, lifecycle="ACTIVE", last_evaluation=0.0)])
+    assert len(results) == 1
+    assert results[0].status == CheckStatus.WARN
+    assert "last_evaluation unknown" in results[0].message
+
+
+def test_check_factors_stale_positive_last_evaluation_warns() -> None:
+    import time as _time
+
+    results = check_factors(
+        [FactorState(factor_id="f1", value=0.5, lifecycle="ACTIVE", last_evaluation=_time.time() - 900)]
+    )
+    assert len(results) == 1
+    assert "stale" in results[0].message
+
+
+def test_check_factors_fresh_evaluation_passes() -> None:
+    import time as _time
+
+    results = check_factors(
+        [FactorState(factor_id="f1", value=0.5, lifecycle="ACTIVE", last_evaluation=_time.time() - 60)]
+    )
+    assert results == []

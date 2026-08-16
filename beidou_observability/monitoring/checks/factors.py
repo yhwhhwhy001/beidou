@@ -45,7 +45,21 @@ def check_factors(states, *, active_strategy_refs=None):
                     observed_at=now,
                 )
             )
-        elif fs.last_evaluation > 0 and (now - fs.last_evaluation) > 600:
+        elif fs.last_evaluation <= 0:
+            # M18-F02: last_evaluation=0(从未评估/调用方未填)不再静默 ——
+            # 恒跳过的 stale 检查让过期因子永不暴露;显式 WARN 审计可见
+            results.append(
+                MonitoringCheckResult(
+                    check_id="runtime.health.factor_lifecycle",
+                    entity_type="factor",
+                    entity_id=fs.factor_id,
+                    status=CheckStatus.WARN,
+                    severity=CheckSeverity.P1,
+                    message=f"Factor {fs.factor_id}: last_evaluation unknown (0) — evaluation freshness not evidenced",
+                    observed_at=now,
+                )
+            )
+        elif (now - fs.last_evaluation) > 600:
             results.append(
                 MonitoringCheckResult(
                     check_id="runtime.health.factor_lifecycle",
