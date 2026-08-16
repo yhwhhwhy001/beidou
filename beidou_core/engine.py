@@ -57,14 +57,6 @@ from beidou_safety.execution.command_aggregate import (
     ParentExecutionState,
     TargetDeltaPlan,
 )
-from beidou_safety.execution.contracts import (
-    ExecutionPlan,
-    Fill,
-    OrderIdempotencyKey,
-    PlanSlice,
-    PlanStatus,
-    PositionAggregate,
-)
 from beidou_safety.execution.intent import IntentOutbox
 from beidou_safety.execution.ledger import (
     AccountType,
@@ -141,7 +133,7 @@ from beidou_strategy.alpha.mean_reversion import MeanReversionEngine, MultiPerio
 from beidou_strategy.alpha.model_registry import DriftDetector, ModelRecord, ModelRegistry, ModelStatus
 from beidou_strategy.alpha.signal_fusion import SignalFuser
 from beidou_strategy.components.mean_reversion_fixed import estimate_half_life, robust_zscore
-from beidou_strategy.kernel_parity import KernelMode, ParityResult, StrategyKernel
+from beidou_strategy.kernel_parity import KernelMode, StrategyKernel
 from beidou_strategy.paper_shadow import PaperMatchingEngine, PaperShadowRunner, ShadowConfig, ShadowMode
 from beidou_strategy.portfolio import PortfolioTarget, PositionOwnership
 from beidou_strategy.portfolio.contracts import PositionSide, SignedPortfolioTarget
@@ -395,6 +387,7 @@ def _reconciliation_max_age_seconds(env_mode_value: str) -> float:
     （CONNECTED 时 300s）一致——事件停流保护语义不变，只是对齐时间尺度。
     live/canary/paper 保持 30s 严格默认。
     """
+    # TESTNET-EXEMPT: EXEMPT-05
     return 300.0 if env_mode_value == "testnet" else 30.0
 
 
@@ -1797,35 +1790,11 @@ class AutonomousEngine:
         # wire_factor_registry 已移除：ControlPlane 无此方法，hasattr 恒为 False
 
         # ================================================================
-        # Fix 2: 启动 CertificationManager
-        # ================================================================
-        try:
-            from beidou_certification.engine import CertificationManager, G5TestnetCertification, G6ShadowCertification
-
-            self._cert_manager = CertificationManager()
-            if self._env_mode.value in ("testnet", "shadow"):
-                self._cert_manager.register_framework(G5TestnetCertification())
-            if self._env_mode.value in ("shadow",):
-                self._cert_manager.register_framework(G6ShadowCertification())
-        except Exception:
-            self._cert_manager = None
-
-        # ================================================================
-        # Fix 3: 接线 ProductionLadder
-        # ================================================================
-        try:
-            from beidou_certification.engine import ProductionLadder as CertProductionLadder
-
-            if self._cert_manager is not None:
-                self._production_ladder = CertProductionLadder(self._cert_manager)
-            else:
-                self._production_ladder = None
-        except Exception:
-            self._production_ladder = None
-
-        # ================================================================
         # Fix 4: 接线 ChaosEngine（环境变量开关）
         # ================================================================
+        # M00-F04: CertificationManager/ProductionLadder 构造后从未被读取
+        # （原 Fix 2/Fix 3 死接线），已移除；认证/资本阶梯晋级由
+        # beidou_certification 与监督器独立管理，不经过引擎实例。
         self._chaos_engine = None
         if os.environ.get("BEIDOU_CHAOS_ENABLED", "").lower() == "true":
             try:
@@ -1888,7 +1857,6 @@ class AutonomousEngine:
         self._strategy_kernel = StrategyKernel(mode=self._kernel_mode.value)
         self._strategy_kernel.set_alpha_graph(self._alpha_graph)
         self._strategy_kernel.set_typed_graph(self._typed_graph)
-        self._kernel_parity: str = ""
 
         # Strategy performance tracking
         self._autopilot_strategy_id = StrategyId("autopilot")
@@ -2380,6 +2348,7 @@ class AutonomousEngine:
         if self._running and self._realtime_age_seconds() > 15.0:
             return HealthState.UNHEALTHY
         # BD-FIX: 零写模式按设计跳过对账（_reconcile 直接返回），
+        # TESTNET-EXEMPT: EXEMPT-08
         # _last_reconciliation_result 恒 None。旧逻辑让 paper/shadow 的
         # liveness 恒 DEGRADED → 快照风控 exchange_health=UNSAFE →
         # AUX-R0 恒拒。零写模式以 RESUME + realtime 活跃为健康标准，
@@ -2579,6 +2548,7 @@ class AutonomousEngine:
 
         # BD-FIX（C3 审查）: 保护覆盖只统计本地所有权可证明的持仓 ——
         # 共享 demo 账户的外部持仓不属于引擎，不得产生覆盖 gap。
+        # TESTNET-EXEMPT: EXEMPT-02
         # 豁免仅限 testnet：live/canary 中"交易所有持仓但本地无记录"
         # 仍是严重缺口（丢仓），必须 fail-closed。
         _is_testnet = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
@@ -2699,6 +2669,8 @@ class AutonomousEngine:
             self._startup_mono = time.monotonic()
             startup_elapsed = 0.0
         startup_grace = startup_elapsed < 600.0
+        # TESTNET-EXEMPT: EXEMPT-03（demo 低频事件下放宽事件新鲜度，
+        # 停流保护语义不变；live/canary 保持严格 event_age）
         effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") or startup_grace else max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
         require_complete_projection = True
@@ -2779,13 +2751,6 @@ class AutonomousEngine:
         if not self._can_write:
             return False, "TRADING_WRITE_DISABLED"
         return True, "READY"
-
-    async def run_parity_check(self) -> ParityResult:
-        """BD-T05: 验证 Backtest/Paper/Testnet 策略一致性。"""
-        from beidou_strategy.kernel_parity import parity_check
-
-        _passed, result = parity_check()
-        return result
 
     def _portfolio_summary(self) -> str:
         """生成持仓摘要（品种/数量/入场/现价/盈亏%/盈亏$），供告警 webhook。"""
@@ -3316,6 +3281,8 @@ class AutonomousEngine:
                             self._last_protection_fact_at = time.time()
                             print("[protection] ownership verified — protection facts restored")
                     if durable_ok and self._control.get_status() != ControlAction.RESUME:
+                        # TESTNET-EXEMPT: EXEMPT-07（引擎侧自动 RESUME；
+                        # 授权链挂接属 M19）
                         try:
                             self._control.execute_action(ControlAction.RESUME)
                             print("[realtime] Auto-restored RESUME after durable facts verified")
@@ -6951,6 +6918,7 @@ class AutonomousEngine:
             result = self._recon.reconcile(AccountId("default"), VenueId("BINANCE"))
         # BD-FIX（用户批准）: testnet 下 event 侧（user stream 投影）差异
         # 降 WARN 不阻断 —— demo 事件乱序/丢失使投影器与 fill 记账两条
+        # TESTNET-EXEMPT: EXEMPT-01
         # 重建路径周期性分歧（final75 实测 BEAT 符号反转、余额 4997
         # 恒定）。system/exchange 两方仍严格（差异阻断不变）；
         # live/canary 保持三方严格。
@@ -8674,6 +8642,7 @@ class AutonomousEngine:
                         except (TypeError, ValueError):
                             liquidation_price = None
                         # BD-FIX: demo 账户快照不提供 liquidationPrice 字段
+                        # TESTNET-EXEMPT: EXEMPT-04
                         # （实测 None）—— R7 恒 UNKNOWN 使有持仓后无法下
                         # 任何新单（fail-closed 拦截加仓与平仓，18:20 实测
                         # SELL strength=1.0 被拒）。testnet 用杠杆推导保守
@@ -8820,6 +8789,7 @@ class AutonomousEngine:
                             reconciliation_status=snapshot_reconciliation_status,
                             exchange_health=(
                                 # BD-FIX: testnet 用核心活性判定（运行中 +
+                                # TESTNET-EXEMPT: EXEMPT-06
                                 # realtime 新鲜）—— 完整 liveness 的 user
                                 # stream/对账/控制面瞬时状态在 demo 抖动下
                                 # 反复 DEGRADED → R0 恒拒（final59 实测
@@ -9725,24 +9695,6 @@ class AutonomousEngine:
         return derive_eligibility(snap)
 
     @staticmethod
-    def build_strategy_signal(
-        strategy_id: str, action: str, symbol: str = "", confidence: float = 0.0, reason: str = ""
-    ) -> StrategySignal:
-        """@deprecated: 信号构建当前由近线循环内联执行，此方法保留用于外部工具。"""
-        """BD-CV23: 构造 Typed Strategy Signal。
-
-        NO_ACTION 不会被当系统故障，VETO 在所有环境阻断下游。
-        """
-        _action_map = {
-            "ACTION": StrategyAction.ACTION,
-            "NO_ACTION": StrategyAction.NO_ACTION,
-            "VETO": StrategyAction.VETO,
-            "DEGRADED": StrategyAction.DEGRADED,
-        }
-        sa = _action_map.get(action, StrategyAction.NO_ACTION)
-        return StrategySignal(strategy_id=strategy_id, action=sa, symbol=symbol, confidence=confidence, reason=reason)
-
-    @staticmethod
     def _signed_position_from_account(account: dict[str, Any], symbol: str) -> Decimal | None:
         """Read one exact signed venue position; incomplete facts stay UNKNOWN."""
 
@@ -9786,41 +9738,6 @@ class AutonomousEngine:
             inflight_exposure=inflight_exposure,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
-
-    def build_execution_plan(
-        self, slices: list[PlanSlice], algorithm: str = "", is_emergency: bool = False
-    ) -> ExecutionPlan:
-        """BD-CV40: 构造 ExecutionPlan。
-
-        无算法适用返回 NOT_EXECUTABLE。Emergency plan 绝不增加绝对仓位。
-        """
-        if not slices or not algorithm:
-            return ExecutionPlan(
-                plan_id=f"plan-{int(time.time() * 1000)}", status=PlanStatus.NOT_EXECUTABLE, algorithm=algorithm
-            )
-        return ExecutionPlan(
-            plan_id=f"plan-{int(time.time() * 1000)}",
-            slices=slices,
-            status=PlanStatus.PENDING,
-            algorithm=algorithm,
-            is_emergency=is_emergency,
-        )
-
-    def build_position_aggregate(self, symbol: str, fills: list[Fill] | None = None) -> PositionAggregate:
-        """BD-CV42: 从成交记录构建 PositionAggregate。
-
-        任意成交序列 replay 确定性。
-        """
-        pa = PositionAggregate(symbol=symbol, fills=fills or [])
-        if fills:
-            return pa.replay(fills)
-        return pa
-
-    def build_idempotency_key(
-        self, correlation_id: str, client_order_id: str, outbox_id: str = ""
-    ) -> OrderIdempotencyKey:
-        """BD-CV41: 构造订单幂等键。"""
-        return OrderIdempotencyKey(correlation_id=correlation_id, client_order_id=client_order_id, outbox_id=outbox_id)
 
     # --- Main loop ---
 

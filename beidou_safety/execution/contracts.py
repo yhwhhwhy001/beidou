@@ -124,12 +124,25 @@ class PositionAggregate:
     is_reduce_only_compliant: bool = True
 
     def replay(self, fills: list[Fill]) -> PositionAggregate:
-        """确定性重放成交序列。"""
+        """确定性重放成交序列。
+
+        reduce-only 永不跨零反向开仓：从空仓建仓（同方向加仓/减仓）
+        不受限；仅当成交会使净仓位**穿越零点反向**（多头 SELL 超量、
+        空头 BUY 超量）时跳过该成交并置 ``is_reduce_only_compliant=False``。
+        M00-F04：原实现对 SELL 侧仅 ``pass`` 空操作（成交仍被应用），
+        连跨零也未拦截，且缺失 BUY 侧对称防护，一并修复。逐笔独立判定；
+        ``is_reduce_only_compliant=False`` 的聚合（历史事实）不再拦截。
+        """
         net = self.net_position
         total_cost = self.avg_entry_price * abs(self.net_position) if self.net_position != 0 else 0.0
+        skipped_any = False
         for f in fills:
-            if self.is_reduce_only_compliant and f.side == "SELL" and net <= 0:
-                pass  # reduce-only 不跨零
+            if self.is_reduce_only_compliant and (
+                (f.side == "SELL" and net > 0 and f.quantity > net)
+                or (f.side == "BUY" and net < 0 and f.quantity > abs(net))
+            ):
+                skipped_any = True
+                continue
             net += f.quantity if f.side == "BUY" else -f.quantity
             total_cost += f.price * abs(f.quantity) + f.commission
         return PositionAggregate(
@@ -137,6 +150,7 @@ class PositionAggregate:
             net_position=net,
             avg_entry_price=total_cost / abs(net) if net != 0 else 0.0,
             fills=self.fills + fills,
+            is_reduce_only_compliant=self.is_reduce_only_compliant and not skipped_any,
         )
 
 

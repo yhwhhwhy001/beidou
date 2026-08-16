@@ -826,3 +826,41 @@ def test_mutation_empty_package_without_py_files_fails_scan() -> None:
             empty_packages.append(pkg_name)
 
     assert not empty_packages, f"PKG01 mutation: 空 Python 包未被架构扫描阻断: {empty_packages}"
+
+
+def test_engine_has_no_unreachable_builder_stubs() -> None:
+    """M00-F04: 已移除的引擎死代码/死接线不得回归（唯一生产主链收敛）。"""
+    source = (ROOT / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+    for dead in (
+        "def run_parity_check",
+        "def build_strategy_signal",
+        "def build_execution_plan",
+        "def build_position_aggregate",
+        "def build_idempotency_key",
+        "self._cert_manager",
+        "self._production_ladder",
+        "self._kernel_parity",
+    ):
+        assert dead not in source, f"dead symbol {dead} reintroduced"
+
+
+def test_no_second_engine_entry_outside_main_chain() -> None:
+    """M00-F06: 唯一生产主链之外的引擎实例化已退役（dev-only autopilot 除外）。"""
+    allowed = {
+        "beidou_launcher/supervisor.py",  # 唯一主链
+        "apps/autopilot/__main__.py",  # dev-only 手动入口（launchd 不使用）
+    }
+    for py_file in ROOT.rglob("*.py"):
+        if ".venv" in py_file.parts or "tests" in py_file.parts:
+            continue
+        rel = str(py_file.relative_to(ROOT))
+        text = py_file.read_text(encoding="utf-8")
+        if "AutonomousEngine(" in text:
+            assert rel in allowed, f"M00-F06: 非主链入口实例化引擎: {rel}"
+    for rel in (
+        "apps/strategy_engine/__main__.py",
+        "apps/safety_executor/__main__.py",
+        "apps/research_lab/__main__.py",
+    ):
+        src = (ROOT / rel).read_text(encoding="utf-8")
+        assert "retired" in src, f"{rel} 缺退役标记"

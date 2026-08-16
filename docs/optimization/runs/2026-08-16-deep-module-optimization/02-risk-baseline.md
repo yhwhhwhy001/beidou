@@ -41,7 +41,7 @@
 | P1-08 | M01 | replay 脚本 BROKEN（4 处独立崩溃：check_closed_bar/status=="CLOSED"/kline_gen.add/FeatureVector kwargs）；FeatureVector data_quality_tier 恒 UNKNOWN |
 | P1-09 | M10 | RiskSnapshot 完整性哈希无签名；PreRiskCheckerImpl.check() 生产死代码+内联副本；contracts.py:131-133 reduce-only replay pass 空操作 |
 | P1-10 | M13 | open_orders 对账仅比 ID 集合（reconciliation.py:305）；Ledger/PositionAggregate 双实现并存 |
-| P1-11 | M11 | rest_client 裸 print+locals() 取错误变量；idempotency_key sha256 截 64bit；三套订单状态机 |
+| P1-11 | M11 | rest_client 裸 print+locals() 取错误变量；idempotency_key sha256 截 64bit；三套订单状态机；**engine.py:4617/4624 `order_id` 未定义（F821）——成交处理路径真实未定义变量，执行到该分支即 NameError** |
 | P1-12 | M18 | 自适应频率不门控实际检查节奏（每 5s 全量跑）、未持久化；IncidentManager/StormDetector/P0ImmediateTrigger 未接入运行时 |
 | P1-13 | M18 | 因子 stale 检查 last_evaluation=0 硬编码恒失效；监控读引擎私字段 |
 | P1-14 | M16 | LeaseManager（lease.py 双主防护）未接线引擎；EventStore/AtomicPersistence 纯内存；PITR/restore 无独立运行证据 |
