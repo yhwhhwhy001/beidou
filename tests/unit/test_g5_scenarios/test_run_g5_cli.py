@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioResult,
     ScenarioStatus,
 )
-from scripts.testnet.run_g5 import _extract_account_access, build_context, main
+from scripts.testnet.run_g5 import _configure_scenario_logging, _extract_account_access, build_context, main
 
 
 class _FakeScenario(ScenarioBase):
@@ -71,3 +72,33 @@ def test_list_flag_prints_registry(capsys, monkeypatch) -> None:
     assert main() == 0
     out = capsys.readouterr().out
     assert "fake" in out
+
+
+def test_configure_scenario_logging_enables_info_emission() -> None:
+    """_configure_scenario_logging 后 root 达 INFO:场景 logger.info 意图消息真实可达(设计§4)。"""
+    root = logging.getLogger()
+    old_level = root.level
+    old_handlers = list(root.handlers)
+    captured: list[str] = []
+    probe = logging.Handler()
+    probe.setLevel(logging.INFO)
+
+    def _capture(record: logging.LogRecord) -> None:
+        captured.append(record.getMessage())
+
+    probe.emit = _capture
+    try:
+        root.setLevel(logging.WARNING)  # 先造出「INFO 被丢弃」的默认状态
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        _configure_scenario_logging()
+        assert root.level == logging.INFO  # INFO 级不再被 lastResort 丢弃
+        root.addHandler(probe)
+        logging.getLogger("beidou_certification.g5_scenarios.protocol.create_query_cancel").info("intent-probe")
+        assert "intent-probe" in captured  # INFO 消息真实到达 handler
+    finally:
+        root.setLevel(old_level)
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        for handler in old_handlers:
+            root.addHandler(handler)

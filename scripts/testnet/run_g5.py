@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import math
 import os
 import re
@@ -80,6 +81,16 @@ def require_exchange_symbol(probe_symbol: str, symbols: object) -> dict[str, obj
         if isinstance(candidate, dict) and candidate.get("symbol") == probe_symbol:
             return candidate
     raise ValueError(f"requested symbol {probe_symbol} was not returned by exchange info")
+
+
+def _configure_scenario_logging() -> None:
+    """场景运行日志配置:root 无 handler 时 INFO 意图消息会被 lastResort(WARNING+)丢弃。
+
+    设计规格§4「任何写操作前打印操作意图与金额」由场景 logger.info 输出,
+    此处保证真实认证运行时该意图可见(S1-S7 的 print 输出不受影响)。
+    """
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def build_context(
@@ -162,6 +173,9 @@ def main() -> int:
         for name in sorted(SCENARIO_REGISTRY):
             print(name)
         return 0
+
+    # 场景写操作意图为 logger.info 输出,root 默认无 handler 会被静默丢弃 —— 场景执行前配置 INFO
+    _configure_scenario_logging()
 
     if not args.symbol:
         parser.error("--symbol 是必选参数(--list 除外)")
