@@ -459,17 +459,25 @@ class BinanceRESTClient:
                 # P1-016: 从响应头解析限频状态
                 self._update_rate_state_from_headers(resp_headers)
 
-                if isinstance(data, dict) and "code" in data and data.get("code", 0) < 0:
-                    binance_code = data["code"]
-                    category, retryable = classify_http_error(200, "", binance_code)
-                    return Result.failure(
-                        data.get("msg", str(data)),
-                        http_status=200,
-                        category=category,
-                        retryable=retryable,
-                        raw=dict(data),
-                        source="binance_rest",
-                    )
+                if isinstance(data, dict) and "code" in data:
+                    # BD-FIX: 交易所部分端点(如 algoOrder 取消)的成功
+                    # 响应里 code 是字符串("200"),旧代码 `code < 0` 触发
+                    # str/int TypeError 并被误报 WRITE_UNKNOWN(交易所侧
+                    # 实际已生效)。先规范化为 int 再比较。
+                    try:
+                        binance_code = int(data.get("code") or 0)
+                    except (TypeError, ValueError):
+                        binance_code = 0
+                    if binance_code < 0:
+                        category, retryable = classify_http_error(200, "", binance_code)
+                        return Result.failure(
+                            data.get("msg", str(data)),
+                            http_status=200,
+                            category=category,
+                            retryable=retryable,
+                            raw=dict(data),
+                            source="binance_rest",
+                        )
 
                 success_result = Result.ok(data)
                 if cache_key is not None:

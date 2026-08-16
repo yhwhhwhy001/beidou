@@ -492,3 +492,42 @@ def test_venue_failure_still_counts_toward_circuit_breaker(monkeypatch: pytest.M
     result = asyncio.run(client.get_order("BTCUSDT", 7))
     assert result.is_success() is False
     assert client._rate_state.consecutive_failures == 1
+
+
+def test_delete_response_with_string_code_does_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DELETE 成功响应若 code 为字符串("200"),旧代码 `code < 0`
+    触发 str/int TypeError 并被误报 WRITE_UNKNOWN(交易所侧已生效)。
+    必须把 code 规范化为 int 后再比较。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+
+    def fake_urlopen(request, timeout, _session=None):
+        return b'{"algoId": 1000000168693137, "success": true, "code": "200"}', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    result = asyncio.run(client.cancel_algo_order("ONGUSDT", 1000000168693137))
+    assert result.is_success() is True
+    assert result.data == {"algoId": 1000000168693137, "success": True, "code": "200"}
+
+
+def test_string_negative_business_code_is_classified(monkeypatch: pytest.MonkeyPatch) -> None:
+    """字符串形式的负业务码("-2013")也必须被识别为业务拒绝。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+
+    def fake_urlopen(request, timeout, _session=None):
+        return b'{"code": "-2013", "msg": "Order does not exist."}', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    result = asyncio.run(client.get_order("BTCUSDT", 999999))
+    assert result.is_success() is False
+    assert result.error is not None
+    assert result.error.category is ErrorCategory.ORDER_REJECTED
