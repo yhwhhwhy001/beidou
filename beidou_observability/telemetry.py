@@ -74,6 +74,8 @@ class Incident:
     resolved_at: datetime | None = None
     evidence_snapshots: list[dict[str, Any]] = field(default_factory=list)
     related_incidents: list[str] = field(default_factory=list)
+    # M21: 运行时字段 —— 去重更新时由 AlertManager 就地刷新
+    _last_updated: datetime | None = None
 
     def acknowledge(self) -> None:
         if self.status == IncidentStatus.DETECTED:
