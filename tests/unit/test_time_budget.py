@@ -138,6 +138,32 @@ def test_policy_yaml_parses_time_budget_minutes(tmp_path):
     assert config.time_budget_minutes == 7.0
 
 
+def test_budget_hint_printed_only_when_stopped(capsys):
+    """CLI 提示:预算耗尽时输出警告,正常完成时静默。"""
+    from apps.factor_miner.__main__ import _echo_budget_hint
+    from beidou_research.mining.runner import MiningResult
+
+    result = MiningResult(
+        run_id="x",
+        candidates_generated=1,
+        candidates_screened=1,
+        candidates_evaluated=1,
+        candidates_passed=0,
+        evidence_bundles=[],
+        failure_taxonomy={},
+        runtime_seconds=1.0,
+        stopped_by_time_budget=True,
+    )
+    _echo_budget_hint(result)
+    captured = capsys.readouterr()
+    assert "时间预算耗尽" in captured.err
+
+    result.stopped_by_time_budget = False
+    _echo_budget_hint(result)
+    captured = capsys.readouterr()
+    assert "时间预算耗尽" not in captured.err
+
+
 def test_policy_yaml_without_resources_defaults_to_unlimited(tmp_path):
     """缺少 resources 段的 policy 回退为 0(不限时),兼容旧配置。"""
     policy = tmp_path / "policy.yaml"

@@ -308,6 +308,20 @@ class MiningRunner:
         """时间预算未耗尽返回 True;预算为 0/未设置表示不限时。"""
         return self._budget_deadline is None or self._budget_clock() <= self._budget_deadline
 
+    def _compute_residual_values(
+        self,
+        factor_values: list[float],
+        control_values: dict[str, list[float]],
+    ) -> list[float]:
+        """残差化(top 候选互残差):懒加载可选生成器并调用其方法。
+
+        compute_residual_values 是 ResidualGenerator 的实例方法而非
+        模块级函数;此前按模块级函数导入导致每次运行都吞 ImportError。
+        """
+        from .generators.residual import ResidualGenerator
+
+        return ResidualGenerator().compute_residual_values(factor_values, control_values)
+
     def run(
         self,
         price_data: list[dict],
@@ -1023,8 +1037,6 @@ class MiningRunner:
             )[:3]
             if len(top_pass) >= 2:
                 try:
-                    from .generators.residual import compute_residual_values  # type: ignore[attr-defined]  # 可选生成器
-
                     aligned_maps = [
                         {sample[0]: sample for sample in candidate.get("_aligned_samples", [])}
                         for candidate in top_pass
@@ -1039,7 +1051,7 @@ class MiningRunner:
                         ]
                         for j, candidate in enumerate(top_pass[1:])
                     }
-                    residual_vals = compute_residual_values(base_values, control_fvs)
+                    residual_vals = self._compute_residual_values(base_values, control_fvs)
                     residual_returns = [aligned_maps[0][index][2] for index in common_indices]
                     n_res = min(len(residual_vals), len(residual_returns))
                     res_pairs = [

@@ -15,12 +15,114 @@ from __future__ import annotations
 import json
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 
 import click
 
-from beidou_research.data.dataset_manifest import DatasetManifest
-from beidou_research.data.kline_store import KlineStore, frame_to_price_data
 from beidou_research.mining.persistence import JSONFileFactorStore
+
+
+def _echo_budget_hint(result) -> None:
+    """时间预算耗尽提示:优雅停止是预期路径,已落盘证据保留。"""
+    if getattr(result, "stopped_by_time_budget", False):
+        click.echo("  WARNING: 时间预算耗尽 — 已优雅停止,已保存的证据保留", err=True)
+
+
+def _resolve_jobs(requested: int, n_symbols: int) -> int:
+    """并行进程数收敛:至少 1,不超过品种数。"""
+    return max(1, min(requested, n_symbols))
+
+
+def _run_symbol_worker(payload: dict) -> dict:
+    """单品种完整挖掘;串行路径与进程池路径共用(模块级,spawn 可 pickle)。"""
+    sym = payload["symbol"]
+
+    from beidou_core.feed import MarketDataFeed
+    from beidou_research.data.dataset_manifest import DatasetManifest
+    from beidou_research.data.kline_store import KlineStore, frame_to_price_data
+    from beidou_research.mining.runner import (
+        MiningRunner,
+        PipelineConfig,
+        compute_feature_manifest_hash,
+    )
+
+    store = KlineStore(root=payload["data_root"])
+    manifest_hash = ""
+    if payload["from_store"] or store.has_data(sym, payload["interval"], min_rows=100):
+        if not store.has_data(sym, payload["interval"], min_rows=100):
+            raise RuntimeError(f"SYMBOL_LOCAL_DATA_MISSING:{sym}/{payload['interval']}")
+        frame = store.load(sym, payload["interval"])
+        price_data = frame_to_price_data(frame)
+        manifest = DatasetManifest.compute(frame, sym, payload["interval"])
+        manifest_hash = DatasetManifest.hash_of(manifest)
+        source = "local"
+    else:
+        feed = MarketDataFeed()
+        klines = feed.fetch_klines(sym, interval=payload["interval"], limit=payload["limit"])
+        if len(klines) < 100:
+            return {"symbol": sym, "skipped": True, "reason": "insufficient_klines"}
+        price_data = [
+            {
+                "timestamp": k["open_time"],
+                "close": k["close"],
+                "open": k["open"],
+                "high": k["high"],
+                "low": k["low"],
+                "volume": k["volume"],
+                "is_closed": k.get("is_closed") is True,
+            }
+            for k in klines
+        ]
+        source = "api"
+
+    pipeline_config = PipelineConfig.from_yaml(payload["policy"])
+    pipeline_config.evidence_dir = payload["output_dir"]
+    pipeline_config.dataset_manifest_hash = manifest_hash
+    # GAP-1: 特征 schema manifest 必须独立于 dataset payload 绑定。
+    # 本地数据与 API 拉取两条路径共用此处配置构造，均注入。
+    pipeline_config.feature_manifest_hash = compute_feature_manifest_hash()
+    runner = MiningRunner(pipeline_config)
+
+    result = runner.run(
+        price_data=price_data,
+        venue="BINANCE",
+        symbol=sym,
+        timeframe=payload["interval"],
+    )
+    return {
+        "symbol": sym,
+        "result": result,
+        "manifest_hash": manifest_hash,
+        "source": source,
+        "rows": len(price_data),
+        "pid": os.getpid(),
+    }
+
+
+def _run_symbols(payloads: list[dict], jobs: int) -> list[dict]:
+    """执行所有品种,按提交顺序返回结果;jobs > 1 且多品种时用进程池并行。"""
+    if jobs <= 1 or len(payloads) <= 1:
+        return [_run_symbol_worker(p) for p in payloads]
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        futures = {pool.submit(_run_symbol_worker, p): p["symbol"] for p in payloads}
+        results: list[dict] = []
+        for future in futures:
+            symbol = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:  # 单品种失败不阻断其他品种
+                results.append({"symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
+        return results
+
+
+def _echo_symbol_result(symbol: str, result, manifest_hash: str) -> None:
+    """打印单品种结果;无数据集清单与预算耗尽需显式警告。"""
+    if not manifest_hash:
+        click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）", err=True)
+    _echo_budget_hint(result)
+    click.echo(
+        f"  候选: {result.candidates_generated} | 预筛: {result.candidates_screened} | 评估: {result.candidates_evaluated} | PASS: {result.candidates_passed} | {result.runtime_seconds:.1f}s"
+    )
 
 
 @click.group()
@@ -51,6 +153,13 @@ def cli() -> None:
 @click.option("--dry-run", is_flag=True, help="仅验证配置，不执行挖掘")
 @click.option("--from-store", is_flag=True, help="强制从本地 parquet 读取（缺失即报错）")
 @click.option("--data-root", default=".beidou/data/klines", show_default=True, help="本地 K 线数据根目录")
+@click.option(
+    "--jobs",
+    default=4,
+    show_default=True,
+    type=click.IntRange(1, 16),
+    help="并行品种进程数（1 = 串行）",
+)
 def run(
     policy: str,
     config: str | None,
@@ -62,6 +171,7 @@ def run(
     dry_run: bool,
     from_store: bool,
     data_root: str,
+    jobs: int,
 ) -> None:
     """执行因子挖掘运行。"""
     click.echo(f"[factor_miner] 启动挖掘运行 (policy={policy})")
@@ -97,90 +207,56 @@ def run(
     os.environ.setdefault("BEIDOU_ENV", "research")
     os.makedirs(output_dir, exist_ok=True)
 
-    click.echo(f"[factor_miner] 全量挖掘运行 (品种={symbols_list}, interval={interval}, limit={limit})...")
+    resolved_jobs = _resolve_jobs(jobs, len(symbols_list))
+    click.echo(
+        f"[factor_miner] 全量挖掘运行 (品种={symbols_list}, interval={interval}, limit={limit}, jobs={resolved_jobs})..."
+    )
 
-    try:
-        from beidou_core.feed import MarketDataFeed
-        from beidou_research.mining.runner import (
-            MiningRunner,
-            PipelineConfig,
-            compute_feature_manifest_hash,
+    payloads = [
+        {
+            "symbol": sym,
+            "interval": interval,
+            "limit": limit,
+            "policy": policy,
+            "output_dir": output_dir,
+            "from_store": from_store,
+            "data_root": data_root,
+        }
+        for sym in symbols_list
+    ]
+
+    all_results: list[dict] = []
+    had_errors = False
+    for item in _run_symbols(payloads, resolved_jobs):
+        sym = item["symbol"]
+        click.echo(f"\n--- {sym} ---")
+        if item.get("error"):
+            click.echo(f"  ERROR: {item['error']}", err=True)
+            had_errors = True
+            continue
+        if item.get("skipped"):
+            click.echo(f"  跳过 ({item['reason']})")
+            continue
+
+        result = item["result"]
+        if item.get("source") == "local":
+            click.echo(f"  本地数据: {item['rows']} 条 manifest={item['manifest_hash'][:12]}")
+        else:
+            click.echo(f"  API K线: {item['rows']} 条")
+        _echo_symbol_result(sym, result, item.get("manifest_hash", ""))
+        all_results.append({"symbol": sym, "result": result})
+
+    # 汇总
+    click.echo(f"\n{'=' * 50}")
+    click.echo("汇总:")
+    for r in all_results:
+        sym = r["symbol"]
+        res = r["result"]
+        click.echo(
+            f"  {sym}: 候选{res.candidates_generated} 预筛{res.candidates_screened} PASS {res.candidates_passed} ({res.runtime_seconds:.1f}s)"
         )
 
-        feed = MarketDataFeed()
-        all_results: list[dict] = []
-
-        for sym in symbols_list:
-            click.echo(f"\n--- {sym} ---")
-            store = KlineStore(root=data_root)
-            manifest_hash = ""
-            if from_store or store.has_data(sym, interval, min_rows=100):
-                if not store.has_data(sym, interval, min_rows=100):
-                    click.echo(f"  ERROR: 本地无 {sym}/{interval} 数据（--from-store 指定）", err=True)
-                    sys.exit(1)
-                frame = store.load(sym, interval)
-                price_data = frame_to_price_data(frame)
-                manifest = DatasetManifest.compute(frame, sym, interval)
-                manifest_hash = DatasetManifest.hash_of(manifest)
-                click.echo(f"  本地数据: {len(price_data)} 条 manifest={manifest_hash[:12]}")
-            else:
-                klines = feed.fetch_klines(sym, interval=interval, limit=limit)
-                if len(klines) < 100:
-                    click.echo(f"  跳过 (K线不足: {len(klines)} 条)")
-                    continue
-                price_data = [
-                    {
-                        "timestamp": k["open_time"],
-                        "close": k["close"],
-                        "open": k["open"],
-                        "high": k["high"],
-                        "low": k["low"],
-                        "volume": k["volume"],
-                        "is_closed": k.get("is_closed") is True,
-                    }
-                    for k in klines
-                ]
-                click.echo(f"  API K线: {len(price_data)} 条")
-
-            pipeline_config = PipelineConfig.from_yaml(policy)
-            pipeline_config.evidence_dir = output_dir
-            pipeline_config.dataset_manifest_hash = manifest_hash
-            # GAP-1: 特征 schema manifest 必须独立于 dataset payload 绑定。
-            # 本地数据与 API 拉取两条路径共用此处配置构造，均注入。
-            pipeline_config.feature_manifest_hash = compute_feature_manifest_hash()
-            if not manifest_hash:
-                click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）")
-            runner = MiningRunner(pipeline_config)
-
-            result = runner.run(
-                price_data=price_data,
-                venue="BINANCE",
-                symbol=sym,
-                timeframe=interval,
-            )
-            click.echo(
-                f"  候选: {result.candidates_generated} | 预筛: {result.candidates_screened} | 评估: {result.candidates_evaluated} | PASS: {result.candidates_passed} | {result.runtime_seconds:.1f}s"
-            )
-            all_results.append({"symbol": sym, "result": result})
-
-        # 汇总
-        click.echo(f"\n{'=' * 50}")
-        click.echo("汇总:")
-        for r in all_results:
-            sym = r["symbol"]
-            res = r["result"]
-            click.echo(
-                f"  {sym}: 候选{res.candidates_generated} 预筛{res.candidates_screened} PASS {res.candidates_passed} ({res.runtime_seconds:.1f}s)"
-            )
-
-    except ImportError as e:
-        click.echo(f"[factor_miner] ERROR: 缺少依赖: {e}", err=True)
-        sys.exit(1)
-    except Exception as exc:
-        click.echo(f"[factor_miner] ERROR: {type(exc).__name__}: {exc}", err=True)
-        import traceback
-
-        traceback.print_exc()
+    if had_errors:
         sys.exit(1)
 
 

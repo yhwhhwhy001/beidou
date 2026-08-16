@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
+
 from beidou_shared.types import GateResult
 
 
@@ -64,6 +66,40 @@ class CPCVResult:
     gate_result: GateResult = GateResult.UNVERIFIABLE
     evidence_hash: str = ""
     failure_reasons: list[str] = field(default_factory=list)
+
+
+def _purge_and_embargo_mask(
+    train_indices: list[int],
+    test_indices: list[int],
+    purge_bars: int,
+    embargo_bars: int,
+) -> np.ndarray:
+    """向量化 purge/embargo 排除判定,与纯 Python 参考语义逐元素一致。
+
+    - purge:   存在测试索引 t 满足 |i - t| <= purge_bars 的 i 被排除。
+    - embargo: 存在测试索引 t 满足 0 < i - t <= embargo_bars 的 i 被排除。
+    返回与 train_indices 等长的 bool 掩码(True = 保留)。
+    """
+    train = np.asarray(train_indices, dtype=np.int64)
+    test = np.sort(np.asarray(test_indices, dtype=np.int64))
+    if test.size == 0:
+        return np.ones(train.size, dtype=bool)
+    excluded = np.zeros(train.size, dtype=bool)
+
+    if purge_bars > 0:
+        j = np.searchsorted(test, train)
+        lo = np.clip(j - 1, 0, test.size - 1)
+        hi = np.clip(j, 0, test.size - 1)
+        dist = np.minimum(np.abs(train - test[hi]), np.abs(train - test[lo]))
+        excluded |= dist <= purge_bars
+
+    if embargo_bars > 0:
+        j = np.searchsorted(test, train)
+        prev = test[np.clip(j - 1, 0, test.size - 1)]
+        delta = train - prev
+        excluded |= (delta > 0) & (delta <= embargo_bars)
+
+    return ~excluded
 
 
 class CPCVEvaluator:
@@ -140,18 +176,8 @@ class CPCVEvaluator:
             # Purge 每一个测试块的边界；只看测试集最小/最大索引会让
             # 中间测试块两侧的训练样本泄漏到路径中。
             if test_indices and (cfg.purge_bars > 0 or cfg.embargo_bars > 0):
-                test_index_set = set(test_indices)
-
-                def _overlaps_barrier(index: int, *, _test_index_set: set[int] = test_index_set) -> bool:
-                    return (
-                        cfg.purge_bars > 0
-                        and any(abs(index - test_index) <= cfg.purge_bars for test_index in _test_index_set)
-                    ) or (
-                        cfg.embargo_bars > 0
-                        and any(0 < index - test_index <= cfg.embargo_bars for test_index in _test_index_set)
-                    )
-
-                train_indices = [index for index in train_indices if not _overlaps_barrier(index)]
+                keep = _purge_and_embargo_mask(train_indices, test_indices, cfg.purge_bars, cfg.embargo_bars)
+                train_indices = [index for index, keep_i in zip(train_indices, keep) if keep_i]
 
             if len(train_indices) < max(cfg.min_train_samples, cfg.min_train_groups):
                 continue
@@ -299,18 +325,18 @@ class CPCVEvaluator:
 
 
 def _default_ic(predictions: list[float], returns: list[float]) -> float:
-    """默认 IC 指标。"""
+    """默认 IC 指标(Pearson 相关系数,numpy 向量化,语义与旧实现一致)。"""
     n = min(len(predictions), len(returns))
     if n < 3:
         return 0.0
-    p = predictions[:n]
-    r = returns[:n]
-    mp = sum(p) / n
-    mr = sum(r) / n
-    cov = sum((p[i] - mp) * (r[i] - mr) for i in range(n)) / (n - 1)
-    sp = (sum((x - mp) ** 2 for x in p) / (n - 1)) ** 0.5
-    sr = (sum((x - mr) ** 2 for x in r) / (n - 1)) ** 0.5
-    if sp == 0 or sr == 0:
+    p = np.asarray(predictions[:n], dtype=np.float64)
+    r = np.asarray(returns[:n], dtype=np.float64)
+    mp = p.mean()
+    mr = r.mean()
+    cov = float(np.sum((p - mp) * (r - mr)) / (n - 1))
+    sp = float(np.sqrt(np.sum((p - mp) ** 2) / (n - 1)))
+    sr = float(np.sqrt(np.sum((r - mr) ** 2) / (n - 1)))
+    if sp == 0.0 or sr == 0.0:
         return 0.0
     return float(cov / (sp * sr))
 
