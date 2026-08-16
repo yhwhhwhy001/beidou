@@ -9,6 +9,7 @@ BD-CV22: 集成 FactorEvidence contract — NaN/空evidence/旧evidence不能PRO
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -427,6 +428,21 @@ class FactorPromotionGate:
 
         # 检查 ICIR 阈值
         if performance is not None:
+            # M04-F01 (P0): NaN/Inf 不得通过晋级门禁 —— NaN < threshold 在
+            # Python 中恒 False（直接通过），Inf 同理。非有限指标必须显式
+            # 拒绝并记录,绝不能进入生命周期推进。
+            non_finite_metrics = []
+            if not math.isfinite(float(performance.icir)):
+                non_finite_metrics.append(f"icir={performance.icir!r}")
+            if not math.isfinite(float(performance.ic_mean)):
+                non_finite_metrics.append(f"ic_mean={performance.ic_mean!r}")
+            if isinstance(performance.sample_count, (int, float)) and not math.isfinite(
+                float(performance.sample_count)
+            ):
+                non_finite_metrics.append(f"sample_count={performance.sample_count!r}")
+            if non_finite_metrics:
+                failures.append("Non-finite metrics rejected: " + ", ".join(non_finite_metrics))
+
             min_icir = requirements.get("min_icir")
             if min_icir is not None and performance.icir < min_icir:
                 failures.append(f"ICIR {performance.icir:.3f} < threshold {min_icir}")
@@ -505,11 +521,22 @@ class FactorPromotionGate:
 
 
 class FactorEvaluator:
-    """因子评估器 — 计算 IC、RankIC、ICIR、分层回测、衰减、边际贡献。"""
+    """因子评估器 — 计算 IC、RankIC、ICIR、分层回测、衰减、边际贡献。
+
+    M04-F04: **deprecated 评估器** —— 统计推断请用
+    ``beidou_research.mining.evaluation.metrics``（Newey-West 标准误、
+    block bootstrap、VIF 等生产评估实现）。本类保留给 FactorRegistry
+    的旧调用路径,迁移（M14 生命周期联动）完成后删除。
+    """
 
     @staticmethod
     def compute_ic(predictions: list[float], returns: list[float]) -> tuple[float, float]:
-        """计算 Pearson IC（信息系数）及其标准误。"""
+        """计算 Pearson IC（信息系数）。
+
+        M04-F03: 第二返回值是**收益标准差**（非标准误）—— 历史标注
+        错误,当前无生产消费者（仅测试忽略性消费）。IC 的统计推断请用
+        mining/evaluation/metrics.py 的 Newey-West/block bootstrap。
+        """
         if len(predictions) < 3 or len(returns) < 3:
             return 0.0, 0.0
         n = min(len(predictions), len(returns))
@@ -565,14 +592,21 @@ class FactorEvaluator:
 
     @staticmethod
     def compute_icir(ic_series: list[float]) -> float:
-        """ICIR = mean(IC) / std(IC)。"""
+        """ICIR = mean(IC) / std(IC)。
+
+        M04-F02 (P0): 零方差（全同 IC 序列）返回 0.0 —— 旧实现返回
+        ±inf,穿透下游 `icir < threshold` 门禁（Inf 恒通过）。
+        无法从全同样本推断信息比,0.0 是保守中性值。
+        """
         if len(ic_series) < 2:
             return 0.0
         mean_ic = sum(ic_series) / len(ic_series)
         var = sum((ic - mean_ic) ** 2 for ic in ic_series) / (len(ic_series) - 1)
         std_ic = var**0.5
-        if std_ic == 0:
-            return float("inf") if mean_ic > 0 else float("-inf") if mean_ic < 0 else 0.0
+        # M04-F02: 浮点精度下全同序列的 std 可能为 ~1e-17 而非精确 0 ——
+        # 用相对容差判定"不可推断"（保守 0.0）。
+        if std_ic < 1e-12 * max(1.0, abs(mean_ic)):
+            return 0.0
         return mean_ic / std_ic
 
     @staticmethod
