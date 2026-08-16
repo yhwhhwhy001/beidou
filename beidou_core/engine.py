@@ -8168,6 +8168,10 @@ class AutonomousEngine:
                                         p_order.exchange_order_id = str(algo_resp["algoId"])
                                         p_order.status = ProtectionStatus.ACTIVE
                                         self._active_algo_ids.setdefault(pos_id, set()).add(str(algo_resp["algoId"]))
+                                        # M11-F02 (S33 持久化缺口): 新保护必须
+                                        # 落 PG —— 旧实现只改内存,重启后投影
+                                        # 丢失该 SL(并行会话实测需手工补写)。
+                                        self._persist_protection_order(p_order, status="ACTIVE")
                                         print(
                                             f"[nearline] ✅ SL/TP submitted: {symbol} {p_order.order_type} algoId={algo_resp['algoId']}"
                                         )

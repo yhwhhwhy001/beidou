@@ -68,6 +68,8 @@ class ExchangeProtectionManager:
         instrument_id: str,
         venue_id: str,
         entry_price: float,
+        *,
+        price_precision: int | None = None,
         quantity: float,
         side: str,
         stop_pct: float = 2.0,
@@ -93,7 +95,7 @@ class ExchangeProtectionManager:
             venue_id=venue_id,
             order_type=ProtectionType.STOP_MARKET,
             side="SELL" if side == "LONG" else "BUY",
-            trigger_price=round(stop_price, 8),
+            trigger_price=round(stop_price, price_precision) if price_precision is not None else round(stop_price, 8),
             quantity=quantity,
         )
         self._protections[sl.protection_id] = sl
@@ -108,7 +110,7 @@ class ExchangeProtectionManager:
             venue_id=venue_id,
             order_type=ProtectionType.TAKE_PROFIT_MARKET,
             side="SELL" if side == "LONG" else "BUY",
-            trigger_price=round(tp_price, 8),
+            trigger_price=round(tp_price, price_precision) if price_precision is not None else round(tp_price, 8),
             quantity=quantity,
         )
         self._protections[tp.protection_id] = tp
