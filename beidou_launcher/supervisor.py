@@ -935,6 +935,13 @@ class BeidouSupervisor:
             return False
         lifecycle = self.engine._lifecycle
         state_value = str(getattr(lifecycle.state, "value", lifecycle.state))
+        # BD-FIX (M00-F02): --no-self-heal 显式关闭自动恢复时，任何
+        # 路径（含 ACTIVE 捷径）都不得自动补发 RESUME —— 与下方
+        # RECOVERING 路径的既有 self_heal 门保持一致。恢复需人工/
+        # 重启授权。
+        if not self.self_heal:
+            print("[supervisor] RECOVERY SKIP: self_heal disabled (--no-self-heal)")
+            return False
         # BD-FIX: ACTIVE 时跳过 transition（ACTIVE→RECOVERING 状态机
         # 非法），直接走下方 RESUME 补发 —— 引擎健康但控制面被
         # 撤销的场景（final63 实测 PAUSED 卡死：授权撤销 + 对账恢复
@@ -1012,8 +1019,18 @@ class BeidouSupervisor:
         频发、人工授权不现实，因此在防抖器连续清洁（回到 RUNNING）且无
         blocker 时自动补发授权并 RESUME；live/canary/paper 不进入此路径，
         保持“撤销后必须人工/重启重新授权”的生产安全语义不变。
+        例外之外的例外（M00-F02）：``self_heal=False``（``--no-self-heal``）
+        时本路径同样关闭——显式关闭自愈优先于环境便利。
         """
         if self.engine is None or self.mode != "testnet":
+            return False
+        # BD-FIX (M00-F02): --no-self-heal 显式关闭自动恢复时，testnet
+        # 自动重新授权同样必须关闭 —— 否则 launchd 的 --no-self-heal
+        # 只挡住 _recover_if_validated 一条路径，故障自愈后仍会自动
+        # RESUME（P0-01）。live/canary/paper 不受影响（本方法仅
+        # testnet 进入）。
+        if not self.self_heal:
+            print("[supervisor] testnet auto re-auth SKIPPED: self_heal disabled (--no-self-heal)")
             return False
         if self._resume_authorized or self._control_state() == "RESUME" or self.report.blockers:
             return False

@@ -39,9 +39,12 @@ def _post_fail_closed_supervisor(
     mode: str,
     lifecycle_state: ModuleState = ModuleState.DEGRADED,
     with_blocker: bool = False,
+    self_heal: bool = True,
 ) -> tuple[BeidouSupervisor, ControlPlane, ModuleLifecycle]:
     """构造处于 ``_fail_closed`` 之后状态的监督器（授权已撤销、NO_NEW_RISK）。"""
-    supervisor = BeidouSupervisor(project_root=tmp_path, mode=mode, symbols=["BTCUSDT"], port=19090)
+    supervisor = BeidouSupervisor(
+        project_root=tmp_path, mode=mode, symbols=["BTCUSDT"], port=19090, self_heal=self_heal
+    )
     control = ControlPlane()  # 构造即 NO_NEW_RISK
     lifecycle = ModuleLifecycle("test")
     lifecycle.state = lifecycle_state
@@ -148,3 +151,38 @@ def test_manual_no_new_risk_with_intact_authority_is_not_overridden(tmp_path: Pa
     assert supervisor._maybe_testnet_auto_reauthorize() is False
     assert supervisor._control_state() == "NO_NEW_RISK"
     assert lifecycle.state is ModuleState.DEGRADED
+
+
+def test_no_self_heal_disables_testnet_auto_reauthorize(tmp_path: Path) -> None:
+    """--no-self-heal 时 testnet 不得自动重新授权（显式关闭自愈优先于环境便利）。"""
+    supervisor, _control, lifecycle = _post_fail_closed_supervisor(tmp_path, mode="testnet", self_heal=False)
+
+    assert supervisor._maybe_testnet_auto_reauthorize() is False
+    assert supervisor._resume_authorized is False
+    assert supervisor._control_state() == "NO_NEW_RISK"
+    assert lifecycle.state is ModuleState.DEGRADED
+    assert supervisor.report.supervisor_state != "RUNNING"
+
+
+def test_no_self_heal_disables_active_shortcut_resume(tmp_path: Path) -> None:
+    """--no-self-heal 时 _recover_if_validated 的 ACTIVE 捷径不得补发 RESUME。"""
+    supervisor, _control, _lifecycle = _post_fail_closed_supervisor(
+        tmp_path, mode="testnet", lifecycle_state=ModuleState.ACTIVE, self_heal=False
+    )
+    supervisor._resume_authorized = True  # 授权未撤销（例如外部下发 NO_NEW_RISK）
+
+    assert asyncio.run(supervisor._recover_if_validated([])) is False
+    assert supervisor._control_state() == "NO_NEW_RISK"
+    assert supervisor.report.supervisor_state != "RUNNING"
+
+
+def test_self_heal_active_shortcut_resume_preserved(tmp_path: Path) -> None:
+    """对照: self_heal=True 时 ACTIVE 捷径补发 RESUME 的既有行为保持不变。"""
+    supervisor, _control, _lifecycle = _post_fail_closed_supervisor(
+        tmp_path, mode="testnet", lifecycle_state=ModuleState.ACTIVE, self_heal=True
+    )
+    supervisor._resume_authorized = True
+
+    assert asyncio.run(supervisor._recover_if_validated([])) is True
+    assert supervisor._control_state() == "RESUME"
+    assert supervisor.report.supervisor_state == "RUNNING"
