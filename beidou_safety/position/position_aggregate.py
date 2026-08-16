@@ -40,7 +40,13 @@ class PositionAggregate:
     version: int = 0
 
     def apply_fill(self, fill: FillEvent) -> PositionAggregate:
-        """BD-CV42: 应用单笔成交。reduce-only 不跨零。"""
+        """BD-CV42: 应用单笔成交（原始事实入账，不做跨零改写）。
+
+        注意: 本类不做 reduce-only 跨零防护（成交事实必须完整入账，
+        不得丢弃）；契约版 PositionAggregate.replay 的跨零防护见
+        beidou_safety/execution/contracts.py（M00-F04）。仓位级
+        reduce-only 校验策略由 M12 评估。
+        """
         if not fill.fill_id.strip():
             raise ValueError("Fill identity is required")
         if not fill.symbol.strip():

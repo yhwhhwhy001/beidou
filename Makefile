@@ -95,10 +95,13 @@ verify:
 
 # 运行
 run-safety:
-	python -m apps.safety_executor
+	@echo "apps.safety_executor is retired (M00-F06); use: beidou start --mode testnet"
+	@exit 2
 
 run-strategy:
-	python -m apps.strategy_engine
+	@echo "apps.strategy_engine is retired (M00-F06); use: beidou start --mode paper"
+	@exit 2
 
 run-research:
-	python -m apps.research_lab
+	@echo "apps.research_lab is retired (M00-F06); use: python -m apps.factor_miner run --policy config/factor_mining_policy.yaml"
+	@exit 2

@@ -131,6 +131,9 @@ class BeidouSupervisor:
         self._recovery_timestamps: list[float] = []  # 时间窗口恢复追踪
         # 监控子系统 (MON08)：深度审计调度器与状态
         self._monitoring_scheduler = DeepAuditScheduler()
+        # M00-F03-R2: 最近一次告警的 blocker 聚合指纹（指纹变化即新告警，
+        # 防止 DEGRADED 期间新类型 P0 静默）
+        self._last_blocker_fingerprint: str | None = None
         self._recovery_engine = RecoveryEngine()  # BD-T14: 恢复引擎接线
         self._monitoring_state: dict[str, Any] = {}
         # Use the monotonic clock for the supervisor-loop heartbeat.  The
@@ -148,9 +151,13 @@ class BeidouSupervisor:
         # 窗口 —— 网络类瞬时故障即停机。testnet 加长 LOCKED 窗口
         # （60 周期 × 5s = 5 分钟），live/canary 保持严格 12 周期。
         _lock_after = 60 if self.mode == "testnet" else 12
+        # M00-F03-R2（对抗审查反例 D）: window_seconds=60 只保留 ~12 个
+        # 5s 样本，lock_after=60 永不可达（len(recent) >= 60 恒假）→
+        # testnet LOCKED 终态是死代码。窗口必须能容纳 lock_after 个样本。
         self._health_debounce = HealthDebounce(
             degrade_after=6,
             lock_after=_lock_after,
+            window_seconds=max(60.0, _lock_after * self.monitor_interval * 1.5),
         )
         # P1: G7 实时 SLI 追踪器 — 每个监控周期更新 7 个 SLI
         from .g7_tracker import G7LiveTracker
@@ -919,6 +926,7 @@ class BeidouSupervisor:
                     fatal=True,
                 )
                 self.report.supervisor_state = "LOCKED"
+                self._last_blocker_fingerprint = summarize_blockers(persistent_blockers)
                 self._send_supervisor_alert("LOCKED", persistent_blockers)
         elif debounce_action == "DEGRADED":
             # PKG02 (BDS-P0-001): 所有环境统一降级行为。
@@ -928,12 +936,21 @@ class BeidouSupervisor:
                     fatal=False,
                 )
                 self.report.supervisor_state = "DEGRADED"
+                self._last_blocker_fingerprint = summarize_blockers(persistent_blockers)
                 self._send_supervisor_alert("DEGRADED", persistent_blockers)
             else:
-                # M00-F03: 已在 DEGRADED —— 不再重复降级/打印/告警，但保留
-                # 静默 fail-closed 背压：降级期间持久阻断存在，控制面不允许
-                # 任何风险增加；若被外部意外 RESUME，立即拉回 NO_NEW_RISK。
-                if self._control_state() == "RESUME":
+                # M00-F03-R2（对抗审查反例 C）: 已在 DEGRADED —— 不重复
+                # 相同 blocker 的告警，但 blocker 指纹变化（新类型 P0 出现）
+                # 必须立即告警；否则新故障在 DEGRADED 期间永久静默。
+                fingerprint = summarize_blockers(persistent_blockers)
+                if fingerprint != self._last_blocker_fingerprint:
+                    self._last_blocker_fingerprint = fingerprint
+                    self._send_supervisor_alert("DEGRADED", persistent_blockers)
+                # 静默 fail-closed 背压：授权已撤销时控制面不允许停留
+                # RESUME；若被意外 RESUME，立即拉回 NO_NEW_RISK。
+                # 条件含 not _resume_authorized：授权有效（启动窗口）时
+                # 不参与拉回，避免与引擎恢复路径震荡。
+                if not self._resume_authorized and self._control_state() == "RESUME":
                     from beidou_control.plane import ControlAction
 
                     with suppress(Exception):

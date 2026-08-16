@@ -352,6 +352,7 @@ def _local_equity_estimate(engine: Any, shared_balance: float) -> float:
     启动基线（共享余额 - 自有持仓名义）+ 自有持仓 unrealized（取自
     交易所持仓行，Binance 标准字段）。非 testnet 直接返回共享余额。
     """
+    # TESTNET-EXEMPT: EXEMPT-14
     if str(getattr(getattr(engine, "_env_mode", None), "value", "")) != "testnet":
         return shared_balance
     base = getattr(engine, "_local_equity_base", None)
@@ -1283,7 +1284,17 @@ class AutonomousEngine:
             # 且 is_stale 不校验 policy 新鲜度（critical 列表仅含市场/账户/订单/
             # 仓位/对账/保护/风险），加载时刻即观察时刻，进程生命周期内有效。
             # 策略缺失时保持 _policy_hash 为空 → fail-closed NOT_VERIFIABLE。
-            self._policy_hash = hashlib.sha256(f"{self._policy_id_active}:{self._policy_version}".encode()).hexdigest()
+            # M00-F08-R2（对抗审查反例 J）: hash 必须覆盖参数值本身 ——
+            # 只哈希 policy_id:version 会在参数被替换/回退时宣称同一策略
+            # 指纹，RiskSnapshot 审计事实失真。
+            _params_canonical = json.dumps(self._policy_params, sort_keys=True, separators=(",", ":"), default=str)
+            self._policy_hash = hashlib.sha256(
+                f"{self._policy_id_active}:{self._policy_version}:{_params_canonical}".encode()
+            ).hexdigest()
+            # M00-F08-R2（对抗审查反例 K）: 新键值域校验 —— 签名值必须
+            # 类型正确且落在安全值域，非法值 = 策略不可用（write 阻断），
+            # 不得静默放大风险（如 max_margin_ratio=1.2）或注入非法类型。
+            self._validate_audited_policy_params()
             self._policy_observed_at = time.time()
             print(
                 f"[policy] ACTIVE: {self._policy_id_active} v{self._policy_version} "
@@ -1438,6 +1449,7 @@ class AutonomousEngine:
         self._restore_durable_ledger()
         # PKG20: 余额相对容差按环境配置 — testnet 为共享 demo 账户（外部活动漂移
         # ~0.14 USDT/分钟，0.01% 容差数分钟即失效）使用 1% 相对容差；
+        # TESTNET-EXEMPT: EXEMPT-09
         # canary/live/paper/research 保持 0.01% 严格默认不变。
         _recon_rel_tolerance = Decimal("0.01") if self._env_mode.value == "testnet" else Decimal("0.0001")
         self._recon = ReconciliationEngine(
@@ -1953,6 +1965,48 @@ class AutonomousEngine:
             raise RuntimeError(f"SIGNED_POLICY_PARAMETER_MISSING:{key}")
         return default
 
+    def _validate_audited_policy_params(self) -> None:
+        """校验 M00-F08 新增键的值域（对抗审查反例 K）。
+
+        签名策略提供的值必须类型正确且落在安全值域；非法 → _policy_error
+        （写模式 readiness 阻断，fail-closed）。缺失键走 _policy_float_audited
+        的保守默认 + WARN，不在此校验。
+        """
+        spec: dict[str, tuple[float, float]] = {
+            "maker_fee_bps": (0.0, 100.0),
+            "taker_fee_bps": (0.0, 100.0),
+            "stop_loss_min_pct": (0.05, 50.0),
+            "stop_loss_max_pct": (0.1, 100.0),
+            "stop_loss_atr_multiplier": (0.1, 10.0),
+            "capital_budget_ratio": (0.001, 1.0),
+            "max_margin_ratio": (0.1, 1.0),
+        }
+        for key, (lo, hi) in spec.items():
+            raw = self._policy_params.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                self._policy_error = self._policy_error or f"SIGNED_POLICY_INVALID_PARAM:{key}={raw!r}"
+                print(f"[policy] ERROR: invalid parameter {key}={raw!r} — policy unusable")
+                continue
+            if not math.isfinite(value) or not (lo <= value <= hi):
+                self._policy_error = self._policy_error or f"SIGNED_POLICY_INVALID_PARAM:{key}={value}"
+                print(f"[policy] ERROR: out-of-range parameter {key}={value} not in [{lo},{hi}] — policy unusable")
+        # 交叉约束: 止损区间下界必须小于上界
+        _min_pct = self._policy_params.get("stop_loss_min_pct")
+        _max_pct = self._policy_params.get("stop_loss_max_pct")
+        if _min_pct is not None and _max_pct is not None:
+            try:
+                if float(_min_pct) >= float(_max_pct):
+                    self._policy_error = self._policy_error or (
+                        f"SIGNED_POLICY_INVALID_PARAM:stop_loss_min_pct>={_max_pct}"
+                    )
+                    print(f"[policy] ERROR: stop_loss_min_pct({_min_pct}) must be < stop_loss_max_pct({_max_pct})")
+            except (TypeError, ValueError):
+                pass  # 单键校验已置 _policy_error
+
     def _policy_float_audited(self, key: str, default: float) -> float:
         """带审计的策略参数读取（M00-F08）。
 
@@ -2047,6 +2101,7 @@ class AutonomousEngine:
             # 语义）—— 返回 None 会触发 _block_unowned_protection_orders
             # → NO_NEW_RISK（I4 审查：demo 端点一次瞬时失败即锁控全局
             # 下单）。保护单缺失重试有 inventory 语义校验兜底。
+            # TESTNET-EXEMPT: EXEMPT-10
             if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                 print("[api] testnet: treating open Algo inventory failure as empty (retry next cycle)")
                 return []
@@ -2060,6 +2115,7 @@ class AutonomousEngine:
                 f"{_err.message if _err else 'data-is-None'}"
             )
             if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                # TESTNET-EXEMPT: EXEMPT-10
                 print("[api] testnet: treating open Algo inventory UNKNOWN as empty (retry next cycle)")
                 return []
             return None
@@ -2719,6 +2775,7 @@ class AutonomousEngine:
         # 无事件）中"无事件=无成交=无风险积累"，账户状态由 REST 对账
         # （90s 新鲜度）持续验证；事件停流保护由 transport 状态承担
         # （listenKey 失效 → fault → STOPPED → 检查 FAIL）。
+        # TESTNET-EXEMPT: EXEMPT-12
         # live/canary 保持严格 event_age 语义不变。
         _env_mode = getattr(self, "_env_mode", None)
         if _env_mode is not None and str(getattr(_env_mode, "value", "")) == "testnet":
@@ -6565,6 +6622,7 @@ class AutonomousEngine:
                     # NO_NEW_RISK）。testnet 按信息性事件处理（保持流健康，
                     # 与 ACCOUNT_CONFIG_UPDATE 同语义）；live/canary 保持
                     # fault（自己的算法单状态变化必须复核）。
+                    # TESTNET-EXEMPT: EXEMPT-11
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         self._update_user_stream_runtime(
                             status="HEALTHY",
@@ -6579,6 +6637,7 @@ class AutonomousEngine:
                     # BD-FIX: 共享 demo 账户的其他用户把共享保证金打到追缴线
                     # 也会推送 MARGIN_CALL —— testnet 按信息性事件处理
                     # （记录 + 保持流健康）；live 保持 terminal（自身仓位
+                # TESTNET-EXEMPT: EXEMPT-11
                     # 追缴必须停流复核）。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         print(f"[user-stream] MARGIN_CALL received on testnet (shared account) — informational")
@@ -6593,6 +6652,7 @@ class AutonomousEngine:
                     return
                 elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
                     # BD-FIX: 共享 demo 账户其他用户的策略/网格单更新属环境
+                # TESTNET-EXEMPT: EXEMPT-11
                     # 噪音 —— testnet 按信息性事件处理；live 保持 fault。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         print(f"[user-stream] {event_type} on testnet (shared account) — informational")
@@ -6608,6 +6668,7 @@ class AutonomousEngine:
                 else:
                     # PKG02 (BDS-P0-001): 所有环境统一 fail-closed；
                     # testnet 共享账户的未知事件（新格式/其他 worker 构造）
+                # TESTNET-EXEMPT: EXEMPT-11
                     # 按信息性处理，避免一次未知事件永久锁死交易（I5 审查）。
                     if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                         print(
@@ -6963,6 +7024,7 @@ class AutonomousEngine:
         # 恒定）。system/exchange 两方仍严格（差异阻断不变）；
         # live/canary 保持三方严格。
         if (
+            # TESTNET-EXEMPT: EXEMPT-13
             not result.matched
             and str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
         ):
@@ -6984,6 +7046,7 @@ class AutonomousEngine:
         # 两方（交易所 REST ↔ 系统账本）对拍一致即"独立验证"成立 ——
         # event_stream 侧因 sequencer 未授权而 INCOMPLETE 属预期（授权后
         # 才会完整，鸡生蛋），不构成授权障碍；两方冲突时 fail-closed 不授权。
+        # TESTNET-EXEMPT: EXEMPT-13
         recon_id = f"recon-{result.checked_at.strftime('%Y%m%dT%H%M%S.%fZ')}"
         self._maybe_authorize_user_stream_baseline(exchange_facts, recon_id, result=result)
         # PKG02 (BDS-P0-001): 移除 testnet 仅仓位不匹配旁路 — 所有环境使用统一对账标准
@@ -7157,6 +7220,7 @@ class AutonomousEngine:
             if any(str(d).startswith("system/exchange") for d in differences):
                 return False
         if not bool(getattr(self, "_can_write", False)):
+        # TESTNET-EXEMPT: EXEMPT-13
             return False
         if str(getattr(self._env_mode, "value", "")) != "testnet":
             return False
@@ -7233,6 +7297,7 @@ class AutonomousEngine:
             for pos in positions_list
             if abs(float(pos.get("positionAmt", 0) or 0)) > 0
         }
+        # TESTNET-EXEMPT: EXEMPT-16
         _env_mode = getattr(self, "_env_mode", None)
         is_testnet = _env_mode is not None and _env_mode.value == "testnet"
 
@@ -8667,6 +8732,7 @@ class AutonomousEngine:
                         # 风控判定 —— testnet 下本地无所有权证明时
                         # 按无持仓处理（风控针对自有敞口；liq 价同步
                         # 置 None，避免"已平仓但有清算价"误判）
+                        # TESTNET-EXEMPT: EXEMPT-17
                         _foreign_position = (
                             str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
                             and symbol not in _local_owned_symbols(self)
@@ -8691,6 +8757,7 @@ class AutonomousEngine:
                         # live/canary 保持严格（缺失即 UNKNOWN）。
                         if (
                             liquidation_price is None
+                        # TESTNET-EXEMPT: EXEMPT-04
                             and raw_qty != 0
                             and str(getattr(self._env_mode, "value", "")) == "testnet"
                         ):
@@ -8790,6 +8857,7 @@ class AutonomousEngine:
                         # demo 网络抖动的瞬时对账失败（30s 重试周期）让
                         # R0 恒拒（final58 实测 163 信号全被 AUX-R0 SKIP）。
                         # 对账的权威判定仍在 supervisor（90s 新鲜度），
+                        # TESTNET-EXEMPT: EXEMPT-06
                         # 此处只需"近期有过 MATCHED"作为快照输入。
                         _is_testnet_snap = str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
                         snapshot_reconciliation_status = (
@@ -9564,6 +9632,7 @@ class AutonomousEngine:
             # BD-FIX: Testnet 模式下提款权限由交易所默认开启（测试资金），
             # 不产生告警。非 testnet 环境保持 CRITICAL 阻断。
             if self._can_withdraw:
+                # TESTNET-EXEMPT: EXEMPT-15
                 _env_mode = getattr(self, "_env_mode", None)
                 is_testnet = _env_mode is not None and _env_mode.value == "testnet"
                 if not is_testnet:
@@ -9658,6 +9727,7 @@ class AutonomousEngine:
         self._venue_can_withdraw = venue_can_withdraw
         self._can_trade = venue_can_trade
         self._can_withdraw = venue_can_withdraw
+        # TESTNET-EXEMPT: EXEMPT-15
         _env_mode = getattr(self, "_env_mode", None)
         if venue_can_withdraw and (_env_mode is None or _env_mode.value != "testnet"):
             return False, "WITHDRAWAL_PERMISSION_ENABLED"
@@ -9665,6 +9735,7 @@ class AutonomousEngine:
             return False, "VENUE_TRADING_DISABLED"
         # BD-FIX: R9 风险视角 — testnet 豁免后不再把 venue 提款权限
         # 原样传给风险规则（否则 R9 恒 REJECT 阻塞 testnet 交易）。
+        # TESTNET-EXEMPT: EXEMPT-15
         self._risk_can_withdraw = bool(venue_can_withdraw) and _env_mode is not None and _env_mode.value != "testnet"
         return True, "OK"
 
@@ -9814,6 +9885,7 @@ class AutonomousEngine:
             # 快速 5 次重试（~15s）后 FATAL 会让每次抖动杀死进程。
             # testnet 进入长周期退避重试（最长 10 分钟），期间健康
             # 端点存活；live/canary 保持快速 FATAL。
+            # TESTNET-EXEMPT: EXEMPT-18
             if str(getattr(self._env_mode, "value", "")) == "testnet":
                 print("[beidou-autopilot] testnet: exchange API unavailable — long-cycle retry (up to 10min)")
                 for _long_attempt in range(10):

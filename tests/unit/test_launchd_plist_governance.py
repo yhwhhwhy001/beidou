@@ -80,14 +80,15 @@ def _run_wrapper_with_exit(code: int) -> int:
     ).returncode
 
 
-def test_wrapper_maps_terminal_exit_codes_to_zero() -> None:
-    """LOCKED(5)/FAILED(6) 映射为 0 —— launchd 不重启终态。"""
+def test_wrapper_maps_only_locked_to_zero() -> None:
+    """仅 LOCKED(5) 映射为 0 —— 终态不重启（M00-F07-R2 与 supervisor 真实返回码对齐）。"""
     assert _run_wrapper_with_exit(5) == 0
-    assert _run_wrapper_with_exit(6) == 0
 
 
 def test_wrapper_preserves_other_exit_codes() -> None:
-    """崩溃(非零)退出码透传 —— launchd SuccessfulExit=false 据此重启。"""
+    """启动失败(4)/引擎失败(6)/崩溃(其他非零)透传 —— launchd SuccessfulExit=false 据此重启。"""
+    assert _run_wrapper_with_exit(4) == 4
+    assert _run_wrapper_with_exit(6) == 6
     assert _run_wrapper_with_exit(3) == 3
     assert _run_wrapper_with_exit(0) == 0
 

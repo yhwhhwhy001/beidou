@@ -18,6 +18,7 @@ def _bare_engine(*, policy: dict | None = None, can_write: bool = False, **attrs
     engine = object.__new__(AutonomousEngine)
     engine._policy_params = dict(policy or {})
     engine._can_write = can_write
+    engine._policy_error = None
     for key, value in attrs.items():
         setattr(engine, key, value)
     return engine
@@ -90,3 +91,49 @@ def test_max_margin_ratio_reads_policy() -> None:
     assert engine._policy_float_audited("max_margin_ratio", 0.95) == 0.95
     engine2 = _bare_engine(policy={"max_margin_ratio": 0.8})
     assert engine2._policy_float_audited("max_margin_ratio", 0.95) == 0.8
+
+
+# --- M00-F08-R2: 签名值域校验（对抗审查反例 J/K） ---
+
+
+def test_out_of_range_signed_param_sets_policy_error() -> None:
+    """越界签名值（margin 120%）必须置策略错误（write 阻断），不得静默放大风险。"""
+    engine = _bare_engine(policy={"max_margin_ratio": 1.2})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "max_margin_ratio" in engine._policy_error
+
+
+def test_non_numeric_signed_param_sets_policy_error() -> None:
+    engine = _bare_engine(policy={"maker_fee_bps": "free"})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "maker_fee_bps" in engine._policy_error
+
+
+def test_non_finite_signed_param_sets_policy_error() -> None:
+    engine = _bare_engine(policy={"stop_loss_max_pct": float("inf")})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+
+
+def test_stop_loss_cross_constraint_invalid() -> None:
+    engine = _bare_engine(policy={"stop_loss_min_pct": 5.0, "stop_loss_max_pct": 2.0})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+
+
+def test_valid_signed_params_do_not_set_policy_error() -> None:
+    engine = _bare_engine(
+        policy={
+            "max_margin_ratio": 0.8,
+            "maker_fee_bps": 1.0,
+            "taker_fee_bps": 2.0,
+            "stop_loss_min_pct": 1.0,
+            "stop_loss_max_pct": 5.0,
+            "stop_loss_atr_multiplier": 1.5,
+            "capital_budget_ratio": 0.1,
+        }
+    )
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is None

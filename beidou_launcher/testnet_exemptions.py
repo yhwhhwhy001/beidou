@@ -92,4 +92,84 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         reassessment_module="M13",
         risk_note="paper/shadow/research 环境无对账健康维度；可写环境保持严格。",
     ),
+    TestnetExemption(
+        exemption_id="EXEMPT-09",
+        title="对账余额相对容差 testnet 1% vs 其他 0.01%",
+        rationale="共享 demo 账户外部活动漂移 ~0.14 USDT/分钟，0.01% 容差数分钟即失效"
+        "（PKG20）；canary/live/paper/research 保持 0.0001 严格默认。",
+        reassessment_module="M13",
+        risk_note="100 倍容差放大 —— 余额差异检测灵敏度显著降低；M13 评估共享账户隔离方案。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-10",
+        title="Algo inventory 查询失败/UNKNOWN 视为空列表",
+        rationale="demo 端点瞬时失败即锁控全局下单过重（I4 审查）；保护单缺失重试有"
+        " inventory 语义校验兜底；live/canary 返回 None → NO_NEW_RISK。",
+        reassessment_module="M12",
+        risk_note="'查询失败'与'确无单'不可区分 —— 幽灵保护单可能漏检；M12 复核兜底校验强度。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-11",
+        title="user stream 事件降级为信息性（ALGO_UPDATE/MARGIN_CALL/未知事件）",
+        rationale="demo 15:52 实测 FILLED 达成后 ALGO_UPDATE 触发 fault → NO_NEW_RISK；"
+        "testnet 按信息性事件处理保持流健康；live/canary 保持 fault（自有算法单状态变化必须复核）。",
+        reassessment_module="M13",
+        risk_note="MARGIN_CALL 追缴事件在 testnet 降级为信息 —— 真追缴风险信号被掩盖；"
+        "live/canary 语义不变。M13 复核。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-12",
+        title="user stream 就绪不要求事件新鲜（CONNECTED 状态）",
+        rationale="demo 低频环境事件停流保护由 transport 状态承担（listenKey 失效 → fault）；"
+        "live/canary 保持严格 event_age 语义。",
+        reassessment_module="M13",
+        risk_note="与 EXEMPT-03 同族（300s 阈值），此处是完全豁免事件龄；M13 合并评估。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-13",
+        title="两方对拍一致即自动授权 user stream replay baseline",
+        rationale="sequencer 未授权 → event_stream INCOMPLETE 属鸡生蛋预期，不构成授权障碍；"
+        "两方冲突时 fail-closed 不授权（PKG02 已移除仅仓位不匹配旁路）。",
+        reassessment_module="M13",
+        risk_note="replay baseline 授权后投影时间戳冻结（EXEMPT-05 的根源）；M13 评估投影器修正。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-14",
+        title="本地权益估计替代共享余额（sizing 输入）",
+        rationale="共享 demo 账户 REST 余额含外部资金，直接使用会放大/掩盖自有 drawdown、"
+        "污染仓位 sizing；本地估计=启动基线+自有持仓 unrealized；非 testnet 直接返回共享余额。",
+        reassessment_module="M10",
+        risk_note="sizing 输入的权益口径与交易所不同 —— 组合层资金边界由本地估计定义；M10 复核。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-15",
+        title="提款权限（R9）testnet 豁免：不告警、风险视角按 False 结算",
+        rationale="testnet 测试资金由交易所默认开启提款权限；非 testnet 保持 CRITICAL 阻断"
+        "（PKG02 R9 统一检查）。",
+        reassessment_module="M10",
+        risk_note="提款权限在 testnet 完全退出风控告警面 —— live/canary 语义不变；M10 复核 R9。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-16",
+        title="无主 Algo 单清理仅在 testnet 执行",
+        rationale="共享 demo 账户存在历史遗留无主条件单，testnet 下清理；live/canary 无此路径。",
+        reassessment_module="M12",
+        risk_note="清理依赖所有权判定证据链；M12 复核 unowned 判定与幽灵单取消的幂等性。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-17",
+        title="风控视角：外部持仓按无持仓处理",
+        rationale="共享账户外部持仓不参与风控判定（风控针对自有敞口），本地无所有权证明时"
+        " position_qty=0、liq 价置 None；与 EXEMPT-02（覆盖判定）同根。",
+        reassessment_module="M10",
+        risk_note="风控敞口口径依赖所有权证据；live/canary 保持严格（无此豁免）。M10 复核。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-18",
+        title="启动期交易所不可用长周期重试（最多 10 分钟）",
+        rationale="demo 地域限制（-2015）间歇性出现，快速 FATAL 会让每次抖动杀死进程；"
+        "testnet 长周期退避重试期间健康端点存活；live/canary 保持快速 FATAL。",
+        reassessment_module="M22",
+        risk_note="进程存活但功能不可用窗口最长 10 分钟；M22 复核与 launchd 重启语义的协同。",
+    ),
 )

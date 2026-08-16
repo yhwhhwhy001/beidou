@@ -140,3 +140,42 @@ async def test_lock_transition_still_alerts_and_stays_silent_after(tmp_path: Pat
     await supervisor._apply_debounce_action("LOCKED", blockers, has_persistent=True)
     assert len(alerts.sent) == 1
     assert supervisor.report.supervisor_state == "LOCKED"
+
+
+@pytest.mark.asyncio
+async def test_new_blocker_type_during_degraded_triggers_alert(tmp_path: Path) -> None:
+    """对抗审查反例 C: DEGRADED 期间出现新类型 P0 必须告警（指纹变化检测）。"""
+    supervisor, alerts, _control = _supervisor_with_fake_engine(tmp_path)
+    initial = _protection_blockers(2)
+    await supervisor._apply_debounce_action("DEGRADED", initial, has_persistent=True)
+    assert len(alerts.sent) == 1
+    # 相同指纹重复周期 → 无新增告警（不回归告警风暴）
+    await supervisor._apply_debounce_action("DEGRADED", initial, has_persistent=True)
+    assert len(alerts.sent) == 1
+    # 新类型 blocker（对账 MISMATCHED）→ 指纹变化 → 立即告警
+    new_blockers = [
+        *initial,
+        CheckResult(
+            check_id="runtime.safety.reconciliation",
+            name="深度对账",
+            status=CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
+            message="MISMATCHED",
+        ),
+    ]
+    await supervisor._apply_debounce_action("DEGRADED", new_blockers, has_persistent=True)
+    assert len(alerts.sent) == 2
+    assert "reconciliation" in alerts.sent[-1][2]
+
+
+def test_supervisor_debounce_window_supports_lock_after(tmp_path: Path) -> None:
+    """对抗审查反例 D: 防抖窗口必须能容纳 lock_after 个样本，否则 LOCKED 死代码。"""
+    supervisor = BeidouSupervisor(project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090)
+    debounce = supervisor._health_debounce
+    assert debounce.window_seconds >= debounce.lock_after * supervisor.monitor_interval
+    # 模拟 lock_after 次连续持久阻断 → LOCKED 可达
+    base = 1000.0
+    result = None
+    for i in range(debounce.lock_after):
+        result = debounce.feed(True, now=base + i * supervisor.monitor_interval)
+    assert result == "LOCKED"

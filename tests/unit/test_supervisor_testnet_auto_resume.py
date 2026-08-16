@@ -153,6 +153,34 @@ def test_manual_no_new_risk_with_intact_authority_is_not_overridden(tmp_path: Pa
     assert lifecycle.state is ModuleState.DEGRADED
 
 
+def test_no_self_heal_engine_side_resume_blocked_by_interlock(tmp_path: Path) -> None:
+    """--no-self-heal 时引擎侧 EXEMPT-07 自动 RESUME 必须被 interlock 拦截（对抗审查反例 A）。
+
+    引擎存在第三条自动 RESUME 路径（durable_ok 后直接 execute_action(RESUME)），
+    其防线是 _install_resume_interlock 对授权状态的守卫 —— 该隐式耦合必须
+    有测试固化，防止未来接线绕过。
+    """
+    from beidou_control.plane import ControlAction
+
+    supervisor = BeidouSupervisor(
+        project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090, self_heal=False
+    )
+    control = ControlPlane()
+    lifecycle = ModuleLifecycle("test")
+    supervisor.engine = SimpleNamespace(_control=control, _lifecycle=lifecycle)
+    supervisor._resume_authorized = False
+    supervisor._install_resume_interlock()
+
+    # 引擎侧尝试自动 RESUME（EXEMPT-07 路径）→ 被改写为 NO_NEW_RISK
+    control.execute_action(ControlAction.RESUME)
+    assert supervisor._control_state() == "NO_NEW_RISK"
+
+    # 授权有效时 RESUME 放行（对照：interlock 本身不破坏正常恢复）
+    supervisor._resume_authorized = True
+    control.execute_action(ControlAction.RESUME)
+    assert supervisor._control_state() == "RESUME"
+
+
 def test_no_self_heal_disables_testnet_auto_reauthorize(tmp_path: Path) -> None:
     """--no-self-heal 时 testnet 不得自动重新授权（显式关闭自愈优先于环境便利）。"""
     supervisor, _control, lifecycle = _post_fail_closed_supervisor(tmp_path, mode="testnet", self_heal=False)
