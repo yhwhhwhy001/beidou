@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-16T15:37:54.633723+00:00",
+  "generated_at": "2026-08-16T16:54:51.882200+00:00",
   "purpose": "R-M03-1 threshold recalibration evidence (M08-corrected backtest kernel)",
   "method": "engine-equivalent signal state machine + M08 simulate_paper_window",
   "old_baseline": {
@@ -539,6 +539,104 @@
           "new_rsi_p25": 58.31,
           "new_rsi_p75": 66.4,
           "diff_mean": -7.58
+        }
+      }
+    },
+    "_vol_tiers": {
+      "BTCUSDT": {
+        "old_ann_vol_bucket_pct": {
+          "3.0": 91.52,
+          "2.0": 6.68,
+          "1.0": 1.02,
+          "0.5": 0.79
+        },
+        "new_ann_vol_with_old_thresholds_pct": {
+          "3.0": 10.7,
+          "2.0": 37.5,
+          "1.0": 25.23,
+          "0.5": 26.57
+        },
+        "new_ann_vol_with_equivalent_thresholds_pct": {
+          "3.0": 91.52,
+          "2.0": 6.68,
+          "1.0": 1.02,
+          "0.5": 0.79
+        },
+        "equivalent_thresholds": [
+          0.98,
+          1.96,
+          2.94
+        ],
+        "new_ann_vol_quantiles": {
+          "0.25": 0.28,
+          "0.5": 0.41,
+          "0.75": 0.62,
+          "0.9": 0.91,
+          "0.95": 1.2
+        }
+      },
+      "ETHUSDT": {
+        "old_ann_vol_bucket_pct": {
+          "3.0": 62.23,
+          "2.0": 24.36,
+          "1.0": 8.28,
+          "0.5": 5.13
+        },
+        "new_ann_vol_with_old_thresholds_pct": {
+          "3.0": 3.21,
+          "2.0": 16.08,
+          "1.0": 20.51,
+          "0.5": 60.2
+        },
+        "new_ann_vol_with_equivalent_thresholds_pct": {
+          "3.0": 62.23,
+          "2.0": 24.36,
+          "1.0": 8.28,
+          "0.5": 5.13
+        },
+        "equivalent_thresholds": [
+          0.98,
+          1.96,
+          2.94
+        ],
+        "new_ann_vol_quantiles": {
+          "0.25": 0.45,
+          "0.5": 0.73,
+          "0.75": 1.38,
+          "0.9": 2.27,
+          "0.95": 2.97
+        }
+      },
+      "SOLUSDT": {
+        "old_ann_vol_bucket_pct": {
+          "3.0": 58.28,
+          "2.0": 9.3,
+          "1.0": 2.47,
+          "0.5": 29.95
+        },
+        "new_ann_vol_with_old_thresholds_pct": {
+          "3.0": 1.52,
+          "2.0": 14.15,
+          "1.0": 20.53,
+          "0.5": 63.8
+        },
+        "new_ann_vol_with_equivalent_thresholds_pct": {
+          "3.0": 58.28,
+          "2.0": 9.3,
+          "1.0": 2.47,
+          "0.5": 29.95
+        },
+        "equivalent_thresholds": [
+          0.98,
+          1.96,
+          2.94
+        ],
+        "new_ann_vol_quantiles": {
+          "0.25": 0.5,
+          "0.5": 0.77,
+          "0.75": 4.01,
+          "0.9": 6.68,
+          "0.95": 7.76
         }
       }
     },

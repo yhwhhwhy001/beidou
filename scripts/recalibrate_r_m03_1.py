@@ -253,12 +253,81 @@ def rsi_mapping_analysis(symbol: str, results: dict) -> None:
     )
 
 
+def vol_tier_analysis(symbol: str, results: dict) -> None:
+    """R-M03-3: 年化修正后 adaptive_leverage 档位失效量化。
+
+    旧口径 ann_vol_old = vol_20×√365(1h 误用日频年化);
+    新口径 ann_vol_new = vol_20×√8760 = old×√24。
+    统计:旧档位(0.2/0.4/0.6)在新/旧口径下的时间占比与杠杆分布。
+    """
+    df = load_symbol(symbol)
+    closes = df["close"].tolist()
+    rows: list[dict] = []
+    for i in range(20, len(closes)):
+        rets = [(closes[j] - closes[j - 1]) / closes[j - 1] for j in range(i - 19, i + 1) if closes[j - 1] > 0]
+        if len(rets) < 20:
+            continue
+        vol_20 = (sum(r**2 for r in rets) / len(rets)) ** 0.5
+        rows.append(
+            {
+                "old": vol_20 * (365**0.5),
+                "new": vol_20 * (8760**0.5),
+            }
+        )
+    if not rows:
+        return
+    frame = pd.DataFrame(rows)
+    tiers = (0.2, 0.4, 0.6)
+    levels = (3.0, 2.0, 1.0, 0.5)
+
+    def bucket_pct(ann_vol: pd.Series) -> dict[str, float]:
+        out = {}
+        for level in levels:
+            if level == 3.0:
+                mask = ann_vol < tiers[0]
+            elif level == 2.0:
+                mask = (ann_vol >= tiers[0]) & (ann_vol < tiers[1])
+            elif level == 1.0:
+                mask = (ann_vol >= tiers[1]) & (ann_vol < tiers[2])
+            else:
+                mask = ann_vol >= tiers[2]
+            out[str(level)] = round(float(mask.mean() * 100), 2)
+        return out
+
+    old_bucket = bucket_pct(frame["old"])
+    new_old_threshold = bucket_pct(frame["new"])  # 新口径 + 旧阈值
+    equivalent_tiers = tuple(t * (24**0.5) for t in tiers)
+    eq_bucket = {}
+    for idx, level in enumerate(levels):
+        if idx == 0:
+            mask = frame["new"] < equivalent_tiers[0]
+        elif idx == 3:
+            mask = frame["new"] >= equivalent_tiers[2]
+        else:
+            mask = (frame["new"] >= equivalent_tiers[idx - 1]) & (frame["new"] < equivalent_tiers[idx])
+        eq_bucket[str(level)] = round(float(mask.mean() * 100), 2)
+    results.setdefault("_vol_tiers", {})[symbol] = {
+        "old_ann_vol_bucket_pct": old_bucket,
+        "new_ann_vol_with_old_thresholds_pct": new_old_threshold,
+        "new_ann_vol_with_equivalent_thresholds_pct": eq_bucket,
+        "equivalent_thresholds": [round(t, 2) for t in equivalent_tiers],
+        "new_ann_vol_quantiles": {
+            q: round(float(frame["new"].quantile(q)), 2) for q in (0.25, 0.5, 0.75, 0.9, 0.95)
+        },
+    }
+    print(
+        f"[{symbol}] vol 档位: 旧口径={old_bucket} | 新口径+旧阈值={new_old_threshold} "
+        f"| 新口径+等效阈值{tuple(round(t,2) for t in equivalent_tiers)}={eq_bucket}"
+    )
+
+
 def main() -> None:
     symbols = sys.argv[1:] or ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     results: dict = {}
     for symbol in symbols:
         run_symbol(symbol, results)
         rsi_mapping_analysis(symbol, results)
+        vol_tier_analysis(symbol, results)
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     evidence = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
