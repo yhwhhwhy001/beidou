@@ -311,13 +311,11 @@ def vol_tier_analysis(symbol: str, results: dict) -> None:
         "new_ann_vol_with_old_thresholds_pct": new_old_threshold,
         "new_ann_vol_with_equivalent_thresholds_pct": eq_bucket,
         "equivalent_thresholds": [round(t, 2) for t in equivalent_tiers],
-        "new_ann_vol_quantiles": {
-            q: round(float(frame["new"].quantile(q)), 2) for q in (0.25, 0.5, 0.75, 0.9, 0.95)
-        },
+        "new_ann_vol_quantiles": {q: round(float(frame["new"].quantile(q)), 2) for q in (0.25, 0.5, 0.75, 0.9, 0.95)},
     }
     print(
         f"[{symbol}] vol 档位: 旧口径={old_bucket} | 新口径+旧阈值={new_old_threshold} "
-        f"| 新口径+等效阈值{tuple(round(t,2) for t in equivalent_tiers)}={eq_bucket}"
+        f"| 新口径+等效阈值{tuple(round(t, 2) for t in equivalent_tiers)}={eq_bucket}"
     )
 
 

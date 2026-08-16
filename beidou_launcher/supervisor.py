@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import dataclasses
+import logging
 import os
 import signal
 import time
@@ -98,9 +98,7 @@ def _apply_dev_fast_start_g5_exemption(checks: list[CheckResult], mode: str) -> 
     if not (os.environ.get("BEIDOU_DEV_FAST_START") and mode == "testnet"):
         return checks
     return [
-        dataclasses.replace(check, severity=CheckSeverity.P2)
-        if check.check_id == "preflight.g5_certificate"
-        else check
+        dataclasses.replace(check, severity=CheckSeverity.P2) if check.check_id == "preflight.g5_certificate" else check
         for check in checks
     ]
 
