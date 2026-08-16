@@ -405,7 +405,9 @@ class BeidouSupervisor:
         if self.engine is None:
             return
         now = time.monotonic()
-        if now - self._last_exchange_account_probe < 15.0:
+        # BD-FIX (rate-budget): 15→30s。account 探针权重高且 rest_client
+        # 已有 10s 响应缓存，30s 间隔叠加缓存后配额消耗减半。
+        if now - self._last_exchange_account_probe < 30.0:
             return
         self._last_exchange_account_probe = now
         try:
@@ -503,7 +505,9 @@ class BeidouSupervisor:
         if self.engine is None:
             return
         now = time.monotonic()
-        if not force and now - self._last_exchange_algo_probe < 15.0:
+        # BD-FIX (rate-budget): 15→30s。openAlgoOrders 权重高且
+        # rest_client 已有 10s 响应缓存，30s 间隔叠加缓存后配额消耗减半。
+        if not force and now - self._last_exchange_algo_probe < 30.0:
             return
         self._last_exchange_algo_probe = now
         try:

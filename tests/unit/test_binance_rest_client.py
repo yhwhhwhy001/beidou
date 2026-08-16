@@ -344,3 +344,97 @@ def test_account_capability_rejects_venue_withdrawal_permission(monkeypatch: pyt
     assert result.is_success() is False
     assert result.error is not None
     assert result.error.category is ErrorCategory.UNKNOWN
+
+
+def test_high_weight_get_response_cached_within_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """openAlgoOrders/openOrders 是高权重端点（各 40w）：TTL 内重复
+    调用必须命中本地缓存，不再发起第二次传输。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout, _session=None):
+        calls.append(request.get_method())
+        return b'[{"algoId": 1, "symbol": "BTCUSDT"}]', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    first = asyncio.run(client.get_open_algo_orders())
+    second = asyncio.run(client.get_open_algo_orders())
+    assert first.is_success() is True
+    assert second.is_success() is True
+    assert second.data == first.data
+    assert calls == ["GET"]
+
+
+def test_high_weight_get_cache_keyed_by_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存键必须包含请求参数：带 symbol 与不带 symbol 是两个事实。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout, _session=None):
+        calls.append(request.full_url)
+        return b'[]', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    asyncio.run(client.get_open_orders())
+    asyncio.run(client.get_open_orders("BTCUSDT"))
+    assert len(calls) == 2
+
+
+def test_failed_high_weight_get_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """失败结果不缓存：下一轮必须重新发起传输（否则把瞬时失败
+    固化为持久 UNKNOWN）。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    calls: list[str] = []
+
+    def failing_urlopen(request, timeout, _session=None):
+        calls.append(request.get_method())
+        raise ConnectionError("boom")
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", failing_urlopen)
+    first = asyncio.run(client.get_open_algo_orders())
+    second = asyncio.run(client.get_open_algo_orders())
+    assert first.is_success() is False
+    assert second.is_success() is False
+    assert calls == ["GET", "GET"]
+
+
+def test_cached_get_serves_during_open_circuit_breaker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """熔断窗口内，TTL 内的缓存结果仍可直接返回——supervisor 保护
+    覆盖探针依赖这一行为在熔断期间保持 ok=True。"""
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout, _session=None):
+        calls.append(request.get_method())
+        return b'[{"algoId": 2, "symbol": "ETHUSDT"}]', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    first = asyncio.run(client.get_open_algo_orders())
+    assert first.is_success() is True
+
+    client._rate_state.circuit_open = True
+    client._rate_state.circuit_open_until = rest_module.time.monotonic() + 60
+    cached = asyncio.run(client.get_open_algo_orders())
+    assert cached.is_success() is True
+    assert cached.data == first.data
+    assert calls == ["GET"]

@@ -21,6 +21,7 @@ from typing import Any
 from beidou_exchange.binance_usdm.endpoints import (
     CIRCUIT_BREAKER_COOLDOWN,
     CIRCUIT_BREAKER_THRESHOLD,
+    HIGH_WEIGHT_GET_CACHE_TTL,
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_RETRIES,
     DEFAULT_ORDER_LIMIT,
@@ -79,6 +80,11 @@ class BinanceRESTClient:
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
+        # BD-FIX (rate-budget): 高权重 GET 响应缓存（TTL 内一次传输）。
+        # 缓存成功结果；失败不缓存。熔断窗口内缓存命中直接返回，
+        # 使 supervisor 保护覆盖探针在熔断期间仍可消费最近的成功事实。
+        self._get_cache: dict[tuple[str, tuple], tuple[float, Result]] = {}
+        self._cacheable_gets = {Endpoint.OPEN_ORDERS, Endpoint.OPEN_ALGO_ORDERS}
 
     def reset_circuit_breaker(self) -> None:
         """重置客户端熔断器（启动恢复等关键阶段调用）。"""
@@ -386,6 +392,16 @@ class BinanceRESTClient:
         base_params = dict(params or {})
         method = str(method).upper()
 
+        # BD-FIX (rate-budget): 高权重 GET 的短 TTL 响应缓存。缓存命中
+        # 时直接返回最近的成功事实，不产生网络请求——包括熔断窗口内，
+        # 让保护覆盖探针在熔断期间仍可消费最近一次成功快照。
+        cache_key: tuple[str, tuple] | None = None
+        if method == "GET" and path in self._cacheable_gets:
+            cache_key = (path, tuple(sorted(base_params.items())))
+            cached = self._get_cache.get(cache_key)
+            if cached is not None and time.monotonic() - cached[0] <= HIGH_WEIGHT_GET_CACHE_TTL:
+                return cached[1]
+
         # A writable Testnet request has the same ambiguity and rate-limit
         # semantics as any other venue write.  Environment labels must never
         # bypass the shared transport circuit.
@@ -455,7 +471,10 @@ class BinanceRESTClient:
                         source="binance_rest",
                     )
 
-                return Result.ok(data)
+                success_result = Result.ok(data)
+                if cache_key is not None:
+                    self._get_cache[cache_key] = (time.monotonic(), success_result)
+                return success_result
 
             except urllib.error.HTTPError as e:
                 http_status = e.code

@@ -75,5 +75,9 @@ DEFAULT_MAX_RETRIES: int = 5
 DEFAULT_HTTP_TIMEOUT: int = 30
 DEFAULT_WEIGHT_LIMIT: int = 1200
 DEFAULT_ORDER_LIMIT: int = 10
+# BD-FIX (rate-budget): openOrders/openAlgoOrders 各消耗 40 权重。
+# supervisor 每 30s 探测 + 近线每周期调用都会打这两个端点，短 TTL
+# 响应缓存让同一事实在 TTL 内只消耗一次配额。
+HIGH_WEIGHT_GET_CACHE_TTL: float = 10.0
 CIRCUIT_BREAKER_THRESHOLD: int = 5
-CIRCUIT_BREAKER_COOLDOWN: int = 30
+CIRCUIT_BREAKER_COOLDOWN: int = 60
