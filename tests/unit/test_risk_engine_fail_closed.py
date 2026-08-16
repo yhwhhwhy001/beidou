@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from beidou_safety.risk import PreRiskContext
+from beidou_safety.risk import PreRiskChecker, PreRiskContext
 from beidou_safety.risk.engine import RiskEngineImpl, RiskRuleLevel, RiskSnapshot, _RiskCheckResult
 from beidou_shared.types import (
     AccountId,
@@ -286,3 +286,112 @@ def test_pre_risk_approves_within_all_limits() -> None:
     )
     results = asyncio.run(checker.check(context))
     assert all(r.decision == RiskDecision.APPROVED for r in results)
+
+
+# --- M10-R2: 对抗审查反例回归 ---
+
+
+def test_pre_risk_call_site_shape_no_type_error() -> None:
+    """生产调用点原样形状(engine nearline):AccountRef 必须关键字构造。
+
+    回归 M10#1/M11#2: 位置参数构造抛 pydantic v2 TypeError,且函数内
+    局部 import AccountRef 使上游意图构造 UnboundLocalError —— 近线
+    下单路径整体死亡。按调用点形状构造必须不抛任何异常。
+    """
+    from beidou_safety.risk.engine import _PreRiskContext
+
+    pre_context = _PreRiskContext(
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        order_quantity=Quantity(amount="0.1"),
+        order_price=MonetaryValue(amount="50000", currency="USDT"),
+        leverage=3.0,
+        account_balance=10000.0,
+        pending_orders=[str(oid) for oid in (OrderId("o-1"), OrderId("o-2"))],
+        risk_increasing=True,
+    )
+    checker = PreRiskChecker()
+    results = asyncio.run(checker.check(pre_context))
+    assert all(r.decision == RiskDecision.APPROVED for r in results)
+
+
+def test_pre_risk_margin_missing_fail_closed_for_risk_increasing() -> None:
+    """balance 缺失 + risk_increasing → REJECTED(fail-closed),不再静默跳过。"""
+    checker = PreRiskChecker()
+    context = _context(
+        account_balance=None,
+        risk_increasing=True,
+    )
+    results = asyncio.run(checker.check(context))
+    assert any(
+        r.decision != RiskDecision.APPROVED and "margin check unavailable" in r.reason.lower()
+        for r in results
+    )
+
+
+def test_pre_risk_margin_missing_does_not_block_reduce() -> None:
+    """balance 缺失 + 非风险增加方向 → 不因保证金检查拒绝(减仓永不封锁)。"""
+    checker = PreRiskChecker()
+    context = _context(
+        account_balance=None,
+        risk_increasing=False,
+        order_quantity=Quantity(amount="0.05"),  # 低于 current position,减仓意图
+        current_position=Quantity(amount="0.1"),
+    )
+    results = asyncio.run(checker.check(context))
+    assert not any("margin" in r.reason.lower() for r in results)
+
+
+def test_pre_risk_margin_effective_balance_deduction() -> None:
+    """保证金口径:可用权益 = balance - current_margin,扣减后超限拒绝。"""
+    checker = PreRiskChecker()
+    context = _context(
+        account_balance=1000.0,
+        current_margin=MonetaryValue(amount="800", currency="USDT"),
+        order_quantity=Quantity(amount="5"),
+        order_price=MonetaryValue(amount="100", currency="USDT"),
+        leverage=2.0,
+        risk_increasing=True,
+    )
+    results = asyncio.run(checker.check(context))
+    # notional=500 > (1000-800)*2=400 → 拒绝
+    assert any(r.decision != RiskDecision.APPROVED and "exceeds margin" in r.reason for r in results)
+
+
+def test_projection_counts_extra_inflight_notional() -> None:
+    """同轮已批准敞口计入投影(batch 集体绕过窗口闭合)。"""
+    from types import SimpleNamespace
+
+    from beidou_core.engine import AutonomousEngine
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._symbols = ["BTCUSDT"]
+    engine._outbox = SimpleNamespace(inflight_signed_quantity=lambda sym: 0.0)
+    engine._last_prices = {"BTCUSDT": 100.0}
+    engine._protection = SimpleNamespace(all_positions=lambda: {})
+    risk_increasing, projected = engine._portfolio_exposure_projection(
+        "BTCUSDT", 100.0, extra_inflight_notional=500.0
+    )
+    assert risk_increasing is True
+    assert projected == 600.0
+
+
+def test_projection_batch_accumulation_blocks_collective_bypass() -> None:
+    """两单批处理:第一单过门后累加,第二单投影必须包含第一单敞口。"""
+    from types import SimpleNamespace
+
+    from beidou_core.engine import AutonomousEngine
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._symbols = ["BTCUSDT", "ETHUSDT"]
+    engine._outbox = SimpleNamespace(inflight_signed_quantity=lambda sym: 0.0)
+    engine._last_prices = {"BTCUSDT": 100.0, "ETHUSDT": 100.0}
+    engine._protection = SimpleNamespace(all_positions=lambda: {})
+
+    _ri1, projected_first = engine._portfolio_exposure_projection("BTCUSDT", 100.0)
+    assert projected_first == 100.0
+    batch_approved = 100.0  # 第一单过门后累加
+    _ri2, projected_second = engine._portfolio_exposure_projection(
+        "ETHUSDT", 100.0, extra_inflight_notional=batch_approved
+    )
+    assert projected_second == 200.0

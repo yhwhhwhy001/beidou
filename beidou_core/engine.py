@@ -2193,12 +2193,17 @@ class AutonomousEngine:
             currency="USDT",
         )
 
-    def _portfolio_exposure_projection(self, symbol: str, position_notional: float) -> tuple[bool, float]:
+    def _portfolio_exposure_projection(
+        self, symbol: str, position_notional: float, *, extra_inflight_notional: float = 0.0
+    ) -> tuple[bool, float]:
         """组合敞口投影（M07-R2 可测试接缝）。
 
         返回 (risk_increasing, projected_total):已成交(排除本 symbol) +
-        在途 inflight + 本单目标名义(仅风险增加时计入)。减仓/平仓意图
+        在途 inflight + 同轮已批准敞口(extra_inflight_notional) +
+        本单目标名义(仅风险增加时计入)。减仓/平仓意图
         永远 risk_increasing=False(降杠杆不得被总敞口门封锁)。
+        M10-R2: extra_inflight_notional 覆盖同轮 batch 集体绕过窗口
+        (keyword-only,不破坏位置参数调用方)。
         """
         current_exposure = self._portfolio_total_exposure(exclude_symbol=symbol)
         current_symbol_notional = self._portfolio_total_exposure(only_symbol=symbol)
@@ -2213,7 +2218,12 @@ class AutonomousEngine:
         except Exception as inflight_exc:
             logger.warning("inflight exposure aggregation failed: %s", type(inflight_exc).__name__)
             inflight_total = 0.0
-        projected = current_exposure + inflight_total + (position_notional if risk_increasing else 0.0)
+        projected = (
+            current_exposure
+            + inflight_total
+            + max(0.0, extra_inflight_notional)
+            + (position_notional if risk_increasing else 0.0)
+        )
         return risk_increasing, projected
 
     def _portfolio_total_exposure(
@@ -8931,6 +8941,12 @@ class AutonomousEngine:
                 except Exception as exc:
                     print(f"[nearline] duplicate-order evidence UNKNOWN: {exc}")
 
+            # M10-R2: 同轮已批准敞口累加器 —— 敞口门内的 inflight 只覆盖
+            # 跨轮意图(execution_commands 已计划);同轮已 commit 未计划的
+            # 意图对门不可见,batch 可集体绕过门限。每单过门即累加
+            # (后续检查若 SKIP,高估方向偏严,fail-closed;一轮 tick 后
+            # 自然清零)。
+            _batch_approved_notional = 0.0
             for prop in proposals:
                 symbol = prop["symbol"]
                 venue_id = prop["venue_id"]
@@ -9146,7 +9162,9 @@ class AutonomousEngine:
                 # 意图受门约束 —— 减仓/平仓永远放行(旧门在超限后把一切
                 # 意图 SKIP,组合冻结在超限态无法降杠杆);③ 价格保守取
                 # max(last, entry)(陈旧价低估方向)。
-                _risk_increasing, _projected = self._portfolio_exposure_projection(symbol, position_notional)
+                _risk_increasing, _projected = self._portfolio_exposure_projection(
+                    symbol, position_notional, extra_inflight_notional=_batch_approved_notional
+                )
                 _max_total_notional = (
                     self._policy_float("max_total_leverage", self._settings.production.max_total_leverage)
                     * account_balance
@@ -9158,6 +9176,8 @@ class AutonomousEngine:
                         f"{self._policy_float('max_total_leverage', 3.0)}x balance)"
                     )
                     continue
+                if _risk_increasing:
+                    _batch_approved_notional += position_notional
 
                 # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = dict(RiskRuleRegistry.evaluate_all(risk_context))
@@ -9392,17 +9412,24 @@ class AutonomousEngine:
                 # M10-F01: PreRisk 收敛 —— 内联副本替换为真实
                 # PreRiskCheckerImpl.check()(经济性/杠杆/名义上限/保证金/
                 # 挂单上限),消除规则漂移双轨。
+                # M10-R2/M11-R2: 函数内 `from beidou_shared.types import
+                # AccountRef` 使 AccountRef 成为函数局部名,9311/9371
+                # 的意图构造先使用后赋值 → UnboundLocalError(静默吞于
+                # 9433 外层 except,近线自动入场全灭)。删除该局部 import
+                # 回退模块级解析;同时 AccountRef 是 pydantic v2 双必填
+                # 字段模型,位置参数构造抛 TypeError —— 与 9311/9371
+                # 同形改关键字构造。
                 from beidou_safety.risk.engine import _PreRiskContext
-                from beidou_shared.types import AccountRef
 
                 pre_context = _PreRiskContext(
-                    account_ref=AccountRef("default"),
+                    account_ref=AccountRef(venue_id=venue_id, account_id=AccountId("default")),
                     instrument_id=InstrumentId(symbol),
                     order_quantity=Quantity(amount=str(position_size)),
                     order_price=MonetaryValue(amount=str(price), currency="USDT"),
                     leverage=dyn_leverage,
                     account_balance=account_balance,
                     pending_orders=[str(oid) for oid in self._active_order_ids],
+                    risk_increasing=_risk_increasing,
                 )
                 pre_results = await self._pre_risk.check(pre_context)
                 pre_rejections = [r for r in pre_results if r.decision != RiskDecision.APPROVED]

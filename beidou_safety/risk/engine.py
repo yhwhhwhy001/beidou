@@ -60,6 +60,7 @@ class _PreRiskContext:
     current_margin: MonetaryValue | None = None
     pending_orders: list[OrderId] = field(default_factory=list)
     account_balance: float | None = None  # M10-F01: 保证金检查输入
+    risk_increasing: bool | None = None  # M10-R2: 意图方向(保证金缺失 fail-closed 判定)
     correlation_id: CorrelationId | None = None
 
 
@@ -351,8 +352,37 @@ class PreRiskCheckerImpl:
                 )
             )
         # M10-F01: 保证金检查（原引擎内联,收敛到真实 checker）
-        if context.account_balance is not None and context.account_balance > 0:
-            if notional > context.account_balance * leverage:
+        # M10-R2: balance 缺失对 risk-increasing 意图 fail-closed(否则
+        # 未来新调用点漏填即静默失去防线 —— 假 checker 风险);减仓/未知
+        # 方向保持跳过(减仓永不封锁,M07-R2)。口径:扣除已用保证金
+        # (current_margin 提供时),可用权益 = balance - margin_used。
+        if context.account_balance is None or context.account_balance <= 0:
+            if context.risk_increasing is True:
+                results.append(
+                    _RiskCheckResult(
+                        RiskRuleLevel.R2,
+                        RiskDecision.REJECTED,
+                        "Margin check unavailable: account_balance missing for risk-increasing intent",
+                        cid,
+                    )
+                )
+        else:
+            margin_used = (
+                float(context.current_margin.amount)
+                if context.current_margin is not None
+                else 0.0
+            )
+            effective_balance = context.account_balance - margin_used
+            if effective_balance <= 0:
+                results.append(
+                    _RiskCheckResult(
+                        RiskRuleLevel.R2,
+                        RiskDecision.REJECTED,
+                        f"Available margin exhausted (balance={context.account_balance}, margin_used={margin_used})",
+                        cid,
+                    )
+                )
+            elif notional > effective_balance * leverage:
                 results.append(
                     _RiskCheckResult(
                         RiskRuleLevel.R2,
