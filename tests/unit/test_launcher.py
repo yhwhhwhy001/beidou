@@ -489,34 +489,32 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
     assert "force_stop_existing" not in source
 
 
-def test_dev_fast_start_g5_exemption_applies_only_at_launcher_layer(
+def test_g5_dev_exemption_applies_only_at_launcher_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M22-F05: DEV_FAST_START 豁免只在启动层降级 G5 阻断语义。
+    """M22-F05: 已登记 dev 豁免只在启动层降级 G5 阻断语义。
 
-    preflight 恒为严格判定(FAIL+P0);supervisor 启动层在豁免登记时
-    把 G5 降为 P2(不阻断),检查与证据保留;未登记或非 testnet 不降级。
+    preflight 恒为严格判定(FAIL+P0);豁免由 cli 层显式读 env 传参,
+    supervisor 启动层在豁免登记时把 G5 降为 P2(不阻断),检查与证据
+    保留;未登记或非 testnet 不降级。
     """
-    from beidou_launcher.supervisor import _apply_dev_fast_start_g5_exemption
+    from beidou_launcher.supervisor import _apply_g5_dev_exemption
 
     g5_fail = CheckResult("preflight.g5_certificate", "G5 Testnet 证书", CheckStatus.FAIL, CheckSeverity.P0, "x")
     other_p0 = CheckResult("preflight.python", "Python 版本", CheckStatus.FAIL, CheckSeverity.P0, "x")
 
-    monkeypatch.setenv("BEIDOU_DEV_FAST_START", "1")
-    applied = _apply_dev_fast_start_g5_exemption([g5_fail, other_p0], "testnet")
+    applied = _apply_g5_dev_exemption([g5_fail, other_p0], "testnet", exempt=True)
     by_id = {check.check_id: check for check in applied}
     assert by_id["preflight.g5_certificate"].severity is CheckSeverity.P2
     assert by_id["preflight.g5_certificate"].status is CheckStatus.FAIL
     assert by_id["preflight.g5_certificate"].is_blocking is False
     assert by_id["preflight.python"].severity is CheckSeverity.P0  # 其他检查不受影响
 
-    monkeypatch.delenv("BEIDOU_DEV_FAST_START", raising=False)
-    strict = _apply_dev_fast_start_g5_exemption([g5_fail], "testnet")
+    strict = _apply_g5_dev_exemption([g5_fail], "testnet", exempt=False)
     assert strict[0].severity is CheckSeverity.P0
     assert strict[0].is_blocking is True
 
-    monkeypatch.setenv("BEIDOU_DEV_FAST_START", "1")
-    paper_mode = _apply_dev_fast_start_g5_exemption([g5_fail], "paper")
+    paper_mode = _apply_g5_dev_exemption([g5_fail], "paper", exempt=True)
     assert paper_mode[0].severity is CheckSeverity.P0
 
 
