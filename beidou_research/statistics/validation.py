@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 
-def _retired() -> None:
+def _retired() -> NoReturn:
     raise NotImplementedError(
         "statistics/validation.py is retired (M05-F02): use "
         "beidou_research.mining.evaluation.{purged_walk_forward,cpcv,multiple_testing} "

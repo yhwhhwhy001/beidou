@@ -963,8 +963,10 @@ class BeidouSupervisor:
                 if not self._resume_authorized and self._control_state() == "RESUME":
                     from beidou_control.plane import ControlAction
 
-                    with suppress(Exception):
-                        self.engine._control.execute_action(ControlAction.NO_NEW_RISK)
+                    _engine = self.engine
+                    if _engine is not None:
+                        with suppress(Exception):
+                            _engine._control.execute_action(ControlAction.NO_NEW_RISK)
         elif debounce_action == "RUNNING":
             if self._control_state() != "RESUME":
                 self.report.supervisor_state = "PAUSED"
@@ -1273,8 +1275,9 @@ class BeidouSupervisor:
 
             debounce_action = self._health_debounce.feed(has_persistent)
             # M00-F03: 分支链抽至 _apply_debounce_action（转移门控 + 静默背压，
-            # 可独立测试）。
-            await self._apply_debounce_action(debounce_action, persistent_blockers, has_persistent)
+            # 可独立测试）。None = 防抖器样本不足,保持当前状态不动作。
+            if debounce_action is not None:
+                await self._apply_debounce_action(debounce_action, persistent_blockers, has_persistent)
 
             self.report.trading_ready = self._is_trading_ready()
             # P1: G7 实时 SLI 追踪 — 每个周期更新

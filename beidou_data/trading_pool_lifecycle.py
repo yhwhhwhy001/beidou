@@ -77,14 +77,14 @@ def _default_observation_hours() -> float:
         hours = 24.0
     if hours < 1.0:
         if not getattr(_default_observation_hours, "_clamped_logged", False):
-            _default_observation_hours._clamped_logged = True
+            _default_observation_hours._clamped_logged = True  # type: ignore[attr-defined]  # M21: 运行时标志位
             logging.getLogger("beidou.trading_pool").warning(
                 "BEIDOU_MIN_OBSERVATION_HOURS=%r below 1.0h clamped to 1.0 (observation gate must not be bypassable)",
                 raw,
             )
         hours = 1.0
     elif hours != 24.0 and not getattr(_default_observation_hours, "_override_logged", False):
-        _default_observation_hours._override_logged = True
+        _default_observation_hours._override_logged = True  # type: ignore[attr-defined]  # M21: 运行时标志位
         logging.getLogger("beidou.trading_pool").warning(
             "observation hours overridden by env: BEIDOU_MIN_OBSERVATION_HOURS=%s", raw
         )

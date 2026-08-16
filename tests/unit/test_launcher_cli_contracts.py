@@ -14,6 +14,21 @@ from beidou_launcher.checks import PreflightChecker, find_project_root
 from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
 
 
+@pytest.fixture(autouse=True)
+def _restore_cwd():
+    """M21-F01: cli.main 会 os.chdir(project_root) —— 进程级副作用。
+
+    测试用 monkeypatch 把 root 指向 tmp_path(chdir 跟随),但 invoke
+    结束后 CWD 停在 tmp_path(测试收尾时已删除),后续测试/插件以
+    相对路径写文件会落到悬空目录。每个测试后恢复真实 CWD。
+    """
+    import os
+
+    original = Path.cwd()
+    yield
+    os.chdir(original)
+
+
 def _check(*, blocking: bool) -> CheckResult:
     return CheckResult(
         check_id="check",

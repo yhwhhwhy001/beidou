@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:beidou-sbom-20260811T210203Z",
+  "serialNumber": "urn:uuid:beidou-sbom-20260816T152102Z",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-08-11T21:02:03.518103+00:00",
+    "timestamp": "2026-08-16T15:21:02.737473+00:00",
     "tools": [
       {
         "name": "beidou-sbom-generator",
@@ -20,11 +20,11 @@
     "properties": [
       {
         "name": "beidou:git_sha",
-        "value": "22ffb120ebf932dfd52853a94cf8119cd524f39b"
+        "value": "5e7313c83f5fb12a240d22f1025d68d697ae35c8"
       },
       {
         "name": "beidou:lockfile_hash",
-        "value": "a71ee1564c49540dee7cfa9d8df5d67afe0ded49b807bf74f9cc0f245d54bc63"
+        "value": "629ab8bfdb9de93b70eb6272427b1dc2b8c6e8ad9094675ad3dd67ebbf3ecf89"
       },
       {
         "name": "beidou:baseline",
@@ -33,6 +33,12 @@
     ]
   },
   "components": [
+    {
+      "type": "library",
+      "name": "alembic",
+      "version": "1.19.1",
+      "purl": "pkg:pypi/alembic@1.19.1"
+    },
     {
       "type": "library",
       "name": "annotated-types",
@@ -50,6 +56,12 @@
       "name": "ast_serialize",
       "version": "0.6.0",
       "purl": "pkg:pypi/ast_serialize@0.6.0"
+    },
+    {
+      "type": "library",
+      "name": "beidou",
+      "version": "2.0.0",
+      "purl": "pkg:pypi/beidou@2.0.0"
     },
     {
       "type": "library",
@@ -80,6 +92,12 @@
       "name": "click",
       "version": "8.4.2",
       "purl": "pkg:pypi/click@8.4.2"
+    },
+    {
+      "type": "library",
+      "name": "colorlog",
+      "version": "6.12.0",
+      "purl": "pkg:pypi/colorlog@6.12.0"
     },
     {
       "type": "library",
@@ -149,9 +167,33 @@
     },
     {
       "type": "library",
+      "name": "joblib",
+      "version": "1.5.3",
+      "purl": "pkg:pypi/joblib@1.5.3"
+    },
+    {
+      "type": "library",
       "name": "librt",
       "version": "0.13.0",
       "purl": "pkg:pypi/librt@0.13.0"
+    },
+    {
+      "type": "library",
+      "name": "llvmlite",
+      "version": "0.49.0",
+      "purl": "pkg:pypi/llvmlite@0.49.0"
+    },
+    {
+      "type": "library",
+      "name": "Mako",
+      "version": "1.4.1",
+      "purl": "pkg:pypi/Mako@1.4.1"
+    },
+    {
+      "type": "library",
+      "name": "MarkupSafe",
+      "version": "3.0.3",
+      "purl": "pkg:pypi/MarkupSafe@3.0.3"
     },
     {
       "type": "library",
@@ -173,9 +215,33 @@
     },
     {
       "type": "library",
+      "name": "narwhals",
+      "version": "2.24.0",
+      "purl": "pkg:pypi/narwhals@2.24.0"
+    },
+    {
+      "type": "library",
       "name": "nodeenv",
       "version": "1.10.0",
       "purl": "pkg:pypi/nodeenv@1.10.0"
+    },
+    {
+      "type": "library",
+      "name": "numba",
+      "version": "0.67.0",
+      "purl": "pkg:pypi/numba@0.67.0"
+    },
+    {
+      "type": "library",
+      "name": "numpy",
+      "version": "2.5.2",
+      "purl": "pkg:pypi/numpy@2.5.2"
+    },
+    {
+      "type": "library",
+      "name": "optuna",
+      "version": "4.9.0",
+      "purl": "pkg:pypi/optuna@4.9.0"
     },
     {
       "type": "library",
@@ -185,9 +251,27 @@
     },
     {
       "type": "library",
+      "name": "pandas",
+      "version": "3.0.5",
+      "purl": "pkg:pypi/pandas@3.0.5"
+    },
+    {
+      "type": "library",
+      "name": "pandas-stubs",
+      "version": "3.0.5.260730",
+      "purl": "pkg:pypi/pandas-stubs@3.0.5.260730"
+    },
+    {
+      "type": "library",
       "name": "pathspec",
       "version": "1.1.1",
       "purl": "pkg:pypi/pathspec@1.1.1"
+    },
+    {
+      "type": "library",
+      "name": "patsy",
+      "version": "1.0.2",
+      "purl": "pkg:pypi/patsy@1.0.2"
     },
     {
       "type": "library",
@@ -239,6 +323,18 @@
     },
     {
       "type": "library",
+      "name": "py-spy",
+      "version": "0.4.2",
+      "purl": "pkg:pypi/py-spy@0.4.2"
+    },
+    {
+      "type": "library",
+      "name": "pyarrow",
+      "version": "25.0.1",
+      "purl": "pkg:pypi/pyarrow@25.0.1"
+    },
+    {
+      "type": "library",
       "name": "pycparser",
       "version": "3.0",
       "purl": "pkg:pypi/pycparser@3.0"
@@ -287,6 +383,12 @@
     },
     {
       "type": "library",
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "purl": "pkg:pypi/python-dateutil@2.9.0.post0"
+    },
+    {
+      "type": "library",
       "name": "python-discovery",
       "version": "1.5.1",
       "purl": "pkg:pypi/python-discovery@1.5.1"
@@ -311,9 +413,39 @@
     },
     {
       "type": "library",
+      "name": "scikit-learn",
+      "version": "1.9.0",
+      "purl": "pkg:pypi/scikit-learn@1.9.0"
+    },
+    {
+      "type": "library",
+      "name": "scipy",
+      "version": "1.18.0",
+      "purl": "pkg:pypi/scipy@1.18.0"
+    },
+    {
+      "type": "library",
+      "name": "six",
+      "version": "1.17.0",
+      "purl": "pkg:pypi/six@1.17.0"
+    },
+    {
+      "type": "library",
       "name": "sortedcontainers",
       "version": "2.4.0",
       "purl": "pkg:pypi/sortedcontainers@2.4.0"
+    },
+    {
+      "type": "library",
+      "name": "SQLAlchemy",
+      "version": "2.0.52",
+      "purl": "pkg:pypi/SQLAlchemy@2.0.52"
+    },
+    {
+      "type": "library",
+      "name": "statsmodels",
+      "version": "0.14.6",
+      "purl": "pkg:pypi/statsmodels@0.14.6"
     },
     {
       "type": "library",
@@ -326,6 +458,18 @@
       "name": "tenacity",
       "version": "9.1.4",
       "purl": "pkg:pypi/tenacity@9.1.4"
+    },
+    {
+      "type": "library",
+      "name": "threadpoolctl",
+      "version": "3.6.0",
+      "purl": "pkg:pypi/threadpoolctl@3.6.0"
+    },
+    {
+      "type": "library",
+      "name": "tqdm",
+      "version": "4.70.0",
+      "purl": "pkg:pypi/tqdm@4.70.0"
     },
     {
       "type": "library",

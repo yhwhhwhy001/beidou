@@ -173,7 +173,7 @@ class ControlPlane:
         )
         # M19-F01 (P0-12): 引擎周期性同步的最新事实快照,供受门禁的
         # RESUME 入口(execute_authorized_resume)与手动 API 使用。
-        self._latest_truth_snapshot = None
+        self._latest_truth_snapshot: TruthSnapshot | None = None
 
     # --- State management ---
 
