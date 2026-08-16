@@ -995,8 +995,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             )
         response = await self.request("GET", Endpoint.OPEN_ALGO_ORDERS, signed=True)
         if not response.is_success() or not isinstance(response.data, list):
+            # BD-DIAG: 透传底层失败原因,供 nearline 诊断打印定位
+            _underlying = response.error.message if response.error else "non-list data"
             return Result.failure(
-                "Open Algo inventory is UNKNOWN",
+                f"Open Algo inventory is UNKNOWN: {_underlying}",
                 category=ErrorCategory.UNKNOWN,
                 raw=response.data,
                 source="binance_algo_adapter",

@@ -2044,6 +2044,13 @@ class AutonomousEngine:
                 return []
             return None
         if not result.is_success() or result.data is None:
+            # BD-DIAG: 打印底层失败原因,定位 UNKNOWN 的根因
+            _err = result.error
+            print(
+                f"[api] open Algo inventory UNKNOWN: "
+                f"{getattr(_err, 'category', None) and _err.category.value} "
+                f"{_err.message if _err else 'data-is-None'}"
+            )
             if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                 print("[api] testnet: treating open Algo inventory UNKNOWN as empty (retry next cycle)")
                 return []
