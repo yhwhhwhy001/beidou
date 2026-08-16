@@ -162,6 +162,17 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
+def _validate_params_positive(value: Any, *, name: str, max_value: float | None = None) -> bool:
+    """M06-F02: 组件参数校验 —— 有限、正数、可选上限。"""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(parsed) or parsed <= 0:
+        return False
+    return not (max_value is not None and parsed > max_value)
+
+
 def _validated_features(features: Any, required: tuple[str, ...]) -> dict[str, float] | None:
     """Validate a feature snapshot without inventing trading inputs."""
 
@@ -584,7 +595,16 @@ class MeanReversionEntry(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 校验内部引擎参数（窗口/阈值/带/成本边际）。"""
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            return False
+        return (
+            _validate_params_positive(getattr(engine, "_window", 0), name="half_life_window", max_value=2000)
+            and _validate_params_positive(getattr(engine, "_z_threshold", 0), name="z_threshold", max_value=10.0)
+            and _validate_params_positive(getattr(engine, "_no_trade_band", 0), name="no_trade_band", max_value=10.0)
+            and _validate_params_positive(getattr(engine, "_cost_margin", 0), name="cost_margin", max_value=1000.0)
+        )
 
     # ========== 旧 SMA 偏离逻辑（fallback 参考，BD-05 已替换） ==========
     # deviation_pct = (close - sma_20) / sma_20 * 100 if sma_20 > 0 else 0
@@ -677,7 +697,14 @@ class MomentumFilter(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: periods 非空、全为正整数、上限 500。"""
+        momentum = getattr(self, "_momentum", None)
+        if momentum is None:
+            return False
+        periods = getattr(momentum, "_periods", None)
+        if not isinstance(periods, list) or not periods:
+            return False
+        return all(isinstance(period, int) and 1 <= period <= 500 for period in periods)
 
     # ========== 旧简单趋势检查逻辑（fallback 参考，BD-05 已替换） ==========
     # # 高波动时否决一切信号
@@ -689,6 +716,14 @@ class MomentumFilter(AlphaComponent):
 
 class TrendFollowingEntry(AlphaComponent):
     """趋势跟踪入场 — SMA5/SMA20 金叉死叉 + 趋势强度确认。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    RSI_ENTRY_MAX = 70.0
+    RSI_CONFIRM_MIN = 30.0
+    TREND_MIN_PCT = 0.5
+    STRENGTH_BASE = 0.05
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -746,11 +781,19 @@ class TrendFollowingEntry(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(0.0 <= self.RSI_CONFIRM_MIN < self.RSI_ENTRY_MAX <= 100.0 and self.TREND_MIN_PCT >= 0.0 and 0.0 <= self.STRENGTH_BASE <= 1.0)
 
 
 class BreakoutEntry(AlphaComponent):
     """突破入场 — 价格突破 20 期最高/最低 + 波动率扩张确认。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    VOL_EXPANSION_MIN = 0.2
+    VOL_RATIO_MIN = 1.2
+    STRENGTH_BASE = 0.05
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -811,11 +854,21 @@ class BreakoutEntry(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(self.VOL_EXPANSION_MIN >= 0.0 and self.VOL_RATIO_MIN >= 1.0 and 0.0 <= self.STRENGTH_BASE <= 1.0)
 
 
 class VolatilityFilter(AlphaComponent):
     """波动率过滤器 — ATR 分级：高波动否决，低波动放行，中等波动降级。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    ATR_HIGH_PCT = 5.0
+    VOL_HIGH = 0.6
+    VOL_MID = 0.4
+    RSI_OVERSOLD = 30.0
+    RSI_OVERBOUGHT = 70.0
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -879,11 +932,20 @@ class VolatilityFilter(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(0.0 <= self.RSI_OVERSOLD < self.RSI_OVERBOUGHT <= 100.0 and 0.0 <= self.VOL_MID <= self.VOL_HIGH and self.ATR_HIGH_PCT > 0.0)
 
 
 class VolumeFilter(AlphaComponent):
     """成交量过滤器 — 量比确认：放量增强，缩量降级，无量否决。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    VOL_RATIO_VERY_LOW = 0.25
+    VOL_RATIO_LOW = 0.5
+    VOL_RATIO_HIGH = 1.5
+    STRENGTH_MIN = 0.08
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -947,11 +1009,17 @@ class VolumeFilter(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(0.0 <= self.VOL_RATIO_VERY_LOW <= self.VOL_RATIO_LOW <= self.VOL_RATIO_HIGH and 0.0 <= self.STRENGTH_MIN <= 1.0)
 
 
 class TrailingExit(AlphaComponent):
     """ATR 跟踪止损止盈 — 回撤超过 2× ATR 触发退出。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    RSI_TAKE_PROFIT = 70.0
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -1035,11 +1103,17 @@ class TrailingExit(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(0.0 <= self.RSI_TAKE_PROFIT <= 100.0)
 
 
 class TimeExit(AlphaComponent):
     """持仓时间退出 — 超时强制退出，避免过夜风险累积。"""
+
+    # M06-F02: 阈值常量显式化(validate 校验;generate 使用同一常量,
+    # 参数提取至签名策略属 M09)
+    STRENGTH_SCHEDULE = (0.0, 0.4, 0.7, 0.95)
+
 
     def __init__(self) -> None:
         super().__init__(
@@ -1100,7 +1174,8 @@ class TimeExit(AlphaComponent):
         return signal
 
     def validate(self) -> bool:
-        return True
+        """M06-F02: 阈值常量健全性校验（generate 依赖同一常量）。"""
+        return bool(all(0.0 <= s <= 1.0 for s in self.STRENGTH_SCHEDULE) and self.STRENGTH_SCHEDULE == tuple(sorted(self.STRENGTH_SCHEDULE)))
 
 
 # ================================================================
@@ -8398,10 +8473,29 @@ class AutonomousEngine:
                         typed_mode = kernel_result.get("kernel") == "typed_graph"
                         typed_proposal = kernel_result.get("proposal") if typed_mode else None
                         all_signals = (
-                            list(kernel_result.get("exit_signals", []))
-                            if typed_mode
-                            else list(kernel_result.get("signals", []))
+                            list(kernel_result.get("signals", []))
+                            if not typed_mode
+                            else []
                         )
+                        # M06-F01 (P0-15): Exit 信号与入场流程严格分离 ——
+                        # 旧代码把 exit_signals 混入 strength 排名,Exit 提案
+                        # (side=None) 会被送进入场 sizing/BUY/SELL 流程。
+                        # Exit 现在独立收集+审计;执行(reduce-only target
+                        # delta)登记 M06-R2/M12。
+                        exit_signals = list(kernel_result.get("exit_signals", [])) if typed_mode else []
+                        if exit_signals:
+                            audit = getattr(self, "_exit_signal_audit", {})
+                            sig_ids: list[str] = []
+                            for exit_signal in exit_signals:
+                                hash_fn = getattr(exit_signal, "hash", None)
+                                sig_id = str(hash_fn()) if callable(hash_fn) else str(getattr(exit_signal, "hash", "?"))
+                                sig_ids.append(sig_id)
+                                audit[sig_id] = audit.get(sig_id, 0) + 1
+                            self._exit_signal_audit = audit
+                            logger.warning(
+                                "nearline exit signals for %s@%s collected (execution pending M12): %s",
+                                symbol, tf, sig_ids[:5],
+                            )
                         if not typed_proposal and not all_signals:
                             continue
                     except Exception as exc:

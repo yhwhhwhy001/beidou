@@ -30,6 +30,7 @@ from beidou_shared.types import (
     VenueId,
 )
 from beidou_strategy.alpha.contracts import (
+    DEGRADE_MULTIPLIER,
     DataQualityTier,
     EntryProposal,
     FilterDecision,
@@ -362,8 +363,8 @@ class FilterNode(TypedGraphNode):
                         decision=FilterDecision.DEGRADE,
                         component_id=self.node_id,
                         reason_codes=[f"filter_degraded: {str(e)[:100]}"],
-                        confidence_multiplier=0.5,
-                        size_multiplier=0.5,
+                        confidence_multiplier=DEGRADE_MULTIPLIER,
+                        size_multiplier=DEGRADE_MULTIPLIER,
                     ),
                     dq_tier=DataQualityTier.DEGRADED,
                     metadata={"error": str(e), "degraded": True},
@@ -639,16 +640,26 @@ class TypedAlphaGraph:
 
             if isinstance(node, FilterNode) and node.is_mandatory:
                 if isinstance(output.data, FilterResult) and output.data.decision == FilterDecision.VETO:
-                    return {"proposal": None, "component_outputs": component_outputs}
+                    return {
+                        "proposal": None,
+                        "component_outputs": component_outputs,
+                        # M06-F01: 完整节点输出（含 EXIT 节点类型/数据/DQ）——
+                        # component_outputs 只存 data,无法区分节点类型。
+                        "node_outputs": outputs,
+                    }
 
         for node_id in reversed(order):
             node = self._nodes[node_id]
             if node.node_type == NodeType.FUSION and node_id in outputs:
                 data = outputs[node_id].data
                 if isinstance(data, StrategyProposal):
-                    return {"proposal": data, "component_outputs": component_outputs}
+                    return {
+                        "proposal": data,
+                        "component_outputs": component_outputs,
+                        "node_outputs": outputs,
+                    }
 
-        return {"proposal": None, "component_outputs": component_outputs}
+        return {"proposal": None, "component_outputs": component_outputs, "node_outputs": outputs}
 
     def compute_graph_hash(self) -> str:
         """P1-001: 图行为哈希绑定完整上下文 — 参数/模型/因子版本/代码SHA。"""

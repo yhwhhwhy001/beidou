@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from beidou_strategy.alpha.contracts import DEGRADE_MULTIPLIER
+
 logger = logging.getLogger(__name__)
 
 
@@ -158,8 +160,8 @@ class TypedStrategyKernel:
                         output_hash="",
                     )
                 if filter_out == FilterResult.DEGRADE:
-                    confidence *= 0.5
-                    target_exposure *= 0.5
+                    confidence *= DEGRADE_MULTIPLIER
+                    target_exposure *= DEGRADE_MULTIPLIER
                     current_action = StrategyAction.DEGRADED
                     reason = "FILTER_DEGRADE"
             except Exception as exc:

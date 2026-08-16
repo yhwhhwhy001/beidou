@@ -92,6 +92,11 @@ class FeatureSnapshot:
     quality: DataQualityTier = DataQualityTier.UNKNOWN
 
 
+# M06-F03: DEGRADE 衰减乘数统一常量 —— 生产 TypedAlphaGraph 与
+# TypedStrategyKernel 必须使用同一值(旧实现两处硬编码且语义不一致)。
+DEGRADE_MULTIPLIER: float = 0.5
+
+
 @dataclass(frozen=True, slots=True)
 class EntryProposal:
     """BD-T05: 入场提案 — 由 Entry Alpha 节点生成。side 替换遗留 direction:str。"""

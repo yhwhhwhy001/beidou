@@ -177,6 +177,7 @@ class StrategyKernel:
         """
         if self._typed_graph is not None:
             _detailed_fn = getattr(self._typed_graph, "_execute_detailed", None)
+            _detailed: dict[str, Any] = {}
             if callable(_detailed_fn):
                 _detailed = await _detailed_fn(context)
                 _proposal = _detailed.get("proposal")
@@ -200,9 +201,25 @@ class StrategyKernel:
             graph_hash_fn = getattr(self._typed_graph, "compute_graph_hash", None)
             if callable(graph_hash_fn):
                 graph_hash = str(graph_hash_fn())
+            # M06-F01 (P0-15): Exit 输出必须显式传播 —— 旧实现只回
+            # proposal/component_outputs,engine 读 exit_signals 键永远
+            # 为空(退出信号死路径)。类型判定用 node_outputs
+            # (component_outputs 只存 data,无节点类型)。
+            exit_signals: list[Any] = []
+            for _node_id, output in _detailed.get("node_outputs", {}).items():
+                if (
+                    output is not None
+                    and getattr(output, "node_type", None) is not None
+                    and str(getattr(output.node_type, "value", output.node_type)) == "EXIT"
+                    and getattr(output, "data", None) is not None
+                    and getattr(output, "dq_tier", None) is not None
+                    and str(getattr(output.dq_tier, "value", output.dq_tier)) == "PASS"
+                ):
+                    exit_signals.append(output.data)
             return {
                 "proposal": _proposal,
                 "component_outputs": _component_outputs,
+                "exit_signals": exit_signals,
                 "kernel": "typed_graph",
                 "mode": self.mode,
                 "graph_hash": graph_hash,

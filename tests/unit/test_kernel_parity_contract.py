@@ -130,3 +130,55 @@ def test_retired_research_kernel_cannot_fabricate_walk_forward_folds() -> None:
     )
     with pytest.raises(RuntimeError, match="LEGACY_RESEARCH_KERNEL_DISABLED"):
         PurgedWalkForward().run(manifest, [{}])
+
+
+def _exit_kernel_with_graph() -> StrategyKernel:
+    """构造带一个 EXIT 节点的 typed graph 内核（M06-F01 契约测试）。"""
+    from beidou_strategy.alpha.typed_graph import ExitNode, TypedAlphaGraph
+
+    class _ExitProposal:
+        """side=None 的退出提案（Exit 不得新增风险,side 必须为 None）。"""
+
+        side = None
+        strength = 0.6
+        confidence = 0.7
+
+        def hash(self) -> str:
+            return "exit-proposal-hash-1"
+
+    exit_proposal = _ExitProposal()
+
+    async def _exit_fn(_context: dict):
+        return exit_proposal
+
+    graph = TypedAlphaGraph(strategy_id="exit-test")
+    graph.add_node(ExitNode("exit-1", exit_fn=_exit_fn))
+    kernel = StrategyKernel(mode="paper")
+    kernel.set_typed_graph(graph)
+    return kernel
+
+
+@pytest.mark.asyncio
+async def test_typed_kernel_propagates_exit_signals() -> None:
+    """M06-F01 (P0-15): kernel 必须显式返回 exit_signals（旧实现死键）。"""
+    kernel = _exit_kernel_with_graph()
+    result = await kernel.evaluate({})
+    assert result is not None
+    assert result["kernel"] == "typed_graph"
+    assert "exit_signals" in result
+    assert len(result["exit_signals"]) == 1
+    # 无入场 proposal 时 blocked_by 语义保持
+    assert result["blocked_by"] == "typed_graph_no_proposal"
+
+
+@pytest.mark.asyncio
+async def test_typed_kernel_no_exit_outputs_empty_list() -> None:
+    """无 EXIT 输出时 exit_signals 必须为空列表（消费方契约稳定）。"""
+    from beidou_strategy.alpha.typed_graph import TypedAlphaGraph
+
+    graph = TypedAlphaGraph(strategy_id="empty-test")
+    kernel = StrategyKernel(mode="paper")
+    kernel.set_typed_graph(graph)
+    result = await kernel.evaluate({})
+    assert result is not None
+    assert result["exit_signals"] == []
