@@ -127,6 +127,8 @@ class PipelineConfig:
     # PipelineConfig intentionally leaves it empty so diagnostic runs cannot
     # manufacture a production promotion certificate.
     policy_version: str = ""
+    # resources.time_budget_minutes 运行时强制。0 表示不限时(裸配置/旧 policy)。
+    time_budget_minutes: float = 0.0
 
     @classmethod
     def from_yaml(cls, path: str) -> PipelineConfig:
@@ -170,6 +172,11 @@ class PipelineConfig:
         if not required_cost_keys.issubset(cost):
             raise ValueError("MINING_POLICY_COST_MODEL_INCOMPLETE")
 
+        resources = cfg.get("resources")
+        time_budget_minutes = 0.0
+        if isinstance(resources, dict) and resources.get("time_budget_minutes") is not None:
+            time_budget_minutes = float(resources["time_budget_minutes"])
+
         return cls(
             run_id=f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}",
             random_seed=int(generation["random_seed"]),
@@ -211,6 +218,7 @@ class PipelineConfig:
             policy_path=path,
             strict_policy=True,
             policy_version=policy_version.strip(),
+            time_budget_minutes=time_budget_minutes,
         )
 
 
@@ -232,6 +240,7 @@ class MiningResult:
     failure_taxonomy: dict[str, int]
     runtime_seconds: float
     status: str = "COMPLETED"
+    stopped_by_time_budget: bool = False
 
 
 class MiningRunner:
@@ -258,6 +267,10 @@ class MiningRunner:
         self._stability = StabilityEvaluator()
         self._capacity = CapacityEvaluator(self.config.cost_model)
         self._store = JSONFileFactorStore(self.config.evidence_dir)
+        # 时间预算:时钟可注入以便测试确定性控制超时。
+        self._budget_clock = time.monotonic
+        self._budget_deadline: float | None = None
+        self._stopped_by_time_budget = False
         # 表达式引擎（懒初始化）
         self._registry: Any = None
         self._feature_dict: dict[str, list[float]] = {}
@@ -291,6 +304,10 @@ class MiningRunner:
             return candidate
         return "UNKNOWN"
 
+    def _within_time_budget(self) -> bool:
+        """时间预算未耗尽返回 True;预算为 0/未设置表示不限时。"""
+        return self._budget_deadline is None or self._budget_clock() <= self._budget_deadline
+
     def run(
         self,
         price_data: list[dict],
@@ -316,6 +333,10 @@ class MiningRunner:
         """
         t0 = time.time()
         self._generation_policy_error = ""
+        self._stopped_by_time_budget = False
+        self._budget_deadline = None
+        if self.config.time_budget_minutes and self.config.time_budget_minutes > 0:
+            self._budget_deadline = self._budget_clock() + self.config.time_budget_minutes * 60.0
         run_id = self.config.run_id
         ven = VenueId(venue)
         sym = InstrumentId(symbol)
@@ -425,6 +446,9 @@ class MiningRunner:
             failure_taxonomy["generation_policy"] = 1
 
         for candidate_index, c in enumerate(candidates):
+            if not self._within_time_budget():
+                self._stopped_by_time_budget = True
+                break
             factor_values = self._evaluate_candidate(c, price_points)
             ch = c.get(
                 "expression_hash", hashlib.sha256(json.dumps(c, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -507,6 +531,9 @@ class MiningRunner:
         flip_count = 0  # M05-F01 (P0): 翻转数计入多重检验试验预算
 
         for candidate in screened[:50]:  # 限制评估数量
+            if not self._within_time_budget():
+                self._stopped_by_time_budget = True
+                break
             factor_vals = candidate["factor_values"]
             samples = _aligned_samples(factor_vals)
             if len(samples) < 50:
@@ -1087,6 +1114,7 @@ class MiningRunner:
             failure_taxonomy=failure_taxonomy,
             runtime_seconds=runtime,
             status=pipeline_status,
+            stopped_by_time_budget=self._stopped_by_time_budget,
         )
 
         self._notify(progress_callback, "complete", 5, 5)
