@@ -220,7 +220,7 @@ def test_rate_limit_circuit_not_open_fails(tmp_path, monkeypatch):
 
 def test_rate_limit_uncached_get_not_rejected_fails(tmp_path, monkeypatch):
     class PermissiveClient(FakeRateLimitClient):
-        async def get_open_orders(self, symbol: str | None = None) -> Result:  # type: ignore[no-untyped-def]
+        async def get_open_orders(self, symbol: str | None = None) -> Result:
             self.calls.append(f"get_open_orders:{symbol or ''}")
             return Result.ok([])  # 熔断窗口内请求未被短路 → 语义不符
 
