@@ -1,0 +1,1510 @@
+{
+  "generated_at": "2026-08-16T15:37:54.633723+00:00",
+  "purpose": "R-M03-1 threshold recalibration evidence (M08-corrected backtest kernel)",
+  "method": "engine-equivalent signal state machine + M08 simulate_paper_window",
+  "old_baseline": {
+    "rsi_pair": [
+      70,
+      30
+    ],
+    "trail_mult": 2.0
+  },
+  "results": {
+    "BTCUSDT": {
+      "rsi(70,30)/trail1.5/cost1.0": {
+        "paper_ir": -0.028149,
+        "paper_sharpe": -2.634597,
+        "paper_drawdown_pct": -99.990319,
+        "signal_consistency": 0.457123,
+        "n_trades": 3093,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail1.5/cost2.0": {
+        "paper_ir": -0.029687,
+        "paper_sharpe": -2.778529,
+        "paper_drawdown_pct": -99.992397,
+        "signal_consistency": 0.457123,
+        "n_trades": 3093,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail1.5/cost8.0": {
+        "paper_ir": -0.038904,
+        "paper_sharpe": -3.641202,
+        "paper_drawdown_pct": -99.998369,
+        "signal_consistency": 0.457123,
+        "n_trades": 3093,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost1.0": {
+        "paper_ir": -0.028116,
+        "paper_sharpe": -2.63155,
+        "paper_drawdown_pct": -99.990146,
+        "signal_consistency": 0.456908,
+        "n_trades": 3073,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost2.0": {
+        "paper_ir": -0.029645,
+        "paper_sharpe": -2.774609,
+        "paper_drawdown_pct": -99.992252,
+        "signal_consistency": 0.456908,
+        "n_trades": 3073,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost8.0": {
+        "paper_ir": -0.038806,
+        "paper_sharpe": -3.632049,
+        "paper_drawdown_pct": -99.998331,
+        "signal_consistency": 0.456908,
+        "n_trades": 3073,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost1.0": {
+        "paper_ir": -0.028085,
+        "paper_sharpe": -2.628658,
+        "paper_drawdown_pct": -99.990144,
+        "signal_consistency": 0.457055,
+        "n_trades": 3069,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost2.0": {
+        "paper_ir": -0.029612,
+        "paper_sharpe": -2.771536,
+        "paper_drawdown_pct": -99.992249,
+        "signal_consistency": 0.457055,
+        "n_trades": 3069,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost8.0": {
+        "paper_ir": -0.038762,
+        "paper_sharpe": -3.627897,
+        "paper_drawdown_pct": -99.998314,
+        "signal_consistency": 0.457055,
+        "n_trades": 3069,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost1.0": {
+        "paper_ir": -0.028091,
+        "paper_sharpe": -2.629191,
+        "paper_drawdown_pct": -99.990144,
+        "signal_consistency": 0.457148,
+        "n_trades": 3067,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost2.0": {
+        "paper_ir": -0.029617,
+        "paper_sharpe": -2.771984,
+        "paper_drawdown_pct": -99.992249,
+        "signal_consistency": 0.457148,
+        "n_trades": 3067,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost8.0": {
+        "paper_ir": -0.038761,
+        "paper_sharpe": -3.627827,
+        "paper_drawdown_pct": -99.998315,
+        "signal_consistency": 0.457148,
+        "n_trades": 3067,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost1.0": {
+        "paper_ir": -0.029151,
+        "paper_sharpe": -2.728409,
+        "paper_drawdown_pct": -99.992017,
+        "signal_consistency": 0.455189,
+        "n_trades": 3047,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost2.0": {
+        "paper_ir": -0.030684,
+        "paper_sharpe": -2.871839,
+        "paper_drawdown_pct": -99.993708,
+        "signal_consistency": 0.455189,
+        "n_trades": 3047,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost8.0": {
+        "paper_ir": -0.039868,
+        "paper_sharpe": -3.731469,
+        "paper_drawdown_pct": -99.998522,
+        "signal_consistency": 0.455189,
+        "n_trades": 3047,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost1.0": {
+        "paper_ir": -0.029179,
+        "paper_sharpe": -2.731036,
+        "paper_drawdown_pct": -99.991932,
+        "signal_consistency": 0.45504,
+        "n_trades": 3035,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost2.0": {
+        "paper_ir": -0.030706,
+        "paper_sharpe": -2.873932,
+        "paper_drawdown_pct": -99.993637,
+        "signal_consistency": 0.45504,
+        "n_trades": 3035,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost8.0": {
+        "paper_ir": -0.039856,
+        "paper_sharpe": -3.730363,
+        "paper_drawdown_pct": -99.998516,
+        "signal_consistency": 0.45504,
+        "n_trades": 3035,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost1.0": {
+        "paper_ir": -0.02912,
+        "paper_sharpe": -2.7255,
+        "paper_drawdown_pct": -99.991932,
+        "signal_consistency": 0.455188,
+        "n_trades": 3033,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost2.0": {
+        "paper_ir": -0.030646,
+        "paper_sharpe": -2.868302,
+        "paper_drawdown_pct": -99.993637,
+        "signal_consistency": 0.455188,
+        "n_trades": 3033,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost8.0": {
+        "paper_ir": -0.03979,
+        "paper_sharpe": -3.724169,
+        "paper_drawdown_pct": -99.998495,
+        "signal_consistency": 0.455188,
+        "n_trades": 3033,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost1.0": {
+        "paper_ir": -0.029115,
+        "paper_sharpe": -2.725056,
+        "paper_drawdown_pct": -99.991932,
+        "signal_consistency": 0.455237,
+        "n_trades": 3031,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost2.0": {
+        "paper_ir": -0.03064,
+        "paper_sharpe": -2.86777,
+        "paper_drawdown_pct": -99.993637,
+        "signal_consistency": 0.455237,
+        "n_trades": 3031,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost8.0": {
+        "paper_ir": -0.039779,
+        "paper_sharpe": -3.723113,
+        "paper_drawdown_pct": -99.998492,
+        "signal_consistency": 0.455237,
+        "n_trades": 3031,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost1.0": {
+        "paper_ir": -0.028951,
+        "paper_sharpe": -2.709664,
+        "paper_drawdown_pct": -99.991602,
+        "signal_consistency": 0.457083,
+        "n_trades": 3117,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost2.0": {
+        "paper_ir": -0.030494,
+        "paper_sharpe": -2.854069,
+        "paper_drawdown_pct": -99.993411,
+        "signal_consistency": 0.457083,
+        "n_trades": 3117,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost8.0": {
+        "paper_ir": -0.039741,
+        "paper_sharpe": -3.719573,
+        "paper_drawdown_pct": -99.998681,
+        "signal_consistency": 0.457083,
+        "n_trades": 3117,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost1.0": {
+        "paper_ir": -0.029014,
+        "paper_sharpe": -2.7156,
+        "paper_drawdown_pct": -99.991484,
+        "signal_consistency": 0.456765,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost2.0": {
+        "paper_ir": -0.030547,
+        "paper_sharpe": -2.85905,
+        "paper_drawdown_pct": -99.993312,
+        "signal_consistency": 0.456765,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost8.0": {
+        "paper_ir": -0.039733,
+        "paper_sharpe": -3.718822,
+        "paper_drawdown_pct": -99.998674,
+        "signal_consistency": 0.456765,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost1.0": {
+        "paper_ir": -0.028975,
+        "paper_sharpe": -2.711895,
+        "paper_drawdown_pct": -99.991486,
+        "signal_consistency": 0.456749,
+        "n_trades": 3087,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost2.0": {
+        "paper_ir": -0.030504,
+        "paper_sharpe": -2.854993,
+        "paper_drawdown_pct": -99.993312,
+        "signal_consistency": 0.456749,
+        "n_trades": 3087,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost8.0": {
+        "paper_ir": -0.039667,
+        "paper_sharpe": -3.712661,
+        "paper_drawdown_pct": -99.998654,
+        "signal_consistency": 0.456749,
+        "n_trades": 3087,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost1.0": {
+        "paper_ir": -0.028943,
+        "paper_sharpe": -2.708875,
+        "paper_drawdown_pct": -99.991486,
+        "signal_consistency": 0.456885,
+        "n_trades": 3083,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost2.0": {
+        "paper_ir": -0.03047,
+        "paper_sharpe": -2.851799,
+        "paper_drawdown_pct": -99.993312,
+        "signal_consistency": 0.456885,
+        "n_trades": 3083,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost8.0": {
+        "paper_ir": -0.039622,
+        "paper_sharpe": -3.708422,
+        "paper_drawdown_pct": -99.998642,
+        "signal_consistency": 0.456885,
+        "n_trades": 3083,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost1.0": {
+        "paper_ir": -0.027464,
+        "paper_sharpe": -2.570448,
+        "paper_drawdown_pct": -99.986449,
+        "signal_consistency": 0.458412,
+        "n_trades": 2863,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost2.0": {
+        "paper_ir": -0.028933,
+        "paper_sharpe": -2.70796,
+        "paper_drawdown_pct": -99.989197,
+        "signal_consistency": 0.458412,
+        "n_trades": 2863,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost8.0": {
+        "paper_ir": -0.037739,
+        "paper_sharpe": -3.532143,
+        "paper_drawdown_pct": -99.997288,
+        "signal_consistency": 0.458412,
+        "n_trades": 2863,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost1.0": {
+        "paper_ir": -0.027461,
+        "paper_sharpe": -2.570231,
+        "paper_drawdown_pct": -99.986439,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost2.0": {
+        "paper_ir": -0.02893,
+        "paper_sharpe": -2.707654,
+        "paper_drawdown_pct": -99.989187,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost8.0": {
+        "paper_ir": -0.03773,
+        "paper_sharpe": -3.5313,
+        "paper_drawdown_pct": -99.997283,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost1.0": {
+        "paper_ir": -0.027461,
+        "paper_sharpe": -2.570231,
+        "paper_drawdown_pct": -99.986439,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost2.0": {
+        "paper_ir": -0.02893,
+        "paper_sharpe": -2.707654,
+        "paper_drawdown_pct": -99.989187,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost8.0": {
+        "paper_ir": -0.03773,
+        "paper_sharpe": -3.5313,
+        "paper_drawdown_pct": -99.997283,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost1.0": {
+        "paper_ir": -0.027461,
+        "paper_sharpe": -2.570231,
+        "paper_drawdown_pct": -99.986439,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost2.0": {
+        "paper_ir": -0.02893,
+        "paper_sharpe": -2.707654,
+        "paper_drawdown_pct": -99.989187,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost8.0": {
+        "paper_ir": -0.03773,
+        "paper_sharpe": -3.5313,
+        "paper_drawdown_pct": -99.997283,
+        "signal_consistency": 0.458364,
+        "n_trades": 2861,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost1.0": {
+        "paper_ir": -0.02905,
+        "paper_sharpe": -2.718889,
+        "paper_drawdown_pct": -99.992117,
+        "signal_consistency": 0.45642,
+        "n_trades": 3135,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost2.0": {
+        "paper_ir": -0.030592,
+        "paper_sharpe": -2.863255,
+        "paper_drawdown_pct": -99.993824,
+        "signal_consistency": 0.45642,
+        "n_trades": 3135,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost8.0": {
+        "paper_ir": -0.039837,
+        "paper_sharpe": -3.728524,
+        "paper_drawdown_pct": -99.998782,
+        "signal_consistency": 0.45642,
+        "n_trades": 3135,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost1.0": {
+        "paper_ir": -0.029141,
+        "paper_sharpe": -2.72746,
+        "paper_drawdown_pct": -99.99206,
+        "signal_consistency": 0.456363,
+        "n_trades": 3105,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost2.0": {
+        "paper_ir": -0.03067,
+        "paper_sharpe": -2.870536,
+        "paper_drawdown_pct": -99.99377,
+        "signal_consistency": 0.456363,
+        "n_trades": 3105,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost8.0": {
+        "paper_ir": -0.039832,
+        "paper_sharpe": -3.72807,
+        "paper_drawdown_pct": -99.998774,
+        "signal_consistency": 0.456363,
+        "n_trades": 3105,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost1.0": {
+        "paper_ir": -0.029103,
+        "paper_sharpe": -2.723899,
+        "paper_drawdown_pct": -99.992062,
+        "signal_consistency": 0.456278,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost2.0": {
+        "paper_ir": -0.030627,
+        "paper_sharpe": -2.86654,
+        "paper_drawdown_pct": -99.99377,
+        "signal_consistency": 0.456278,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost8.0": {
+        "paper_ir": -0.039761,
+        "paper_sharpe": -3.721469,
+        "paper_drawdown_pct": -99.998754,
+        "signal_consistency": 0.456278,
+        "n_trades": 3095,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost1.0": {
+        "paper_ir": -0.029071,
+        "paper_sharpe": -2.7209,
+        "paper_drawdown_pct": -99.992062,
+        "signal_consistency": 0.456414,
+        "n_trades": 3091,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost2.0": {
+        "paper_ir": -0.030593,
+        "paper_sharpe": -2.863367,
+        "paper_drawdown_pct": -99.99377,
+        "signal_consistency": 0.456414,
+        "n_trades": 3091,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost8.0": {
+        "paper_ir": -0.039716,
+        "paper_sharpe": -3.717258,
+        "paper_drawdown_pct": -99.998743,
+        "signal_consistency": 0.456414,
+        "n_trades": 3091,
+        "window_bars": 17847
+      }
+    },
+    "_rsi_mapping": {
+      "BTCUSDT": {
+        "30": {
+          "n": 147,
+          "new_rsi_median": 36.38,
+          "new_rsi_p25": 32.47,
+          "new_rsi_p75": 40.14,
+          "diff_mean": 6.48
+        },
+        "70": {
+          "n": 200,
+          "new_rsi_median": 61.96,
+          "new_rsi_p25": 57.59,
+          "new_rsi_p75": 66.13,
+          "diff_mean": -8.37
+        }
+      },
+      "ETHUSDT": {
+        "30": {
+          "n": 133,
+          "new_rsi_median": 36.74,
+          "new_rsi_p25": 32.17,
+          "new_rsi_p75": 41.44,
+          "diff_mean": 7.37
+        },
+        "70": {
+          "n": 157,
+          "new_rsi_median": 60.84,
+          "new_rsi_p25": 57.91,
+          "new_rsi_p75": 65.33,
+          "diff_mean": -9.18
+        }
+      },
+      "SOLUSDT": {
+        "30": {
+          "n": 148,
+          "new_rsi_median": 36.61,
+          "new_rsi_p25": 33.42,
+          "new_rsi_p75": 40.44,
+          "diff_mean": 7.44
+        },
+        "70": {
+          "n": 185,
+          "new_rsi_median": 62.3,
+          "new_rsi_p25": 58.31,
+          "new_rsi_p75": 66.4,
+          "diff_mean": -7.58
+        }
+      }
+    },
+    "ETHUSDT": {
+      "rsi(70,30)/trail1.5/cost1.0": {
+        "paper_ir": -0.094996,
+        "paper_sharpe": -8.891099,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427636,
+        "n_trades": 3997,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail1.5/cost2.0": {
+        "paper_ir": -0.096668,
+        "paper_sharpe": -9.04767,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427636,
+        "n_trades": 3997,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail1.5/cost8.0": {
+        "paper_ir": -0.106688,
+        "paper_sharpe": -9.985416,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427636,
+        "n_trades": 3997,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost1.0": {
+        "paper_ir": -0.094797,
+        "paper_sharpe": -8.872505,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427901,
+        "n_trades": 3981,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost2.0": {
+        "paper_ir": -0.096463,
+        "paper_sharpe": -9.028437,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427901,
+        "n_trades": 3981,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.0/cost8.0": {
+        "paper_ir": -0.106441,
+        "paper_sharpe": -9.962356,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427901,
+        "n_trades": 3981,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost1.0": {
+        "paper_ir": -0.094793,
+        "paper_sharpe": -8.872155,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost2.0": {
+        "paper_ir": -0.096458,
+        "paper_sharpe": -9.028015,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail2.5/cost8.0": {
+        "paper_ir": -0.106432,
+        "paper_sharpe": -9.961505,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost1.0": {
+        "paper_ir": -0.094793,
+        "paper_sharpe": -8.872155,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost2.0": {
+        "paper_ir": -0.096458,
+        "paper_sharpe": -9.028015,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(70,30)/trail3.0/cost8.0": {
+        "paper_ir": -0.106432,
+        "paper_sharpe": -9.961505,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.427997,
+        "n_trades": 3979,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost1.0": {
+        "paper_ir": -0.093999,
+        "paper_sharpe": -8.797839,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4253,
+        "n_trades": 3939,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost2.0": {
+        "paper_ir": -0.095665,
+        "paper_sharpe": -8.953729,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4253,
+        "n_trades": 3939,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail1.5/cost8.0": {
+        "paper_ir": -0.10564,
+        "paper_sharpe": -9.887376,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4253,
+        "n_trades": 3939,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost1.0": {
+        "paper_ir": -0.093818,
+        "paper_sharpe": -8.78089,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425605,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost2.0": {
+        "paper_ir": -0.095479,
+        "paper_sharpe": -8.936356,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425605,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.0/cost8.0": {
+        "paper_ir": -0.105427,
+        "paper_sharpe": -9.867472,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425605,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost1.0": {
+        "paper_ir": -0.093821,
+        "paper_sharpe": -8.781168,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost2.0": {
+        "paper_ir": -0.095482,
+        "paper_sharpe": -8.936635,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail2.5/cost8.0": {
+        "paper_ir": -0.10543,
+        "paper_sharpe": -9.867751,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost1.0": {
+        "paper_ir": -0.093821,
+        "paper_sharpe": -8.781168,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost2.0": {
+        "paper_ir": -0.095482,
+        "paper_sharpe": -8.936635,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(65,35)/trail3.0/cost8.0": {
+        "paper_ir": -0.10543,
+        "paper_sharpe": -9.867751,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.425655,
+        "n_trades": 3929,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost1.0": {
+        "paper_ir": -0.094072,
+        "paper_sharpe": -8.804692,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428618,
+        "n_trades": 4017,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost2.0": {
+        "paper_ir": -0.095738,
+        "paper_sharpe": -8.960614,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428618,
+        "n_trades": 4017,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail1.5/cost8.0": {
+        "paper_ir": -0.105716,
+        "paper_sharpe": -9.894504,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428618,
+        "n_trades": 4017,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost1.0": {
+        "paper_ir": -0.094164,
+        "paper_sharpe": -8.813245,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4289,
+        "n_trades": 3995,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost2.0": {
+        "paper_ir": -0.095818,
+        "paper_sharpe": -8.968083,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4289,
+        "n_trades": 3995,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.0/cost8.0": {
+        "paper_ir": -0.105727,
+        "paper_sharpe": -9.895482,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.4289,
+        "n_trades": 3995,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost1.0": {
+        "paper_ir": -0.0941,
+        "paper_sharpe": -8.807286,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost2.0": {
+        "paper_ir": -0.095753,
+        "paper_sharpe": -8.961972,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail2.5/cost8.0": {
+        "paper_ir": -0.105652,
+        "paper_sharpe": -9.88846,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost1.0": {
+        "paper_ir": -0.0941,
+        "paper_sharpe": -8.807286,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost2.0": {
+        "paper_ir": -0.095753,
+        "paper_sharpe": -8.961972,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(75,25)/trail3.0/cost8.0": {
+        "paper_ir": -0.105652,
+        "paper_sharpe": -9.88846,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.429145,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost1.0": {
+        "paper_ir": -0.09158,
+        "paper_sharpe": -8.571387,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3781,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost2.0": {
+        "paper_ir": -0.093236,
+        "paper_sharpe": -8.72641,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3781,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail1.5/cost8.0": {
+        "paper_ir": -0.103155,
+        "paper_sharpe": -9.654794,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3781,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost1.0": {
+        "paper_ir": -0.091596,
+        "paper_sharpe": -8.572959,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost2.0": {
+        "paper_ir": -0.093252,
+        "paper_sharpe": -8.727907,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.0/cost8.0": {
+        "paper_ir": -0.103166,
+        "paper_sharpe": -9.655844,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424402,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost1.0": {
+        "paper_ir": -0.0916,
+        "paper_sharpe": -8.573248,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost2.0": {
+        "paper_ir": -0.093255,
+        "paper_sharpe": -8.728195,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail2.5/cost8.0": {
+        "paper_ir": -0.103169,
+        "paper_sharpe": -9.656133,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost1.0": {
+        "paper_ir": -0.0916,
+        "paper_sharpe": -8.573248,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost2.0": {
+        "paper_ir": -0.093255,
+        "paper_sharpe": -8.728195,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(60,40)/trail3.0/cost8.0": {
+        "paper_ir": -0.103169,
+        "paper_sharpe": -9.656133,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.424459,
+        "n_trades": 3779,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost1.0": {
+        "paper_ir": -0.094388,
+        "paper_sharpe": -8.834238,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428851,
+        "n_trades": 4023,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost2.0": {
+        "paper_ir": -0.096052,
+        "paper_sharpe": -8.990003,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428851,
+        "n_trades": 4023,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail1.5/cost8.0": {
+        "paper_ir": -0.10602,
+        "paper_sharpe": -9.922953,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.428851,
+        "n_trades": 4023,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost1.0": {
+        "paper_ir": -0.094554,
+        "paper_sharpe": -8.849781,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42921,
+        "n_trades": 4001,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost2.0": {
+        "paper_ir": -0.096207,
+        "paper_sharpe": -9.004472,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42921,
+        "n_trades": 4001,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.0/cost8.0": {
+        "paper_ir": -0.106106,
+        "paper_sharpe": -9.930987,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42921,
+        "n_trades": 4001,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost1.0": {
+        "paper_ir": -0.094464,
+        "paper_sharpe": -8.841357,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost2.0": {
+        "paper_ir": -0.096113,
+        "paper_sharpe": -8.995681,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail2.5/cost8.0": {
+        "paper_ir": -0.105989,
+        "paper_sharpe": -9.920005,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost1.0": {
+        "paper_ir": -0.094464,
+        "paper_sharpe": -8.841357,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost2.0": {
+        "paper_ir": -0.096113,
+        "paper_sharpe": -8.995681,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      },
+      "rsi(80,20)/trail3.0/cost8.0": {
+        "paper_ir": -0.105989,
+        "paper_sharpe": -9.920005,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.42943,
+        "n_trades": 3991,
+        "window_bars": 17847
+      }
+    },
+    "SOLUSDT": {
+      "rsi(70,30)/trail1.5/cost1.0": {
+        "paper_ir": -0.162017,
+        "paper_sharpe": -15.163946,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414534,
+        "n_trades": 4183,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail1.5/cost2.0": {
+        "paper_ir": -0.162802,
+        "paper_sharpe": -15.237408,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414534,
+        "n_trades": 4183,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail1.5/cost8.0": {
+        "paper_ir": -0.167506,
+        "paper_sharpe": -15.677733,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414534,
+        "n_trades": 4183,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.0/cost1.0": {
+        "paper_ir": -0.161831,
+        "paper_sharpe": -15.146587,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414339,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.0/cost2.0": {
+        "paper_ir": -0.162612,
+        "paper_sharpe": -15.219624,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414339,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.0/cost8.0": {
+        "paper_ir": -0.167289,
+        "paper_sharpe": -15.657401,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414339,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.5/cost1.0": {
+        "paper_ir": -0.161824,
+        "paper_sharpe": -15.145861,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.5/cost2.0": {
+        "paper_ir": -0.162602,
+        "paper_sharpe": -15.218706,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail2.5/cost8.0": {
+        "paper_ir": -0.167267,
+        "paper_sharpe": -15.655333,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail3.0/cost1.0": {
+        "paper_ir": -0.161824,
+        "paper_sharpe": -15.145861,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail3.0/cost2.0": {
+        "paper_ir": -0.162602,
+        "paper_sharpe": -15.218706,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(70,30)/trail3.0/cost8.0": {
+        "paper_ir": -0.167267,
+        "paper_sharpe": -15.655333,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.414429,
+        "n_trades": 4147,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail1.5/cost1.0": {
+        "paper_ir": -0.160467,
+        "paper_sharpe": -15.018912,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410663,
+        "n_trades": 4139,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail1.5/cost2.0": {
+        "paper_ir": -0.161249,
+        "paper_sharpe": -15.092109,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410663,
+        "n_trades": 4139,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail1.5/cost8.0": {
+        "paper_ir": -0.165937,
+        "paper_sharpe": -15.530839,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410663,
+        "n_trades": 4139,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.0/cost1.0": {
+        "paper_ir": -0.160392,
+        "paper_sharpe": -15.011898,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410739,
+        "n_trades": 4127,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.0/cost2.0": {
+        "paper_ir": -0.161172,
+        "paper_sharpe": -15.084886,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410739,
+        "n_trades": 4127,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.0/cost8.0": {
+        "paper_ir": -0.165846,
+        "paper_sharpe": -15.522365,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410739,
+        "n_trades": 4127,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.5/cost1.0": {
+        "paper_ir": -0.160371,
+        "paper_sharpe": -15.009921,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.5/cost2.0": {
+        "paper_ir": -0.16115,
+        "paper_sharpe": -15.082812,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail2.5/cost8.0": {
+        "paper_ir": -0.165818,
+        "paper_sharpe": -15.519706,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail3.0/cost1.0": {
+        "paper_ir": -0.160371,
+        "paper_sharpe": -15.009921,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail3.0/cost2.0": {
+        "paper_ir": -0.16115,
+        "paper_sharpe": -15.082812,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(65,35)/trail3.0/cost8.0": {
+        "paper_ir": -0.165818,
+        "paper_sharpe": -15.519706,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.410854,
+        "n_trades": 4121,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail1.5/cost1.0": {
+        "paper_ir": -0.162144,
+        "paper_sharpe": -15.175884,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413846,
+        "n_trades": 4199,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail1.5/cost2.0": {
+        "paper_ir": -0.162931,
+        "paper_sharpe": -15.249552,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413846,
+        "n_trades": 4199,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail1.5/cost8.0": {
+        "paper_ir": -0.167649,
+        "paper_sharpe": -15.691111,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413846,
+        "n_trades": 4199,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.0/cost1.0": {
+        "paper_ir": -0.161936,
+        "paper_sharpe": -15.156412,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413763,
+        "n_trades": 4167,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.0/cost2.0": {
+        "paper_ir": -0.162718,
+        "paper_sharpe": -15.229527,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413763,
+        "n_trades": 4167,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.0/cost8.0": {
+        "paper_ir": -0.1674,
+        "paper_sharpe": -15.667771,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413763,
+        "n_trades": 4167,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.5/cost1.0": {
+        "paper_ir": -0.161937,
+        "paper_sharpe": -15.156445,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.5/cost2.0": {
+        "paper_ir": -0.162716,
+        "paper_sharpe": -15.229337,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail2.5/cost8.0": {
+        "paper_ir": -0.167384,
+        "paper_sharpe": -15.666243,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail3.0/cost1.0": {
+        "paper_ir": -0.161937,
+        "paper_sharpe": -15.156445,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail3.0/cost2.0": {
+        "paper_ir": -0.162716,
+        "paper_sharpe": -15.229337,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(75,25)/trail3.0/cost8.0": {
+        "paper_ir": -0.167384,
+        "paper_sharpe": -15.666243,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413818,
+        "n_trades": 4153,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail1.5/cost1.0": {
+        "paper_ir": -0.152741,
+        "paper_sharpe": -14.295774,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407146,
+        "n_trades": 3955,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail1.5/cost2.0": {
+        "paper_ir": -0.153513,
+        "paper_sharpe": -14.368042,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407146,
+        "n_trades": 3955,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail1.5/cost8.0": {
+        "paper_ir": -0.158141,
+        "paper_sharpe": -14.80119,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407146,
+        "n_trades": 3955,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.0/cost1.0": {
+        "paper_ir": -0.15278,
+        "paper_sharpe": -14.299458,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407048,
+        "n_trades": 3949,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.0/cost2.0": {
+        "paper_ir": -0.153551,
+        "paper_sharpe": -14.371627,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407048,
+        "n_trades": 3949,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.0/cost8.0": {
+        "paper_ir": -0.158173,
+        "paper_sharpe": -14.804183,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407048,
+        "n_trades": 3949,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.5/cost1.0": {
+        "paper_ir": -0.15278,
+        "paper_sharpe": -14.299441,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.5/cost2.0": {
+        "paper_ir": -0.153551,
+        "paper_sharpe": -14.371577,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail2.5/cost8.0": {
+        "paper_ir": -0.15817,
+        "paper_sharpe": -14.803934,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail3.0/cost1.0": {
+        "paper_ir": -0.15278,
+        "paper_sharpe": -14.299441,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail3.0/cost2.0": {
+        "paper_ir": -0.153551,
+        "paper_sharpe": -14.371577,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(60,40)/trail3.0/cost8.0": {
+        "paper_ir": -0.15817,
+        "paper_sharpe": -14.803934,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.407009,
+        "n_trades": 3947,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail1.5/cost1.0": {
+        "paper_ir": -0.162256,
+        "paper_sharpe": -15.186307,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.41361,
+        "n_trades": 4205,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail1.5/cost2.0": {
+        "paper_ir": -0.163043,
+        "paper_sharpe": -15.259987,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.41361,
+        "n_trades": 4205,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail1.5/cost8.0": {
+        "paper_ir": -0.167762,
+        "paper_sharpe": -15.701619,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.41361,
+        "n_trades": 4205,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.0/cost1.0": {
+        "paper_ir": -0.162077,
+        "paper_sharpe": -15.16954,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413528,
+        "n_trades": 4175,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.0/cost2.0": {
+        "paper_ir": -0.162858,
+        "paper_sharpe": -15.242701,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413528,
+        "n_trades": 4175,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.0/cost8.0": {
+        "paper_ir": -0.167544,
+        "paper_sharpe": -15.68122,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413528,
+        "n_trades": 4175,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.5/cost1.0": {
+        "paper_ir": -0.162066,
+        "paper_sharpe": -15.168535,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413503,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.5/cost2.0": {
+        "paper_ir": -0.162845,
+        "paper_sharpe": -15.241441,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413503,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail2.5/cost8.0": {
+        "paper_ir": -0.167514,
+        "paper_sharpe": -15.67843,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413503,
+        "n_trades": 4159,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail3.0/cost1.0": {
+        "paper_ir": -0.162078,
+        "paper_sharpe": -15.169632,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413644,
+        "n_trades": 4155,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail3.0/cost2.0": {
+        "paper_ir": -0.162856,
+        "paper_sharpe": -15.242475,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413644,
+        "n_trades": 4155,
+        "window_bars": 17806
+      },
+      "rsi(80,20)/trail3.0/cost8.0": {
+        "paper_ir": -0.167521,
+        "paper_sharpe": -15.679085,
+        "paper_drawdown_pct": -100.0,
+        "signal_consistency": 0.413644,
+        "n_trades": 4155,
+        "window_bars": 17806
+      }
+    }
+  }
+}
