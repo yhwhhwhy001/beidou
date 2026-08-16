@@ -1,13 +1,16 @@
 """create_query_cancel: 下单→查询→撤单→再查询确认 CANCELED。
 
-真实路径:取 exchangeInfo 的 LOT_SIZE minQty 作下单量,以 ticker 现价
-作 LIMIT 挂单价(GTC),记账 min_qty × 现价后下单;撤单后最终查询
-状态须为 CANCELED。dry_run 记账 0 且不发送任何请求。
+真实路径:取 exchangeInfo 的 LOT_SIZE minQty 作下单量,以低于现价
+5% 且对齐 tickSize 的 resting 限价挂单(GTC),记账 min_qty × 现价后
+下单;任何写操作前打印操作意图与金额(设计规格§4);撤单清理在
+finally 保护,任一步异常也不残留挂单;最终查询状态须为 CANCELED。
+dry_run 记账 0 且不发送任何请求。
 """
 
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from typing import Any, TypeVar
 
 from beidou_certification.g5_scenarios.base import (
@@ -42,6 +45,24 @@ def min_order_quantity(symbol: str, exchange_info: dict[str, Any]) -> tuple[floa
     raise ValueError(f"symbol {symbol} not in exchange info")
 
 
+def _tick_size(symbol: str, exchange_info: dict[str, Any]) -> Decimal:
+    """从 exchangeInfo 提取 PRICE_FILTER tickSize;缺失即 ValueError。"""
+    for s in exchange_info.get("symbols", []):
+        if s.get("symbol") == symbol:
+            for f in s.get("filters", []):
+                if f.get("filterType") == "PRICE_FILTER":
+                    return Decimal(str(f.get("tickSize", "0.01")))
+            raise ValueError(f"PRICE_FILTER missing for {symbol}")
+    raise ValueError(f"symbol {symbol} not in exchange info")
+
+
+def _resting_buy_price(symbol: str, exchange_info: dict[str, Any], last_price: str) -> str:
+    """低于现价 5% 且对齐 tickSize 的 resting 买价(现价×0.95 向下取整到 tick)。"""
+    raw = Decimal(last_price) * Decimal("0.95")
+    tick = _tick_size(symbol, exchange_info)
+    return str((raw // tick) * tick)
+
+
 class CreateQueryCancelScenario(ScenarioBase):
     scenario_id = "create_query_cancel"
 
@@ -58,27 +79,44 @@ class CreateQueryCancelScenario(ScenarioBase):
             info = _require_ok(await ctx.client.get_exchange_info(ctx.symbol), "get_exchange_info")
             min_qty, _ = min_order_quantity(ctx.symbol, info)
             ticker = _require_ok(await ctx.client.get_ticker(ctx.symbol), "get_ticker")
-            price = str(ticker["lastPrice"])
-            ctx.ledger.record(self.scenario_id, min_qty * float(ticker["lastPrice"]))
+            price = _resting_buy_price(ctx.symbol, info, str(ticker["lastPrice"]))
+            qty = format(min_qty, "f")
+            notional = min_qty * float(ticker["lastPrice"])
+            ctx.ledger.record(self.scenario_id, notional)
+            print(f"create_order BUY {qty} {ctx.symbol} @ {price} notional={notional:.2f} USDT")  # noqa: T201
             order = _require_ok(
                 await ctx.client.create_order(
                     ctx.symbol,
                     "BUY",
                     "LIMIT",
-                    format(min_qty, "f"),
+                    qty,
                     price=price,
                     time_in_force="GTC",
                     client_order_id=f"g5-cqc-{int(time.time() * 1000)}",
                 ),
                 "create_order",
             )
+            order_id = int(order["orderId"])
             steps.append({"action": "order", "order_id": order["orderId"], "status": order.get("status")})
-            queried = _require_ok(await ctx.client.get_order(ctx.symbol, int(order["orderId"])), "get_order")
-            steps.append({"action": "query", "status": queried.get("status")})
-            cancelled = _require_ok(await ctx.client.cancel_order(ctx.symbol, int(order["orderId"])), "cancel_order")
-            steps.append({"action": "cancel", "status": cancelled.get("status")})
-            final = _require_ok(await ctx.client.get_order(ctx.symbol, int(order["orderId"])), "get_order_after_cancel")
-            steps.append({"action": "query_after_cancel", "status": final.get("status")})
+            cancelled = False
+            final: dict[str, Any] = {}
+            try:
+                queried = _require_ok(await ctx.client.get_order(ctx.symbol, order_id), "get_order")
+                steps.append({"action": "query", "status": queried.get("status")})
+                print(f"cancel_order {order_id} {ctx.symbol}")  # noqa: T201
+                cancelled_res = _require_ok(await ctx.client.cancel_order(ctx.symbol, order_id), "cancel_order")
+                cancelled = True
+                steps.append({"action": "cancel", "status": cancelled_res.get("status")})
+                final = _require_ok(await ctx.client.get_order(ctx.symbol, order_id), "get_order_after_cancel")
+                steps.append({"action": "query_after_cancel", "status": final.get("status")})
+            finally:
+                if not cancelled:  # 任一步异常也撤销挂单,不残留(设计规格§4:写操作→finally 恢复)
+                    try:
+                        print(f"cancel_order {order_id} {ctx.symbol} (cleanup)")  # noqa: T201
+                        cleanup = await ctx.client.cancel_order(ctx.symbol, order_id)
+                        steps.append({"action": "cleanup_cancel", "ok": cleanup.is_ok})
+                    except Exception as exc:
+                        steps.append({"action": "cleanup_cancel", "ok": False, "error": str(exc)[:200]})
             ok = str(final.get("status")) == "CANCELED"
             return ScenarioResult(
                 self.scenario_id,

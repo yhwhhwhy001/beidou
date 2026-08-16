@@ -2,7 +2,9 @@
 
 判定纯函数 assert_no_duplicate:第二次响应为带 code 的错误(交易所拒绝,如
 -4015/-2011)→ 通过;返回已知 orderId(同一订单)→ 通过;返回新 orderId
-(重复成交)→ 失败。真实路径记账 min_qty × 现价,结束前撤销本场景挂单。
+(重复成交)→ 失败。真实路径记账 min_qty × 现价,以 resting 限价挂单,
+任何写操作前打印操作意图(设计规格§4);撤单清理在 finally 保护,
+任一步异常(含 open_orders 查询、第二次下单)也不残留挂单。
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioResult,
     ScenarioStatus,
 )
-from beidou_certification.g5_scenarios.protocol.create_query_cancel import min_order_quantity
+from beidou_certification.g5_scenarios.protocol.create_query_cancel import _resting_buy_price, min_order_quantity
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
 
@@ -64,47 +66,59 @@ class StableClientOrderIdScenario(ScenarioBase):
             info = _require_ok(await ctx.client.get_exchange_info(ctx.symbol), "get_exchange_info")
             min_qty, _ = min_order_quantity(ctx.symbol, info)
             ticker = _require_ok(await ctx.client.get_ticker(ctx.symbol), "get_ticker")
-            price = str(ticker["lastPrice"])
-            ctx.ledger.record(self.scenario_id, min_qty * float(ticker["lastPrice"]))
+            price = _resting_buy_price(ctx.symbol, info, str(ticker["lastPrice"]))
+            qty = format(min_qty, "f")
+            notional = min_qty * float(ticker["lastPrice"])
+            ctx.ledger.record(self.scenario_id, notional)
             cid = f"g5-stable-{int(time.time() * 1000)}"
+            print(f"create_order BUY {qty} {ctx.symbol} @ {price} notional={notional:.2f} USDT")  # noqa: T201
             first = _require_ok(
                 await ctx.client.create_order(
                     ctx.symbol,
                     "BUY",
                     "LIMIT",
-                    format(min_qty, "f"),
+                    qty,
                     price=price,
                     time_in_force="GTC",
                     client_order_id=cid,
                 ),
                 "create_order(first)",
             )
+            first_id = int(first["orderId"])
             steps.append({"action": "first_order", "order_id": first["orderId"], "status": first.get("status")})
-            snapshot = _require_ok(await ctx.client.get_open_orders(ctx.symbol), "get_open_orders")
-            known: list[dict[str, Any]] = list(snapshot)
-            if all(str(o.get("orderId")) != str(first["orderId"]) for o in known):
-                known.append({"orderId": first["orderId"]})
-            steps.append({"action": "snapshot_open_orders", "count": len(snapshot)})
-            second = await ctx.client.create_order(
-                ctx.symbol, "BUY", "LIMIT", format(min_qty, "f"), price=price, time_in_force="GTC", client_order_id=cid
-            )
-            if second.is_ok:
-                second_payload: Any = second.data if isinstance(second.data, dict) else {}
-            else:
-                raw = second.error.raw if second.error is not None else None
-                second_payload = raw if isinstance(raw, dict) else {}
-            ok, reason = assert_no_duplicate(second_payload, known)
-            steps.append({"action": "second_order", "is_ok": second.is_ok, "verdict": reason})
-            # 清理本场景挂单,避免残留订单影响后续场景/对账
-            cancel_ids: list[int] = [int(first["orderId"])]
-            if isinstance(second_payload, dict) and second_payload.get("orderId") is not None:
-                cancel_ids.append(int(second_payload["orderId"]))
-            for oid in dict.fromkeys(cancel_ids):
-                try:
-                    cancel_res = await ctx.client.cancel_order(ctx.symbol, oid)
-                    steps.append({"action": "cleanup_cancel", "order_id": oid, "ok": cancel_res.is_ok})
-                except Exception as exc:
-                    steps.append({"action": "cleanup_cancel", "order_id": oid, "ok": False, "error": str(exc)[:200]})
+            second_new_id: int | None = None
+            try:
+                snapshot = _require_ok(await ctx.client.get_open_orders(ctx.symbol), "get_open_orders")
+                known: list[dict[str, Any]] = list(snapshot)
+                if all(str(o.get("orderId")) != str(first_id) for o in known):
+                    known.append({"orderId": first_id})
+                steps.append({"action": "snapshot_open_orders", "count": len(snapshot)})
+                print(f"create_order BUY {qty} {ctx.symbol} @ {price} (dup clientOrderId)")  # noqa: T201
+                second = await ctx.client.create_order(
+                    ctx.symbol, "BUY", "LIMIT", qty, price=price, time_in_force="GTC", client_order_id=cid
+                )
+                if second.is_ok:
+                    second_payload: Any = second.data if isinstance(second.data, dict) else {}
+                else:
+                    raw = second.error.raw if second.error is not None else None
+                    second_payload = raw if isinstance(raw, dict) else {}
+                ok, reason = assert_no_duplicate(second_payload, known)
+                steps.append({"action": "second_order", "is_ok": second.is_ok, "verdict": reason})
+                if isinstance(second_payload, dict) and second_payload.get("orderId") is not None:
+                    second_new_id = int(second_payload["orderId"])
+            finally:
+                # 清理本场景挂单(finally 保护:open_orders 查询或第二次下单
+                # 抛异常时也不残留),避免残留订单影响后续场景/对账
+                cancel_ids = [first_id] + ([second_new_id] if second_new_id not in (None, first_id) else [])
+                for oid in dict.fromkeys(cancel_ids):
+                    try:
+                        print(f"cancel_order {oid} {ctx.symbol} (cleanup)")  # noqa: T201
+                        cancel_res = await ctx.client.cancel_order(ctx.symbol, oid)
+                        steps.append({"action": "cleanup_cancel", "order_id": oid, "ok": cancel_res.is_ok})
+                    except Exception as exc:
+                        steps.append(
+                            {"action": "cleanup_cancel", "order_id": oid, "ok": False, "error": str(exc)[:200]}
+                        )
             return ScenarioResult(
                 self.scenario_id,
                 ScenarioStatus.PASS if ok else ScenarioStatus.FAIL,

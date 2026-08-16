@@ -12,6 +12,7 @@ from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioConte
 from beidou_certification.g5_scenarios.protocol.clock_skew import ClockSkewScenario, is_timestamp_error
 from beidou_certification.g5_scenarios.protocol.create_query_cancel import (
     CreateQueryCancelScenario,
+    _resting_buy_price,
     min_order_quantity,
 )
 from beidou_certification.g5_scenarios.protocol.stable_client_order_id import (
@@ -47,6 +48,27 @@ def test_min_order_quantity_symbol_missing_raises():
         min_order_quantity("NOPE", {"symbols": [{"symbol": "X", "filters": []}]})
 
 
+def test_resting_buy_price_aligned_to_tick():
+    # 60000.5 × 0.95 = 57000.475 → 向下取整到 tickSize 0.10 → 57000.40(可挂单精度)
+    info = {
+        "symbols": [
+            {
+                "symbol": "BTCUSDT",
+                "filters": [
+                    {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+                ],
+            }
+        ]
+    }
+    assert _resting_buy_price("BTCUSDT", info, "60000.5") == "57000.40"
+
+
+def test_resting_buy_price_missing_filter_raises():
+    with pytest.raises(ValueError):
+        _resting_buy_price("X", {"symbols": [{"symbol": "X", "filters": []}]}, "1.0")
+
+
 def test_assert_no_duplicate_same_order_returned():
     assert assert_no_duplicate({"orderId": 1}, [{"orderId": 1}]) == (True, "same_order_returned")
 
@@ -77,6 +99,7 @@ class FakeClient:
         self.seen_offsets: list[int] = []
         self.create_order_results: list[Result] = []
         self.final_status: dict[int, str] = {}
+        self.simulate_resync = True  # 模拟真实客户端对 -1021 自动 resync 校正偏移
 
     async def get_server_time(self) -> Result:
         self.calls.append(("get_server_time",))
@@ -89,7 +112,10 @@ class FakeClient:
                 "symbols": [
                     {
                         "symbol": "BTCUSDT",
-                        "filters": [{"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"}],
+                        "filters": [
+                            {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+                        ],
                     }
                 ]
             }
@@ -116,6 +142,8 @@ class FakeClient:
     ) -> Result:
         self.calls.append(("create_order", symbol, side, order_type, quantity, price, time_in_force, client_order_id))
         self.seen_offsets.append(self._clock_offset_ms)
+        if self.simulate_resync:
+            self._clock_offset_ms = -500  # 客户端 -1021 后 resync 得到真实校准值
         if self.create_order_results:
             return self.create_order_results.pop(0)
         return Result.ok({"orderId": 1, "status": "NEW"})
@@ -198,7 +226,7 @@ def test_stable_client_order_id_real_path_exchange_rejected_pass(tmp_path):
     creates = [c for c in client.calls if c[0] == "create_order"]
     assert len(creates) == 2
     assert creates[0][7] == creates[1][7] and creates[0][7] is not None  # 同 clientOrderId
-    assert creates[0][5] == "60000.5"  # LIMIT 带现价(GTC)
+    assert creates[0][5] == "57000.40"  # resting 限价(现价×0.95 对齐 tick)
     assert any(c[0] == "cancel_order" for c in client.calls)  # 残留挂单清理
     assert math.isclose(ctx.ledger.total, 0.001 * 60000.5)
 
@@ -213,14 +241,17 @@ def test_clock_skew_dry_run(tmp_path):
     assert ctx.ledger.total == 0.0
 
 
-def test_clock_skew_real_path_pass_and_offset_restored(tmp_path):
+def test_clock_skew_real_path_pass_keeps_resync_calibration(tmp_path):
     client = FakeClient()
     ctx = _ctx(client, tmp_path)
     result = asyncio.run(ClockSkewScenario().run(ctx))
     assert result.status == ScenarioStatus.PASS
     assert result.error_type == ""
     assert client.seen_offsets == [300000]  # 下单时注入 +300000 偏差
-    assert client._clock_offset_ms == 0  # 执行后恢复原偏移,不污染后续场景
+    order_step = next(s for s in result.evidence["steps"] if s["action"] == "order")
+    assert order_step["resynced"] is True  # resync 校准真实发生(证据不再硬编码)
+    # 注入前偏移为 0(无校准),resync 已产生真实校准 → 保留 resync 结果,不还原 0
+    assert client._clock_offset_ms == -500
     assert math.isclose(ctx.ledger.total, 0.001 * 60000.5)  # 真实下单即记账
     assert any(c[0] == "cancel_order" for c in client.calls)  # 签名验证后撤单
 
@@ -234,8 +265,23 @@ def test_clock_skew_timestamp_error_fails_without_accounting(tmp_path):
     result = asyncio.run(ClockSkewScenario().run(ctx))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "TIMESTAMP_ERROR"
-    assert client._clock_offset_ms == 0
+    assert client._clock_offset_ms == -500  # resync 校准已发生,保留
     assert ctx.ledger.total == 0.0  # 未真实下单不记账
+
+
+def test_clock_skew_business_error_restores_offset_and_passes(tmp_path):
+    # 无 -1021(盘口未校验时间戳或业务拒绝):resync 未发生 → 注入前偏移被还原,不污染后续场景
+    client = FakeClient()
+    client.simulate_resync = False
+    client.create_order_results = [
+        Result.failure("Insufficient margin", raw={"code": -2019, "msg": "..."}),
+    ]
+    ctx = _ctx(client, tmp_path)
+    result = asyncio.run(ClockSkewScenario().run(ctx))
+    assert result.status == ScenarioStatus.PASS  # 非时间戳类错误即 PASS(签名路径已可用)
+    assert result.error_type == ""
+    assert client._clock_offset_ms == 0  # 未 resync → 还原注入前偏移
+    assert ctx.ledger.total == 0.0  # 未下单不记账
 
 
 def test_protocol_scenarios_registered():
