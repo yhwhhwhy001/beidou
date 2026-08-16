@@ -59,13 +59,27 @@ class InstrumentScore:
 
 
 def _default_observation_hours() -> float:
-    """BD-FIX（观察期可配置）: testnet 验收可经环境变量缩短观察期。"""
+    """BD-FIX（观察期可配置）: testnet 验收可经环境变量缩短观察期。
+
+    TESTNET-EXEMPT: EXEMPT-19（M02-F02）—— 环境变量覆盖属 operator
+    显式配置，加载时审计日志；晋级权仍在实时评分规则。
+    """
+    import logging
     import os
 
+    raw = os.getenv("BEIDOU_MIN_OBSERVATION_HOURS", "24.0")
     try:
-        return float(os.getenv("BEIDOU_MIN_OBSERVATION_HOURS", "24.0"))
+        hours = float(raw)
     except ValueError:
+        logging.getLogger("beidou.trading_pool").warning(
+            "BEIDOU_MIN_OBSERVATION_HOURS=%r invalid, falling back to 24.0", raw
+        )
         return 24.0
+    if hours != 24.0:
+        logging.getLogger("beidou.trading_pool").warning(
+            "observation hours overridden by env: BEIDOU_MIN_OBSERVATION_HOURS=%s", raw
+        )
+    return hours
 
 
 @dataclass
@@ -111,6 +125,8 @@ class TradingPool:
         self._event_sink = event_sink
         self._policy_version = policy_version
         self._source = source
+        # M02-F05: 评分权重可被签名策略覆盖（None = 默认权重）
+        self._score_weights: dict[str, float] | None = None
         # Restore persisted state on startup
         if initial_state:
             for state in initial_state:
@@ -220,21 +236,50 @@ class TradingPool:
         _threshold = self.PROMOTE_THRESHOLD if threshold is None else threshold
         if quality_score < _threshold:
             return False
+        evidence = evidence or {}
         entry.historical_seed = {
             "quality_score": round(quality_score, 4),
-            "evidence": evidence or {},
+            "evidence": evidence,
             "seeded_at": datetime.now(timezone.utc).isoformat(),
         }
-        # 观察期起点提前到历史数据覆盖时间（等效观察期已满）
-        entry.observing_since = datetime.now(timezone.utc) - timedelta(days=365)
+        # M02-F01: 观察期起点派生自证据的数据天数（evidence["days"]）——
+        # 旧实现用 365d 魔数捷径，与证据覆盖范围无关（审计失真）。
+        # 无天数证据时保持保守 24h（不加速）。
+        try:
+            evidence_days = float(evidence.get("days", 0) or 0)
+        except (TypeError, ValueError):
+            evidence_days = 0.0
+        if evidence_days <= 0:
+            return False
+        backdated_hours = min(evidence_days * 24.0, 365.0 * 24.0)
+        entry.observing_since = datetime.now(timezone.utc) - timedelta(hours=backdated_hours)
+        entry.historical_seed["observation_backdate_hours"] = round(backdated_hours, 1)
         self._persist(entry)
         return True
+
+    def set_score_weights(self, weights: dict[str, float]) -> None:
+        """M02-F05: 设置评分权重（来自签名策略）。非法值保持 None=默认。"""
+        expected = set(_DEFAULT_SCORE_WEIGHTS)
+        if not isinstance(weights, dict) or set(weights) != expected:
+            logging.getLogger("beidou.trading_pool").warning(
+                "invalid score weights ignored: %r (expected keys %s)", weights, sorted(expected)
+            )
+            return
+        try:
+            parsed = {key: float(value) for key, value in weights.items()}
+        except (TypeError, ValueError):
+            logging.getLogger("beidou.trading_pool").warning("non-numeric score weights ignored: %r", weights)
+            return
+        if any(not (0.0 <= v <= 1.0) for v in parsed.values()) or sum(parsed.values()) <= 0:
+            logging.getLogger("beidou.trading_pool").warning("out-of-range score weights ignored: %r", parsed)
+            return
+        self._score_weights = parsed
 
     def score(self, instrument_id: str, score: InstrumentScore) -> None:
         entry = self._pool.get(instrument_id)
         if not entry:
             return
-        score.compute_overall()
+        score.compute_overall(self._score_weights)
         entry.scores.append(score)
 
         # 自动降级检查

@@ -8,13 +8,20 @@ from beidou_launcher.testnet_exemptions import TESTNET_EXEMPTIONS
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 ENGINE_SRC = (ROOT / "beidou_core" / "engine.py").read_text(encoding="utf-8")
+# M02: 特赦标记可能位于其他生产模块（如 trading_pool_lifecycle）
+ALL_SOURCES = {
+    "beidou_core/engine.py": ENGINE_SRC,
+    "beidou_data/trading_pool_lifecycle.py": (ROOT / "beidou_data" / "trading_pool_lifecycle.py").read_text(
+        encoding="utf-8"
+    ),
+}
 
 
 def test_exemption_registry_entries_are_complete() -> None:
     """每项特赦必须有唯一 id、非空理由与责任模块。"""
     ids = [item.exemption_id for item in TESTNET_EXEMPTIONS]
     assert len(ids) == len(set(ids)), f"重复 exemption_id: {ids}"
-    assert len(ids) == 18, f"登记表数量变化需评审: {len(ids)}"
+    assert len(ids) == 19, f"登记表数量变化需评审: {len(ids)}"
     for item in TESTNET_EXEMPTIONS:
         assert item.rationale.strip(), f"{item.exemption_id} 缺理由"
         assert item.reassessment_module.strip(), f"{item.exemption_id} 缺责任模块"
@@ -63,16 +70,18 @@ def test_testnet_branches_are_marked_or_allowlisted() -> None:
 
 
 def test_every_registered_exemption_has_code_marker() -> None:
-    """登记表中的每项都必须在引擎代码有对应标记（登记与代码一致）。"""
+    """登记表中的每项都必须在生产代码有对应标记（登记与代码一致）。"""
+    all_sources = "".join(ALL_SOURCES.values())
     for item in TESTNET_EXEMPTIONS:
-        assert item.marker in ENGINE_SRC, f"{item.exemption_id} 在 engine.py 无标记"
+        assert item.marker in all_sources, f"{item.exemption_id} 在生产代码无标记"
 
 
 def test_every_code_marker_is_registered() -> None:
-    """引擎中的每个 TESTNET-EXEMPT 标记都必须已登记（防未治理新特赦）。"""
+    """生产代码中的每个 TESTNET-EXEMPT 标记都必须已登记（防未治理新特赦）。"""
     import re
 
     registered = {item.marker for item in TESTNET_EXEMPTIONS}
-    for match in re.finditer(r"TESTNET-EXEMPT:\s*(EXEMPT-\d+)", ENGINE_SRC):
+    all_sources = "".join(ALL_SOURCES.values())
+    for match in re.finditer(r"TESTNET-EXEMPT:\s*(EXEMPT-\d+)", all_sources):
         marker = f"TESTNET-EXEMPT: {match.group(1)}"
         assert marker in registered, f"未登记的特赦标记: {marker}"

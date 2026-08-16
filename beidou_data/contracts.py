@@ -137,13 +137,18 @@ class DQSnapshot:
 
 @dataclass(frozen=True)
 class UniverseEntry:
-    """单个交易对的 PIT 状态。"""
+    """单个交易对的 PIT 状态。
+
+    M02-F03: funding_rate/open_interest/capacity_score 用 None 表示
+    "未知/未提供" —— 旧实现以 0.0 作 UNKNOWN 哨兵，把合法的零费率
+    （市场常态）与零持仓量误判为关键字段缺失。
+    """
 
     symbol: str
     listing_age_days: float = 0.0
-    funding_rate: float = 0.0
-    open_interest: float = 0.0
-    capacity_score: float = 0.0
+    funding_rate: float | None = None
+    open_interest: float | None = None
+    capacity_score: float | None = None
     dq_ok: bool = False
     is_executable: bool = False
     exclude_reason: str = ""
@@ -169,14 +174,17 @@ class PITUniverseSnapshot:
         return {e.symbol: e.exclude_reason for e in self.entries if not e.is_executable and e.exclude_reason}
 
     def any_unknown_critical(self) -> list[str]:
-        """返回关键字段 UNKNOWN 的 symbol 列表。"""
+        """返回关键字段 UNKNOWN（None）的 symbol 列表。
+
+        M02-F03: 未知语义由 None 承载 —— 合法的零费率/零 OI 不再误报。
+        """
         issues = []
         for e in self.entries:
-            if e.funding_rate == 0.0 and not e.exclude_reason:
+            if e.funding_rate is None and not e.exclude_reason:
                 issues.append(f"{e.symbol}:funding_rate")
-            if e.open_interest == 0.0 and not e.exclude_reason:
+            if e.open_interest is None and not e.exclude_reason:
                 issues.append(f"{e.symbol}:open_interest")
-            if e.capacity_score == 0.0 and not e.exclude_reason:
+            if e.capacity_score is None and not e.exclude_reason:
                 issues.append(f"{e.symbol}:capacity_score")
         return issues
 

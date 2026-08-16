@@ -172,4 +172,12 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         reassessment_module="M22",
         risk_note="进程存活但功能不可用窗口最长 10 分钟；M22 复核与 launchd 重启语义的协同。",
     ),
+    TestnetExemption(
+        exemption_id="EXEMPT-19",
+        title="观察期经环境变量 BEIDOU_MIN_OBSERVATION_HOURS 缩短",
+        rationale="交易池最小观察期默认 24h；环境变量允许 operator 显式缩短（验收/受控环境）。"
+        "晋级权仍在实时评分规则（PROMOTE_THRESHOLD + 三重验证），只加速观察期。",
+        reassessment_module="M02",
+        risk_note="未签名的环境变量是代码外配置入口 —— 加载时审计日志，运营变更需记录。",
+    ),
 )

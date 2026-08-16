@@ -216,12 +216,22 @@ class TestPITUniverse:
         assert blocked["XRPUSDT"] == "low_liquidity"
 
     def test_unknown_critical(self):
+        # M02-F03: UNKNOWN = None（缺失证据）；零值是合法事实不得误报。
         entries = [
-            UniverseEntry(symbol="BTCUSDT", funding_rate=0.0, open_interest=0.0),
+            UniverseEntry(symbol="BTCUSDT", funding_rate=None, open_interest=None),
         ]
         snap = PITUniverseSnapshot(universe_id="u1", entries=entries)
         issues = snap.any_unknown_critical()
-        assert len(issues) > 0
+        assert "BTCUSDT:funding_rate" in issues
+        assert "BTCUSDT:open_interest" in issues
+
+    def test_zero_values_are_not_unknown(self):
+        # 零费率/零 OI 是合法市场事实，不得被当作 UNKNOWN 阻断。
+        entries = [
+            UniverseEntry(symbol="BTCUSDT", funding_rate=0.0, open_interest=0.0, capacity_score=0.5),
+        ]
+        snap = PITUniverseSnapshot(universe_id="u1", entries=entries)
+        assert snap.any_unknown_critical() == []
 
 
 # ============================================================================

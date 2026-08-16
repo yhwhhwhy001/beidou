@@ -1546,6 +1546,12 @@ class AutonomousEngine:
             policy_version=str(self._policy_version or "UNKNOWN"),
             source="MARKET_QUALITY_OBSERVATION",
         )
+        # M02-F05: 评分权重经签名策略可覆盖（缺失→默认权重+审计 WARN）
+        _policy_weights = self._policy_params.get("universe_score_weights")
+        if isinstance(_policy_weights, dict):
+            self._trading_pool.set_score_weights(_policy_weights)
+        else:
+            print("[universe] score weights not in signed policy — using defaults (audit)")
         for sym in configured_symbols:
             # A configured symbol is only an observation candidate.  Startup
             # must never manufacture an ACTIVE trading universe: activation
@@ -2046,6 +2052,23 @@ class AutonomousEngine:
             amount=str(account_balance * self._policy_float_audited("capital_budget_ratio", 0.1)),
             currency="USDT",
         )
+
+    def _diag_throttle(self, key: str, interval_seconds: float = 30.0) -> bool:
+        """诊断打印节流：同一 key 每 interval_seconds 最多打印一次。
+
+        M02-F04：替代硬编码 (APRUSDT,ARCUSDT,BNBUSDT) 三元组 —— 诊断
+        限频必须按任意 symbol 通用，不得绑定具体标的。
+        """
+        stamps = getattr(self, "_diag_throttle_stamps", None)
+        if stamps is None:
+            stamps = {}
+            self._diag_throttle_stamps = stamps
+        now = time.time()
+        last = stamps.get(key, 0.0)
+        if now - last < interval_seconds:
+            return False
+        stamps[key] = now
+        return True
 
     # --- Adapter-bound REST API (BD-02: single adapter boundary) ---
     # 所有 Binance API 访问统一通过 self._adapter (BinanceUsdmAdapter)
@@ -7821,8 +7844,7 @@ class AutonomousEngine:
                 server_count = len(owned_ids)
                 # 交易所已有 >= 期望数量即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count:
-                    if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_detail_diag", 0) > 30:
-                        self._last_retry_detail_diag = time.time()
+                    if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(
                             f"[nearline-diag] {symbol}: covered skip expected={expected_count} "
                             f"server={server_count} sl_status={getattr(getattr(pp.stop_loss,'status',None),'value',None)}"
@@ -7855,8 +7877,7 @@ class AutonomousEngine:
                 # BD-FIX (S41): 交易所已有 Algo 单 → 跳过
                 symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
                 if symbol_algo_count >= 2:
-                    if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_detail_diag", 0) > 30:
-                        self._last_retry_detail_diag = time.time()
+                    if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(f"[nearline-diag] {symbol}: s41 skip symbol_algo_count={symbol_algo_count}")
                     continue  # 已有 SL+TP
 
@@ -8042,8 +8063,7 @@ class AutonomousEngine:
 
                 # --- 重试止损单 ---
                 # server_count < expected_count 说明有缺失，止损单存在即尝试补发
-                if symbol in ("APRUSDT", "ARCUSDT", "BNBUSDT") and time.time() - getattr(self, "_last_retry_sl_diag", 0) > 30:
-                    self._last_retry_sl_diag = time.time()
+                if self._diag_throttle(f"retry-sl:{symbol}"):
                     print(
                         f"[nearline-diag] {symbol}: sl={pp.stop_loss} "
                         f"needs={_needs_exchange_protection(pp.stop_loss)} "
