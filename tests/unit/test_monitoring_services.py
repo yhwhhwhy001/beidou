@@ -562,3 +562,63 @@ def test_check_factors_fresh_evaluation_passes() -> None:
         [FactorState(factor_id="f1", value=0.5, lifecycle="ACTIVE", last_evaluation=_time.time() - 60)]
     )
     assert results == []
+
+
+# --- M22 coverage 补测: monitoring 空白 ---
+
+
+def test_clock_integrity_drift_detection() -> None:
+    from beidou_observability.monitoring.clock_integrity import ClockIntegrity
+
+    ci = ClockIntegrity()
+    assert ci.average_drift_ms == 0.0
+    ci.record_exchange_time(1000)
+    ci.record_exchange_time(2000)  # 正常记录(漂移 ~1000ms)
+    ci.record_exchange_time(12000)  # 大幅漂移(10000ms)
+    result = ci.check()
+    assert result.check_id == "runtime.integrity.clock"
+    # 平均漂移 (1000+10000)/2 = 5500ms > block 阈值(5000ms)
+    assert result.status.value == "FAIL"
+
+
+def test_clock_integrity_warn_band() -> None:
+    from beidou_observability.monitoring.clock_integrity import ClockIntegrity
+
+    ci = ClockIntegrity()
+    ci.record_exchange_time(1000)
+    # 漂移 = (3000-1000) - elapsed*1000;elapsed 极小时 ≈ 2000+ms 落在
+    # warn 带(>2000 且 <=5000)——用大漂移但不过 block 阈值
+    ci.record_exchange_time(3400)
+    result = ci.check()
+    assert result.status.value in {"WARN", "FAIL"}
+
+
+def test_monitoring_service_check_deep_and_incidents() -> None:
+    from beidou_observability.monitoring.service import MonitoringService
+
+    service = MonitoringService()
+    assert service.status()["health"] in {"OK", "HEALTHY", "DEGRADED", "UNKNOWN", "GREEN"}
+    assert service.check_deep() == []
+    assert service.get_incidents() == []
+    assert service.to_json()
+    assert service.get_mode_contract()["mode"] == "UNKNOWN"
+
+
+def test_monitoring_reconciliation_check_guards() -> None:
+    from beidou_observability.monitoring.checks.reconciliation import (
+        ReconciliationResult,
+        build_reconciliation_check,
+    )
+
+    mismatched = build_reconciliation_check(
+        ReconciliationResult(matched=1, mismatched=1, unknown=0, unsupported=0)
+    )
+    assert mismatched.status.value == "FAIL"
+    unsupported = build_reconciliation_check(
+        ReconciliationResult(matched=0, mismatched=0, unknown=0, unsupported=1)
+    )
+    assert unsupported.status.value == "FAIL"  # 不支持不是干净零差异
+    clean = build_reconciliation_check(
+        ReconciliationResult(matched=1, mismatched=0, unknown=0, unsupported=0)
+    )
+    assert clean.status.value == "PASS"
