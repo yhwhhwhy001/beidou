@@ -33,6 +33,7 @@ def _facts(
     complete: bool = True,
     balance: str = "100",
     source: str = "SYSTEM",
+    detail: dict | None = None,
 ) -> AccountFactSnapshot:
     return AccountFactSnapshot(
         account_id=AccountId("acct"),
@@ -40,6 +41,7 @@ def _facts(
         balance=MonetaryValue(amount=balance),
         positions={InstrumentId("BTCUSDT"): Quantity(amount="0.25")},
         open_orders=["order-1"],
+        open_orders_detail=detail or {},
         timestamp=timestamp,
         source=source,
         fact_version="v1",
@@ -428,3 +430,91 @@ def test_order_parameter_mismatch_detected_with_same_ids() -> None:
     result = ReconciliationEngine.compare(system_facts, exchange_facts, now=now)
     assert not result.matched
     assert any("parameter mismatch" in str(d) for d in result.differences)
+
+
+# --- M13-R2: 对抗审查反例回归 ---
+
+
+def _detail(**overrides) -> dict:
+    values = {
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "qty": "0.25",
+        "price": "50000",
+        "type": "LIMIT",
+    }
+    values.update(overrides)
+    return {"order-1": values}
+
+
+def test_one_sided_detail_does_not_block() -> None:
+    """单侧缺明细 → MATCHED + detail_degraded 审计标志,不阻断新风险。
+
+    回归:旧分支在有挂单时每轮 MISMATCHED,live/canary 三方对账永久阻断。
+    """
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail())
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail={})
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert result.status is ReconciliationStatus.MATCHED
+    assert result.detail_degraded is True
+
+
+def test_both_missing_detail_no_degradation_flag() -> None:
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    result = ReconciliationEngine.compare(_facts(timestamp=now), _facts(timestamp=now, source="EXCHANGE"), now=now)
+    assert result.status is ReconciliationStatus.MATCHED
+    assert result.detail_degraded is False
+
+
+def test_price_drift_detected() -> None:
+    """price 加入比较域 —— 同 ID 订单价格漂移必须阻断。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(price="90000"))
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail(price="85000"))
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("price" in str(d) for d in result.differences)
+
+
+def test_price_zero_skipped_for_stop_orders() -> None:
+    """STOP 类单 price=0 为无效价位(有效价位在 stopPrice) —— 跳过比较。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(price="0", type="STOP_MARKET"))
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail(price="0", type="STOP_MARKET"))
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert result.status is ReconciliationStatus.MATCHED
+
+
+def test_qty_invalid_blocks_not_silently_cleared() -> None:
+    """qty 解析失败 → 阻断差异(fail-closed),不再双侧清零放行。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail(qty="abc"))
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail(qty="1.0"))
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert not result.matched
+    assert any("INVALID_ORDER_QTY_FACT" in str(d) for d in result.differences)
+
+
+def test_reduce_only_not_compared() -> None:
+    """reduce_only 移除比较域(系统侧 order_states 无该列,原死代码)。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail())  # 无 reduce_only 键
+    exchange = _facts(
+        timestamp=now,
+        source="EXCHANGE",
+        detail=_detail(reduce_only="true"),
+    )
+    result = ReconciliationEngine.compare(system, exchange, now=now)
+    assert result.status is ReconciliationStatus.MATCHED
+
+
+def test_three_way_aggregates_detail_degraded() -> None:
+    """三方对账:event 侧无 detail → 聚合 detail_degraded=True 且不阻断。"""
+    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    system = _facts(timestamp=now, detail=_detail())
+    exchange = _facts(timestamp=now, source="EXCHANGE", detail=_detail())
+    event = _facts(timestamp=now, source="EVENT_STREAM", detail={})
+    result = ReconciliationEngine.compare_three_way(system, exchange, event, now=now)
+    assert result.status is ReconciliationStatus.MATCHED
+    assert result.detail_degraded is True

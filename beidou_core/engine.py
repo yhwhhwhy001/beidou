@@ -7145,13 +7145,15 @@ class AutonomousEngine:
             positions=positions,
             open_orders=[str(row["order_id"]) for row in active_orders],
             # M13-F01: 订单参数明细(系统侧)—— 参数级对账输入
+            # M13-R2: 加 price(order_states 已有列);reduce_only 移除
+            # (order_states 无该列,原恒空串死代码,登记 M16 扩表)
             open_orders_detail={
                 str(row["order_id"]): {
                     "symbol": str(row.get("symbol", "")),
                     "side": str(row.get("side", "")),
                     "qty": str(row.get("quantity", "0")),
+                    "price": str(row.get("price", "")),
                     "type": str(row.get("order_type", "")),
-                    "reduce_only": "",
                 }
                 for row in active_orders
             },
@@ -7260,13 +7262,16 @@ class AutonomousEngine:
             positions=exchange_positions,
             open_orders=[str(order["orderId"]) for order in open_orders],
             # M13-F01: 订单参数明细(交易所侧)—— 参数级对账输入
+            # M13-R2: 加 price/stop_price(审计证据;stop_price 系统侧无列,
+            # 不参与比较,登记 M16 扩表)
             open_orders_detail={
                 str(order["orderId"]): {
                     "symbol": str(order.get("symbol", "")),
                     "side": str(order.get("side", "")),
                     "qty": str(order.get("origQty", "0")),
+                    "price": str(order.get("price", "")),
                     "type": str(order.get("type", "")),
-                    "reduce_only": str(order.get("reduceOnly", "")),
+                    "stop_price": str(order.get("stopPrice", "")),
                 }
                 for order in open_orders
             },

@@ -42,6 +42,9 @@ class ReconciliationResult:
     exchange_facts: AccountFactSnapshot | None = None
     event_facts: AccountFactSnapshot | None = None
     checked_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # M13-R2: 参数级明细降级标志 —— 单侧缺 open_orders_detail 时置位,
+    # 不产生阻断差异(审计可见,ID 集合比较仍生效)
+    detail_degraded: bool = False
 
     @property
     def is_unknown(self) -> bool:
@@ -273,6 +276,7 @@ class ReconciliationEngine:
             )
 
         diffs: list[str] = []
+        detail_degraded = False
 
         # 余额比较：金额允许一个极小 Decimal→float 表示误差，但不允许
         # 通过大容差掩盖真实权益差异。
@@ -319,9 +323,21 @@ class ReconciliationEngine:
             if parts:
                 diffs.append("Open orders mismatch: " + "; ".join(parts))
 
-        # M13-F01: 参数级比较（两侧明细齐全时）—— 同 ID 订单的
-        # symbol/side/qty/type 必须一致,否则即使 ID 集合一致也是
+        # M13-F01/R2: 参数级比较（两侧明细齐全时）—— 同 ID 订单的
+        # symbol/side/type/qty/price 必须一致,否则即使 ID 集合一致也是
         # 事实分歧（旧实现只比 ID,参数漂移静默通过）。
+        # R2(对抗审查)处置:
+        # - 单侧缺明细不再产生阻断差异 —— live/canary 三方对账中事件侧
+        #   投影器不携带 detail,旧分支在有挂单时每轮 MISMATCHED 永久
+        #   阻断新风险(功能性回归,testnet 被 EXEMPT-13 掩盖)。改为
+        #   detail_degraded 审计标志,ID 集合比较仍生效。
+        # - qty 解析失败不再双侧清零放行(fail-open)—— Decimal 解析
+        #   失败产生阻断差异,与余额/仓位路径同构 fail-closed。
+        # - price 加入比较域(任一侧为 0/空时跳过 —— STOP 类单 price=0
+        #   为无效价位)。stopPrice 系统侧无列(order_states),登记 M16
+        #   扩表 —— 不造假比较。
+        # - reduce_only 移除:系统侧 order_state 无该列,原实现恒空串
+        #   死代码(恒不触发),登记 M16 扩表。
         sys_detail = getattr(system_facts, "open_orders_detail", {}) or {}
         ex_detail = getattr(exchange_facts, "open_orders_detail", {}) or {}
         if sys_detail and ex_detail:
@@ -329,25 +345,44 @@ class ReconciliationEngine:
             for order_id in sorted(sys_orders & ex_orders):
                 s = sys_detail.get(order_id, {})
                 e = ex_detail.get(order_id, {})
-                for field in ("symbol", "side", "type", "reduce_only"):
+                for field in ("symbol", "side", "type"):
                     s_val = str(s.get(field, "")).strip().upper()
                     e_val = str(e.get(field, "")).strip().upper()
                     if s_val and e_val and s_val != e_val:
                         param_diffs.append(f"{order_id}:{field}({s_val} vs {e_val})")
                 try:
-                    s_qty = float(s.get("qty", 0) or 0)
-                    e_qty = float(e.get("qty", 0) or 0)
-                except (TypeError, ValueError):
-                    s_qty = e_qty = 0.0
-                if abs(s_qty - e_qty) > 1e-9:
+                    s_qty = Decimal(str(s.get("qty", "") or "0"))
+                    e_qty = Decimal(str(e.get("qty", "") or "0"))
+                    if not s_qty.is_finite() or not e_qty.is_finite():
+                        raise InvalidOperation("order qty is not finite")
+                except (InvalidOperation, TypeError, ValueError):
+                    param_diffs.append(
+                        f"{order_id}:qty(INVALID_ORDER_QTY_FACT: {s.get('qty')!r} vs {e.get('qty')!r})"
+                    )
+                    continue
+                if abs(s_qty - e_qty) > Decimal("1e-9"):
                     param_diffs.append(f"{order_id}:qty({s_qty} vs {e_qty})")
+                s_price = str(s.get("price", "") or "").strip()
+                e_price = str(e.get("price", "") or "").strip()
+                if s_price and e_price:
+                    try:
+                        s_p = Decimal(s_price)
+                        e_p = Decimal(e_price)
+                        if not s_p.is_finite() or not e_p.is_finite():
+                            raise InvalidOperation("order price is not finite")
+                    except (InvalidOperation, TypeError, ValueError):
+                        param_diffs.append(f"{order_id}:price(INVALID_PRICE_FACT)")
+                    else:
+                        # STOP 类单 price=0 为无效价位(有效价位在
+                        # stopPrice,系统侧无列) —— 任一侧为 0 时跳过
+                        if s_p > 0 and e_p > 0 and s_p != e_p:
+                            param_diffs.append(f"{order_id}:price({s_price} vs {e_price})")
             if param_diffs:
                 diffs.append("Open order parameter mismatch: " + "; ".join(param_diffs[:20]))
         elif sys_detail or ex_detail:
-            # 单侧缺明细:诚实降级并显式标注(不阻断,但审计可见)
-            diffs.append(
-                "Open order detail comparison unavailable (one-sided detail missing) — ID-only compared"
-            )
+            # M13-R2: 单侧缺明细(事件侧投影器不携带 detail)—— 审计标志,
+            # 不阻断;ID 集合比较在上方已生效
+            detail_degraded = True
 
         def _position_map(facts: AccountFactSnapshot) -> dict[str, Decimal]:
             result: dict[str, Decimal] = {}
@@ -437,6 +472,7 @@ class ReconciliationEngine:
             system_facts=system_facts,
             exchange_facts=exchange_facts,
             checked_at=checked_at,
+            detail_degraded=detail_degraded,
         )
 
     @staticmethod
@@ -568,6 +604,8 @@ class ReconciliationEngine:
             if pair_result.status is ReconciliationStatus.MISMATCHED
             for diff in pair_result.differences
         ]
+        # M13-R2: 任一 pair 明细降级 → 聚合结果带审计标志(不阻断)
+        detail_degraded = any(pair_result.detail_degraded for _, pair_result in pair_results)
         return ReconciliationResult(
             matched=not mismatches,
             status=ReconciliationStatus.MATCHED if not mismatches else ReconciliationStatus.MISMATCHED,
@@ -576,6 +614,7 @@ class ReconciliationEngine:
             exchange_facts=exchange_facts,
             event_facts=event_facts,
             checked_at=checked_at,
+            detail_degraded=detail_degraded,
         )
 
     # --- BD-CV44: 三方同源伪造检测 ---

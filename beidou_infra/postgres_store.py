@@ -358,6 +358,12 @@ class PostgresPersistentStore:
             "balance_decimals": int(facts.balance.decimals),
             "positions": {str(k): str(v.amount) for k, v in facts.positions.items()},
             "open_orders": [str(order_id) for order_id in facts.open_orders],
+            # M13-R2: 参数级明细必须随快照持久化 —— 旧序列化丢弃
+            # open_orders_detail,快照恢复路径双侧缺明细且无审计标注
+            "open_orders_detail": {
+                str(order_id): {str(k): str(v) for k, v in detail.items()}
+                for order_id, detail in getattr(facts, "open_orders_detail", {}).items()
+            },
             "margin_amount": str(margin.amount) if margin is not None else None,
             "margin_currency": str(margin.currency) if margin is not None else None,
             "margin_decimals": int(margin.decimals) if margin is not None else None,
