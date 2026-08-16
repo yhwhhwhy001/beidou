@@ -747,7 +747,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "ceedbad4d160a161b341bcba8b8c4ed77d0d05dfc4f92a77df74bb31825eae23",
+ "governance_digest": "f47d484ee15f28b16fa6d7a036360e48e62d8588f7cffe60bae62627601b171b",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "c51bd50d544aadfb6b321e7f17c5baf6e67544040ac0e97fc50b7d16bbbef313",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1029,7 +1029,7 @@
   "beidou_observability/monitoring/snapshot_broker.py": "953ea017e900307f8428b38a360d3e8bbf47084c37ae628724b065d7ab18b7bf",
   "beidou_observability/monitoring/storm_detector.py": "e6fb1a477cb21bc57b2398d4e45880cca56fec4b516ff5e095c6115140691e1c",
   "beidou_observability/monitoring/watchdog.py": "74f35aeb9d7e86ea22638a8c66a2fd5a7a534cf543174d712845ae58c85f8902",
-  "beidou_observability/telemetry.py": "f37f206689a5810c972d4549e1752f244759d16d6bdf053444a7ae82ac739672",
+  "beidou_observability/telemetry.py": "4d798025c5d8ca88b23bda42b2fda493d7cb0c23f28e663df8827e0dad34ad8f",
   "beidou_policy/__init__.py": "4c641b6ec5b201093fb20472c945f9e9d0c11eab1d017f48d323b97831297c2c",
   "beidou_policy/loader.py": "3b32167db434be0ddf109e0ca9731eec336626154190409f81ca450665222d59",
   "beidou_policy/registry.py": "2f3672e3571d6e022ec029ea5ff68711d8f40111afb56dd2f305ecda9f75ca6d",
