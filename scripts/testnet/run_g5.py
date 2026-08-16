@@ -163,10 +163,13 @@ def main() -> int:
             fail_fast(f"Testnet REST URL is UNKNOWN: {type(exc).__name__}")
     if not rest_url:
         fail_fast("Testnet REST URL is not configured")
-    dangerous_urls = ["fapi.binance.com", "api.binance.com"]
-    for url in dangerous_urls:
-        if url in rest_url.lower():
-            fail_fast(f"Mainnet URL detected: {rest_url}")
+    # M22-F04: host 精确匹配 —— 子串匹配把 demo-fapi.binance.com
+    # 误判为 mainnet(与 gate_verifier M20-F02 同款缺陷)
+    from urllib.parse import urlparse
+
+    parsed_host = (urlparse(rest_url).hostname or "").lower()
+    if parsed_host in {"fapi.binance.com", "api.binance.com"}:
+        fail_fast(f"Mainnet URL detected: {rest_url}")
 
     # 1c: Testnet URL 验证
     testnet_url = rest_url
