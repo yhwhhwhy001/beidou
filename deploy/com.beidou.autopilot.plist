@@ -6,13 +6,22 @@
     <string>com.beidou.autopilot</string>
 
     <!--
-      Safety template only.  It is not installed or loaded automatically.
-      Credentials must come from an approved provider; no shell/eval or
-      secret values are embedded in this file.  Missing credentials fail the
-      preflight gate and therefore cannot enable trading.
+      Governed launchd template (M00-F07). 不自动安装/加载; 部署需操作者
+      显式执行 `launchctl bootstrap gui/501 <path>`。
+
+      1. 凭据: 由 wrapper 从 ~/beidou/.env 注入; plist 不内嵌密钥、不做
+         shell eval(旧实装 eval .zshrc 属漂移, doctor 会 WARN)。
+      2. 重启语义: KeepAlive={SuccessfulExit:false} —— 非零退出(崩溃)
+         自动重启; wrapper 把监督器终态退出码 5(LOCKED)/6(FAILED) 映射
+         为 0, 终态不重启(P0-02 崩溃-重启循环防护)。
+      3. symbols 启动参数必须与运行宇宙一致(当前宇宙见 .beidou/supervisor-state.json);
+         模板仅含最小示例集合, 部署时替换。
+      4. 需要代理时在 EnvironmentVariables 增加 HTTPS_PROXY/HTTP_PROXY/
+         NO_PROXY(网络配置, 非密钥)。
     -->
     <key>ProgramArguments</key>
     <array>
+        <string>/Users/maguannan/beidou/deploy/beidou_launchd_wrapper.sh</string>
         <string>/opt/homebrew/bin/beidou</string>
         <string>start</string>
         <string>--mode</string>
@@ -36,17 +45,20 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Never restart a failed/LOCKED process without a governed watchdog. -->
+    <!-- 崩溃(非零退出)自动重启; LOCKED/FAILED 终态经 wrapper 映射为 0 不重启 -->
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ThrottleInterval</key>
     <integer>30</integer>
     <key>ExitTimeOut</key>
     <integer>30</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/maguannan/beidou/.beidou/launchd.stdout.log</string>
+    <string>/private/tmp/beidou_launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/maguannan/beidou/.beidou/launchd.stderr.log</string>
+    <string>/private/tmp/beidou_launchd_err.log</string>
 </dict>
 </plist>

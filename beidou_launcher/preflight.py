@@ -242,6 +242,47 @@ def _port_available(port: int) -> tuple[bool, str]:
         sock.close()
 
 
+def _launchd_plist_drift(
+    project_root: Path, installed_path: Path | None = None
+) -> tuple[list[str], dict[str, Any]]:
+    """比对 deploy 模板与实装 launchd plist（M00-F07，P0-02 治理）。
+
+    返回 (drift_items, evidence)。漂移项仅为 WARN（P2）：模板变更/实装
+    变更需要操作者显式决定，preflight 不替操作者改系统配置。
+    """
+    import plistlib
+
+    template_path = project_root / "deploy" / "com.beidou.autopilot.plist"
+    evidence: dict[str, Any] = {"installed": False}
+    if not template_path.is_file():
+        return ["模板缺失: deploy/com.beidou.autopilot.plist"], evidence
+    with open(template_path, "rb") as f:
+        template = plistlib.load(f)
+    resolved = installed_path or (Path.home() / "Library" / "LaunchAgents" / "com.beidou.autopilot.plist")
+    if not resolved.is_file():
+        evidence["note"] = "实装 plist 不存在（未部署）；无漂移可比"
+        return [], evidence
+    evidence["installed"] = True
+    with open(resolved, "rb") as f:
+        installed = plistlib.load(f)
+    drift: list[str] = []
+    t_ka, i_ka = template.get("KeepAlive"), installed.get("KeepAlive")
+    if i_ka is True and t_ka is not True:
+        drift.append("实装 KeepAlive=true：监督器终态退出码 5/6（LOCKED/FAILED）会被无限重启（崩溃-重启循环）")
+    t_thr, i_thr = template.get("ThrottleInterval"), installed.get("ThrottleInterval")
+    if i_thr is not None and t_thr is not None and int(i_thr) != int(t_thr):
+        drift.append(f"ThrottleInterval 实装 {i_thr}s vs 模板 {t_thr}s")
+    args = " ".join(str(a) for a in (installed.get("ProgramArguments") or []))
+    if "eval" in args and "zshrc" in args:
+        drift.append("实装使用 shell eval 注入凭据（模板禁止：凭据应经 wrapper 从 .env 注入）")
+    if "HTTPS_PROXY" not in args and template.get("EnvironmentVariables", {}).get("HTTPS_PROXY"):
+        drift.append("模板配置代理但实装未携带代理环境（网络可达性可能受地域限制）")
+    evidence["installed_keep_alive"] = str(i_ka)
+    evidence["installed_throttle"] = str(i_thr)
+    evidence["installed_has_eval"] = bool("eval" in args and "zshrc" in args)
+    return drift, evidence
+
+
 def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
     checks: list[CheckResult] = []
     version_ok = (3, 12) <= sys.version_info[:2] < (4, 0)
@@ -575,4 +616,16 @@ def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckR
                 f"EnvironmentGuard 执行异常: {type(exc).__name__}: {exc}",
             )
         )
+    # M00-F07: 实装 plist 与模板漂移（非阻断 WARN）
+    drift, plist_evidence = _launchd_plist_drift(project_root)
+    checks.append(
+        CheckResult(
+            check_id="preflight.launchd_plist_drift",
+            name="launchd 实装 plist 与模板漂移",
+            status=CheckStatus.WARN if drift else CheckStatus.PASS,
+            severity=CheckSeverity.P2,
+            message="; ".join(drift) if drift else "实装 plist 与模板一致（或未部署）",
+            evidence=plist_evidence,
+        )
+    )
     return checks, settings

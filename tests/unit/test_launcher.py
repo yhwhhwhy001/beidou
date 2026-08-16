@@ -478,10 +478,15 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
 
 
 def test_launchagent_template_is_direct_and_fail_closed() -> None:
+    # M00-F07 (P0-02): 设计升级 —— 模板经受治理 wrapper 启动
+    # （终态退出码 5/6 映射为 0 不重启），KeepAlive 采用
+    # {SuccessfulExit: false}（崩溃条件重启、终态不重启）。
+    # 不变量不变: 无 shell/eval、无内嵌密钥、显式参数。
     payload = plistlib.loads(Path("deploy/com.beidou.autopilot.plist").read_bytes())
     arguments = payload["ProgramArguments"]
 
-    assert arguments[:2] == ["/opt/homebrew/bin/beidou", "start"]
+    assert arguments[0].endswith("beidou_launchd_wrapper.sh")
+    assert arguments[1:3] == ["/opt/homebrew/bin/beidou", "start"]
     assert "/bin/zsh" not in arguments
     assert "-c" not in arguments
     assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
@@ -489,7 +494,10 @@ def test_launchagent_template_is_direct_and_fail_closed() -> None:
     configured_symbols = arguments[symbols_index + 1]
     assert configured_symbols not in {"DEFAULT", "ALL"}
     assert configured_symbols.split(",") == ["BTCUSDT", "ETHUSDT"]
-    assert payload["KeepAlive"] is False
+    # P0-02: 不得无条件重启（旧 KeepAlive=true 会把 LOCKED/FAILED 变成重启循环）
+    keep_alive = payload["KeepAlive"]
+    assert keep_alive is not True
+    assert keep_alive == {"SuccessfulExit": False}
     assert payload["EnvironmentVariables"] == {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}
 
 

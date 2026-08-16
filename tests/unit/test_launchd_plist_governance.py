@@ -1,0 +1,105 @@
+"""launchd plist 治理测试（M00-F07，P0-02）。
+
+覆盖: 模板/实装漂移检测、wrapper 终态退出码映射（LOCKED/FAILED 不重启）、
+模板本身的受控重启语义（KeepAlive 不得为 True）。
+"""
+
+from __future__ import annotations
+
+import plistlib
+import subprocess
+from pathlib import Path
+
+from beidou_launcher.preflight import _launchd_plist_drift
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _write_plist(path: Path, payload: dict) -> None:
+    with open(path, "wb") as f:
+        plistlib.dump(payload, f)
+
+
+def _installed_payload(*, keep_alive: object = True, throttle: int = 10, with_eval: bool = True) -> dict:
+    args = [
+        "/bin/zsh",
+        "-c",
+        "eval \"$(grep '^export BEIDOU_' ~/.zshrc)\" && /opt/homebrew/bin/beidou start",
+    ]
+    if not with_eval:
+        args = ["/opt/homebrew/bin/beidou", "start", "--mode", "testnet"]
+    return {
+        "Label": "com.beidou.autopilot",
+        "ProgramArguments": args,
+        "KeepAlive": keep_alive,
+        "ThrottleInterval": throttle,
+    }
+
+
+def test_drift_detects_keepalive_true_and_shell_eval(tmp_path: Path) -> None:
+    installed = tmp_path / "com.beidou.autopilot.plist"
+    _write_plist(installed, _installed_payload(keep_alive=True, throttle=10, with_eval=True))
+    drift, evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+    assert any("KeepAlive=true" in item for item in drift)
+    assert any("eval" in item for item in drift)
+    assert any("ThrottleInterval" in item for item in drift)
+    assert evidence["installed"] is True
+
+
+def test_no_installed_plist_is_not_drift(tmp_path: Path) -> None:
+    drift, evidence = _launchd_plist_drift(ROOT, installed_path=tmp_path / "nonexistent.plist")
+    assert drift == []
+    assert evidence["installed"] is False
+
+
+def test_compliant_installed_plist_has_no_drift(tmp_path: Path) -> None:
+    installed = tmp_path / "com.beidou.autopilot.plist"
+    _write_plist(
+        installed,
+        {
+            "Label": "com.beidou.autopilot",
+            "ProgramArguments": [
+                str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"),
+                "/opt/homebrew/bin/beidou",
+                "start",
+            ],
+            "KeepAlive": {"SuccessfulExit": False},
+            "ThrottleInterval": 30,
+        },
+    )
+    drift, _evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+    assert drift == []
+
+
+def _run_wrapper_with_exit(code: int) -> int:
+    # 测试运行固定路径的仓库 wrapper,参数为常量退出码 —— 无不可信输入。
+    return subprocess.run(  # noqa: S603
+        [str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"), "/bin/sh", "-c", f"exit {code}"],
+        check=False,
+        capture_output=True,
+    ).returncode
+
+
+def test_wrapper_maps_terminal_exit_codes_to_zero() -> None:
+    """LOCKED(5)/FAILED(6) 映射为 0 —— launchd 不重启终态。"""
+    assert _run_wrapper_with_exit(5) == 0
+    assert _run_wrapper_with_exit(6) == 0
+
+
+def test_wrapper_preserves_other_exit_codes() -> None:
+    """崩溃(非零)退出码透传 —— launchd SuccessfulExit=false 据此重启。"""
+    assert _run_wrapper_with_exit(3) == 3
+    assert _run_wrapper_with_exit(0) == 0
+
+
+def test_template_plist_uses_governed_restart_semantics() -> None:
+    """模板不得使用 KeepAlive=true；必须经 wrapper 启动。"""
+    with open(ROOT / "deploy" / "com.beidou.autopilot.plist", "rb") as f:
+        template = plistlib.load(f)
+    keep_alive = template.get("KeepAlive")
+    assert keep_alive is not True, "模板 KeepAlive=true 会无限重启 LOCKED/FAILED"
+    assert isinstance(keep_alive, dict) and keep_alive.get("SuccessfulExit") is False
+    args = template["ProgramArguments"]
+    assert args[0].endswith("beidou_launchd_wrapper.sh")
+    assert Path(args[0]).is_file() and Path(args[0]).stat().st_mode & 0o111, "wrapper 缺失或不可执行"
+    assert template.get("ThrottleInterval") is not None and template["ThrottleInterval"] >= 30
