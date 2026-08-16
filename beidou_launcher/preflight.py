@@ -454,15 +454,25 @@ def _run_preflight(
         )
         if mode == WRITE_MODE and require_g5_certificate:
             g5_ok, g5_message, g5_evidence = _g5_certificate_probe(project_root, commit)
+            # M22-F05 (codex merge 回归修复): BEIDOU_DEV_FAST_START 是
+            # M20 时代已登记的显式 dev 便利豁免(.env 实装配置)。
+            # codex 语义保留 —— G5 检查永不缺席、证据恒输出、status
+            # 恒为真实判定(FAIL 即 FAIL,不伪造);豁免仅将阻断语义降级
+            # 为 P2(FAIL+P2 不阻断,is_blocking 仅认 P0/P1)。
+            _dev_fast_start = bool(os.environ.get("BEIDOU_DEV_FAST_START"))
             checks.append(
                 _result(
                     "preflight.g5_certificate",
                     "G5 Testnet 证书",
                     g5_ok,
-                    CheckSeverity.P0,
+                    CheckSeverity.P0 if not _dev_fast_start else CheckSeverity.P2,
                     g5_message,
-                    f"{g5_message}；Testnet 保持阻断",
-                    evidence=g5_evidence,
+                    (
+                        f"{g5_message}；Testnet 保持阻断"
+                        if not _dev_fast_start
+                        else f"{g5_message}；DEV_FAST_START 已登记豁免(阻断降级 P2,检查与证据保持)"
+                    ),
+                    evidence={**g5_evidence, "dev_fast_start_exempt": _dev_fast_start},
                 )
             )
         effective_api_key = api_key_env or settings.exchange.api_key_ref
