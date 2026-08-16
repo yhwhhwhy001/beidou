@@ -2128,6 +2128,28 @@ class AutonomousEngine:
             currency="USDT",
         )
 
+    def _portfolio_total_exposure(self, exclude_symbol: str | None = None) -> float:
+        """全部持仓(可排除指定 symbol)按最近价格计的总名义敞口（M07-F01）。
+
+        组合级总敞口硬门的输入:单笔 R4 杠杆检查不约束跨 symbol 总敞口,
+        旧实现 max_total_leverage 在组合层无任何执行点。
+        """
+        total = 0.0
+        for pp in self._protection.all_positions().values():
+            sym = str(pp.instrument_id)
+            if exclude_symbol is not None and sym == exclude_symbol:
+                continue
+            try:
+                qty = float(pp.quantity)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0:
+                continue
+            price = float(self._last_prices.get(sym, float(pp.entry_price)))
+            if math.isfinite(price) and price > 0:
+                total += qty * price
+        return total
+
     def _diag_throttle(self, key: str, interval_seconds: float = 30.0) -> bool:
         """诊断打印节流：同一 key 每 interval_seconds 最多打印一次。
 
@@ -8946,6 +8968,9 @@ class AutonomousEngine:
                         for pp in self._protection.all_positions().values()
                         if pp.stop_loss is not None and pp.stop_loss.is_active()
                     ),
+                    # M07-F01: 组合级总敞口(排除本 symbol,按最近价计) ——
+                    # 供 R 规则与快照审计;总敞口硬门在下方执行。
+                    "total_exposure": self._portfolio_total_exposure(exclude_symbol=symbol),
                     "total_positions": self._protection.position_count(),
                     "can_trade": self._can_trade,  # 凭据权限推导 (R9)
                     # PKG02 (BDS-P0-001): 使用交易所实际返回的 canWithdraw。
@@ -8954,6 +8979,22 @@ class AutonomousEngine:
                     "can_withdraw": self._risk_can_withdraw if self._can_write else False,
                     "duplicate_orders_24h": duplicate_orders_24h,
                 }
+
+                # M07-F01: 组合级总敞口硬门 —— 现有敞口(排除本 symbol) +
+                # 新目标敞口不得超过 max_total_leverage × 账户权益。旧实现
+                # 只有单笔 R4 杠杆检查,组合层总敞口无任何执行点。
+                _current_exposure = self._portfolio_total_exposure(exclude_symbol=symbol)
+                _max_total_notional = (
+                    self._policy_float("max_total_leverage", self._settings.production.max_total_leverage)
+                    * account_balance
+                )
+                if _max_total_notional > 0 and _current_exposure + position_notional > _max_total_notional:
+                    print(
+                        f"[nearline] {symbol}: SKIP (portfolio total exposure "
+                        f"{_current_exposure + position_notional:.1f} > "
+                        f"{self._policy_float('max_total_leverage', 3.0)}x balance)"
+                    )
+                    continue
 
                 # PKG02 (BDS-P0-001): 所有环境使用完整的 R0-R10 风险规则评估
                 risk_results = dict(RiskRuleRegistry.evaluate_all(risk_context))
