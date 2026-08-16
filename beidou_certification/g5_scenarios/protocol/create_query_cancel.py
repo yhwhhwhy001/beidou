@@ -9,6 +9,7 @@ dry_run 记账 0 且不发送任何请求。
 
 from __future__ import annotations
 
+import logging
 import time
 from decimal import Decimal
 from typing import Any, TypeVar
@@ -22,6 +23,8 @@ from beidou_certification.g5_scenarios.base import (
 )
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -83,7 +86,7 @@ class CreateQueryCancelScenario(ScenarioBase):
             qty = format(min_qty, "f")
             notional = min_qty * float(ticker["lastPrice"])
             ctx.ledger.record(self.scenario_id, notional)
-            print(f"create_order BUY {qty} {ctx.symbol} @ {price} notional={notional:.2f} USDT")  # noqa: T201
+            logger.info("create_order BUY %s %s @ %s notional=%.2f USDT", qty, ctx.symbol, price, notional)
             order = _require_ok(
                 await ctx.client.create_order(
                     ctx.symbol,
@@ -103,7 +106,7 @@ class CreateQueryCancelScenario(ScenarioBase):
             try:
                 queried = _require_ok(await ctx.client.get_order(ctx.symbol, order_id), "get_order")
                 steps.append({"action": "query", "status": queried.get("status")})
-                print(f"cancel_order {order_id} {ctx.symbol}")  # noqa: T201
+                logger.info("cancel_order %s %s %s", order_id, qty, ctx.symbol)
                 cancelled_res = _require_ok(await ctx.client.cancel_order(ctx.symbol, order_id), "cancel_order")
                 cancelled = True
                 steps.append({"action": "cancel", "status": cancelled_res.get("status")})
@@ -112,7 +115,7 @@ class CreateQueryCancelScenario(ScenarioBase):
             finally:
                 if not cancelled:  # 任一步异常也撤销挂单,不残留(设计规格§4:写操作→finally 恢复)
                     try:
-                        print(f"cancel_order {order_id} {ctx.symbol} (cleanup)")  # noqa: T201
+                        logger.info("cancel_order %s %s %s (cleanup)", order_id, qty, ctx.symbol)
                         cleanup = await ctx.client.cancel_order(ctx.symbol, order_id)
                         steps.append({"action": "cleanup_cancel", "ok": cleanup.is_ok})
                     except Exception as exc:

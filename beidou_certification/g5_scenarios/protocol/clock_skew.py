@@ -10,6 +10,7 @@ resync 校准(或注入前已有校准)时还原,不抹掉客户端 resync 结�
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, TypeVar
 
@@ -23,6 +24,8 @@ from beidou_certification.g5_scenarios.base import (
 from beidou_certification.g5_scenarios.protocol.create_query_cancel import _resting_buy_price, min_order_quantity
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -73,7 +76,7 @@ class ClockSkewScenario(ScenarioBase):
             try:
                 ctx.client._clock_offset_ms = SKEW_OFFSET_MS
                 steps.append({"action": "inject_skew", "offset_ms": SKEW_OFFSET_MS})
-                print(f"create_order BUY {qty} {ctx.symbol} @ {price} notional={notional:.2f} USDT (skew)")  # noqa: T201
+                logger.info("create_order BUY %s %s @ %s notional=%.2f USDT (skew)", qty, ctx.symbol, price, notional)
                 order_res = await ctx.client.create_order(
                     ctx.symbol,
                     "BUY",
@@ -101,7 +104,7 @@ class ClockSkewScenario(ScenarioBase):
                     }
                 )
                 try:
-                    print(f"cancel_order {order.get('orderId')} {ctx.symbol} (cleanup)")  # noqa: T201
+                    logger.info("cancel_order %s %s %s (cleanup)", order.get("orderId"), qty, ctx.symbol)
                     cancel_res = await ctx.client.cancel_order(ctx.symbol, int(order["orderId"]))
                     steps.append({"action": "cleanup_cancel", "ok": cancel_res.is_ok})
                 except Exception as exc:

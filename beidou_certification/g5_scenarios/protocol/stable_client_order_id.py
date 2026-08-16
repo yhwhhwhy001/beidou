@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, TypeVar
 
@@ -22,6 +23,8 @@ from beidou_certification.g5_scenarios.base import (
 from beidou_certification.g5_scenarios.protocol.create_query_cancel import _resting_buy_price, min_order_quantity
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -71,7 +74,7 @@ class StableClientOrderIdScenario(ScenarioBase):
             notional = min_qty * float(ticker["lastPrice"])
             ctx.ledger.record(self.scenario_id, notional)
             cid = f"g5-stable-{int(time.time() * 1000)}"
-            print(f"create_order BUY {qty} {ctx.symbol} @ {price} notional={notional:.2f} USDT")  # noqa: T201
+            logger.info("create_order BUY %s %s @ %s notional=%.2f USDT", qty, ctx.symbol, price, notional)
             first = _require_ok(
                 await ctx.client.create_order(
                     ctx.symbol,
@@ -93,7 +96,13 @@ class StableClientOrderIdScenario(ScenarioBase):
                 if all(str(o.get("orderId")) != str(first_id) for o in known):
                     known.append({"orderId": first_id})
                 steps.append({"action": "snapshot_open_orders", "count": len(snapshot)})
-                print(f"create_order BUY {qty} {ctx.symbol} @ {price} (dup clientOrderId)")  # noqa: T201
+                logger.info(
+                    "create_order BUY %s %s @ %s notional=%.2f USDT (dup clientOrderId)",
+                    qty,
+                    ctx.symbol,
+                    price,
+                    notional,
+                )
                 second = await ctx.client.create_order(
                     ctx.symbol, "BUY", "LIMIT", qty, price=price, time_in_force="GTC", client_order_id=cid
                 )
@@ -112,7 +121,7 @@ class StableClientOrderIdScenario(ScenarioBase):
                 cancel_ids = [first_id] + ([second_new_id] if second_new_id not in (None, first_id) else [])
                 for oid in dict.fromkeys(cancel_ids):
                     try:
-                        print(f"cancel_order {oid} {ctx.symbol} (cleanup)")  # noqa: T201
+                        logger.info("cancel_order %s %s %s (cleanup)", oid, qty, ctx.symbol)
                         cancel_res = await ctx.client.cancel_order(ctx.symbol, oid)
                         steps.append({"action": "cleanup_cancel", "order_id": oid, "ok": cancel_res.is_ok})
                     except Exception as exc:
