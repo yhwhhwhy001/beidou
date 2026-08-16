@@ -1240,14 +1240,18 @@ class BeidouSupervisor:
             # (引擎内部状态)每轮执行,安全门禁不稀疏。非 RESUME 或存在
             # blocker 时保持每轮全查 —— P0 不被稀释,故障响应不退化。
             _deep_due = self._monitoring_scheduler.should_run_deep_audit()  # type: ignore[no-untyped-call]
+            # BD-FIX (M18-F01 回归): 快照刷新不得只依赖深度审计轮。
+            # check_account_unknown 要求快照 age<=45s,而深度审计最长
+            # 600s 才触发一次 → 平稳期快照必然超龄 → account P0 FAIL
+            # → trading_ready 周期性翻转,下单窗口被周期性关闭。
+            # 三个快照各自带内部节流(account 30s / position 300s /
+            # algo 按需),每轮调用成本受节流约束,不在稀疏轮跳过。
+            await asyncio.gather(
+                _refresh_snapshot_safe(self._refresh_exchange_account_snapshot()),
+                _refresh_snapshot_safe(self._refresh_position_mode()),
+                _refresh_snapshot_safe(self._refresh_exchange_algo_snapshot()),
+            )
             if _deep_due or self.report.blockers or self._control_state() != "RESUME":
-                # P1 优化: 三个独立 exchange 快照并行获取（无依赖关系）；
-                # 每路快照带超时保护，慢网络不拖住循环心跳，超时下轮重试。
-                await asyncio.gather(
-                    _refresh_snapshot_safe(self._refresh_exchange_account_snapshot()),
-                    _refresh_snapshot_safe(self._refresh_position_mode()),
-                    _refresh_snapshot_safe(self._refresh_exchange_algo_snapshot()),
-                )
                 # 先合并全部内部与外部事实，再决定是否阻断/恢复；不能在深度
                 # monitoring 检查之前依据一组较窄的 runtime checks 自动 RESUME。
                 checks = self._runtime_checks()
