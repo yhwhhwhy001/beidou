@@ -221,6 +221,36 @@ def test_core_store_opening_risk_position_order_and_protection(tmp_path) -> None
     store.close()
 
 
+def test_core_store_order_state_never_regresses_from_terminal_or_partial_fill(tmp_path) -> None:
+    store = PersistentStore(str(tmp_path / "order-state.db"))
+    # 竞态回归:成交先持久化为 FILLED 后,迟到的下单响应(status=NEW)
+    # 不得把终态回写成 NEW(实测 14:07 XRP/DOGE/ATOM 三单因此恒
+    # MISMATCH → recon BLOCKED → 引擎停摆)。
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "1", "1", "FILLED", "1", "60000")
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "1", "1", "NEW")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["raced"]["status"] == "FILLED"
+    assert rows["raced"]["filled_qty"] == "1"
+    assert store.get_active_orders() == []
+    # PARTIALLY_FILLED 也不得被 NEW 回写(同一竞态的中间态)
+    store.save_order_state("partial-raced", "BTCUSDT", "BUY", "LIMIT", "1", "1", "PARTIALLY_FILLED", "0.4")
+    store.save_order_state("partial-raced", "BTCUSDT", "BUY", "LIMIT", "1", "1", "NEW")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["partial-raced"]["status"] == "PARTIALLY_FILLED"
+    assert rows["partial-raced"]["filled_qty"] == "0.4"
+    # UNKNOWN 歧义标记不得抹掉已证实的终态 FILLED
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "1", "1", "UNKNOWN")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["raced"]["status"] == "FILLED"
+    # 正常生命周期推进不受守卫影响
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "1", "1", "NEW")
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "1", "1", "PARTIALLY_FILLED", "0.5")
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "1", "1", "FILLED", "1", "60000")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["normal"]["status"] == "FILLED"
+    store.close()
+
+
 def test_core_store_operational_views_and_fail_closed_maintenance(tmp_path) -> None:
     store = PersistentStore(str(tmp_path / "ops.db"))
     for sequence in range(12):

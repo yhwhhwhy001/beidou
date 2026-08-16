@@ -483,6 +483,35 @@ def test_postgres_opening_risk_position_order_and_protection_contracts() -> None
     assert [row["status"] for row in store._records("protection")] == ["CANCELLED", "PENDING"]
 
 
+def test_postgres_order_state_never_regresses_from_terminal_or_partial_fill() -> None:
+    store, _connection = _store()
+    # 竞态回归:成交先经 user stream 持久化为 FILLED 后,迟到的下单
+    # 响应(status=NEW)不得把终态回写成 NEW(实测 14:07 XRP/DOGE/ATOM
+    # 三单因此恒 MISMATCH → recon BLOCKED → 引擎停摆)。
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "FILLED", "0.1", "50000")
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["raced"]["status"] == "FILLED"
+    assert rows["raced"]["filled_qty"] == "0.1"
+    assert store.get_active_orders() == []
+    # PARTIALLY_FILLED 也不得被 NEW 回写(同一竞态的中间态)
+    store.save_order_state("partial-raced", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "PARTIALLY_FILLED", "0.04")
+    store.save_order_state("partial-raced", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["partial-raced"]["status"] == "PARTIALLY_FILLED"
+    assert rows["partial-raced"]["filled_qty"] == "0.04"
+    # UNKNOWN 歧义标记不得抹掉已证实的终态 FILLED
+    store.save_order_state("raced", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "UNKNOWN")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["raced"]["status"] == "FILLED"
+    # 正常生命周期推进不受守卫影响
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "NEW")
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "PARTIALLY_FILLED", "0.05")
+    store.save_order_state("normal", "BTCUSDT", "BUY", "LIMIT", "0.1", "50000", "FILLED", "0.1", "50000")
+    rows = {row["order_id"]: row for row in store.restore_order_states()}
+    assert rows["normal"]["status"] == "FILLED"
+
+
 def test_postgres_checkpoint_pool_report_market_and_maintenance() -> None:
     store, _connection = _store()
     for sequence in range(12):

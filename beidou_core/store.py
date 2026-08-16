@@ -12,6 +12,9 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any
 
+# 订单终态集合 —— save_order_state 单调守卫共用(BD-FIX: 竞态回写防护)
+_TERMINAL_ORDER_STATUSES = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
+
 
 class PersistentStore:
     """SQLite 持久化存储。线程安全，WAL 模式。"""
@@ -979,6 +982,16 @@ class PersistentStore:
         client_order_id: str | None = None,
     ) -> None:
         conn = self._get_conn()
+        # BD-FIX: 终态/部分成交不得被迟到的下单响应回写。实测 14:07
+        # XRP/DOGE/ATOM 三单 user stream 先落 FILLED、REST 下单响应后到
+        # 携 status=NEW 覆盖终态 → system 侧假挂单 → recon 恒 BLOCKED。
+        existing_row = conn.execute("SELECT status FROM order_states WHERE order_id=?", (order_id,)).fetchone()
+        if existing_row is not None:
+            prev_status = str(existing_row["status"] or "")
+            if prev_status in _TERMINAL_ORDER_STATUSES and status not in _TERMINAL_ORDER_STATUSES:
+                return
+            if prev_status == "PARTIALLY_FILLED" and status == "NEW":
+                return
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT OR REPLACE INTO order_states (order_id, symbol, side, order_type, quantity, price, status, filled_qty, avg_price, client_order_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT created_at FROM order_states WHERE order_id=?),?),?)",

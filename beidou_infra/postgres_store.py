@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, ClassVar, Iterator
 
+# 订单终态集合 —— save_order_state 单调守卫共用(BD-FIX: 竞态回写防护)
+_TERMINAL_ORDER_STATUSES = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
+
 
 def _value(value: Any) -> str | None:
     if value is None:
@@ -661,6 +664,15 @@ class PostgresPersistentStore:
         client_order_id: str | None = None,
     ) -> None:
         existing = self._get_record("order_state", str(order_id))
+        # BD-FIX: 终态/部分成交不得被迟到的下单响应回写。实测 14:07
+        # XRP/DOGE/ATOM 三单 user stream 先落 FILLED、REST 下单响应后到
+        # 携 status=NEW 覆盖终态 → system 侧假挂单 → recon 恒 BLOCKED。
+        if existing:
+            prev_status = str(existing.get("status") or "")
+            if prev_status in _TERMINAL_ORDER_STATUSES and status not in _TERMINAL_ORDER_STATUSES:
+                return
+            if prev_status == "PARTIALLY_FILLED" and status == "NEW":
+                return
         self._write_record(
             "order_state",
             str(order_id),
