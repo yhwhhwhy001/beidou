@@ -199,3 +199,67 @@ def test_build_certificate_status_reflects_fail_and_restart_skip(tmp_path):
     runner.restart_skipped = ["user_stream_reconnect"]
     cert = runner.build_certificate({"a": _r("a", ScenarioStatus.PASS)}, started_at="t", ended_at="t")
     assert cert["status"] == "NOT_VERIFIABLE"
+
+
+def _make_boom(sid: str, exc: Exception) -> type[ScenarioBase]:
+    """构造 run() 抛通用异常(非 NotionalExceededError)的假场景。"""
+
+    class Boom(ScenarioBase):
+        scenario_id = sid
+
+        async def run(self, ctx: ScenarioContext) -> ScenarioResult:
+            raise exc
+
+    return Boom
+
+
+def test_run_selected_resets_restart_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "SCENARIO_REGISTRY", {"process_restart": _make_fake("process_restart")})
+    runner, _ = _make_runner(tmp_path)
+    runner.run_selected(skip_restart=True)
+    assert runner.restart_skipped == ["process_restart"]
+    # 再次运行且注册表无重启组场景时,残留跳过记录必须清空(否则污染证书状态)
+    monkeypatch.setattr(runner_module, "SCENARIO_REGISTRY", {"a": _make_fake("a")})
+    runner.run_selected(skip_restart=True)
+    assert runner.restart_skipped == []
+
+
+def test_run_one_constructor_failure_uses_class_scenario_id(tmp_path):
+    class Exploding(ScenarioBase):
+        scenario_id = "exploding"
+
+        def __init__(self) -> None:
+            raise RuntimeError("ctor boom")
+
+        async def run(self, ctx: ScenarioContext) -> ScenarioResult:
+            raise AssertionError("unreachable")
+
+    runner, _ = _make_runner(tmp_path)
+    ctx = ScenarioContext(
+        client=None,
+        ledger=runner.ledger,
+        evidence_dir=tmp_path / "evidence",
+        symbol="BTCUSDT",
+        dry_run=True,
+    )
+    result = runner._run_one(Exploding, ctx)
+    assert result.status == ScenarioStatus.FAIL
+    # 构造异常时实例未产生,scenario_id 必须取类属性(否则 UnboundLocalError)
+    assert result.scenario_id == "exploding"
+    assert result.error_type == "RuntimeError"
+    assert "ctor boom" in result.error_message
+
+
+def test_run_selected_continues_after_generic_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        runner_module,
+        "SCENARIO_REGISTRY",
+        {"boom": _make_boom("boom", ValueError("boom")), "after": _make_fake("after")},
+    )
+    runner, _ = _make_runner(tmp_path)
+    results = runner.run_selected()
+    assert list(results) == ["boom", "after"]  # 通用异常记 FAIL 后继续后续场景
+    assert results["boom"].status == ScenarioStatus.FAIL
+    assert results["boom"].error_type == "ValueError"
+    assert "boom" in results["boom"].error_message
+    assert results["after"].status == ScenarioStatus.PASS

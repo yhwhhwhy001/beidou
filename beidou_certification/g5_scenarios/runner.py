@@ -65,21 +65,32 @@ class G5Runner:
         self.restart_skipped: list[str] = []
 
     def _run_one(self, scenario_cls: type[ScenarioBase], ctx: ScenarioContext) -> ScenarioResult:
-        """执行单个场景;名义超限按 fail-fast 记 FAIL 并阻断后续场景。"""
-        scenario = scenario_cls()
+        """执行单个场景;名义超限按 fail-fast 记 FAIL 并阻断后续场景,
+        其他异常记 FAIL(error_type=类型名)不阻断后续场景。"""
         try:
+            scenario = scenario_cls()
             return asyncio.run(scenario.run(ctx))
         except NotionalExceededError as exc:
             return ScenarioResult(
-                scenario_id=scenario.scenario_id,
+                scenario_id=scenario_cls.scenario_id,
                 status=ScenarioStatus.FAIL,
                 evidence={},
                 duration=0.0,
                 error_type="NOTIONAL_EXCEEDED",
                 error_message=str(exc),
             )
+        except Exception as exc:
+            return ScenarioResult(
+                scenario_id=scenario_cls.scenario_id,
+                status=ScenarioStatus.FAIL,
+                evidence={},
+                duration=0.0,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
 
     def run_selected(self, *, only: str | None = None, skip_restart: bool = False) -> dict[str, ScenarioResult]:
+        self.restart_skipped = []  # 每次运行重置,避免残留跳过记录污染证书状态
         results: dict[str, ScenarioResult] = {}
         for sid, cls in SCENARIO_REGISTRY.items():
             if only and sid != only:

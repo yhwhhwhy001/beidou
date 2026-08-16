@@ -2,6 +2,10 @@
 
 用法:
     python scripts/testnet/run_g5.py --plan config/g5-testnet-plan.yaml --symbol SYMBOL --confirm-testnet
+    python scripts/testnet/run_g5.py --list                      # 打印已注册场景
+    python scripts/testnet/run_g5.py ... --scenario NAME         # 只跑单个场景
+    python scripts/testnet/run_g5.py ... --skip-restart          # 跳过重启组场景
+    python scripts/testnet/run_g5.py ... --dry-run               # 场景内不发送真实请求
 
 前置条件:
     - BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_SIGNING_KEY 已设置
@@ -13,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import math
 import os
@@ -22,10 +25,15 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
+from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, write_scenario_evidence
 from beidou_launcher.models import CheckResult
+
+if TYPE_CHECKING:
+    from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 
 
 def fail_fast(reason: str) -> None:
@@ -74,10 +82,28 @@ def require_exchange_symbol(probe_symbol: str, symbols: object) -> dict[str, obj
     raise ValueError(f"requested symbol {probe_symbol} was not returned by exchange info")
 
 
+def build_context(
+    client: BinanceRESTClient | None,
+    ledger: NotionalLedger,
+    evidence_dir: Path,
+    symbol: str,
+    dry_run: bool,
+) -> ScenarioContext:
+    """构造场景执行上下文;供 G5Runner.make_context 与测试共用。"""
+
+    return ScenarioContext(
+        client=client,
+        ledger=ledger,
+        evidence_dir=evidence_dir,
+        symbol=symbol,
+        dry_run=dry_run,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
-    parser.add_argument("--symbol", required=True, help="显式指定只读协议探测品种")
+    parser.add_argument("--symbol", help="显式指定只读协议探测品种")
     parser.add_argument("--confirm-testnet", action="store_true", help="确认连接到 Testnet（非 Mainnet）")
     parser.add_argument(
         "--max-notional",
@@ -91,7 +117,37 @@ def main() -> int:
         default="DEV_BYPASS",
         help="证书认证模式(M20-F02 显式化): DEV_BYPASS=单次协议探测; FULL=72h 认证流程",
     )
+    parser.add_argument(
+        "--scenario",
+        default=None,
+        help="只执行指定场景(SCENARIO_REGISTRY 中的名字);缺省执行全部已注册场景",
+    )
+    parser.add_argument(
+        "--skip-restart",
+        action="store_true",
+        help="跳过重启组场景(process_restart/database_restart/user_stream_reconnect)",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="打印已注册场景后退出(不访问网络、不校验 plan)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="场景内不发送真实请求(仅演练场景逻辑)",
+    )
     args = parser.parse_args()
+
+    if args.list:
+        from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
+
+        for name in sorted(SCENARIO_REGISTRY):
+            print(name)
+        return 0
+
+    if not args.symbol:
+        parser.error("--symbol 是必选参数(--list 除外)")
     try:
         probe_symbol = validate_probe_symbol(args.symbol)
     except ValueError as exc:
@@ -403,102 +459,110 @@ def main() -> int:
         except Exception as e:
             results["idempotency"] = {"status": "FAIL", "error": str(e)}
 
-        # The seven legacy observations above are useful diagnostics, but
-        # they are not the sixteen plan scenarios.  Keep them as observations
-        # and explicitly mark every unimplemented protocol scenario as
-        # NOT_VERIFIABLE so a partial probe can never become a PASS certificate.
-        observations = dict(results)
-        observation_failures = sorted(
-            name for name, result in observations.items() if isinstance(result, dict) and result.get("status") == "FAIL"
+        # S1-S7 为只读观察,作为证书 observations 保留;协议场景由
+        # G5Runner 在同步上下文执行(每场景自带 asyncio.run)。
+        return evidence, results
+
+    observations, evidence = asyncio.run(run_scenarios())
+
+    ended_at = datetime.now(timezone.utc)
+    evidence["ended_at"] = ended_at.isoformat()
+    evidence["observations"] = observations
+    observation_failures = sorted(
+        name for name, result in observations.items() if isinstance(result, dict) and result.get("status") == "FAIL"
+    )
+
+    # ================================================================
+    # G5 场景框架:runner 按 SCENARIO_REGISTRY 执行注册场景
+    # (注册表当前为空,后续任务逐场景注册;S1-S7 只读观察不参与场景计数)
+    # ================================================================
+    from beidou_certification.g5_scenarios.runner import G5Runner
+
+    ledger = NotionalLedger(requested_max_notional)
+    scenario_evidence_dir = Path("artifacts/evidence/testnet/g5/scenarios")
+    scenario_client = BinanceRESTClient(rest_url=testnet_url, api_key=api_key, api_secret=api_secret)
+
+    def make_context() -> ScenarioContext:
+        return build_context(
+            client=scenario_client,
+            ledger=ledger,
+            evidence_dir=scenario_evidence_dir,
+            symbol=probe_symbol,
+            dry_run=args.dry_run,
         )
-        results = {
-            scenario: {
-                "status": "NOT_VERIFIABLE",
-                "reason": "scenario requires a complete protocol test and durable evidence",
-            }
-            for scenario in expected_scenarios
-        }
-        has_fail = bool(observation_failures) or any(r.get("status") == "FAIL" for r in results.values())
-        has_not_verifiable = any(r.get("status") == "NOT_VERIFIABLE" for r in results.values())
-        account_access = observations.get("account_access", {})
 
-        # Compute evidence hash
-        ended_at = datetime.now(timezone.utc)
-        evidence["ended_at"] = ended_at.isoformat()
-        evidence["observations"] = observations
-        evidence_json = json.dumps(evidence, sort_keys=True, default=str)
-        evidence_hash = hashlib.sha256(evidence_json.encode()).hexdigest()
+    runner = G5Runner(
+        plan_path=Path(args.plan),
+        commit=commit,
+        testnet_url=testnet_url,
+        evidence_dir=scenario_evidence_dir,
+        ledger=ledger,
+        symbol=probe_symbol,
+        make_context=make_context,
+    )
+    results = runner.run_selected(only=args.scenario, skip_restart=args.skip_restart)
+    for sid, result in results.items():
+        write_scenario_evidence(make_context(), result)
+        print(f"[{sid}] {result.status.value}")
 
-        certificate = {
-            "gate": "G5",
-            # M20-F02: 认证模式必须显式标注,缺失视为伪造拒绝(验证器恒拒)。
-            # DEV_BYPASS=开发便利证书(单次协议探测);FULL=72h 真实认证流程。
-            "certification_mode": args.certification_mode,
-            "status": "FAIL" if has_fail else ("NOT_VERIFIABLE" if has_not_verifiable else "PASS"),
-            "commit": commit,
-            "environment": plan_environment,
-            "testnet_url": testnet_url,
-            "mainnet_prohibited": plan_mainnet_prohibited,
-            "is_simulated": False,
-            "started_at": started_at.isoformat(),
-            "ended_at": ended_at.isoformat(),
-            "evidence_hash": evidence_hash,
-            "max_notional_usdt": requested_max_notional,
-            "scenarios": results,
-            "observations": observations,
-            "account_access": {
-                "can_trade": account_access.get("can_trade", False),
-                "can_withdraw": account_access.get("can_withdraw"),
-                "has_balance": account_access.get("has_balance", False),
-            },
-            "blockers": (
-                [f"G5_OBSERVATION_FAILED:{name}" for name in observation_failures]
-                + (["G5_SCENARIO_NOT_VERIFIABLE"] if has_not_verifiable else [])
-            ),
-            "summary": {
-                "total": len(results),
-                "pass": sum(1 for r in results.values() if r.get("status") == "PASS"),
-                "warn": sum(1 for r in results.values() if r.get("status") == "WARN"),
-                "fail": sum(1 for r in results.values() if r.get("status") == "FAIL"),
-                "not_verifiable": sum(1 for r in results.values() if r.get("status") == "NOT_VERIFIABLE"),
-            },
+    # S2 实测账户事实覆盖 runner 占位默认;S2 失败(无实测值)时退回占位默认
+    account_access = None
+    s2 = observations.get("account_access") or {}
+    if all(key in s2 for key in ("can_trade", "can_withdraw", "has_balance")):
+        account_access = {
+            "can_trade": s2["can_trade"],
+            "can_withdraw": s2["can_withdraw"],
+            "has_balance": s2["has_balance"],
         }
 
-        from beidou_certification.gate_verifier import verify_g5_certificate
+    certificate = runner.build_certificate(
+        results,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        account_access=account_access,
+    )
+    # 合并 legacy 观察与认证模式(M20-F02: 认证模式必须显式标注,缺失视为伪造拒绝)
+    certificate["certification_mode"] = args.certification_mode
+    certificate["observations"] = observations
+    if observation_failures:
+        certificate["status"] = "FAIL"
+    certificate["blockers"] = [f"G5_OBSERVATION_FAILED:{name}" for name in observation_failures] + (
+        ["G5_SCENARIO_NOT_VERIFIABLE"] if any(r.status.value == "NOT_VERIFIABLE" for r in results.values()) else []
+    )
 
-        verification = verify_g5_certificate(
-            certificate,
-            expected_commit=commit,
-            expected_scenarios=expected_scenarios,
-            max_notional_usdt=plan_max_notional,
-        )
-        certificate["semantic_verification"] = verification.to_dict()
-        if not verification.passed and certificate["status"] == "PASS":
-            certificate["status"] = "NOT_VERIFIABLE"
+    from beidou_certification.gate_verifier import verify_g5_certificate
 
-        evidence_dir = Path("artifacts/evidence/testnet")
-        evidence_dir.mkdir(parents=True, exist_ok=True)
+    verification = verify_g5_certificate(
+        certificate,
+        expected_commit=commit,
+        expected_scenarios=expected_scenarios,
+        max_notional_usdt=plan_max_notional,
+    )
+    certificate["semantic_verification"] = verification.to_dict()
+    if not verification.passed and certificate["status"] == "PASS":
+        certificate["status"] = "NOT_VERIFIABLE"
 
-        with open(evidence_dir / "g5-certificate.json", "w") as f:
-            json.dump(certificate, f, indent=2, default=str)
+    evidence_dir = Path("artifacts/evidence/testnet")
+    evidence_dir.mkdir(parents=True, exist_ok=True)
 
-        with open(evidence_dir / "g5-evidence.json", "w") as f:
-            json.dump(evidence, f, indent=2, default=str)
+    with open(evidence_dir / "g5-certificate.json", "w") as f:
+        json.dump(certificate, f, indent=2, default=str)
 
-        print("\n" + "=" * 60)
-        print(f"G5 CERTIFICATE: {certificate['status']}")
-        print(f"  Total: {certificate['summary']['total']}")
-        print(f"  PASS:  {certificate['summary']['pass']}")
-        print(f"  WARN:  {certificate['summary']['warn']}")
-        print(f"  FAIL:  {certificate['summary']['fail']}")
-        print(f"  N/V:   {certificate['summary']['not_verifiable']}")
-        print(f"  Hash:  {evidence_hash[:16]}...")
-        print("  Saved: artifacts/evidence/testnet/g5-certificate.json")
-        print("=" * 60)
+    with open(evidence_dir / "g5-evidence.json", "w") as f:
+        json.dump(evidence, f, indent=2, default=str)
 
-        return certificate
+    print("\n" + "=" * 60)
+    print(f"G5 CERTIFICATE: {certificate['status']}")
+    print(f"  Total: {certificate['summary']['total']}")
+    print(f"  PASS:  {certificate['summary']['pass']}")
+    print(f"  WARN:  {certificate['summary']['warn']}")
+    print(f"  FAIL:  {certificate['summary']['fail']}")
+    print(f"  N/V:   {certificate['summary']['not_verifiable']}")
+    print(f"  Hash:  {certificate['evidence_hash'][:16]}...")
+    print("  Saved: artifacts/evidence/testnet/g5-certificate.json")
+    print("=" * 60)
 
-    cert_result = asyncio.run(run_scenarios())
+    cert_result = certificate
 
     # Gate 4: 最终判定
     if cert_result["status"] != "PASS":
