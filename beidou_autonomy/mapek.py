@@ -253,8 +253,11 @@ class MAPEKController:
         LOCK/NO_NEW_RISK/EXIT_ONLY/EMERGENCY_FLATTEN 必须通过
         ControlAuthority 真实生效，不能仅写日志。
 
-        SUCCESS 仅在恢复后 invariants 非空、全 PASS、
-        TruthSnapshot 新鲜且 verifier PASS 时返回。
+        M15-F01 (P0-13) 语义诚实化:控制面动作真实执行后返回 DEGRADED
+        (降级方向 fail-closed,安全);RESTART_MODULE 无真实重启执行器,
+        仅计数 + checkpoint 判定(SUCCESS=checkpoint 有效,否则
+        PARTIAL/FAILED)。恢复后的不变量/TruthSnapshot 验证由调用方
+        通过 verify_recovery 执行(见 engine offline autopilot)。
         """
         from beidou_control.plane import ControlAction
 
@@ -341,3 +344,38 @@ class MAPEKController:
         )
 
         return result
+
+    def execute_recovery_governed(
+        self,
+        action: RecoveryAction,
+        module_name: str,
+        *,
+        reason: str = "",
+        control_plane: Any | None = None,
+        checkpoint: Checkpoint | None = None,
+    ) -> RecoveryResult:
+        """M15-F01 (P0-13): 受治理的恢复执行 —— 真实控制面动作 + LOCK 安全过滤。
+
+        decide_action 的 LOCK 默认语义(无指纹/低相似)在 log-only 时代
+        无害;真实接线后未知故障模式会永久 LOCK(终态,需人工签名
+        恢复)。治理规则:
+        - LOCK 仅在超重启保护(reason 含 "refusing further auto-restart")
+          时真实执行 —— 循环崩溃是确定的失控模式,必须终态阻断;
+        - 其余 LOCK(无指纹/相似度不足)改写为 DEGRADE_TO_NO_NEW_RISK
+          真实执行 —— fail-closed 但不锁死,事实恢复后由授权链
+          (M19-F01)重新 RESUME。
+        RESUME 方向的动作不存在于 RecoveryAction 枚举 —— 恢复执行
+        只降级不升级,升级永远走 execute_authorized_resume 门禁。
+        """
+        if action == RecoveryAction.LOCK and "refusing further auto-restart" not in reason:
+            self._recovery_log.append(
+                {
+                    "module": module_name,
+                    "action": "LOCK_DOWNGRADED",
+                    "to": RecoveryAction.DEGRADE_TO_NO_NEW_RISK.value,
+                    "reason": reason,
+                    "timestamp": time.time(),
+                }
+            )
+            action = RecoveryAction.DEGRADE_TO_NO_NEW_RISK
+        return self.execute_with_authority(action, module_name, checkpoint=checkpoint, control_plane=control_plane)

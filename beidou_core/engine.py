@@ -9846,6 +9846,9 @@ class AutonomousEngine:
                 print("[offline] MAPE-K: anomaly detected — ledger unbalanced")
 
             # Plan & Execute: if anomaly detected, attempt recovery
+            # M15 研究演进登记:无 challenger 生成闭环 —— 本循环只做故障
+            # 恢复(Monitor→Analyze→Plan→Execute);新策略/挑战者生成属研究
+            # 演进方向(beidou_research 链),不在生产自进化范围内。
             if anomaly_detected:
                 symptom_vector = {
                     "error_count": float(system_metrics["error_count"]),
@@ -9855,7 +9858,15 @@ class AutonomousEngine:
                 if recovery_action != RecoveryAction.NOOP:
                     print(f"[offline] MAPE-K: executing recovery action {recovery_action.value} (reason: {reason})")
                     try:
-                        result = self._mapek.execute_recovery(recovery_action, "autopilot")
+                        # M15-F01 (P0-13): 接线真实控制面动作(execute_with_authority),
+                        # LOCK 经治理过滤(无指纹 LOCK → NO_NEW_RISK fail-closed
+                        # 但不锁死;超重启 LOCK 保留终态阻断)。
+                        result = self._mapek.execute_recovery_governed(
+                            recovery_action,
+                            "autopilot",
+                            reason=reason,
+                            control_plane=self._control,
+                        )
                         print(f"[offline] MAPE-K: recovery result = {result.value}")
                         invariants = {
                             "error_count_ok": system_metrics["error_count"] < 50,
