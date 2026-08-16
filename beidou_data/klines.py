@@ -65,9 +65,17 @@ class KLineGenerator:
     ) -> OHLCV | None:
         key = self._make_key(venue_instrument)
         delta = self._interval_delta()
+        # M01-F03-R2（对抗审查反例 3）: 桶起点必须 floor 到 interval 边界。
+        # 旧逻辑 5m/15m/30m 只清秒不清分 → 首 tick 10:04:30 得到 10:04-10:09
+        # 的错位桶（应为 10:05-10:10）。
         interval_start = timestamp.replace(second=0, microsecond=0)
         if delta >= timedelta(hours=1):
             interval_start = interval_start.replace(minute=0)
+        elif self.interval.endswith("m"):
+            minutes = int(self.interval[:-1])
+            interval_start = interval_start.replace(
+                minute=interval_start.minute - interval_start.minute % minutes
+            )
         if delta >= timedelta(hours=24):
             interval_start = interval_start.replace(hour=0)
         interval_end = interval_start + delta
@@ -159,10 +167,15 @@ class KLineGenerator:
         volume: float,
         timestamp: datetime,
         symbol: str = "",
-        venue_id: str = "BINANCE_USDM",
+        venue_id: str = "BINANCE",
         is_taker_buy: bool = False,
     ) -> OHLCV | None:
-        """Convenience wrapper — accept raw floats, delegate to process_tick."""
+        """Convenience wrapper — accept raw floats, delegate to process_tick.
+
+        M01-F03-R2: 默认 venue_id 必须与 feed 的读取 key（VenueId("BINANCE")）
+        一致 —— 旧默认 "BINANCE_USDM" 使 5m 生成器写进另一个 key，读取
+        路径永远不可达（事件时间接线全部落黑洞）。
+        """
         from beidou_shared.types import InstrumentId, VenueId
 
         vi = VenueInstrument(

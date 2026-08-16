@@ -393,27 +393,42 @@ class TestAutoRepair:
 
 
 def test_parse_rest_kline_missing_close_flag_is_not_closed():
-    """M01-F01 (P0-04): x 标志缺失时绝不伪造 is_closed=True（闭合证据诚实性）。"""
+    """M01-F01-R2: 形成中 bar（close_time 在未来）绝不标记为闭合（时间推导）。"""
     from beidou_core.feed import MarketDataFeed
 
     now = datetime.now(timezone.utc)
-    open_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
-    close_ms = int((now - timedelta(minutes=1)).timestamp() * 1000)
-    row = [open_ms, "100", "101", "99", "100.5", "10", close_ms, "1000", 5]  # 无 x 字段
+    open_ms = int((now - timedelta(minutes=30)).timestamp() * 1000)
+    future_close_ms = int((now + timedelta(minutes=30)).timestamp() * 1000)
+    # Binance 形态:index 11 = Ignore("0" 字符串),无 x 标志
+    row = [open_ms, "100", "101", "99", "100.5", "10", future_close_ms, "1000", 5, "0", "0", "0"]
     parsed = MarketDataFeed._parse_rest_kline(row, now, include_closed=True)
     assert parsed is not None
-    assert parsed["is_closed"] is False  # 缺失闭合证据 = 未闭合,绝不制造 True
+    assert parsed["is_closed"] is False  # 形成中 bar:close_time 在未来 → 未闭合
 
 
-def test_parse_rest_kline_explicit_close_flag_is_honored():
+def test_parse_rest_kline_derives_closed_from_close_time():
+    """M01-F01-R2: 闭合 bar（close_time 在过去）按时间推导为 True（REST 无 x 标志）。"""
     from beidou_core.feed import MarketDataFeed
 
     now = datetime.now(timezone.utc)
-    open_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
-    close_ms = int((now - timedelta(minutes=1)).timestamp() * 1000)
-    row = [open_ms, "100", "101", "99", "100.5", "10", close_ms, "1000", 5, "0", "0", "0", True]
+    open_ms = int((now - timedelta(hours=2)).timestamp() * 1000)
+    close_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
+    row = [open_ms, "100", "101", "99", "100.5", "10", close_ms, "1000", 5, "0", "0", "0"]
     parsed = MarketDataFeed._parse_rest_kline(row, now, include_closed=True)
-    assert parsed["is_closed"] is True
+    assert parsed is not None
+    assert parsed["is_closed"] is True  # 已闭合:close_time <= now
+
+
+def test_parse_rest_kline_ignore_field_string_is_not_trusted():
+    """对抗审查反例 2: index 11="0"(Ignore 字符串) 的 bool 转换恒 True,必须不采信。"""
+    from beidou_core.feed import MarketDataFeed
+
+    now = datetime.now(timezone.utc)
+    open_ms = int((now - timedelta(minutes=30)).timestamp() * 1000)
+    future_close_ms = int((now + timedelta(minutes=30)).timestamp() * 1000)
+    row = [open_ms, "100", "101", "99", "100.5", "10", future_close_ms, "1000", 5, "0", "0", "0"]
+    parsed = MarketDataFeed._parse_rest_kline(row, now, include_closed=True)
+    assert parsed["is_closed"] is False  # "0" 字符串不被采信 → 按时间推导为未闭合
 
 
 def test_sync_kline_merge_preserves_closed_evidence():
@@ -472,10 +487,11 @@ def test_parse_event_time_valid_and_invalid():
 
 
 class _EventTimeKlineClient:
-    """ticker 携带固定 E 事件时间的假客户端。"""
+    """ticker 携带固定 E 事件时间的假客户端（模拟已同步时钟偏移）。"""
 
     def __init__(self, event_ms: int) -> None:
         self._event_ms = event_ms
+        self._rest_client = type("FakeRest", (), {"_clock_offset_ms": 0})()
 
     async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None):
         from beidou_exchange.binance_usdm.endpoints import Endpoint

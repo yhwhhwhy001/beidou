@@ -3242,30 +3242,44 @@ class AutonomousEngine:
                 # Yield event loop between symbols
                 await asyncio.sleep(0)
 
-                # 1. Fetch latest market data
-                # BD-FIX: WebSocket 数据优先 — 如果 WS 数据新鲜则跳过 REST 调用
-                if self._feed._ws_active and self._feed.is_ws_data_fresh(symbol):
-                    features = await self._feed.async_get_kline_features(symbol)
-                    # 补充 ticker/orderbook 从 WS 缓存
-                    ticker = self._feed.get_last_ticker(symbol)
-                    ob = self._feed.get_last_orderbook(symbol)
-                    if ticker and ob and features:
-                        quote = _validated_ws_quote(ticker)
-                        if quote is not None:
-                            ws_price, ws_bid, ws_ask = quote
-                            features["price"] = ws_price
-                            features["bid"] = ws_bid
-                            features["ask"] = ws_ask
-                            features["spread_bps"] = (ws_ask - ws_bid) / ws_ask * 10000
+                # M01-F04-R2（对抗审查反例 4）: 单标的市场数据异常（含 DQ
+                # gate FAIL）不得中止整轮 tick —— 按标的分隔异常并审计计数，
+                # 其余标的的订单监控/对账/保护报告照常执行。
+                try:
+                    # 1. Fetch latest market data
+                    # BD-FIX: WebSocket 数据优先 — 如果 WS 数据新鲜则跳过 REST 调用
+                    if self._feed._ws_active and self._feed.is_ws_data_fresh(symbol):
+                        features = await self._feed.async_get_kline_features(symbol)
+                        # 补充 ticker/orderbook 从 WS 缓存
+                        ticker = self._feed.get_last_ticker(symbol)
+                        ob = self._feed.get_last_orderbook(symbol)
+                        if ticker and ob and features:
+                            quote = _validated_ws_quote(ticker)
+                            if quote is not None:
+                                ws_price, ws_bid, ws_ask = quote
+                                features["price"] = ws_price
+                                features["bid"] = ws_bid
+                                features["ask"] = ws_ask
+                                features["spread_bps"] = (ws_ask - ws_bid) / ws_ask * 10000
+                            else:
+                                # A stale/incomplete WS ticker cannot be repaired
+                                # by copying the last close into bid/ask.  Refresh
+                                # the complete snapshot through the feed boundary.
+                                features = await self._feed.async_update_features(symbol)
                         else:
-                            # A stale/incomplete WS ticker cannot be repaired
-                            # by copying the last close into bid/ask.  Refresh
-                            # the complete snapshot through the feed boundary.
                             features = await self._feed.async_update_features(symbol)
                     else:
                         features = await self._feed.async_update_features(symbol)
-                else:
-                    features = await self._feed.async_update_features(symbol)
+                except Exception as _md_exc:
+                    self._market_data_failures = getattr(self, "_market_data_failures", {})
+                    self._market_data_failures[symbol] = self._market_data_failures.get(symbol, 0) + 1
+                    logger.warning(
+                        "realtime market data failed for %s: %s: %s (per-symbol isolated)",
+                        symbol,
+                        type(_md_exc).__name__,
+                        str(_md_exc)[:160],
+                    )
+                    continue
                 if not features:
                     continue
 
@@ -10179,7 +10193,16 @@ class AutonomousEngine:
                     continue
                 entry_price = float(p.get("entryPrice", 0))
                 if entry_price <= 0:
-                    features = await self._feed.async_update_features(symbol)
+                    try:
+                        features = await self._feed.async_update_features(symbol)
+                    except Exception as _md_exc:
+                        logger.warning(
+                            "protection recovery market data failed for %s: %s: %s",
+                            symbol,
+                            type(_md_exc).__name__,
+                            str(_md_exc)[:160],
+                        )
+                        continue
                     entry_price = features.get("price", 0) if features else 0
                     if entry_price <= 0:
                         continue
@@ -10195,7 +10218,16 @@ class AutonomousEngine:
                 if already_protected:
                     continue
 
-                kline_features = await self._feed.async_get_kline_features(symbol)
+                try:
+                    kline_features = await self._feed.async_get_kline_features(symbol)
+                except Exception as _md_exc:
+                    logger.warning(
+                        "protection recovery kline features failed for %s: %s: %s",
+                        symbol,
+                        type(_md_exc).__name__,
+                        str(_md_exc)[:160],
+                    )
+                    continue
                 adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
                 # BD-FIX: 小市值品种 K 线特征越界（OUT_OF_RANGE）时降级
                 # 为保守默认保护配置（5% SL / 10% TP —— 名义安全值），

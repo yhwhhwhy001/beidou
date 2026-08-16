@@ -82,3 +82,45 @@ def test_replay_tool_is_deterministic() -> None:
         assert fv.input_hash
         assert fv.feature_version == "v1"
         assert fv.data_quality_tier in ("PASS", "CONDITIONAL")
+
+
+def test_payload_hash_stable_across_ingestion_histories() -> None:
+    """M01-F05-R2: 闭合 bar 的 payload_hash 不得随前置 NOT_CLOSED 尝试次数漂移。"""
+    from beidou_data.market import ClosedBarNormalizer
+
+    normalizer_a = ClosedBarNormalizer()
+    normalizer_a.normalize(_raw(10, closed=False), _VI, "1h")
+    normalizer_a.normalize(_raw(10, closed=False), _VI, "1h")
+    closed_a = normalizer_a.normalize(_raw(10, closed=True), _VI, "1h")
+    assert closed_a.bar is not None
+
+    normalizer_b = ClosedBarNormalizer()
+    closed_b = normalizer_b.normalize(_raw(10, closed=True), _VI, "1h")
+    assert closed_b.bar is not None
+
+    assert closed_a.bar.payload_hash == closed_b.bar.payload_hash
+    assert closed_a.bar.sequence == closed_b.bar.sequence
+
+
+def test_sequence_validator_supports_all_intervals() -> None:
+    """M01-F05-R2: 15m/2h/4h 连续 bar 不得误报 GAP_DETECTED（对抗审查反例 6）。"""
+    from beidou_data.market import BarSequenceValidator
+
+    for interval, step in (("15m", timedelta(minutes=15)), ("2h", timedelta(hours=2)), ("4h", timedelta(hours=4))):
+        validator = BarSequenceValidator()
+        base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+        for i in range(3):
+            raw = {
+                "open_time": (base + step * i).isoformat(),
+                "close_time": (base + step * (i + 1)).isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100.5",
+                "volume": "10",
+                "is_closed": True,
+            }
+            result = ClosedBarNormalizer().normalize(raw, _VI, interval)
+            assert result.bar is not None
+            status = validator.validate(result.bar, now=result.bar.close_time)
+            assert status is BarIntegrity.OK, f"{interval} bar {i} 误报: {status}"

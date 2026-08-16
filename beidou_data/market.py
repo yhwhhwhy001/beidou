@@ -279,7 +279,10 @@ class ClosedBarNormalizer:
             if numeric_values["low"] > min(numeric_values["open"], numeric_values["close"], numeric_values["high"]):
                 return ClosedBarResult(None, BarIntegrity.INVALID, "Low is above an OHLC value", cid)
 
-            self._seq_counter += 1
+            # M01-F05-R2（对抗审查反例 5）: sequence 采用"peek 不消耗"语义
+            # —— 未闭合 bar 不推进计数器，同一 bar 无论前置多少次
+            # NOT_CLOSED 尝试，闭合版本的 sequence/payload_hash 恒定
+            # （内容寻址不随摄取历史漂移）。
             bar = ClosedBar(
                 venue_instrument=venue_instrument,
                 open_time=open_time,
@@ -332,12 +335,14 @@ class ClosedBarNormalizer:
             if audit_key in self._seen:
                 return ClosedBarResult(bar, BarIntegrity.DUPLICATE, f"Duplicate bar: {audit_key}", cid)
 
-            # M01-F05 (P1-08): 未闭合 bar 不注册 _seen —— 同一 bar 先到
-            # NOT_CLOSED、后到闭合态是正常演进（修订路径），旧实现把
-            # 第二次标为 DUPLICATE 导致闭合事实永远无法进入。
+            # M01-F05 (P1-08): 未闭合 bar 不注册 _seen、不消耗 sequence ——
+            # 同一 bar 先到 NOT_CLOSED、后到闭合态是正常演进（修订路径），
+            # 旧实现把第二次标为 DUPLICATE 且 sequence 消耗使 payload_hash
+            # 随摄取历史漂移（内容寻址失效）。
             if not bar.is_closed:
                 return ClosedBarResult(bar, BarIntegrity.NOT_CLOSED, "Bar is not yet closed", cid)
 
+            self._seq_counter += 1
             self._seen[audit_key] = bar.sequence
             return ClosedBarResult(bar, BarIntegrity.OK, f"Normalized: {audit_key}", cid)
 
@@ -429,15 +434,26 @@ class BarSequenceValidator:
         self._update(bar)
         return BarIntegrity.OK
 
+    @staticmethod
+    def _interval_seconds(interval: str) -> float:
+        """interval 字符串 → 秒。未知/非法 → 60 默认（M01-F05-R2）。
+
+        旧实现只注册 1m/5m/1h，其他间隔沿用 60s 默认 → 连续的 15m/2h/4h
+        bar 全部误报 GAP_DETECTED（对抗审查反例 6）。
+        """
+        mapping = {"m": 60.0, "h": 3600.0, "d": 86400.0, "w": 604800.0}
+        if len(interval) < 2 or interval[-1] not in mapping:
+            return 60.0
+        try:
+            value = int(interval[:-1])
+        except ValueError:
+            return 60.0
+        return value * mapping[interval[-1]]
+
     def _update(self, bar: ClosedBar) -> None:
         key = self._seq_key(bar)
         self._last_open_times[key] = bar.open_time
-        if bar.interval == "1m":
-            self._expected_intervals[key] = 60.0
-        elif bar.interval == "5m":
-            self._expected_intervals[key] = 300.0
-        elif bar.interval == "1h":
-            self._expected_intervals[key] = 3600.0
+        self._expected_intervals[key] = self._interval_seconds(bar.interval)
 
 
 class RawLayer:

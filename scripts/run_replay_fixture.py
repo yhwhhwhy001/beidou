@@ -65,7 +65,10 @@ def replay(raw_klines: list[dict], symbol: str) -> tuple[list[ClosedBarResult], 
 
         if result.status is BarIntegrity.OK and result.bar is not None:
             bar = result.bar
-            seq_status = sequence_validator.validate(bar)
+            # M01-F05-R2: 以 bar 自身 close_time 作为参照 now —— 重放语义下
+            # bar 在自身时刻永不过期（STALE 检查按墙钟会形同虚设/失真），
+            # 且保证跨次运行确定性。
+            seq_status = sequence_validator.validate(bar, now=bar.close_time)
             gate = DataQualityGate(venue_instrument=venue_instrument)
             tier = _gate_tier_for_status(seq_status)
             gate.checks.append(

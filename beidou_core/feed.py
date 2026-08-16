@@ -139,6 +139,64 @@ class MarketDataFeed:
             return None
         return event_time
 
+    def _clock_offset_ms(self) -> int | None:
+        """交易所时钟偏移（服务端时间 - 本地时间, ms）。不可达/异常 → None。
+
+        M01-F04-R2（对抗审查反例 3/4）: 时钟偏差不能拿数据年龄（now - E）
+        冒充 —— 轮询数据天然有秒级年龄。真实偏差来自 rest_client 的
+        服务端时间同步。
+        """
+        rest_client = getattr(getattr(self, "_client", None), "_rest_client", None)
+        value = getattr(rest_client, "_clock_offset_ms", None)
+        if value is None:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if abs(parsed) <= 3_600_000 else None
+
+    def _build_live_dq_gate(
+        self, venue_instrument: VenueInstrument, ticker: dict, spread_bps: float, ticker_ts: datetime | None
+    ) -> DataQualityGate:
+        """构造实时行情 DQ 门禁（M01-F04-R2）: FRESHNESS=数据年龄、
+        COMPLETENESS=点差、CLOCK_SKEW=适配器时钟偏移（三者语义分离）。"""
+        gate = DataQualityGate(venue_instrument=venue_instrument)
+        now = datetime.now(timezone.utc)
+        if ticker_ts is not None:
+            age_s = (now - ticker_ts).total_seconds()
+            if age_s <= 120.0:
+                freshness_tier = DataQualityTier.PASS
+            elif age_s <= 300.0:
+                freshness_tier = DataQualityTier.CONDITIONAL
+            else:
+                freshness_tier = DataQualityTier.FAIL
+            gate.checks.append(
+                DQCheckResult(DQCheckType.FRESHNESS, freshness_tier, f"age={age_s:.0f}s", metric_value=age_s)
+            )
+        else:
+            gate.checks.append(
+                DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.CONDITIONAL, "event_time_unavailable")
+            )
+        if spread_bps < 100:
+            gate.checks.append(
+                DQCheckResult(DQCheckType.COMPLETENESS, DataQualityTier.PASS, detail=f"spread={spread_bps:.1f}bps")
+            )
+        else:
+            gate.checks.append(
+                DQCheckResult(
+                    DQCheckType.COMPLETENESS, DataQualityTier.CONDITIONAL, detail=f"spread={spread_bps:.1f}bps"
+                )
+            )
+        offset_ms = self._clock_offset_ms()
+        if offset_ms is not None:
+            gate.add_clock_skew_check(offset_ms)
+        else:
+            gate.checks.append(
+                DQCheckResult(DQCheckType.CLOCK_SKEW, DataQualityTier.CONDITIONAL, "clock_offset_unverifiable")
+            )
+        return gate
+
     def set_client(self, client: Any) -> None:
         """注入共享的 REST client（引擎启动时调用，替代独立实例）。"""
         self._client = client
@@ -420,7 +478,9 @@ class MarketDataFeed:
         except (OverflowError, OSError, ValueError):
             return None
 
-        if close_time > now:
+        if close_time > now and not include_closed:
+            # M01-F01-R2: closed-only 调用方丢弃形成中 bar;include_closed
+            # 调用方保留该行但 is_closed 按时间推导为 False（诚实证据）。
             return None
 
         values: dict[str, float] = {}
@@ -455,24 +515,29 @@ class MarketDataFeed:
             "quote_volume": quote_volume,
             "trades": raw[8],
         }
-        # BD-FIX: Binance kline 第 12 字段 (index 11, "x") 是该 bar 的闭合标志。
-        # REST 返回的最后一条往往是正在形成的未闭合 bar；把它盲目标记为闭合
-        # 会让未闭合价格进入策略决策（违反 closed-bar-only 不变量）。
+        # M01-F01-R2（对抗审查反例 2，live API 实证）: Binance REST kline
+        # 数组没有 "x" 标志 —— index 11 是 "Ignore" 字段（恒为字符串
+        # "0"），bool("0")=True 会把每行（含形成中 bar）都制造为闭合。
+        # 正确推导: close_time 是桶终点 —— close_time <= now 即为闭合。
+        # 若传输层提供了显式标志则优先采用。
         is_closed_flag: bool | None = None
         if len(raw) > 11:
             raw_flag = raw[11]
-            if raw_flag not in (None, ""):
+            if isinstance(raw_flag, bool):
+                is_closed_flag = raw_flag
+            elif raw_flag not in (None, ""):
                 try:
                     is_closed_flag = bool(raw_flag)
                 except (TypeError, ValueError):
                     is_closed_flag = None
-        if include_closed and is_closed_flag is None:
-            # M01-F01 (P0-04): 缺失闭合证据绝不制造 is_closed=True ——
-            # 与 ClosedBarNormalizer 的"missing close evidence is never
-            # closed"不变量一致。未闭合行由下游闭合 bar 门禁拒绝。
-            is_closed_flag = False
-        if is_closed_flag is not None:
-            parsed_row["is_closed"] = is_closed_flag
+                # 非 bool 非空的字符串标志不可信（"0"/"1" 均 bool=True）;
+                # 仅显式布尔可信,其余按时间推导。
+                if isinstance(raw_flag, str):
+                    is_closed_flag = None
+        if is_closed_flag is None:
+            # 缺失/不可信标志 → 按时间推导（Binance 原生语义）
+            is_closed_flag = close_time <= now
+        parsed_row["is_closed"] = bool(is_closed_flag)
         return parsed_row
 
     @staticmethod
@@ -657,41 +722,7 @@ class MarketDataFeed:
 
         # M01-F04 (P0-07): DQ 门禁真实接线 —— 检查项真实、结果被求值、
         # FAIL 阻断（raise），tier 持久化到 FeatureVector。
-        gate = DataQualityGate(venue_instrument=vi)
-        gate.checks.append(
-            DQCheckResult(
-                check_type=DQCheckType.FRESHNESS,
-                tier=DataQualityTier.PASS,
-                detail="live_ticker",
-            )
-        )
-        if spread_bps < 100:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.COMPLETENESS,
-                    tier=DataQualityTier.PASS,
-                    detail=f"spread={spread_bps:.1f}bps",
-                )
-            )
-        else:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.COMPLETENESS,
-                    tier=DataQualityTier.CONDITIONAL,
-                    detail=f"spread={spread_bps:.1f}bps",
-                )
-            )
-        if event_time is not None:
-            skew_ms = int((datetime.now(timezone.utc) - event_time).total_seconds() * 1000)
-            gate.add_clock_skew_check(skew_ms)
-        else:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.CLOCK_SKEW,
-                    tier=DataQualityTier.CONDITIONAL,
-                    detail="event_time_unavailable",
-                )
-            )
+        gate = self._build_live_dq_gate(vi, ticker, spread_bps, event_time)
         dq_tier = gate.overall_tier()
         if dq_tier == DataQualityTier.FAIL:
             raise MarketDataUnknownError(f"data quality gate FAIL for {symbol}: {[c.detail for c in gate.checks]}")
@@ -740,6 +771,43 @@ class MarketDataFeed:
         features = self._compute_kline_features(symbol, interval, klines)
         if not features:
             raise MarketDataUnknownError(f"insufficient valid closed bars for {symbol}")
+        # M01-F04-R2（对抗审查反例 4）: 信号路径（近线特征）必须有 DQ
+        # 门禁 —— 旧实现只在保护参数路径有门禁，时钟漂移时形成中 bar
+        # 可直接成为有效信号输入（INV-004）。
+        vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol))
+        ticker = self._last_ticker.get(symbol, {})
+        ticker_ts = self._parse_event_time(ticker)
+        gate = DataQualityGate(venue_instrument=vi)
+        now = datetime.now(timezone.utc)
+        if ticker_ts is not None:
+            age_s = (now - ticker_ts).total_seconds()
+            if age_s <= 120.0:
+                freshness_tier = DataQualityTier.PASS
+            elif age_s <= 300.0:
+                freshness_tier = DataQualityTier.CONDITIONAL
+            else:
+                freshness_tier = DataQualityTier.FAIL
+            gate.checks.append(
+                DQCheckResult(DQCheckType.FRESHNESS, freshness_tier, f"age={age_s:.0f}s", metric_value=age_s)
+            )
+        else:
+            gate.checks.append(
+                DQCheckResult(DQCheckType.FRESHNESS, DataQualityTier.CONDITIONAL, "event_time_unavailable")
+            )
+        gate.checks.append(
+            DQCheckResult(DQCheckType.COMPLETENESS, DataQualityTier.CONDITIONAL, "spread_not_evaluated_here")
+        )
+        offset_ms = self._clock_offset_ms()
+        if offset_ms is not None:
+            gate.add_clock_skew_check(offset_ms)
+        else:
+            gate.checks.append(
+                DQCheckResult(DQCheckType.CLOCK_SKEW, DataQualityTier.CONDITIONAL, "clock_offset_unverifiable")
+            )
+        dq_tier = gate.overall_tier()
+        if dq_tier == DataQualityTier.FAIL:
+            raise MarketDataUnknownError(f"kline DQ gate FAIL for {symbol}: {[c.detail for c in gate.checks]}")
+        features["dq_tier"] = dq_tier.value
         return features
 
     def fetch_ticker(self, symbol: str) -> dict:
@@ -903,41 +971,7 @@ class MarketDataFeed:
             self._last_error_time = time.monotonic()
 
         # M01-F04 (P0-07): DQ 门禁真实接线（同步路径）
-        gate = DataQualityGate(venue_instrument=vi)
-        gate.checks.append(
-            DQCheckResult(
-                check_type=DQCheckType.FRESHNESS,
-                tier=DataQualityTier.PASS,
-                detail="live_ticker",
-            )
-        )
-        if spread_bps < 100:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.COMPLETENESS,
-                    tier=DataQualityTier.PASS,
-                    detail=f"spread={spread_bps:.1f}bps",
-                )
-            )
-        else:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.COMPLETENESS,
-                    tier=DataQualityTier.CONDITIONAL,
-                    detail=f"spread={spread_bps:.1f}bps",
-                )
-            )
-        if _sync_event_time is not None:
-            skew_ms = int((datetime.now(timezone.utc) - _sync_event_time).total_seconds() * 1000)
-            gate.add_clock_skew_check(skew_ms)
-        else:
-            gate.checks.append(
-                DQCheckResult(
-                    check_type=DQCheckType.CLOCK_SKEW,
-                    tier=DataQualityTier.CONDITIONAL,
-                    detail="event_time_unavailable",
-                )
-            )
+        gate = self._build_live_dq_gate(vi, ticker, spread_bps, _sync_event_time)
         dq_tier = gate.overall_tier()
         if dq_tier == DataQualityTier.FAIL:
             raise MarketDataUnknownError(f"data quality gate FAIL for {symbol}: {[c.detail for c in gate.checks]}")
