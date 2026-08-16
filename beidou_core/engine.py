@@ -445,21 +445,44 @@ def _blocked_signal(
 # ================================================================
 
 
-def adaptive_leverage(ann_volatility: float) -> float:
-    """波动率越高杠杆越低，控制风险暴露。"""
+def adaptive_leverage(
+    ann_volatility: float,
+    *,
+    levels: tuple[float, float, float, float] = (3.0, 2.0, 1.0, 0.5),
+    thresholds: tuple[float, float, float] = (0.2, 0.4, 0.6),
+) -> float:
+    """波动率越高杠杆越低，控制风险暴露。
+
+    M09-F01: 档位与阈值参数化 —— 默认值=旧硬编码行为,调用方经签名
+    策略覆盖(_policy_float_audited)。
+    """
     if not math.isfinite(ann_volatility) or ann_volatility <= 0.0:
         return 0.0  # UNKNOWN → no new risk
-    if ann_volatility < 0.2:
-        return 3.0  # 低波动：可以放大
-    if ann_volatility < 0.4:
-        return 2.0  # 正常波动
-    if ann_volatility < 0.6:
-        return 1.0  # 偏高波动：减半
-    return 0.5  # 极端波动：最小化
+    if ann_volatility < thresholds[0]:
+        return levels[0]  # 低波动：可以放大
+    if ann_volatility < thresholds[1]:
+        return levels[1]  # 正常波动
+    if ann_volatility < thresholds[2]:
+        return levels[2]  # 偏高波动：减半
+    return levels[3]  # 极端波动：最小化
 
 
-def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: float) -> float:
-    """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。"""
+def adaptive_position_pct(
+    strength: float,
+    ann_volatility: float,
+    spread_bps: float,
+    *,
+    base_pct: float | None = None,
+    vol_penalty_floor: float = 0.2,
+    spread_penalty_floor: float = 0.3,
+    spread_scale_bps: float = 50.0,
+) -> float:
+    """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。
+
+    M09-F02: 基数与惩罚参数化 —— 默认值=旧行为;base_pct 仍可用
+    BEIDOU_ADAPTIVE_BASE_PCT 环境覆盖(EXEMPT-20),调用方经签名策略
+    覆盖优先。
+    """
     if (
         not all(math.isfinite(value) for value in (strength, ann_volatility, spread_bps))
         or strength <= 0.0
@@ -467,12 +490,14 @@ def adaptive_position_pct(strength: float, ann_volatility: float, spread_bps: fl
         or spread_bps < 0.0
     ):
         return 0.0
-    vol_penalty = max(0.2, 1.0 - ann_volatility)  # 波动越高惩罚越大
-    spread_penalty = max(0.3, 1.0 - spread_bps / 50.0)  # 点差越大惩罚越大
+    vol_penalty = max(vol_penalty_floor, 1.0 - ann_volatility)  # 波动越高惩罚越大
+    spread_penalty = max(spread_penalty_floor, 1.0 - spread_bps / spread_scale_bps)  # 点差越大惩罚越大
     # BD-FIX: 仓位基数环境可调（默认 0.02 生产语义不变）—— 0.02 与
     # risk_per_trade_pct 双重保守叠加使 testnet 名义恒 ~10 USDT，
     # 自适应变化不可感知（用户反馈"自适应未启用"）。
-    _base_pct = float(os.getenv("BEIDOU_ADAPTIVE_BASE_PCT", "0.02"))
+    # M09-F02: base_pct 参数优先(签名策略);环境变量覆盖保留。
+    # TESTNET-EXEMPT: EXEMPT-20
+    _base_pct = base_pct if base_pct is not None else float(os.getenv("BEIDOU_ADAPTIVE_BASE_PCT", "0.02"))
     base = strength * _base_pct
     return base * vol_penalty * spread_penalty
 
@@ -2061,6 +2086,16 @@ class AutonomousEngine:
             "stop_loss_atr_multiplier": (0.1, 10.0),
             "capital_budget_ratio": (0.001, 1.0),
             "max_margin_ratio": (0.1, 1.0),
+            # M09: 杠杆档位/波动阈值/仓位基数与上限
+            "leverage_low_vol": (0.1, 20.0),
+            "leverage_mid_vol": (0.1, 20.0),
+            "leverage_high_vol": (0.1, 20.0),
+            "leverage_extreme_vol": (0.1, 20.0),
+            "vol_tier_1": (0.01, 5.0),
+            "vol_tier_2": (0.01, 5.0),
+            "vol_tier_3": (0.01, 5.0),
+            "position_pct_base": (0.0001, 0.5),
+            "position_cap_ratio": (0.01, 1.0),
         }
         for key, (lo, hi) in spec.items():
             raw = self._policy_params.get(key)
@@ -8633,10 +8668,30 @@ class AutonomousEngine:
                 signal_strength = fused.strength
 
                 # 自适应杠杆 — 波动率越高杠杆越低
-                dyn_leverage = adaptive_leverage(ann_vol)
+                # M09-F01: 档位与阈值经签名策略可覆盖(默认=旧行为)。
+                dyn_leverage = adaptive_leverage(
+                    ann_vol,
+                    levels=(
+                        self._policy_float_audited("leverage_low_vol", 3.0),
+                        self._policy_float_audited("leverage_mid_vol", 2.0),
+                        self._policy_float_audited("leverage_high_vol", 1.0),
+                        self._policy_float_audited("leverage_extreme_vol", 0.5),
+                    ),
+                    thresholds=(
+                        self._policy_float_audited("vol_tier_1", 0.2),
+                        self._policy_float_audited("vol_tier_2", 0.4),
+                        self._policy_float_audited("vol_tier_3", 0.6),
+                    ),
+                )
 
                 # 自适应仓位 — 信号强度 × 波动率惩罚 × 点差惩罚 × 风险预算
-                adaptive_pct = adaptive_position_pct(signal_strength, ann_vol, spread_bps_val)
+                # M09-F02: 基数/惩罚经签名策略可覆盖(默认=旧行为)。
+                adaptive_pct = adaptive_position_pct(
+                    signal_strength,
+                    ann_vol,
+                    spread_bps_val,
+                    base_pct=self._policy_float_audited("position_pct_base", 0.02),
+                )
                 budget = self._strategy_risk.get_budget(self._autopilot_strategy_id)
                 if budget is None:
                     print(f"[nearline] {symbol}: SKIP (strategy risk budget UNKNOWN)")
@@ -8661,7 +8716,11 @@ class AutonomousEngine:
                 # 自适应仓位: risk_based_size × adaptive_pct, 受 leverage 约束
                 max_by_leverage = (account_balance * dyn_leverage) / price
                 position_size = min(risk_based_size * adaptive_pct, max_by_leverage)
-                position_size = min(position_size, max_by_leverage * 0.5)
+                # M09-F03: ×0.5 仓位帽经签名策略可覆盖(默认=旧行为)。
+                position_size = min(
+                    position_size,
+                    max_by_leverage * self._policy_float_audited("position_cap_ratio", 0.5),
+                )
                 # PKG02: 从交易所规则获取最小下单量
                 _precision = getattr(self, "_symbol_precision", {}).get(symbol, {})
                 _min_qty = float(_precision.get("min_quantity", 0) or 0)

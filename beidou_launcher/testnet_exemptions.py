@@ -180,4 +180,12 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         reassessment_module="M02",
         risk_note="未签名的环境变量是代码外配置入口 —— 加载时审计日志，运营变更需记录。",
     ),
+    TestnetExemption(
+        exemption_id="EXEMPT-20",
+        title="自适应仓位基数经环境变量 BEIDOU_ADAPTIVE_BASE_PCT 覆盖",
+        rationale="仓位基数默认 0.02(与 risk_per_trade_pct 双重保守);环境变量允许 operator"
+        "调整感知度(用户反馈'自适应未启用'后的可调入口)。签名策略键 position_pct_base 优先。",
+        reassessment_module="M09",
+        risk_note="未签名环境变量放大仓位基数 —— 签名策略提供键后应弃用环境变量路径。",
+    ),
 )

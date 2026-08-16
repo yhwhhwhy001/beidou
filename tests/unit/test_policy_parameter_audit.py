@@ -137,3 +137,49 @@ def test_valid_signed_params_do_not_set_policy_error() -> None:
     )
     engine._validate_audited_policy_params()
     assert engine._policy_error is None
+
+
+# --- M09（仓位/杠杆参数治理） ---
+
+
+def test_adaptive_leverage_defaults_match_legacy_behavior() -> None:
+    """M09-F01: 默认档位与旧硬编码行为一致（行为兼容）。"""
+    from beidou_core.engine import adaptive_leverage
+
+    assert adaptive_leverage(0.1) == 3.0
+    assert adaptive_leverage(0.3) == 2.0
+    assert adaptive_leverage(0.5) == 1.0
+    assert adaptive_leverage(0.9) == 0.5
+    assert adaptive_leverage(0.0) == 0.0  # UNKNOWN → no new risk
+    assert adaptive_leverage(float("nan")) == 0.0
+
+
+def test_adaptive_leverage_policy_override() -> None:
+    """M09-F01: 档位/阈值经参数覆盖。"""
+    from beidou_core.engine import adaptive_leverage
+
+    custom = adaptive_leverage(
+        0.24,
+        levels=(4.0, 2.5, 1.5, 0.75),
+        thresholds=(0.15, 0.25, 0.5),
+    )
+    assert custom == 2.5  # 0.24 落在 tier2(<0.25)
+
+
+def test_adaptive_position_pct_params() -> None:
+    """M09-F02: 基数与惩罚参数化,默认行为不变。"""
+    from beidou_core.engine import adaptive_position_pct
+
+    base = adaptive_position_pct(0.5, 0.3, 10.0)
+    custom = adaptive_position_pct(0.5, 0.3, 10.0, base_pct=0.04)
+    assert custom == base * 2  # 基数翻倍,惩罚相同
+    assert adaptive_position_pct(0.0, 0.3, 10.0) == 0.0  # 零强度
+    assert adaptive_position_pct(0.5, float("inf"), 10.0) == 0.0  # 非有限
+
+
+def test_position_cap_ratio_policy_key_validated() -> None:
+    """M09-F03: position_cap_ratio 越界值被策略校验拒绝。"""
+    engine = _bare_engine(policy={"position_cap_ratio": 1.5})
+    engine._validate_audited_policy_params()
+    assert engine._policy_error is not None
+    assert "position_cap_ratio" in engine._policy_error
