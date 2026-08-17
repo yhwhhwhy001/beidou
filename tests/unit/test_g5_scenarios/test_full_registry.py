@@ -15,7 +15,6 @@ _PLAN_PATH = Path(__file__).resolve().parents[3] / "config" / "g5-testnet-plan.y
 EXPECTED_ORDER = [
     "ack_loss",
     "cancel_fill_race",
-    "partial_fill",
     "reconciliation_mismatch",
     "timeout_unknown_recovery",
     "double_worker_fencing",
@@ -29,6 +28,9 @@ EXPECTED_ORDER = [
     "process_restart",
     "database_restart",
     "user_stream_reconnect",
+    # Ruling-20: partial_fill 移到最后 —— PASS 后引擎 ghost 订单缺陷
+    # (CANCELED-with-executedQty 不落 order_state)会污染后续场景前置。
+    "partial_fill",
 ]
 
 
