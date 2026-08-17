@@ -141,7 +141,7 @@ class PostgresPersistentStore:
     def _get_conn(self) -> Any:
         # PG 重启后旧连接 closed 非 0(psycopg3: 1=closed 2=broken)
         # → 重建而非复用,否则事务永久失败(引擎功能性死亡)。
-        if self._conn is not None and getattr(self._conn, "closed", 0):
+        if self._conn is not None and bool(getattr(self._conn, "closed", False)):
             self._discard_dead_conn(self._conn)
         if self._conn is None:
             self._conn = self._connection_factory()
