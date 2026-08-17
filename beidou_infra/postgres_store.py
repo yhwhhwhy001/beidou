@@ -13,6 +13,7 @@ replay, PITR, venue reconciliation and dual-worker evidence.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import uuid
@@ -127,7 +128,21 @@ class PostgresPersistentStore:
             cls._instances[dsn] = instance
             return instance
 
+    def _discard_dead_conn(self, conn: Any) -> None:
+        """死连接回收(引擎 fail-closed 根因修复): PG 重启后旧连接变
+        closed/broken,复用会使所有事务永久抛 "connection is closed"。
+        关闭并置空,下次 _get_conn 重建新连接。"""
+        with contextlib.suppress(Exception):
+            close = getattr(conn, "close", None)
+            if callable(close):
+                close()
+        self._conn = None
+
     def _get_conn(self) -> Any:
+        # PG 重启后旧连接 closed 非 0(psycopg3: 1=closed 2=broken)
+        # → 重建而非复用,否则事务永久失败(引擎功能性死亡)。
+        if self._conn is not None and getattr(self._conn, "closed", 0):
+            self._discard_dead_conn(self._conn)
         if self._conn is None:
             self._conn = self._connection_factory()
         return self._conn
@@ -138,15 +153,24 @@ class PostgresPersistentStore:
             conn = self._get_conn()
             transaction = getattr(conn, "transaction", None)
             if callable(transaction):
-                with transaction():
-                    yield conn
-                return
+                try:
+                    with transaction():
+                        yield conn
+                    return
+                except Exception:
+                    # 事务异常后检测死连接(服务端关闭时 psycopg 标记
+                    # closed)—— 回收使下一次调用走重建路径。
+                    if getattr(conn, "closed", 0):
+                        self._discard_dead_conn(conn)
+                    raise
             try:
                 yield conn
             except Exception:
                 rollback = getattr(conn, "rollback", None)
                 if callable(rollback):
                     rollback()
+                if getattr(conn, "closed", 0):
+                    self._discard_dead_conn(conn)
                 raise
             else:
                 commit = getattr(conn, "commit", None)

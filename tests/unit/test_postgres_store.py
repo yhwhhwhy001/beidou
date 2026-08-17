@@ -189,6 +189,58 @@ def test_postgres_store_immutable_fill_event_is_replay_idempotent() -> None:
     assert len(connection.events) == 1
 
 
+def test_store_reconnects_dead_connection_after_pg_restart() -> None:
+    """引擎 fail-closed 根因修复: PG 重启后旧连接 closed → 重建。
+
+    PG 重启后 store 持有的单连接变死连接,复用使所有事务永久抛
+    "connection is closed"(对账永久失败 → trading_ready 永久 False,
+    实测 14 次 segment failed)。修复后 _get_conn 检测 closed 非 0
+    (psycopg3: 1=closed 2=broken)→ 关闭旧连接并重建。
+    """
+    conn1 = _Connection()
+    conn2 = _Connection()
+    factories = [conn1, conn2]
+    store = PostgresPersistentStore(
+        "postgresql://test",
+        connection_factory=lambda: factories.pop(0),
+    )
+    assert store._get_conn() is conn1
+    # PG 重启: 旧连接变死
+    conn1.closed = 1
+    conn1.close = lambda: None  # _discard_dead_conn 关闭调用
+    assert store._get_conn() is conn2  # 检测 closed → 重建
+
+
+def test_store_discards_dead_conn_on_transaction_failure() -> None:
+    """事务异常路径: 事务期间连接变 closed → 异常后回收,下次重建。
+
+    (事务开始前已 closed 的连接由 _get_conn 主动重建覆盖 —— 本用例
+    覆盖 yield 期间服务端才关闭连接的竞态窗口。)
+    """
+    conn1 = _Connection()
+    conn2 = _Connection()
+    factories = [conn1, conn2]
+    store = PostgresPersistentStore(
+        "postgresql://test",
+        connection_factory=lambda: factories.pop(0),
+    )
+    assert store._get_conn() is conn1
+
+    class _Boom(Exception):
+        pass
+
+    conn1.close = lambda: None
+    try:
+        with store._transaction() as conn:
+            assert conn is conn1
+            conn1.closed = 1  # 事务期间服务端关闭连接
+            raise _Boom("connection is closed")
+    except _Boom:
+        pass
+    assert store._conn is None  # 事务异常 + closed → 已回收
+    assert store._get_conn() is conn2  # 重建
+
+
 def _store() -> tuple[PostgresPersistentStore, _Connection]:
     connection = _Connection()
     store = PostgresPersistentStore(
