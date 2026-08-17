@@ -3547,6 +3547,69 @@ class AutonomousEngine:
 
     # --- Clock Domain: REALTIME (every 5s) ---
 
+    async def _reconciliation_segment(self) -> None:
+        """对账心跳段: UNKNOWN 意图周期重查 + 对账 + 事实恢复自动 RESUME。
+
+        fail-closed 根因修复: 原实现内联在 _realtime_tick 的 try 块内,
+        PG 重启时前段 PG 写失败被函数级 except 吞掉后 reconcile 段永远
+        跳不过去 → _last_recon 停更 → supervisor 模块健康 stale →
+        防抖器 LOCKED fatal → 有序关机 exit 0 → launchd 不拉起正常退出。
+        独立方法 + 心跳语义(尝试过即更新 _last_recon)保证任何故障下
+        心跳续命,PG 恢复后对账自动恢复正常。
+        """
+        try:
+            # UNKNOWN/SENDING 意图的运行时恢复（C1 审查：demo 一次 POST
+            # 超时即让该标的在途敞口永久占满、重启前无法再下单）。周期
+            # 重查（按 client_id 的 identity-bound venue 事实裁决）。
+            if time.time() - getattr(self, "_last_unknown_resolve", 0.0) > 60:
+                self._last_unknown_resolve = time.time()
+                try:
+                    await asyncio.wait_for(self._resolve_unknown_outbox_intents(), timeout=20.0)
+                except Exception as _resolve_exc:
+                    logger.warning("periodic unknown-intent resolve skipped: %s", type(_resolve_exc).__name__)
+
+            if time.time() - self._last_recon > 30:
+                # BD-FIX: 对账含交易所网络调用，慢响应不得阻塞实时循环
+                # （循环停摆会拉大对账间隔，触发 supervisor 的 60s 新鲜度
+                # 检查降级）。超时按 fail-closed 处理：本轮不更新事实，
+                # 30s 后下一轮重试。
+                try:
+                    recon_ok = await asyncio.wait_for(self._reconcile(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    recon_ok = False
+                self._last_recon = time.time()
+                # 对账通过 → 检查持久事实并自动清除事故
+                if recon_ok:
+                    durable_ok, _, _ = self._durable_fact_status()
+                    # BD-FIX: incident 清理与 RESUME 动作解耦。旧逻辑把两者
+                    # 包在 `control != RESUME` 条件下 —— 控制面已 RESUME
+                    # （testnet 自动重新授权）时 incident 永不 resolve，
+                    # 残留 CRITICAL 事故永久展示且告警噪音不断（final14/21
+                    # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
+                    if durable_ok:
+                        self._maybe_auto_resolve_incidents()
+                        # BD-FIX: 保护事实恢复后复位所有权标志（I3 审查：
+                        # 置位后进程内永不复位，瞬态 API 失败即永久锁死）
+                        if getattr(self, "_protection_owner_unknown", False):
+                            self._protection_owner_unknown = False
+                            self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
+                            self._last_protection_fact_at = time.time()
+                            print("[protection] ownership verified — protection facts restored")
+                    if durable_ok and self._control.get_status() != ControlAction.RESUME:
+                        # TESTNET-EXEMPT: EXEMPT-07（引擎侧自动 RESUME；
+                        # 授权链挂接属 M19）
+                        try:
+                            self._control.execute_action(ControlAction.RESUME)
+                            print("[realtime] Auto-restored RESUME after durable facts verified")
+                        except Exception as exc:
+                            logger.warning("automatic RESUME failed: %s", type(exc).__name__)
+        except Exception as exc:
+            # 心跳语义: 段内任何异常(如 PG 停机时 _reconcile 的 durable
+            # 读取失败)都不得停更 _last_recon —— 尝试过即更新,stale
+            # 永不累积,防抖器不触发 LOCKED。
+            self._last_recon = time.time()
+            logger.warning("reconciliation segment failed: %s: %s", type(exc).__name__, str(exc)[:200], exc_info=True)
+
     async def _realtime_tick(self) -> None:
         """实时时钟：行情轮询 → 保护单检查 → 订单处理 → 对账。"""
         self._tick_count += 1
@@ -3681,54 +3744,6 @@ class AutonomousEngine:
                     for intent in unacked:
                         await self._place_order(intent)
 
-            # 6. Reconciliation (every 30s)
-            # BD-FIX: UNKNOWN/SENDING 意图的运行时恢复（C1 审查：demo
-            # 一次 POST 超时即让该标的在途敞口永久占满、重启前无法再
-            # 下单）。周期重查（按 client_id 的 identity-bound venue
-            # 事实裁决），与启动时 resolve 同语义。
-            if time.time() - getattr(self, "_last_unknown_resolve", 0.0) > 60:
-                self._last_unknown_resolve = time.time()
-                try:
-                    await asyncio.wait_for(self._resolve_unknown_outbox_intents(), timeout=20.0)
-                except Exception as _resolve_exc:
-                    logger.warning("periodic unknown-intent resolve skipped: %s", type(_resolve_exc).__name__)
-
-            if time.time() - self._last_recon > 30:
-                # BD-FIX: 对账含交易所网络调用，慢响应不得阻塞实时循环
-                # （循环停摆会拉大对账间隔，触发 supervisor 的 60s 新鲜度
-                # 检查降级）。超时按 fail-closed 处理：本轮不更新事实，
-                # 30s 后下一轮重试。
-                try:
-                    recon_ok = await asyncio.wait_for(self._reconcile(), timeout=25.0)
-                except asyncio.TimeoutError:
-                    recon_ok = False
-                self._last_recon = time.time()
-                # 对账通过 → 检查持久事实并自动清除事故
-                if recon_ok:
-                    durable_ok, _, _ = self._durable_fact_status()
-                    # BD-FIX: incident 清理与 RESUME 动作解耦。旧逻辑把两者
-                    # 包在 `control != RESUME` 条件下 —— 控制面已 RESUME
-                    # （testnet 自动重新授权）时 incident 永不 resolve，
-                    # 残留 CRITICAL 事故永久展示且告警噪音不断（final14/21
-                    # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
-                    if durable_ok:
-                        self._maybe_auto_resolve_incidents()
-                        # BD-FIX: 保护事实恢复后复位所有权标志（I3 审查：
-                        # 置位后进程内永不复位，瞬态 API 失败即永久锁死）
-                        if getattr(self, "_protection_owner_unknown", False):
-                            self._protection_owner_unknown = False
-                            self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
-                            self._last_protection_fact_at = time.time()
-                            print("[protection] ownership verified — protection facts restored")
-                    if durable_ok and self._control.get_status() != ControlAction.RESUME:
-                        # TESTNET-EXEMPT: EXEMPT-07（引擎侧自动 RESUME；
-                        # 授权链挂接属 M19）
-                        try:
-                            self._control.execute_action(ControlAction.RESUME)
-                            print("[realtime] Auto-restored RESUME after durable facts verified")
-                        except Exception as exc:
-                            logger.warning("automatic RESUME failed: %s", type(exc).__name__)
-
             # 7. Protection status report (every 60 ticks ≈ 60s)
             if self._tick_count % 60 == 0:
                 positions = self._protection.all_positions()
@@ -3772,9 +3787,23 @@ class AutonomousEngine:
                 str(e)[:200],
                 category="realtime",
             )
+            # fail-closed 根因修复(诊断性): 原实现完全静默 —— PG 重启时
+            # 前段 PG 写失败只进 incident 内存/JSONL,日志无痕迹,后续
+            # stale 累积无法定位。落一条 warning(含堆栈)使同类问题可诊断。
+            logger.warning("realtime tick error (isolated per-tick): %s: %s", type(e).__name__, str(e)[:200], exc_info=True)
         finally:
             self._last_realtime = time.time()
             self._last_realtime_mono = time.monotonic()
+        # fail-closed 根因修复: 对账心跳与行情/snapshot/intents 段解耦。
+        # PG 重启时前段 PG 写抛 OperationalError 被主 except 吞掉,原结构下
+        # reconcile 段(在 try 内、异常点之后)永远跳不过去 → _last_recon
+        # 停更 → supervisor 模块健康 stale(>120s) → 防抖器 LOCKED fatal
+        # → 有序关机 exit 0 → launchd 不拉起 → 引擎永久下线。对账段独立
+        # 执行并自带异常隔离后,任何前段故障不再阻断心跳。
+        try:
+            await self._reconciliation_segment()
+        except Exception as exc:
+            logger.warning("reconciliation segment unexpected: %s: %s", type(exc).__name__, str(exc)[:200], exc_info=True)
 
     async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
         """平仓时取消交易所上的关联条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""

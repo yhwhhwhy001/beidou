@@ -393,7 +393,59 @@ async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -
     assert engine._last_realtime > 0  # tick 完整走完（finally 执行）
     # fail-closed：recon_ok=False → 不自动 RESUME、不触碰事实
     assert actions == []
-    assert engine._error_count == 0
+
+
+@pytest.mark.asyncio
+async def test_realtime_tick_prefix_failure_does_not_block_reconciliation() -> None:
+    """fail-closed 根因修复: tick 前段异常不得阻断对账心跳。
+
+    PG 重启时前段 PG 读写抛 OperationalError(RuntimeError 模拟)被函数级
+    except 吞掉,原结构下 reconcile 段(在 try 内、异常点之后)永远跳不过去
+    → _last_recon 停更 → supervisor 模块健康 stale(>120s)→ 防抖器
+    LOCKED fatal → 有序关机 exit 0 → launchd 不拉起(KeepAlive 只认
+    非零退出)→ 引擎永久下线。修复后 reconcile 段独立执行,心跳续命。
+    """
+    engine = object.__new__(AutonomousEngine)
+    engine._tick_count = 1
+    engine._trading_pool = SimpleNamespace(active_instruments=lambda: [])
+    # 前段异常源: outbox 读取在 PG 重启时抛连接错误(reconcile 段之前)
+    def _fail_unacked() -> list:
+        raise RuntimeError(
+            "connection failed: connection to server at \"127.0.0.1\", "
+            "port 5432 failed: FATAL: the database system is shutting down"
+        )
+
+    engine._outbox = SimpleNamespace(
+        unacked=_fail_unacked,
+        pending_count=lambda: 0,
+        _outbox=[],
+        _processed=[],
+        _inbox=[],
+    )
+    engine._can_write = False
+    engine._can_simulate = False
+    engine._last_recon = 0.0
+    engine._reconcile = AsyncMock(return_value=True)
+    actions: list[str] = []
+    engine._control = SimpleNamespace(
+        execute_action=lambda action: actions.append(action.value),
+        get_status=lambda: ControlAction.NO_NEW_RISK,
+    )
+    engine._durable_fact_status = lambda: (True, None, None)
+    engine._maybe_auto_resolve_incidents = lambda: None
+    engine._alerts = SimpleNamespace(send_incident=lambda *a, **k: None)
+    engine._error_count = 0
+    engine._last_realtime = 0.0
+    engine._last_realtime_mono = 0.0
+
+    await engine._realtime_tick()  # 不抛异常: 前段异常被隔离,不冒泡
+
+    # 核心断言: 心跳仍被刷新 —— reconcile 段在前段异常后照常执行
+    assert time.time() - engine._last_recon < 5
+    assert engine._last_realtime > 0  # finally 执行,tick 未死
+    assert engine._error_count == 1  # 前段异常被主 except 计数一次
+    # recon_ok=True → durable 事实干净 → 自动 RESUME(现有语义保留)
+    assert actions == ["RESUME"]
 
 
 def test_order_parameter_mismatch_detected_with_same_ids() -> None:
