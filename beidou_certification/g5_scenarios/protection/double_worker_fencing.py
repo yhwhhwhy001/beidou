@@ -149,6 +149,12 @@ class DoubleWorkerFencingScenario(ScenarioBase):
             #    拒绝只可能来自引擎持有而非锁实现缺陷)
             temp_dir = self._temp_lock_dir or Path(tempfile.mkdtemp(prefix="g5-fencing-"))
             probe_lock = self._make_lock(temp_dir / "probe.pid")
+            # 探针锁 acquire 为文件创建型写操作(仅临时路径,不触碰引擎锁):
+            # 写操作前打印意图,措辞与 engine-path acquire 一致
+            logger.info(
+                "double_worker_fencing: 以第二实例身份 acquire 探针锁 %s(证明锁实现可用,拒绝只可能来自引擎持有)",
+                temp_dir / "probe.pid",
+            )
             probe_acquired, probe_message = probe_lock.acquire()
             steps.append({"action": "probe_lock_acquire", "acquired": probe_acquired, "message": probe_message})
             if probe_acquired:

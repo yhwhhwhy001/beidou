@@ -22,6 +22,7 @@ from beidou_certification.g5_scenarios.protection.native_protection import (
     algo_orphan_verdict,
 )
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
+from beidou_exchange.core.error_taxonomy import Result
 
 # ---- 判定纯函数(brief 单测,verbatim) ----
 
@@ -384,6 +385,38 @@ def test_native_protection_client_unavailable_not_verifiable(tmp_path: Path) -> 
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=None)))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert result.error_type == "CLIENT_UNAVAILABLE"
+
+
+# ---- native_protection 默认依赖解包 Result 时 data=None → 显式 RuntimeError ----
+# (不用 assert:python -O 下 assert 被剥离,None 会流出为 T)
+
+
+def test_native_protection_result_none_data_fail(tmp_path: Path) -> None:
+    class _NoneDataClient:
+        async def get_account(self) -> Any:
+            return Result.success(None)
+
+        async def get_exchange_info(self, symbol: str) -> Any:
+            raise AssertionError("不应到达 get_exchange_info")
+
+        async def get_ticker(self, symbol: str) -> Any:
+            raise AssertionError("不应到达 get_ticker")
+
+        async def get_open_algo_orders(self) -> Any:
+            raise AssertionError("不应到达 get_open_algo_orders")
+
+        async def create_algo_order(self, params: dict[str, Any]) -> Any:
+            raise AssertionError("不应到达 create_algo_order")
+
+        async def cancel_algo_order(self, symbol: str, algo_id: int) -> Any:
+            raise AssertionError("不应到达 cancel_algo_order")
+
+    scenario = NativeProtectionScenario()  # 默认真实依赖:解包 Result 的路径
+    result = asyncio.run(scenario.run(_ctx(tmp_path, client=_NoneDataClient())))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "RuntimeError"
+    assert "get_account" in result.error_message and "no data" in result.error_message
+    assert not any(s.get("action") == "algo_created" for s in result.evidence["steps"])
 
 
 # ---- double_worker_fencing dry_run:NOT_VERIFIABLE 且不触碰任何真实资源 ----

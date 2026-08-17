@@ -46,10 +46,15 @@ _FAR_TRIGGER_FACTOR = "0.5"
 
 
 def _require_ok(result: Result[T], action: str) -> T:
-    """解包 Result:失败抛 RuntimeError 携带交易所错误原文进证据。"""
+    """解包 Result:失败抛 RuntimeError 携带交易所错误原文进证据。
+
+    data=None 显式抛错(不用 assert:python -O 下 assert 被剥离,None 会
+    流出为 T);错误消息带场景动作上下文。
+    """
     if not result.is_ok:
         raise RuntimeError(f"{action} failed: {result.error}")
-    assert result.data is not None
+    if result.data is None:
+        raise RuntimeError(f"{action} returned no data (None)")
     return result.data
 
 
