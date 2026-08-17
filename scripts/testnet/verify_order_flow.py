@@ -43,6 +43,22 @@ def _require(result: Result, action: str):
     return result.data
 
 
+async def _require_retry(client: BinanceRESTClient, call, action: str, retries: int = 3) -> dict:
+    """demo-fapi 签名请求间歇性 401(2026-08-18 实测,与 21:48 同模式)——
+    重试 3 次(间隔 8s),全部失败才抛出;下单类动作不用此包装(防重复下单)。"""
+    last: Exception | None = None
+    for attempt in range(retries):
+        result = await call()
+        if result.is_ok and result.data is not None:
+            return result.data
+        last = RuntimeError(f"{action} failed: {result.error}")
+        if attempt < retries - 1:
+            print(f"  (重试 {attempt + 1}/{retries - 1}: {result.error})")
+            await asyncio.sleep(8)
+    assert last is not None
+    raise last
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", default="BTCUSDT")
@@ -56,7 +72,7 @@ async def main() -> int:
         return 1
 
     client = BinanceRESTClient(
-        rest_url="https://fapi.binance.com",
+        rest_url="https://demo-fapi.binance.com",
         api_key=api_key,
         api_secret=api_secret,
     )
@@ -66,18 +82,18 @@ async def main() -> int:
     entry_qty = "0"
 
     # ---- 前置:确认账户空持仓零挂单(防残留) ----
-    acct = _require(await client.get_account(), "get_account")
+    acct = await _require_retry(client, client.get_account, "get_account")
     resid = [
         (p["symbol"], p["positionAmt"]) for p in acct.get("positions", []) if float(p.get("positionAmt", 0)) != 0
     ]
-    open_orders = _require(await client.get_open_orders(), "get_open_orders")
+    open_orders = await _require_retry(client, client.get_open_orders, "get_open_orders")
     if resid:
         print(f"WARN: 账户存在残留持仓 {resid} — 先跳过入场,直接平仓清理")
     if open_orders:
         print(f"WARN: 账户存在挂单 {[o['orderId'] for o in open_orders]} — 先撤单清理")
         for o in open_orders:
             await client.cancel_order(o["symbol"], int(o["orderId"]))
-        open_orders = _require(await client.get_open_orders(), "get_open_orders")
+        open_orders = await _require_retry(client, client.get_open_orders, "get_open_orders")
 
     # ---- 步骤 1: 市价买单(minQty) ----
     depth = _require(await client.get_depth(symbol), "get_depth")
@@ -88,12 +104,17 @@ async def main() -> int:
     market_price = Decimal(str(asks[0][0]))
     info = _require(await client.get_exchange_info(symbol), "get_exchange_info")
     min_qty = Decimal("0.001")
+    step_size = Decimal("0.001")
     for entry in info.get("symbols", []):
         if entry.get("symbol") == symbol:
             for f in entry.get("filters", []):
                 if f.get("filterType") == "LOT_SIZE":
                     min_qty = Decimal(str(f["minQty"]))
-    qty = format(min_qty.normalize(), "f")
+                    step_size = Decimal(str(f.get("stepSize", "0.001")))
+    # MIN_NOTIONAL 门槛(BTC 0.0001×64093=6.4 < 50 会被拒 —— 认证轮同款核算)
+    from beidou_certification.g5_scenarios.base import min_gate_quantity
+
+    qty = format(min_gate_quantity(min_qty, step_size, market_price).normalize(), "f")
     t0 = int(time.time() * 1000)
     entry = _require(
         await client.create_order(symbol, "BUY", "MARKET", qty, client_order_id=f"g5-verify-entry-{t0}"),
@@ -149,9 +170,9 @@ async def main() -> int:
     algo_ids = [i for i in (sl_id, tp_id) if i]
 
     # ---- 步骤 3: 查询并展示 ----
-    queried = _require(await client.get_order(symbol, entry_order_id), "get_order(entry)")
+    queried = await _require_retry(client, lambda: client.get_order(symbol, entry_order_id), "get_order(entry)")
     position_line = ""
-    acct2 = _require(await client.get_account(), "get_account(after)")
+    acct2 = await _require_retry(client, client.get_account, "get_account(after)")
     for p in acct2.get("positions", []):
         if p["symbol"] == symbol and float(p.get("positionAmt", 0)) != 0:
             position_line = (
@@ -186,11 +207,11 @@ async def main() -> int:
         )
         print(f"  平仓单 {close.get('orderId')}: status={close.get('status')} "
               f"avgPrice={close.get('avgPrice')} executed={close.get('executedQty')}")
-    acct3 = _require(await client.get_account(), "get_account(final)")
+    acct3 = await _require_retry(client, client.get_account, "get_account(final)")
     final_resid = [
         (p["symbol"], p["positionAmt"]) for p in acct3.get("positions", []) if float(p.get("positionAmt", 0)) != 0
     ]
-    final_open = _require(await client.get_open_orders(), "get_open_orders(final)")
+    final_open = await _require_retry(client, client.get_open_orders, "get_open_orders(final)")
     print(f"  复核持仓: {final_resid or '空'}  复核挂单: {[o['orderId'] for o in final_open] or '空'}")
     if final_resid or final_open:
         failures.append(f"清理不彻底: 持仓 {final_resid} 挂单 {[o['orderId'] for o in final_open]}")
