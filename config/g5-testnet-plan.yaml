@@ -18,6 +18,9 @@ scenarios:
 - rate_limit
 - credential_failure
 - reconciliation_mismatch
+# Ruling-22: testnet 无真实提现能力,demo-fapi canWithdraw 恒 True,显式豁免
+# (fail_fast_on 里的 withdraw_permission 是运行期观察项 fail-fast 语义,保留不动)
+allow_withdraw_permission: true
 fail_fast_on:
 - P0
 - mainnet_url

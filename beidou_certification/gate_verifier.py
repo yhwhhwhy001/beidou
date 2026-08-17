@@ -87,8 +87,18 @@ def verify_g5_certificate(
     expected_scenarios: Iterable[str],
     now: datetime | None = None,
     max_notional_usdt: float = 20.0,
+    allow_withdraw_permission: bool = False,
 ) -> GateVerification:
-    """Verify the non-negotiable semantics of a real G5 Testnet certificate."""
+    """Verify the non-negotiable semantics of a real G5 Testnet certificate.
+
+    Ruling-22:testnet 无真实提现能力,demo-fapi 的 canWithdraw 恒 True 是固定
+    事实(认证轮 #12 证书唯一 verification failure = withdraw_permission)。
+    allow_withdraw_permission=True 时豁免该检查,但豁免必须双重要求成立:
+    (a) 参数为 True;且 (b) 证书 testnet_url host 非 mainnet(is_mainnet 判定,
+    mainnet host 时豁免无效 —— 提现权限硬性保留)。豁免生效时 checks 记
+    withdraw_permission_exempt=True 且 failures 不添加 withdraw_permission;
+    豁免未生效时行为与现状完全一致(照常 check 并失败)。
+    """
 
     expected = set(expected_scenarios)
     checks: dict[str, bool] = {}
@@ -158,7 +168,12 @@ def verify_g5_certificate(
 
     account_access = certificate.get("account_access")
     account_access = account_access if isinstance(account_access, dict) else {}
-    check("withdraw_permission", account_access.get("can_withdraw") is False)
+    # Ruling-22:testnet 无真实提现能力,demo-fapi canWithdraw 恒 True ——
+    # 显式豁免需双重要求(allow 参数 True 且 host 非 mainnet;mainnet 硬性)
+    if allow_withdraw_permission and not is_mainnet:
+        checks["withdraw_permission_exempt"] = True
+    else:
+        check("withdraw_permission", account_access.get("can_withdraw") is False)
 
     blockers = certificate.get("blockers", [])
     p0_failures = certificate.get("p0_failures", [])

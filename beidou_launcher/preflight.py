@@ -55,11 +55,15 @@ def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, d
             return False, "G5 certificate or scenario plan is malformed", evidence
         from beidou_certification.gate_verifier import verify_g5_certificate
 
+        # Ruling-22:plan 显式声明 allow_withdraw_permission 时豁免 demo-fapi
+        # canWithdraw 恒 True(缺省 False,行为与现状一致;豁免仍需 host 非
+        # mainnet,由 verify 内双重判定把关)
         verification = verify_g5_certificate(
             certificate,
             expected_commit=commit,
             expected_scenarios=[str(item) for item in expected_scenarios],
             max_notional_usdt=float(max_notional),
+            allow_withdraw_permission=bool(plan.get("allow_withdraw_permission", False)),
         )
         evidence["verification"] = verification.to_dict()
         if not verification.passed:

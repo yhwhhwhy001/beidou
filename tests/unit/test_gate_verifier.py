@@ -176,3 +176,57 @@ def test_g5_dev_bypass_mode_passes_with_explicit_label() -> None:
         expected_scenarios=EXPECTED_SCENARIOS,
     )
     assert verification.passed is True
+
+
+# ---- Ruling-22:testnet 提现权限显式豁免(demo-fapi canWithdraw 恒 True) ----
+
+
+def test_g5_withdraw_exempt_on_demo_fapi_host() -> None:
+    """demo-fapi host + allow=True → 豁免生效:checks 记
+    withdraw_permission_exempt=True,failures 不含 withdraw_permission。"""
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    verification = verify_g5_certificate(
+        _g5(account_access={"can_withdraw": True}),
+        expected_commit="abc123",
+        expected_scenarios=EXPECTED_SCENARIOS,
+        allow_withdraw_permission=True,
+    )
+    assert verification.passed is True
+    assert verification.checks["withdraw_permission_exempt"] is True
+    assert "withdraw_permission" not in verification.failures
+
+
+def test_g5_withdraw_exempt_invalid_on_mainnet_host() -> None:
+    """mainnet host + allow=True → 豁免无效(提现权限硬性保留):仍 failed,
+    failures 含 withdraw_permission,checks 无豁免标记。"""
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    verification = verify_g5_certificate(
+        _g5(
+            testnet_url="https://fapi.binance.com",
+            account_access={"can_withdraw": True},
+        ),
+        expected_commit="abc123",
+        expected_scenarios=EXPECTED_SCENARIOS,
+        allow_withdraw_permission=True,
+    )
+    assert verification.passed is False
+    assert verification.status == "NOT_VERIFIABLE"
+    assert "withdraw_permission" in verification.failures
+    assert "withdraw_permission_exempt" not in verification.checks
+
+
+def test_g5_withdraw_not_exempt_without_allow_flag() -> None:
+    """allow=False(缺省)→ 豁免未生效,行为与现状一致:demo-fapi host +
+    canWithdraw=True 仍 failed 且 failures 含 withdraw_permission。"""
+    from beidou_certification.gate_verifier import verify_g5_certificate
+
+    verification = verify_g5_certificate(
+        _g5(account_access={"can_withdraw": True}),
+        expected_commit="abc123",
+        expected_scenarios=EXPECTED_SCENARIOS,
+    )
+    assert verification.passed is False
+    assert "withdraw_permission" in verification.failures
+    assert "withdraw_permission_exempt" not in verification.checks

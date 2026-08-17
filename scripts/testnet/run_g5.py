@@ -328,7 +328,7 @@ def main() -> int:
     # ================================================================
     started_at = datetime.now(timezone.utc)
 
-    async def run_scenarios() -> dict:
+    async def run_scenarios() -> tuple[dict, dict]:
         client = BinanceRESTClient(
             rest_url=testnet_url,
             api_key=api_key,
@@ -588,11 +588,15 @@ def main() -> int:
 
     from beidou_certification.gate_verifier import verify_g5_certificate
 
+    # Ruling-22:testnet 无真实提现能力,demo-fapi canWithdraw 恒 True ——
+    # plan 显式声明 allow_withdraw_permission 时豁免(缺省 False 行为不变;
+    # S2 预检输出保持真实判定,此处仅影响语义验证)。
     verification = verify_g5_certificate(
         certificate,
         expected_commit=commit,
         expected_scenarios=expected_scenarios,
         max_notional_usdt=plan_max_notional,
+        allow_withdraw_permission=bool(plan.get("allow_withdraw_permission", False)),
     )
     certificate["semantic_verification"] = verification.to_dict()
     if not verification.passed and certificate["status"] == "PASS":
