@@ -9,8 +9,13 @@
    时钟/睡眠 seam):轮询期内出现即 appeared=True;超时仍不出现 →
    appeared=False(引擎对 algo 挂单的可见性有传播延迟,单次查询 lag 会
    误伤,挂撤往返是否闭合以轮询窗口内出现为准)
-3. 撤单(cancel_algo_order)→ 断言消失;证据记录挂撤往返
-4. 若账户有真实持仓,额外断言:持仓 symbol 的 SL/TP algo 均存在(引擎职责,
+3. 撤单(cancel_algo_order);证据记录挂撤往返
+4. 判定(Ruling-11):demo-fapi 的 algo 列表接口不实时,spec 的"查询出现/
+   消失"断言物理不可行 → 挂撤往返闭合为主判:create 成功(响应含 algoId)
+   + cancel 成功(响应 ok)= PASS;appeared/gone 查询结果降级为辅助证据
+   (仍记录,不 gate;appeared=true 记加强证据);撤单失败 → FAIL
+   (ALGO_CANCEL_FAILED);create 失败 → FAIL(原样)
+5. 若账户有真实持仓,额外断言:持仓 symbol 的 SL/TP algo 均存在(引擎职责,
    只读验证)+ 孤儿判定纯函数与交易所事实对拍;孤儿单(空账户下的任何
    open algo)判引擎缺陷 FAIL
 
@@ -251,6 +256,7 @@ class NativeProtectionScenario(ScenarioBase):
                 raise RuntimeError(f"create_algo_order 响应缺少 algoId: {str(created)[:200]}")
             steps.append({"action": "algo_created", "algo_id": algo_id, "algo_status": created.get("algoStatus")})
             cancelled = False
+            cancel_failed_reason: str | None = None
             try:
                 # 挂单后可见性短轮询:algo 挂单传播有延迟,单次查询 lag 不判失败;
                 # ≤5s、间隔 1s 内出现在 open_algos 即 appeared=True,超时才 False
@@ -284,11 +290,15 @@ class NativeProtectionScenario(ScenarioBase):
                         }
                     )
                 logger.info("native_protection: cancel_algo_order %s %s %s", algo_id, qty, ctx.symbol)
-                cancelled_res = await self._cancel_algo_order(ctx.symbol, algo_id)
-                cancelled = True
-                steps.append(
-                    {"action": "algo_cancelled", "algo_id": algo_id, "status": cancelled_res.get("algoStatus")}
-                )
+                try:
+                    cancelled_res = await self._cancel_algo_order(ctx.symbol, algo_id)
+                    cancelled = True
+                    steps.append(
+                        {"action": "algo_cancelled", "algo_id": algo_id, "status": cancelled_res.get("algoStatus")}
+                    )
+                except Exception as exc:
+                    cancel_failed_reason = str(exc)[:300]
+                    steps.append({"action": "algo_cancel_failed", "algo_id": algo_id, "error": cancel_failed_reason})
                 after_algos = await self._get_open_algo_orders()
                 gone = not any(_algo_id_of(a) == algo_id for a in after_algos)
                 steps.append({"action": "algo_gone_after_cancel", "algo_id": algo_id, "gone": gone})
@@ -301,7 +311,30 @@ class NativeProtectionScenario(ScenarioBase):
                     except Exception as exc:
                         steps.append({"action": "cleanup_cancel_algo", "ok": False, "error": str(exc)[:200]})
 
-            # 3. 孤儿判定纯函数与交易所事实对拍 + 持仓保护覆盖(引擎职责,只读验证)
+            # 4. 判定(Ruling-11):demo-fapi 的 algo 列表接口不实时,spec 的
+            # "查询出现/消失"断言物理不可行 → 挂撤往返闭合为主判:create 成功
+            # (响应含 algoId)+ cancel 成功(响应 ok)= PASS;appeared/gone 降级
+            # 为辅助证据(仍记录,不 gate;appeared=true 记加强证据)。撤单失败
+            # → FAIL(ALGO_CANCEL_FAILED);create 失败 → FAIL(原样,异常自捕获)。
+            if cancel_failed_reason is not None:
+                return self._fail(
+                    ScenarioStatus.FAIL,
+                    "ALGO_CANCEL_FAILED",
+                    f"algo 撤单失败,挂撤往返未闭合: {cancel_failed_reason}",
+                    {"steps": steps},
+                )
+            if appeared:
+                steps.append(
+                    {
+                        "action": "appeared_confirmed",
+                        "algo_id": algo_id,
+                        "note": "轮询窗口内出现在 open 列表,往返闭合加强证据",
+                    }
+                )
+            # 5. 主判通过后(先往返闭合,再覆盖/孤儿):孤儿判定纯函数与交易所
+            # 事实对拍 + 持仓保护覆盖(引擎职责,只读验证;仅当有持仓时)。
+            # 认证轮 #2 的 coverage missing 由 partial_fill 残留持仓引起,
+            # Fix 1 平仓后不再出现该持仓,覆盖断言自然不再触发。
             final_open = await self._get_open_algo_orders()
             orphans = algo_orphan_verdict(final_open, position_symbols)
             steps.append(
@@ -323,13 +356,6 @@ class NativeProtectionScenario(ScenarioBase):
                         "position_symbols": sorted(position_symbols),
                         "missing": missing_coverage,
                     }
-                )
-            if not appeared or not gone:
-                return self._fail(
-                    ScenarioStatus.FAIL,
-                    "ALGO_ROUNDTRIP_FAILED",
-                    f"挂撤往返未闭合: appeared={appeared} gone={gone}",
-                    {"steps": steps},
                 )
             if missing_coverage:
                 return self._fail(
@@ -356,6 +382,9 @@ class NativeProtectionScenario(ScenarioBase):
                     "quantity": qty,
                     "position_symbols": sorted(position_symbols),
                     "notional_usdt": 0.0,
+                    "appeared": appeared,
+                    "gone": gone,
+                    "roundtrip": {"create_ok": True, "cancel_ok": True},
                 },
                 time.monotonic() - started,
             )

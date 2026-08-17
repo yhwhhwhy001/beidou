@@ -234,6 +234,8 @@ def test_native_protection_roundtrip_pass(tmp_path: Path) -> None:
     assert evidence["verdict"] == "native_protection_roundtrip_ok"
     assert evidence["notional_usdt"] == 0.0
     assert evidence["algo_id"] == 9001
+    assert evidence["appeared"] is True and evidence["gone"] is True
+    assert evidence["roundtrip"] == {"create_ok": True, "cancel_ok": True}
     steps = evidence["steps"]
 
     snapshot = next(s for s in steps if s.get("action") == "account_snapshot")
@@ -249,6 +251,8 @@ def test_native_protection_roundtrip_pass(tmp_path: Path) -> None:
     assert cancelled["algo_id"] == 9001 and cancelled["status"] == "CANCELLED"
     gone = next(s for s in steps if s.get("action") == "algo_gone_after_cancel")
     assert gone["gone"] is True
+    appeared_bonus = next(s for s in steps if s.get("action") == "appeared_confirmed")
+    assert appeared_bonus["algo_id"] == 9001  # appeared=true 加强证据加分项
     orphan = next(s for s in steps if s.get("action") == "orphan_verdict")
     assert orphan["orphan_count"] == 0 and orphan["orphans"] == []
     # 恰好一次撤单(非重复),无残留
@@ -348,25 +352,35 @@ def test_native_protection_delayed_appearance_polls_pass(tmp_path: Path) -> None
     assert exchange.cancelled == [("BTCUSDT", 9001)]
 
 
-# ---- native_protection 挂撤往返断裂(幽灵 ACK)→ FAIL ----
+# ---- native_protection 幽灵 ACK:appeared=false 但 create+cancel 成功 → PASS ----
+# (Ruling-11:demo-fapi 的 algo 列表接口不实时,spec 的"查询出现/消失"断言
+# 物理不可行 → 挂撤往返闭合为主判:create 成功 + cancel 成功即 PASS)
 
 
-def test_native_protection_roundtrip_appearance_fail(tmp_path: Path) -> None:
-    # create 返回 algoId 但 open 列表在 5s 轮询窗口内始终未出现 → 撤单仍执行,
-    # 最终 FAIL(轮询窗口跑满 6 次,假时钟推进 5s)
+def test_native_protection_ghost_ack_create_cancel_roundtrip_pass(tmp_path: Path) -> None:
+    # create 返回 algoId 但 open 列表在 5s 轮询窗口内始终未出现(幽灵 ACK);
+    # 撤单成功 → 往返闭合 PASS;appeared/gone 降级为辅助证据不 gate
     clock = _FakeClock()
     exchange = _FakeAlgoExchange(open_algos=[], next_algo_id=6001, create_registers=False)
     scenario = _np_scenario(exchange, clock)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
-    assert result.status == ScenarioStatus.FAIL
-    assert result.error_type == "ALGO_ROUNDTRIP_FAILED"
-    steps = result.evidence["steps"]
+    assert result.status == ScenarioStatus.PASS
+    evidence = result.evidence
+    assert evidence["verdict"] == "native_protection_roundtrip_ok"
+    assert evidence["appeared"] is False  # 辅助证据:未出现不判失败
+    assert evidence["roundtrip"] == {"create_ok": True, "cancel_ok": True}
+    steps = evidence["steps"]
     appears = next(s for s in steps if s.get("action") == "algo_appears_in_open")
     assert appears["appeared"] is False
     assert appears["polls"] == 6  # t=0..5 共 6 次轮询
     assert appears["poll_window_seconds"] == pytest.approx(5.0)
     warning = next(s for s in steps if s.get("action") == "algo_appearance_warning")
     assert warning is not None
+    cancelled = next(s for s in steps if s.get("action") == "algo_cancelled")
+    assert cancelled["algo_id"] == 6001 and cancelled["status"] == "CANCELLED"
+    gone = next(s for s in steps if s.get("action") == "algo_gone_after_cancel")
+    assert gone["gone"] is True
+    assert not any(s.get("action") == "appeared_confirmed" for s in steps)  # 未出现无加分项
     # 撤单仍执行,不残留
     assert exchange.cancelled == [("BTCUSDT", 6001)]
 
@@ -375,6 +389,7 @@ def test_native_protection_roundtrip_appearance_fail(tmp_path: Path) -> None:
 
 
 def test_native_protection_cancel_failure_cleanup_then_fail(tmp_path: Path) -> None:
+    # 撤单失败 → FAIL(ALGO_CANCEL_FAILED):主判"挂撤往返闭合"要求 cancel 成功
     exchange = _FakeAlgoExchange(open_algos=[], next_algo_id=6001)
     real_cancel = exchange.cancel_algo_order
     calls = {"n": 0}
@@ -395,9 +410,11 @@ def test_native_protection_cancel_failure_cleanup_then_fail(tmp_path: Path) -> N
     )
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
     assert result.status == ScenarioStatus.FAIL
-    assert result.error_type == "RuntimeError"
+    assert result.error_type == "ALGO_CANCEL_FAILED"
     assert "cancel boom" in result.error_message
     steps = result.evidence["steps"]
+    failed = next(s for s in steps if s.get("action") == "algo_cancel_failed")
+    assert failed["algo_id"] == 6001 and "cancel boom" in failed["error"]
     cleanup = next(s for s in steps if s.get("action") == "cleanup_cancel_algo")
     assert cleanup["ok"] is True
     # 清理撤单成功,无残留

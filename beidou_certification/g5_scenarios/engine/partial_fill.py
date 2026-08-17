@@ -11,6 +11,15 @@ notional = 量×价格,超限改用"最小过门槛量"(stepSize 对齐的最小
 qty×price ≥ testnet MIN_NOTIONAL=50,量小通常全成交 → NOT_VERIFIABLE),
 兜底仍超限 → NotionalExceededError 交 runner fail-fast。dry_run 早退不碰
 任何接口;run() 自捕获异常返回 FAIL。
+
+成交后平仓清理(认证轮 #2 根因:partial_fill 全成交留下 0.0022 BTC 持仓 →
+引擎对账 MISMATCHED → trading_ready=False → 后续场景 NOT_VERIFIABLE):
+一旦观察到 PARTIALLY_FILLED 或 FILLED 即存在真实持仓,必须反向市价单平仓
+(side 反转、quantity=executedQty、reduceOnly=true 防开新仓;平仓价优先取
+响应 avgPrice,缺失回退入场价;notional 记账平仓单金额),任何路径不得带
+持仓离开场景 —— 平仓置于 try/except/finally 结构保证(含 NOT_VERIFIABLE
+与异常路径):平仓失败 → close_failed 证据 + FAIL(持仓污染后续场景不可
+接受)。部分成交路径保留现有 PASS 目标:平掉已成交部分,余量撤单。
 """
 
 from __future__ import annotations
@@ -82,6 +91,13 @@ class PartialFillScenario(ScenarioBase):
         cancelled = False
         observed = "NEW"
         client: Any = None
+        # 平仓清理状态(认证轮 #2 根因防护):last_executed_qty 记录最近轮询
+        # 成交量为 0 即无持仓;close_attempted 标记分支平仓已执行(成功或失败),
+        # 供 finally 兜底判断;entry_price/close_side 供异常路径反向下单。
+        last_executed_qty: Decimal = Decimal("0")
+        close_attempted = False
+        entry_price: Decimal = Decimal("0")
+        close_side = "SELL"
         try:
             ctx.ledger.record(self.scenario_id, 0.0)
             if ctx.dry_run:
@@ -114,6 +130,7 @@ class PartialFillScenario(ScenarioBase):
             if not asks:
                 return self._not_verifiable_liquidity(steps)
             ask_price = Decimal(str(asks[0][0]))
+            entry_price = ask_price
             ask_qty = Decimal(str(asks[0][1]))
             if ask_qty <= min_qty * _LIQUIDITY_GATE_MULTIPLE:
                 return self._not_verifiable_liquidity(steps)
@@ -162,6 +179,8 @@ class PartialFillScenario(ScenarioBase):
                 "create_order",
             )
             order_id = int(order["orderId"])
+            entry_side = str(order.get("side", "BUY")).upper()
+            close_side = "SELL" if entry_side == "BUY" else "BUY"
             steps.append(
                 {
                     "action": "place_order",
@@ -177,6 +196,7 @@ class PartialFillScenario(ScenarioBase):
                 await asyncio.sleep(_POLL_INTERVAL_SECONDS)
                 queried = _require_ok(await client.get_order(ctx.symbol, order_id), "get_order")
                 observed = str(queried.get("status", "NEW"))
+                last_executed_qty = Decimal(str(queried.get("executedQty", "0") or "0"))
                 steps.append(
                     {
                         "action": "poll",
@@ -225,6 +245,43 @@ class PartialFillScenario(ScenarioBase):
                 final = _require_ok(await client.get_order(ctx.symbol, order_id), "get_order_after_cancel")
                 final_status = str(final.get("status", ""))
                 steps.append({"action": "query_after_cancel", "status": final_status})
+                # 平掉已成交部分(持仓量小但同样污染后续场景;余量已撤单,防
+                # 撤单前平仓导致余量再成交重新开仓)。平仓失败 → close_failed
+                # 证据 + FAIL(持仓残留不可接受)。
+                close_notional: float | None = None
+                if last_executed_qty > 0:
+                    try:
+                        close_notional = await self._close_position(
+                            ctx,
+                            steps,
+                            symbol=ctx.symbol,
+                            close_side=close_side,
+                            close_qty=last_executed_qty,
+                            fallback_price=entry_price,
+                        )
+                    except Exception as exc:
+                        steps.append(
+                            {
+                                "action": "close_failed",
+                                "side": close_side,
+                                "qty": _format_qty(last_executed_qty),
+                                "error": str(exc)[:300],
+                            }
+                        )
+                        return self._fail(
+                            ScenarioStatus.FAIL,
+                            "CLOSE_FAILED",
+                            f"PARTIALLY_FILLED 后平仓失败(持仓残留会污染后续场景): {exc}",
+                            {
+                                "steps": steps,
+                                "partial_status": "PARTIALLY_FILLED",
+                                "final_status_after_cancel": final_status,
+                                "notional_usdt": notional,
+                                "closed": False,
+                            },
+                        )
+                    finally:
+                        close_attempted = True
                 ok = final_status == "CANCELED"
                 return ScenarioResult(
                     self.scenario_id,
@@ -235,13 +292,56 @@ class PartialFillScenario(ScenarioBase):
                         "final_status_after_cancel": final_status,
                         "notional_usdt": notional,
                         "monotonic_guard_source": source,
+                        "close_notional_usdt": close_notional,
+                        "closed": True,
                     },
                     time.monotonic() - started,
                     error_type="" if ok else "UNEXPECTED_FINAL_STATUS",
                 )
             if observed == "FILLED":
-                # 全成交:盘口太薄,无法观察到部分成交
-                return self._not_verifiable_liquidity(steps, notional_usdt=notional)
+                # 全成交:盘口太薄,无法观察到部分成交;但成交产生真实持仓 →
+                # 反向市价单平仓清理,防持仓污染后续场景(认证轮 #2 根因)。
+                # 平仓成功 → 维持 NOT_VERIFIABLE(仍未观察到部分成交);平仓
+                # 失败 → close_failed 证据 + FAIL(持仓残留不可接受)。
+                filled_close_notional: float | None = None
+                if last_executed_qty > 0:
+                    try:
+                        filled_close_notional = await self._close_position(
+                            ctx,
+                            steps,
+                            symbol=ctx.symbol,
+                            close_side=close_side,
+                            close_qty=last_executed_qty,
+                            fallback_price=entry_price,
+                        )
+                    except Exception as exc:
+                        steps.append(
+                            {
+                                "action": "close_failed",
+                                "side": close_side,
+                                "qty": _format_qty(last_executed_qty),
+                                "error": str(exc)[:300],
+                            }
+                        )
+                        return self._fail(
+                            ScenarioStatus.FAIL,
+                            "CLOSE_FAILED",
+                            f"FILLED 后平仓失败(持仓残留会污染后续场景): {exc}",
+                            {"steps": steps, "notional_usdt": notional, "closed": False},
+                        )
+                    finally:
+                        close_attempted = True
+                return self._fail(
+                    ScenarioStatus.NOT_VERIFIABLE,
+                    "LIQUIDITY_INSUFFICIENT_OR_TOO_DEEP",
+                    _NOT_VERIFIABLE_REASON,
+                    {
+                        "steps": steps,
+                        "notional_usdt": notional,
+                        "close_notional_usdt": filled_close_notional,
+                        "closed": True,
+                    },
+                )
             if observed in {"CANCELED", "EXPIRED", "REJECTED"}:
                 return self._not_verifiable_terminal(steps, notional_usdt=notional)
             # 窗口结束仍 NEW:盘口过深/价位移动,未观察到成交
@@ -269,6 +369,33 @@ class PartialFillScenario(ScenarioBase):
                         )
                     except Exception as exc:
                         steps.append({"action": "cleanup_cancel", "ok": False, "error": str(exc)[:200]})
+            # 持仓清理保证(认证轮 #2 根因):只要观察到成交(部分/全部)就存在
+            # 真实持仓,且分支平仓未执行(守卫断言/撤单/查询异常等提前出口)→
+            # 兜底平仓;此路径结果已是 FAIL/异常,平仓失败仅记录 close_failed
+            # (不能再升级状态,但绝不静默带持仓离开场景)。
+            if observed in {"PARTIALLY_FILLED", "FILLED"} and last_executed_qty > 0 and not close_attempted:
+                try:
+                    logger.info(
+                        "close_position %s %s %s (cleanup)", close_side, _format_qty(last_executed_qty), ctx.symbol
+                    )
+                    await self._close_position(
+                        ctx,
+                        steps,
+                        symbol=ctx.symbol,
+                        close_side=close_side,
+                        close_qty=last_executed_qty,
+                        fallback_price=entry_price,
+                    )
+                except Exception as exc:
+                    steps.append(
+                        {
+                            "action": "close_failed",
+                            "side": close_side,
+                            "qty": _format_qty(last_executed_qty),
+                            "error": str(exc)[:300],
+                            "phase": "cleanup",
+                        }
+                    )
 
     def _not_verifiable_liquidity(self, steps: list[dict[str, Any]], *, notional_usdt: float = 0.0) -> ScenarioResult:
         """流动性不足/盘口过深/全成交 → 无法验证部分成交语义。"""
@@ -287,6 +414,56 @@ class PartialFillScenario(ScenarioBase):
             "unexpected_terminal_without_partial_fill",
             {"steps": steps, "notional_usdt": notional_usdt},
         )
+
+    async def _close_position(
+        self,
+        ctx: ScenarioContext,
+        steps: list[dict[str, Any]],
+        *,
+        symbol: str,
+        close_side: str,
+        close_qty: Decimal,
+        fallback_price: Decimal,
+    ) -> float:
+        """反向市价单平仓已成交持仓,返回平仓单 notional(USDT)。
+
+        side 反转入场方向,reduceOnly=true 防开新仓(平仓方向判断错误也不开
+        新仓);平仓价优先取响应 avgPrice(市价单真实成交价),缺失回退入场价;
+        平仓单金额 qty×price 记入 ledger。创建失败(Result 错误或异常)抛出,
+        调用方记录 close_failed 并 FAIL —— 持仓污染后续场景不可接受
+        (认证轮 #2 根因:partial_fill 全成交留下持仓 → 引擎对账 MISMATCHED)。
+        """
+        client = ctx.client
+        assert client is not None
+        created = _require_ok(
+            await client.create_order(
+                symbol,
+                close_side,
+                "MARKET",
+                _format_qty(close_qty),
+                reduce_only="true",
+                client_order_id=f"g5-pfill-close-{int(time.time() * 1000)}",
+            ),
+            "close_position_market_order",
+        )
+        avg_price = created.get("avgPrice")
+        price = Decimal(str(avg_price)) if avg_price is not None else fallback_price
+        close_notional = float(close_qty * price)
+        ctx.ledger.record(self.scenario_id, close_notional)
+        steps.append(
+            {
+                "action": "close",
+                "side": close_side,
+                "qty": _format_qty(close_qty),
+                "price": str(price),
+                "price_source": "avg_price" if avg_price is not None else "entry_price",
+                "notional_usdt": close_notional,
+                "order_id": int(created.get("orderId", 0)),
+                "status": created.get("status"),
+                "executed_qty": str(created.get("executedQty", "")),
+            }
+        )
+        return close_notional
 
 
 SCENARIO_REGISTRY[PartialFillScenario.scenario_id] = PartialFillScenario

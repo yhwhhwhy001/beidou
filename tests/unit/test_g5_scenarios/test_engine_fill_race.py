@@ -96,7 +96,12 @@ _DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["0.49", "5"]], "a
 
 
 class _FakeClient:
-    """partial_fill 用假交易所客户端:深度/轮询状态序列/撤单结果可编程。"""
+    """partial_fill 用假交易所客户端:深度/轮询状态序列/撤单结果可编程。
+
+    MARKET 单(平仓)记录进 close_orders 并带 avgPrice(平仓 notional 记账
+    用);FILLED 轮询的 executedQty = 下单量(全成交);fail_close 模拟平仓
+    单创建失败。
+    """
 
     def __init__(
         self,
@@ -105,15 +110,19 @@ class _FakeClient:
         depth: dict[str, Any] | None = None,
         order_statuses: list[str] | None = None,
         cancel_status: str = "CANCELED",
+        close_avg_price: str = "0.50",
     ) -> None:
         self.exchange_info = exchange_info or _EXCHANGE_INFO
         self.depth = depth or _DEPTH_DEFAULT
         self.statuses = list(order_statuses or ["PARTIALLY_FILLED"])
         self.cancel_status = cancel_status
+        self.close_avg_price = close_avg_price
         self.placed: list[dict[str, Any]] = []
+        self.close_orders: list[dict[str, Any]] = []
         self.cancelled: list[int] = []
         self.queries: list[str] = []
         self.fail_create = False
+        self.fail_close = False
 
     async def get_exchange_info(self, symbol: str) -> Result[dict]:
         return Result.success(self.exchange_info)
@@ -135,29 +144,37 @@ class _FakeClient:
         if self.fail_create:
             raise AssertionError("流动性不足时不得下单")
         order_id = len(self.placed) + 1
-        self.placed.append(
-            {
-                "orderId": order_id,
-                "symbol": symbol,
-                "side": side,
-                "type": order_type,
-                "quantity": quantity,
-                "price": price,
-                "timeInForce": time_in_force,
-                "clientOrderId": client_order_id,
-                "status": "NEW",
-            }
-        )
-        return Result.success(self.placed[-1])
+        record: dict[str, Any] = {
+            "orderId": order_id,
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": quantity,
+            "price": price,
+            "timeInForce": time_in_force,
+            "reduceOnly": reduce_only,
+            "clientOrderId": client_order_id,
+            "status": "NEW",
+        }
+        if order_type == "MARKET":
+            if self.fail_close:
+                raise RuntimeError("close boom")
+            record["status"] = "FILLED"
+            record["avgPrice"] = self.close_avg_price
+            record["executedQty"] = quantity
+            self.close_orders.append(record)
+        self.placed.append(record)
+        return Result.success(record)
 
     async def get_order(self, symbol: str, order_id: int) -> Result[dict]:
         self.queries.append(str(order_id))
         status = self.statuses[0] if len(self.statuses) > 1 else self.statuses[-1]
         if len(self.statuses) > 1:
             self.statuses.pop(0)
-        executed = {"PARTIALLY_FILLED": "10", "CANCELED": "10", "FILLED": "15", "NEW": "0"}.get(status, "0")
+        placed_qty = self.placed[-1]["quantity"] if self.placed else "15"
+        executed = {"PARTIALLY_FILLED": "10", "CANCELED": "10", "FILLED": placed_qty, "NEW": "0"}.get(status, "0")
         return Result.success(
-            {"orderId": order_id, "symbol": symbol, "status": status, "executedQty": executed, "origQty": "15"}
+            {"orderId": order_id, "symbol": symbol, "status": status, "executedQty": executed, "origQty": placed_qty}
         )
 
     async def cancel_order(self, symbol: str, order_id: int) -> Result[dict]:
@@ -229,11 +246,17 @@ def test_partial_fill_notional_fallback_uses_min_gate_quantity(tmp_path: Path) -
     result = asyncio.run(PartialFillScenario().run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE  # 全 FILLED → 无法验证部分成交
     assert fake.placed and fake.placed[0]["quantity"] == "100"
-    assert ctx.ledger.total == pytest.approx(100 * 0.50)  # 过门槛量 × 价格
+    assert ctx.ledger.total == pytest.approx(100 * 0.50 + 100 * 0.50)  # 入场 + 平仓单金额
     assert result.evidence["notional_usdt"] == pytest.approx(50.0)
     fallback = next(s for s in result.evidence["steps"] if s.get("action") == "notional_fallback")
     assert fallback["fallback_qty"] == "100"
     assert fallback["fallback_notional_usdt"] == pytest.approx(50.0)
+    # 全成交产生真实持仓 → 反向市价单平仓清理(认证轮 #2 根因)
+    close_step = next(s for s in result.evidence["steps"] if s.get("action") == "close")
+    assert close_step["side"] == "SELL" and close_step["qty"] == "100"
+    assert close_step["price"] == "0.50" and close_step["price_source"] == "avg_price"
+    assert result.evidence["closed"] is True
+    assert result.evidence["close_notional_usdt"] == pytest.approx(50.0)
 
 
 def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
@@ -267,7 +290,17 @@ def test_partial_fill_full_fill_not_verifiable(tmp_path: Path) -> None:
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     assert fake.cancelled == []  # 全成交,无需撤单清理
-    assert ctx.ledger.total == pytest.approx(15 * 0.50)
+    # 全成交产生真实持仓 → 反向市价单平仓(防污染后续场景,认证轮 #2 根因)
+    assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
+    assert fake.close_orders[0]["quantity"] == "15"
+    assert fake.close_orders[0]["type"] == "MARKET"
+    assert fake.close_orders[0]["reduceOnly"] == "true"
+    close_step = next(s for s in result.evidence["steps"] if s.get("action") == "close")
+    assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
+    assert close_step["executed_qty"] == "15"
+    assert result.evidence["closed"] is True
+    assert result.evidence["close_notional_usdt"] == pytest.approx(15 * 0.50)
+    assert ctx.ledger.total == pytest.approx(15 * 0.50 + 15 * 0.50)  # 入场 + 平仓单金额
 
 
 def test_partial_fill_stays_new_not_verifiable(tmp_path: Path, monkeypatch: Any) -> None:
@@ -293,8 +326,19 @@ def test_partial_fill_happy_path(tmp_path: Path) -> None:
     assert evidence["partial_status"] == "PARTIALLY_FILLED"
     assert fake.placed and fake.placed[0]["price"] == "0.50"  # 价格 = 最优 ask
     assert fake.placed[0]["quantity"] == "15"  # ask 深度 10 × 1.5
-    assert fake.cancelled == [1]
-    assert ctx.ledger.total == pytest.approx(15 * 0.50)
+    assert fake.cancelled == [1]  # 余量撤单
+    # 平掉已成交部分(10),防持仓污染后续场景;反向市价单 + reduceOnly
+    assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
+    assert fake.close_orders[0]["quantity"] == "10"
+    assert fake.close_orders[0]["type"] == "MARKET"
+    assert fake.close_orders[0]["reduceOnly"] == "true"
+    close_step = next(s for s in evidence["steps"] if s.get("action") == "close")
+    assert close_step["side"] == "SELL" and close_step["qty"] == "10"
+    assert close_step["price"] == "0.50" and close_step["price_source"] == "avg_price"
+    assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
+    assert evidence["closed"] is True
+    assert evidence["close_notional_usdt"] == pytest.approx(10 * 0.50)
+    assert ctx.ledger.total == pytest.approx(15 * 0.50 + 10 * 0.50)  # 入场 + 平仓单金额
     # 组件级守卫断言(纯函数)与引擎守卫源码证据
     guard_steps = [s for s in evidence["steps"] if s.get("action") == "guard_component_assert"]
     assert guard_steps and guard_steps[0]["ok"] is True
@@ -307,6 +351,57 @@ def test_partial_fill_happy_path(tmp_path: Path) -> None:
         assert "PARTIALLY_FILLED" in entry["rule_text"]
         assert "NEW" in entry["rule_text"]
     assert evidence["final_status_after_cancel"] == "CANCELED"
+
+
+# ---- partial_fill: 平仓失败 → close_failed + FAIL(持仓污染不可接受) ----
+
+
+def test_partial_fill_close_failure_fails(tmp_path: Path) -> None:
+    # FILLED 后反向市价平仓单创建失败 → FAIL(CLOSE_FAILED),绝不允许带持仓
+    # 离开场景污染后续场景(认证轮 #2 根因)
+    fake = _FakeClient(order_statuses=["FILLED"])
+    fake.fail_close = True
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario().run(ctx))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "CLOSE_FAILED"
+    assert "close boom" in result.error_message
+    assert result.evidence["closed"] is False
+    close_failed = next(s for s in result.evidence["steps"] if s.get("action") == "close_failed")
+    assert close_failed["side"] == "SELL" and close_failed["qty"] == "15"
+    assert "close boom" in close_failed["error"]
+    assert fake.cancelled == []  # 全成交无需撤单
+
+
+# ---- partial_fill: 成交后异常路径仍平仓(finally 兜底保证) ----
+
+
+def test_partial_fill_exception_after_fill_still_closes(tmp_path: Path) -> None:
+    # PARTIALLY_FILLED 后撤单抛异常 → FAIL(异常自捕获);finally 先重试撤单
+    # 再兜底平仓已成交部分 —— 任何路径不得带持仓离开场景
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "CANCELED"])
+    real_cancel = fake.cancel_order
+    calls = {"n": 0}
+
+    async def flaky_cancel(symbol: str, order_id: int) -> Result[dict]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("cancel boom")
+        return await real_cancel(symbol, order_id)
+
+    fake.cancel_order = flaky_cancel  # type: ignore[method-assign]
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario().run(ctx))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "RuntimeError"
+    assert "cancel boom" in result.error_message
+    steps = result.evidence["steps"]
+    # finally 兜底平仓执行(异常路径也不带持仓离开)
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["side"] == "SELL" and close_step["qty"] == "10"
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "10"
+    cleanup = next(s for s in steps if s.get("action") == "cleanup_cancel")
+    assert cleanup["ok"] is True  # 撤单重试成功,无挂单残留
 
 
 # ---- cancel_fill_race: 假连接(模拟 PostgresPersistentStore 的 SQL 面) ----
