@@ -165,6 +165,12 @@ def classify_http_error(http_status: int, response_body: str = "", binance_code:
         return (ErrorCategory.RATE_LIMIT, True)
     if http_status == 418:
         return (ErrorCategory.RATE_LIMIT, True)
+    # 408 是交易所上游超时("Timeout waiting for response from backend
+    # server")—— 瞬时且读取类请求幂等,归类 EXCHANGE_UNAVAILABLE 可安全
+    # 重试。demo-fapi 账户接口成串 408 实测(2026-08-18,>1h),不可重试
+    # 分类让每次失败单发即弃,对账 ONE_SIDE_MISSING 污染快照风控门。
+    if http_status == 408:
+        return (ErrorCategory.EXCHANGE_UNAVAILABLE, True)
     if http_status in (401, 403):
         return (ErrorCategory.AUTH_FAILURE, False)
     if http_status >= 500:

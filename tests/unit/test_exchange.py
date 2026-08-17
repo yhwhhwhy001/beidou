@@ -261,3 +261,28 @@ class TestErrorNormalizer:
         )
         error = ErrorNormalizer.normalize("BYBIT", 10001, "Auth failed")
         assert error.category == ErrorCategory.AUTH_FAILURE
+
+
+class TestClassifyHttpError:
+    """HTTP 状态码分类测试(408 可重试回归)。"""
+
+    def test_408_is_retryable_exchange_unavailable(self) -> None:
+        from beidou_exchange.core.error_taxonomy import classify_http_error
+
+        category, retryable = classify_http_error(408, "", 0)
+        assert category == ErrorCategory.EXCHANGE_UNAVAILABLE
+        assert retryable is True
+
+    def test_5xx_still_retryable(self) -> None:
+        from beidou_exchange.core.error_taxonomy import classify_http_error
+
+        category, retryable = classify_http_error(504, "", 0)
+        assert category == ErrorCategory.EXCHANGE_UNAVAILABLE
+        assert retryable is True
+
+    def test_401_never_retryable(self) -> None:
+        from beidou_exchange.core.error_taxonomy import classify_http_error
+
+        category, retryable = classify_http_error(401, "", 0)
+        assert category == ErrorCategory.AUTH_FAILURE
+        assert retryable is False
