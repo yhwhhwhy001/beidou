@@ -1,19 +1,20 @@
-"""partial_fill: 浅盘口品种自适应 LIMIT 下单 → 确定性 PARTIALLY_FILLED 守卫断言。
+"""partial_fill: 动态扫描浅盘口品种 → LIMIT 下单 → 确定性 PARTIALLY_FILLED 守卫断言。
 
-Ruling-15(认证轮 #6 证据:iceberg 在 testnet 不切片,0.5s 全成 → NOT_VERIFIABLE;
-clock_skew 全成双倍记账 317 吃光预算 → NOTIONAL_EXCEEDED):删除 iceberg 下单
-路径(rest_client 的 iceberg_qty 参数保留,公共 API 不删),改为品种自适应
-浅盘口方案 —— 实测 INJUSDT 盘口恒定(top_ask=2.1,二档=35.9,36s 观察不变,
-做市盘;stepSize=0.1,price≈4.156):min_gate_qty = ceil(50/price/step)×step
-= 12.1(notional 50.3),下单 12.1 限价 best_ask → 必然成交 2.1、余 10.0 挂盘
-→ 确定性 PARTIALLY_FILLED。候选列表 _CANDIDATE_SYMBOLS(partial_fill 独立于
---symbol 运行,控制器裁决的 plan 偏离,场景语义不变)逐个探测 depth,选第一个
-满足 top_ask_qty>0 且 top_ask_qty×3 < min_gate_qty(该品种)的品种(浅盘口
-判定,×3 隐藏量容差保证部分成交);全不满足 → NOT_VERIFIABLE
-("liquidity_insufficient_or_too_deep")。下单:LIMIT,qty=min_gate_qty(该品种
-动态计算、stepSize 对齐),price=best_ask,GTC,普通限价(不带 iceberg)。
-notional 记账:入场 50.3 + 平仓 50.3 = 100.6;全轮 100.6+171 ≈ 272 ≤ cap 400
-(clock_skew 的 NOTIONAL_EXCEEDED 随之消除)。
+Ruling-16(认证轮 #7 证据:INJUSDT 盘口从实测 2.1 变为 132778.9,testnet 做市
+盘全局动态摆动,固定候选列表失效):动态扫描替代固定候选 ——
+get_exchange_info() 全量取 status=TRADING 且以 USDT 结尾的品种(rest_client
+的 iceberg_qty 参数保留,公共 API 不删;partial_fill 独立于 --symbol 运行,
+控制器裁决的 plan 偏离,场景语义不变),按 best_ask(探测价)过滤
+price ∈ [0.05, 100](min_gate 对齐粒度合理),seed 用场景启动时 injected now
+整数部分随机采样最多 30 个(可复现),逐个探测 depth,选第一个满足
+top_ask_qty>0 且 top_ask_qty×3 < min_gate_qty(该品种,min_gate 用全量
+exchangeInfo 的 minQty/step + best_ask 计算,无需 ticker 调用)的品种
+(浅盘口判定,×3 隐藏量容差保证部分成交);全 miss 后 sleep 10s 再扫一轮
+(每轮重新随机采样),最多 3 轮;仍全 miss → NOT_VERIFIABLE
+("liquidity_insufficient_or_too_deep",证据记每轮采样数与 miss 数)。
+下单:LIMIT,qty=min_gate_qty(该品种动态计算、stepSize 对齐),price=best_ask,
+GTC,普通限价(不带 iceberg)。notional 记账:入场 50.3 + 平仓 50.3 = 100.6;
+全轮 100.6+171 ≈ 272 ≤ cap 400。
 轮询:下单后首查 0.5s、之后 1s 间隔、30 次 ≈ 30s 窗口(余量挂单在盘口,市场
 扫单可能 1-2s 内全成,首查要快);PARTIALLY_FILLED → 组件级守卫断言
 (terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
@@ -38,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from decimal import Decimal
 from typing import Any, Awaitable, Callable, TypeVar
@@ -64,11 +66,17 @@ T = TypeVar("T")
 _POLL_INTERVAL_SECONDS = 1.0  # 首查后 1s 间隔轮询
 _FIRST_POLL_DELAY_SECONDS = 0.5  # 下单后首查 0.5s(余量挂单在盘口,市场扫单可能 1-2s 内全成)
 _MAX_POLLS = 30  # 0.5s + 29×1s ≈ 30s 轮询窗口
-# Ruling-15:浅盘口品种自适应 —— 候选测试网做市品种(partial_fill 独立于
-# --symbol 运行,控制器裁决的 plan 偏离,场景语义不变);INJUSDT 实测盘口恒定
-# (top_ask=2.1,二档=35.9,36s 观察不变,做市盘;stepSize=0.1,price≈4.156,
-# min_gate_qty=12.1 → 下单 12.1 必然成交 2.1、余 10.0 挂盘 → 确定性部分成交)。
-_CANDIDATE_SYMBOLS = ("INJUSDT", "BTCUSDT")
+# Ruling-16:动态扫描浅盘口品种(partial_fill 独立于 --symbol 运行,控制器裁决
+# 的 plan 偏离,场景语义不变)。认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9
+# (testnet 做市盘全局动态摆动),固定候选列表失效 → 从全量 exchangeInfo 取
+# status=TRADING 且 USDT 结尾品种,best_ask ∈ [0.05, 100] 过滤(min_gate 对齐
+# 粒度合理),seed 用场景启动时 injected now 整数部分随机采样最多 30 个
+# (可复现),逐品种探测 depth;全 miss 后 sleep 10s 再扫一轮,最多 3 轮。
+_SCAN_ROUNDS = 3  # 最多 3 轮扫描(轮间 sleep 10s,总等待 ≤20s < 60s 上限)
+_SCAN_SAMPLE_SIZE = 30  # 每轮随机采样品种数上限
+_SCAN_RETRY_INTERVAL_SECONDS = 10.0  # 全 miss 后重扫间隔(注入睡眠 seam)
+_PRICE_FILTER_MIN = Decimal("0.05")  # 候选价格下界(min_gate 对齐粒度)
+_PRICE_FILTER_MAX = Decimal("100")  # 候选价格上界
 _SHALLOW_MULTIPLE = Decimal("3")  # 浅盘口判定:top_ask×3 < min_gate_qty(隐藏量容差)
 _NOT_VERIFIABLE_REASON = "liquidity_insufficient_or_too_deep"
 _TERMINAL_NO_CANCEL = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
@@ -145,49 +153,85 @@ class PartialFillScenario(ScenarioBase):
             assert ctx.client is not None
             client = ctx.client
 
-            # ---- 品种自适应浅盘口探测(Ruling-15,fix round 7)----
-            # 认证轮 #6:iceberg 在 testnet 不切片(0.5s 全成)→ 删除 iceberg
-            # 路径(rest_client 的 iceberg_qty 参数保留,公共 API 不删)。实测
-            # INJUSDT 盘口恒定(top_ask=2.1,二档=35.9,36s 观察不变,做市盘;
-            # stepSize=0.1,price≈4.156,min_gate_qty=12.1):下单 12.1 限价
-            # best_ask → 必然成交 2.1、余 10.0 挂盘 → 确定性 PARTIALLY_FILLED。
-            # 候选列表逐个探测 depth,选第一个满足 top_ask_qty>0 且
-            # top_ask_qty×3 < min_gate_qty(该品种)的品种(浅盘口判定,×3 为
-            # 隐藏量容差,保证部分成交);全不满足 → NOT_VERIFIABLE。
+            # ---- 动态扫描浅盘口品种(Ruling-16,fix round 8)----
+            # 认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9,固定候选列表失效
+            # (testnet 做市盘全局动态摆动)→ 动态扫描替代固定候选:
+            # get_exchange_info() 全量取 status=TRADING 且 USDT 结尾品种(缺
+            # LOT_SIZE 的跳过),best_ask ∈ [0.05, 100] 过滤(min_gate 对齐粒度
+            # 合理),seed 用 injected now 整数部分随机采样最多 30 个(可复现),
+            # 逐个探测 depth(谓词:top_ask>0 且 top_ask×3 < min_gate_qty,
+            # min_gate 用全量 exchangeInfo 的 minQty/step + best_ask 计算,
+            # 无需 ticker 调用);全 miss 后 sleep 10s 再扫一轮(每轮重新随机
+            # 采样),最多 3 轮;仍全 miss → NOT_VERIFIABLE(证据记每轮采样数
+            # 与 miss 数)。
+            full_info = _require_ok(await client.get_exchange_info(), "get_exchange_info")
+            lot_sizes: dict[str, tuple[Decimal, Decimal]] = {}
+            for entry in full_info.get("symbols", []):
+                if entry.get("status") != "TRADING" or not str(entry.get("symbol", "")).endswith("USDT"):
+                    continue
+                try:
+                    lot_sizes[str(entry["symbol"])] = _min_qty_and_step(str(entry["symbol"]), full_info)
+                except ValueError:
+                    continue  # 缺 LOT_SIZE 的品种跳过
+            rng = random.Random(int(self._now()))  # noqa: S311 - 候选采样可复现(seed=now),非加密用途
+            candidates = list(lot_sizes)
             entry_price = Decimal("0")
             min_gate_qty = Decimal("0")
             selected_symbol = ""
-            for candidate in _CANDIDATE_SYMBOLS:
-                info = _require_ok(await client.get_exchange_info(candidate), "get_exchange_info")
-                min_qty, step_size = _min_qty_and_step(candidate, info)
-                depth = _require_ok(await client.get_depth(candidate), "get_depth")
-                asks = depth.get("asks") or []
-                bids = depth.get("bids") or []
-                probe: dict[str, Any] = {
-                    "action": "depth_probe",
-                    "symbol": candidate,
-                    "best_ask": str(asks[0][0]) if asks else "",
-                    "top_ask_qty": str(asks[0][1]) if asks else "",
-                    "top_bid": str(bids[0][0]) if bids else "",
+            for round_no in range(1, _SCAN_ROUNDS + 1):
+                sampled = rng.sample(candidates, min(_SCAN_SAMPLE_SIZE, len(candidates)))
+                misses = 0
+                for candidate in sampled:
+                    min_qty, step_size = lot_sizes[candidate]
+                    depth = _require_ok(await client.get_depth(candidate), "get_depth")
+                    asks = depth.get("asks") or []
+                    bids = depth.get("bids") or []
+                    probe: dict[str, Any] = {
+                        "action": "depth_probe",
+                        "symbol": candidate,
+                        "round_no": round_no,
+                        "best_ask": str(asks[0][0]) if asks else "",
+                        "top_ask_qty": str(asks[0][1]) if asks else "",
+                        "top_bid": str(bids[0][0]) if bids else "",
+                    }
+                    if asks:
+                        ask_price = Decimal(str(asks[0][0]))
+                        ask_qty = Decimal(str(asks[0][1]))
+                        candidate_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
+                        probe["min_gate_qty"] = _format_qty(candidate_min_gate)
+                        if not (_PRICE_FILTER_MIN <= ask_price <= _PRICE_FILTER_MAX):
+                            probe["reason"] = "price_out_of_range"
+                        elif ask_qty > 0 and ask_qty * _SHALLOW_MULTIPLE < candidate_min_gate:
+                            selected_symbol = candidate
+                            entry_price = ask_price
+                            min_gate_qty = candidate_min_gate
+                            probe["selected"] = True
+                            steps.append(probe)
+                            break
+                        else:
+                            probe["reason"] = "not_shallow"
+                    else:
+                        probe["reason"] = "no_ask"
+                    misses += 1
+                    steps.append(probe)
+                round_summary: dict[str, Any] = {
+                    "action": "scan_round",
+                    "round_no": round_no,
+                    "samples": len(sampled),
+                    "misses": misses,
+                    "hit": bool(selected_symbol),
                 }
-                if asks:
-                    ask_price = Decimal(str(asks[0][0]))
-                    ask_qty = Decimal(str(asks[0][1]))
-                    candidate_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
-                    probe["min_gate_qty"] = _format_qty(candidate_min_gate)
-                    if ask_qty > 0 and ask_qty * _SHALLOW_MULTIPLE < candidate_min_gate:
-                        selected_symbol = candidate
-                        entry_price = ask_price
-                        min_gate_qty = candidate_min_gate
-                        probe["selected"] = True
-                        steps.append(probe)
-                        break
-                    probe["reason"] = "not_shallow"
-                else:
-                    probe["reason"] = "no_ask"
-                steps.append(probe)
+                steps.append(round_summary)
+                if selected_symbol or round_no == _SCAN_ROUNDS:
+                    break
+                await self._sleep(_SCAN_RETRY_INTERVAL_SECONDS)
             if not selected_symbol:
-                return self._not_verifiable_liquidity(steps)
+                return self._fail(
+                    ScenarioStatus.NOT_VERIFIABLE,
+                    "LIQUIDITY_INSUFFICIENT_OR_TOO_DEEP",
+                    _NOT_VERIFIABLE_REASON,
+                    {"steps": steps, "scan_rounds": [s for s in steps if s.get("action") == "scan_round"]},
+                )
 
             # 下单:LIMIT,qty=min_gate_qty(该品种动态计算、stepSize 对齐),
             # price=best_ask,GTC,普通限价(不带 iceberg);浅盘口判定保证

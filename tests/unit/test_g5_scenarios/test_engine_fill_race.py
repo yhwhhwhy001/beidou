@@ -80,47 +80,60 @@ def _ctx(
     )
 
 
-# Ruling-15 默认 fixture:INJUSDT 浅盘口做市币(认证轮 #6 实测盘口恒定:
-# top_ask=2.1、二档=35.9、stepSize=0.1、price≈4.156)。min_gate_qty =
-# ceil(50/4.156/0.1)×0.1 = 12.1(notional 50.3);浅盘口判定 2.1×3=6.3 < 12.1
-# ✓ 命中 → 下单 12.1 限价 best_ask 必然成交 2.1、余 10.0 挂盘 → 确定性部分成交。
+# Ruling-16 默认 fixture:全量小品种集(3 个 TRADING/USDT 品种,动态扫描候选)。
+# INJUSDT 浅盘口做市币(认证轮 #6 实测盘口恒定:top_ask=2.1、二档=35.9、
+# stepSize=0.1、price≈4.156):min_gate_qty = ceil(50/4.156/0.1)×0.1 = 12.1
+# (notional 50.3);浅盘口判定 2.1×3=6.3 < 12.1 ✓ 命中 → 下单 12.1 限价
+# best_ask 必然成交 2.1、余 10.0 挂盘 → 确定性部分成交。
+# BTCUSDT(price 60000 ∉ [0.05,100] → price_out_of_range);LTCUSDT(price 50,
+# min_gate = ceil(50/50/0.001)×0.001 = 1.0)。
 _EXCHANGE_INFO: dict[str, Any] = {
     "symbols": [
         {
             "symbol": "INJUSDT",
+            "status": "TRADING",
             "filters": [
                 {"filterType": "LOT_SIZE", "minQty": "0.1", "stepSize": "0.1"},
                 {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
             ],
-        }
+        },
+        {
+            "symbol": "BTCUSDT",
+            "status": "TRADING",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            ],
+        },
+        {
+            "symbol": "LTCUSDT",
+            "status": "TRADING",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            ],
+        },
     ]
 }
 
 _DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "2.1"]]}
 
-# 候选回退 fixture:BTCUSDT(minQty/step 0.001)浅盘口 top_ask 0.0002
-# (0.0002×3=0.0006 < min_gate 0.001 ✓)。
-_EXCHANGE_INFO_BTC: dict[str, Any] = {
-    "symbols": [
-        {
-            "symbol": "BTCUSDT",
-            "filters": [
-                {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
-                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
-            ],
-        }
-    ]
-}
+# 动态扫描确定性:非 INJ 品种的默认盘口(避免默认浅盘口被随机选中)。
+# BTCUSDT:price 60000 ∉ [0.05, 100] → price_out_of_range;LTCUSDT:top_ask 100
+# @4.156 → 300 > min_gate 12.031 → not_shallow。
+_DEPTH_BTC_OUT_OF_RANGE: dict[str, Any] = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0002"]]}
+_DEPTH_LTC_DEEP: dict[str, Any] = {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]}
 
 
 class _FakeClient:
-    """partial_fill 用假交易所客户端:品种自适应的盘口/轮询状态/撤单可编程。
+    """partial_fill 用假交易所客户端:动态扫描的盘口/轮询状态/撤单可编程。
 
-    get_exchange_info/get_depth 按 symbol 从 exchange_info_map/depth_map 取
-    (缺省回退默认 fixture,供候选回退与全 miss 用例);MARKET 单(平仓)记录进
-    close_orders 并带 avgPrice;PARTIALLY_FILLED/CANCELED 轮询的 executedQty
-    = 最近一次盘口顶部 ask 量(浅盘口下单成交顶部档的建模);FILLED = 下单量
-    (全成交);fail_close 模拟平仓单创建失败。
+    get_exchange_info() 返回全量小品种集(动态扫描);get_depth 按 symbol 从
+    depth_sequence_map(逐次弹出,多轮扫描模拟)/depth_map(缺省回退默认 fixture)
+    取;MARKET 单(平仓)记录进 close_orders 并带 avgPrice;
+    PARTIALLY_FILLED/CANCELED 轮询的 executedQty = 最近一次盘口顶部 ask 量
+    (浅盘口下单成交顶部档的建模);FILLED = 下单量(全成交);fail_close 模拟
+    平仓单创建失败。
     """
 
     def __init__(
@@ -128,8 +141,8 @@ class _FakeClient:
         *,
         exchange_info: dict[str, Any] | None = None,
         depth: dict[str, Any] | None = None,
-        exchange_info_map: dict[str, dict[str, Any]] | None = None,
         depth_map: dict[str, dict[str, Any]] | None = None,
+        depth_sequence_map: dict[str, list[dict[str, Any]]] | None = None,
         order_statuses: list[str] | None = None,
         cancel_status: str = "CANCELED",
         close_avg_price: str = "4.156",
@@ -137,8 +150,9 @@ class _FakeClient:
     ) -> None:
         self.exchange_info = exchange_info or _EXCHANGE_INFO
         self.depth = depth or _DEPTH_DEFAULT
-        self.exchange_info_map = dict(exchange_info_map or {})
-        self.depth_map = dict(depth_map or {})
+        # 非 INJ 品种默认非浅盘口(动态扫描确定性);调用方传入的 depth_map 覆盖
+        self.depth_map = {"BTCUSDT": _DEPTH_BTC_OUT_OF_RANGE, "LTCUSDT": _DEPTH_LTC_DEEP, **dict(depth_map or {})}
+        self.depth_sequence_map = {k: list(v) for k, v in (depth_sequence_map or {}).items()}
         self.statuses = list(order_statuses or ["PARTIALLY_FILLED"])
         self.cancel_status = cancel_status
         self.close_avg_price = close_avg_price
@@ -152,12 +166,17 @@ class _FakeClient:
         self.fail_create = False
         self.fail_close = False
 
-    async def get_exchange_info(self, symbol: str) -> Result[dict]:
-        return Result.success(self.exchange_info_map.get(symbol, self.exchange_info))
+    async def get_exchange_info(self, symbol: str | None = None) -> Result[dict]:
+        # 动态扫描:全量品种集(单 symbol 过滤由扫描侧按 LOT_SIZE 提取处理)
+        return Result.success(self.exchange_info)
 
     async def get_depth(self, symbol: str, limit: int = 20) -> Result[dict]:
         self.depth_calls += 1
-        self.last_depth = self.depth_map.get(symbol, self.depth)
+        sequence = self.depth_sequence_map.get(symbol)
+        if sequence:
+            self.last_depth = sequence.pop(0) if len(sequence) > 1 else sequence[0]
+        else:
+            self.last_depth = self.depth_map.get(symbol, self.depth)
         return Result.success(self.last_depth)
 
     async def create_order(
@@ -269,9 +288,9 @@ def test_partial_fill_client_unavailable_not_verifiable(tmp_path: Path) -> None:
 
 
 def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
-    # 盘口为空:无法取价也无法成交 → NOT_VERIFIABLE;两个候选品种各探测一次
-    depth = {"lastUpdateId": 1, "bids": [], "asks": []}
-    fake = _FakeClient(exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC}, depth=depth)
+    # 盘口为空:无法取价也无法成交 → NOT_VERIFIABLE;3 轮 × 3 品种全 no_ask
+    empty = {"lastUpdateId": 1, "bids": [], "asks": []}
+    fake = _FakeClient(depth_map={"INJUSDT": empty, "BTCUSDT": empty, "LTCUSDT": empty})
     fake.fail_create = True
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
@@ -279,9 +298,10 @@ def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     assert fake.placed == []
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
-    assert len(probes) == 2 and all(p["best_ask"] == "" for p in probes)  # INJ + BTC 均无盘口
-    assert [p["symbol"] for p in probes] == ["INJUSDT", "BTCUSDT"]
+    assert len(probes) == 9 and all(p["best_ask"] == "" for p in probes)  # 3 轮 × 3 品种
     assert all(p["reason"] == "no_ask" for p in probes)
+    rounds = [s for s in result.evidence["steps"] if s.get("action") == "scan_round"]
+    assert len(rounds) == 3
 
 
 def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
@@ -297,20 +317,24 @@ def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
 # ---- partial_fill: 品种自适应浅盘口(Ruling-15) ----
 
 
-def test_partial_fill_instrument_adaptive_inj_selected(tmp_path: Path) -> None:
-    # 默认 fixture:INJUSDT 浅盘口(top_ask 2.1 ×3=6.3 < min_gate 12.1)命中 →
-    # 下单 12.1 限价 best_ask 4.156 → 必然成交 2.1、余 10.0 挂盘 → 部分成交;
-    # 平仓量 min_gate 兜底 max(2.1, 12.1)=12.1 reduceOnly 只平 2.1,notional 50.3
+def test_partial_fill_dynamic_scan_inj_selected(tmp_path: Path) -> None:
+    # 动态扫描:全量品种集(INJ/BTC/LTC)采样后逐品种探测,INJUSDT 浅盘口
+    # (top_ask 2.1 ×3=6.3 < min_gate 12.1)命中 → 下单 12.1 限价 best_ask
+    # 4.156 → 必然成交 2.1、余 10.0 挂盘 → 部分成交;平仓量 min_gate 兜底
+    # max(2.1, 12.1)=12.1 reduceOnly 只平 2.1,notional 50.3
     fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "CANCELED"])
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
     assert result.status == ScenarioStatus.PASS
     steps = result.evidence["steps"]
-    assert fake.depth_calls == 1  # INJ 首探即命中
-    probe = next(s for s in steps if s.get("action") == "depth_probe")
-    assert probe["symbol"] == "INJUSDT" and probe["selected"] is True
-    assert probe["best_ask"] == "4.156" and probe["top_ask_qty"] == "2.1"
-    assert probe["min_gate_qty"] == "12.1"
+    probes = [s for s in steps if s.get("action") == "depth_probe"]
+    assert 1 <= fake.depth_calls <= 3  # 采样顺序随机,INJ 命中即停止
+    inj_probe = next(p for p in probes if p["symbol"] == "INJUSDT")
+    assert inj_probe["selected"] is True
+    assert inj_probe["best_ask"] == "4.156" and inj_probe["top_ask_qty"] == "2.1"
+    assert inj_probe["min_gate_qty"] == "12.1" and inj_probe["round_no"] == 1
+    rounds = [s for s in steps if s.get("action") == "scan_round"]
+    assert len(rounds) == 1 and rounds[0]["hit"] is True and rounds[0]["samples"] == 3
     placed = fake.placed[0]
     assert placed["symbol"] == "INJUSDT"
     assert placed["quantity"] == "12.1" and placed["type"] == "LIMIT"
@@ -325,53 +349,92 @@ def test_partial_fill_instrument_adaptive_inj_selected(tmp_path: Path) -> None:
     assert fake.cancelled == [1]  # 余量撤单
 
 
-def test_partial_fill_instrument_fallback_btc_selected(tmp_path: Path) -> None:
-    # INJ 不满足浅盘口(top_ask 100 ×3=300 > min_gate 12.1)→ 回退 BTCUSDT
-    # (top_ask 0.0002 ×3=0.0006 < min_gate 0.001 命中)→ 下单 0.001 @60000,
-    # 成交 0.0002 → 平仓 min_gate 兜底 0.001
+def test_partial_fill_dynamic_fallback_ltc_selected(tmp_path: Path) -> None:
+    # INJ 不满足浅盘口(top_ask 100 ×3=300 > min_gate 12.1)→ 回退 LTCUSDT
+    # (price 50 ∈ [0.05,100];top_ask 0.2 ×3=0.6 < min_gate 1.0 命中)→
+    # 下单 1.0 @50,成交 0.2 → 平仓 min_gate 兜底 1.0
     depth_map = {
         "INJUSDT": {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},
-        "BTCUSDT": {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0002"]]},
+        "LTCUSDT": {"lastUpdateId": 1, "bids": [["49.5", "5"]], "asks": [["50", "0.2"]]},
     }
     fake = _FakeClient(
-        exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC},
         depth_map=depth_map,
         order_statuses=["PARTIALLY_FILLED", "CANCELED"],
-        close_avg_price="60000",
+        close_avg_price="50",
     )
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
     assert result.status == ScenarioStatus.PASS
     steps = result.evidence["steps"]
-    assert fake.depth_calls == 2  # INJ 未命中 → BTC 命中
     probes = [s for s in steps if s.get("action") == "depth_probe"]
-    assert probes[0]["symbol"] == "INJUSDT" and probes[0]["reason"] == "not_shallow"
-    assert probes[1]["symbol"] == "BTCUSDT" and probes[1]["selected"] is True
+    ltc_probe = next(p for p in probes if p["symbol"] == "LTCUSDT")
+    assert ltc_probe["selected"] is True and ltc_probe["min_gate_qty"] == "1"
+    # 采样顺序随机:INJ 先探则记 not_shallow;LTC 先探则直接命中(扫描即停)
+    for p in probes:
+        if p["symbol"] != "LTCUSDT":
+            assert p.get("reason") in {"not_shallow", "price_out_of_range"}
+    rounds = [s for s in steps if s.get("action") == "scan_round"]
+    assert len(rounds) == 1 and rounds[0]["hit"] is True
     placed = fake.placed[0]
-    assert placed["symbol"] == "BTCUSDT" and placed["quantity"] == "0.001"
-    assert placed["price"] == "60000"
+    assert placed["symbol"] == "LTCUSDT" and placed["quantity"] == "1"
+    assert placed["price"] == "50"
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["qty"] == "0.001"  # min_gate 兜底(reduceOnly 只平 0.0002)
+    assert close_step["qty"] == "1"  # min_gate 兜底(reduceOnly 只平 0.2)
+    assert close_step["notional_usdt"] == pytest.approx(50.0)
     assert fake.cancelled == [1]
 
 
-def test_partial_fill_instrument_all_miss_not_verifiable(tmp_path: Path) -> None:
-    # 两候选均不满足浅盘口(INJ top_ask 100;BTC top_ask 0.114 ×3=0.342 >
-    # min_gate 0.001)→ NOT_VERIFIABLE,证据记录每个品种 miss 原因
+def test_partial_fill_dynamic_all_miss_not_verifiable(tmp_path: Path) -> None:
+    # 3 轮扫描全 miss(INJ/LTC 深盘口,BTC price_out_of_range)→ NOT_VERIFIABLE,
+    # 证据记每轮采样数与 miss 数;轮间 sleep 10s(假时钟断言)
     depth_map = {
         "INJUSDT": {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},
-        "BTCUSDT": {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.114"]]},
+        "LTCUSDT": {"lastUpdateId": 1, "bids": [["49.5", "5"]], "asks": [["50", "10"]]},
     }
-    fake = _FakeClient(exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC}, depth_map=depth_map)
+    clock = _FakeProbeClock()
+    fake = _FakeClient(depth_map=depth_map)
     fake.fail_create = True
     ctx = _ctx(fake, tmp_path)
-    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     assert fake.placed == []
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
-    assert len(probes) == 2 and all(p["reason"] == "not_shallow" for p in probes)
+    assert len(probes) == 9  # 3 轮 × 3 品种
     assert all("selected" not in p for p in probes)
+    rounds = [s for s in result.evidence["steps"] if s.get("action") == "scan_round"]
+    assert len(rounds) == 3 and all(r["samples"] == 3 and r["misses"] == 3 for r in rounds)
+    assert all(r["hit"] is False for r in rounds)
+    assert clock.sleeps == [10.0, 10.0]  # 轮间重扫间隔
+    assert result.evidence["scan_rounds"]
+
+
+def test_partial_fill_dynamic_multi_round_scan(tmp_path: Path) -> None:
+    # 第 1 轮全 miss(INJ 深盘口)→ sleep 10s 重扫 → 第 2 轮 INJ 浅盘口命中;
+    # 每轮重新随机采样,seed 用 injected now 整数部分(可复现)
+    depth_sequence_map = {
+        "INJUSDT": [
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},  # 第 1 轮深
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "2.1"]]},  # 第 2 轮浅
+        ]
+    }
+    clock = _FakeProbeClock()
+    fake = _FakeClient(
+        depth_sequence_map=depth_sequence_map,
+        order_statuses=["PARTIALLY_FILLED", "CANCELED"],
+    )
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    rounds = [s for s in steps if s.get("action") == "scan_round"]
+    assert [r["hit"] for r in rounds] == [False, True]
+    assert clock.sleeps[0] == 10.0  # 第 1 轮 miss 后重扫间隔一次
+    assert clock.sleeps[1] == 0.5  # 命中后照常首查 0.5s
+    inj_probe = next(p for p in steps if p.get("action") == "depth_probe" and p.get("selected"))
+    assert inj_probe["symbol"] == "INJUSDT" and inj_probe["round_no"] == 2
+    assert fake.placed and fake.placed[0]["quantity"] == "12.1"
+    assert fake.cancelled == [1]
 
 
 # ---- partial_fill: 轮询判定 ----
