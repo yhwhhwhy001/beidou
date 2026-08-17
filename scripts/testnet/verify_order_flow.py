@@ -113,12 +113,34 @@ async def main() -> int:
     sl_price = float(market_price * Decimal("0.7"))  # -30% 远价
     tp_price = float(market_price * Decimal("1.3"))  # +30% 远价
     sl = _require(
-        await client.create_algo_order(symbol, "SELL", "STOP", qty, stop_price=f"{sl_price:.4f}", close_position="false"),
+        await client.create_algo_order(
+            {
+                "symbol": symbol,
+                "side": "SELL",
+                "algoType": "CONDITIONAL",
+                "type": "STOP_MARKET",
+                "quantity": qty,
+                "triggerPrice": f"{sl_price:.4f}",
+                "reduceOnly": "true",
+                "workingType": "CONTRACT_PRICE",
+                "clientAlgoId": f"g5-verify-sl-{t0}",
+            }
+        ),
         "create_algo_order(SL)",
     )
     tp = _require(
         await client.create_algo_order(
-            symbol, "SELL", "TAKE_PROFIT", qty, stop_price=f"{tp_price:.4f}", close_position="false"
+            {
+                "symbol": symbol,
+                "side": "SELL",
+                "algoType": "CONDITIONAL",
+                "type": "TAKE_PROFIT_MARKET",
+                "quantity": qty,
+                "triggerPrice": f"{tp_price:.4f}",
+                "reduceOnly": "true",
+                "workingType": "CONTRACT_PRICE",
+                "clientAlgoId": f"g5-verify-tp-{t0}",
+            }
         ),
         "create_algo_order(TP)",
     )
