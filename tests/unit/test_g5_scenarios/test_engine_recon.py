@@ -309,6 +309,7 @@ def test_dry_run_does_not_touch_pg(tmp_path: Path, monkeypatch: Any) -> None:
 
 def test_full_flow_mismatch_observed_and_recovered(tmp_path: Path, monkeypatch: Any) -> None:
     scenario, clock, conn, ctx = _run_flow(tmp_path, monkeypatch)
+    t0 = clock.t
     result = asyncio.run(scenario.run(ctx))
     assert result.status == ScenarioStatus.PASS
     evidence = result.evidence
@@ -351,12 +352,16 @@ def test_full_flow_mismatch_observed_and_recovered(tmp_path: Path, monkeypatch: 
     final = next(s for s in steps if s.get("action") == "restore_baseline_finally")
     assert final["ok"] is True
 
-    # 6. 轮询行为真实:≥35s 后第一轮即发现 MISMATCHED;恢复后按周期等 MATCHED
+    # 6. 轮询行为真实(相对 t0 计时,非绝对 epoch 恒真式):35s 等待后第一次
+    #    查询即命中 MISMATCHED;恢复后 5s 步进,引擎 30s 对账周期落 MATCHED
+    #    (第 7 次查询命中)。60s 总窗口从轮询开始起算(deadline_at =
+    #    now + deadline),不是 35s+60s=95s 累加 —— 全程实测恰好 65.0s。
     polls = [s for s in steps if s.get("action") == "poll_found"]
     assert polls[0]["want_status"] == "MISMATCHED"
-    assert polls[0]["polls"] >= 1
+    assert polls[0]["polls"] == 1  # 首个 poll 即 35s 等待后的第一次查询(非空转)
     assert polls[1]["want_status"] == "MATCHED"
-    assert clock.t >= 35.0 + 60.0  # 至少消耗 35s 等待 + 恢复后到下一周期
+    assert polls[1]["polls"] == 7  # 恢复后 5s 步进 × 6 次空轮询 + 第 7 次命中
+    assert clock.t - t0 >= 65.0  # 35s 等待 + 恢复后引擎 30s 周期落 MATCHED,实测恰好 65.0s
 
     # 7. 基线零残留:假连接里 records 与原始一致
     assert conn.records[(_RECORD_TYPE, _RECORD_ID)] == _ORIGINAL_PAYLOAD
@@ -367,6 +372,7 @@ def test_full_flow_mismatch_observed_and_recovered(tmp_path: Path, monkeypatch: 
 
 def test_mismatch_not_observed_not_verifiable(tmp_path: Path, monkeypatch: Any) -> None:
     scenario, clock, conn, ctx = _run_flow(tmp_path, monkeypatch, emit_mismatch=False)
+    t0 = clock.t
     result = asyncio.run(scenario.run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert result.error_type == "mismatch_not_observed"
@@ -379,8 +385,10 @@ def test_mismatch_not_observed_not_verifiable(tmp_path: Path, monkeypatch: Any) 
     assert final["ok"] is True
     # 原始基线仍恢复
     assert conn.records[(_RECORD_TYPE, _RECORD_ID)] == _ORIGINAL_PAYLOAD
-    # 轮询确实跑满 60s 窗口(35s 起步 + 5s 步进 × 12 = 95s)
-    assert clock.t >= 35.0 + 60.0
+    # 轮询跑满 60s 总窗口(deadline_at = now + deadline,从轮询开始起算):
+    # 35s 等待 + 5s 步进 × 5 次空轮询,第 6 次查询(now ≥ deadline_at)触发
+    # 超时 —— 实测恰好 60.0s,不是 35s+60s=95s。
+    assert clock.t - t0 >= 60.0
 
 
 # ---- 恢复后 MATCHED 超时 → FAIL,基线仍恢复 ----
