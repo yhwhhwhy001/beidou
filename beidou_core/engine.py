@@ -1591,6 +1591,10 @@ class AutonomousEngine:
         if self._user_stream_projector.sequencer.last_sequence is not None:
             self._event_stream_facts = self._user_stream_projector.fact_snapshot()
         self._last_reconciliation_result: Any | None = None
+        # 最后一次 MATCHED 对账的 monotonic 时间戳(快照风控"近期有过
+        # MATCHED"语义,EXEMPT-06;与 _last_reconciliation_result 的"最近
+        # 一次"语义分离 —— 瞬时 ONE_SIDE_MISSING 不再关闭快照门)。
+        self._last_matched_reconciliation_mono: float | None = None
         self._pre_risk = PreRiskCheckerImpl(
             max_leverage=self._policy_float("max_leverage", self._settings.production.max_leverage),
             max_concentration_pct=self._policy_float(
@@ -2715,6 +2719,24 @@ class AutonomousEngine:
         if checked_at.tzinfo is None:
             checked_at = checked_at.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - checked_at).total_seconds()
+        return math.isfinite(age) and 0.0 <= age <= max_age_seconds
+
+    def _recently_matched_reconciliation(self, *, max_age_seconds: float = 300.0) -> bool:
+        """Return whether a MATCHED reconciliation happened within the window.
+
+        EXEMPT-06 注释语义: 快照风控输入只需"近期有过 MATCHED"。demo-fapi
+        账户接口成串超时(5xx,客户端重试 5 次仍失败)时,_fresh_matched_
+        reconciliation 的"最近一次必须 MATCHED"语义会把失败窗口内的全部
+        信号 AUX-R0 拒掉。该 helper 只看最后一次 MATCHED 的时间戳:
+        瞬时失败不再关闭快照门;账户事实本身仍来自最后一次成功查询
+        (_last_account 只在成功时更新),故障持续超过窗口期门自动关闭。
+        live/canary 不使用本 helper,保持严格语义。
+        """
+
+        last_mono = getattr(self, "_last_matched_reconciliation_mono", None)
+        if not isinstance(last_mono, (int, float)):
+            return False
+        age = time.monotonic() - float(last_mono)
         return math.isfinite(age) and 0.0 <= age <= max_age_seconds
 
     def _check_liveness(self) -> HealthState:
@@ -7409,6 +7431,12 @@ class AutonomousEngine:
 
         account, account_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
         if not account_ok or not isinstance(account, dict) or "totalWalletBalance" not in account:
+            # BD-FIX: demo-fapi 账户接口成串 5xx(客户端 5 次退避重试后仍
+            # 失败,约 10s 短宕机串)会污染快照风控门 —— 补 1 轮 2s 延迟
+            # 重试扛过短串;预算约束(运行时 wait_for 25s)内不叠加更多轮。
+            await asyncio.sleep(2.0)
+            account, account_ok = await self._api_async_safe(Endpoint.ACCOUNT, signed=True)
+        if not account_ok or not isinstance(account, dict) or "totalWalletBalance" not in account:
             result = ReconciliationEngine.compare(None, None)
             result.status = ReconciliationStatus.ONE_SIDE_MISSING
             result.differences = ["ONE_SIDE_MISSING: complete ACCOUNT snapshot unavailable"]
@@ -7524,6 +7552,8 @@ class AutonomousEngine:
                 result.differences = []
                 result.status = ReconciliationStatus.MATCHED
         self._last_reconciliation_result = result
+        if bool(getattr(result, "matched", False)):
+            self._last_matched_reconciliation_mono = time.monotonic()
         self._record_reconciliation_truth(
             result,
             system_facts=system_facts,
@@ -9505,7 +9535,11 @@ class AutonomousEngine:
                         snapshot_reconciliation_status = (
                             "MATCHED"
                             if (
-                                self._fresh_matched_reconciliation(max_age_seconds=300.0 if _is_testnet_snap else 60.0)
+                                (
+                                    self._recently_matched_reconciliation(max_age_seconds=300.0)
+                                    if _is_testnet_snap
+                                    else self._fresh_matched_reconciliation(max_age_seconds=60.0)
+                                )
                                 or zero_write_snapshot
                             )
                             else "MISMATCHED"

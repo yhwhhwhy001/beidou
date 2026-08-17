@@ -256,6 +256,36 @@ def test_recon_max_age_strict_for_production_envs() -> None:
     assert _reconciliation_max_age_seconds("paper") == 30.0
 
 
+def test_recently_matched_reconciliation_false_when_never_matched() -> None:
+    engine = _engine()
+    assert engine._recently_matched_reconciliation(max_age_seconds=300.0) is False
+
+
+def test_recently_matched_reconciliation_window_bounds() -> None:
+    import time
+
+    engine = _engine()
+    engine._last_matched_reconciliation_mono = time.monotonic() - 120.0
+    assert engine._recently_matched_reconciliation(max_age_seconds=300.0) is True
+    assert engine._recently_matched_reconciliation(max_age_seconds=60.0) is False  # 超窗
+
+
+def test_recently_matched_reconciliation_survives_recent_failure() -> None:
+    """瞬时 ONE_SIDE_MISSING 不清空"近期 MATCHED"时间戳(EXEMPT-06 语义)。
+
+    失败路径只更新 _last_reconciliation_result(最近一次),不触碰
+    _last_matched_reconciliation_mono —— 快照风控门(testnet)在失败窗口内
+    仍按"近期有过 MATCHED"放行;严格语义(cleanup/live)按最近一次判定不变。
+    """
+    import time
+
+    engine = _engine()
+    engine._last_matched_reconciliation_mono = time.monotonic() - 30.0
+    engine._last_reconciliation_result = SimpleNamespace(matched=False, checked_at=datetime.now(timezone.utc))
+    assert engine._recently_matched_reconciliation(max_age_seconds=300.0) is True
+    assert engine._fresh_matched_reconciliation(max_age_seconds=300.0) is False
+
+
 def test_recon_max_age_300s_accepts_32s_old_event_facts() -> None:
     """镜像 03:04 现场：授权后投影冻结 32s → 30s 阈值 STALE；
     300s 阈值下对账正常比较（不再 STALE）。"""
