@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import contextmanager
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -81,7 +80,27 @@ def _ctx(
     )
 
 
+# Ruling-15 默认 fixture:INJUSDT 浅盘口做市币(认证轮 #6 实测盘口恒定:
+# top_ask=2.1、二档=35.9、stepSize=0.1、price≈4.156)。min_gate_qty =
+# ceil(50/4.156/0.1)×0.1 = 12.1(notional 50.3);浅盘口判定 2.1×3=6.3 < 12.1
+# ✓ 命中 → 下单 12.1 限价 best_ask 必然成交 2.1、余 10.0 挂盘 → 确定性部分成交。
 _EXCHANGE_INFO: dict[str, Any] = {
+    "symbols": [
+        {
+            "symbol": "INJUSDT",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.1", "stepSize": "0.1"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            ],
+        }
+    ]
+}
+
+_DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "2.1"]]}
+
+# 候选回退 fixture:BTCUSDT(minQty/step 0.001)浅盘口 top_ask 0.0002
+# (0.0002×3=0.0006 < min_gate 0.001 ✓)。
+_EXCHANGE_INFO_BTC: dict[str, Any] = {
     "symbols": [
         {
             "symbol": "BTCUSDT",
@@ -93,36 +112,15 @@ _EXCHANGE_INFO: dict[str, Any] = {
     ]
 }
 
-# 真实价位(≈60000 USDT/BTC):min_gate_qty = ceil(50/60000/0.001)×0.001 = 0.001,
-# limit 1000 下 max_partial_qty = (500/60000//0.001)×0.001 = 0.008 → 窗口
-# 0.001 ≤ ask < 0.008,默认顶部 ask 0.004 命中(≈240 USDT)。
-_DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.004"]]}
-
-# 认证轮 #4 台阶场景 fixture:minQty/stepSize 0.0008、价格 62500 →
-# min_gate_qty = ceil(50/62500/0.0008)×0.0008 = 0.0008(台阶 0.0008 恰等于
-# min_gate,命中下界含等于);limit 372 → max_partial_qty = (186/62500//0.0008)×
-# 0.0008 = 0.0024 → 窗口 0.0008 ≤ ask < 0.0024。
-_EXCHANGE_INFO_MIN_GATE_0008: dict[str, Any] = {
-    "symbols": [
-        {
-            "symbol": "BTCUSDT",
-            "filters": [
-                {"filterType": "LOT_SIZE", "minQty": "0.0008", "stepSize": "0.0008"},
-                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
-            ],
-        }
-    ]
-}
-
 
 class _FakeClient:
-    """partial_fill 用假交易所客户端:盘口序列/轮询状态序列/撤单结果可编程。
+    """partial_fill 用假交易所客户端:品种自适应的盘口/轮询状态/撤单可编程。
 
-    MARKET 单(平仓)记录进 close_orders 并带 avgPrice(平仓 notional 记账
-    用);PARTIALLY_FILLED/CANCELED 轮询的 executedQty = 最近一次盘口顶部
-    ask 量(下单量 = ask×1.5,成交顶部档后剩余挂单即部分成交);FILLED =
-    下单量(全成交);fail_close 模拟平仓单创建失败;depths 为盘口序列
-    (流动性窗口主动探测:每次 get_depth 弹出下一个,耗尽后回退 depth)。
+    get_exchange_info/get_depth 按 symbol 从 exchange_info_map/depth_map 取
+    (缺省回退默认 fixture,供候选回退与全 miss 用例);MARKET 单(平仓)记录进
+    close_orders 并带 avgPrice;PARTIALLY_FILLED/CANCELED 轮询的 executedQty
+    = 最近一次盘口顶部 ask 量(浅盘口下单成交顶部档的建模);FILLED = 下单量
+    (全成交);fail_close 模拟平仓单创建失败。
     """
 
     def __init__(
@@ -130,15 +128,17 @@ class _FakeClient:
         *,
         exchange_info: dict[str, Any] | None = None,
         depth: dict[str, Any] | None = None,
-        depths: list[dict[str, Any]] | None = None,
+        exchange_info_map: dict[str, dict[str, Any]] | None = None,
+        depth_map: dict[str, dict[str, Any]] | None = None,
         order_statuses: list[str] | None = None,
         cancel_status: str = "CANCELED",
-        close_avg_price: str = "60000",
+        close_avg_price: str = "4.156",
         new_executed_qty: str = "0",
     ) -> None:
         self.exchange_info = exchange_info or _EXCHANGE_INFO
         self.depth = depth or _DEPTH_DEFAULT
-        self.depths = list(depths or [])
+        self.exchange_info_map = dict(exchange_info_map or {})
+        self.depth_map = dict(depth_map or {})
         self.statuses = list(order_statuses or ["PARTIALLY_FILLED"])
         self.cancel_status = cancel_status
         self.close_avg_price = close_avg_price
@@ -153,12 +153,11 @@ class _FakeClient:
         self.fail_close = False
 
     async def get_exchange_info(self, symbol: str) -> Result[dict]:
-        return Result.success(self.exchange_info)
+        return Result.success(self.exchange_info_map.get(symbol, self.exchange_info))
 
     async def get_depth(self, symbol: str, limit: int = 20) -> Result[dict]:
         self.depth_calls += 1
-        if self.depths:
-            self.last_depth = self.depths.pop(0)
+        self.last_depth = self.depth_map.get(symbol, self.depth)
         return Result.success(self.last_depth)
 
     async def create_order(
@@ -204,16 +203,13 @@ class _FakeClient:
         status = self.statuses[0] if len(self.statuses) > 1 else self.statuses[-1]
         if len(self.statuses) > 1:
             self.statuses.pop(0)
-        placed_qty = self.placed[-1]["quantity"] if self.placed else "0.0025"
-        placed_iceberg = self.placed[-1].get("icebergQty") if self.placed else None
+        placed_qty = self.placed[-1]["quantity"] if self.placed else "12.1"
         asks = (self.last_depth or {}).get("asks") or []
-        top_ask_qty = str(asks[0][1]) if asks else "0.004"
-        # ICEBERG 语义:每笔最多成交可见切片 → 部分成交 = min(icebergQty, 盘口量)
-        slice_qty = str(placed_iceberg or "0.001")
-        slice_executed = format(min(Decimal(slice_qty), Decimal(top_ask_qty)), "f")
+        top_ask_qty = str(asks[0][1]) if asks else "2.1"
+        # 浅盘口 LIMIT 下单:成交顶部档(min(top_ask, qty) → top_ask),余量挂盘
         executed = {
-            "PARTIALLY_FILLED": slice_executed,
-            "CANCELED": slice_executed,
+            "PARTIALLY_FILLED": top_ask_qty,
+            "CANCELED": top_ask_qty,
             "FILLED": placed_qty,
             "NEW": self.new_executed_qty,
         }.get(status, "0")
@@ -273,9 +269,9 @@ def test_partial_fill_client_unavailable_not_verifiable(tmp_path: Path) -> None:
 
 
 def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
-    # 盘口为空:无法取价也无法成交 iceberg → NOT_VERIFIABLE(单次深度探测)
+    # 盘口为空:无法取价也无法成交 → NOT_VERIFIABLE;两个候选品种各探测一次
     depth = {"lastUpdateId": 1, "bids": [], "asks": []}
-    fake = _FakeClient(depth=depth)
+    fake = _FakeClient(exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC}, depth=depth)
     fake.fail_create = True
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
@@ -283,49 +279,99 @@ def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     assert fake.placed == []
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
-    assert len(probes) == 1 and probes[0]["best_ask"] == ""  # 单次探测取价失败
+    assert len(probes) == 2 and all(p["best_ask"] == "" for p in probes)  # INJ + BTC 均无盘口
+    assert [p["symbol"] for p in probes] == ["INJUSDT", "BTCUSDT"]
+    assert all(p["reason"] == "no_ask" for p in probes)
 
 
 def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
-    # 累计预算:前置场景已占 380,iceberg 入场记账 0.0025×60000=150 →
-    # 总 530 > 500 → NotionalExceededError 交 runner fail-fast(资金保护优先)
+    # 累计预算:前置场景已占 460,浅盘口入场记账 12.1×4.156≈50.3 →
+    # 总 510 > 500 → NotionalExceededError 交 runner fail-fast(资金保护优先)
     fake = _FakeClient()
     ctx = _ctx(fake, tmp_path, limit=500.0)
-    ctx.ledger.record("prior_scenario", 380.0)
+    ctx.ledger.record("prior_scenario", 460.0)
     with pytest.raises(NotionalExceededError):
         asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
 
 
-# ---- partial_fill: ICEBERG 确定性部分成交(Ruling-14) ----
+# ---- partial_fill: 品种自适应浅盘口(Ruling-15) ----
 
 
-def test_partial_fill_iceberg_slice_min_gate_boundary(tmp_path: Path) -> None:
-    # minQty/stepSize 0.0008、价格 62500 → min_gate = 0.0008 → iceberg 切片 =
-    # max(0.0008, 0.0008) = 0.0008(≈51 USDT,恰 ≥ MIN_NOTIONAL);iceberg 语义
-    # 每笔最多成交切片 → 部分成交 = min(0.0008, 盘口量),状态 PARTIALLY_FILLED
-    # 确定性极高(只要盘口非空);平仓量 min_gate 兜底 → notional 50.0 恒合法
-    depth = {"lastUpdateId": 1, "bids": [["62499.5", "5"]], "asks": [["62500", "0.004"]]}
+def test_partial_fill_instrument_adaptive_inj_selected(tmp_path: Path) -> None:
+    # 默认 fixture:INJUSDT 浅盘口(top_ask 2.1 ×3=6.3 < min_gate 12.1)命中 →
+    # 下单 12.1 限价 best_ask 4.156 → 必然成交 2.1、余 10.0 挂盘 → 部分成交;
+    # 平仓量 min_gate 兜底 max(2.1, 12.1)=12.1 reduceOnly 只平 2.1,notional 50.3
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "CANCELED"])
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    assert fake.depth_calls == 1  # INJ 首探即命中
+    probe = next(s for s in steps if s.get("action") == "depth_probe")
+    assert probe["symbol"] == "INJUSDT" and probe["selected"] is True
+    assert probe["best_ask"] == "4.156" and probe["top_ask_qty"] == "2.1"
+    assert probe["min_gate_qty"] == "12.1"
+    placed = fake.placed[0]
+    assert placed["symbol"] == "INJUSDT"
+    assert placed["quantity"] == "12.1" and placed["type"] == "LIMIT"
+    assert placed["price"] == "4.156" and placed["timeInForce"] == "GTC"
+    assert placed["icebergQty"] is None  # 普通限价,不带 iceberg
+    place = next(s for s in steps if s.get("action") == "place_order")
+    assert "iceberg_qty" not in place and place["symbol"] == "INJUSDT"
+    # 成交 2.1 → 平仓 min_gate 兜底 12.1(reduceOnly 只平 2.1,notional 50.3 合规)
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["qty"] == "12.1"
+    assert close_step["notional_usdt"] == pytest.approx(12.1 * 4.156)
+    assert fake.cancelled == [1]  # 余量撤单
+
+
+def test_partial_fill_instrument_fallback_btc_selected(tmp_path: Path) -> None:
+    # INJ 不满足浅盘口(top_ask 100 ×3=300 > min_gate 12.1)→ 回退 BTCUSDT
+    # (top_ask 0.0002 ×3=0.0006 < min_gate 0.001 命中)→ 下单 0.001 @60000,
+    # 成交 0.0002 → 平仓 min_gate 兜底 0.001
+    depth_map = {
+        "INJUSDT": {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},
+        "BTCUSDT": {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0002"]]},
+    }
     fake = _FakeClient(
-        exchange_info=_EXCHANGE_INFO_MIN_GATE_0008,
-        depth=depth,
+        exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC},
+        depth_map=depth_map,
         order_statuses=["PARTIALLY_FILLED", "CANCELED"],
-        close_avg_price="62500",  # 平仓价对齐入场价(边界 notional 恰 50.0)
+        close_avg_price="60000",
     )
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
     assert result.status == ScenarioStatus.PASS
     steps = result.evidence["steps"]
-    assert fake.depth_calls == 1  # 下单前一次深度探测取价
+    assert fake.depth_calls == 2  # INJ 未命中 → BTC 命中
+    probes = [s for s in steps if s.get("action") == "depth_probe"]
+    assert probes[0]["symbol"] == "INJUSDT" and probes[0]["reason"] == "not_shallow"
+    assert probes[1]["symbol"] == "BTCUSDT" and probes[1]["selected"] is True
     placed = fake.placed[0]
-    assert placed["quantity"] == "0.0025" and placed["icebergQty"] == "0.0008"
-    assert placed["type"] == "LIMIT" and placed["price"] == "62500" and placed["timeInForce"] == "GTC"
-    place = next(s for s in steps if s.get("action") == "place_order")
-    assert place["iceberg_qty"] == "0.0008"
-    # 部分成交 = 切片 min(0.0008, 盘口 0.004)= 0.0008 → 平仓 notional 50.0
+    assert placed["symbol"] == "BTCUSDT" and placed["quantity"] == "0.001"
+    assert placed["price"] == "60000"
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["qty"] == "0.0008"
-    assert close_step["notional_usdt"] == pytest.approx(50.0)
-    assert fake.cancelled == [1]  # 余量撤单
+    assert close_step["qty"] == "0.001"  # min_gate 兜底(reduceOnly 只平 0.0002)
+    assert fake.cancelled == [1]
+
+
+def test_partial_fill_instrument_all_miss_not_verifiable(tmp_path: Path) -> None:
+    # 两候选均不满足浅盘口(INJ top_ask 100;BTC top_ask 0.114 ×3=0.342 >
+    # min_gate 0.001)→ NOT_VERIFIABLE,证据记录每个品种 miss 原因
+    depth_map = {
+        "INJUSDT": {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},
+        "BTCUSDT": {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.114"]]},
+    }
+    fake = _FakeClient(exchange_info_map={"BTCUSDT": _EXCHANGE_INFO_BTC}, depth_map=depth_map)
+    fake.fail_create = True
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert "liquidity_insufficient_or_too_deep" in result.error_message
+    assert fake.placed == []
+    probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
+    assert len(probes) == 2 and all(p["reason"] == "not_shallow" for p in probes)
+    assert all("selected" not in p for p in probes)
 
 
 # ---- partial_fill: 轮询判定 ----
@@ -340,16 +386,16 @@ def test_partial_fill_full_fill_not_verifiable(tmp_path: Path) -> None:
     assert fake.cancelled == []  # 全成交,无需撤单清理
     # 全成交产生真实持仓 → 反向市价单平仓(防污染后续场景,认证轮 #2 根因)
     assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
-    assert fake.close_orders[0]["quantity"] == "0.0025"  # iceberg 总下单量全成交
+    assert fake.close_orders[0]["quantity"] == "12.1"  # min_gate 下单量全成交
     assert fake.close_orders[0]["type"] == "MARKET"
     assert fake.close_orders[0]["reduceOnly"] == "true"
     close_step = next(s for s in result.evidence["steps"] if s.get("action") == "close")
     assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
-    assert close_step["executed_qty"] == "0.0025"
+    assert close_step["executed_qty"] == "12.1"
     assert result.evidence["closed"] is True
     assert result.evidence["close_needed"] is True
-    assert result.evidence["close_notional_usdt"] == pytest.approx(0.0025 * 60000)
-    assert ctx.ledger.total == pytest.approx(0.0025 * 60000 * 2)  # 入场 + 平仓单金额
+    assert result.evidence["close_notional_usdt"] == pytest.approx(12.1 * 4.156)
+    assert ctx.ledger.total == pytest.approx(12.1 * 4.156 * 2)  # 入场 + 平仓单金额
 
 
 def test_partial_fill_stays_new_not_verifiable(tmp_path: Path) -> None:
@@ -379,7 +425,7 @@ def test_partial_fill_fast_first_poll_after_order(tmp_path: Path) -> None:
     polls = [s for s in result.evidence["steps"] if s.get("action") == "poll"]
     assert len(polls) == 1  # 首查 0.5s 即捕获 FILLED,窗口提前结束
     assert clock.sleeps == [0.5]  # 仅首查延迟一次
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.0025"  # 全量平仓
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "12.1"  # 全量平仓
 
 
 # ---- partial_fill: 部分成交成功路径 ----
@@ -392,27 +438,25 @@ def test_partial_fill_happy_path(tmp_path: Path) -> None:
     assert result.status == ScenarioStatus.PASS
     evidence = result.evidence
     assert evidence["partial_status"] == "PARTIALLY_FILLED"
-    # ICEBERG 限价单:qty=0.0025,price=最优 ask,icebergQty=max(0.0008, min_gate 0.001)
-    assert fake.placed and fake.placed[0]["price"] == "60000"
-    assert fake.placed[0]["quantity"] == "0.0025"
+    # 浅盘口限价单:qty=min_gate_qty 12.1,price=最优 ask 4.156,GTC,不带 iceberg
+    assert fake.placed and fake.placed[0]["price"] == "4.156"
+    assert fake.placed[0]["quantity"] == "12.1"
     assert fake.placed[0]["type"] == "LIMIT" and fake.placed[0]["timeInForce"] == "GTC"
-    assert fake.placed[0]["icebergQty"] == "0.001"
-    place = next(s for s in evidence["steps"] if s.get("action") == "place_order")
-    assert place["iceberg_qty"] == "0.001"
+    assert fake.placed[0]["icebergQty"] is None
     assert fake.cancelled == [1]  # 余量撤单
-    # 平掉已成交部分(iceberg 切片 min(0.001, 盘口 0.004)= 0.001),防持仓污染;
-    # 反向市价单 + reduceOnly
+    # 平掉已成交部分(顶部 ask 2.1)→ 平仓量 min_gate 兜底 12.1(reduceOnly
+    # 只平 2.1,订单 notional 50.3 合规),防持仓污染
     assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
-    assert fake.close_orders[0]["quantity"] == "0.001"
+    assert fake.close_orders[0]["quantity"] == "12.1"
     assert fake.close_orders[0]["type"] == "MARKET"
     assert fake.close_orders[0]["reduceOnly"] == "true"
     close_step = next(s for s in evidence["steps"] if s.get("action") == "close")
-    assert close_step["side"] == "SELL" and close_step["qty"] == "0.001"
-    assert close_step["price"] == "60000" and close_step["price_source"] == "avg_price"
+    assert close_step["side"] == "SELL" and close_step["qty"] == "12.1"
+    assert close_step["price"] == "4.156" and close_step["price_source"] == "avg_price"
     assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
     assert evidence["closed"] is True
-    assert evidence["close_notional_usdt"] == pytest.approx(0.001 * 60000)
-    assert ctx.ledger.total == pytest.approx(0.0025 * 60000 + 0.001 * 60000)  # 入场 + 平仓单金额
+    assert evidence["close_notional_usdt"] == pytest.approx(12.1 * 4.156)
+    assert ctx.ledger.total == pytest.approx(12.1 * 4.156 * 2)  # 入场 + 平仓单金额
     # 组件级守卫断言(纯函数)与引擎守卫源码证据
     guard_steps = [s for s in evidence["steps"] if s.get("action") == "guard_component_assert"]
     assert guard_steps and guard_steps[0]["ok"] is True
@@ -442,7 +486,7 @@ def test_partial_fill_close_failure_fails(tmp_path: Path) -> None:
     assert "close boom" in result.error_message
     assert result.evidence["closed"] is False
     close_failed = next(s for s in result.evidence["steps"] if s.get("action") == "close_failed")
-    assert close_failed["side"] == "SELL" and close_failed["qty"] == "0.0025"
+    assert close_failed["side"] == "SELL" and close_failed["qty"] == "12.1"
     assert "close boom" in close_failed["error"]
     assert fake.cancelled == []  # 全成交无需撤单
 
@@ -472,8 +516,8 @@ def test_partial_fill_exception_after_fill_still_closes(tmp_path: Path) -> None:
     steps = result.evidence["steps"]
     # finally 兜底平仓执行(异常路径也不带持仓离开)
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["side"] == "SELL" and close_step["qty"] == "0.001"  # iceberg 切片成交
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.001"
+    assert close_step["side"] == "SELL" and close_step["qty"] == "12.1"  # min_gate 兜底
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "12.1"
     cleanup = next(s for s in steps if s.get("action") == "cleanup_cancel")
     assert cleanup["ok"] is True  # 撤单重试成功,无挂单残留
 
@@ -492,26 +536,26 @@ def test_partial_fill_canceled_with_executed_qty_still_closes(tmp_path: Path) ->
     steps = result.evidence["steps"]
     assert any(s.get("action") == "skip_cleanup_cancel" for s in steps)  # 已终态无需撤单
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["side"] == "SELL" and close_step["qty"] == "0.001"  # iceberg 切片成交
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.001"
+    assert close_step["side"] == "SELL" and close_step["qty"] == "12.1"  # min_gate 兜底
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "12.1"
     assert fake.cancelled == []  # 终态订单不触发撤单
 
 
 def test_partial_fill_new_with_executed_qty_still_closes(tmp_path: Path) -> None:
-    # 轮询窗口结束仍 NEW 但已有成交(状态查询滞后,executedQty=0.0005 低于
-    # min_gate 0.001)→ finally 兜底平仓 + 撤单;平仓量 min_gate 兜底
-    # max(0.0005, 0.001)=0.001(订单 notional 60 ≥ 50;reduceOnly 下 quantity
+    # 轮询窗口结束仍 NEW 但已有成交(状态查询滞后,executedQty=0.5 低于
+    # min_gate 12.1)→ finally 兜底平仓 + 撤单;平仓量 min_gate 兜底
+    # max(0.5, 12.1)=12.1(订单 notional 50.3 ≥ 50;reduceOnly 下 quantity
     # 可大于持仓,实际仅平持仓量)
     clock = _FakeProbeClock()
-    fake = _FakeClient(order_statuses=["NEW"], new_executed_qty="0.0005")
+    fake = _FakeClient(order_statuses=["NEW"], new_executed_qty="0.5")
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     steps = result.evidence["steps"]
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["side"] == "SELL" and close_step["qty"] == "0.001"  # min_gate 兜底
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.001"
+    assert close_step["side"] == "SELL" and close_step["qty"] == "12.1"  # min_gate 兜底
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "12.1"
     assert fake.close_orders[0]["reduceOnly"] == "true"  # 防开新仓
     assert fake.cancelled == [1]  # 未终态订单照常撤单清理
 
@@ -520,9 +564,8 @@ def test_partial_fill_new_with_executed_qty_still_closes(tmp_path: Path) -> None
 
 
 def test_partial_fill_cancel_race_filled_closes_full_executed(tmp_path: Path) -> None:
-    # PARTIALLY_FILLED(iceberg 切片 executed 0.001)后撤单,撤单查询显示 FILLED
-    # (余量竞态成交 executed 0.0025)→ 平仓量取 max(0.001, final 0.0025)=0.0025,
-    # 不留残余
+    # PARTIALLY_FILLED(executed 2.1)后撤单,撤单查询显示 FILLED(余量竞态成交
+    # executed 12.1)→ 平仓量取 max(2.1, final 12.1)=12.1,不留残余
     fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "FILLED"])
     ctx = _ctx(fake, tmp_path)
     result = asyncio.run(PartialFillScenario().run(ctx))
@@ -530,8 +573,8 @@ def test_partial_fill_cancel_race_filled_closes_full_executed(tmp_path: Path) ->
     assert result.error_type == "UNEXPECTED_FINAL_STATUS"  # 撤单后终态非 CANCELED
     steps = result.evidence["steps"]
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["qty"] == "0.0025"  # max(轮询切片 0.001, final 0.0025)
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.0025"
+    assert close_step["qty"] == "12.1"  # max(轮询 2.1, final 12.1)
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "12.1"
     assert result.evidence["closed"] is True and result.evidence["close_needed"] is True
 
 
