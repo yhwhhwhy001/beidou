@@ -5,6 +5,6 @@ Ruling-6:engine 与 protocol 两个子包均在包导入时接线注册(Task 4/5
 场景不再游离于注册表之外)。
 """
 
-from beidou_certification.g5_scenarios import engine, protocol
+from beidou_certification.g5_scenarios import engine, protocol, restart
 
-__all__ = ["engine", "protocol"]
+__all__ = ["engine", "protocol", "restart"]
