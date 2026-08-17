@@ -56,6 +56,17 @@ _PROBE_WINDOW_SECONDS = 3.0  # 每次连接的数据接收窗口(brief 契约:�
 _MAX_EVENT_AGE_SECONDS = 300.0
 
 
+def _mask_key(key: str) -> str:
+    """listen key 脱敏:证据落盘只保留前后片段,不泄露完整凭据。
+
+    内存中仍持有完整 key 供实际 ws/清理调用;仅写入 steps 前脱敏。
+    短 key(测试/畸形输入)缩窄片段避免前后缀重叠。
+    """
+    if len(key) < 12:
+        return f"{key[:4]}...{key[-2:]}"
+    return f"{key[:6]}...{key[-4:]}"
+
+
 def ws_reconnect_verdict(before: str, after: str, last_event_age_s: float) -> tuple[bool, str]:
     """引擎 user stream 断线重连后的独立探针判定:(引擎未受影响?, 判定原因)。
 
@@ -244,7 +255,7 @@ class UserStreamReconnectScenario(ScenarioBase):
                 )
             logger.info("user_stream_reconnect: 独立 listen key 探针开始(不触碰引擎真实 listen key)")
             key1 = await self._create_listen_key()
-            steps.append({"action": "listen_key_created", "key": key1, "probe": "first"})
+            steps.append({"action": "listen_key_created", "key": _mask_key(key1), "probe": "first"})
             probe1 = await self._ws_probe(key1, self._probe_window)
             steps.append({"action": "ws_probe_first", **probe1})
             if not probe1.get("connected"):
@@ -255,7 +266,7 @@ class UserStreamReconnectScenario(ScenarioBase):
             steps.append(
                 {
                     "action": "listen_key_recreated",
-                    "key": key2,
+                    "key": _mask_key(key2),
                     "note": "Binance 语义:新 listenKey 使旧 key 失效,即用户数据流重连",
                 }
             )

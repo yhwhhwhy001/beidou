@@ -9,6 +9,7 @@ FAIL 自捕获。
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -495,6 +496,33 @@ def test_database_restart_brew_exception_self_captured_fail(tmp_path: Path) -> N
     assert not any(s.get("action") == "brew_restart" for s in steps)
 
 
+def test_database_restart_brew_timeout_self_captured_fail(tmp_path: Path) -> None:
+    """brew 命令超时(真实路径受 120s timeout 约束,防全局锁无限挂起)→ FAIL,
+    错误类型 TimeoutExpired 在证据中可见。"""
+
+    def _brew_timeout() -> None:
+        raise subprocess.TimeoutExpired(
+            cmd=["/opt/homebrew/bin/brew", "services", "restart", "postgresql@16"], timeout=120
+        )
+
+    clock = _FakeClock()
+    fake = _FakeDBOps(clock)
+    scenario = DatabaseRestartScenario(
+        now=clock.now,
+        sleep=clock.sleep,
+        fetch_status=fake.fetch_status,
+        pg_connect=fake.pg_connect,
+        brew_restart=_brew_timeout,
+        engine_pid=fake.engine_pid,
+    )
+    result = asyncio.run(scenario.run(_ctx(tmp_path)))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "TimeoutExpired"
+    assert "timed out after 120 seconds" in result.error_message
+    assert result.evidence["steps"] != []
+
+
+
 # ---- user_stream_reconnect 全流程:独立 listen key 探针 → 引擎不受影响 → PASS ----
 
 
@@ -514,9 +542,10 @@ def test_user_stream_reconnect_full_flow_pass(tmp_path: Path) -> None:
     steps = evidence["steps"]
 
     created = next(s for s in steps if s.get("action") == "listen_key_created")
-    assert created["key"] == "probe-key-1"
+    assert created["key"] == "prob...-1"  # 证据脱敏:仅保留前后片段,无完整凭据
     recreated = next(s for s in steps if s.get("action") == "listen_key_recreated")
-    assert recreated["key"] == "probe-key-2"
+    assert recreated["key"] == "prob...-2"
+    assert "probe-key-1" not in str(steps) and "probe-key-2" not in str(steps)
     first = next(s for s in steps if s.get("action") == "ws_probe_first")
     assert first["connected"] is True
     second = next(s for s in steps if s.get("action") == "ws_probe_second")
@@ -624,14 +653,17 @@ def test_user_stream_reconnect_create_listen_key_failure_fail(tmp_path: Path) ->
 
 
 def test_user_stream_reconnect_client_unavailable_not_verifiable(tmp_path: Path) -> None:
+    async def _dummy() -> None:
+        raise AssertionError("CLIENT_UNAVAILABLE 时应先行返回,不得调用探针依赖")
+
     clock = _FakeClock()
     engine = _FakeWSRuntimeOps(clock)
     probe = _FakeWSProbe([])
     scenario = UserStreamReconnectScenario(
         now=clock.now,
         fetch_status=engine.fetch_status,
-        create_listen_key=lambda: None,  # type: ignore[return-value]
-        close_listen_key=lambda key: None,  # type: ignore[return-value]
+        create_listen_key=_dummy,
+        close_listen_key=_dummy,
         ws_probe=probe.probe,
     )
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=None)))

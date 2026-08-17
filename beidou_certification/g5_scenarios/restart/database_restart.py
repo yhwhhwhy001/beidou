@@ -106,12 +106,19 @@ class DatabaseRestartScenario(ScenarioBase):
 
     @staticmethod
     def _brew_restart_real() -> None:
-        """真实重启:brew services restart postgresql@16。"""
+        """真实重启:brew services restart postgresql@16。
+
+        timeout 与 PG 恢复窗口一致(120s):brew 可能因全局锁无限阻塞,这是
+        唯一不受轮询 deadline 约束的真实动作,必须限时,否则认证轮整体挂起
+        且零证据;TimeoutExpired/CalledProcessError 走 run() 通用
+        except Exception → FAIL(error_type 即异常类名)。
+        """
         subprocess.run(
             ["/opt/homebrew/bin/brew", "services", "restart", "postgresql@16"],
             check=True,
             capture_output=True,
             text=True,
+            timeout=_PG_RESTORE_DEADLINE_SECONDS,
         )
 
     # ---- 轮询与校验 ----
