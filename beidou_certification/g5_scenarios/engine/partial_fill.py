@@ -25,6 +25,19 @@ NOT_VERIFIABLE。全 miss 后 sleep 10s 再扫一轮(每轮重新随机采样),
 下单:LIMIT,qty=budget_qty(该品种动态计算、stepSize 对齐),price=best_ask,
 GTC,普通限价(不带 iceberg)。notional 记账:入场 43.3×4.156≈180 +
 平仓 50.3 = 230.3;全成路径 180+180=360 ≤ cap 400。
+
+Ruling-19(认证轮 #9 证据:FXSUSDT 探测时 best_ask=0.3156 命中谓词,下单瞬间
+盘口价格摆动到 0.3035(3.8%),交易所 400 "Limit price can't be higher than
+0.303535" → 探测-下单竞态 FAIL):命中候选后不再直接下单,改为尝试循环
+(_PLACE_ATTEMPTS=3)—— 每次尝试前重新 get_depth(selected_symbol) 取最新
+best_ask 重算 min_gate_qty/budget_qty(复用 min_gate_quantity/_budget_entry_qty)
+并重验谓词;谓词失效 → book_moved 步骤(too_deep/price_out_of_range/no_ask,
+含最新盘口字段)回扫描循环继续下一候选(不加 sleep;attempt 之间不加 sleep,
+重新探测本身取最新状态);谓词满足 → create_order LIMIT qty=最新 budget_qty
+price=最新 best_ask,成功即进入下单后流程(轮询/守卫/撤单/平仓全部复用,
+entry_price/min_gate_qty/notional 用最新值);create_order Result 错误 →
+place_attempt 步骤(错误原文截断 300 字符)后重试,最多 3 次;3 次全败 →
+FAIL(error_type=RuntimeError,error_message 携带最后一次错误原文)。
 轮询:下单后首查 0.5s、之后 1s 间隔、30 次 ≈ 30s 窗口(余量挂单在盘口,市场
 扫单可能 1-2s 内全成,首查要快);PARTIALLY_FILLED → 组件级守卫断言
 (terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
@@ -90,6 +103,7 @@ _SCAN_RETRY_INTERVAL_SECONDS = 10.0  # 全 miss 后重扫间隔(注入睡眠 sea
 _PRICE_FILTER_MIN = Decimal("0.05")  # 候选价格下界(min_gate 对齐粒度)
 _PRICE_FILTER_MAX = Decimal("100")  # 候选价格上界
 _ENTRY_BUDGET_USDT = Decimal("180")  # 固定大单量半额预算(Ruling-18,全成路径 360 ≤ cap 400)
+_PLACE_ATTEMPTS = 3  # 下单尝试循环上限(Ruling-19:每次尝试前重新探测最新盘口)
 _NOT_VERIFIABLE_REASON = "liquidity_insufficient_or_too_deep"
 _TERMINAL_NO_CANCEL = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
 
@@ -206,21 +220,26 @@ class PartialFillScenario(ScenarioBase):
             assert ctx.client is not None
             client = ctx.client
 
-            # ---- 动态扫描浅盘口品种(Ruling-16/Ruling-18,fix round 9)----
+            # ---- 动态扫描浅盘口品种(Ruling-16/Ruling-18/Ruling-19,fix round 10)----
             # 认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9,固定候选列表失效
             # (testnet 做市盘全局动态摆动)→ 动态扫描替代固定候选;
             # 认证轮 #8:浅盘口谓词 top_ask×3 < min_gate 在深做市盘(top 档量
             # 分钟级摆动,HYPEUSDT qty ∈ {1.09,...,2702})下 3 轮 90 品种全
-            # miss → Ruling-18 放宽谓词 + 固定大单量:
+            # miss → Ruling-18 放宽谓词 + 固定大单量;
+            # 认证轮 #9:FXSUSDT 探测 best_ask=0.3156 命中谓词后下单瞬间价格
+            # 摆到 0.3035(3.8%)→ 400 "Limit price can't be higher than
+            # 0.303535" → Ruling-19 尝试循环(每次下单前重新 get_depth 重算
+            # 重验,见 _attempt_place):
             # get_exchange_info() 全量取 status=TRADING 且 USDT 结尾品种(缺
             # LOT_SIZE 的跳过),best_ask ∈ [0.05, 100] 过滤(min_gate 对齐粒度
             # 合理),seed 用 injected now 整数部分随机采样最多 30 个(可复现),
             # 逐个探测 depth(谓词:top_ask>0 且 top_ask ≤ budget_qty -
             # min_gate_qty,含边界;budget_qty = floor(180/price, step) 向下
             # 对齐,min_gate 用全量 exchangeInfo 的 minQty/step + best_ask
-            # 计算,无需 ticker 调用);全 miss 后 sleep 10s 再扫一轮(每轮
-            # 重新随机采样),最多 6 轮;仍全 miss → NOT_VERIFIABLE(证据记
-            # 每轮采样数与 miss 数)。
+            # 计算,无需 ticker 调用);命中 → 尝试循环:谓词失效(book_moved)
+            # 回扫描继续下一候选(不加 sleep);全 miss 后 sleep 10s 再扫一轮
+            # (每轮重新随机采样),最多 6 轮;仍全 miss → NOT_VERIFIABLE
+            # (证据记每轮采样数与 miss 数)。
             full_info = _require_ok(await client.get_exchange_info(), "get_exchange_info")
             lot_sizes: dict[str, tuple[Decimal, Decimal]] = {}
             for entry in full_info.get("symbols", []):
@@ -236,10 +255,13 @@ class PartialFillScenario(ScenarioBase):
             min_gate_qty = Decimal("0")
             entry_budget_qty = Decimal("0")
             selected_symbol = ""
+            notional = 0.0
+            order: Any = None
             for round_no in range(1, _SCAN_ROUNDS + 1):
                 # 每轮混入 round_no 重新采样(与 rng 跨轮推进等价,证据可复现)
                 sampled = _deterministic_sample(candidates, scan_seed + round_no, _SCAN_SAMPLE_SIZE)
                 misses = 0
+                round_hit = False
                 for candidate in sampled:
                     min_qty, step_size = lot_sizes[candidate]
                     depth = _require_ok(await client.get_depth(candidate), "get_depth")
@@ -253,35 +275,49 @@ class PartialFillScenario(ScenarioBase):
                         "top_ask_qty": str(asks[0][1]) if asks else "",
                         "top_bid": str(bids[0][0]) if bids else "",
                     }
-                    if asks:
-                        ask_price = Decimal(str(asks[0][0]))
-                        ask_qty = Decimal(str(asks[0][1]))
-                        candidate_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
-                        candidate_budget_qty = _budget_entry_qty(ask_price, step_size)
-                        probe["min_gate_qty"] = _format_qty(candidate_min_gate)
-                        probe["budget_qty"] = _format_qty(candidate_budget_qty)
-                        if not (_PRICE_FILTER_MIN <= ask_price <= _PRICE_FILTER_MAX):
-                            probe["reason"] = "price_out_of_range"
-                        elif ask_qty > 0 and ask_qty <= candidate_budget_qty - candidate_min_gate:
-                            selected_symbol = candidate
-                            entry_price = ask_price
-                            min_gate_qty = candidate_min_gate
-                            entry_budget_qty = candidate_budget_qty
-                            probe["selected"] = True
-                            steps.append(probe)
-                            break
-                        else:
-                            probe["reason"] = "too_deep"
-                    else:
+                    if not asks:
                         probe["reason"] = "no_ask"
-                    misses += 1
+                        misses += 1
+                        steps.append(probe)
+                        continue
+                    ask_price = Decimal(str(asks[0][0]))
+                    ask_qty = Decimal(str(asks[0][1]))
+                    candidate_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
+                    candidate_budget_qty = _budget_entry_qty(ask_price, step_size)
+                    probe["min_gate_qty"] = _format_qty(candidate_min_gate)
+                    probe["budget_qty"] = _format_qty(candidate_budget_qty)
+                    if not (_PRICE_FILTER_MIN <= ask_price <= _PRICE_FILTER_MAX):
+                        probe["reason"] = "price_out_of_range"
+                        misses += 1
+                        steps.append(probe)
+                        continue
+                    if not (ask_qty > 0 and ask_qty <= candidate_budget_qty - candidate_min_gate):
+                        probe["reason"] = "too_deep"
+                        misses += 1
+                        steps.append(probe)
+                        continue
+                    # 谓词命中 → 尝试循环(Ruling-19:下单前重新取最新盘口重算
+                    # 重验,防探测-下单竞态);book_moved 失败 → 回扫描继续下一
+                    # 候选(不加 sleep);3 次 place 失败 → RuntimeError FAIL
+                    probe["selected"] = True
+                    round_hit = True
                     steps.append(probe)
+                    place_result = await self._attempt_place(client, candidate, lot_sizes, steps)
+                    if place_result is None:
+                        continue
+                    selected_symbol = candidate
+                    entry_price = place_result["entry_price"]
+                    min_gate_qty = place_result["min_gate_qty"]
+                    entry_budget_qty = place_result["budget_qty"]
+                    notional = place_result["notional"]
+                    order = place_result["order"]
+                    break
                 round_summary: dict[str, Any] = {
                     "action": "scan_round",
                     "round_no": round_no,
                     "samples": len(sampled),
                     "misses": misses,
-                    "hit": bool(selected_symbol),
+                    "hit": round_hit,
                 }
                 steps.append(round_summary)
                 if selected_symbol or round_no == _SCAN_ROUNDS:
@@ -295,16 +331,18 @@ class PartialFillScenario(ScenarioBase):
                     {"steps": steps, "scan_rounds": [s for s in steps if s.get("action") == "scan_round"]},
                 )
 
-            # 下单:LIMIT,qty=budget_qty 固定大单(该品种动态计算、stepSize
-            # 对齐),price=best_ask,GTC,普通限价(不带 iceberg);命中谓词保证
-            # top_ask ≤ budget_qty - min_gate_qty → 部分成交时吃 top 档、
-            # 余量 = budget_qty - top ≥ min_gate 继续挂盘(确定性部分成交
-            # 语义;盘口摆动转深 → FILLED 全成路径平仓 + NOT_VERIFIABLE,
-            # 合法),入场 notional ≈ 180(全成路径 180+180=360 ≤ cap 400)
+            # 下单成功(Ruling-19 尝试循环已在 _attempt_place 创建订单):
+            # LIMIT qty=budget_qty 固定大单、price=最新 best_ask,GTC 普通限价
+            # (不带 iceberg);命中谓词保证 top_ask ≤ budget_qty - min_gate_qty
+            # → 部分成交时吃 top 档、余量 = budget_qty - top ≥ min_gate 继续
+            # 挂盘(确定性部分成交语义;盘口摆动转深 → FILLED 全成路径平仓 +
+            # NOT_VERIFIABLE,合法),入场 notional ≈ 180(全成路径 180+180=360
+            # ≤ cap 400)。order_id 先于 ledger 记账置位 —— 记账超限抛
+            # NotionalExceededError 时 finally 仍能撤单清理该真实订单。
             symbol = selected_symbol
             qty = entry_budget_qty
             price = str(entry_price)
-            notional = float(qty * entry_price)
+            order_id = int(order["orderId"])
             ctx.ledger.record(self.scenario_id, notional)
 
             logger.info(
@@ -314,19 +352,7 @@ class PartialFillScenario(ScenarioBase):
                 price,
                 notional,
             )
-            order = _require_ok(
-                await client.create_order(
-                    symbol,
-                    "BUY",
-                    "LIMIT",
-                    _format_qty(qty),
-                    price=price,
-                    time_in_force="GTC",
-                    client_order_id=f"g5-pfill-{int(self._now() * 1000)}",
-                ),
-                "create_order",
-            )
-            order_id = int(order["orderId"])
+            entry_side = str(order.get("side", "BUY")).upper()
             entry_side = str(order.get("side", "BUY")).upper()
             close_side = "SELL" if entry_side == "BUY" else "BUY"
             steps.append(
@@ -561,6 +587,93 @@ class PartialFillScenario(ScenarioBase):
                             "phase": "cleanup",
                         }
                     )
+
+    async def _attempt_place(
+        self,
+        client: Any,
+        symbol: str,
+        lot_sizes: dict[str, tuple[Decimal, Decimal]],
+        steps: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """下单尝试循环(Ruling-19):下单前重新探测最新盘口,重算并重验谓词。
+
+        认证轮 #9 根因:FXSUSDT 探测时 best_ask=0.3156 命中谓词,下单瞬间
+        价格摆动到 0.3035(3.8%),交易所 400 "Limit price can't be higher
+        than 0.303535" → 探测-下单竞态 FAIL。每次尝试前重新 get_depth:
+        - 谓词失效(no_ask/price_out_of_range/too_deep)→ 记录 book_moved
+          步骤(含最新盘口字段)返回 None,调用方回扫描循环继续下一候选
+          (不加 sleep;attempt 之间不加 sleep —— 重新探测本身取最新状态)
+        - 谓词满足 → create_order LIMIT qty=最新 budget_qty price=最新
+          best_ask,GTC 普通限价(不带 iceberg);成功返回含最新
+          entry_price/min_gate_qty/budget_qty/notional/order 的结果 dict
+        - create_order Result 错误 → 记录 place_attempt 步骤(错误原文截断
+          300 字符)后继续下一次尝试;_PLACE_ATTEMPTS 次全败 → 抛
+          RuntimeError 携带最后一次错误原文(run() 自捕获 → FAIL)。
+        """
+        last_error = ""
+        for attempt_no in range(1, _PLACE_ATTEMPTS + 1):
+            min_qty, step_size = lot_sizes[symbol]
+            depth = _require_ok(await client.get_depth(symbol), "get_depth")
+            asks = depth.get("asks") or []
+            bids = depth.get("bids") or []
+            moved: dict[str, Any] = {
+                "action": "book_moved",
+                "symbol": symbol,
+                "attempt_no": attempt_no,
+                "best_ask": str(asks[0][0]) if asks else "",
+                "top_ask_qty": str(asks[0][1]) if asks else "",
+                "top_bid": str(bids[0][0]) if bids else "",
+            }
+            if not asks:
+                moved["reason"] = "no_ask"
+                steps.append(moved)
+                return None
+            ask_price = Decimal(str(asks[0][0]))
+            ask_qty = Decimal(str(asks[0][1]))
+            latest_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
+            latest_budget_qty = _budget_entry_qty(ask_price, step_size)
+            moved["min_gate_qty"] = _format_qty(latest_min_gate)
+            moved["budget_qty"] = _format_qty(latest_budget_qty)
+            if not (_PRICE_FILTER_MIN <= ask_price <= _PRICE_FILTER_MAX):
+                moved["reason"] = "price_out_of_range"
+                steps.append(moved)
+                return None
+            if not (ask_qty > 0 and ask_qty <= latest_budget_qty - latest_min_gate):
+                moved["reason"] = "too_deep"
+                steps.append(moved)
+                return None
+            order_result = await client.create_order(
+                symbol,
+                "BUY",
+                "LIMIT",
+                _format_qty(latest_budget_qty),
+                price=str(ask_price),
+                time_in_force="GTC",
+                client_order_id=f"g5-pfill-{int(self._now() * 1000)}-{attempt_no}",
+            )
+            if order_result.is_ok:
+                order = order_result.data
+                assert order is not None
+                return {
+                    "order": order,
+                    "entry_price": ask_price,
+                    "min_gate_qty": latest_min_gate,
+                    "budget_qty": latest_budget_qty,
+                    "notional": float(latest_budget_qty * ask_price),
+                }
+            last_error = str(order_result.error)[:300]
+            steps.append(
+                {
+                    "action": "place_attempt",
+                    "attempt_no": attempt_no,
+                    "symbol": symbol,
+                    "qty": _format_qty(latest_budget_qty),
+                    "price": str(ask_price),
+                    "ok": False,
+                    "error": last_error,
+                }
+            )
+        raise RuntimeError(f"create_order 连续失败 {_PLACE_ATTEMPTS} 次: {last_error}")
 
     def _not_verifiable_liquidity(self, steps: list[dict[str, Any]], *, notional_usdt: float = 0.0) -> ScenarioResult:
         """流动性不足/盘口过深/全成交 → 无法验证部分成交语义。"""

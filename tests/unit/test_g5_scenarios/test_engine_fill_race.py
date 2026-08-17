@@ -203,6 +203,8 @@ class _FakeClient:
         cancel_status: str = "CANCELED",
         close_avg_price: str = "4.156",
         new_executed_qty: str = "0",
+        order_error_times: int = 0,
+        order_error_msg: str = "Limit price can't be higher than 0.303535",
     ) -> None:
         self.exchange_info = exchange_info or _EXCHANGE_INFO
         self.depth = depth or _DEPTH_DEFAULT
@@ -213,6 +215,8 @@ class _FakeClient:
         self.cancel_status = cancel_status
         self.close_avg_price = close_avg_price
         self.new_executed_qty = new_executed_qty
+        self.order_error_times = order_error_times
+        self.order_error_msg = order_error_msg
         self.placed: list[dict[str, Any]] = []
         self.close_orders: list[dict[str, Any]] = []
         self.cancelled: list[int] = []
@@ -249,6 +253,11 @@ class _FakeClient:
     ) -> Result[dict]:
         if self.fail_create:
             raise AssertionError("流动性不足时不得下单")
+        # Ruling-19:模拟交易所 400(如 "Limit price can't be higher than ..."),
+        # 前 order_error_times 次 LIMIT 下单返回错误(不产生订单记录)
+        if order_type == "LIMIT" and self.order_error_times > 0:
+            self.order_error_times -= 1
+            return Result.failure(message=self.order_error_msg, http_status=400)
         order_id = len(self.placed) + 1
         record: dict[str, Any] = {
             "orderId": order_id,
@@ -726,6 +735,137 @@ def test_partial_fill_cancel_race_filled_closes_full_executed(tmp_path: Path) ->
     assert close_step["qty"] == "43.3"  # max(轮询 2.1, final 43.3)
     assert fake.close_orders and fake.close_orders[0]["quantity"] == "43.3"
     assert result.evidence["closed"] is True and result.evidence["close_needed"] is True
+
+
+# ---- partial_fill: 探测-下单竞态尝试循环(Ruling-19) ----
+
+
+def test_partial_fill_book_moved_returns_to_scan(tmp_path: Path) -> None:
+    # 命中后尝试下单前盘口变深(book_moved)→ 回扫描循环继续探测后续候选;
+    # 6 轮再无命中 → NOT_VERIFIABLE;book_moved 步骤带最新盘口字段
+    depth_sequence_map = {
+        "INJUSDT": [
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "2.1"]]},  # 探测命中
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},  # 重探变深
+        ]
+    }
+    clock = _FakeProbeClock()
+    fake = _FakeClient(depth_sequence_map=depth_sequence_map)
+    fake.fail_create = True
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert "liquidity_insufficient_or_too_deep" in result.error_message
+    assert fake.placed == []  # 未下单
+    moved = next(s for s in result.evidence["steps"] if s.get("action") == "book_moved")
+    assert moved["symbol"] == "INJUSDT" and moved["attempt_no"] == 1
+    assert moved["reason"] == "too_deep" and moved["top_ask_qty"] == "100"
+    assert moved["min_gate_qty"] == "12.1" and moved["budget_qty"] == "43.3"
+    probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
+    assert len(probes) == 18  # 6 轮 × 3 品种(book_moved 后回扫描,后续候选继续探测)
+    assert any(p.get("selected") is True for p in probes)  # 探测时谓词确实命中过
+    rounds = [s for s in result.evidence["steps"] if s.get("action") == "scan_round"]
+    assert rounds[0]["hit"] is True and rounds[0]["misses"] == 2  # INJ 命中不计 miss,BTC/LTC 记 miss
+    assert clock.sleeps == [10.0] * 5  # 全 miss 轮间重扫间隔照常
+
+
+def test_partial_fill_book_moved_then_other_candidate_hits(tmp_path: Path) -> None:
+    # INJ 探测命中但重探变深(book_moved)→ 回扫描继续;LTCUSDT 浅盘口随后
+    # 命中并成功下单 → PASS,下单量用 LTC 最新 budget_qty 3.6
+    depth_sequence_map = {
+        "INJUSDT": [
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "2.1"]]},
+            {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]},
+        ],
+    }
+    depth_map = {
+        "LTCUSDT": {"lastUpdateId": 1, "bids": [["49.5", "5"]], "asks": [["50", "0.2"]]},
+    }
+    fake = _FakeClient(
+        depth_sequence_map=depth_sequence_map,
+        depth_map=depth_map,
+        order_statuses=["PARTIALLY_FILLED", "CANCELED"],
+        close_avg_price="50",
+    )
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    moved = next(s for s in steps if s.get("action") == "book_moved")
+    assert moved["symbol"] == "INJUSDT" and moved["reason"] == "too_deep"
+    placed = fake.placed[0]
+    assert placed["symbol"] == "LTCUSDT" and placed["quantity"] == "3.6"
+    assert placed["price"] == "50"
+    probes = [s for s in steps if s.get("action") == "depth_probe"]
+    assert [p["symbol"] for p in probes] == ["INJUSDT", "BTCUSDT", "LTCUSDT"]  # book_moved 后继续探测
+    rounds = [s for s in steps if s.get("action") == "scan_round"]
+    assert len(rounds) == 1 and rounds[0]["hit"] is True
+    assert fake.cancelled == [1]
+
+
+def test_partial_fill_place_retry_then_success(tmp_path: Path) -> None:
+    # create_order 返回 400 错误 2 次后第 3 次成功(Ruling-19 尝试循环):
+    # place_attempt 记录 2 条,最终 PASS 且下单量/价与最新重探一致
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "CANCELED"], order_error_times=2)
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    attempts = [s for s in steps if s.get("action") == "place_attempt"]
+    assert [a["attempt_no"] for a in attempts] == [1, 2]
+    assert all(a["ok"] is False for a in attempts)
+    assert all("0.303535" in a["error"] for a in attempts)
+    assert all(a["symbol"] == "INJUSDT" and a["qty"] == "43.3" and a["price"] == "4.156" for a in attempts)
+    placed = fake.placed[0]
+    assert placed["type"] == "LIMIT" and placed["quantity"] == "43.3" and placed["price"] == "4.156"
+    assert fake.cancelled == [1]
+
+
+def test_partial_fill_place_three_failures_fail(tmp_path: Path) -> None:
+    # 3 次 create_order 全败 → FAIL,error_type=RuntimeError,error_message
+    # 携带最后一次错误原文;无订单创建、无撤单、ledger 零记账
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED"], order_error_times=3)
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "RuntimeError"
+    assert "0.303535" in result.error_message
+    attempts = [s for s in result.evidence["steps"] if s.get("action") == "place_attempt"]
+    assert [a["attempt_no"] for a in attempts] == [1, 2, 3]
+    assert all(a["ok"] is False for a in attempts)
+    assert fake.placed == [] and fake.cancelled == []
+    assert ctx.ledger.total == 0.0
+
+
+def test_partial_fill_place_reprobe_price_moved_uses_latest(tmp_path: Path) -> None:
+    # 谓词重验:重探时价格变动 → 下单 qty/price 用最新值(budget_qty 随价格
+    # 重算):INJ 探测 4.156/2.1 命中 → 重探 4.0/1.5 → budget 45.0、
+    # min_gate 12.5 → 下单 45 @ 4.0(非探测时 43.3 @ 4.156)
+    depth_sequence_map = {
+        "INJUSDT": [
+            {"lastUpdateId": 1, "bids": [["3.99", "5"]], "asks": [["4.156", "2.1"]]},  # 探测
+            {"lastUpdateId": 1, "bids": [["3.99", "5"]], "asks": [["4.0", "1.5"]]},  # 重探(价格摆动)
+        ]
+    }
+    fake = _FakeClient(
+        depth_sequence_map=depth_sequence_map,
+        order_statuses=["PARTIALLY_FILLED", "CANCELED"],
+        close_avg_price="4.0",
+    )
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    placed = fake.placed[0]
+    assert placed["quantity"] == "45" and placed["price"] == "4.0"  # 最新值
+    place = next(s for s in steps if s.get("action") == "place_order")
+    assert place["qty"] == "45" and place["price"] == "4.0"
+    # 探测时记录的 min_gate/budget 是旧值,下单用重探后新值(证据可核对)
+    probe = next(p for p in steps if p.get("action") == "depth_probe" and p.get("selected"))
+    assert probe["min_gate_qty"] == "12.1" and probe["budget_qty"] == "43.3"
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["qty"] == "12.5"  # max(成交 1.5, min_gate 12.5)
+    assert ctx.ledger.total == pytest.approx(45 * 4.0 + 12.5 * 4.0)  # 入场 180 + 平仓 50
 
 
 # ---- cancel_fill_race: 假连接(模拟 PostgresPersistentStore 的 SQL 面) ----
