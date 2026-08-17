@@ -7032,7 +7032,7 @@ class AutonomousEngine:
                     if not _parsed_account.is_success() or _parsed_account.data is None:
                         self._user_stream_fault("ACCOUNT_EVENT_PARSE_UNKNOWN")
                         return
-                    accepted = self.ingest_user_account_update(parsed.data)
+                    accepted = self.ingest_user_account_update(_parsed_account.data)
                 elif event_type == "ACCOUNT_CONFIG_UPDATE":
                     # BD-FIX (S1): ACCOUNT_CONFIG_UPDATE 是 Binance 推送的
                     # 信息性事件（杠杆变更、保证金模式变更等），不是数据流
