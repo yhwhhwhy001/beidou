@@ -1,22 +1,22 @@
 """partial_fill: 盘口流动性窗口主动探测 → 贴价 LIMIT 买单 → PARTIALLY_FILLED 守卫断言。
 
-流动性窗口主动探测(控制器裁决:被动等盘口命中部分成交窗口不可靠 ——
-认证轮 #2 全成交、#3 流动性门不通过、盘口又太深):最多 8 次 get_depth
-探测、间隔 8s(注入时钟/睡眠 seam),每次取顶部 ask 量,落入窗口
-min_gate_qty < ask_qty < max_partial_qty 即立即下单并继续原流程;
-8 次未命中 → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep",证据记录
-每次探测 top_ask 与 miss 原因)。min_gate_qty = 最小过门槛量(stepSize 对齐
-的最小 qty 使 qty×price ≥ testnet MIN_NOTIONAL=50,保证不 HTTP 400);
-max_partial_qty = 最大 stepSize 对齐量使 入场 notional + 等量平仓 notional
-≤ ledger cap(入场 ≤ cap/2,≈0.003 BTC,为平仓留空间,不再需要 fallback
-全成交兜底)。
-下单量 = min(顶部 ask 深度 × 1.5, max_partial_qty)对齐 step 且 ≥ min_qty,
-价格 = 最优 ask(贴市价);qty > ask_qty(窗口保证)成交顶部档后剩余挂单即
-PARTIALLY_FILLED(不做 resting 远离市价 —— 本场景目标是部分成交而非不成交)。
-30s(15×2s)轮询 get_order:PARTIALLY_FILLED → 组件级守卫断言
-(terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
-save_order_state 单调守卫语义对拍,证据记录 monotonic_guard_source)并撤单清理;
-全 FILLED 或窗口内仍 NEW → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep")。
+流动性窗口主动探测(控制器裁决 fix round 3/4:认证轮 #2 全成交、#3 流动性
+门不通过、#4 窄窗口 64s 未命中):最多 30 次 get_depth 探测、间隔 8s(注入
+时钟/睡眠 seam),每次取顶部 ask 量,命中条件 top_ask_qty < max_partial_qty
+(去掉 min_gate 下界 —— 下单改限价单 qty=max_partial,部分成交量 = top_ask
+任意小都合法,订单层面 notional 由 qty 保证 ≥ MIN_NOTIONAL)即立即下单并
+继续原流程;30 次未命中 → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep",
+证据记录每次探测 top_ask 与 miss 原因)。max_partial_qty = 最大 stepSize
+对齐量使 入场 notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,
+≈0.003 BTC,为平仓留空间)。
+下单:限价单(LIMIT,price=最优 ask,qty=max_partial_qty,GTC);qty > top_ask
+(窗口保证)成交顶部档后剩余挂单即 PARTIALLY_FILLED(不做 resting 远离市价
+—— 本场景目标是部分成交而非不成交)。轮询:下单后首查 0.5s、之后 1s 间隔、
+30 次 ≈ 30s 窗口(余量挂单在盘口,市场扫单可能 1-2s 内全成,首查要快);
+PARTIALLY_FILLED → 组件级守卫断言(terminal_monotonic_guard("PARTIALLY_FILLED",
+"NEW")=="PARTIALLY_FILLED",与引擎 save_order_state 单调守卫语义对拍,证据
+记录 monotonic_guard_source)并撤单清理;全 FILLED 或窗口内仍 NEW →
+NOT_VERIFIABLE("liquidity_insufficient_or_too_deep")。
 notional = 量×价格,累计超限 → NotionalExceededError 交 runner fail-fast。
 dry_run 早退不碰任何接口;run() 自捕获异常返回 FAIL。
 
@@ -58,11 +58,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_POLL_INTERVAL_SECONDS = 2.0
-_MAX_POLLS = 15  # 2s × 15 ≈ 30s 轮询窗口
-_MAX_PROBES = 8  # 流动性窗口最多 8 次探测
+_POLL_INTERVAL_SECONDS = 1.0  # 首查后 1s 间隔轮询
+_FIRST_POLL_DELAY_SECONDS = 0.5  # 下单后首查 0.5s(余量挂单在盘口,市场扫单可能 1-2s 内全成)
+_MAX_POLLS = 30  # 0.5s + 29×1s ≈ 30s 轮询窗口
+_MAX_PROBES = 30  # 流动性窗口最多 30 次探测(最长 240s)
 _PROBE_INTERVAL_SECONDS = 8.0  # 探测间隔 8s(注入睡眠 seam)
-_OVERSIZE_MULTIPLE = Decimal("1.5")  # 下单量 = 顶部 ask 深度 × 1.5(争取部分成交)
 _NOT_VERIFIABLE_REASON = "liquidity_insufficient_or_too_deep"
 _TERMINAL_NO_CANCEL = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
 
@@ -141,15 +141,15 @@ class PartialFillScenario(ScenarioBase):
             info = _require_ok(await client.get_exchange_info(ctx.symbol), "get_exchange_info")
             min_qty, step_size = _min_qty_and_step(ctx.symbol, info)
 
-            # ---- 流动性窗口主动探测(控制器裁决,fix round 3)----
-            # 被动等盘口命中部分成交窗口不可靠(认证轮 #2 全成交、#3 流动性
-            # 门不通过、盘口又太深):最多 8 次探测、间隔 8s(注入睡眠 seam)。
-            # 窗口:min_gate_qty < top_ask_qty < max_partial_qty(严格不等,避免
-            # 边界全成交/门不过)。min_gate_qty = 最小过门槛量(MIN_NOTIONAL=50,
-            # 保证下单不 HTTP 400);max_partial_qty = 最大 stepSize 对齐量使
-            # 入场 notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,
-            # 为平仓留空间)。8 次未命中 → NOT_VERIFIABLE(证据记每次探测
-            # top_ask 与 miss 原因)。
+            # ---- 流动性窗口主动探测(控制器裁决,fix round 4)----
+            # 认证轮 #4 窄窗口 64s 未命中(盘口顶部量在台阶间切换 0.0069/0.0008/114):
+            # 最多 30 次探测、间隔 8s(注入睡眠 seam)。命中条件 top_ask_qty <
+            # max_partial_qty(去掉 min_gate 下界 —— 限价单 qty=max_partial 下单,
+            # 部分成交量 = top_ask 任意小都合法,订单层面 notional 由 qty 保证
+            # ≥ MIN_NOTIONAL);max_partial_qty = 最大 stepSize 对齐量使 入场
+            # notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,为平仓留
+            # 空间)。30 次未命中 → NOT_VERIFIABLE(证据记每次探测 top_ask 与
+            # miss 原因)。
             ask_price = Decimal("0")
             ask_qty = Decimal("0")
             max_partial_qty = Decimal("0")
@@ -175,9 +175,8 @@ class PartialFillScenario(ScenarioBase):
                     min_gate_qty = min_gate_quantity(min_qty, step_size, ask_price)
                     max_partial_qty = (cap / 2 / ask_price // step_size) * step_size
                     if max_partial_qty <= min_gate_qty:
+                        # cap/2 不足以覆盖 MIN_NOTIONAL 门槛,窗口不可用
                         reason = "window_impossible"
-                    elif ask_qty <= min_gate_qty:
-                        reason = "below_min_gate"
                     elif ask_qty >= max_partial_qty:
                         reason = "above_max_partial"
                     else:
@@ -206,12 +205,11 @@ class PartialFillScenario(ScenarioBase):
             if not probe_hit:
                 return self._not_verifiable_liquidity(steps)
 
-            # 下单量 = min(顶部 ask 深度 × 1.5, max_partial_qty)对齐 step 且
-            # ≥ min_qty;窗口保证 qty > ask_qty(成交顶部档后剩余挂单即部分
-            # 成交)且入场 notional ≤ cap/2(平仓留空间)
-            qty = (ask_qty * _OVERSIZE_MULTIPLE // step_size) * step_size
-            qty = min(qty, max_partial_qty)
-            qty = max(qty, min_qty)
+            # 下单量 = max_partial_qty(整手对齐):限价单 qty > top_ask(窗口
+            # 保证)→ 成交顶部档后剩余挂单即部分成交;部分成交量 = top_ask
+            # 任意小都合法,订单层面 notional 由 qty 保证 ≥ MIN_NOTIONAL;
+            # 入场 notional ≤ cap/2(平仓留空间)
+            qty = max_partial_qty
             price = str(ask_price)
             notional = float(qty * ask_price)
             ctx.ledger.record(self.scenario_id, notional)
@@ -250,7 +248,9 @@ class PartialFillScenario(ScenarioBase):
             )
 
             for poll_no in range(1, _MAX_POLLS + 1):
-                await self._sleep(_POLL_INTERVAL_SECONDS)
+                # 首查 0.5s(余量挂单在盘口,市场扫单可能 1-2s 内全成,首查要快),
+                # 之后 1s 间隔;窗口 ≈ 0.5 + 29×1 = 29.5s
+                await self._sleep(_FIRST_POLL_DELAY_SECONDS if poll_no == 1 else _POLL_INTERVAL_SECONDS)
                 queried = _require_ok(await client.get_order(ctx.symbol, order_id), "get_order")
                 observed = str(queried.get("status", "NEW"))
                 last_executed_qty = Decimal(str(queried.get("executedQty", "0") or "0"))

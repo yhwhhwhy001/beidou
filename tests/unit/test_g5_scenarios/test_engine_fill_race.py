@@ -207,6 +207,21 @@ async def _noop_sleep(_: float) -> None:
     return None
 
 
+class _FakeProbeClock:
+    """partial_fill 假时钟:now() 返回假时间,sleep() 推进并记录每次间隔。"""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
+
+
 # ---- partial_fill: dry_run 早退不碰任何接口 ----
 
 
@@ -234,10 +249,10 @@ def test_partial_fill_client_unavailable_not_verifiable(tmp_path: Path) -> None:
 # ---- partial_fill: 流动性门与 notional 记账 ----
 
 
-def test_partial_fill_liquidity_gate_not_verifiable(tmp_path: Path) -> None:
-    # 顶部 ask 量(0.05)≤ min_gate_qty(1.0)→ 8 次探测全部 below_min_gate
+def test_partial_fill_window_too_deep_not_verifiable(tmp_path: Path) -> None:
+    # 顶部 ask 量(0.114)≥ max_partial_qty(0.008)→ 30 次探测全部 above_max_partial
     # 未命中窗口 → NOT_VERIFIABLE,证据记录每次探测与 miss 原因
-    depth = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0005"]]}
+    depth = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.114"]]}
     fake = _FakeClient(depth=depth)
     fake.fail_create = True  # 不得下单
     ctx = _ctx(fake, tmp_path)
@@ -247,11 +262,12 @@ def test_partial_fill_liquidity_gate_not_verifiable(tmp_path: Path) -> None:
     assert fake.placed == []
     assert ctx.ledger.total == 0.0
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
-    assert len(probes) == 8  # 8 次探测全部未命中
-    assert [s["probe_no"] for s in probes] == list(range(1, 9))
+    assert len(probes) == 30  # 30 次探测全部未命中
+    assert [s["probe_no"] for s in probes] == list(range(1, 31))
     misses = [s for s in result.evidence["steps"] if s.get("action") == "probe_miss"]
-    assert len(misses) == 8 and all(m["reason"] == "below_min_gate" for m in misses)
+    assert len(misses) == 30 and all(m["reason"] == "above_max_partial" for m in misses)
     assert misses[0]["min_gate_qty"] == "0.001"
+    assert misses[0]["max_partial_qty"] == "0.008"
 
 
 def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
@@ -264,7 +280,7 @@ def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     assert fake.placed == []
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
-    assert len(probes) == 8 and all(s["best_ask"] == "" for s in probes)  # 无盘口也探测满
+    assert len(probes) == 30 and all(s["best_ask"] == "" for s in probes)  # 无盘口也探测满
 
 
 def test_partial_fill_qty_capped_by_max_partial(tmp_path: Path) -> None:
@@ -306,30 +322,34 @@ def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
 
 
 def test_partial_fill_window_hit_after_misses(tmp_path: Path) -> None:
-    # 前两次探测窗口外(低于 min_gate / 高于 max_partial),第 3 次命中 →
-    # 立即下单并继续原流程;证据记录每次探测与 miss 原因
+    # 认证轮 #4 盘口台阶序列:顶部量在台阶间切换(0.0069/0.0008/114),窄窗口
+    # (0.0008, 0.0031) 64s 未命中;fix round 4 放宽命中条件(top_ask < max_partial,
+    # 去掉 min_gate 下界)→ 台阶 0.0008 命中,部分成交量任意小都合法
     depths = [
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0005"]]},  # 太薄
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.02"]]},    # 太深
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.004"]]},   # 命中
+        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0069"]]},  # 高于 max_partial
+        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "114"]]},     # 大台阶 miss
+        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0008"]]},  # 小台阶命中
     ]
     fake = _FakeClient(depths=depths, order_statuses=["PARTIALLY_FILLED", "CANCELED"])
-    ctx = _ctx(fake, tmp_path)
+    ctx = _ctx(fake, tmp_path, limit=372.0)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
     assert result.status == ScenarioStatus.PASS
     steps = result.evidence["steps"]
     probes = [s for s in steps if s.get("action") == "depth_probe"]
-    assert len(probes) == 3  # 第 3 次命中即停止探测
+    assert len(probes) == 3  # 第 3 次探测(台阶 0.0008)命中即停止
     assert fake.depth_calls == 3
     misses = [s for s in steps if s.get("action") == "probe_miss"]
     assert [m["probe_no"] for m in misses] == [1, 2]
-    assert misses[0]["reason"] == "below_min_gate"
-    assert misses[1]["reason"] == "above_max_partial"
+    assert all(m["reason"] == "above_max_partial" for m in misses)
     hit = next(s for s in steps if s.get("action") == "window_hit")
     assert hit["probe_no"] == 3
-    assert fake.placed and fake.placed[0]["quantity"] == "0.006"  # min(0.004×1.5, max_partial 0.008)
+    assert hit["top_ask_qty"] == "0.0008"
+    # 限价单:qty = max_partial_qty(0.003),price = 最优 ask
+    assert fake.placed and fake.placed[0]["quantity"] == "0.003"
+    assert fake.placed[0]["price"] == "60000" and fake.placed[0]["type"] == "LIMIT"
+    # 部分成交量 = 顶部 ask(0.0008,任意小都合法)→ 平掉已成交部分
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["qty"] == "0.004"  # 已成交部分(顶部 ask)平仓
+    assert close_step["qty"] == "0.0008"
     assert fake.cancelled == [1]  # 余量撤单
 
 
@@ -345,27 +365,46 @@ def test_partial_fill_full_fill_not_verifiable(tmp_path: Path) -> None:
     assert fake.cancelled == []  # 全成交,无需撤单清理
     # 全成交产生真实持仓 → 反向市价单平仓(防污染后续场景,认证轮 #2 根因)
     assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
-    assert fake.close_orders[0]["quantity"] == "0.006"
+    assert fake.close_orders[0]["quantity"] == "0.008"  # qty = max_partial_qty
     assert fake.close_orders[0]["type"] == "MARKET"
     assert fake.close_orders[0]["reduceOnly"] == "true"
     close_step = next(s for s in result.evidence["steps"] if s.get("action") == "close")
     assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
-    assert close_step["executed_qty"] == "0.006"
+    assert close_step["executed_qty"] == "0.008"
     assert result.evidence["closed"] is True
     assert result.evidence["close_needed"] is True
-    assert result.evidence["close_notional_usdt"] == pytest.approx(0.006 * 60000)
-    assert ctx.ledger.total == pytest.approx(0.006 * 60000 * 2)  # 入场 + 平仓单金额
+    assert result.evidence["close_notional_usdt"] == pytest.approx(0.008 * 60000)
+    assert ctx.ledger.total == pytest.approx(0.008 * 60000 * 2)  # 入场 + 平仓单金额
 
 
-def test_partial_fill_stays_new_not_verifiable(tmp_path: Path, monkeypatch: Any) -> None:
+def test_partial_fill_stays_new_not_verifiable(tmp_path: Path) -> None:
+    clock = _FakeProbeClock()
     fake = _FakeClient(order_statuses=["NEW"])
-    monkeypatch.setattr("beidou_certification.g5_scenarios.engine.partial_fill.asyncio.sleep", _noop_sleep)
     ctx = _ctx(fake, tmp_path)
-    result = asyncio.run(PartialFillScenario().run(ctx))
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert "liquidity_insufficient_or_too_deep" in result.error_message
-    assert len(fake.queries) >= 15  # 30s 窗口(15×2s)轮询满
+    assert len(fake.queries) >= 30  # 首查 0.5s + 29×1s ≈ 30s 窗口轮询满
+    assert clock.sleeps[0] == 0.5  # 首查 0.5s(余量挂单在盘口,扫单可能 1-2s 全成)
+    assert set(clock.sleeps[1:]) == {1.0}  # 之后 1s 间隔
     assert fake.cancelled == [1]  # 仍挂单 → 撤单清理
+
+
+# ---- partial_fill: 下单后首查 0.5s(FILLED 首查即捕获) ----
+
+
+def test_partial_fill_fast_first_poll_after_order(tmp_path: Path) -> None:
+    # 改进 3:下单后首查 0.5s、之后 1s 间隔;FILLED 首查即捕获 → 平仓 +
+    # NOT_VERIFIABLE(市场扫单 1-2s 内全成余量的场景不再被 2s 间隔错过)
+    clock = _FakeProbeClock()
+    fake = _FakeClient(order_statuses=["FILLED"])
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    polls = [s for s in result.evidence["steps"] if s.get("action") == "poll"]
+    assert len(polls) == 1  # 首查 0.5s 即捕获 FILLED,窗口提前结束
+    assert clock.sleeps == [0.5]  # 仅首查延迟一次
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.008"  # 平仓照常
 
 
 # ---- partial_fill: 部分成交成功路径 ----
@@ -379,7 +418,7 @@ def test_partial_fill_happy_path(tmp_path: Path) -> None:
     evidence = result.evidence
     assert evidence["partial_status"] == "PARTIALLY_FILLED"
     assert fake.placed and fake.placed[0]["price"] == "60000"  # 价格 = 最优 ask
-    assert fake.placed[0]["quantity"] == "0.006"  # ask 深度 0.004 × 1.5
+    assert fake.placed[0]["quantity"] == "0.008"  # qty = max_partial_qty
     assert fake.cancelled == [1]  # 余量撤单
     # 平掉已成交部分(顶部 ask 0.004),防持仓污染后续场景;反向市价单 + reduceOnly
     assert fake.close_orders and fake.close_orders[0]["side"] == "SELL"
@@ -392,7 +431,7 @@ def test_partial_fill_happy_path(tmp_path: Path) -> None:
     assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
     assert evidence["closed"] is True
     assert evidence["close_notional_usdt"] == pytest.approx(0.004 * 60000)
-    assert ctx.ledger.total == pytest.approx(0.006 * 60000 + 0.004 * 60000)  # 入场 + 平仓单金额
+    assert ctx.ledger.total == pytest.approx(0.008 * 60000 + 0.004 * 60000)  # 入场 + 平仓单金额
     # 组件级守卫断言(纯函数)与引擎守卫源码证据
     guard_steps = [s for s in evidence["steps"] if s.get("action") == "guard_component_assert"]
     assert guard_steps and guard_steps[0]["ok"] is True
@@ -422,7 +461,7 @@ def test_partial_fill_close_failure_fails(tmp_path: Path) -> None:
     assert "close boom" in result.error_message
     assert result.evidence["closed"] is False
     close_failed = next(s for s in result.evidence["steps"] if s.get("action") == "close_failed")
-    assert close_failed["side"] == "SELL" and close_failed["qty"] == "0.006"
+    assert close_failed["side"] == "SELL" and close_failed["qty"] == "0.008"
     assert "close boom" in close_failed["error"]
     assert fake.cancelled == []  # 全成交无需撤单
 
@@ -505,8 +544,8 @@ def test_partial_fill_cancel_race_filled_closes_full_executed(tmp_path: Path) ->
     assert result.error_type == "UNEXPECTED_FINAL_STATUS"  # 撤单后终态非 CANCELED
     steps = result.evidence["steps"]
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["qty"] == "0.006"  # max(轮询 0.004, final 0.006)
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.006"
+    assert close_step["qty"] == "0.008"  # max(轮询 0.004, final 0.008)
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.008"
     assert result.evidence["closed"] is True and result.evidence["close_needed"] is True
 
 
