@@ -12,13 +12,22 @@ from pathlib import Path
 
 from beidou_certification.g5_scenarios import runner as runner_module
 from beidou_certification.g5_scenarios.base import (
+    EvidenceWriteError,
     NotionalLedger,
     ScenarioBase,
     ScenarioContext,
     ScenarioResult,
     ScenarioStatus,
 )
-from scripts.testnet.run_g5 import _configure_scenario_logging, _extract_account_access, build_context, main
+from beidou_certification.g5_scenarios.runner import G5Runner
+from scripts.testnet import run_g5 as run_g5_module
+from scripts.testnet.run_g5 import (
+    _configure_scenario_logging,
+    _extract_account_access,
+    build_context,
+    main,
+    write_scenario_evidence_all,
+)
 
 
 class _FakeScenario(ScenarioBase):
@@ -72,6 +81,64 @@ def test_list_flag_prints_registry(capsys, monkeypatch) -> None:
     assert main() == 0
     out = capsys.readouterr().out
     assert "fake" in out
+
+
+def test_evidence_write_failure_fails_scenario_and_continues(tmp_path: Path, monkeypatch) -> None:
+    """证据写失败 → 该场景判 FAIL(error_type 记证据写错误类型,error_message
+    记路径),后续场景继续落盘,证书照常生成(spec §4:没有 durable evidence
+    的结果不算结果)。"""
+    evidence_dir = tmp_path / "evidence"
+    results = {
+        "alpha": ScenarioResult("alpha", ScenarioStatus.PASS, {"step": 1}, 0.1),
+        "beta": ScenarioResult("beta", ScenarioStatus.PASS, {"step": 2}, 0.1),
+        "gamma": ScenarioResult("gamma", ScenarioStatus.PASS, {"step": 3}, 0.1),
+    }
+    written: list[str] = []
+
+    def _flaky_write(ctx: ScenarioContext, result: ScenarioResult) -> Path:
+        written.append(result.scenario_id)
+        target = evidence_dir / f"{result.scenario_id}.json"
+        if result.scenario_id == "alpha":
+            raise EvidenceWriteError(f"场景证据写入失败 {target}: disk full")
+        if result.scenario_id == "gamma":
+            raise OSError("simulated raw OSError")
+        evidence_dir.mkdir(parents=True, exist_ok=True)  # 与真实 write_scenario_evidence 同语义
+        target.write_text("{}", encoding="utf-8")
+        return target
+
+    monkeypatch.setattr(run_g5_module, "write_scenario_evidence", _flaky_write)
+    ledger = NotionalLedger(1000.0)
+    ctx = build_context(client=None, ledger=ledger, evidence_dir=evidence_dir, symbol="BTCUSDT", dry_run=True)
+    out = write_scenario_evidence_all(results, lambda: ctx, evidence_dir)
+
+    # alpha/gamma 改判 FAIL:error_type 记错误类型,error_message 记目标路径
+    assert out["alpha"].status == ScenarioStatus.FAIL
+    assert out["alpha"].error_type == "EVIDENCE_WRITE_EvidenceWriteError"
+    assert str(evidence_dir / "alpha.json") in out["alpha"].error_message
+    assert out["gamma"].status == ScenarioStatus.FAIL
+    assert out["gamma"].error_type == "EVIDENCE_WRITE_OSError"
+    # 后续场景照常执行与落盘(未被首个失败中断)
+    assert out["beta"].status == ScenarioStatus.PASS
+    assert (evidence_dir / "beta.json").exists()
+    assert written == ["alpha", "beta", "gamma"]
+    # 证书照常生成:FAIL 进入证书汇总而非中断主流程
+    runner = G5Runner(
+        plan_path=Path("/nonexistent/plan.yaml"),
+        commit="test-commit",
+        testnet_url="https://testnet.binancefuture.com",
+        evidence_dir=evidence_dir,
+        ledger=ledger,
+        symbol="BTCUSDT",
+        make_context=lambda: ctx,
+    )
+    cert = runner.build_certificate(
+        out,
+        started_at="2026-08-17T00:00:00+00:00",
+        ended_at="2026-08-17T00:00:01+00:00",
+    )
+    assert cert["status"] == "FAIL"
+    assert cert["scenarios"]["alpha"]["status"] == "FAIL"
+    assert cert["scenarios"]["beta"]["status"] == "PASS"
 
 
 def test_configure_scenario_logging_enables_info_emission() -> None:

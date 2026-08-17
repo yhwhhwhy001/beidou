@@ -11,10 +11,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
 from beidou_certification.g5_scenarios.restart.process_restart import (
+    EnginePidAmbiguousError,
     ProcessRestartScenario,
     StatusUnreachableError,
+    engine_pid_os,
     parse_engine_status,
 )
 from beidou_certification.g5_scenarios.runner import RESTART_GROUP, SCENARIO_REGISTRY
@@ -238,6 +242,92 @@ def _scenario(clock: _FakeClock, fake: _FakeEngineOps, pg: _FakePG) -> ProcessRe
         process_deadline=120.0,
         ready_deadline=180.0,
     )
+
+
+# ---- engine_pid_os 候选过滤:bash wrapper 排除,选 python 引擎进程 ----
+
+
+class _FakeProcResult:
+    def __init__(self, stdout: str, returncode: int = 0) -> None:
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def _patch_proc(monkeypatch: Any, *, pgrep_stdout: str, comms: dict[int, str]) -> None:
+    """注入假 subprocess.run:pgrep -f 返回匹配集,ps -A -o pid=,comm= 返回可执行名。"""
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> _FakeProcResult:
+        if cmd[0] == "/usr/bin/pgrep":
+            return _FakeProcResult(pgrep_stdout)
+        if cmd[0] == "/bin/ps":
+            return _FakeProcResult("".join(f"{pid} {comm}\n" for pid, comm in comms.items()))
+        raise AssertionError(f"unexpected cmd: {cmd}")
+
+    monkeypatch.setattr("beidou_certification.g5_scenarios.restart.process_restart.subprocess.run", _fake_run)
+
+
+def test_engine_pid_os_filters_wrapper_picks_python(monkeypatch: Any) -> None:
+    """实测形态:80298=bash wrapper,80299=python 引擎 —— 必须选 python 进程。"""
+    _patch_proc(
+        monkeypatch,
+        pgrep_stdout="80298\n80299\n",
+        comms={80298: "bash", 80299: "/opt/homebrew/bin/python3.12"},
+    )
+    assert engine_pid_os() == 80299
+
+
+def test_engine_pid_os_single_python_candidate(monkeypatch: Any) -> None:
+    _patch_proc(monkeypatch, pgrep_stdout="9999\n", comms={9999: "python3.12"})
+    assert engine_pid_os() == 9999
+
+
+def test_engine_pid_os_no_match_returns_none(monkeypatch: Any) -> None:
+    _patch_proc(monkeypatch, pgrep_stdout="", comms={})
+    assert engine_pid_os() is None
+
+
+def test_engine_pid_os_only_wrapper_returns_none(monkeypatch: Any) -> None:
+    """pgrep 只命中 bash wrapper(引擎未在跑)→ None,走 engine_process_not_found。"""
+    _patch_proc(monkeypatch, pgrep_stdout="80298\n", comms={80298: "bash"})
+    assert engine_pid_os() is None
+
+
+def test_engine_pid_os_ambiguous_python_candidates_raises(monkeypatch: Any) -> None:
+    """多个 python 引擎候选 → EnginePidAmbiguousError,证据含过滤前后 PID 集。"""
+    _patch_proc(
+        monkeypatch,
+        pgrep_stdout="80298\n80299\n80300\n",
+        comms={80298: "bash", 80299: "python3.12", 80300: "python3.12"},
+    )
+    with pytest.raises(EnginePidAmbiguousError) as excinfo:
+        engine_pid_os()
+    assert excinfo.value.python_candidates == [80299, 80300]
+    assert excinfo.value.matched == [80298, 80299, 80300]  # wrapper 保留在匹配集证据
+
+
+def test_engine_pid_ambiguous_not_verifiable(tmp_path: Path) -> None:
+    """engine_pid seam 抛 EnginePidAmbiguousError → 场景 NOT_VERIFIABLE
+    (error_type=engine_pid_ambiguous),证据记匹配集与 python 候选,不做 SIGKILL。"""
+    clock = _FakeClock()
+    pg = _FakePG(_FakeEngineOps(clock))
+
+    def _ambig_pid() -> int | None:
+        raise EnginePidAmbiguousError(matched=[4242, 4243, 5353], python_candidates=[4242, 4243])
+
+    scenario = ProcessRestartScenario(
+        now=clock.now,
+        sleep=clock.sleep,
+        engine_pid=_ambig_pid,
+        sigkill=lambda pid: pytest.fail(f"ambiguous 时不得 SIGKILL: {pid}"),
+        kickstart=lambda: pytest.fail("ambiguous 时不得 kickstart"),
+        connect=lambda dsn: pg,
+    )
+    ctx = _ctx(tmp_path)
+    result = asyncio.run(scenario.run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert result.error_type == "engine_pid_ambiguous"
+    assert result.evidence["engine_pid_candidates"] == [4242, 4243]
+    assert result.evidence["pgrep_matched"] == [4242, 4243, 5353]
 
 
 # ---- dry_run:NOT_VERIFIABLE 且不触碰任何真实资源 ----

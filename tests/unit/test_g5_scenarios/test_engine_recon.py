@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any, Iterator
 from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
 from beidou_certification.g5_scenarios.engine.reconciliation_mismatch import (
     ReconciliationMismatchScenario,
+    _iso_from,
     position_diff,
 )
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
@@ -287,6 +289,23 @@ def _run_flow(
 
 def test_registered() -> None:
     assert SCENARIO_REGISTRY["reconciliation_mismatch"] is ReconciliationMismatchScenario
+
+
+# ---- 默认时钟是 epoch 秒(time.time),不是 boot 相对秒(monotonic) ----
+
+
+def test_default_now_is_epoch_time() -> None:
+    """默认 _now 与 time.time 同源:轮询 after 过滤/证据时间戳必须走 epoch 基准。
+
+    time.monotonic 回归会把它当 epoch 用(boot 秒经 fromtimestamp 转 → 1970
+    时间戳,after 过滤器恒空且证据年份错误)。年份与真实时钟漂移断言双保险。
+    """
+    scenario = ReconciliationMismatchScenario()
+    now = scenario._now()
+    assert datetime.fromtimestamp(now, tz=timezone.utc).year >= 2024
+    assert abs(now - time.time()) < 300  # 与真实 epoch 时钟同源(容忍测试机时钟偏移)
+    # _iso_from 产物同样落在真实年代(即轮询 SQL after 过滤用的字面量)
+    assert datetime.fromisoformat(_iso_from(now)).year >= 2024
 
 
 # ---- dry_run 不碰 PG ----

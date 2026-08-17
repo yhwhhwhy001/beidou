@@ -193,8 +193,13 @@ class ReconciliationMismatchScenario(ScenarioBase):
         mismatch_deadline: float = _MISMATCH_DEADLINE_SECONDS,
         matched_deadline: float = _MATCHED_DEADLINE_SECONDS,
     ) -> None:
-        """时钟与等待可注入(测试用假时钟/假连接);默认真实时间与真实 sleep。"""
-        self._now = now or time.monotonic
+        """时钟与等待可注入(测试用假时钟/假连接);默认真实时间与真实 sleep。
+
+        _now 默认用 time.time(epoch 秒),与 _iso_from 的 fromtimestamp
+        (epoch 基准)同源 —— 生产轮询 after 过滤/证据时间戳才是真实时间,
+        不能是 time.monotonic(boot 相对秒被当 epoch 转 → 1970)。
+        """
+        self._now = now or time.time
         self._sleep = sleep or asyncio.sleep
         self._poll_interval = poll_interval
         self._min_wait = min_wait

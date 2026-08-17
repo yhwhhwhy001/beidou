@@ -87,16 +87,51 @@ def fetch_status_http() -> dict[str, Any]:
     return payload
 
 
-def engine_pid_os() -> int | None:
-    """真实 PID 探测:pgrep -f "beidou start"(launchd autopilot 进程)。
+def _process_comms(pids: list[int]) -> dict[int, str]:
+    """ps -A -o pid=,comm= 全量取进程可执行名,过滤出候选 pid 的 comm。
 
+    参数为常量字面量(避免 S603 动态输入豁免);机器进程数 ~200 级,
+    单次调用开销可忽略。已退出/查不到的候选 pid 保持缺省。
+    """
+    if not pids:
+        return {}
+    proc = subprocess.run(
+        ["/bin/ps", "-A", "-o", "pid=,comm="],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    wanted = set(pids)
+    comms: dict[int, str] = {}
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            pid = int(parts[0])
+            if pid in wanted:
+                comms[pid] = parts[1]
+    return comms
+
+
+def engine_pid_os() -> int | None:
+    """真实 PID 探测:pgrep -f "beidou start" 匹配集内筛选 python 解释器进程。
+
+    launchd autopilot 的 bash wrapper 也命中 pgrep(实测 wrapper + python
+    引擎两进程并存);SIGKILL wrapper 只会留下孤儿引擎继续持有 InstanceLock,
+    新实例被 fencing 拒绝 —— 必须选 python 引擎进程。python 候选 >1 →
+    EnginePidAmbiguousError(多实例并存,不可安全选择),0 → None(引擎未在跑)。
     database_restart 复用同一默认注入依赖。
     """
     proc = subprocess.run(["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True)
     if proc.returncode != 0:
         return None
     pids = [int(line.strip()) for line in proc.stdout.splitlines() if line.strip().isdigit()]
-    return pids[0] if pids else None
+    if not pids:
+        return None
+    comms = _process_comms(pids)
+    python_pids = [pid for pid in pids if "python" in (comms.get(pid, "") or "").lower()]
+    if len(python_pids) > 1:
+        raise EnginePidAmbiguousError(pids, python_pids)
+    return python_pids[0] if python_pids else None
 
 
 def parse_engine_status(payload: dict) -> tuple[bool, str]:
@@ -138,6 +173,19 @@ class EngineRecoveryTimeoutError(RuntimeError):
 
 class DurableStateDriftError(RuntimeError):
     """重启后 durable 状态漂移(opening 基线损坏或新增 UNKNOWN outbox 行)。"""
+
+
+class EnginePidAmbiguousError(RuntimeError):
+    """pgrep 匹配集中 python 引擎候选 >1:多实例并存,不可安全选择 SIGKILL 目标。
+
+    candidates 记过滤前的 pgrep 匹配集(含 wrapper),python_candidates 记
+    python 解释器候选,供证据与人工排查。
+    """
+
+    def __init__(self, matched: list[int], python_candidates: list[int]) -> None:
+        super().__init__(f"matched={matched} python_candidates={python_candidates}")
+        self.matched = matched
+        self.python_candidates = python_candidates
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:
@@ -432,6 +480,18 @@ class ProcessRestartScenario(ScenarioBase):
             )
         except NotionalExceededError:
             raise  # 名义超限交给 runner fail-fast(资金保护优先)
+        except EnginePidAmbiguousError as exc:
+            # 引擎进程候选不唯一:不能安全选择 SIGKILL 目标,结果不可判定
+            return self._fail(
+                ScenarioStatus.NOT_VERIFIABLE,
+                "engine_pid_ambiguous",
+                f"引擎进程候选不唯一(多实例并存,需人工介入): {exc}",
+                {
+                    "steps": steps,
+                    "pgrep_matched": exc.matched,
+                    "engine_pid_candidates": exc.python_candidates,
+                },
+            )
         except Exception as exc:
             return self._fail(ScenarioStatus.FAIL, type(exc).__name__, str(exc)[:300], {"steps": steps})
         finally:

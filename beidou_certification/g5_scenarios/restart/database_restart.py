@@ -36,6 +36,7 @@ from beidou_certification.g5_scenarios.base import (
 )
 from beidou_certification.g5_scenarios.engine.ack_loss import PG_DSN
 from beidou_certification.g5_scenarios.restart.process_restart import (
+    EnginePidAmbiguousError,
     EngineRecoveryTimeoutError,
     StatusUnreachableError,
     engine_pid_os,
@@ -290,6 +291,18 @@ class DatabaseRestartScenario(ScenarioBase):
             )
         except NotionalExceededError:
             raise  # 名义超限交给 runner fail-fast(资金保护优先)
+        except EnginePidAmbiguousError as exc:
+            # 引擎进程候选不唯一(多实例并存),同 process_restart:结果不可判定
+            return self._fail(
+                ScenarioStatus.NOT_VERIFIABLE,
+                "engine_pid_ambiguous",
+                f"引擎进程候选不唯一(多实例并存,需人工介入): {exc}",
+                {
+                    "steps": steps,
+                    "pgrep_matched": exc.matched,
+                    "engine_pid_candidates": exc.python_candidates,
+                },
+            )
         except Exception as exc:
             return self._fail(ScenarioStatus.FAIL, type(exc).__name__, str(exc)[:300], {"steps": steps})
 

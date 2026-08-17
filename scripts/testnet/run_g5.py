@@ -24,13 +24,21 @@ import os
 import re
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import yaml
 
-from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, write_scenario_evidence
+from beidou_certification.g5_scenarios.base import (
+    EvidenceWriteError,
+    NotionalLedger,
+    ScenarioContext,
+    ScenarioResult,
+    ScenarioStatus,
+    write_scenario_evidence,
+)
 from beidou_launcher.models import CheckResult
 
 if TYPE_CHECKING:
@@ -126,6 +134,32 @@ def _extract_account_access(observations: dict) -> dict | None:
         "can_withdraw": s2["can_withdraw"],
         "has_balance": s2["has_balance"],
     }
+
+
+def write_scenario_evidence_all(
+    results: dict[str, ScenarioResult],
+    make_context: Callable[[], ScenarioContext],
+    evidence_dir: Path,
+) -> dict[str, ScenarioResult]:
+    """逐个落盘场景证据;单场景写失败 → 该场景改判 FAIL,后续场景照常。
+
+    spec §4:证据文件写入失败 → 场景判 FAIL(没有 durable evidence 的结果
+    不算结果)。失败时 error_type 记证据写错误类型,error_message 记目标路径;
+    绝不中断整体执行 —— 证书照常生成,FAIL 进入证书汇总。
+    """
+    for sid, result in results.items():
+        try:
+            write_scenario_evidence(make_context(), result)
+        except (EvidenceWriteError, OSError) as exc:
+            target = evidence_dir / f"{result.scenario_id}.json"
+            results[sid] = result = replace(
+                result,
+                status=ScenarioStatus.FAIL,
+                error_type=f"EVIDENCE_WRITE_{type(exc).__name__}",
+                error_message=f"证据写入失败 {target}: {exc}",
+            )
+        print(f"[{sid}] {result.status.value}")
+    return results
 
 
 def main() -> int:
@@ -532,9 +566,7 @@ def main() -> int:
         make_context=make_context,
     )
     results = runner.run_selected(only=args.scenario, skip_restart=args.skip_restart)
-    for sid, result in results.items():
-        write_scenario_evidence(make_context(), result)
-        print(f"[{sid}] {result.status.value}")
+    results = write_scenario_evidence_all(results, make_context, scenario_evidence_dir)
 
     # S2 实测账户事实覆盖 runner 占位默认;未测量时返回 None,由 runner 保守默认兜底
     account_access = _extract_account_access(observations)
