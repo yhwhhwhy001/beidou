@@ -148,6 +148,8 @@ _EXCHANGE_INFO: dict[str, Any] = {
         {
             "symbol": "INJUSDT",
             "status": "TRADING",
+            "contractType": "PERPETUAL",
+            "underlyingType": "COIN",
             "filters": [
                 {"filterType": "LOT_SIZE", "minQty": "0.1", "stepSize": "0.1"},
                 {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
@@ -156,6 +158,8 @@ _EXCHANGE_INFO: dict[str, Any] = {
         {
             "symbol": "BTCUSDT",
             "status": "TRADING",
+            "contractType": "PERPETUAL",
+            "underlyingType": "COIN",
             "filters": [
                 {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
                 {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
@@ -164,8 +168,22 @@ _EXCHANGE_INFO: dict[str, Any] = {
         {
             "symbol": "LTCUSDT",
             "status": "TRADING",
+            "contractType": "PERPETUAL",
+            "underlyingType": "COIN",
             "filters": [
                 {"filterType": "LOT_SIZE", "minQty": "0.001", "stepSize": "0.001"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            ],
+        },
+        # TradFi 永续(CRCLUSDT 实证: 下单被拒 "Please sign TradFi-Perps
+        # agreement contract fapi.")—— 扫描必须排除,不参与候选。
+        {
+            "symbol": "CRCLUSDT",
+            "status": "TRADING",
+            "contractType": "TRADIFI_PERPETUAL",
+            "underlyingType": "EQUITY",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.1", "stepSize": "0.1"},
                 {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
             ],
         },
@@ -365,8 +383,39 @@ def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
     probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
     assert len(probes) == 18 and all(p["best_ask"] == "" for p in probes)  # 6 轮 × 3 品种
     assert all(p["reason"] == "no_ask" for p in probes)
+    # TradFi 永续(CRCLUSDT)在扫描候选外 —— 永不被探测(下单被拒回归保护)
+    assert all(p["symbol"] != "CRCLUSDT" for p in probes)
     rounds = [s for s in result.evidence["steps"] if s.get("action") == "scan_round"]
     assert len(rounds) == 6
+
+
+def test_partial_fill_tradfi_symbols_excluded_from_scan(tmp_path: Path) -> None:
+    # 认证轮(2026-08-18)实证: CRCLUSDT(TRADIFI_PERPETUAL/EQUITY)下单被拒
+    # "Please sign TradFi-Perps agreement contract fapi." → 扫描仅限
+    # contractType=PERPETUAL 且 underlyingType=COIN 的经典永续。
+    # 全 TradFi 品种集 → 候选为空 → NOT_VERIFIABLE,不做任何盘口探测。
+    tradfi_info = {
+        "symbols": [
+            {
+                "symbol": "CRCLUSDT",
+                "status": "TRADING",
+                "contractType": "TRADIFI_PERPETUAL",
+                "underlyingType": "EQUITY",
+                "filters": [
+                    {"filterType": "LOT_SIZE", "minQty": "0.1", "stepSize": "0.1"},
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                ],
+            }
+        ]
+    }
+    fake = _FakeClient(exchange_info=tradfi_info)
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert "liquidity_insufficient_or_too_deep" in result.error_message
+    probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
+    assert probes == [] and fake.depth_calls == 0  # 无候选 → 零探测
+    assert fake.placed == []
 
 
 def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:

@@ -255,7 +255,13 @@ class PartialFillScenario(ScenarioBase):
             full_info = _require_ok(await client.get_exchange_info(), "get_exchange_info")
             lot_sizes: dict[str, tuple[Decimal, Decimal]] = {}
             for entry in full_info.get("symbols", []):
+                # 认证轮(2026-08-18)实证: TradFi 永续(contractType=TRADIFI_PERPETUAL,
+                # underlyingType=EQUITY, 如 CRCLUSDT)下单被拒
+                # "Please sign TradFi-Perps agreement contract fapi." ——
+                # 探测扫描仅限经典 COIN 永续,避免协议门槛导致场景误 FAIL。
                 if entry.get("status") != "TRADING" or not str(entry.get("symbol", "")).endswith("USDT"):
+                    continue
+                if str(entry.get("contractType", "")) != "PERPETUAL" or str(entry.get("underlyingType", "")) != "COIN":
                     continue
                 try:
                     lot_sizes[str(entry["symbol"])] = _min_qty_and_step(str(entry["symbol"]), full_info)
