@@ -245,18 +245,23 @@ class PartialFillScenario(ScenarioBase):
                 final = _require_ok(await client.get_order(ctx.symbol, order_id), "get_order_after_cancel")
                 final_status = str(final.get("status", ""))
                 steps.append({"action": "query_after_cancel", "status": final_status})
+                # 平仓量取撤单后最新成交:撤单竞态成交(final_status=FILLED)时
+                # 轮询值 last_executed_qty 是 stale,直接平会留残余;final 缺失
+                # executedQty 时 max 回退轮询值。
+                final_executed_qty = Decimal(str(final.get("executedQty", "0") or "0"))
+                close_qty = max(last_executed_qty, final_executed_qty)
                 # 平掉已成交部分(持仓量小但同样污染后续场景;余量已撤单,防
                 # 撤单前平仓导致余量再成交重新开仓)。平仓失败 → close_failed
                 # 证据 + FAIL(持仓残留不可接受)。
                 close_notional: float | None = None
-                if last_executed_qty > 0:
+                if close_qty > 0:
                     try:
                         close_notional = await self._close_position(
                             ctx,
                             steps,
                             symbol=ctx.symbol,
                             close_side=close_side,
-                            close_qty=last_executed_qty,
+                            close_qty=close_qty,
                             fallback_price=entry_price,
                         )
                     except Exception as exc:
@@ -264,7 +269,7 @@ class PartialFillScenario(ScenarioBase):
                             {
                                 "action": "close_failed",
                                 "side": close_side,
-                                "qty": _format_qty(last_executed_qty),
+                                "qty": _format_qty(close_qty),
                                 "error": str(exc)[:300],
                             }
                         )
@@ -278,6 +283,7 @@ class PartialFillScenario(ScenarioBase):
                                 "final_status_after_cancel": final_status,
                                 "notional_usdt": notional,
                                 "closed": False,
+                                "close_needed": True,
                             },
                         )
                     finally:
@@ -293,7 +299,8 @@ class PartialFillScenario(ScenarioBase):
                         "notional_usdt": notional,
                         "monotonic_guard_source": source,
                         "close_notional_usdt": close_notional,
-                        "closed": True,
+                        "closed": close_qty > 0,  # 无成交(executedQty=0)如实标注
+                        "close_needed": close_qty > 0,
                     },
                     time.monotonic() - started,
                     error_type="" if ok else "UNEXPECTED_FINAL_STATUS",
@@ -339,7 +346,8 @@ class PartialFillScenario(ScenarioBase):
                         "steps": steps,
                         "notional_usdt": notional,
                         "close_notional_usdt": filled_close_notional,
-                        "closed": True,
+                        "closed": last_executed_qty > 0,  # 无持仓(executedQty=0)如实标注
+                        "close_needed": last_executed_qty > 0,
                     },
                 )
             if observed in {"CANCELED", "EXPIRED", "REJECTED"}:
@@ -369,11 +377,14 @@ class PartialFillScenario(ScenarioBase):
                         )
                     except Exception as exc:
                         steps.append({"action": "cleanup_cancel", "ok": False, "error": str(exc)[:200]})
-            # 持仓清理保证(认证轮 #2 根因):只要观察到成交(部分/全部)就存在
-            # 真实持仓,且分支平仓未执行(守卫断言/撤单/查询异常等提前出口)→
-            # 兜底平仓;此路径结果已是 FAIL/异常,平仓失败仅记录 close_failed
-            # (不能再升级状态,但绝不静默带持仓离开场景)。
-            if observed in {"PARTIALLY_FILLED", "FILLED"} and last_executed_qty > 0 and not close_attempted:
+            # 持仓清理保证(认证轮 #2 根因):只要观察到成交数量(executedQty>0)
+            # 就存在真实持仓,且分支平仓未执行 → 兜底平仓。覆盖全部提前出口:
+            # 守卫断言/撤单/查询异常、CANCELED/EXPIRED/REJECTED 竞态部分成交
+            # (交易所真实状态:撤单成功但已部分成交)、窗口结束仍 NEW 但已成交;
+            # EXPIRED/REJECTED 时 executedQty 恒 0 不会误平。此路径结果已是
+            # FAIL/异常,平仓失败仅记录 close_failed(不再升级状态,但绝不静默
+            # 带持仓离开场景)。
+            if last_executed_qty > 0 and not close_attempted:
                 try:
                     logger.info(
                         "close_position %s %s %s (cleanup)", close_side, _format_qty(last_executed_qty), ctx.symbol

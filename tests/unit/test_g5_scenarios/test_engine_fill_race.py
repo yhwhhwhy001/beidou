@@ -111,12 +111,14 @@ class _FakeClient:
         order_statuses: list[str] | None = None,
         cancel_status: str = "CANCELED",
         close_avg_price: str = "0.50",
+        new_executed_qty: str = "0",
     ) -> None:
         self.exchange_info = exchange_info or _EXCHANGE_INFO
         self.depth = depth or _DEPTH_DEFAULT
         self.statuses = list(order_statuses or ["PARTIALLY_FILLED"])
         self.cancel_status = cancel_status
         self.close_avg_price = close_avg_price
+        self.new_executed_qty = new_executed_qty
         self.placed: list[dict[str, Any]] = []
         self.close_orders: list[dict[str, Any]] = []
         self.cancelled: list[int] = []
@@ -172,7 +174,12 @@ class _FakeClient:
         if len(self.statuses) > 1:
             self.statuses.pop(0)
         placed_qty = self.placed[-1]["quantity"] if self.placed else "15"
-        executed = {"PARTIALLY_FILLED": "10", "CANCELED": "10", "FILLED": placed_qty, "NEW": "0"}.get(status, "0")
+        executed = {
+            "PARTIALLY_FILLED": "10",
+            "CANCELED": "10",
+            "FILLED": placed_qty,
+            "NEW": self.new_executed_qty,
+        }.get(status, "0")
         return Result.success(
             {"orderId": order_id, "symbol": symbol, "status": status, "executedQty": executed, "origQty": placed_qty}
         )
@@ -299,6 +306,7 @@ def test_partial_fill_full_fill_not_verifiable(tmp_path: Path) -> None:
     assert close_step["order_id"] == 2 and close_step["status"] == "FILLED"
     assert close_step["executed_qty"] == "15"
     assert result.evidence["closed"] is True
+    assert result.evidence["close_needed"] is True
     assert result.evidence["close_notional_usdt"] == pytest.approx(15 * 0.50)
     assert ctx.ledger.total == pytest.approx(15 * 0.50 + 15 * 0.50)  # 入场 + 平仓单金额
 
@@ -402,6 +410,58 @@ def test_partial_fill_exception_after_fill_still_closes(tmp_path: Path) -> None:
     assert fake.close_orders and fake.close_orders[0]["quantity"] == "10"
     cleanup = next(s for s in steps if s.get("action") == "cleanup_cancel")
     assert cleanup["ok"] is True  # 撤单重试成功,无挂单残留
+
+
+# ---- partial_fill: finally 兜底平仓覆盖终态带成交(竞态部分成交后撤单) ----
+
+
+def test_partial_fill_canceled_with_executed_qty_still_closes(tmp_path: Path) -> None:
+    # 撤单竞态部分成交后撤单(CANCELED + executedQty>0 是交易所真实状态):
+    # _not_verifiable_terminal 出口后 finally 兜底平仓,不带持仓离开场景
+    fake = _FakeClient(order_statuses=["CANCELED"])
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario().run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert result.error_type == "UNEXPECTED_TERMINAL_WITHOUT_PARTIAL_FILL"
+    steps = result.evidence["steps"]
+    assert any(s.get("action") == "skip_cleanup_cancel" for s in steps)  # 已终态无需撤单
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["side"] == "SELL" and close_step["qty"] == "10"
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "10"
+    assert fake.cancelled == []  # 终态订单不触发撤单
+
+
+def test_partial_fill_new_with_executed_qty_still_closes(tmp_path: Path, monkeypatch: Any) -> None:
+    # 轮询窗口结束仍 NEW 但已有成交(状态查询滞后)→ finally 兜底平仓 + 撤单
+    fake = _FakeClient(order_statuses=["NEW"], new_executed_qty="10")
+    monkeypatch.setattr("beidou_certification.g5_scenarios.engine.partial_fill.asyncio.sleep", _noop_sleep)
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario().run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert "liquidity_insufficient_or_too_deep" in result.error_message
+    steps = result.evidence["steps"]
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["side"] == "SELL" and close_step["qty"] == "10"
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "10"
+    assert fake.cancelled == [1]  # 未终态订单照常撤单清理
+
+
+# ---- partial_fill: 撤单竞态成交 → 平仓量取 final executedQty(非 stale) ----
+
+
+def test_partial_fill_cancel_race_filled_closes_full_executed(tmp_path: Path) -> None:
+    # PARTIALLY_FILLED(executed 10)后撤单,撤单查询显示 FILLED(余量竞态成交
+    # executed 15)→ 平仓量取 max(10, final 15)=15,不留残余
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "FILLED"])
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario().run(ctx))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "UNEXPECTED_FINAL_STATUS"  # 撤单后终态非 CANCELED
+    steps = result.evidence["steps"]
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["qty"] == "15"  # max(轮询 10, final 15)
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "15"
+    assert result.evidence["closed"] is True and result.evidence["close_needed"] is True
 
 
 # ---- cancel_fill_race: 假连接(模拟 PostgresPersistentStore 的 SQL 面) ----
