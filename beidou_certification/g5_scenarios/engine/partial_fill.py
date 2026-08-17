@@ -353,7 +353,6 @@ class PartialFillScenario(ScenarioBase):
                 notional,
             )
             entry_side = str(order.get("side", "BUY")).upper()
-            entry_side = str(order.get("side", "BUY")).upper()
             close_side = "SELL" if entry_side == "BUY" else "BUY"
             steps.append(
                 {
