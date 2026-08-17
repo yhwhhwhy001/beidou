@@ -21,6 +21,7 @@ testnet 自动授权 baseline；live/canary 保持人工治理授权语义不变
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -682,3 +683,55 @@ def test_derive_liquidation_price_invalid_inputs_return_none() -> None:
     assert _derive_liquidation_price(0.01, 0.0, 3.0) is None  # 非法 entry
     assert _derive_liquidation_price(0.01, 608.43, 0.0) is None  # 非法杠杆
     assert _derive_liquidation_price(0.01, float("nan"), 3.0) is None
+
+
+def test_external_order_terminal_event_syncs_order_state() -> None:
+    """外部订单终态事件回落 order_state(G5 partial_fill 锁盘回归)。
+
+    镜像现场: 共享 demo 账户的认证探针单(不在 _active_order_ids)部分
+    成交后 CANCELED —— fill 记账已写 order_state=PARTIALLY_FILLED,
+    终态事件必须把它翻成 CANCELED,否则 system 侧恒多出 open order
+    → 对账 MISMATCHED 锁盘(LABUSDT 1525093545 实证)。
+    """
+    projector = _authorized_projector()
+    engine = _engine(projector=projector)
+    engine._outbox = Mock(project_user_order_update=Mock())
+    store = Mock()
+    engine._store = store
+    engine._active_order_ids = set()
+    engine._recon = Mock()
+
+    terminal = replace(
+        _unsequenced_order_update(),
+        order_status=OrderStatus.CANCELED,
+        cumulative_quantity=Quantity(amount="0.5"),
+        original_quantity=Quantity(amount="1.0"),
+    )
+    assert engine.ingest_user_order_update(terminal) is True
+    store.save_order_state.assert_called_once()
+    args, _kwargs = store.save_order_state.call_args
+    assert args[0] == "2623101001"
+    assert args[6] == "CANCELED"  # status 终态,store 单调守卫安全
+    assert args[7] == "0.5"  # filled_qty 保留成交事实
+
+
+def test_external_order_fill_event_does_not_touch_terminal_sync() -> None:
+    """非终态事件不触发 order_state 终态同步(写放大防护)。"""
+    projector = _authorized_projector()
+    engine = _engine(projector=projector)
+    engine._outbox = Mock(project_user_order_update=Mock())
+    store = Mock()
+    engine._store = store
+    engine._active_order_ids = set()
+    engine._recon = Mock()
+
+    partial = replace(
+        _unsequenced_order_update(),
+        order_status=OrderStatus.PARTIALLY_FILLED,
+        cumulative_quantity=Quantity(amount="0.5"),
+    )
+    assert engine.ingest_user_order_update(partial) is True
+    # PARTIALLY_FILLED 走 fill 记账路径(_consume_cumulative_fill),不写
+    # 终态同步分支;该路径需要更完整的引擎状态,此处仅断言不因缺失
+    # 组件崩溃、且不误写终态。
+    store.save_order_state.assert_not_called()

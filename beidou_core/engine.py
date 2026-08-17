@@ -6728,10 +6728,12 @@ class AutonomousEngine:
             # exchange 0 恒 MISMATCH）。注意不能用 _process_fill ——
             # 它要求订单在 _order_trackers（保护单订单不在）。
             _order_id = str(getattr(update, "order_id", "") or "")
+            _order_status = str(getattr(getattr(update, "order_status", None), "value", ""))
+            _externally_owned = _order_id not in getattr(self, "_active_order_ids", set())
             if (
                 result.status is UserProjectionStatus.ACCEPTED
-                and _order_id not in getattr(self, "_active_order_ids", set())
-                and str(getattr(getattr(update, "order_status", None), "value", "")) in {"FILLED", "PARTIALLY_FILLED"}
+                and _externally_owned
+                and _order_status in {"FILLED", "PARTIALLY_FILLED"}
             ):
                 try:
                     _result_payload = {
@@ -6763,6 +6765,34 @@ class AutonomousEngine:
                 except Exception as _event_fill_exc:
                     logger.warning(
                         "event-driven fill accounting failed for %s: %s", _order_id, type(_event_fill_exc).__name__
+                    )
+            elif (
+                result.status is UserProjectionStatus.ACCEPTED
+                and _externally_owned
+                and _order_status in {"CANCELED", "EXPIRED", "REJECTED"}
+            ):
+                # BD-FIX: 外部订单(共享 demo 账户的认证探针单等,不在本进程
+                # _active_order_ids)部分成交后终态(CANCELED/EXPIRED/REJECTED)
+                # 必须回落 order_state —— 否则 fill 记账留下的
+                # PARTIALLY_FILLED 记录永不收敛, system 侧恒多出 open order
+                # → 对账 MISMATCHED 锁盘(G5 认证 partial_fill 场景实证,
+                # LABUSDT 1525093545)。终态写入由 store 单调守卫保证安全
+                # (终态不可被非终态覆盖)。
+                try:
+                    self._store.save_order_state(
+                        _order_id,
+                        str(update.symbol),
+                        str(getattr(getattr(update, "side", None), "value", "")),
+                        str(getattr(getattr(update, "order_type", None), "value", "MARKET")),
+                        str(getattr(update, "original_quantity", Quantity(amount="0")).amount),
+                        None,
+                        _order_status,
+                        str(getattr(update, "cumulative_quantity", Quantity(amount="0")).amount),
+                        str(getattr(update, "average_price", Price(amount="0")).amount),
+                    )
+                except Exception as _terminal_state_exc:
+                    logger.warning(
+                        "terminal order_state sync failed for %s: %s", _order_id, type(_terminal_state_exc).__name__
                     )
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
