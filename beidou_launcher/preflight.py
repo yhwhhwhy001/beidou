@@ -63,7 +63,7 @@ def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, d
             expected_commit=commit,
             expected_scenarios=[str(item) for item in expected_scenarios],
             max_notional_usdt=float(max_notional),
-            allow_withdraw_permission=bool(plan.get("allow_withdraw_permission", False)),
+            allow_withdraw_permission=plan.get("allow_withdraw_permission") is True,
         )
         evidence["verification"] = verification.to_dict()
         if not verification.passed:

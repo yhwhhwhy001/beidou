@@ -596,7 +596,7 @@ def main() -> int:
         expected_commit=commit,
         expected_scenarios=expected_scenarios,
         max_notional_usdt=plan_max_notional,
-        allow_withdraw_permission=bool(plan.get("allow_withdraw_permission", False)),
+        allow_withdraw_permission=plan.get("allow_withdraw_permission") is True,
     )
     certificate["semantic_verification"] = verification.to_dict()
     if not verification.passed and certificate["status"] == "PASS":
