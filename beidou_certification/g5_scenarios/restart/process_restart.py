@@ -65,6 +65,40 @@ _PROCESS_DEADLINE_SECONDS = 120.0  # SIGKILL 后等 autopilot 拉起新进程 + 
 _READY_DEADLINE_SECONDS = 180.0  # 新进程就绪后等 trading_ready + recon MATCHED
 
 
+def fetch_status_http() -> dict[str, Any]:
+    """真实 /status 查询:http://127.0.0.1:9090/status(引擎 health server)。
+
+    响应结构见 beidou_core/health.py /status 处理器:trading_ready 与
+    last_reconciliation.status 均在顶层,与 parse_engine_status 契约一致;
+    不可达/非 JSON/非对象均抛 StatusUnreachableError(调用侧按未就绪处理)。
+    database_restart/user_stream_reconnect 复用同一默认注入依赖。
+    """
+    try:
+        with urllib.request.urlopen(_STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
+            raw = resp.read()
+    except OSError as exc:
+        raise StatusUnreachableError(f"status unreachable: {exc}") from exc
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StatusUnreachableError(f"status payload decode failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise StatusUnreachableError(f"status payload is not an object: {type(payload).__name__}")
+    return payload
+
+
+def engine_pid_os() -> int | None:
+    """真实 PID 探测:pgrep -f "beidou start"(launchd autopilot 进程)。
+
+    database_restart 复用同一默认注入依赖。
+    """
+    proc = subprocess.run(["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    pids = [int(line.strip()) for line in proc.stdout.splitlines() if line.strip().isdigit()]
+    return pids[0] if pids else None
+
+
 def parse_engine_status(payload: dict) -> tuple[bool, str]:
     """按 brief 契约解析 /status 响应 → (trading_ready, reason)。
 
@@ -166,33 +200,13 @@ class ProcessRestartScenario(ScenarioBase):
     # ---- 真实运维实现(默认依赖;认证轮经用户批准后由 run_g5.py 执行) ----
 
     def _fetch_status_http(self) -> dict[str, Any]:
-        """真实 /status 查询:http://127.0.0.1:9090/status(引擎 health server)。
-
-        响应结构见 beidou_core/health.py /status 处理器:trading_ready 与
-        last_reconciliation.status 均在顶层,与 parse_engine_status 契约一致;
-        不可达/非 JSON/非对象均抛 StatusUnreachableError(调用侧按未就绪处理)。
-        """
-        try:
-            with urllib.request.urlopen(_STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
-                raw = resp.read()
-        except OSError as exc:
-            raise StatusUnreachableError(f"status unreachable: {exc}") from exc
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise StatusUnreachableError(f"status payload decode failed: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise StatusUnreachableError(f"status payload is not an object: {type(payload).__name__}")
-        return payload
+        """真实 /status 查询(模块级 fetch_status_http 的实例别名)。"""
+        return fetch_status_http()
 
     @staticmethod
     def _engine_pid_os() -> int | None:
-        """真实 PID 探测:pgrep -f "beidou start"(launchd autopilot 进程)。"""
-        proc = subprocess.run(["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True)
-        if proc.returncode != 0:
-            return None
-        pids = [int(line.strip()) for line in proc.stdout.splitlines() if line.strip().isdigit()]
-        return pids[0] if pids else None
+        """真实 PID 探测(模块级 engine_pid_os 的静态别名)。"""
+        return engine_pid_os()
 
     @staticmethod
     def _sigkill_os(pid: int) -> None:
