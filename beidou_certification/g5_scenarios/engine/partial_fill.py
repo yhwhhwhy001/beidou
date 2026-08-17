@@ -1,14 +1,17 @@
 """partial_fill: 盘口流动性窗口主动探测 → 贴价 LIMIT 买单 → PARTIALLY_FILLED 守卫断言。
 
-流动性窗口主动探测(控制器裁决 fix round 3/4:认证轮 #2 全成交、#3 流动性
-门不通过、#4 窄窗口 64s 未命中):最多 30 次 get_depth 探测、间隔 8s(注入
-时钟/睡眠 seam),每次取顶部 ask 量,命中条件 top_ask_qty < max_partial_qty
-(去掉 min_gate 下界 —— 下单改限价单 qty=max_partial,部分成交量 = top_ask
-任意小都合法,订单层面 notional 由 qty 保证 ≥ MIN_NOTIONAL)即立即下单并
-继续原流程;30 次未命中 → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep",
-证据记录每次探测 top_ask 与 miss 原因)。max_partial_qty = 最大 stepSize
-对齐量使 入场 notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,
-≈0.003 BTC,为平仓留空间)。
+流动性窗口主动探测(控制器裁决 fix round 3/4/5:认证轮 #2 全成交、#3 流动性
+门不通过、#4 窄窗口 64s 未命中、round 5 恢复命中下界):最多 30 次 get_depth
+探测、间隔 8s(注入时钟/睡眠 seam),每次取顶部 ask 量,命中条件
+min_gate_qty <= top_ask_qty < max_partial_qty(下界含等于 —— 认证轮 #4 台阶
+0.0008 恰等于 min_gate 必须命中;下界保证部分成交量的平仓单 notional ≥
+MIN_NOTIONAL 不被交易所拒绝;上界严格 < 避免全成交)即立即下单并继续原流程;
+30 次未命中 → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep",证据记录
+每次探测 top_ask 与 miss 原因)。max_partial_qty = 最大 stepSize 对齐量使
+入场 notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,≈0.003 BTC,
+为平仓留空间)。平仓量下限 = min_gate_qty(reduceOnly=true 下 quantity 可大于
+持仓,实际仅平持仓量,订单层面 notional 按 quantity 合规 —— 0.0008 边界成交
+的平仓单恒合法)。
 下单:限价单(LIMIT,price=最优 ask,qty=max_partial_qty,GTC);qty > top_ask
 (窗口保证)成交顶部档后剩余挂单即 PARTIALLY_FILLED(不做 resting 远离市价
 —— 本场景目标是部分成交而非不成交)。轮询:下单后首查 0.5s、之后 1s 间隔、
@@ -141,18 +144,19 @@ class PartialFillScenario(ScenarioBase):
             info = _require_ok(await client.get_exchange_info(ctx.symbol), "get_exchange_info")
             min_qty, step_size = _min_qty_and_step(ctx.symbol, info)
 
-            # ---- 流动性窗口主动探测(控制器裁决,fix round 4)----
-            # 认证轮 #4 窄窗口 64s 未命中(盘口顶部量在台阶间切换 0.0069/0.0008/114):
-            # 最多 30 次探测、间隔 8s(注入睡眠 seam)。命中条件 top_ask_qty <
-            # max_partial_qty(去掉 min_gate 下界 —— 限价单 qty=max_partial 下单,
-            # 部分成交量 = top_ask 任意小都合法,订单层面 notional 由 qty 保证
-            # ≥ MIN_NOTIONAL);max_partial_qty = 最大 stepSize 对齐量使 入场
-            # notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,为平仓留
-            # 空间)。30 次未命中 → NOT_VERIFIABLE(证据记每次探测 top_ask 与
-            # miss 原因)。
+            # ---- 流动性窗口主动探测(控制器裁决,fix round 5)----
+            # 认证轮 #4 窄窗口 64s 未命中(盘口顶部量在台阶间切换 0.0069/0.0008/114);
+            # round 5 恢复命中下界:min_gate_qty <= top_ask_qty < max_partial_qty
+            # (下界含等于 —— 认证轮 #4 台阶 0.0008 恰等于 min_gate 必须命中;
+            # 下界保证部分成交量的平仓单 notional ≥ MIN_NOTIONAL 不被交易所
+            # 拒绝;上界严格 < 避免全成交)。最多 30 次探测、间隔 8s(注入睡眠
+            # seam);max_partial_qty = 最大 stepSize 对齐量使 入场 notional +
+            # 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,为平仓留空间)。
+            # 30 次未命中 → NOT_VERIFIABLE(证据记每次探测 top_ask 与 miss 原因)。
             ask_price = Decimal("0")
             ask_qty = Decimal("0")
             max_partial_qty = Decimal("0")
+            min_gate_qty = Decimal("0")
             probe_hit = False
             for probe_no in range(1, _MAX_PROBES + 1):
                 depth = _require_ok(await client.get_depth(ctx.symbol), "get_depth")
@@ -177,6 +181,9 @@ class PartialFillScenario(ScenarioBase):
                     if max_partial_qty <= min_gate_qty:
                         # cap/2 不足以覆盖 MIN_NOTIONAL 门槛,窗口不可用
                         reason = "window_impossible"
+                    elif ask_qty < min_gate_qty:
+                        # 低于下界:部分成交量的平仓单 notional < 50 会被拒绝
+                        reason = "below_min_gate"
                     elif ask_qty >= max_partial_qty:
                         reason = "above_max_partial"
                     else:
@@ -320,6 +327,7 @@ class PartialFillScenario(ScenarioBase):
                             close_side=close_side,
                             close_qty=close_qty,
                             fallback_price=entry_price,
+                            min_gate_qty=min_gate_qty,
                         )
                     except Exception as exc:
                         steps.append(
@@ -377,6 +385,7 @@ class PartialFillScenario(ScenarioBase):
                             close_side=close_side,
                             close_qty=last_executed_qty,
                             fallback_price=entry_price,
+                            min_gate_qty=min_gate_qty,
                         )
                     except Exception as exc:
                         steps.append(
@@ -453,6 +462,7 @@ class PartialFillScenario(ScenarioBase):
                         close_side=close_side,
                         close_qty=last_executed_qty,
                         fallback_price=entry_price,
+                        min_gate_qty=min_gate_qty,
                     )
                 except Exception as exc:
                     steps.append(
@@ -492,17 +502,23 @@ class PartialFillScenario(ScenarioBase):
         close_side: str,
         close_qty: Decimal,
         fallback_price: Decimal,
+        min_gate_qty: Decimal,
     ) -> float:
         """反向市价单平仓已成交持仓,返回平仓单 notional(USDT)。
 
         side 反转入场方向,reduceOnly=true 防开新仓(平仓方向判断错误也不开
-        新仓);平仓价优先取响应 avgPrice(市价单真实成交价),缺失回退入场价;
+        新仓);平仓量下限 = min_gate_qty(订单层面 notional 按 quantity 计算
+        ≥ MIN_NOTIONAL 保证交易所不拒绝;reduceOnly 语义下 quantity 可大于
+        持仓,实际仅平掉持仓量 —— 0.0008 边界成交的平仓单恒合法,fix round
+        5 根因:round 4 去掉命中下界后极小成交量的平仓单被拒绝 → CLOSE_FAILED);
+        平仓价优先取响应 avgPrice(市价单真实成交价),缺失回退入场价;
         平仓单金额 qty×price 记入 ledger。创建失败(Result 错误或异常)抛出,
         调用方记录 close_failed 并 FAIL —— 持仓污染后续场景不可接受
         (认证轮 #2 根因:partial_fill 全成交留下持仓 → 引擎对账 MISMATCHED)。
         """
         client = ctx.client
         assert client is not None
+        close_qty = max(close_qty, min_gate_qty)
         created = _require_ok(
             await client.create_order(
                 symbol,

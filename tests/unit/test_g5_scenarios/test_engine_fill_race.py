@@ -94,8 +94,24 @@ _EXCHANGE_INFO: dict[str, Any] = {
 
 # 真实价位(≈60000 USDT/BTC):min_gate_qty = ceil(50/60000/0.001)×0.001 = 0.001,
 # limit 1000 下 max_partial_qty = (500/60000//0.001)×0.001 = 0.008 → 窗口
-# 0.001 < ask < 0.008,默认顶部 ask 0.004 命中(≈240 USDT)。
+# 0.001 ≤ ask < 0.008,默认顶部 ask 0.004 命中(≈240 USDT)。
 _DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.004"]]}
+
+# 认证轮 #4 台阶场景 fixture:minQty/stepSize 0.0008、价格 62500 →
+# min_gate_qty = ceil(50/62500/0.0008)×0.0008 = 0.0008(台阶 0.0008 恰等于
+# min_gate,命中下界含等于);limit 372 → max_partial_qty = (186/62500//0.0008)×
+# 0.0008 = 0.0024 → 窗口 0.0008 ≤ ask < 0.0024。
+_EXCHANGE_INFO_MIN_GATE_0008: dict[str, Any] = {
+    "symbols": [
+        {
+            "symbol": "BTCUSDT",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.0008", "stepSize": "0.0008"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+            ],
+        }
+    ]
+}
 
 
 class _FakeClient:
@@ -323,14 +339,20 @@ def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
 
 def test_partial_fill_window_hit_after_misses(tmp_path: Path) -> None:
     # 认证轮 #4 盘口台阶序列:顶部量在台阶间切换(0.0069/0.0008/114),窄窗口
-    # (0.0008, 0.0031) 64s 未命中;fix round 4 放宽命中条件(top_ask < max_partial,
-    # 去掉 min_gate 下界)→ 台阶 0.0008 命中,部分成交量任意小都合法
+    # (0.0008, 0.0031) 64s 未命中;fix round 5 恢复命中下界(含等于)——
+    # 台阶 0.0008 恰等于 min_gate 必须命中(部分成交量 ≥ min_gate 保证平仓单
+    # notional ≥ 50 不被交易所拒绝)
     depths = [
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0069"]]},  # 高于 max_partial
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "114"]]},     # 大台阶 miss
-        {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0008"]]},  # 小台阶命中
+        {"lastUpdateId": 1, "bids": [["62499.5", "5"]], "asks": [["62500", "0.0069"]]},  # 高于 max_partial 0.0024
+        {"lastUpdateId": 1, "bids": [["62499.5", "5"]], "asks": [["62500", "114"]]},     # 大台阶 miss
+        {"lastUpdateId": 1, "bids": [["62499.5", "5"]], "asks": [["62500", "0.0008"]]},  # == min_gate 命中(含等于)
     ]
-    fake = _FakeClient(depths=depths, order_statuses=["PARTIALLY_FILLED", "CANCELED"])
+    fake = _FakeClient(
+        exchange_info=_EXCHANGE_INFO_MIN_GATE_0008,
+        depths=depths,
+        order_statuses=["PARTIALLY_FILLED", "CANCELED"],
+        close_avg_price="62500",  # 平仓价对齐入场价(边界 notional 恰 50.0)
+    )
     ctx = _ctx(fake, tmp_path, limit=372.0)
     result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
     assert result.status == ScenarioStatus.PASS
@@ -344,13 +366,35 @@ def test_partial_fill_window_hit_after_misses(tmp_path: Path) -> None:
     hit = next(s for s in steps if s.get("action") == "window_hit")
     assert hit["probe_no"] == 3
     assert hit["top_ask_qty"] == "0.0008"
-    # 限价单:qty = max_partial_qty(0.003),price = 最优 ask
-    assert fake.placed and fake.placed[0]["quantity"] == "0.003"
-    assert fake.placed[0]["price"] == "60000" and fake.placed[0]["type"] == "LIMIT"
-    # 部分成交量 = 顶部 ask(0.0008,任意小都合法)→ 平掉已成交部分
+    assert hit["min_gate_qty"] == "0.0008"  # 下界含等于:边界台阶命中
+    # 限价单:qty = max_partial_qty(0.0024),price = 最优 ask
+    assert fake.placed and fake.placed[0]["quantity"] == "0.0024"
+    assert fake.placed[0]["price"] == "62500" and fake.placed[0]["type"] == "LIMIT"
+    # 部分成交量 = 顶部 ask(0.0008 == min_gate)→ 平掉已成交部分,
+    # 平仓量 min_gate 兜底 max(0.0008, 0.0008)=0.0008 → notional 50.0 恒合法
     close_step = next(s for s in steps if s.get("action") == "close")
     assert close_step["qty"] == "0.0008"
+    assert close_step["notional_usdt"] == pytest.approx(50.0)
     assert fake.cancelled == [1]  # 余量撤单
+
+
+def test_partial_fill_window_too_thin_not_verifiable(tmp_path: Path) -> None:
+    # 顶部 ask 量(0.0005)< min_gate_qty(0.001)→ 30 次探测全部 below_min_gate:
+    # 下界以下的部分成交量平仓单 notional < 50 会被交易所拒绝(CLOSE_FAILED
+    # 比 NOT_VERIFIABLE 更差)→ 不下单
+    depth = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0005"]]}
+    fake = _FakeClient(depth=depth)
+    fake.fail_create = True
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.NOT_VERIFIABLE
+    assert "liquidity_insufficient_or_too_deep" in result.error_message
+    assert fake.placed == []
+    probes = [s for s in result.evidence["steps"] if s.get("action") == "depth_probe"]
+    assert len(probes) == 30
+    misses = [s for s in result.evidence["steps"] if s.get("action") == "probe_miss"]
+    assert len(misses) == 30 and all(m["reason"] == "below_min_gate" for m in misses)
+    assert misses[0]["min_gate_qty"] == "0.001"
 
 
 # ---- partial_fill: 轮询判定 ----
@@ -516,18 +560,22 @@ def test_partial_fill_canceled_with_executed_qty_still_closes(tmp_path: Path) ->
     assert fake.cancelled == []  # 终态订单不触发撤单
 
 
-def test_partial_fill_new_with_executed_qty_still_closes(tmp_path: Path, monkeypatch: Any) -> None:
-    # 轮询窗口结束仍 NEW 但已有成交(状态查询滞后)→ finally 兜底平仓 + 撤单
-    fake = _FakeClient(order_statuses=["NEW"], new_executed_qty="0.004")
-    monkeypatch.setattr("beidou_certification.g5_scenarios.engine.partial_fill.asyncio.sleep", _noop_sleep)
+def test_partial_fill_new_with_executed_qty_still_closes(tmp_path: Path) -> None:
+    # 轮询窗口结束仍 NEW 但已有成交(状态查询滞后,executedQty=0.0005 低于
+    # min_gate 0.001)→ finally 兜底平仓 + 撤单;平仓量 min_gate 兜底
+    # max(0.0005, 0.001)=0.001(订单 notional 60 ≥ 50;reduceOnly 下 quantity
+    # 可大于持仓,实际仅平持仓量)
+    clock = _FakeProbeClock()
+    fake = _FakeClient(order_statuses=["NEW"], new_executed_qty="0.0005")
     ctx = _ctx(fake, tmp_path)
-    result = asyncio.run(PartialFillScenario().run(ctx))
+    result = asyncio.run(PartialFillScenario(now=clock.now, sleep=clock.sleep).run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE
     assert "liquidity_insufficient_or_too_deep" in result.error_message
     steps = result.evidence["steps"]
     close_step = next(s for s in steps if s.get("action") == "close")
-    assert close_step["side"] == "SELL" and close_step["qty"] == "0.004"
-    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.004"
+    assert close_step["side"] == "SELL" and close_step["qty"] == "0.001"  # min_gate 兜底
+    assert fake.close_orders and fake.close_orders[0]["quantity"] == "0.001"
+    assert fake.close_orders[0]["reduceOnly"] == "true"  # 防开新仓
     assert fake.cancelled == [1]  # 未终态订单照常撤单清理
 
 
