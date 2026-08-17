@@ -106,6 +106,24 @@ def test_convenience_methods_share_one_request_boundary(monkeypatch: pytest.Monk
     assert calls[-1][1] == Endpoint.TICKER_24HR
 
 
+def test_create_order_iceberg_qty_writes_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ruling-14:ICEBERG 可见切片参数(部分成交确定性来源);传入时写
+    # params["icebergQty"],不传不影响既有调用
+    client = BinanceRESTClient("https://demo.example", api_secret="secret")  # noqa: S106 - deterministic test key
+    calls: list[dict] = []
+
+    async def fake_request(method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
+        calls.append(dict(params or {}))
+        return Result.ok({"ok": True})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    asyncio.run(client.create_order("BTCUSDT", "BUY", "LIMIT", "0.0025", "60000", "GTC", iceberg_qty="0.001"))
+    assert calls[-1]["icebergQty"] == "0.001"
+    assert calls[-1]["quantity"] == "0.0025" and calls[-1]["timeInForce"] == "GTC"
+    asyncio.run(client.create_order("BTCUSDT", "BUY", "LIMIT", "0.0025", "60000", "GTC"))
+    assert "icebergQty" not in calls[-1]  # 既有调用不受影响
+
+
 def test_keepalive_transport_holds_put_before_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Listen-key PUT is session mutation and must not bypass the write hold."""
 

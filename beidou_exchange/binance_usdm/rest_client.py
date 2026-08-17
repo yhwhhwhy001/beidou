@@ -200,8 +200,14 @@ class BinanceRESTClient:
         time_in_force: str | None = None,
         reduce_only: str | None = None,
         client_order_id: str | None = None,
+        iceberg_qty: str | None = None,
     ) -> Result[dict]:
-        """创建订单。"""
+        """创建订单。
+
+        iceberg_qty:ICEBERG 可见切片量(Binance USDⓈ-M 支持,LIMIT+GTC;
+        仅显示 icebergQty 在盘口,每笔最多成交该量 —— 部分成交确定性来源,
+        Ruling-14);传入时写入 params["icebergQty"],不传不影响既有调用。
+        """
         params: dict[str, Any] = {
             "symbol": symbol,
             "side": side,
@@ -215,6 +221,8 @@ class BinanceRESTClient:
             params["reduceOnly"] = reduce_only
         if client_order_id:
             params["newClientOrderId"] = client_order_id
+        if iceberg_qty:
+            params["icebergQty"] = iceberg_qty
         return await self._request("POST", Endpoint.ORDER, signed=True, params=params)
 
     async def cancel_order(self, symbol: str, order_id: int) -> Result[dict]:

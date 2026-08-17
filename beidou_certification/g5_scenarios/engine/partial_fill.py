@@ -1,27 +1,25 @@
-"""partial_fill: 盘口流动性窗口主动探测 → 贴价 LIMIT 买单 → PARTIALLY_FILLED 守卫断言。
+"""partial_fill: ICEBERG 确定性部分成交 → PARTIALLY_FILLED 守卫断言。
 
-流动性窗口主动探测(控制器裁决 fix round 3/4/5:认证轮 #2 全成交、#3 流动性
-门不通过、#4 窄窗口 64s 未命中、round 5 恢复命中下界):最多 30 次 get_depth
-探测、间隔 8s(注入时钟/睡眠 seam),每次取顶部 ask 量,命中条件
-min_gate_qty <= top_ask_qty < max_partial_qty(下界含等于 —— 认证轮 #4 台阶
-0.0008 恰等于 min_gate 必须命中;下界保证部分成交量的平仓单 notional ≥
-MIN_NOTIONAL 不被交易所拒绝;上界严格 < 避免全成交)即立即下单并继续原流程;
-30 次未命中 → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep",证据记录
-每次探测 top_ask 与 miss 原因)。max_partial_qty = 最大 stepSize 对齐量使
-入场 notional + 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,≈0.003 BTC,
-为平仓留空间)。平仓量下限 = min_gate_qty(reduceOnly=true 下 quantity 可大于
-持仓,实际仅平持仓量,订单层面 notional 按 quantity 合规 —— 0.0008 边界成交
-的平仓单恒合法)。
-下单:限价单(LIMIT,price=最优 ask,qty=max_partial_qty,GTC);qty > top_ask
-(窗口保证)成交顶部档后剩余挂单即 PARTIALLY_FILLED(不做 resting 远离市价
-—— 本场景目标是部分成交而非不成交)。轮询:下单后首查 0.5s、之后 1s 间隔、
-30 次 ≈ 30s 窗口(余量挂单在盘口,市场扫单可能 1-2s 内全成,首查要快);
-PARTIALLY_FILLED → 组件级守卫断言(terminal_monotonic_guard("PARTIALLY_FILLED",
-"NEW")=="PARTIALLY_FILLED",与引擎 save_order_state 单调守卫语义对拍,证据
-记录 monotonic_guard_source)并撤单清理;全 FILLED 或窗口内仍 NEW →
-NOT_VERIFIABLE("liquidity_insufficient_or_too_deep")。
-notional = 量×价格,累计超限 → NotionalExceededError 交 runner fail-fast。
-dry_run 早退不碰任何接口;run() 自捕获异常返回 FAIL。
+Ruling-14(认证轮 #5 证据:探测 top_ask=0.001 命中窗口,下单 LIMIT 0.0031 @
+best_ask → 0.5s 首查已 FILLED 0.0031 —— 测试网 depth 显示量与真实深度脱节,
+同价位隐藏量充足,LIMIT 贴价部分成交不可靠):删除 30 次盘口窗口探测循环,
+改为直接下 ICEBERG 限价单 —— LIMIT,qty=0.0025(≈159 USDT,留全轮预算),
+price=best_ask(下单前一次 get_depth 探测取价),icebergQty=max(0.0008,
+min_gate_qty)(≈51 USDT,≥ MIN_NOTIONAL),timeInForce=GTC。iceberg 语义:
+每笔最多成交 icebergQty → 立即成交 min(icebergQty, 盘口量) → 状态
+PARTIALLY_FILLED 确定性极高(只要盘口非空);盘口为空 → NOT_VERIFIABLE
+("liquidity_insufficient_or_too_deep")。
+notional 记账:入场按 qty×price(≈159),平仓按实成交(≈51);全轮预算
+159+51+其余 3 下单场景 ~171 = 381 ≤ cap 400(认证轮 #5 入场 197+平仓 197=394
+几乎吃光 cap 的预算分配问题消除)。
+轮询:下单后首查 0.5s、之后 1s 间隔、30 次 ≈ 30s 窗口(余量挂单在盘口,市场
+扫单可能 1-2s 内全成,首查要快);PARTIALLY_FILLED → 组件级守卫断言
+(terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
+save_order_state 单调守卫语义对拍,证据记录 monotonic_guard_source)并撤单清理;
+全 FILLED(市场狂扫 iceberg)或窗口内仍 NEW → NOT_VERIFIABLE。平仓量下限 =
+min_gate_qty(reduceOnly=true 下 quantity 可大于持仓,实际仅平持仓量,订单层面
+notional 按 quantity 合规)。累计超限 → NotionalExceededError 交 runner
+fail-fast。dry_run 早退不碰任何接口;run() 自捕获异常返回 FAIL。
 
 成交后平仓清理(认证轮 #2 根因:partial_fill 全成交留下 0.0022 BTC 持仓 →
 引擎对账 MISMATCHED → trading_ready=False → 后续场景 NOT_VERIFIABLE):
@@ -64,8 +62,8 @@ T = TypeVar("T")
 _POLL_INTERVAL_SECONDS = 1.0  # 首查后 1s 间隔轮询
 _FIRST_POLL_DELAY_SECONDS = 0.5  # 下单后首查 0.5s(余量挂单在盘口,市场扫单可能 1-2s 内全成)
 _MAX_POLLS = 30  # 0.5s + 29×1s ≈ 30s 轮询窗口
-_MAX_PROBES = 30  # 流动性窗口最多 30 次探测(最长 240s)
-_PROBE_INTERVAL_SECONDS = 8.0  # 探测间隔 8s(注入睡眠 seam)
+_ICEBERG_TOTAL_QTY = Decimal("0.0025")  # ICEBERG 总下单量(≈159 USDT,留全轮预算)
+_ICEBERG_QTY = Decimal("0.0008")  # ICEBERG 可见切片(≈51 USDT,≥ MIN_NOTIONAL)
 _NOT_VERIFIABLE_REASON = "liquidity_insufficient_or_too_deep"
 _TERMINAL_NO_CANCEL = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
 
@@ -144,88 +142,45 @@ class PartialFillScenario(ScenarioBase):
             info = _require_ok(await client.get_exchange_info(ctx.symbol), "get_exchange_info")
             min_qty, step_size = _min_qty_and_step(ctx.symbol, info)
 
-            # ---- 流动性窗口主动探测(控制器裁决,fix round 5)----
-            # 认证轮 #4 窄窗口 64s 未命中(盘口顶部量在台阶间切换 0.0069/0.0008/114);
-            # round 5 恢复命中下界:min_gate_qty <= top_ask_qty < max_partial_qty
-            # (下界含等于 —— 认证轮 #4 台阶 0.0008 恰等于 min_gate 必须命中;
-            # 下界保证部分成交量的平仓单 notional ≥ MIN_NOTIONAL 不被交易所
-            # 拒绝;上界严格 < 避免全成交)。最多 30 次探测、间隔 8s(注入睡眠
-            # seam);max_partial_qty = 最大 stepSize 对齐量使 入场 notional +
-            # 等量平仓 notional ≤ ledger cap(入场 ≤ cap/2,为平仓留空间)。
-            # 30 次未命中 → NOT_VERIFIABLE(证据记每次探测 top_ask 与 miss 原因)。
-            ask_price = Decimal("0")
-            ask_qty = Decimal("0")
-            max_partial_qty = Decimal("0")
-            min_gate_qty = Decimal("0")
-            probe_hit = False
-            for probe_no in range(1, _MAX_PROBES + 1):
-                depth = _require_ok(await client.get_depth(ctx.symbol), "get_depth")
-                asks = depth.get("asks") or []
-                bids = depth.get("bids") or []
-                steps.append(
-                    {
-                        "action": "depth_probe",
-                        "probe_no": probe_no,
-                        "best_ask": str(asks[0][0]) if asks else "",
-                        "top_ask_qty": str(asks[0][1]) if asks else "",
-                        "top_bid": str(bids[0][0]) if bids else "",
-                    }
-                )
-                if asks:
-                    ask_price = Decimal(str(asks[0][0]))
-                    ask_qty = Decimal(str(asks[0][1]))
-                    entry_price = ask_price
-                    cap = Decimal(str(ctx.ledger.limit_usdt))
-                    min_gate_qty = min_gate_quantity(min_qty, step_size, ask_price)
-                    max_partial_qty = (cap / 2 / ask_price // step_size) * step_size
-                    if max_partial_qty <= min_gate_qty:
-                        # cap/2 不足以覆盖 MIN_NOTIONAL 门槛,窗口不可用
-                        reason = "window_impossible"
-                    elif ask_qty < min_gate_qty:
-                        # 低于下界:部分成交量的平仓单 notional < 50 会被拒绝
-                        reason = "below_min_gate"
-                    elif ask_qty >= max_partial_qty:
-                        reason = "above_max_partial"
-                    else:
-                        probe_hit = True
-                        steps.append(
-                            {
-                                "action": "window_hit",
-                                "probe_no": probe_no,
-                                "min_gate_qty": _format_qty(min_gate_qty),
-                                "max_partial_qty": _format_qty(max_partial_qty),
-                                "top_ask_qty": _format_qty(ask_qty),
-                            }
-                        )
-                        break
-                    steps.append(
-                        {
-                            "action": "probe_miss",
-                            "probe_no": probe_no,
-                            "reason": reason,
-                            "min_gate_qty": _format_qty(min_gate_qty),
-                            "max_partial_qty": _format_qty(max_partial_qty),
-                        }
-                    )
-                if probe_no < _MAX_PROBES:
-                    await self._sleep(_PROBE_INTERVAL_SECONDS)
-            if not probe_hit:
+            # ---- ICEBERG 确定性部分成交(Ruling-14,fix round 6)----
+            # 认证轮 #5 证据:探测 top_ask=0.001 命中窗口,下单 LIMIT 0.0031 @
+            # best_ask → 0.5s 首查已 FILLED 0.0031(测试网 depth 显示量与真实
+            # 深度脱节,同价位隐藏量充足,LIMIT 贴价部分成交不可靠)→ 删除 30
+            # 次窗口探测循环,改为下单前一次 depth 探测取价,直接下 ICEBERG
+            # 限价单:qty=0.0025(≈159 USDT,留全轮预算),icebergQty=max(0.0008,
+            # min_gate_qty)(≈51 USDT,≥ MIN_NOTIONAL),GTC。iceberg 语义:每笔
+            # 最多成交 icebergQty → 立即成交 min(icebergQty, 盘口量) → 状态
+            # PARTIALLY_FILLED 确定性极高(只要盘口非空);盘口为空 →
+            # NOT_VERIFIABLE。
+            depth = _require_ok(await client.get_depth(ctx.symbol), "get_depth")
+            asks = depth.get("asks") or []
+            bids = depth.get("bids") or []
+            steps.append(
+                {
+                    "action": "depth_probe",
+                    "probe_no": 1,
+                    "best_ask": str(asks[0][0]) if asks else "",
+                    "top_ask_qty": str(asks[0][1]) if asks else "",
+                    "top_bid": str(bids[0][0]) if bids else "",
+                }
+            )
+            if not asks:
                 return self._not_verifiable_liquidity(steps)
-
-            # 下单量 = max_partial_qty(整手对齐):限价单 qty > top_ask(窗口
-            # 保证)→ 成交顶部档后剩余挂单即部分成交;部分成交量 = top_ask
-            # 任意小都合法,订单层面 notional 由 qty 保证 ≥ MIN_NOTIONAL;
-            # 入场 notional ≤ cap/2(平仓留空间)
-            qty = max_partial_qty
+            ask_price = Decimal(str(asks[0][0]))
+            entry_price = ask_price
+            min_gate_qty = min_gate_quantity(min_qty, step_size, ask_price)
+            iceberg_qty = max(_ICEBERG_QTY, min_gate_qty)
+            qty = _ICEBERG_TOTAL_QTY
             price = str(ask_price)
             notional = float(qty * ask_price)
             ctx.ledger.record(self.scenario_id, notional)
 
             logger.info(
-                "create_order BUY %s %s @ %s notional=%.2f USDT (partial_fill 探针)",
+                "create_order BUY %s %s @ %s icebergQty=%s notional=%.2f USDT (partial_fill iceberg 探针)",
                 _format_qty(qty),
                 ctx.symbol,
                 price,
+                _format_qty(iceberg_qty),
                 notional,
             )
             order = _require_ok(
@@ -236,6 +191,7 @@ class PartialFillScenario(ScenarioBase):
                     _format_qty(qty),
                     price=price,
                     time_in_force="GTC",
+                    iceberg_qty=_format_qty(iceberg_qty),
                     client_order_id=f"g5-pfill-{int(self._now() * 1000)}",
                 ),
                 "create_order",
@@ -249,6 +205,7 @@ class PartialFillScenario(ScenarioBase):
                     "order_id": order_id,
                     "qty": _format_qty(qty),
                     "price": price,
+                    "iceberg_qty": _format_qty(iceberg_qty),
                     "notional_usdt": notional,
                     "status": order.get("status"),
                 }
