@@ -7,9 +7,10 @@
 (terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
 save_order_state 单调守卫语义对拍,证据记录 monotonic_guard_source)并撤单清理;
 全 FILLED 或窗口内仍 NEW → NOT_VERIFIABLE("liquidity_insufficient_or_too_deep")。
-notional = 量×价格,超限改用 min_qty(量小通常全成交 → NOT_VERIFIABLE),兜底
-仍超限 → NotionalExceededError 交 runner fail-fast。dry_run 早退不碰任何接口;
-run() 自捕获异常返回 FAIL。
+notional = 量×价格,超限改用"最小过门槛量"(stepSize 对齐的最小 qty 使
+qty×price ≥ testnet MIN_NOTIONAL=50,量小通常全成交 → NOT_VERIFIABLE),
+兜底仍超限 → NotionalExceededError 交 runner fail-fast。dry_run 早退不碰
+任何接口;run() 自捕获异常返回 FAIL。
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioContext,
     ScenarioResult,
     ScenarioStatus,
+    min_gate_quantity,
 )
 from beidou_certification.g5_scenarios.engine.cancel_fill_race import (
     monotonic_guard_source,
@@ -122,17 +124,21 @@ class PartialFillScenario(ScenarioBase):
             price = str(ask_price)
             notional = float(qty * ask_price)
             if notional > ctx.ledger.limit_usdt:
-                # 名义超限:改用 min_qty 兜底(量小通常全成交 → NOT_VERIFIABLE);
-                # 兜底仍超限 → ledger.record 抛 NotionalExceededError 交 runner fail-fast
+                # 名义超限:改用"最小过门槛量"兜底(stepSize 对齐的最小 qty 使
+                # qty×price ≥ testnet MIN_NOTIONAL=50,量小通常全成交 →
+                # NOT_VERIFIABLE);兜底仍超限 → ledger.record 抛
+                # NotionalExceededError 交 runner fail-fast
+                fallback_qty = min_gate_quantity(min_qty, step_size, ask_price)
                 steps.append(
                     {
                         "action": "notional_fallback",
                         "original_qty": _format_qty(qty),
                         "notional_usdt": notional,
-                        "fallback_qty": _format_qty(min_qty),
+                        "fallback_qty": _format_qty(fallback_qty),
+                        "fallback_notional_usdt": float(fallback_qty * ask_price),
                     }
                 )
-                qty = min_qty
+                qty = fallback_qty
                 notional = float(qty * ask_price)
             ctx.ledger.record(self.scenario_id, notional)
 

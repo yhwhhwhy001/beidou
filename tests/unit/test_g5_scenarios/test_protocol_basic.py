@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import math
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
+from beidou_certification.g5_scenarios.base import (
+    MIN_NOTIONAL_GATE_USDT,
+    NotionalLedger,
+    ScenarioContext,
+    ScenarioStatus,
+    min_gate_quantity,
+)
 from beidou_certification.g5_scenarios.protocol.clock_skew import ClockSkewScenario, is_timestamp_error
 from beidou_certification.g5_scenarios.protocol.create_query_cancel import (
     CreateQueryCancelScenario,
@@ -90,16 +97,60 @@ def test_is_timestamp_error_codes():
     assert not is_timestamp_error({"code": "nope"})
 
 
+# ---- 最小过门槛量(testnet MIN_NOTIONAL=50) ----
+
+
+def test_min_gate_quantity_constant():
+    assert MIN_NOTIONAL_GATE_USDT == 50.0
+
+
+def test_min_gate_quantity_already_above_gate_keeps_min_qty():
+    # BTCUSDT 现价 60000.5:min_qty(0.001)×价 ≈ 60 ≥ 50,过门槛量即 min_qty
+    qty = min_gate_quantity(Decimal("0.001"), Decimal("0.001"), Decimal("60000.5"))
+    assert qty == Decimal("0.001")
+
+
+def test_min_gate_quantity_bumps_above_notional_gate():
+    # 低价币:min_qty×price 远低于 50 → stepSize 对齐抬升到 qty×price ≥ 50
+    # 50/10/0.001 = 5000 → 5.0 单位 → notional 50.0
+    qty = min_gate_quantity(Decimal("0.001"), Decimal("0.001"), Decimal("10"))
+    assert qty == Decimal("5.0")
+    assert qty * Decimal("10") >= Decimal(str(MIN_NOTIONAL_GATE_USDT))
+
+
+def test_min_gate_quantity_respects_step_size():
+    # 价格 60、stepSize 1:50/60 = 0.833 → 向上取整 1 单位 → qty=1 → notional 60 ≥ 50
+    qty = min_gate_quantity(Decimal("0.5"), Decimal("1"), Decimal("60"))
+    assert qty == Decimal("1")
+    assert qty * Decimal("60") >= Decimal(str(MIN_NOTIONAL_GATE_USDT))
+
+
+def test_min_gate_quantity_floor_kept_below_min_qty():
+    # min_qty 本身已过门槛(5×60=300):过门槛量 < min_qty 时保底 min_qty
+    assert min_gate_quantity(Decimal("5"), Decimal("1"), Decimal("60")) == Decimal("5")
+
+
+def test_min_gate_quantity_zero_price_raises():
+    with pytest.raises(ValueError):
+        min_gate_quantity(Decimal("0.001"), Decimal("0.001"), Decimal("0"))
+
+
 class FakeClient:
     """最小假交易所客户端:记录调用参数并按脚本返回结果。"""
 
-    def __init__(self) -> None:
+    def __init__(self, last_price: str = "60000.5") -> None:
         self._clock_offset_ms = 0
         self.calls: list[tuple] = []
         self.seen_offsets: list[int] = []
         self.create_order_results: list[Result] = []
         self.final_status: dict[int, str] = {}
         self.simulate_resync = True  # 模拟真实客户端对 -1021 自动 resync 校正偏移
+        self.last_price = last_price
+
+    async def _resync_clock_offset(self) -> None:
+        """模拟客户端显式 resync:重取 server time 后写入真实校准值。"""
+        self.calls.append(("resync_clock_offset",))
+        self._clock_offset_ms = -500
 
     async def get_server_time(self) -> Result:
         self.calls.append(("get_server_time",))
@@ -123,7 +174,7 @@ class FakeClient:
 
     async def get_ticker(self, symbol: str) -> Result:
         self.calls.append(("get_ticker", symbol))
-        return Result.ok({"lastPrice": "60000.5"})
+        return Result.ok({"lastPrice": self.last_price})
 
     async def get_open_orders(self, symbol: str | None = None) -> Result:
         self.calls.append(("get_open_orders", symbol))
@@ -188,7 +239,7 @@ def test_create_query_cancel_real_path_pass(tmp_path):
     actions = [s["action"] for s in result.evidence["steps"]]
     assert actions == ["order", "query", "cancel", "query_after_cancel"]
     # 真实路径记账 min_qty × 现价 = 0.001 × 60000.5
-    assert math.isclose(ctx.ledger.total, 0.001 * 60000.5)
+    assert math.isclose(ctx.ledger.total, 0.001 * 57000.4)  # resting 价 57000.40 × 0.001
 
 
 def test_create_query_cancel_order_rejected_fails_cleanly(tmp_path):
@@ -199,6 +250,19 @@ def test_create_query_cancel_order_rejected_fails_cleanly(tmp_path):
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "RuntimeError"
     assert "Insufficient margin" in result.error_message
+
+
+def test_create_query_cancel_gate_bumps_quantity_above_min_qty(tmp_path):
+    # 低价币:min_qty×price = 0.001×10 = 0.01 < testnet MIN_NOTIONAL=50
+    # → 过门槛量抬升到 stepSize 对齐的 5.264(min_qty×10 的 rest 价 9.50)
+    # notional = 5.264×9.5 = 50.008 ≥ 50
+    client = FakeClient(last_price="10.0")
+    ctx = _ctx(client, tmp_path)
+    result = asyncio.run(CreateQueryCancelScenario().run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    creates = [c for c in client.calls if c[0] == "create_order"]
+    assert creates[0][4] == "5.264"  # 下单量已过 MIN_NOTIONAL 门槛
+    assert math.isclose(ctx.ledger.total, 5.264 * 9.5)
 
 
 def test_stable_client_order_id_dry_run(tmp_path):
@@ -228,7 +292,7 @@ def test_stable_client_order_id_real_path_exchange_rejected_pass(tmp_path):
     assert creates[0][7] == creates[1][7] and creates[0][7] is not None  # 同 clientOrderId
     assert creates[0][5] == "57000.40"  # resting 限价(现价×0.95 对齐 tick)
     assert any(c[0] == "cancel_order" for c in client.calls)  # 残留挂单清理
-    assert math.isclose(ctx.ledger.total, 0.001 * 60000.5)
+    assert math.isclose(ctx.ledger.total, 0.001 * 57000.4)  # resting 价 57000.40 × 0.001
 
 
 def test_clock_skew_dry_run(tmp_path):
@@ -252,21 +316,54 @@ def test_clock_skew_real_path_pass_keeps_resync_calibration(tmp_path):
     assert order_step["resynced"] is True  # resync 校准真实发生(证据不再硬编码)
     # 注入前偏移为 0(无校准),resync 已产生真实校准 → 保留 resync 结果,不还原 0
     assert client._clock_offset_ms == -500
-    assert math.isclose(ctx.ledger.total, 0.001 * 60000.5)  # 真实下单即记账
+    assert math.isclose(ctx.ledger.total, 0.001 * 57000.4)  # resting 价 57000.40 × 0.001,真实下单即记账
     assert any(c[0] == "cancel_order" for c in client.calls)  # 签名验证后撤单
 
 
-def test_clock_skew_timestamp_error_fails_without_accounting(tmp_path):
+def test_clock_skew_timestamp_error_then_explicit_resync_retry_pass(tmp_path):
+    # 首次 -1021 且客户端未自动 resync(偏移仍是注入值)→ 显式 resync 重校准
+    # → 重新下单成功 → PASS;证据记录 resync 前后 offset 与两次结果
     client = FakeClient()
+    client.simulate_resync = False  # 客户端未自动 resync,走显式 resync 路径
     client.create_order_results = [
         Result.failure("Timestamp for this request is outside of the recvWindow.", raw={"code": -1021, "msg": "..."})
     ]
     ctx = _ctx(client, tmp_path)
     result = asyncio.run(ClockSkewScenario().run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    assert result.error_type == ""
+    steps = result.evidence["steps"]
+    first_err = next(s for s in steps if s.get("action") == "order_error" and s.get("attempt") == 1)
+    assert first_err["timestamp_error"] is True and first_err["resynced"] is False
+    resync_step = next(s for s in steps if s.get("action") == "explicit_resync")
+    assert resync_step["offset_before_ms"] == 300000  # 注入值(未自动 resync)
+    assert resync_step["offset_after_ms"] == -500  # 显式 resync 的真实校准值
+    order_step = next(s for s in steps if s.get("action") == "order")
+    assert order_step["attempt"] == 2 and order_step["resynced"] is True
+    assert client.seen_offsets == [300000, -500]  # 两次下单各记录一次偏移
+    assert client._clock_offset_ms == -500  # resync 校准已发生,保留真实值不回退注入值
+    assert math.isclose(ctx.ledger.total, 0.001 * 57000.4)  # resting 价 57000.40 × 0.001,第二次下单成功即记账
+    assert len([c for c in client.calls if c[0] == "create_order"]) == 2
+    assert any(c[0] == "cancel_order" for c in client.calls)
+
+
+def test_clock_skew_timestamp_error_after_retry_still_fails(tmp_path):
+    # 显式 resync 后第二次仍 -1021(如服务端持续拒绝)→ FAIL TIMESTAMP_ERROR
+    client = FakeClient()
+    client.simulate_resync = False
+    client.create_order_results = [
+        Result.failure("Timestamp for this request is outside of the recvWindow.", raw={"code": -1021, "msg": "..."}),
+        Result.failure("Timestamp for this request is outside of the recvWindow.", raw={"code": -1021, "msg": "..."}),
+    ]
+    ctx = _ctx(client, tmp_path)
+    result = asyncio.run(ClockSkewScenario().run(ctx))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "TIMESTAMP_ERROR"
-    assert client._clock_offset_ms == -500  # resync 校准已发生,保留
-    assert ctx.ledger.total == 0.0  # 未真实下单不记账
+    steps = result.evidence["steps"]
+    final_err = next(s for s in steps if s.get("action") == "order_error" and s.get("attempt") == 2)
+    assert final_err["timestamp_error"] is True
+    assert client._clock_offset_ms == -500  # 真实校准值保留
+    assert ctx.ledger.total == 0.0  # 未成功下单不记账
 
 
 def test_clock_skew_business_error_restores_offset_and_passes(tmp_path):

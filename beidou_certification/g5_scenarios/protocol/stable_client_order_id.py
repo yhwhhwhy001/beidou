@@ -2,15 +2,17 @@
 
 判定纯函数 assert_no_duplicate:第二次响应为带 code 的错误(交易所拒绝,如
 -4015/-2011)→ 通过;返回已知 orderId(同一订单)→ 通过;返回新 orderId
-(重复成交)→ 失败。真实路径记账 min_qty × 现价,以 resting 限价挂单,
-任何写操作前打印操作意图(设计规格§4);撤单清理在 finally 保护,
-任一步异常(含 open_orders 查询、第二次下单)也不残留挂单。
+(重复成交)→ 失败。真实路径以"最小过门槛量"(stepSize 对齐的最小 qty 使
+qty×price ≥ testnet MIN_NOTIONAL=50,且不低于 min_qty)挂 resting 限价单,
+记账过门槛量 × 现价,任何写操作前打印操作意图(设计规格§4);撤单清理在
+finally 保护,任一步异常(含 open_orders 查询、第二次下单)也不残留挂单。
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from decimal import Decimal
 from typing import Any, TypeVar
 
 from beidou_certification.g5_scenarios.base import (
@@ -19,6 +21,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioContext,
     ScenarioResult,
     ScenarioStatus,
+    min_gate_quantity,
 )
 from beidou_certification.g5_scenarios.protocol.create_query_cancel import _resting_buy_price, min_order_quantity
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
@@ -67,11 +70,13 @@ class StableClientOrderIdScenario(ScenarioBase):
                     self.scenario_id, ScenarioStatus.PASS, {"dry_run": True, "steps": steps}, time.monotonic() - started
                 )
             info = _require_ok(await ctx.client.get_exchange_info(ctx.symbol), "get_exchange_info")
-            min_qty, _ = min_order_quantity(ctx.symbol, info)
+            min_qty, step_size = min_order_quantity(ctx.symbol, info)
             ticker = _require_ok(await ctx.client.get_ticker(ctx.symbol), "get_ticker")
             price = _resting_buy_price(ctx.symbol, info, str(ticker["lastPrice"]))
-            qty = format(min_qty, "f")
-            notional = min_qty * float(ticker["lastPrice"])
+            qty = format(
+                min_gate_quantity(Decimal(str(min_qty)), Decimal(str(step_size)), Decimal(price)), "f"
+            )
+            notional = float(Decimal(qty) * Decimal(price))
             ctx.ledger.record(self.scenario_id, notional)
             cid = f"g5-stable-{int(time.time() * 1000)}"
             logger.info("create_order BUY %s %s @ %s notional=%.2f USDT", qty, ctx.symbol, price, notional)

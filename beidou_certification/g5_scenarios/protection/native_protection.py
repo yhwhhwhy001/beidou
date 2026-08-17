@@ -5,7 +5,10 @@
 1. 只读:get_account 拿当前持仓 symbols(空账户 → 场景只挂"孤儿"验证路径);
    get_open_algo_orders 基线
 2. 挂 1 个 STOP 条件单(create_algo_order,quantity=min_qty,triggerPrice=
-   当前价 × 0.5 远价防触发)→ 断言 open_algos 中出现
+   当前价 × 0.5 远价防触发)→ 短轮询 open_algos(≤5s,间隔 1s,用注入
+   时钟/睡眠 seam):轮询期内出现即 appeared=True;超时仍不出现 →
+   appeared=False(引擎对 algo 挂单的可见性有传播延迟,单次查询 lag 会
+   误伤,挂撤往返是否闭合以轮询窗口内出现为准)
 3. 撤单(cancel_algo_order)→ 断言消失;证据记录挂撤往返
 4. 若账户有真实持仓,额外断言:持仓 symbol 的 SL/TP algo 均存在(引擎职责,
    只读验证)+ 孤儿判定纯函数与交易所事实对拍;孤儿单(空账户下的任何
@@ -20,6 +23,7 @@ NotionalExceededError 重新抛出供 runner fail-fast;挂/撤单前 logger.info
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from decimal import Decimal
@@ -43,6 +47,11 @@ T = TypeVar("T")
 # STOP 条件单远价触发点:当前价 × 0.5,防触发(触发价远低于市价,测试窗口内
 # 不可能被触达;若极端行情触达,reduceOnly 阻止开新仓)
 _FAR_TRIGGER_FACTOR = "0.5"
+
+# 挂单后 open_algos 可见性短轮询窗口:algo 挂单传播有延迟,单次查询 lag 不判
+# 失败,轮询窗口(≤5s、间隔 1s)内出现即闭合
+_APPEAR_POLL_INTERVAL_S = 1.0
+_APPEAR_POLL_DEADLINE_S = 5.0
 
 
 def _require_ok(result: Result[T], action: str) -> T:
@@ -120,12 +129,14 @@ class NativeProtectionScenario(ScenarioBase):
         create_algo_order: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
         cancel_algo_order: Callable[[str, int], Awaitable[dict[str, Any]]] | None = None,
         now: Callable[[], float] | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         """交易所动作全部可注入(单测注入假驱动,禁止真实交易所调用)。
 
         get_account/get_exchange_info/get_ticker/get_open_algo_orders/
         create_algo_order/cancel_algo_order 的默认实现为真实交易所调用
         (运行时绑定 ctx.client 并解包 Result);场景逻辑只调用注入的依赖。
+        now/sleep 为挂单可见性短轮询的时钟/睡眠 seam(单测注入假时钟)。
         """
         self._get_account = get_account or self._get_account_impl
         self._get_exchange_info = get_exchange_info or self._get_exchange_info_impl
@@ -134,6 +145,7 @@ class NativeProtectionScenario(ScenarioBase):
         self._create_algo_order = create_algo_order or self._create_algo_order_impl
         self._cancel_algo_order = cancel_algo_order or self._cancel_algo_order_impl
         self._now = now or time.time
+        self._sleep = sleep or asyncio.sleep
         self._client: Any = None
 
     # ---- 真实交易所实现(默认依赖;认证轮经用户批准后由 run_g5.py 执行) ----
@@ -240,14 +252,35 @@ class NativeProtectionScenario(ScenarioBase):
             steps.append({"action": "algo_created", "algo_id": algo_id, "algo_status": created.get("algoStatus")})
             cancelled = False
             try:
-                open_algos = await self._get_open_algo_orders()
-                appeared = any(_algo_id_of(a) == algo_id for a in open_algos)
-                steps.append({"action": "algo_appears_in_open", "algo_id": algo_id, "appeared": appeared})
+                # 挂单后可见性短轮询:algo 挂单传播有延迟,单次查询 lag 不判失败;
+                # ≤5s、间隔 1s 内出现在 open_algos 即 appeared=True,超时才 False
+                poll_started = self._now()
+                appeared = False
+                polls = 0
+                while True:
+                    polls += 1
+                    open_algos = await self._get_open_algo_orders()
+                    if any(_algo_id_of(a) == algo_id for a in open_algos):
+                        appeared = True
+                        break
+                    elapsed = self._now() - poll_started
+                    if elapsed >= _APPEAR_POLL_DEADLINE_S:
+                        break
+                    await self._sleep(min(_APPEAR_POLL_INTERVAL_S, _APPEAR_POLL_DEADLINE_S - elapsed))
+                steps.append(
+                    {
+                        "action": "algo_appears_in_open",
+                        "algo_id": algo_id,
+                        "appeared": appeared,
+                        "polls": polls,
+                        "poll_window_seconds": round(self._now() - poll_started, 2),
+                    }
+                )
                 if not appeared:
                     steps.append(
                         {
                             "action": "algo_appearance_warning",
-                            "note": "挂单后 open 列表未出现(幽灵 ACK),仍执行撤单清理",
+                            "note": "挂单后 5s 轮询窗口内 open 列表未出现(幽灵 ACK),仍执行撤单清理",
                         }
                     )
                 logger.info("native_protection: cancel_algo_order %s %s %s", algo_id, qty, ctx.symbol)

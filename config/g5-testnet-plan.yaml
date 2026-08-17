@@ -1,6 +1,6 @@
 environment: BINANCE_USDM_TESTNET_ONLY
 mainnet_prohibited: true
-max_test_notional_usdt: 20
+max_test_notional_usdt: 400
 scenarios:
 - create_query_cancel
 - stable_client_order_id

@@ -13,6 +13,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
 from beidou_certification.g5_scenarios.restart.database_restart import DatabaseRestartScenario
 from beidou_certification.g5_scenarios.restart.process_restart import StatusUnreachableError
@@ -160,27 +162,35 @@ class _FakeDBOps:
 
 
 class _FakeWSRuntimeOps:
-    """user_stream_reconnect 假引擎状态机:第 1 次 /status 为探针前状态,
-    第 2 次为探针中状态,第 3 次为探针后状态(after_age_s 对应
-    last_event_mono 距 now 的年龄)。"""
+    """user_stream_reconnect 假引擎状态机:第 1 次 /status 为探针前基线,
+    第 2 次为探针诱发后 kicked 状态;之后按 recovered_after_polls 自动重连
+    恢复(recovered_age_s 对应 last_event_mono 距 now 的年龄)。
+    never_recovered=True 保持 kicked 不恢复;recovery_unreachable=True
+    从 kicked 观察起 /status 一直不可达。"""
 
     def __init__(
         self,
         clock: _FakeClock,
         *,
         before_status: str = "HEALTHY",
-        after_status: str = "HEALTHY",
-        after_age_s: float = 10.0,
+        kicked_status: str = "STOPPED",
+        recovered_status: str = "HEALTHY",
+        recovered_after_polls: int = 1,
+        recovered_age_s: float = 10.0,
         before_unreachable: bool = False,
-        after_unreachable: bool = False,
+        never_recovered: bool = False,
+        recovery_unreachable: bool = False,
         missing_runtime: bool = False,
     ) -> None:
         self.clock = clock
         self.before_status = before_status
-        self.after_status = after_status
-        self.after_age_s = after_age_s
+        self.kicked_status = kicked_status
+        self.recovered_status = recovered_status
+        self.recovered_after_polls = recovered_after_polls
+        self.recovered_age_s = recovered_age_s
         self.before_unreachable = before_unreachable
-        self.after_unreachable = after_unreachable
+        self.never_recovered = never_recovered
+        self.recovery_unreachable = recovery_unreachable
         self.missing_runtime = missing_runtime
         self.calls = 0
 
@@ -204,10 +214,16 @@ class _FakeWSRuntimeOps:
                 raise StatusUnreachableError("engine down")
             return self._payload(self.before_status, 0.0)
         if self.calls == 2:
-            return self._payload(self.before_status, 0.0)
-        if self.after_unreachable:
+            if self.recovery_unreachable:
+                raise StatusUnreachableError("engine down")
+            return self._payload(self.kicked_status, 0.0)
+        if self.never_recovered:
+            return self._payload(self.kicked_status, 0.0)
+        if self.recovery_unreachable:
             raise StatusUnreachableError("engine down")
-        return self._payload(self.after_status, self.after_age_s)
+        if self.calls - 2 >= self.recovered_after_polls:
+            return self._payload(self.recovered_status, self.recovered_age_s)
+        return self._payload(self.kicked_status, 0.0)
 
 
 class _FakeProbeClient:
@@ -287,6 +303,9 @@ def _ws_scenario(
         close_listen_key=client.close_listen_key,
         ws_probe=probe.probe,
         probe_window=3.0,
+        sleep=clock.sleep,
+        poll_interval=5.0,
+        recovery_deadline=120.0,
     )
 
 
@@ -523,19 +542,26 @@ def test_database_restart_brew_timeout_self_captured_fail(tmp_path: Path) -> Non
 
 
 
-# ---- user_stream_reconnect 全流程:独立 listen key 探针 → 引擎不受影响 → PASS ----
+# ---- user_stream_reconnect 全流程:探针诱发断开 → 引擎自动重连恢复 → PASS ----
 
 
 def test_user_stream_reconnect_full_flow_pass(tmp_path: Path) -> None:
     clock = _FakeClock()
-    engine = _FakeWSRuntimeOps(clock, before_status="HEALTHY", after_status="HEALTHY", after_age_s=10.0)
+    engine = _FakeWSRuntimeOps(
+        clock,
+        before_status="HEALTHY",
+        kicked_status="STOPPED",
+        recovered_status="HEALTHY",
+        recovered_after_polls=1,
+        recovered_age_s=10.0,
+    )
     client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
     probe = _FakeWSProbe([])  # 默认:两次连接都成功且有数据帧
     scenario = _ws_scenario(clock, engine, client, probe)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
     assert result.status == ScenarioStatus.PASS
     evidence = result.evidence
-    assert evidence["verdict"] == "healthy_after_reconnect"
+    assert evidence["verdict"] == "engine_reconnected"
     assert evidence["engine_user_stream_before"] == "HEALTHY"
     assert evidence["engine_user_stream_after"] == "HEALTHY"
     assert evidence["notional_usdt"] == 0.0
@@ -557,32 +583,78 @@ def test_user_stream_reconnect_full_flow_pass(tmp_path: Path) -> None:
     assert client.closed == ["probe-key-1", "probe-key-2"]
     cleanup = next(s for s in steps if s.get("action") == "cleanup_close")
     assert cleanup["first"]["ok"] is True and cleanup["second"]["ok"] is True
-    # 引擎观察:探针前后各一次 + 探针中一次
-    assert engine.calls == 3
+    # 引擎时间线:before → kicked(探针诱发)→ recovered(自动重连,1 次轮询即恢复)
+    assert engine.calls == 3  # before + kicked + recovered 轮询 1 次
     assert next(s for s in steps if s.get("action") == "engine_user_stream_before")["status"] == "HEALTHY"
-    assert next(s for s in steps if s.get("action") == "engine_user_stream_during")["status"] == "HEALTHY"
-    assert next(s for s in steps if s.get("action") == "engine_user_stream_after")["status"] == "HEALTHY"
+    assert next(s for s in steps if s.get("action") == "engine_user_stream_kicked")["status"] == "STOPPED"
+    recovered = next(s for s in steps if s.get("action") == "engine_user_stream_recovered")
+    assert recovered["status"] == "HEALTHY" and recovered["polls"] == 1
     verdict = next(s for s in steps if s.get("action") == "verdict")
-    assert verdict["ok"] is True and verdict["reason"] == "healthy_after_reconnect"
+    assert verdict["ok"] is True and verdict["reason"] == "engine_reconnected"
+    assert verdict["before"] == "HEALTHY" and verdict["kicked"] == "STOPPED" and verdict["after"] == "HEALTHY"
     assert verdict["last_event_age_s"] == 10.0
 
 
-# ---- user_stream_reconnect ws 判定三路径 ----
+# ---- user_stream_reconnect 恢复轮询:引擎延迟恢复 → 轮询窗口内仍 PASS ----
 
-def test_user_stream_reconnect_engine_reconnecting_then_healthy_pass(tmp_path: Path) -> None:
+
+def test_user_stream_reconnect_recovery_after_multiple_polls_pass(tmp_path: Path) -> None:
+    # 引擎 kicked 后第 3 次轮询才恢复(恢复前保持 STOPPED)→ PASS,证据记录 polls
     clock = _FakeClock()
-    engine = _FakeWSRuntimeOps(clock, before_status="RECONNECTING", after_status="HEALTHY", after_age_s=10.0)
+    engine = _FakeWSRuntimeOps(clock, recovered_after_polls=3)
     client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
     probe = _FakeWSProbe([])
     scenario = _ws_scenario(clock, engine, client, probe)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
     assert result.status == ScenarioStatus.PASS
-    assert result.evidence["verdict"] == "reconnected"
+    assert result.evidence["verdict"] == "engine_reconnected"
+    steps = result.evidence["steps"]
+    recovered = next(s for s in steps if s.get("action") == "engine_user_stream_recovered")
+    assert recovered["polls"] == 3
+    assert recovered["elapsed_seconds"] == pytest.approx(10.0)  # 2 次间隔 5s
+    assert clock.t - 1_700_000_000.0 == pytest.approx(10.0)
 
 
-def test_user_stream_reconnect_engine_stale_after_fail(tmp_path: Path) -> None:
+def test_user_stream_reconnect_engine_reconnecting_then_recovered_pass(tmp_path: Path) -> None:
     clock = _FakeClock()
-    engine = _FakeWSRuntimeOps(clock, before_status="HEALTHY", after_status="STALE", after_age_s=999.0)
+    engine = _FakeWSRuntimeOps(
+        clock, before_status="RECONNECTING", kicked_status="RECONNECTING", recovered_status="HEALTHY"
+    )
+    client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
+    probe = _FakeWSProbe([])
+    scenario = _ws_scenario(clock, engine, client, probe)
+    result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
+    assert result.status == ScenarioStatus.PASS
+    assert result.evidence["verdict"] == "engine_reconnected"
+
+
+# ---- user_stream_reconnect 引擎未自动重连恢复 → FAIL ----
+
+
+def test_user_stream_reconnect_engine_never_recovered_fail(tmp_path: Path) -> None:
+    # 探针诱发断开后引擎在 120s 恢复窗口内始终未重连(STOPPED)→ FAIL
+    clock = _FakeClock()
+    engine = _FakeWSRuntimeOps(clock, kicked_status="STOPPED", never_recovered=True)
+    client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
+    probe = _FakeWSProbe([])
+    scenario = _ws_scenario(clock, engine, client, probe)
+    t0 = clock.t
+    result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "ENGINE_NOT_RECOVERED"
+    steps = result.evidence["steps"]
+    timeout = next(s for s in steps if s.get("action") == "engine_recovery_timeout")
+    assert timeout["deadline_seconds"] == 120.0
+    # 轮询跑满 120s 窗口(5s 步进,共 25 次轮询)
+    assert timeout["polls"] == 25
+    assert clock.t - t0 == pytest.approx(120.0)
+    assert len(probe.calls) == 2 and len(client.closed) == 2  # 探针与清理照常
+
+
+def test_user_stream_reconnect_stale_event_age_fail(tmp_path: Path) -> None:
+    # 引擎已恢复(HEALTHY)但事件年龄超过 300s 豁免窗口 → 停流判 stale
+    clock = _FakeClock()
+    engine = _FakeWSRuntimeOps(clock, recovered_status="HEALTHY", recovered_age_s=999.0)
     client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
     probe = _FakeWSProbe([])
     scenario = _ws_scenario(clock, engine, client, probe)
@@ -592,18 +664,6 @@ def test_user_stream_reconnect_engine_stale_after_fail(tmp_path: Path) -> None:
     assert result.error_message == "stale_after_reconnect"
     steps = result.evidence["steps"]
     assert next(s for s in steps if s.get("action") == "verdict")["ok"] is False
-
-
-def test_user_stream_reconnect_stale_event_age_fail(tmp_path: Path) -> None:
-    # after 状态 HEALTHY 但事件年龄超过 300s 豁免窗口 → 停流判 stale
-    clock = _FakeClock()
-    engine = _FakeWSRuntimeOps(clock, before_status="HEALTHY", after_status="HEALTHY", after_age_s=999.0)
-    client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
-    probe = _FakeWSProbe([])
-    scenario = _ws_scenario(clock, engine, client, probe)
-    result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
-    assert result.status == ScenarioStatus.FAIL
-    assert result.error_type == "STALE_AFTER_RECONNECT"
 
 
 # ---- user_stream_reconnect 探针失败路径 → FAIL ----
@@ -700,14 +760,18 @@ def test_user_stream_reconnect_engine_status_missing_not_verifiable(tmp_path: Pa
 
 
 def test_user_stream_reconnect_engine_unreachable_after_fail(tmp_path: Path) -> None:
+    # 探针诱发后引擎 /status 一直不可达(恢复窗口内)→ FAIL
     clock = _FakeClock()
-    engine = _FakeWSRuntimeOps(clock, after_unreachable=True)
+    engine = _FakeWSRuntimeOps(clock, recovery_unreachable=True)
     client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
     probe = _FakeWSProbe([])
     scenario = _ws_scenario(clock, engine, client, probe)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "engine_status_unreachable_after_probe"
+    steps = result.evidence["steps"]
+    timeout = next(s for s in steps if s.get("action") == "engine_recovery_timeout")
+    assert timeout["last_unreachable"] is not None
     # 探针完整执行过,清理也已完成
     assert len(probe.calls) == 2 and len(client.closed) == 2
 
@@ -723,6 +787,7 @@ def test_user_stream_reconnect_cleanup_close_failure_still_pass(tmp_path: Path) 
     scenario = _ws_scenario(clock, engine, client, probe)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=client)))
     assert result.status == ScenarioStatus.PASS
+    assert result.evidence["verdict"] == "engine_reconnected"
     steps = result.evidence["steps"]
     cleanup = next(s for s in steps if s.get("action") == "cleanup_close")
     assert cleanup["first"]["ok"] is False and cleanup["second"]["ok"] is False

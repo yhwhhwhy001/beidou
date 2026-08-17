@@ -1,10 +1,11 @@
 """create_query_cancel: 下单→查询→撤单→再查询确认 CANCELED。
 
-真实路径:取 exchangeInfo 的 LOT_SIZE minQty 作下单量,以低于现价
-5% 且对齐 tickSize 的 resting 限价挂单(GTC),记账 min_qty × 现价后
-下单;任何写操作前打印操作意图与金额(设计规格§4);撤单清理在
-finally 保护,任一步异常也不残留挂单;最终查询状态须为 CANCELED。
-dry_run 记账 0 且不发送任何请求。
+真实路径:取 exchangeInfo 的 LOT_SIZE minQty/stepSize 计算"最小过门槛量"
+(stepSize 对齐的最小 qty 使 qty×price ≥ testnet MIN_NOTIONAL=50,且不低于
+min_qty),以低于现价 5% 且对齐 tickSize 的 resting 限价挂单(GTC),记账
+过门槛量 × 现价后下单;任何写操作前打印操作意图与金额(设计规格§4);
+撤单清理在 finally 保护,任一步异常也不残留挂单;最终查询状态须为
+CANCELED。dry_run 记账 0 且不发送任何请求。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioContext,
     ScenarioResult,
     ScenarioStatus,
+    min_gate_quantity,
 )
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
@@ -80,11 +82,13 @@ class CreateQueryCancelScenario(ScenarioBase):
                     self.scenario_id, ScenarioStatus.PASS, {"dry_run": True, "steps": steps}, time.monotonic() - started
                 )
             info = _require_ok(await ctx.client.get_exchange_info(ctx.symbol), "get_exchange_info")
-            min_qty, _ = min_order_quantity(ctx.symbol, info)
+            min_qty, step_size = min_order_quantity(ctx.symbol, info)
             ticker = _require_ok(await ctx.client.get_ticker(ctx.symbol), "get_ticker")
             price = _resting_buy_price(ctx.symbol, info, str(ticker["lastPrice"]))
-            qty = format(min_qty, "f")
-            notional = min_qty * float(ticker["lastPrice"])
+            qty = format(
+                min_gate_quantity(Decimal(str(min_qty)), Decimal(str(step_size)), Decimal(price)), "f"
+            )
+            notional = float(Decimal(qty) * Decimal(price))
             ctx.ledger.record(self.scenario_id, notional)
             logger.info("create_order BUY %s %s @ %s notional=%.2f USDT", qty, ctx.symbol, price, notional)
             order = _require_ok(

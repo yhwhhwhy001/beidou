@@ -220,20 +220,25 @@ def test_partial_fill_depth_empty_not_verifiable(tmp_path: Path) -> None:
     assert fake.placed == []
 
 
-def test_partial_fill_notional_fallback_uses_min_qty(tmp_path: Path) -> None:
-    # 顶部 ask 1000 ×1.5 = 1500 量,notional 750 > 20 → 改用 min_qty(0.01)
+def test_partial_fill_notional_fallback_uses_min_gate_quantity(tmp_path: Path) -> None:
+    # 顶部 ask 1000 ×1.5 = 1500 量,notional 750 > 400 → 改用"最小过门槛量"
+    # (0.50 价、stepSize 0.01:ceil(50/0.5/0.01)=100 → qty 100,notional 50)
     depth = {"lastUpdateId": 1, "bids": [["0.49", "5"]], "asks": [["0.50", "1000"]]}
-    fake = _FakeClient(depth=depth, order_statuses=["FILLED"])  # min_qty 单必全成交
-    ctx = _ctx(fake, tmp_path, limit=20.0)
+    fake = _FakeClient(depth=depth, order_statuses=["FILLED"])  # 过门槛小单必全成交
+    ctx = _ctx(fake, tmp_path, limit=400.0)
     result = asyncio.run(PartialFillScenario().run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE  # 全 FILLED → 无法验证部分成交
-    assert fake.placed and fake.placed[0]["quantity"] == "0.01"
-    assert ctx.ledger.total == pytest.approx(0.01 * 0.50)  # min_qty × 价格
-    assert result.evidence["notional_usdt"] == pytest.approx(0.005)
+    assert fake.placed and fake.placed[0]["quantity"] == "100"
+    assert ctx.ledger.total == pytest.approx(100 * 0.50)  # 过门槛量 × 价格
+    assert result.evidence["notional_usdt"] == pytest.approx(50.0)
+    fallback = next(s for s in result.evidence["steps"] if s.get("action") == "notional_fallback")
+    assert fallback["fallback_qty"] == "100"
+    assert fallback["fallback_notional_usdt"] == pytest.approx(50.0)
 
 
 def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
-    # min_qty=1、价 30:min_qty 兜底仍超 20 → NotionalExceededError 交 runner fail-fast
+    # min_qty=1、价 30:过门槛量兜底 = ceil(50/30/1)=2 → notional 60 仍超限(55)
+    # → NotionalExceededError 交 runner fail-fast
     info = {
         "symbols": [
             {
@@ -247,7 +252,7 @@ def test_partial_fill_notional_exceeded_fail_fast(tmp_path: Path) -> None:
     }
     depth = {"lastUpdateId": 1, "bids": [["29.9", "5"]], "asks": [["30", "100"]]}
     fake = _FakeClient(exchange_info=info, depth=depth)
-    ctx = _ctx(fake, tmp_path, limit=20.0)
+    ctx = _ctx(fake, tmp_path, limit=55.0)
     with pytest.raises(NotionalExceededError):
         asyncio.run(PartialFillScenario().run(ctx))
 

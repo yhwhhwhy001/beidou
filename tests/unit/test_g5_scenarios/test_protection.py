@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
 from beidou_certification.g5_scenarios.protection.double_worker_fencing import (
     DoubleWorkerFencingScenario,
@@ -99,11 +101,25 @@ def _ctx(tmp_path: Path, *, dry_run: bool = False, client: Any = None) -> Scenar
     )
 
 
+class _FakeClock:
+    """native_protection 假时钟:now() 返回假时间,sleep() 直接推进假时间。"""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def now(self) -> float:
+        return self.t
+
+    async def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
 class _FakeAlgoExchange:
     """native_protection 假交易所:内存账户持仓 + open algo 列表,记录全部调用。
 
     create_registers=False 模拟幽灵 ACK(create 返回 algoId 但 open 列表
-    不出现),驱动挂撤往返断裂路径。
+    不出现),驱动挂撤往返断裂路径;appear_after_polls=N 模拟 algo 挂单
+    传播延迟(挂单后第 N 次 open 轮询才出现)。
     """
 
     def __init__(
@@ -113,14 +129,18 @@ class _FakeAlgoExchange:
         open_algos: list[dict[str, Any]] | None = None,
         next_algo_id: int = 9001,
         create_registers: bool = True,
+        appear_after_polls: int = 0,
     ) -> None:
         self.positions = positions if positions is not None else []
         self.open_algos = [dict(a) for a in (open_algos or [])]
         self.next_algo_id = next_algo_id
         self.create_registers = create_registers
+        self.appear_after_polls = appear_after_polls
         self.calls: list[str] = []
         self.created_params: list[dict[str, Any]] = []
         self.cancelled: list[tuple[str, int]] = []
+        self._pending_algo: dict[str, Any] | None = None
+        self._polls_after_create = 0
 
     async def get_account(self) -> dict[str, Any]:
         self.calls.append("get_account")
@@ -136,6 +156,11 @@ class _FakeAlgoExchange:
 
     async def get_open_algo_orders(self) -> list[dict[str, Any]]:
         self.calls.append("get_open_algo_orders")
+        if self._pending_algo is not None and self.create_registers:
+            self._polls_after_create += 1
+            if self._polls_after_create >= self.appear_after_polls:
+                self.open_algos.append(self._pending_algo)
+                self._pending_algo = None
         return [dict(a) for a in self.open_algos]
 
     async def create_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -144,8 +169,10 @@ class _FakeAlgoExchange:
         algo_id = self.next_algo_id
         self.next_algo_id += 1
         created = {"algoId": algo_id, "algoStatus": "NEW", **params}
-        if self.create_registers:
+        if self.create_registers and self.appear_after_polls == 0:
             self.open_algos.append(created)
+        else:
+            self._pending_algo = created
         return created
 
     async def cancel_algo_order(self, symbol: str, algo_id: int) -> dict[str, Any]:
@@ -155,7 +182,7 @@ class _FakeAlgoExchange:
         return {"algoId": algo_id, "algoStatus": "CANCELLED"}
 
 
-def _np_scenario(exchange: _FakeAlgoExchange) -> NativeProtectionScenario:
+def _np_scenario(exchange: _FakeAlgoExchange, clock: _FakeClock | None = None) -> NativeProtectionScenario:
     return NativeProtectionScenario(
         get_account=exchange.get_account,
         get_exchange_info=exchange.get_exchange_info,
@@ -163,6 +190,8 @@ def _np_scenario(exchange: _FakeAlgoExchange) -> NativeProtectionScenario:
         get_open_algo_orders=exchange.get_open_algo_orders,
         create_algo_order=exchange.create_algo_order,
         cancel_algo_order=exchange.cancel_algo_order,
+        now=clock.now if clock is not None else None,
+        sleep=clock.sleep if clock is not None else None,
     )
 
 
@@ -215,6 +244,7 @@ def test_native_protection_roundtrip_pass(tmp_path: Path) -> None:
     assert created["algo_id"] == 9001 and created["algo_status"] == "NEW"
     appears = next(s for s in steps if s.get("action") == "algo_appears_in_open")
     assert appears["appeared"] is True
+    assert appears["polls"] == 1  # 立即出现,单次轮询即闭合
     cancelled = next(s for s in steps if s.get("action") == "algo_cancelled")
     assert cancelled["algo_id"] == 9001 and cancelled["status"] == "CANCELLED"
     gone = next(s for s in steps if s.get("action") == "algo_gone_after_cancel")
@@ -299,19 +329,42 @@ def test_native_protection_missing_coverage_fail(tmp_path: Path) -> None:
     assert coverage["missing"] == ["BTCUSDT"]
 
 
+# ---- native_protection 挂单传播延迟:轮询窗口内出现 → 仍 PASS ----
+
+
+def test_native_protection_delayed_appearance_polls_pass(tmp_path: Path) -> None:
+    # algo 挂单传播有延迟:挂单后第 3 次 open 轮询才出现(轮询窗口 ≤5s 内)
+    # → appeared=True,挂撤往返闭合,不误伤单次查询 lag
+    clock = _FakeClock()
+    exchange = _FakeAlgoExchange(open_algos=[], next_algo_id=9001, appear_after_polls=3)
+    scenario = _np_scenario(exchange, clock)
+    result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    appears = next(s for s in steps if s.get("action") == "algo_appears_in_open")
+    assert appears["appeared"] is True
+    assert appears["polls"] == 3  # 第 3 次轮询才出现
+    assert clock.t == pytest.approx(2.0)  # 两次轮询间隔 1s
+    assert exchange.cancelled == [("BTCUSDT", 9001)]
+
+
 # ---- native_protection 挂撤往返断裂(幽灵 ACK)→ FAIL ----
 
 
 def test_native_protection_roundtrip_appearance_fail(tmp_path: Path) -> None:
-    # create 返回 algoId 但 open 列表未出现 → 撤单仍执行,最终 FAIL
+    # create 返回 algoId 但 open 列表在 5s 轮询窗口内始终未出现 → 撤单仍执行,
+    # 最终 FAIL(轮询窗口跑满 6 次,假时钟推进 5s)
+    clock = _FakeClock()
     exchange = _FakeAlgoExchange(open_algos=[], next_algo_id=6001, create_registers=False)
-    scenario = _np_scenario(exchange)
+    scenario = _np_scenario(exchange, clock)
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "ALGO_ROUNDTRIP_FAILED"
     steps = result.evidence["steps"]
     appears = next(s for s in steps if s.get("action") == "algo_appears_in_open")
     assert appears["appeared"] is False
+    assert appears["polls"] == 6  # t=0..5 共 6 次轮询
+    assert appears["poll_window_seconds"] == pytest.approx(5.0)
     warning = next(s for s in steps if s.get("action") == "algo_appearance_warning")
     assert warning is not None
     # 撤单仍执行,不残留

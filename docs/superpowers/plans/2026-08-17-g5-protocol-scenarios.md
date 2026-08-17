@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- 证书格式必须通过 `verify_g5_certificate`(gate_verifier.py:83):16 场景全 PASS、commit 绑定 HEAD、certification_mode ∈ (DEV_BYPASS, FULL)、max_notional ≤ 20、can_withdraw=False、无 P0。
-- 全部下单累计 notional ≤ plan `max_test_notional_usdt`(20),超限 fail-fast。
+- 证书格式必须通过 `verify_g5_certificate`(gate_verifier.py:83):16 场景全 PASS、commit 绑定 HEAD、certification_mode ∈ (DEV_BYPASS, FULL)、max_notional ≤ 400、can_withdraw=False、无 P0。
+- 全部下单累计 notional ≤ plan `max_test_notional_usdt`(400),超限 fail-fast;testnet MIN_NOTIONAL=50 门槛("Order's notional must be no smaller than 50")—— 下单量取 stepSize 对齐的最小 qty 使 qty×price ≥ 50(共享常量 `MIN_NOTIONAL_GATE_USDT` + 辅助 `min_gate_quantity`),按 min_qty 直接下单被 HTTP 400 拒绝。
 - 新代码零 mypy/ruff 豁免;`python -m pytest tests/unit -q` 全绿;`ruff check` 通过。
 - 测试网 URL 恒为 `https://demo-fapi.binance.com`,任何 mainnet 痕迹 fail-fast。
 - 每场景证据文件:`artifacts/evidence/testnet/g5/scenarios/<scenario_id>.json`,写入失败 = 场景 FAIL。
@@ -63,15 +63,15 @@ def test_scenario_result_hash_is_deterministic():
     assert r2.artifact_hash() != h1
 
 def test_notional_ledger_enforces_limit():
-    ledger = NotionalLedger(limit_usdt=20.0)
+    ledger = NotionalLedger(limit_usdt=400.0)
     ledger.record("s1", 15.0)
     assert ledger.total == 15.0
     with pytest.raises(NotionalExceededError) as ei:
         ledger.record("s2", 6.0)
-    assert ei.value.scenario_id == "s2" and ei.value.limit == 20.0
+    assert ei.value.scenario_id == "s2" and ei.value.limit == 400.0
 
 def test_write_evidence_roundtrip(tmp_path: Path):
-    ctx = ScenarioContext(client=None, ledger=NotionalLedger(20.0),
+    ctx = ScenarioContext(client=None, ledger=NotionalLedger(400.0),
                           evidence_dir=tmp_path, symbol="BTCUSDT", dry_run=True)
     r = ScenarioResult(scenario_id="x", status=ScenarioStatus.PASS,
                        evidence={"k": "v"}, duration=0.0)
@@ -81,7 +81,7 @@ def test_write_evidence_roundtrip(tmp_path: Path):
     assert "artifact_hash" in data and "written_at" in data
 
 def test_write_evidence_failure_raises(tmp_path: Path):
-    ctx = ScenarioContext(client=None, ledger=NotionalLedger(20.0),
+    ctx = ScenarioContext(client=None, ledger=NotionalLedger(400.0),
                           evidence_dir=tmp_path / "no" / "such" / "dir" / "file", symbol="B", dry_run=True)
     r = ScenarioResult(scenario_id="x", status=ScenarioStatus.PASS, evidence={}, duration=0.0)
     with pytest.raises(EvidenceWriteError):
@@ -306,9 +306,9 @@ from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_certification.g5_scenarios.base import ScenarioContext
 
 def test_build_context_shape():
-    ctx = build_context(client=None, ledger=NotionalLedger(20.0),
+    ctx = build_context(client=None, ledger=NotionalLedger(400.0),
                         evidence_dir=Path("/tmp/e"), symbol="BTCUSDT", dry_run=True)
-    assert ctx.client is None and ctx.ledger.limit == 20.0
+    assert ctx.client is None and ctx.ledger.limit == 400.0
     assert ctx.evidence_dir == Path("/tmp/e") and ctx.symbol == "BTCUSDT" and ctx.dry_run
 
 def test_list_flag_prints_registry(capsys):
@@ -603,7 +603,7 @@ def test_terminal_monotonic_guard():
 - partial_fill:
   1. 只读探测盘口(get_depth),取 top bid/ask 数量;若盘口量 > min_qty × 10(有对手流动性)→ 下 LIMIT 买单(量 = 盘口 ask 深度量 × 1.5,价格 = 最优 ask),预期 PARTIALLY_FILLED;30s 轮询 get_order,若全 FILLED 或仍 NEW → 记 NOT_VERIFIABLE("liquidity_insufficient_or_too_deep");若 PARTIALLY_FILLED → 断言本地 `save_order_state` 守卫:用 `terminal_monotonic_guard("PARTIALLY_FILLED", "NEW") == "PARTIALLY_FILLED"`(组件级验证)并撤单清理。
   2. 与引擎单调守卫的对拍:读 `beidou_core/store.py` 的 `save_order_state` 守卫代码行号,证据里记录 `monotonic_guard_source`(文件:行号 + 与场景纯函数语义一致)。
-  - notional 记账:order 量 × 价格(≤20 约束内;超限则改用 min_qty)。
+  - notional 记账:order 量 × 价格(≤400 约束内;超限则改用"最小过门槛量" —— stepSize 对齐的最小 qty 使 qty×price ≥ testnet MIN_NOTIONAL=50,量小通常全成交 → NOT_VERIFIABLE)。
 - cancel_fill_race:组件级验证 —— 用 PG 临时行(order_id 前缀 `g5-race-<ts>`)依次写 NEW → FILLED → 尝试 CANCELED,断言终态 FILLED(经 `terminal_monotonic_guard` 纯函数 + 直接读 store 语义);再加 PARTIALLY_FILLED → NEW 覆盖断言。不真实下单(交易所竞态本身在真实运行中已被引擎处理;场景验证的是守卫语义)。
 
 - [ ] **Step 4: 运行确认通过** — 单测通过

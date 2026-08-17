@@ -1,21 +1,27 @@
-"""user_stream_reconnect: 重启组场景三 — 用户数据流断线重连与引擎独立性验证。
+"""user_stream_reconnect: 重启组场景三 — 探针诱发引擎 user stream 断开 → 引擎自动重连恢复。
 
-只读探针,自建独立 listen key,不触碰引擎真实 listen key:
+语义(2026-08-17 认证轮修正):探针重建 listen key 会使引擎同账户的 listen
+key 失效 —— 这是 Binance 用户数据流语义(Binance 账户级 listen key 唯一,
+新建即失效旧 key),属预期副作用。场景验证引擎对意外断开的自愈能力:
 1. 前置:ctx.client 可用;引擎 /status user_stream_runtime.status 基线
    (缺失/不可达 → NOT_VERIFIABLE)
-2. 自建独立 listen key(client.create_listen_key)→ 建 ws 连接收 3s →
-   主动 close;再 create_listen_key + 重连(新 key 使旧 key 失效,即
-   Binance 用户数据流重连语义),断言第二次连接成功且收到数据帧或 ACK
-3. 全程观察运行中引擎的 /status user_stream_runtime.status(探针前后各一次、
-   探针中一次,只读),用纯函数 ws_reconnect_verdict(before, after,
-   last_event_age_s) 判定引擎自身未受影响
-4. 清理:Binance USDⓈ-M 官方提供 DELETE /fapi/v1/listenKey 关闭用户数据流
+2. 自建 listen key(client.create_listen_key)→ 建 ws 连接收 3s → 再
+   create_listen_key(引擎同账户 key 失效,即"探针诱发断开")→ 观察引擎
+   kicked 状态(时间线证据,非致命)→ 探针第二次连接,断言连接成功且收到
+   数据帧或 ACK
+3. 轮询 /status(≤120s,间隔 5s,用注入时钟/睡眠 seam)等引擎
+   user_stream_runtime.status 自动重连回 CONNECTED/HEALTHY;时间线证据:
+   before → kicked → recovered
+4. 最终判定:引擎恢复(事件年龄 ≤ 300s 停流豁免窗口)+ 探针重连成功 →
+   PASS("engine_reconnected");窗口内未恢复 → FAIL
+5. 清理:Binance USDⓈ-M 官方提供 DELETE /fapi/v1/listenKey 关闭用户数据流
    (客户端未暴露专用方法,经通用 request 通道调用真实端点);探针 listen key
    从不续期(keep-alive),删除失败也会在 60 分钟 TTL 后自然过期 —— 清理
    非致命,证据记录原因。
 
-notional 记账 0;dry_run → NOT_VERIFIABLE("restart requires real execution");
-run() 自捕获异常返回 FAIL。
+ws_reconnect_verdict 纯函数保留,判定输入为"引擎恢复后状态 + 探针结果"
+(健康态 + 事件年龄 → ok;恢复但停流 → stale)。notional 记账 0;dry_run →
+NOT_VERIFIABLE("restart requires real execution");run() 自捕获异常返回 FAIL。
 """
 
 from __future__ import annotations
@@ -54,6 +60,12 @@ _WS_BASE_URL = os.environ.get("BEIDOU_G5_WS_BASE_URL", FSTREAM_TESTNET_URL)
 _PROBE_WINDOW_SECONDS = 3.0  # 每次连接的数据接收窗口(brief 契约:收 3s)
 # 事件新鲜度豁免窗口:与引擎 testnet 判定一致(engine.py effective_max_age=300)
 _MAX_EVENT_AGE_SECONDS = 300.0
+# 引擎 user stream 自动重连恢复的轮询窗口:探针诱发断开后引擎应自动重连
+_RECOVERY_POLL_INTERVAL_S = 5.0
+_RECOVERY_DEADLINE_S = 120.0
+# 恢复判定:status 回到 CONNECTED/HEALTHY 即认为引擎已自动重连(引擎把
+# 事件停流超过豁免窗口的状态标记为 STALE,不在恢复集内)
+_RECOVERED_STATUSES = frozenset({"HEALTHY", "CONNECTED"})
 
 
 def _mask_key(key: str) -> str:
@@ -68,10 +80,12 @@ def _mask_key(key: str) -> str:
 
 
 def ws_reconnect_verdict(before: str, after: str, last_event_age_s: float) -> tuple[bool, str]:
-    """引擎 user stream 断线重连后的独立探针判定:(引擎未受影响?, 判定原因)。
+    """引擎 user stream 恢复判定纯函数:(引擎已恢复?, 判定原因)。
 
+    输入为"引擎恢复后状态 + 探针结果":after 是探针诱发断开后引擎恢复到的
+    status,before 是探针前基线,last_event_age_s 是恢复观察的事件年龄。
     - after 为 HEALTHY/CONNECTED 且事件年龄 ≤ 300s(引擎 testnet 豁免窗口)
-      → 引擎自愈,未受影响:
+      → 引擎自愈:
         * before 处于过渡态(RECONNECTING/CONNECTING/STARTING)→ "reconnected"
         * 否则 → "healthy_after_reconnect"
     - after 非健康态,或健康但事件年龄超窗(停流保护)→ (False,
@@ -124,12 +138,16 @@ class UserStreamReconnectScenario(ScenarioBase):
         close_listen_key: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
         ws_probe: Callable[[str, float], Awaitable[dict[str, Any]]] | None = None,
         probe_window: float = _PROBE_WINDOW_SECONDS,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+        poll_interval: float = _RECOVERY_POLL_INTERVAL_S,
+        recovery_deadline: float = _RECOVERY_DEADLINE_S,
     ) -> None:
         """探针动作全部可注入(单测注入假驱动,禁止真实交易所调用)。
 
         fetch_status/create_listen_key/close_listen_key/ws_probe 的默认实现
         为真实调用;场景逻辑只调用注入的依赖。默认依赖在 run() 时绑定到
-        ctx.client 的客户端。
+        ctx.client 的客户端。now/sleep 为引擎恢复轮询的时钟/睡眠 seam
+        (单测注入假时钟);poll_interval/recovery_deadline 为恢复轮询参数。
         """
         self._now = now or time.monotonic
         self._fetch_status = fetch_status or fetch_status_http
@@ -137,6 +155,9 @@ class UserStreamReconnectScenario(ScenarioBase):
         self._close_listen_key = close_listen_key or self._close_listen_key_impl
         self._ws_probe = ws_probe or self._ws_probe_impl
         self._probe_window = probe_window
+        self._sleep = sleep or asyncio.sleep
+        self._poll_interval = poll_interval
+        self._recovery_deadline = recovery_deadline
         self._client: Any = None
 
     # ---- 真实探针实现(默认依赖;认证轮经用户批准后由 run_g5.py 执行) ----
@@ -218,6 +239,51 @@ class UserStreamReconnectScenario(ScenarioBase):
         steps.append({"action": action, "status": status, "reachable": True})
         return status, True
 
+    async def _poll_engine_recovery(self, steps: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
+        """轮询 /status 直至 user_stream_runtime.status 回到 CONNECTED/HEALTHY。
+
+        窗口 ≤ recovery_deadline、间隔 poll_interval(用注入时钟/睡眠 seam);
+        返回 (payload, last_unreachable):payload=None 表示窗口内未恢复,
+        last_unreachable 为最近一次 /status 不可达原因(窗口内瞬时不可达不
+        中断轮询,留给判定区分"引擎未恢复"与"引擎不可达")。
+        """
+        poll_started = self._now()
+        deadline_at = poll_started + self._recovery_deadline
+        polls = 0
+        last_unreachable: str | None = None
+        while True:
+            polls += 1
+            try:
+                payload = self._fetch_status()
+            except StatusUnreachableError as exc:
+                last_unreachable = str(exc)[:200]
+                payload = None
+            status = _user_stream_status(payload) if payload is not None else None
+            if status in _RECOVERED_STATUSES:
+                steps.append(
+                    {
+                        "action": "engine_user_stream_recovered",
+                        "status": status,
+                        "reachable": True,
+                        "polls": polls,
+                        "elapsed_seconds": round(self._now() - poll_started, 2),
+                    }
+                )
+                return payload, None
+            remaining = deadline_at - self._now()
+            if remaining <= 0:
+                steps.append(
+                    {
+                        "action": "engine_recovery_timeout",
+                        "deadline_seconds": self._recovery_deadline,
+                        "polls": polls,
+                        "last_status": status,
+                        "last_unreachable": last_unreachable,
+                    }
+                )
+                return None, last_unreachable
+            await self._sleep(min(self._poll_interval, remaining))
+
     async def run(self, ctx: ScenarioContext) -> ScenarioResult:
         started = time.monotonic()
         steps: list[dict[str, Any]] = []
@@ -253,23 +319,26 @@ class UserStreamReconnectScenario(ScenarioBase):
                     "引擎 /status 缺 user_stream_runtime.status",
                     {"steps": steps},
                 )
-            logger.info("user_stream_reconnect: 独立 listen key 探针开始(不触碰引擎真实 listen key)")
+            logger.info(
+                "user_stream_reconnect: listen key 探针开始(重建 listen key 诱发引擎断开,验证引擎自动重连)"
+            )
             key1 = await self._create_listen_key()
             steps.append({"action": "listen_key_created", "key": _mask_key(key1), "probe": "first"})
             probe1 = await self._ws_probe(key1, self._probe_window)
             steps.append({"action": "ws_probe_first", **probe1})
             if not probe1.get("connected"):
                 raise RuntimeError("probe 首次 ws 连接失败")
-            # 探针窗口内再观察一次引擎 user_stream(只读)
-            await self._observe_engine("engine_user_stream_during", steps)
             key2 = await self._create_listen_key()
             steps.append(
                 {
                     "action": "listen_key_recreated",
                     "key": _mask_key(key2),
-                    "note": "Binance 语义:新 listenKey 使旧 key 失效,即用户数据流重连",
+                    "note": "Binance 语义:新 listenKey 使引擎同账户 key 失效,即探针诱发引擎断开",
                 }
             )
+            # 时间线证据:探针诱发后引擎 user_stream 状态(可能已 STOPPED/
+            # RECONNECTING,也可能尚未感知 —— 只读观察,非致命)
+            kicked_status, _kicked_reachable = await self._observe_engine("engine_user_stream_kicked", steps)
             probe2 = await self._ws_probe(key2, self._probe_window)
             steps.append({"action": "ws_probe_second", **probe2})
             if not probe2.get("connected"):
@@ -292,33 +361,41 @@ class UserStreamReconnectScenario(ScenarioBase):
             close1 = await self._close_listen_key(key1)
             close2 = await self._close_listen_key(key2)
             steps.append({"action": "cleanup_close", "first": close1, "second": close2})
-            try:
-                after_payload = self._fetch_status()
-            except StatusUnreachableError as exc:
-                steps.append({"action": "engine_user_stream_after", "reachable": False, "error": str(exc)[:200]})
+            # 轮询引擎自动重连恢复:探针诱发断开是预期副作用,引擎应自动重连
+            recovered_payload, last_unreachable = await self._poll_engine_recovery(steps)
+            if recovered_payload is None:
+                if last_unreachable is not None:
+                    return self._fail(
+                        ScenarioStatus.FAIL,
+                        "engine_status_unreachable_after_probe",
+                        f"探针后引擎 /status 不可达(恢复窗口内): {last_unreachable}",
+                        {"steps": steps},
+                    )
                 return self._fail(
                     ScenarioStatus.FAIL,
-                    "engine_status_unreachable_after_probe",
-                    f"探针后引擎 /status 不可达: {exc}",
+                    "ENGINE_NOT_RECOVERED",
+                    f"引擎 user stream 在 {self._recovery_deadline:g}s 内未自动重连恢复",
                     {"steps": steps},
                 )
-            after_status = _user_stream_status(after_payload)
-            steps.append({"action": "engine_user_stream_after", "status": after_status, "reachable": True})
-            if after_status is None:
+            recovered_status = _user_stream_status(recovered_payload)
+            if recovered_status is None:
                 return self._fail(
                     ScenarioStatus.FAIL,
                     "engine_user_stream_status_missing_after",
-                    "探针后 /status 缺 user_stream_runtime.status",
+                    "引擎恢复后 /status 缺 user_stream_runtime.status",
                     {"steps": steps},
                 )
-            age, age_known = _user_stream_event_age(after_payload, self._now())
+            age, age_known = _user_stream_event_age(recovered_payload, self._now())
             steps.append({"action": "engine_event_age", "last_event_age_s": round(age, 2), "age_known": age_known})
-            ok, reason = ws_reconnect_verdict(before_status, after_status, age)
+            ok, reason = ws_reconnect_verdict(before_status, recovered_status, age)
+            if ok:
+                reason = "engine_reconnected"
             steps.append(
                 {
                     "action": "verdict",
                     "before": before_status,
-                    "after": after_status,
+                    "kicked": kicked_status,
+                    "after": recovered_status,
                     "last_event_age_s": round(age, 2),
                     "ok": ok,
                     "reason": reason,
@@ -333,7 +410,7 @@ class UserStreamReconnectScenario(ScenarioBase):
                     "steps": steps,
                     "verdict": reason,
                     "engine_user_stream_before": before_status,
-                    "engine_user_stream_after": after_status,
+                    "engine_user_stream_after": recovered_status,
                     "notional_usdt": 0.0,
                 },
                 time.monotonic() - started,

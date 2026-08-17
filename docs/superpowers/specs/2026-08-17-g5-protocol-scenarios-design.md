@@ -61,8 +61,11 @@ beidou_certification/g5_scenarios/
   (确定性 JSON 可序列化)、duration、artifact_hash(sha256 规范化证据 JSON)。
 - `ScenarioBase.run(ctx) -> ScenarioResult`:`ctx` 共享上下文 —— 交易所 client(协议组)、
   引擎构造工厂(引擎组)、notional 记账器、证据目录、代理环境。
-- **notional 记账器**:全局累计下单金额,超 plan `max_test_notional_usdt`(20)立即
-  fail-fast,防止认证耗尽账户资金。
+- **notional 记账器**:全局累计下单金额,超 plan `max_test_notional_usdt`(400)
+  立即 fail-fast,防止认证耗尽账户资金。testnet MIN_NOTIONAL=50 门槛
+  ("Order's notional must be no smaller than 50"):下单量须为 stepSize 对齐的
+  最小 qty 使 qty×price ≥ 50(共享常量 `MIN_NOTIONAL_GATE_USDT`,辅助函数
+  `min_gate_quantity`),按 min_qty 直接下单会被 HTTP 400 拒绝。
 - 证据文件内容:输入参数、步骤时间线、原始交易所响应(密钥脱敏)、最终判定与 hash。
 
 ## 2. 16 个场景逐个要点

@@ -12,12 +12,18 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum, auto
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+
+# Binance USDⓈ-M 账户级最小订单名义门槛(MIN_NOTIONAL):订单 notional 低于
+# 该值会被 HTTP 400 拒绝("Order's notional must be no smaller than 50")。
+# testnet 与 mainnet 一致;下单场景按此门槛计算最小可下单量。
+MIN_NOTIONAL_GATE_USDT = 50.0
 
 
 class ScenarioStatus(str, Enum):
@@ -116,6 +122,20 @@ class ScenarioBase(ABC):
 
 class EvidenceWriteError(OSError):
     """证据写入失败:目录创建或文件写入的 OSError 包装。"""
+
+
+def min_gate_quantity(min_qty: Decimal, step_size: Decimal, price: Decimal) -> Decimal:
+    """最小过门槛下单量:stepSize 对齐的最小 qty 使 qty×price ≥ MIN_NOTIONAL_GATE_USDT,
+    且不低于 min_qty。
+
+    testnet MIN_NOTIONAL=50 门槛导致 min_qty×price 可能低于门槛,按 min_qty 直接
+    下单会被 HTTP 400("Order's notional must be no smaller than 50")拒绝。
+    """
+    if price <= 0:
+        raise ValueError(f"min_gate_quantity 需要正价格,got {price}")
+    gate = Decimal(str(MIN_NOTIONAL_GATE_USDT))
+    steps = (gate / price / step_size).__ceil__()
+    return max(Decimal(steps) * step_size, min_qty)
 
 
 def write_scenario_evidence(ctx: ScenarioContext, result: ScenarioResult) -> Path:
