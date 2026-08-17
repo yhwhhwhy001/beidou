@@ -3614,12 +3614,15 @@ class AutonomousEngine:
         """实时时钟：行情轮询 → 保护单检查 → 订单处理 → 对账。"""
         self._tick_count += 1
 
-        if self._tick_count % 3 == 0:
-            print(
-                f"[realtime] TICK #{self._tick_count} — outbox id={id(self._outbox)} items={len(self._outbox._outbox)}"
-            )
-
         try:
+            if self._tick_count % 3 == 0:
+                # TICK 打印在 try 内: outbox._outbox property 走 PG 查询,
+                # PG 停机时抛 OperationalError —— 若在 try 外,该 tick 的
+                # try/finally/对账心跳段整体被跳过(fail-closed 修复的
+                # 完整性要求: 任何故障下心跳都不停)。
+                print(
+                    f"[realtime] TICK #{self._tick_count} — outbox id={id(self._outbox)} items={len(self._outbox._outbox)}"
+                )
             # Only evidence-approved pool members may enter the realtime path.
             # Configured symbols remain data subscriptions, never a trading
             # fallback when the pool has no ACTIVE entries.
