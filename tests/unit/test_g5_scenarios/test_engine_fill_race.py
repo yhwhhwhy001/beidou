@@ -176,7 +176,7 @@ _DEPTH_DEFAULT: dict[str, Any] = {"lastUpdateId": 1, "bids": [["4.1", "5"]], "as
 
 # 动态扫描确定性:非 INJ 品种的默认盘口(避免默认浅盘口被随机选中)。
 # BTCUSDT:price 60000 ∉ [0.05, 100] → price_out_of_range;LTCUSDT:top_ask 100
-# @4.156 → 100 > budget 43.31 - min_gate 12.031 = 31.279 → too_deep。
+# @4.156 → 100 > budget 43.3 - min_gate 12.1 = 31.2 → too_deep。
 _DEPTH_BTC_OUT_OF_RANGE: dict[str, Any] = {"lastUpdateId": 1, "bids": [["59999.5", "5"]], "asks": [["60000", "0.0002"]]}
 _DEPTH_LTC_DEEP: dict[str, Any] = {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "100"]]}
 
@@ -407,6 +407,28 @@ def test_partial_fill_dynamic_scan_inj_selected(tmp_path: Path) -> None:
     assert close_step["notional_usdt"] == pytest.approx(12.1 * 4.156)
     assert fake.cancelled == [1]  # 余量撤单
     assert ctx.ledger.total == pytest.approx(43.3 * 4.156 + 12.1 * 4.156)  # 入场 + 平仓单金额
+
+
+def test_partial_fill_predicate_boundary_equal_hits(tmp_path: Path) -> None:
+    # Ruling-18 谓词边界(<= 含边界命中):INJ top_ask 恰 = 31.2 = budget 43.3
+    # - min_gate 12.1,余量恰 = min_gate 12.1 → 命中且固定大单 43.3 下单
+    depth_map = {
+        "INJUSDT": {"lastUpdateId": 1, "bids": [["4.1", "5"]], "asks": [["4.156", "31.2"]]},
+    }
+    fake = _FakeClient(depth_map=depth_map, order_statuses=["PARTIALLY_FILLED", "CANCELED"])
+    ctx = _ctx(fake, tmp_path)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    inj_probe = next(p for p in steps if p.get("action") == "depth_probe" and p.get("selected"))
+    assert inj_probe["symbol"] == "INJUSDT" and inj_probe["top_ask_qty"] == "31.2"
+    assert inj_probe["min_gate_qty"] == "12.1" and inj_probe["budget_qty"] == "43.3"
+    placed = fake.placed[0]
+    assert placed["symbol"] == "INJUSDT" and placed["quantity"] == "43.3"
+    # 余量 43.3 - 31.2 = 12.1 = min_gate 恰挂盘;平仓量 max(31.2, 12.1) = 31.2
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["qty"] == "31.2"
+    assert fake.cancelled == [1]  # 余量撤单
 
 
 def test_partial_fill_dynamic_fallback_ltc_selected(tmp_path: Path) -> None:
