@@ -6,15 +6,25 @@ get_exchange_info() 全量取 status=TRADING 且以 USDT 结尾的品种(rest_cl
 的 iceberg_qty 参数保留,公共 API 不删;partial_fill 独立于 --symbol 运行,
 控制器裁决的 plan 偏离,场景语义不变),按 best_ask(探测价)过滤
 price ∈ [0.05, 100](min_gate 对齐粒度合理),seed 用场景启动时 injected now
-整数部分确定性采样最多 30 个(可复现),逐个探测 depth,选第一个满足
-top_ask_qty>0 且 top_ask_qty×3 < min_gate_qty(该品种,min_gate 用全量
-exchangeInfo 的 minQty/step + best_ask 计算,无需 ticker 调用)的品种
-(浅盘口判定,×3 隐藏量容差保证部分成交);全 miss 后 sleep 10s 再扫一轮
-(每轮重新随机采样),最多 3 轮;仍全 miss → NOT_VERIFIABLE
+整数部分确定性采样最多 30 个(可复现),逐个探测 depth。
+
+Ruling-18(认证轮 #8 证据:3 轮 90 品种全 miss —— testnet 做市盘 top 档量
+分钟级摆动但整体深,HYPEUSDT qty ∈ {1.09, ..., 2702},浅盘口谓词
+top_ask×3 < min_gate 物理不可命中):放宽命中谓词 + 固定大单量 ——
+命中条件 top_ask_qty > 0 且 top_ask_qty <= budget_qty - min_gate_qty
+(含边界;min_gate 用全量 exchangeInfo 的 minQty/step + best_ask 计算,
+无需 ticker 调用),budget_qty = floor(_ENTRY_BUDGET_USDT / price,
+step_size) 向下 step 对齐(_ENTRY_BUDGET_USDT=180 半额预算,留 10% 余量
+防平仓价波动触发 ledger fail-fast:全成路径 180+180=360 ≤ cap 400);
+下单量 = budget_qty 固定大单,部分成交时吃 top 档、余量
+= budget_qty - top ≥ min_gate 挂盘;FILLED 全成路径保留平仓 +
+NOT_VERIFIABLE。全 miss 后 sleep 10s 再扫一轮(每轮重新随机采样),
+最多 6 轮(间隔保持 10s,总扫描 ≤70s;Ruling-8 的 60s 是下单后观察窗口
+语义,扫描阶段不受限);仍全 miss → NOT_VERIFIABLE
 ("liquidity_insufficient_or_too_deep",证据记每轮采样数与 miss 数)。
-下单:LIMIT,qty=min_gate_qty(该品种动态计算、stepSize 对齐),price=best_ask,
-GTC,普通限价(不带 iceberg)。notional 记账:入场 50.3 + 平仓 50.3 = 100.6;
-全轮 100.6+171 ≈ 272 ≤ cap 400。
+下单:LIMIT,qty=budget_qty(该品种动态计算、stepSize 对齐),price=best_ask,
+GTC,普通限价(不带 iceberg)。notional 记账:入场 43.3×4.156≈180 +
+平仓 50.3 = 230.3;全成路径 180+180=360 ≤ cap 400。
 轮询:下单后首查 0.5s、之后 1s 间隔、30 次 ≈ 30s 窗口(余量挂单在盘口,市场
 扫单可能 1-2s 内全成,首查要快);PARTIALLY_FILLED → 组件级守卫断言
 (terminal_monotonic_guard("PARTIALLY_FILLED","NEW")=="PARTIALLY_FILLED",与引擎
@@ -65,18 +75,21 @@ T = TypeVar("T")
 _POLL_INTERVAL_SECONDS = 1.0  # 首查后 1s 间隔轮询
 _FIRST_POLL_DELAY_SECONDS = 0.5  # 下单后首查 0.5s(余量挂单在盘口,市场扫单可能 1-2s 内全成)
 _MAX_POLLS = 30  # 0.5s + 29×1s ≈ 30s 轮询窗口
-# Ruling-16:动态扫描浅盘口品种(partial_fill 独立于 --symbol 运行,控制器裁决
-# 的 plan 偏离,场景语义不变)。认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9
-# (testnet 做市盘全局动态摆动),固定候选列表失效 → 从全量 exchangeInfo 取
-# status=TRADING 且 USDT 结尾品种,best_ask ∈ [0.05, 100] 过滤(min_gate 对齐
-# 粒度合理),seed 用场景启动时 injected now 整数部分确定性采样最多 30 个
-# (可复现),逐品种探测 depth;全 miss 后 sleep 10s 再扫一轮,最多 3 轮。
-_SCAN_ROUNDS = 3  # 最多 3 轮扫描(轮间 sleep 10s,总等待 ≤20s < 60s 上限)
+# Ruling-16/Ruling-18:动态扫描浅盘口品种(partial_fill 独立于 --symbol 运行,
+# 控制器裁决的 plan 偏离,场景语义不变)。认证轮 #7:INJUSDT 盘口从实测 2.1
+# 变为 132778.9(testnet 做市盘全局动态摆动),固定候选列表失效 → 从全量
+# exchangeInfo 取 status=TRADING 且 USDT 结尾品种,best_ask ∈ [0.05, 100]
+# 过滤(min_gate 对齐粒度合理),seed 用场景启动时 injected now 整数部分
+# 确定性采样最多 30 个(可复现),逐品种探测 depth;认证轮 #8:3 轮 90 品种
+# 全 miss(top 档量分钟级摆动但整体深,浅盘口谓词物理不可命中)→ Ruling-18
+# 放宽谓词(top_ask ≤ budget_qty - min_gate)并改固定大单量 budget_qty
+# (180 半额预算);全 miss 后 sleep 10s 再扫一轮,最多 6 轮。
+_SCAN_ROUNDS = 6  # 最多 6 轮扫描(轮间 sleep 10s,总扫描 ≤70s;60s 是下单后观察窗口语义)
 _SCAN_SAMPLE_SIZE = 30  # 每轮随机采样品种数上限
 _SCAN_RETRY_INTERVAL_SECONDS = 10.0  # 全 miss 后重扫间隔(注入睡眠 seam)
 _PRICE_FILTER_MIN = Decimal("0.05")  # 候选价格下界(min_gate 对齐粒度)
 _PRICE_FILTER_MAX = Decimal("100")  # 候选价格上界
-_SHALLOW_MULTIPLE = Decimal("3")  # 浅盘口判定:top_ask×3 < min_gate_qty(隐藏量容差)
+_ENTRY_BUDGET_USDT = Decimal("180")  # 固定大单量半额预算(Ruling-18,全成路径 360 ≤ cap 400)
 _NOT_VERIFIABLE_REASON = "liquidity_insufficient_or_too_deep"
 _TERMINAL_NO_CANCEL = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
 
@@ -103,6 +116,20 @@ def _min_qty_and_step(symbol: str, exchange_info: dict[str, Any]) -> tuple[Decim
 def _format_qty(qty: Decimal) -> str:
     """Decimal → 定点字符串(去尾零,拒绝科学计数法),满足 LOT_SIZE 步进要求。"""
     return format(qty.normalize(), "f")
+
+
+def _budget_entry_qty(price: Decimal, step_size: Decimal) -> Decimal:
+    """固定大单量预算:floor(_ENTRY_BUDGET_USDT / price) 向下 step 对齐。
+
+    Ruling-18:半额预算 180 USDT 换取的品种数量,向下对齐 step_size 保证
+    不超预算且 LOT_SIZE 合规;price ≤ 100 时恒 ≥ min_gate_qty(180/100=1.8
+    ≥ 50/100=0.5,无需防御分支)。price/step_size 非正即 ValueError
+    (min_gate_quantity 同款非法输入防御惯例)。
+    """
+    if price <= 0 or step_size <= 0:
+        raise ValueError(f"_budget_entry_qty 需要正 price/step_size,got {price}/{step_size}")
+    steps = (_ENTRY_BUDGET_USDT / price / step_size) // Decimal("1")
+    return steps * step_size
 
 
 def _lcg_stream(seed: int, count: int) -> list[int]:
@@ -179,17 +206,21 @@ class PartialFillScenario(ScenarioBase):
             assert ctx.client is not None
             client = ctx.client
 
-            # ---- 动态扫描浅盘口品种(Ruling-16,fix round 8)----
+            # ---- 动态扫描浅盘口品种(Ruling-16/Ruling-18,fix round 9)----
             # 认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9,固定候选列表失效
-            # (testnet 做市盘全局动态摆动)→ 动态扫描替代固定候选:
+            # (testnet 做市盘全局动态摆动)→ 动态扫描替代固定候选;
+            # 认证轮 #8:浅盘口谓词 top_ask×3 < min_gate 在深做市盘(top 档量
+            # 分钟级摆动,HYPEUSDT qty ∈ {1.09,...,2702})下 3 轮 90 品种全
+            # miss → Ruling-18 放宽谓词 + 固定大单量:
             # get_exchange_info() 全量取 status=TRADING 且 USDT 结尾品种(缺
             # LOT_SIZE 的跳过),best_ask ∈ [0.05, 100] 过滤(min_gate 对齐粒度
             # 合理),seed 用 injected now 整数部分随机采样最多 30 个(可复现),
-            # 逐个探测 depth(谓词:top_ask>0 且 top_ask×3 < min_gate_qty,
-            # min_gate 用全量 exchangeInfo 的 minQty/step + best_ask 计算,
-            # 无需 ticker 调用);全 miss 后 sleep 10s 再扫一轮(每轮重新随机
-            # 采样),最多 3 轮;仍全 miss → NOT_VERIFIABLE(证据记每轮采样数
-            # 与 miss 数)。
+            # 逐个探测 depth(谓词:top_ask>0 且 top_ask ≤ budget_qty -
+            # min_gate_qty,含边界;budget_qty = floor(180/price, step) 向下
+            # 对齐,min_gate 用全量 exchangeInfo 的 minQty/step + best_ask
+            # 计算,无需 ticker 调用);全 miss 后 sleep 10s 再扫一轮(每轮
+            # 重新随机采样),最多 6 轮;仍全 miss → NOT_VERIFIABLE(证据记
+            # 每轮采样数与 miss 数)。
             full_info = _require_ok(await client.get_exchange_info(), "get_exchange_info")
             lot_sizes: dict[str, tuple[Decimal, Decimal]] = {}
             for entry in full_info.get("symbols", []):
@@ -203,6 +234,7 @@ class PartialFillScenario(ScenarioBase):
             candidates = list(lot_sizes)
             entry_price = Decimal("0")
             min_gate_qty = Decimal("0")
+            entry_budget_qty = Decimal("0")
             selected_symbol = ""
             for round_no in range(1, _SCAN_ROUNDS + 1):
                 # 每轮混入 round_no 重新采样(与 rng 跨轮推进等价,证据可复现)
@@ -225,18 +257,21 @@ class PartialFillScenario(ScenarioBase):
                         ask_price = Decimal(str(asks[0][0]))
                         ask_qty = Decimal(str(asks[0][1]))
                         candidate_min_gate = min_gate_quantity(min_qty, step_size, ask_price)
+                        candidate_budget_qty = _budget_entry_qty(ask_price, step_size)
                         probe["min_gate_qty"] = _format_qty(candidate_min_gate)
+                        probe["budget_qty"] = _format_qty(candidate_budget_qty)
                         if not (_PRICE_FILTER_MIN <= ask_price <= _PRICE_FILTER_MAX):
                             probe["reason"] = "price_out_of_range"
-                        elif ask_qty > 0 and ask_qty * _SHALLOW_MULTIPLE < candidate_min_gate:
+                        elif ask_qty > 0 and ask_qty <= candidate_budget_qty - candidate_min_gate:
                             selected_symbol = candidate
                             entry_price = ask_price
                             min_gate_qty = candidate_min_gate
+                            entry_budget_qty = candidate_budget_qty
                             probe["selected"] = True
                             steps.append(probe)
                             break
                         else:
-                            probe["reason"] = "not_shallow"
+                            probe["reason"] = "too_deep"
                     else:
                         probe["reason"] = "no_ask"
                     misses += 1
@@ -260,17 +295,20 @@ class PartialFillScenario(ScenarioBase):
                     {"steps": steps, "scan_rounds": [s for s in steps if s.get("action") == "scan_round"]},
                 )
 
-            # 下单:LIMIT,qty=min_gate_qty(该品种动态计算、stepSize 对齐),
-            # price=best_ask,GTC,普通限价(不带 iceberg);浅盘口判定保证
-            # top_ask×3 < qty → 必然部分成交(余量挂盘),入场 notional ≈ 50.3
+            # 下单:LIMIT,qty=budget_qty 固定大单(该品种动态计算、stepSize
+            # 对齐),price=best_ask,GTC,普通限价(不带 iceberg);命中谓词保证
+            # top_ask ≤ budget_qty - min_gate_qty → 部分成交时吃 top 档、
+            # 余量 = budget_qty - top ≥ min_gate 继续挂盘(确定性部分成交
+            # 语义;盘口摆动转深 → FILLED 全成路径平仓 + NOT_VERIFIABLE,
+            # 合法),入场 notional ≈ 180(全成路径 180+180=360 ≤ cap 400)
             symbol = selected_symbol
-            qty = min_gate_qty
+            qty = entry_budget_qty
             price = str(entry_price)
             notional = float(qty * entry_price)
             ctx.ledger.record(self.scenario_id, notional)
 
             logger.info(
-                "create_order BUY %s %s @ %s notional=%.2f USDT (partial_fill 浅盘口探针)",
+                "create_order BUY %s %s @ %s notional=%.2f USDT (partial_fill 固定大单探针)",
                 _format_qty(qty),
                 symbol,
                 price,
