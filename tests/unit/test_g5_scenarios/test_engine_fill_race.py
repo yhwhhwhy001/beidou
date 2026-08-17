@@ -26,7 +26,10 @@ from beidou_certification.g5_scenarios.engine.cancel_fill_race import (
     CancelFillRaceScenario,
     terminal_monotonic_guard,
 )
-from beidou_certification.g5_scenarios.engine.partial_fill import PartialFillScenario
+from beidou_certification.g5_scenarios.engine.partial_fill import (
+    PartialFillScenario,
+    _deterministic_sample,
+)
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_exchange.core.error_taxonomy import Result
 
@@ -59,6 +62,28 @@ def test_terminal_monotonic_guard_engine_edges() -> None:
     assert terminal_monotonic_guard("NEW", "EXPIRED") == "EXPIRED"
     assert terminal_monotonic_guard("NEW", "REJECTED") == "REJECTED"
     assert terminal_monotonic_guard("", "NEW") == "NEW"
+
+
+# ---- 确定性采样纯函数(Ruling-17:替代 random.Random,零豁免) ----
+
+
+def test_deterministic_sample_reproducible() -> None:
+    # 同 seed 同采样、无重复、不同 seed 不同采样(证据可复现性要求)
+    items = [f"s{i}" for i in range(100)]
+    a = _deterministic_sample(items, 42, 30)
+    b = _deterministic_sample(items, 42, 30)
+    assert a == b
+    assert len(a) == 30 and len(set(a)) == 30
+    c = _deterministic_sample(items, 43, 30)
+    assert c != a
+    assert all(x in items for x in a)
+
+
+def test_deterministic_sample_bounds() -> None:
+    # k ≥ n 全量返回;空列表不崩
+    items = [f"s{i}" for i in range(5)]
+    assert _deterministic_sample(items, 7, 10) == items
+    assert _deterministic_sample([], 7, 10) == []
 
 
 # ---- 场景执行上下文与可编程假客户端 ----

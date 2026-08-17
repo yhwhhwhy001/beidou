@@ -6,7 +6,7 @@ get_exchange_info() 全量取 status=TRADING 且以 USDT 结尾的品种(rest_cl
 的 iceberg_qty 参数保留,公共 API 不删;partial_fill 独立于 --symbol 运行,
 控制器裁决的 plan 偏离,场景语义不变),按 best_ask(探测价)过滤
 price ∈ [0.05, 100](min_gate 对齐粒度合理),seed 用场景启动时 injected now
-整数部分随机采样最多 30 个(可复现),逐个探测 depth,选第一个满足
+整数部分确定性采样最多 30 个(可复现),逐个探测 depth,选第一个满足
 top_ask_qty>0 且 top_ask_qty×3 < min_gate_qty(该品种,min_gate 用全量
 exchangeInfo 的 minQty/step + best_ask 计算,无需 ticker 调用)的品种
 (浅盘口判定,×3 隐藏量容差保证部分成交);全 miss 后 sleep 10s 再扫一轮
@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 from decimal import Decimal
 from typing import Any, Awaitable, Callable, TypeVar
@@ -70,7 +69,7 @@ _MAX_POLLS = 30  # 0.5s + 29×1s ≈ 30s 轮询窗口
 # 的 plan 偏离,场景语义不变)。认证轮 #7:INJUSDT 盘口从实测 2.1 变为 132778.9
 # (testnet 做市盘全局动态摆动),固定候选列表失效 → 从全量 exchangeInfo 取
 # status=TRADING 且 USDT 结尾品种,best_ask ∈ [0.05, 100] 过滤(min_gate 对齐
-# 粒度合理),seed 用场景启动时 injected now 整数部分随机采样最多 30 个
+# 粒度合理),seed 用场景启动时 injected now 整数部分确定性采样最多 30 个
 # (可复现),逐品种探测 depth;全 miss 后 sleep 10s 再扫一轮,最多 3 轮。
 _SCAN_ROUNDS = 3  # 最多 3 轮扫描(轮间 sleep 10s,总等待 ≤20s < 60s 上限)
 _SCAN_SAMPLE_SIZE = 30  # 每轮随机采样品种数上限
@@ -104,6 +103,33 @@ def _min_qty_and_step(symbol: str, exchange_info: dict[str, Any]) -> tuple[Decim
 def _format_qty(qty: Decimal) -> str:
     """Decimal → 定点字符串(去尾零,拒绝科学计数法),满足 LOT_SIZE 步进要求。"""
     return format(qty.normalize(), "f")
+
+
+def _lcg_stream(seed: int, count: int) -> list[int]:
+    """Park-Miller LCG 确定性伪随机流(Ruling-17:免 random 模块零豁免,可复现)。"""
+    state = seed % 2147483647 or 1
+    out: list[int] = []
+    for _ in range(count):
+        state = (state * 48271) % 2147483647
+        out.append(state)
+    return out
+
+
+def _deterministic_sample(items: list[str], seed: int, k: int) -> list[str]:
+    """确定性采样 k 个不重复元素(LCG 驱动 Fisher-Yates 前缀洗牌)。
+
+    Ruling-17:替代 random.Random 采样 —— 零豁免约束下不可用 # noqa: S311,
+    且注入 now 可复现的证据要求不变(seed 相同 → 采样相同)。
+    """
+    n = len(items)
+    if k >= n:
+        return list(items)
+    deck = list(items)
+    stream = _lcg_stream(seed, k)
+    for i, r in enumerate(stream):
+        j = i + (r % (n - i))
+        deck[i], deck[j] = deck[j], deck[i]
+    return deck[:k]
 
 
 class PartialFillScenario(ScenarioBase):
@@ -173,13 +199,14 @@ class PartialFillScenario(ScenarioBase):
                     lot_sizes[str(entry["symbol"])] = _min_qty_and_step(str(entry["symbol"]), full_info)
                 except ValueError:
                     continue  # 缺 LOT_SIZE 的品种跳过
-            rng = random.Random(int(self._now()))  # noqa: S311 - 候选采样可复现(seed=now),非加密用途
+            scan_seed = int(self._now())
             candidates = list(lot_sizes)
             entry_price = Decimal("0")
             min_gate_qty = Decimal("0")
             selected_symbol = ""
             for round_no in range(1, _SCAN_ROUNDS + 1):
-                sampled = rng.sample(candidates, min(_SCAN_SAMPLE_SIZE, len(candidates)))
+                # 每轮混入 round_no 重新采样(与 rng 跨轮推进等价,证据可复现)
+                sampled = _deterministic_sample(candidates, scan_seed + round_no, _SCAN_SAMPLE_SIZE)
                 misses = 0
                 for candidate in sampled:
                     min_qty, step_size = lot_sizes[candidate]
