@@ -44,8 +44,20 @@ FAIL(error_type=RuntimeError,error_message 携带最后一次错误原文)。
 save_order_state 单调守卫语义对拍,证据记录 monotonic_guard_source)并撤单清理;
 全 FILLED 或窗口内仍 NEW → NOT_VERIFIABLE。平仓量下限 = min_gate_qty
 (reduceOnly=true 下 quantity 可大于持仓 —— INJ 成交 2.1 时平仓单 qty=12.1
-只平 2.1,notional 50.3 合规;实际仅平持仓量)。累计超限 → NotionalExceededError
-交 runner fail-fast。dry_run 早退不碰任何接口;run() 自捕获异常返回 FAIL。
+只平 2.1,notional 50.3 合规;实际仅平持仓量)。入场侧记账超限 →
+NotionalExceededError 交 runner fail-fast(资金保护语义,place 前记账);
+平仓侧记账豁免 notional cap(Ruling-21,持仓清理优先)。dry_run 早退不碰任何
+接口;run() 自捕获异常返回 FAIL。
+
+Ruling-21(认证轮 #11 证据:QNTUSDT 第 4 轮命中 3.1@57.17 部分成交 1.8 →
+撤单成功 → 平仓时 _close_position 内 ledger.record 抛 NotionalExceededError
+(总 notional 443.37>400 —— testnet 盘口摆动使平仓 avgPrice 从 57.17 推到
+~85)→ 原逻辑平仓失败 CLOSE_FAILED + 1.8 QNT 持仓残留(close_attempted=True
+使 finally 兜底失效)):平仓侧记账豁免 notional cap —— _close_position 内
+ledger.record 包 try/except NotionalExceededError,超限时 steps 记
+{action: "close_notional_exceeded", notional_usdt, limit}(limit 取
+ledger.limit_usdt)证据,不抛、不阻断平仓 —— "任何路径不得带持仓离开"
+优先于 notional fail-fast;入场侧记账保持 fail-fast 不变(资金保护语义)。
 
 成交后平仓清理(认证轮 #2 根因:partial_fill 全成交留下 0.0022 BTC 持仓 →
 引擎对账 MISMATCHED → trading_ready=False → 后续场景 NOT_VERIFIABLE):
@@ -711,7 +723,10 @@ class PartialFillScenario(ScenarioBase):
         持仓,实际仅平掉持仓量 —— 0.0008 边界成交的平仓单恒合法,fix round
         5 根因:round 4 去掉命中下界后极小成交量的平仓单被拒绝 → CLOSE_FAILED);
         平仓价优先取响应 avgPrice(市价单真实成交价),缺失回退入场价;
-        平仓单金额 qty×price 记入 ledger。创建失败(Result 错误或异常)抛出,
+        平仓单金额 qty×price 记入 ledger,但记账超限豁免 fail-fast
+        (Ruling-21,认证轮 #11 根因:平仓 avgPrice 摆动使总 notional 超 cap →
+        原 CLOSE_FAILED + 持仓残留;持仓清理优先于测试预算,超限仅记
+        close_notional_exceeded 证据不抛)。创建失败(Result 错误或异常)抛出,
         调用方记录 close_failed 并 FAIL —— 持仓污染后续场景不可接受
         (认证轮 #2 根因:partial_fill 全成交留下持仓 → 引擎对账 MISMATCHED)。
         """
@@ -732,7 +747,20 @@ class PartialFillScenario(ScenarioBase):
         avg_price = created.get("avgPrice")
         price = Decimal(str(avg_price)) if avg_price is not None else fallback_price
         close_notional = float(close_qty * price)
-        ctx.ledger.record(self.scenario_id, close_notional)
+        try:
+            ctx.ledger.record(self.scenario_id, close_notional)
+        except NotionalExceededError:
+            # Ruling-21(认证轮 #11 根因:QNTUSDT 平仓 avgPrice 57.17→85 使总
+            # notional 443.37>400 → 原 CLOSE_FAILED + 1.8 QNT 持仓残留):
+            # 平仓记账豁免 notional cap —— "任何路径不得带持仓离开"优先于
+            # notional fail-fast;超限记证据,不抛、不阻断平仓。
+            steps.append(
+                {
+                    "action": "close_notional_exceeded",
+                    "notional_usdt": close_notional,
+                    "limit": ctx.ledger.limit_usdt,
+                }
+            )
         steps.append(
             {
                 "action": "close",

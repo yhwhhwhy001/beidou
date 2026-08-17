@@ -868,6 +868,31 @@ def test_partial_fill_place_reprobe_price_moved_uses_latest(tmp_path: Path) -> N
     assert ctx.ledger.total == pytest.approx(45 * 4.0 + 12.5 * 4.0)  # 入场 180 + 平仓 50
 
 
+# ---- partial_fill: 平仓记账豁免 notional cap(Ruling-21) ----
+
+
+def test_partial_fill_close_notional_exceeded_still_passes(tmp_path: Path) -> None:
+    # Ruling-21(认证轮 #11 根因:QNTUSDT 平仓 avgPrice 摆动使总 notional 超 cap
+    # → 原 CLOSE_FAILED + 持仓残留):平仓记账超限不阻断平仓 —— 收紧 ledger
+    # limit=200,入场 43.3×4.156≈179.95 记账后平仓 12.1×4.156≈50.29 必然超限;
+    # 断言 close 步骤成功、close_notional_exceeded 证据存在(limit 为 ledger
+    # limit)、场景仍 PASS(部分成交守卫路径完整)、ledger 总量超 limit 但未抛
+    fake = _FakeClient(order_statuses=["PARTIALLY_FILLED", "CANCELED"])
+    ctx = _ctx(fake, tmp_path, limit=200.0)
+    result = asyncio.run(PartialFillScenario(sleep=_noop_sleep).run(ctx))
+    assert result.status == ScenarioStatus.PASS
+    steps = result.evidence["steps"]
+    close_step = next(s for s in steps if s.get("action") == "close")
+    assert close_step["qty"] == "12.1" and close_step["notional_usdt"] == pytest.approx(12.1 * 4.156)
+    exceeded = next(s for s in steps if s.get("action") == "close_notional_exceeded")
+    assert exceeded["notional_usdt"] == pytest.approx(12.1 * 4.156)
+    assert exceeded["limit"] == 200.0  # ledger.limit_usdt 公开属性
+    assert result.evidence["partial_status"] == "PARTIALLY_FILLED"
+    assert fake.cancelled == [1]  # 余量撤单照常
+    assert ctx.ledger.total == pytest.approx(43.3 * 4.156 + 12.1 * 4.156)  # 超 limit 但未抛
+    assert ctx.ledger.total > 200.0
+
+
 # ---- cancel_fill_race: 假连接(模拟 PostgresPersistentStore 的 SQL 面) ----
 
 
