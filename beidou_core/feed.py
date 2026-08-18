@@ -857,6 +857,32 @@ class MarketDataFeed:
         features["dq_tier"] = dq_tier.value
         return features
 
+    async def async_get_klines_raw(
+        self, symbol: str, interval: str = "1m", lookback: int = 400
+    ) -> list[dict[str, Any]]:
+        """返回解析后的闭合 K 线原始列(open_time 升序)。
+
+        BD-FIX (final83i): 因子历史回填源 —— 挖掘因子组件重启后用闭合
+        历史 bar 重建内存价格/因子值历史,避免实时重等约 60 分钟预热。
+        仅闭合 bar(与近线信号主路径同语义),调用方自行按 open_time 排序。
+        """
+        raw = await self._api_async(
+            Endpoint.KLINES,
+            params={"symbol": symbol, "interval": interval, "limit": lookback},
+        )
+        if isinstance(raw, dict) and "error" in raw:
+            raise MarketDataUnknownError(f"kline response for {symbol} contains an error")
+        if not isinstance(raw, list):
+            raise MarketDataUnknownError(f"kline response for {symbol} is not a list")
+        now = datetime.now(timezone.utc)
+        by_open: dict[datetime, dict[str, Any]] = {}
+        for k in raw:
+            parsed = self._parse_rest_kline(k, now, include_closed=True)
+            if parsed is None or parsed.get("is_closed") is not True:
+                continue
+            by_open[parsed["open_time"]] = parsed
+        return [by_open[t] for t in sorted(by_open)]
+
     def fetch_ticker(self, symbol: str) -> dict:
         data = self._api(Endpoint.TICKER_24HR, params={"symbol": symbol})
         if not isinstance(data, dict) or "lastPrice" not in data:

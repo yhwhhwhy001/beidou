@@ -1992,6 +1992,8 @@ class AutonomousEngine:
         self._strategy_kernel = StrategyKernel(mode=self._kernel_mode.value)
         self._strategy_kernel.set_alpha_graph(self._alpha_graph)
         self._strategy_kernel.set_typed_graph(self._typed_graph)
+        # BD-FIX (final83i): 挖掘因子组件注入 K 线回填源(重启免预热)
+        self._wire_factor_backfill(component_instances)
 
         # Strategy performance tracking
         self._autopilot_strategy_id = StrategyId("autopilot")
@@ -3431,6 +3433,22 @@ class AutonomousEngine:
 
         return {k: f.to_dict() for k, f in facts.items()}
 
+    def _wire_factor_backfill(self, component_instances: dict[str, AlphaComponent]) -> None:
+        """BD-FIX (final83i): 挖掘因子组件注入 K 线回填源。
+
+        重启后 Alpha DAG 中的 ExpressionComponent 首轮求值即从 REST
+        闭合历史 K 线重建价格/因子值历史,不再实时裸等约 60 分钟预热
+        (_MIN_BARS + _Z_MIN 逐 bar 积累)。组件无回填接口时静默跳过。
+        """
+        _feed = getattr(self, "_feed", None)
+        _raw_klines = getattr(_feed, "async_get_klines_raw", None) if _feed is not None else None
+        if not callable(_raw_klines):
+            return
+        for _comp in component_instances.values():
+            _setter = getattr(_comp, "set_backfill_source", None)
+            if callable(_setter):
+                _setter(_raw_klines)
+
     def _rebuild_alpha_graph(self) -> None:
         """BF-08: 从 FactorRegistry 重建 AlphaGraph。
 
@@ -3488,6 +3506,8 @@ class AutonomousEngine:
         if hasattr(self, "_strategy_kernel"):
             self._strategy_kernel.set_alpha_graph(new_graph)
             self._strategy_kernel.set_typed_graph(self._typed_graph)
+        # BD-FIX (final83i): 重建后的因子组件同样注入回填源
+        self._wire_factor_backfill(component_instances)
         # Ensure prediction tracking covers all active factors
         for fid in active_factor_ids:
             if fid not in self._factor_predictions:

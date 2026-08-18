@@ -88,6 +88,16 @@ class ExpressionComponent(AlphaComponent):
         # 近线循环交错喂收盘价，混合粒度序列上的 z-score 完全失真
         # （信号触发慢/不稳定的根因）。每 tf 独立历史与 z 窗口。
         self._histories: dict[str, dict[str, deque[float]]] = {}
+        # BD-FIX (final83i): 重启回填 —— 引擎注入异步 K 线源,首轮求值前
+        # 用闭合历史 bar 重建价格/因子值历史,不再实时裸等约 60 分钟预热
+        # (_MIN_BARS + _Z_MIN 逐 bar 积累)。每 (symbol, timeframe) 至多
+        # 尝试一次,失败继续实时积累且不回退重试。
+        self._backfill_source: Any = None
+        self._backfill_attempted: set[tuple[str, str]] = set()
+        try:
+            self._backfill_lookback: int = int(os.getenv("BEIDOU_FACTOR_BACKFILL_BARS", "400"))
+        except (TypeError, ValueError):
+            self._backfill_lookback = 400
         if expression_string:
             try:
                 from beidou_research.mining.primitive_library import PrimitiveRegistry
@@ -114,12 +124,80 @@ class ExpressionComponent(AlphaComponent):
         """注册类级表达式绑定，供无参构造按 factor_id 兜底。"""
         EXPRESSION_BINDINGS[factor_id] = (expression_string, role)
 
+    def set_backfill_source(self, source: Any) -> None:
+        """注入异步 K 线回填源：``async (symbol, timeframe) -> list[dict]``。
+
+        每行含 close/high/low/volume（open_time 升序、仅闭合 bar）。引擎在
+        Alpha DAG 组装后为每个挖掘因子组件注入（final83i）。
+        """
+        self._backfill_source = source
+
     def validate(self) -> bool:
         return bool(self._factor_id) and self._expr is not None
 
+    async def _maybe_backfill(self, symbol: str, timeframe: str, hist: dict[str, deque[float]]) -> bool:
+        """首轮求值前用闭合历史 K 线重建价格/因子值历史（幂等）。
+
+        返回 True 表示本轮完成了回填（调用方可对与回填尾部重合的当前
+        闭合 bar 去重一次）；False 表示未回填（正常实时积累）。
+        """
+        _key = (symbol, timeframe)
+        if self._backfill_source is None or _key in self._backfill_attempted:
+            return False
+        self._backfill_attempted.add(_key)
+        try:
+            bars = await self._backfill_source(symbol, timeframe, self._backfill_lookback)
+            rows = [b for b in bars if isinstance(b, dict)] if isinstance(bars, (list, tuple)) else []
+            if len(rows) < _MIN_BARS:
+                return False
+            hist["close"].clear()
+            hist["high"].clear()
+            hist["low"].clear()
+            hist["volume"].clear()
+            for row in rows:
+                try:
+                    _close = float(row["close"])
+                    _high = float(row.get("high", _close))
+                    _low = float(row.get("low", _close))
+                    _volume = float(row.get("volume", 0) or 0)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if not all(math.isfinite(v) for v in (_close, _high, _low, _volume)):
+                    continue
+                hist["close"].append(_close)
+                hist["high"].append(_high)
+                hist["low"].append(_low)
+                hist["volume"].append(max(_volume, 0.0))
+            if self._expr is None or len(hist["close"]) < _MIN_BARS:
+                return False
+            # 与离线 runner 同构地对全序列求值,重建因子值历史(z 窗口)
+            feature_dict = self._build_feature_dict(hist)
+            loop = asyncio.get_running_loop()
+            values = await loop.run_in_executor(_EVAL_EXECUTOR, self._expr.evaluate_series, feature_dict)
+            hist["value"].clear()
+            for raw_value in values[-_Z_WINDOW:]:
+                try:
+                    parsed = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(parsed):
+                    hist["value"].append(parsed)
+            return True
+        except Exception:
+            # 回填失败(API 抖动/数据不足):继续实时积累;本 (symbol,tf)
+            # 不再重试,避免每 tick 打 API。
+            return False
+
     async def generate(self, context: dict[str, Any]) -> AlphaSignal:
         features = context.get("features", {}) or {}
-        _hist = self._hist_for(str(context.get("timeframe", "1m")))
+        _timeframe = str(context.get("timeframe", "1m"))
+        _hist = self._hist_for(_timeframe)
+        # BD-FIX (final83i): 首轮求值前回填闭合历史(重启免 60 分钟预热)
+        _seeded_now = False
+        if len(_hist["close"]) < _MIN_BARS and self._backfill_source is not None:
+            _seeded_now = await self._maybe_backfill(
+                str(context.get("instrument_id", "UNKNOWN")), _timeframe, _hist
+            )
         try:
             close = float(features["close"])
             high = float(features.get("high", close))
@@ -127,10 +205,14 @@ class ExpressionComponent(AlphaComponent):
             volume = float(features.get("volume", 0.0))
         except (KeyError, TypeError, ValueError):
             return self._no_action(context)
-        _hist["close"].append(close)
-        _hist["high"].append(high)
-        _hist["low"].append(low)
-        _hist["volume"].append(volume)
+        # 回填当轮若当前闭合 bar 与回填尾部重合则去重一次(同一根 bar 不双计);
+        # 其余轮次保持原始终追加语义。
+        _dup_of_seed = bool(_seeded_now and _hist["close"] and _hist["close"][-1] == close)
+        if not _dup_of_seed:
+            _hist["close"].append(close)
+            _hist["high"].append(high)
+            _hist["low"].append(low)
+            _hist["volume"].append(volume)
 
         if self._expr is None or len(_hist["close"]) < _MIN_BARS:
             return self._no_action(context)
