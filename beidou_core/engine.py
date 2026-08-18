@@ -4529,7 +4529,15 @@ class AutonomousEngine:
             # BD-FIX (S2): 区分"交易所缺失"与"语义不匹配"。
             # 交易所缺失 → 保护单已被触发/取消/过期 → 清理本地存储。
             # 语义不匹配 → 真正风险 → 保持阻断。
-            venue_missing = [i for i in semantic_issues if i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+            # BD-FIX (testnet inventory lag): 新放置的 algo 宽限期内豁免
+            # 缺失判定 —— 启动时把上一运行刚下发的保护误清为 CANCELLED
+            # 会诱发重建→再缺失的震荡(实测 DOGE/TIA 启动误清)。
+            venue_missing = [
+                i
+                for i in semantic_issues
+                if i.startswith("PROTECTION_VENUE_ROW_MISSING:")
+                and not self._protection_row_fresh(str(i.split(":", 1)[1]))
+            ]
             hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
             if venue_missing and not hard_issues:
                 # 所有问题都是"交易所缺失" → 保护单已被触发/取消/过期
@@ -9092,6 +9100,35 @@ class AutonomousEngine:
             # 恢复路径兜底,不放大异常(15 分钟租约回收仍是安全网)
             return False
 
+    def _protection_row_fresh(self, algo_id: str, *, grace_seconds: float = 600.0) -> bool:
+        """BD-FIX (testnet inventory lag): 新放置的 algo 豁免缺失防抖。
+
+        testnet openAlgoOrders 可见性延迟数分钟 —— 刚下发的 algo 尚未
+        出现在库存里,3 轮 VENUE_ROW_MISSING 防抖会把它当"已消失"取消,
+        再重建、再被取消,形成震荡循环且资格门长期 UNKNOWN(实测
+        XRPUSDT 持仓 45.9 时 stop_qty=0 持续 10+ 分钟)。按 durable 行
+        created_at 判龄,宽限期内不参与缺失判定。
+        """
+        store = getattr(self, "_store", None)
+        if store is None:
+            return False
+        try:
+            rows = store.restore_protections()
+        except Exception:
+            return False
+        for row in rows:
+            if str(row.get("exchange_order_id", "") or "").strip() != str(algo_id):
+                continue
+            raw = str(row.get("created_at", "") or "").strip()
+            if not raw:
+                return False
+            try:
+                _ts = datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                return False
+            return (time.time() - _ts) < grace_seconds
+        return False
+
     def _dedup_ghost_protection_positions(self) -> int:
         """BD-FIX (ghost-position deadlock): 同品种重复保护投影去重。
 
@@ -9222,7 +9259,15 @@ class AutonomousEngine:
                 # BD-FIX: 区分"交易所缺失"与"语义不匹配"（与启动恢复 S2 同语义）。
                 # 缺失 → 保护单已被触发/取消/过期 → 清理本地 stale 行后继续补发；
                 # 真语义冲突（SYMBOL/SIDE/QTY/TRIGGER/REDUCE_ONLY）→ 保持 fail-closed。
-                venue_missing = [i for i in semantic_issues if i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+                # BD-FIX (testnet inventory lag): 新放置的 algo 在宽限期内豁免
+                # 缺失判定 —— 否则刚下发的保护被 3 轮防抖取消 → 重建 → 再取消,
+                # 资格门长期 UNKNOWN(实测 XRP 持仓 45.9 时 stop_qty=0 达 10+ 分钟)。
+                venue_missing = [
+                    i
+                    for i in semantic_issues
+                    if i.startswith("PROTECTION_VENUE_ROW_MISSING:")
+                    and not self._protection_row_fresh(str(i.split(":", 1)[1]))
+                ]
                 hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
                 if hard_issues:
                     self._block_unowned_protection_orders(hard_issues)

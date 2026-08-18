@@ -1455,3 +1455,50 @@ def test_restore_durable_protection_registers_active_algo_mapping() -> None:
     }
     known_ids = {a for ids in engine._active_algo_ids.values() for a in ids}
     assert known_ids == durable_ids
+
+
+# ---------------------------------------------------------------------------
+# 9. testnet 库存可见性延迟:新放置的 algo 豁免缺失防抖
+# ---------------------------------------------------------------------------
+
+
+def test_protection_row_fresh_grace_window() -> None:
+    from datetime import datetime, timedelta
+    from datetime import timezone as _tz
+
+    now_iso = datetime.now(_tz.utc).isoformat()
+    old_iso = (datetime.now(_tz.utc) - timedelta(hours=2)).isoformat()
+    engine = _adopt_engine(
+        protections=[
+            dict(
+                _durable_row(
+                    protection_id="sl-a",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="STOP_MARKET",
+                    quantity="1.0",
+                    position_id="pos-a",
+                    generation=1,
+                    algo_id="algo-a",
+                ),
+                created_at=now_iso,
+            ),
+            dict(
+                _durable_row(
+                    protection_id="sl-b",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="STOP_MARKET",
+                    quantity="1.0",
+                    position_id="pos-b",
+                    generation=1,
+                    algo_id="algo-b",
+                ),
+                created_at=old_iso,
+            ),
+        ]
+    )
+
+    assert engine._protection_row_fresh("algo-a") is True
+    assert engine._protection_row_fresh("algo-b") is False
+    assert engine._protection_row_fresh("algo-missing") is False
