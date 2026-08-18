@@ -4547,7 +4547,16 @@ class AutonomousEngine:
             if not intent_id or not client_id or not symbol:
                 continue
             try:
-                query = await self._adapter.query_order_by_client_id(symbol, client_id)
+                # 直查原始响应:适配器会把 -2013(Order does not exist)包装为
+                # 通用失败并丢弃原始 msg,无法区分"真不存在"与"查询失败"。
+                # 明确缺席是 venue 的确定性结论,允许把 UNKNOWN 恢复为
+                # PENDING(worker 会重新验证审批:过期审批被确定性拒绝为
+                # FAILED,不会重新下单)。
+                raw = await self._api_async(
+                    Endpoint.ORDER,
+                    signed=True,
+                    params={"symbol": symbol, "origClientOrderId": client_id},
+                )
             except Exception as exc:
                 logger.warning(
                     "UNKNOWN intent lookup failed for %s: %s",
@@ -4555,9 +4564,18 @@ class AutonomousEngine:
                     type(exc).__name__,
                 )
                 continue
-            if not query.is_success() or not isinstance(query.data, dict) or not query.data.get("orderId"):
+            if not isinstance(raw, dict):
                 continue
-            venue_order = query.data
+            if "status" not in raw:
+                _code = raw.get("code")
+                _msg = str(raw.get("msg", "") or "")
+                if _code == -2013 or "does not exist" in _msg or "Unknown order" in _msg:
+                    self._outbox.resolve_unknown(intent_id, exchange_order_found=False)
+                    resolved_count += 1
+                continue
+            venue_order = raw
+            if not venue_order.get("orderId"):
+                continue
             if (
                 str(venue_order.get("clientOrderId", "")) != client_id
                 or str(venue_order.get("symbol", "")).strip().upper() != symbol
@@ -8977,11 +8995,14 @@ class AutonomousEngine:
             event_id = f"stale-resolve:{intent_id}:{sequence}:{venue_status}"
             try:
                 if venue_status == "NOT_FOUND":
-                    target = (
-                        ChildCommandState.CANCELED
-                        if current_state in ("SENDING", "ACKED", "PARTIALLY_FILLED", "UNKNOWN")
-                        else ChildCommandState.REJECTED
-                    )
+                    # 明确缺席(-2013):交易所从未接受该子命令。本地未持有
+                    # exchange_order_id 时只能判 REJECTED(交易所从未确认);
+                    # 持有 order id 却查询不到(历史终态移出查询窗口)按
+                    # CANCELED 归档(CANCELED 守卫要求 order id)。
+                    if current_state in ("SENDING", "ACKED", "PARTIALLY_FILLED", "UNKNOWN"):
+                        target = ChildCommandState.REJECTED if not exchange_order_id else ChildCommandState.CANCELED
+                    else:
+                        target = ChildCommandState.REJECTED
                     await asyncio.to_thread(
                         _recover, intent_id, sequence, target,
                         event_id=event_id, exchange_order_id=exchange_order_id,

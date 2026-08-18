@@ -1220,6 +1220,8 @@ class PostgresIntentOutbox:
         """
         if self._connection_factory is None or self._fencing_token <= 0:
             raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        _all_terminal = False
+        _any_rejected = False
         with (
             OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
             OutboxWorker._transaction(conn),
@@ -1289,6 +1291,21 @@ class PostgresIntentOutbox:
                     self._fencing_token,
                 ),
             )
+            from beidou_safety.execution.command_aggregate import ChildCommandState
+
+            _terminal = {ChildCommandState.FILLED, ChildCommandState.CANCELED, ChildCommandState.REJECTED}
+            _all_terminal = all(c.state in _terminal for c in updated.children)
+            _any_rejected = any(c.state is ChildCommandState.REJECTED for c in updated.children)
+
+        # BD-FIX: 全部子命令到达终态后关闭父意图,避免父行永久停留在
+        # SENDING/SENT(realtime 视图 pending 永不归零、inflight 泄漏)。
+        # 父行仍为 UNKNOWN 时 ack/reject 均不适用,由 UNKNOWN 恢复路径
+        # (venue 明确缺席 → PENDING → worker 复核)另行裁决。
+        if _all_terminal:
+            if _any_rejected:
+                self.reject(intent_id, "EXECUTION_PLAN_TERMINAL_REJECTED", idempotency_key="")
+            else:
+                self.ack(intent_id, idempotency_key="")
 
     def project_order_terminal(
         self,

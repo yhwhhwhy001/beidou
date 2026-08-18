@@ -194,6 +194,95 @@ async def test_engine_resolves_not_found_planned_as_rejected(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_engine_resolves_not_found_unknown_without_order_id_as_rejected(monkeypatch) -> None:
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._can_write = True
+    recover = Mock()
+    engine._outbox = SimpleNamespace(
+        stale_child_commands=Mock(
+            return_value=[{
+                "parent_intent_id": "intent-x", "sequence": 0, "state": "UNKNOWN",
+                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "",
+            }]
+        ),
+        recover_stale_child=recover,
+    )
+    engine._api_async = AsyncMock(return_value={"code": -2013, "msg": "Order does not exist"})
+
+    resolved = await engine._resolve_stale_execution_commands()
+
+    assert resolved == 1
+    assert recover.call_args.args[2] == ChildCommandState.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_engine_resolves_not_found_with_order_id_as_canceled(monkeypatch) -> None:
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._can_write = True
+    recover = Mock()
+    engine._outbox = SimpleNamespace(
+        stale_child_commands=Mock(
+            return_value=[{
+                "parent_intent_id": "intent-x", "sequence": 0, "state": "UNKNOWN",
+                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "999",
+            }]
+        ),
+        recover_stale_child=recover,
+    )
+    engine._api_async = AsyncMock(return_value={"code": -2013, "msg": "Order does not exist"})
+
+    resolved = await engine._resolve_stale_execution_commands()
+
+    assert resolved == 1
+    assert recover.call_args.args[2] == ChildCommandState.CANCELED
+
+
+def test_recover_stale_child_closes_parent_when_all_children_rejected() -> None:
+    conn = _RecordingConnection()
+    rejected = _child(0).transition(ChildCommandState.REJECTED, event_id="e-rej")
+    conn.cursor_state.fetchone_values.append(None)  # 父意图无活跃租约
+    conn.cursor_state.fetchall_values.append([(json.dumps(rejected.to_payload(), default=str),)])
+    conn.cursor_state.fetchone_values.append(None)  # 事件非重复
+    conn.cursor_state.fetchone_values.append(("msg-1", "SENDING", "intent-stale-1"))  # 父行 SELECT
+    conn.cursor_state.fetchone_values.append(("intent-stale-1",))  # UPDATE RETURNING
+    store = _outbox(conn)
+
+    store.recover_stale_child(
+        "intent-stale-1", 0, ChildCommandState.REJECTED, event_id="stale-resolve:x:0:NOT_FOUND"
+    )
+
+    parent_update = next(
+        (s, p) for s, p in conn.cursor_state.statements if s.startswith("UPDATE v3_transactional_outbox")
+    )
+    assert parent_update[1][0] == "FAILED"
+
+
+def test_recover_stale_child_acks_parent_when_all_children_filled() -> None:
+    conn = _RecordingConnection()
+    filled = _child(0).transition(ChildCommandState.SENDING, event_id="e-send")
+    filled = filled.transition(ChildCommandState.ACKED, event_id="e-ack", exchange_order_id="123")
+    filled = filled.transition(
+        ChildCommandState.FILLED, event_id="e-fill", exchange_order_id="123", cumulative_filled_quantity="5.8"
+    )
+    conn.cursor_state.fetchone_values.append(None)  # 父意图无活跃租约
+    conn.cursor_state.fetchall_values.append([(json.dumps(filled.to_payload(), default=str),)])
+    conn.cursor_state.fetchone_values.append(None)  # 事件非重复
+    conn.cursor_state.fetchone_values.append(("msg-1", "SENDING", "intent-stale-1"))  # 父行 SELECT
+    conn.cursor_state.fetchone_values.append(("intent-stale-1",))  # UPDATE RETURNING
+    store = _outbox(conn)
+
+    store.recover_stale_child(
+        "intent-stale-1", 0, ChildCommandState.FILLED, event_id="stale-resolve:x:0:FILLED",
+        exchange_order_id="123", cumulative_filled_quantity="5.8",
+    )
+
+    parent_update = next(
+        (s, p) for s, p in conn.cursor_state.statements if s.startswith("UPDATE v3_transactional_outbox")
+    )
+    assert parent_update[1][0] == "ACKED"
+
+
+@pytest.mark.asyncio
 async def test_sync_venue_leverage_env_gated_and_cached(monkeypatch) -> None:
     engine = AutonomousEngine.__new__(AutonomousEngine)
     engine._env_mode = SimpleNamespace(value="testnet")

@@ -216,16 +216,11 @@ async def test_terminal_partial_fill_monitoring_requires_reconciliation() -> Non
 async def test_unknown_intent_lookup_failure_is_not_requeued() -> None:
     resolutions: list[tuple[str, bool]] = []
 
-    async def failed_lookup(_symbol: str, _client_id: str) -> Result:
-        return Result.failure(
-            "network timeout",
-            category=ErrorCategory.TIMEOUT,
-            retryable=True,
-            raw={"reason": "timeout"},
-        )
+    async def failed_lookup(*_args, **_kwargs) -> dict:
+        raise TimeoutError("network timeout")
 
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._adapter = SimpleNamespace(query_order_by_client_id=failed_lookup)
+    engine._api_async = failed_lookup
     engine._outbox = SimpleNamespace(
         get_unknown_intents=lambda: [
             {
@@ -246,28 +241,82 @@ async def test_unknown_intent_lookup_failure_is_not_requeued() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_intent_definitive_absence_is_requeued() -> None:
+    resolutions: list[tuple[str, bool]] = []
+
+    async def absent_lookup(*_args, **_kwargs) -> dict:
+        return {"code": -2013, "msg": "Order does not exist."}
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._api_async = absent_lookup
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-absent",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-absent",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 1
+    assert resolutions == [("intent-unknown-absent", False)]
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_ambiguous_absence_stays_unknown() -> None:
+    resolutions: list[tuple[str, bool]] = []
+
+    async def ambiguous_lookup(*_args, **_kwargs) -> dict:
+        return {"code": -1021, "msg": "Timestamp for this request was 1000ms ahead of the server's time."}
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._api_async = ambiguous_lookup
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-ambiguous",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-ambiguous",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
+    assert resolved == 0
+    assert resolutions == []
+
+
+@pytest.mark.asyncio
 async def test_unknown_intent_terminal_partial_fill_requires_reconciliation() -> None:
     resolutions: list[tuple[str, bool]] = []
     persisted: list[tuple[tuple, dict]] = []
     failures: list[str] = []
 
-    async def found_partial_terminal(_symbol: str, _client_id: str) -> Result:
-        return Result.success(
-            {
-                "orderId": 42,
-                "clientOrderId": "beidou-intent-unknown-partial",
-                "symbol": "BTCUSDT",
-                "side": "BUY",
-                "type": "MARKET",
-                "origQty": "1",
-                "executedQty": "0.25",
-                "avgPrice": "95000",
-                "status": "CANCELED",
-            }
-        )
+    async def found_partial_terminal(*_args, **_kwargs) -> dict:
+        return {
+            "orderId": 42,
+            "clientOrderId": "beidou-intent-unknown-partial",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "1",
+            "executedQty": "0.25",
+            "avgPrice": "95000",
+            "status": "CANCELED",
+        }
 
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._adapter = SimpleNamespace(query_order_by_client_id=found_partial_terminal)
+    engine._api_async = found_partial_terminal
     engine._store = SimpleNamespace(save_order_state=lambda *args, **kwargs: persisted.append((args, kwargs)))
     engine._outbox = SimpleNamespace(
         get_unknown_intents=lambda: [
@@ -296,23 +345,21 @@ async def test_unknown_intent_identity_bound_venue_fact_is_acknowledged() -> Non
     resolutions: list[tuple[str, bool]] = []
     persisted: list[tuple[tuple, dict]] = []
 
-    async def found_lookup(_symbol: str, _client_id: str) -> Result:
-        return Result.success(
-            {
-                "orderId": 42,
-                "clientOrderId": "beidou-intent-unknown-2",
-                "symbol": "BTCUSDT",
-                "side": "BUY",
-                "type": "MARKET",
-                "origQty": "0.01",
-                "executedQty": "0.01",
-                "avgPrice": "95000",
-                "status": "FILLED",
-            }
-        )
+    async def found_lookup(*_args, **_kwargs) -> dict:
+        return {
+            "orderId": 42,
+            "clientOrderId": "beidou-intent-unknown-2",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "0.01",
+            "executedQty": "0.01",
+            "avgPrice": "95000",
+            "status": "FILLED",
+        }
 
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._adapter = SimpleNamespace(query_order_by_client_id=found_lookup)
+    engine._api_async = found_lookup
     engine._store = SimpleNamespace(save_order_state=lambda *args, **kwargs: persisted.append((args, kwargs)))
     engine._outbox = SimpleNamespace(
         get_unknown_intents=lambda: [
@@ -352,25 +399,23 @@ async def test_unknown_intent_order_fact_persistence_failure_stays_unknown() -> 
     resolutions: list[tuple[str, bool]] = []
     failures: list[str] = []
 
-    async def found_lookup(_symbol: str, _client_id: str) -> Result:
-        return Result.success(
-            {
-                "orderId": 44,
-                "clientOrderId": "beidou-intent-unknown-4",
-                "symbol": "BTCUSDT",
-                "side": "BUY",
-                "type": "MARKET",
-                "origQty": "0.01",
-                "executedQty": "0",
-                "status": "NEW",
-            }
-        )
+    async def found_lookup(*_args, **_kwargs) -> dict:
+        return {
+            "orderId": 44,
+            "clientOrderId": "beidou-intent-unknown-4",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "0.01",
+            "executedQty": "0",
+            "status": "NEW",
+        }
 
     def fail_persist(*_args, **_kwargs) -> None:
         raise RuntimeError("injected persistence failure")
 
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._adapter = SimpleNamespace(query_order_by_client_id=found_lookup)
+    engine._api_async = found_lookup
     engine._store = SimpleNamespace(save_order_state=fail_persist)
     engine._record_execution_fact_failure_env_guarded = failures.append
     engine._outbox = SimpleNamespace(
@@ -397,18 +442,16 @@ async def test_unknown_intent_order_fact_persistence_failure_stays_unknown() -> 
 async def test_unknown_intent_mismatched_lookup_identity_stays_unknown() -> None:
     resolutions: list[tuple[str, bool]] = []
 
-    async def mismatched_lookup(_symbol: str, _client_id: str) -> Result:
-        return Result.success(
-            {
-                "orderId": 43,
-                "clientOrderId": "another-client-id",
-                "symbol": "ETHUSDT",
-                "status": "FILLED",
-            }
-        )
+    async def mismatched_lookup(*_args, **_kwargs) -> dict:
+        return {
+            "orderId": 43,
+            "clientOrderId": "another-client-id",
+            "symbol": "ETHUSDT",
+            "status": "FILLED",
+        }
 
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._adapter = SimpleNamespace(query_order_by_client_id=mismatched_lookup)
+    engine._api_async = mismatched_lookup
     engine._outbox = SimpleNamespace(
         get_unknown_intents=lambda: [
             {
