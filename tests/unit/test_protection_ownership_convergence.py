@@ -869,6 +869,197 @@ async def test_retry_missing_protections_rebuilds_undersized_sl_after_position_g
     assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
 
 
+@pytest.mark.asyncio
+async def test_retry_missing_protections_rebuilds_stale_generation_sl_after_flip() -> None:
+    """翻转成交把 _position_generation 推高后,旧代保护行被资格门按代数
+    过滤 → 覆盖判定 stop_qty=0 恒拒(实测 LTC 0.091 持仓 10 分钟零成交)。
+    SL 数量虽覆盖持仓,代数落后同样必须取消+按当前代数重建。"""
+    from beidou_safety.protection.engine import (
+        ProtectionOrder,
+        ProtectionStatus,
+        StopLossType,
+        TakeProfitType,
+    )
+    from beidou_shared.types import InstrumentId, OrderSide, Price, Quantity, VenueId
+
+    engine = _adopt_engine(positions={"SUIUSDT": "44.3"}, local_symbols=set())
+    engine._env_mode = SimpleNamespace(value="testnet")
+    engine._can_write = True
+    engine._control = SimpleNamespace(
+        get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"), execute_action=lambda action: None
+    )
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+    engine._symbol_precision = {"SUIUSDT": {"price": 4, "quantity": 4}}
+    engine._stale_protection_algos = []
+    engine._sl_unprotectable_streak = {}
+    # 当前代数 2,投影/保护行仍停留在代数 1(翻转后未重建)
+    engine._position_generation = {"SUIUSDT": 2}
+    engine._position_projection = {
+        "SUIUSDT": {"position_generation": 2, "entry_price": "0.6473", "signed_quantity": "44.3"}
+    }
+
+    old_sl = ProtectionOrder(
+        protection_id="sl-pos-1",
+        position_id="pos-1",
+        instrument_id=InstrumentId("SUIUSDT"),
+        venue_id=VenueId("BINANCE"),
+        side=OrderSide.SELL,
+        trigger_price=Price(amount="0.66"),
+        order_price=None,
+        quantity=Quantity(amount="44.3"),
+        order_type="STOP_MARKET",
+        reduce_only=True,
+        status=ProtectionStatus.ACTIVE,
+        stop_type=StopLossType.ATR_BASED,
+        take_profit_type=None,
+        owner_id="owner-1",
+        position_generation=1,
+        session_id="session-1",
+        exchange_order_id="1000001",
+    )
+    old_tp = ProtectionOrder(
+        protection_id="tp-pos-1",
+        position_id="pos-1",
+        instrument_id=InstrumentId("SUIUSDT"),
+        venue_id=VenueId("BINANCE"),
+        side=OrderSide.SELL,
+        trigger_price=Price(amount="0.70"),
+        order_price=None,
+        quantity=Quantity(amount="44.3"),
+        order_type="TAKE_PROFIT_MARKET",
+        reduce_only=True,
+        status=ProtectionStatus.ACTIVE,
+        stop_type=None,
+        take_profit_type=TakeProfitType.FIXED_RR,
+        owner_id="owner-1",
+        position_generation=1,
+        session_id="session-1",
+        exchange_order_id="1000002",
+    )
+    pp = SimpleNamespace(
+        position_id="pos-1",
+        instrument_id="SUIUSDT",
+        side=OrderSide.BUY,
+        entry_price=0.6473,
+        quantity=44.3,
+        stop_loss=old_sl,
+        take_profits=[old_tp],
+        position_generation=1,
+    )
+    engine._protection._projections["pos-1"] = pp
+    engine._store.protections = {
+        "sl-pos-1": _durable_row(
+            protection_id="sl-pos-1",
+            symbol="SUIUSDT",
+            side="SELL",
+            order_type="STOP_MARKET",
+            quantity="44.3",
+            position_id="pos-1",
+            generation=1,
+            algo_id="1000001",
+            trigger_price="0.66",
+        ),
+        "tp-pos-1": _durable_row(
+            protection_id="tp-pos-1",
+            symbol="SUIUSDT",
+            side="SELL",
+            order_type="TAKE_PROFIT_MARKET",
+            quantity="44.3",
+            position_id="pos-1",
+            generation=1,
+            algo_id="1000002",
+            stop_type=None,
+            take_profit_type="FIXED_RR",
+            trigger_price="0.70",
+        ),
+    }
+
+    cancelled_ids: list[int] = []
+    created_params: list[dict[str, Any]] = []
+
+    venue_state: list[dict[str, Any]] = [
+        _venue_algo("1000001", "SUIUSDT", side="SELL", order_type="STOP_MARKET", quantity="44.3", trigger_price="0.66"),
+        _venue_algo(
+            "1000002", "SUIUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="44.3", trigger_price="0.70"
+        ),
+    ]
+
+    async def _fake_cancel(symbol: str, algo_id: int) -> dict[str, Any]:
+        cancelled_ids.append(algo_id)
+        venue_state[:] = [a for a in venue_state if str(a["algoId"]) != str(algo_id)]
+        return {"code": "200", "msg": "success"}
+
+    engine._cancel_algo_order = _fake_cancel  # type: ignore[method-assign]
+
+    async def _fake_create(params: dict[str, Any]) -> dict[str, Any]:
+        created_params.append(dict(params))
+        is_stop = str(params["type"]).startswith("STOP")
+        new_id = "1000003" if is_stop else "1000004"
+        venue_state.append(
+            _venue_algo(
+                new_id,
+                "SUIUSDT",
+                side="SELL",
+                order_type=str(params["type"]),
+                quantity=str(params["quantity"]),
+                trigger_price=str(params["triggerPrice"]),
+            )
+        )
+        return {"algoId": new_id}
+
+    engine._create_algo_order = _fake_create  # type: ignore[method-assign]
+
+    async def _fake_kline(_symbol: str) -> dict[str, Any]:
+        return {}
+
+    engine._feed.async_get_kline_features = _fake_kline  # type: ignore[attr-defined]
+
+    async def _fake_inventory() -> list[dict[str, Any]]:
+        return [dict(a) for a in venue_state]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+    engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
+    import beidou_strategy.protection.adaptive as adaptive_mod
+
+    class _Cfg:
+        def __init__(self) -> None:
+            self.metadata: dict[str, Any] = {}
+            self.stop_pct = 2.0
+            self.atr_pct = 1.0
+            self.volatility_regime = SimpleNamespace(value="LOW")
+            self.price_tier = SimpleNamespace(value="MID")
+            self.market_regime = SimpleNamespace(value="RANGING")
+            self.rr_ratio = 1.0
+            self.stop_loss_config = {"type": "FIXED_PERCENT", "stop_pct": 2.0}
+            self.take_profit_config = {"type": "FIXED_RR", "rr": 1.0}
+
+    orig_calc = adaptive_mod.AdaptiveProtectionCalculator.calculate
+    adaptive_mod.AdaptiveProtectionCalculator.calculate = staticmethod(lambda *_a, **_k: _Cfg())
+    try:
+        await engine._retry_missing_protections({"SUIUSDT"})
+        await engine._retry_missing_protections({"SUIUSDT"})
+    finally:
+        adaptive_mod.AdaptiveProtectionCalculator.calculate = orig_calc
+
+    # 旧 venue 条件单被取消,新 SL/TP 重建
+    assert {str(c) for c in cancelled_ids} == {"1000001", "1000002"}
+    stop_creates = [c for c in created_params if str(c["type"]).startswith("STOP")]
+    assert stop_creates and abs(float(stop_creates[0]["quantity"]) - 44.3) < 1e-6
+    # durable 行收敛:新行代数 = 当前代数 2
+    rows = engine._store.restore_protections()
+    sl_rows = [r for r in rows if r["status"] == "ACTIVE" and r["order_type"].startswith("STOP")]
+    assert any(int(r["position_generation"]) == 2 for r in sl_rows), sl_rows
+    assert engine._protection_owner_unknown is False
+    assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # 5. 幽灵持仓去重(R8 20/21 死锁根因修复)
 # ---------------------------------------------------------------------------

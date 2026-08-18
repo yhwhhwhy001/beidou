@@ -7160,13 +7160,19 @@ class AutonomousEngine:
             qty = _proj_qty
         if _proj_entry > 0:
             entry_price = _proj_entry
-        # 幂等:同一 symbol 已有同量同向投影(其他路径已建立保护)时
-        # 跳过,避免重复下单;数量/方向不一致视为旧持仓残留,由下方
-        # stale 清理后重建。
+        # 幂等:同一 symbol 已有同量同向同代投影(其他路径已建立保护)时
+        # 跳过,避免重复下单;数量/方向/代数不一致视为旧持仓残留,由下方
+        # stale 清理后重建。代数参与比较:翻转成交把 _position_generation
+        # 推高后,旧代投影若仍被幂等命中,资格门按代数过滤会把新保护行
+        # 判为 stop_qty=0 恒拒(实测 LTC 0.091 持仓 10 分钟零成交)。
+        _gen_current = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
         _same_projection = [
             pp2
             for pp2 in self._protection.all_positions().values()
-            if str(pp2.instrument_id) == symbol and abs(float(pp2.quantity) - qty) < 1e-8 and pp2.side == pos_side
+            if str(pp2.instrument_id) == symbol
+            and abs(float(pp2.quantity) - qty) < 1e-8
+            and pp2.side == pos_side
+            and int(getattr(pp2, "position_generation", 0) or 0) == _gen_current
         ]
         if _same_projection:
             return
@@ -9523,7 +9529,17 @@ class AutonomousEngine:
                         _sl_covers = _durable_sl_qty + 1e-8 >= _pos_qty
                     except Exception:
                         _sl_covers = False
-                if not _sl_covers and _sl is not None and self._store is not None:
+                # BD-FIX (generation lag): 翻转成交把 _position_generation 推高
+                # 后,旧代投影/保护行会被资格门按代数过滤 → 覆盖判定
+                # stop_qty=0 恒拒(实测 LTC 0.091 持仓 10 分钟零成交)。
+                # 代数落后与数量不足同语义:取消陈旧行与 venue 条件单,
+                # 走 S33 按当前代数重建。
+                _gen_current = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+                _gen_stale = (
+                    _gen_current > 0
+                    and int(getattr(pp, "position_generation", 0) or 0) < _gen_current
+                )
+                if (not _sl_covers or _gen_stale) and _sl is not None and self._store is not None:
                     try:
                         _symbol_rows = [
                             r
@@ -9533,7 +9549,11 @@ class AutonomousEngine:
                     except Exception:
                         _symbol_rows = []
                     if _symbol_rows:
-                        self._cancel_stale_protection_rows(symbol, _symbol_rows, "STOP_COVERAGE_STALE")
+                        self._cancel_stale_protection_rows(
+                            symbol,
+                            _symbol_rows,
+                            "STOP_GENERATION_STALE" if _gen_stale and _sl_covers else "STOP_COVERAGE_STALE",
+                        )
                         _canceled = await self._cancel_stale_protection_algos()
                         if _canceled:
                             exchange_algo_symbols[symbol] = {
@@ -9542,9 +9562,13 @@ class AutonomousEngine:
                             existing_ids = exchange_algo_symbols.get(symbol, set())
                             owned_ids = existing_ids & self._active_algo_ids.get(pos_id, set())
                         pp.stop_loss = None
+                        # 已取消并等待重建 —— 旧 SL 的覆盖判定不再成立,
+                        # 防止 S41 以品种算法单计数把重建跳过。
+                        _sl_covers = False
+                        _stale_kind = "generation" if _gen_stale else "under-sized"
                         print(
-                            f"[nearline] 🧹 {symbol}: stale under-sized SL cancelled "
-                            "(position grew) — rebuilding to full position quantity"
+                            f"[nearline] 🧹 {symbol}: stale {_stale_kind} SL cancelled "
+                            f"(gen {int(getattr(pp, 'position_generation', 0) or 0)}→{_gen_current}) — rebuilding"
                         )
                 # 交易所已有 >= 期望数量且 SL 数量覆盖持仓 即视为已覆盖
                 if expected_count > 0 and server_count >= expected_count and _sl_covers:
@@ -9588,10 +9612,13 @@ class AutonomousEngine:
                 # 现在只有本持仓自己的 SL 为 ACTIVE(或本持仓无 SL 对象、
                 # 由 durable 数量兜底判定覆盖)时才允许跳过。
                 symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
-                _sl_active_own = _sl is not None and bool(
-                    callable(getattr(_sl, "is_active", None)) and _sl.is_active()
+                # 以投影当前 SL 为准(_sl 可能是被取消的陈旧引用):
+                # 取消/重建后 stop_loss=None 不得再被 S41 跳过。
+                _sl_live = getattr(pp, "stop_loss", None)
+                _sl_active_own = _sl_live is not None and bool(
+                    callable(getattr(_sl_live, "is_active", None)) and _sl_live.is_active()
                 )
-                if symbol_algo_count >= 2 and _sl_covers and (_sl is None or _sl_active_own):
+                if symbol_algo_count >= 2 and _sl_covers and (_sl_live is None or _sl_active_own):
                     if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(f"[nearline-diag] {symbol}: s41 skip symbol_algo_count={symbol_algo_count}")
                     continue  # 已有 SL+TP 且数量覆盖
@@ -9645,6 +9672,11 @@ class AutonomousEngine:
                             # 恒跳过 → NO_NEW_RISK 死锁(对抗审查
                             # CONFIRMED_BUG,运行时复刻)。
                             _position_generation = self._resolve_position_generation(symbol, pp)
+                            # BD-FIX (generation lag): 投影代数同步推进 ——
+                            # 否则下一轮 _gen_stale 复判为陈旧,把刚重建的
+                            # 保护再次取消(实测重建→再取消震荡)。
+                            with contextlib.suppress(Exception):
+                                pp.position_generation = _position_generation
                             from beidou_safety.protection.engine import StopLossCalculator
 
                             sl_type = StopLossType(adaptive_cfg.stop_loss_config.get("type", "FIXED_PERCENT"))
@@ -9847,6 +9879,14 @@ class AutonomousEngine:
                     # Retry the exact approved trigger.  Moving a stop after
                     # rejection changes the signed risk contract and could
                     # silently widen the permitted loss.
+                    # BD-FIX (generation lag): 重试提交前把 SL 代数对齐当前
+                    # 持仓代数 —— 旧代 SL 提交成功也会被资格门按代数过滤
+                    # 成 stop_qty=0(实测 LTC)。代数是身份元数据,不改变
+                    # trigger/数量等已审批风险合同。
+                    with contextlib.suppress(Exception):
+                        _gen_live = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+                        if _gen_live > 0 and int(getattr(pp.stop_loss, "position_generation", 0) or 0) < _gen_live:
+                            pp.stop_loss.position_generation = _gen_live
                     algo_resp = await self._create_algo_order(
                         self._protection_algo_params(
                             pp.stop_loss,
