@@ -4028,16 +4028,21 @@ class AutonomousEngine:
                 issues.append(f"PROTECTION_TYPE_MISMATCH:{algo_id}")
             expected_qty = _decimal(expected.get("quantity"))
             actual_qty = _decimal(actual.get("quantity"))
-            if expected_qty is None or actual_qty is None or expected_qty <= 0 or actual_qty != expected_qty:
+            # BD-FIX: durable 行持有未舍入的 float 表示(如 0.7599999999999998),
+            # venue 侧按标的精度舍入(0.76)—— 精确 Decimal 相等会误判为
+            # 语义冲突并阻断补发(实测 LINKUSDT 1000000171437383)。数量按
+            # 1e-8、触发价按 1e-4 量化后比较(venue 最小精度内视为一致)。
+            _QTY_STEP = Decimal("0.00000001")
+            _PRICE_STEP = Decimal("0.0001")
+            if expected_qty is None or actual_qty is None or expected_qty <= 0:
+                issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
+            elif abs(actual_qty - expected_qty) > _QTY_STEP / 2:
                 issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
             expected_trigger = _decimal(expected.get("trigger_price"))
             actual_trigger = _decimal(actual.get("triggerPrice"))
-            if (
-                expected_trigger is None
-                or actual_trigger is None
-                or expected_trigger <= 0
-                or actual_trigger != expected_trigger
-            ):
+            if expected_trigger is None or actual_trigger is None or expected_trigger <= 0:
+                issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
+            elif abs(actual_trigger - expected_trigger) > _PRICE_STEP / 2:
                 issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
             reduce_only = actual.get("reduceOnly")
             if reduce_only is not True and str(reduce_only).strip().lower() not in {"1", "true", "yes"}:
@@ -4060,7 +4065,7 @@ class AutonomousEngine:
             if str(row.get("owner_id", "")).strip() != str(getattr(self, "_protection_owner_id", "")):
                 continue
             protection_id = str(row.get("protection_id", "")).strip()
-            algo_id = str(row.get("exchange_order_id", "")).strip()
+            algo_id = str(row.get("exchange_order_id") or "").strip()
             if algo_id:
                 self._stale_protection_algos.append((str(symbol).upper(), algo_id))
             if store and protection_id:
@@ -4381,6 +4386,13 @@ class AutonomousEngine:
                 # Phase 1 按 venue 持仓量重建 —— 而非永久阻断(实测 18:46
                 # 重启 ×13 STOP_LOSS_QUANTITY_UNCOVERED → LOCKED)。
                 self._cancel_stale_protection_rows(symbol, position_rows, "STOP_COVERAGE_STALE")
+                continue
+            if not stop_orders and not take_profit_orders:
+                # BD-FIX: 全部保护行仍为 PENDING(从未拿到 venue ACK)。
+                # 无 ACK-backed 事实可挂载 —— 跳过投影(近线 S33 按
+                # PENDING trigger 重新提交),而不是构造空投影触发
+                # restore_position_projection 的 ValueError 阻断整个恢复
+                # (实测 TIAUSDT PROTECTION_RESTORE_FAILED → BLOCK)。
                 continue
             if position_id in self._protection.all_positions():
                 continue
@@ -11401,14 +11413,18 @@ class AutonomousEngine:
             _stale_algos = getattr(self, "_stale_protection_algos", None) or []
             if _stale_algos:
                 for _sym, _algo_id in _stale_algos:
+                    if not str(_algo_id or "").strip():
+                        continue
                     try:
                         _cancel_resp = await self._cancel_algo_order(_sym, int(_algo_id))
-                        if "code" not in _cancel_resp:
+                        # venue 成功响应形如 {"code":200,"msg":"success",...}
+                        _cancel_msg = str(_cancel_resp.get("msg", ""))
+                        if str(_cancel_resp.get("code")) == "200" or "success" in _cancel_msg.lower():
                             print(f"[startup] Canceled stale protection algo {_algo_id} for {_sym}")
                         else:
                             print(
                                 f"[startup] Failed to cancel stale algo {_algo_id}: "
-                                f"{_cancel_resp.get('msg', _cancel_resp)}"
+                                f"{_cancel_msg or _cancel_resp}"
                             )
                     except Exception as _cancel_exc:
                         print(f"[startup] Error canceling stale algo {_algo_id}: {_cancel_exc}")
