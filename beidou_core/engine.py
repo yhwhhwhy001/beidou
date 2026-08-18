@@ -8881,9 +8881,24 @@ class AutonomousEngine:
                 return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
             if semantic_issues:
-                self._block_unowned_protection_orders(semantic_issues)
-                print("[nearline] Excess-order cleanup blocked: protection semantics UNKNOWN")
-                return
+                # BD-FIX (inventory-lag flap): VENUE_ROW_MISSING 由补发循环的
+                # 3 轮防抖负责清理/重建 —— cleanup 路径不得据单轮缺失阻塞
+                # 资格门。实测 testnet openAlgoOrders 可见性延迟把刚放置的
+                # algo 判缺失 → 每次 NO_NEW_RISK 拒绝并触发"取消自己刚下的
+                # 保护单"的震荡循环。硬语义冲突(SYMBOL/SIDE/QTY/TRIGGER/
+                # REDUCE_ONLY)仍然 fail-closed 阻断。
+                venue_missing = [i for i in semantic_issues if i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+                hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
+                if hard_issues:
+                    self._block_unowned_protection_orders(hard_issues)
+                    print("[nearline] Excess-order cleanup blocked: protection semantics UNKNOWN")
+                    return
+                if venue_missing:
+                    print(
+                        "[nearline] Excess-order cleanup deferred: "
+                        f"{len(venue_missing)} venue row(s) missing (debounced by retry loop)"
+                    )
+                    return
             exchange_symbols = {
                 str(row.get("symbol", "")).strip().upper()
                 for row in (getattr(self, "_last_account", {}) or {}).get("positions", [])
