@@ -1248,9 +1248,11 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 raw=raw,
                 source="binance_user_stream_adapter",
             )
-        if event_result.data.event_type != "ORDER_TRADE_UPDATE" or not isinstance(raw, dict):
+        if event_result.data.event_type not in {"ORDER_TRADE_UPDATE", "TRADE_LITE"} or not isinstance(raw, dict):
+            # TRADE_LITE 与 ORDER_TRADE_UPDATE 同构(轻量用户流),携带同样
+            # 的成交事实(e/E/T/o 信封与 i/c/s/S/o/X/x/q/z/l/L/ap 字段)。
             return Result.failure(
-                "Expected ORDER_TRADE_UPDATE envelope",
+                "Expected ORDER_TRADE_UPDATE/TRADE_LITE envelope",
                 category=ErrorCategory.UNKNOWN,
                 raw=raw,
                 source="binance_user_stream_adapter",

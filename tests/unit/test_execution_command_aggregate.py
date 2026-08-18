@@ -324,6 +324,42 @@ def test_user_stream_terminal_partial_fill_projects_unknown(tmp_path) -> None:
     assert projected.state is ParentExecutionState.UNKNOWN
 
 
+def test_trade_lite_envelope_parses_as_order_update() -> None:
+    """TRADE_LITE(轻量用户流)与 ORDER_TRADE_UPDATE 同构,必须能解析成交事实。"""
+
+    raw = {
+        "e": "TRADE_LITE",
+        "E": 1787049071956,
+        "T": 1787049071955,
+        "u": 1,
+        "o": {
+            "i": 16763789717,
+            "I": 1,
+            "c": "beidou-ethusdt-entry-1787049068",
+            "s": "ETHUSDT",
+            "S": "SELL",
+            "o": "LIMIT",
+            "X": "PARTIALLY_FILLED",
+            "x": "TRADE",
+            "q": "0.008",
+            "z": "0.008",
+            "l": "0.008",
+            "L": "1895.85",
+            "ap": "1895.85",
+            "t": 1001,
+            "n": "0",
+            "N": "USDT",
+            "rp": "0",
+        },
+    }
+    result = BinanceUsdmAdapter.parse_user_order_update(raw)
+    assert result.is_success() and result.data is not None
+    assert result.data.order_id == "16763789717"
+    assert result.data.client_order_id == "beidou-ethusdt-entry-1787049068"
+    assert result.data.order_status.value == "PARTIALLY_FILLED"
+    assert result.data.cumulative_quantity.amount == "0.008"
+
+
 def test_engine_persists_complete_multi_slice_plan_before_first_write(monkeypatch) -> None:
     outbox = IntentOutbox()
     intent = OrderIntent(

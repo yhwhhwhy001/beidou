@@ -4044,6 +4044,53 @@ class AutonomousEngine:
                 issues.append(f"PROTECTION_REDUCE_ONLY_UNPROVEN:{algo_id}")
         return sorted(set(issues))
 
+    def _cancel_stale_protection_rows(self, symbol: str, rows: list[dict[str, Any]], reason: str) -> None:
+        """自愈:取消本进程所有权的陈旧保护行(durable 标记 + venue 待取消清单)。
+
+        仅处理 owner_id 属于本服务的行;任何无主/异主行不触碰(fail-closed)。
+        venue 侧条件单由恢复流程调用方在 Phase 1 前异步取消
+        (``_stale_protection_algos``),并在现有 algo 清单中剔除,避免 S41
+        去重把重建的保护再次跳过。
+        """
+        if not hasattr(self, "_stale_protection_algos"):
+            self._stale_protection_algos: list[tuple[str, str]] = []
+        store = getattr(self, "_store", None)
+        cleaned = 0
+        for row in rows:
+            if str(row.get("owner_id", "")).strip() != str(getattr(self, "_protection_owner_id", "")):
+                continue
+            protection_id = str(row.get("protection_id", "")).strip()
+            algo_id = str(row.get("exchange_order_id", "")).strip()
+            if algo_id:
+                self._stale_protection_algos.append((str(symbol).upper(), algo_id))
+            if store and protection_id:
+                try:
+                    store.save_protection(
+                        protection_id=protection_id,
+                        position_id=str(row.get("position_id", "")),
+                        symbol=str(row.get("symbol", symbol)),
+                        side=str(row.get("side", "")),
+                        trigger_price=str(row.get("trigger_price", "") or "0"),
+                        order_price=row.get("order_price"),
+                        quantity=str(row.get("quantity", "") or "0"),
+                        order_type=str(row.get("order_type", "") or "STOP_MARKET"),
+                        status="CANCELLED",
+                        stop_type=row.get("stop_type"),
+                        take_profit_type=row.get("take_profit_type"),
+                        owner_id=str(row.get("owner_id", self._protection_owner_id)),
+                        position_generation=int(row.get("position_generation", 0) or 0),
+                        session_id=str(row.get("session_id", "") or ""),
+                        exchange_order_id=algo_id or None,
+                    )
+                    cleaned += 1
+                except Exception as exc:
+                    print(
+                        f"[startup] Failed to cancel stale protection {protection_id}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+        if cleaned:
+            print(f"[startup] Canceled {cleaned} stale protection row(s) for {symbol}: {reason}")
+
     def _restore_durable_protection_projection(
         self,
         account: dict[str, Any],
@@ -4161,10 +4208,34 @@ class AutonomousEngine:
             symbol for symbol, position_ids in symbol_position_ids.items() if len(position_ids) > 1
         )
         if conflicting_symbols:
-            self._block_unowned_protection_orders(
-                [f"PROTECTION_MULTIPLE_ACTIVE_GENERATIONS:{symbol}" for symbol in conflicting_symbols]
-            )
-            return False
+            conflict_rows = [
+                row
+                for row in rows
+                if str(row.get("symbol", "")).strip().upper() in {sym.upper() for sym in conflicting_symbols}
+            ]
+            conflict_owners = {str(row.get("owner_id", "")).strip() for row in conflict_rows}
+            if conflict_owners == {str(self._protection_owner_id)}:
+                # BD-FIX: 多代数残留(旧持仓的保护行未被清理,新持仓重建了
+                # 另一组行)。取消本进程所有权的全部冲突行与 venue 条件单,
+                # 由 Phase 1 按 venue 持仓量重建 —— 而非永久阻断(实测
+                # 18:46 重启 POS 冲突 + 覆盖缺失 ×13 → LOCKED)。
+                for sym in conflicting_symbols:
+                    sym_rows = [r for r in conflict_rows if str(r.get("symbol", "")).strip().upper() == sym]
+                    self._cancel_stale_protection_rows(sym, sym_rows, "MULTIPLE_ACTIVE_GENERATIONS")
+                excluded = {sym.upper() for sym in conflicting_symbols}
+                rows = [r for r in rows if str(r.get("symbol", "")).strip().upper() not in excluded]
+                grouped = {}
+                for row in rows:
+                    grouped.setdefault(str(row.get("position_id", "")).strip(), []).append(row)
+                symbol_position_ids = {}
+                for position_id, position_rows in grouped.items():
+                    for symbol in {str(r.get("symbol", "")).strip().upper() for r in position_rows if r.get("symbol")}:
+                        symbol_position_ids.setdefault(symbol, set()).add(position_id)
+            else:
+                self._block_unowned_protection_orders(
+                    [f"PROTECTION_MULTIPLE_ACTIVE_GENERATIONS:{symbol}" for symbol in conflicting_symbols]
+                )
+                return False
 
         for position_id, position_rows in grouped.items():
             symbols = {str(row.get("symbol", "")).strip().upper() for row in position_rows}
@@ -4187,8 +4258,11 @@ class AutonomousEngine:
                 return False
             venue_position = venue_positions.get(symbol)
             if venue_position is None:
-                self._block_unowned_protection_orders([f"PROTECTION_WITHOUT_VENUE_POSITION:{symbol}"])
-                return False
+                # BD-FIX: 持仓已在交易所平掉但本地保护行残留。取消本进程
+                # 所有权的行与 venue 条件单(Phase 1 只为 venue 持仓重建,
+                # 平仓的标的不再需要保护),而非永久阻断。
+                self._cancel_stale_protection_rows(symbol, position_rows, "POSITION_FLAT_ON_VENUE")
+                continue
             signed_quantity, account_entry = venue_position
             if account_entry <= 0:
                 projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
@@ -4302,8 +4376,12 @@ class AutonomousEngine:
                 # S33 重建 SL。
                 pass
             elif len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
-                self._block_unowned_protection_orders([f"PROTECTION_STOP_COVERAGE_UNKNOWN:{position_id}"])
-                return False
+                # BD-FIX: 陈旧保护(持仓在多腿入场后增长,SL/TP 停留在首腿
+                # 成交量)。取消本进程所有权的陈旧行与 venue 条件单,由
+                # Phase 1 按 venue 持仓量重建 —— 而非永久阻断(实测 18:46
+                # 重启 ×13 STOP_LOSS_QUANTITY_UNCOVERED → LOCKED)。
+                self._cancel_stale_protection_rows(symbol, position_rows, "STOP_COVERAGE_STALE")
+                continue
             if position_id in self._protection.all_positions():
                 continue
             projection = PositionProtection(
@@ -5974,10 +6052,41 @@ class AutonomousEngine:
                         # position, and ledger authorities.  Preserve UNKNOWN
                         # until independent reconciliation supplies the exact
                         # fill facts; do not infer or book from one REST row.
-                        self._mark_order_unknown(
+                        # BD-FIX: user stream 事件已把同一成交事实提交到
+                        # 持久化 fill 日志(COMMITTED)时,无需再等待对账 ——
+                        # 直接终态关闭 tracker,否则该订单永久 UNKNOWN 且
+                        # 事故持续触发 NO_NEW_RISK(实测 ETHUSDT 18:31)。
+                        _delta_qty, _partial_price, _fill_id = self._consume_cumulative_fill(
+                            order_id, order_sym or symbol, result, status=status
+                        )
+                        _fill_row = self._store.get_fill_event(_fill_id) if _fill_id else None
+                        if (
+                            not _fill_id
+                            or _fill_row is None
+                            or str(_fill_row.get("processing_state", "")) != "COMMITTED"
+                        ):
+                            self._mark_order_unknown(
+                                order_id,
+                                order_sym or symbol,
+                                f"TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{order_id}",
+                            )
+                            continue
+                        tracker.apply(OrderEvent.CANCELED)
+                        self._active_order_ids.discard(order_id)
+                        self._order_trackers.pop(order_id, None)
+                        self._order_symbols.pop(order_id, None)
+                        self._store.save_order_state(
                             order_id,
                             order_sym or symbol,
-                            f"TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{order_id}",
+                            result.get("side", ""),
+                            result.get("type", ""),
+                            result.get("origQty", "0"),
+                            result.get("price"),
+                            status,
+                            str(executed_qty),
+                            str(result.get("avgPrice") or _partial_price),
+                            reduce_only=str(result.get("reduceOnly", "")),
+                            stop_price=str(result.get("stopPrice", "")),
                         )
                         continue
                     tracker.apply(OrderEvent.CANCELED)
@@ -6501,6 +6610,22 @@ class AutonomousEngine:
         qty = float(qty)
         pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
         pos_id = f"pos-{order_id}"
+        # BD-FIX: 多腿入场(执行计划切片)时,本单成交量只是总持仓的一部分。
+        # 保护必须按持仓投影的总量与混合均价建立 —— 否则第二腿起
+        # _same_projection 幂等检查误判"已保护"而跳过,SL/TP 恒停留在
+        # 第一腿成交量(实测 APTUSDT 27.0 持仓仅 13.5 SL → 重启后
+        # STOP_LOSS_QUANTITY_UNCOVERED ×13 → supervisor LOCKED)。
+        _proj = getattr(self, "_position_projection", {}).get(symbol) or {}
+        try:
+            _proj_qty = abs(float(_proj.get("signed_quantity", 0) or 0))
+            _proj_entry = float(_proj.get("entry_price", 0) or 0)
+        except (TypeError, ValueError):
+            _proj_qty = 0.0
+            _proj_entry = 0.0
+        if _proj_qty > 0:
+            qty = _proj_qty
+        if _proj_entry > 0:
+            entry_price = _proj_entry
         # 幂等:同一 symbol 已有同量同向投影(其他路径已建立保护)时
         # 跳过,避免重复下单;数量/方向不一致视为旧持仓残留,由下方
         # stale 清理后重建。
@@ -6850,9 +6975,16 @@ class AutonomousEngine:
             _externally_owned = _order_id not in getattr(self, "_active_order_ids", set())
             if (
                 result.status is UserProjectionStatus.ACCEPTED
-                and _externally_owned
                 and _order_status in {"FILLED", "PARTIALLY_FILLED"}
             ):
+                # BD-FIX: 自有订单的成交同样经 user stream 事件入账,不再
+                # 仅依赖 REST 订单监控。监控首轮观测到"先部分成交后终态
+                # (EXPIRED/CANCELED)"的订单时按 fail-closed 保留 UNKNOWN
+                # (TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED),且无任何
+                # 后续路径补交成交事实 → 持仓投影恒漂移、对账 MISMATCHED
+                # 锁盘(实测 ETHUSDT 18:31 部分成交 0.008 后 EXPIRED)。
+                # _consume_cumulative_fill 以持久化 fill 日志单调去重,
+                # 与监控轮询路径幂等(_delta=0 时不再入账)。
                 try:
                     _result_payload = {
                         "orderId": _order_id,
@@ -7231,6 +7363,26 @@ class AutonomousEngine:
                         return
                     self._user_stream_fault("MARGIN_CALL", terminal=True)
                     return
+                elif event_type == "TRADE_LITE":
+                    # TRADE_LITE 与 ORDER_TRADE_UPDATE 同构,携带成交事实
+                    # (含共享 demo 账户其他用户的成交)。成交必须摄入并
+                    # 入账,否则外部成交造成的持仓漂移永不收敛(对账
+                    # MISMATCHED 锁盘);解析失败时 testnet 保持流健康等待
+                    # 下一条事件,live/canary fail-closed。
+                    parsed = BinanceUsdmAdapter.parse_user_order_update(data)
+                    if not parsed.is_success() or parsed.data is None:
+                        if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                            print("[user-stream] TRADE_LITE parse failed on testnet — keeping stream healthy")
+                            self._update_user_stream_runtime(
+                                status="HEALTHY",
+                                last_event_mono=time.monotonic(),
+                                listen_key_active=True,
+                                last_error="",
+                            )
+                            return
+                        self._user_stream_fault("TRADE_LITE_PARSE_UNKNOWN")
+                        return
+                    accepted = self.ingest_user_order_update(parsed.data)
                 elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
                     # BD-FIX: 共享 demo 账户其他用户的策略/网格单更新属环境
                     # TESTNET-EXEMPT: EXEMPT-11
@@ -11243,6 +11395,30 @@ class AutonomousEngine:
                 unowned_algo_ids, existing_algo_inventory, positions_list
             )
             durable_projection_ok = self._restore_durable_protection_projection(account, existing_algo_inventory)
+            # BD-FIX: 恢复流程判定为陈旧的保护行(覆盖不足/持仓已平/多代数)
+            # 在 Phase 1 前取消其 venue 条件单,并从现有清单剔除,否则 S41
+            # 去重会因"已有 2 个 Algo 单"跳过重建(实测 ×13 LOCKED)。
+            _stale_algos = getattr(self, "_stale_protection_algos", None) or []
+            if _stale_algos:
+                for _sym, _algo_id in _stale_algos:
+                    try:
+                        _cancel_resp = await self._cancel_algo_order(_sym, int(_algo_id))
+                        if "code" not in _cancel_resp:
+                            print(f"[startup] Canceled stale protection algo {_algo_id} for {_sym}")
+                        else:
+                            print(
+                                f"[startup] Failed to cancel stale algo {_algo_id}: "
+                                f"{_cancel_resp.get('msg', _cancel_resp)}"
+                            )
+                    except Exception as _cancel_exc:
+                        print(f"[startup] Error canceling stale algo {_algo_id}: {_cancel_exc}")
+                    if isinstance(existing_algo_inventory, list):
+                        existing_algo_inventory = [
+                            a
+                            for a in existing_algo_inventory
+                            if str(a.get("algoId", "")) != str(_algo_id)
+                        ]
+                self._stale_protection_algos = []
             if not durable_projection_ok:
                 print(
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"

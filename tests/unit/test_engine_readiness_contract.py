@@ -19,6 +19,7 @@ from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_lifecycle.lifecycle import ModuleState
 from beidou_safety.execution import OrderIntent, order_intent_binding_hash
 from beidou_safety.execution.order_state import OrderEvent
+from beidou_safety.execution.user_events import UserProjectionStatus
 from beidou_safety.protection.engine import ProtectionManager
 from beidou_safety.risk.engine import RiskApprovalSignerImpl, RiskApprovalStateMachine
 from beidou_shared.types import (
@@ -48,6 +49,13 @@ class _Store:
 
     def save_order_state(self, *args, **kwargs) -> None:
         self.saved_order_states.append((args, kwargs))
+
+    def get_fill_event(self, _event_id):
+        return None
+
+    def save_protection(self, **kwargs) -> None:
+        self.saved_protections = getattr(self, "saved_protections", [])
+        self.saved_protections.append(kwargs)
 
 
 class _Protection:
@@ -201,7 +209,9 @@ async def test_terminal_partial_fill_monitoring_requires_reconciliation() -> Non
     engine._store = store
     engine._api_async_safe = query_order
     engine._record_execution_fact_failure_env_guarded = failures.append
-    engine._consume_cumulative_fill = lambda *_args, **_kwargs: pytest.fail("must not consume ambiguous fill")
+    # 终态部分成交:监控先查持久化 fill 日志,无 COMMITTED 证据时保持
+    # UNKNOWN(不得入账),等待独立对账 —— 与 user stream 已入账的路径互补。
+    engine._consume_cumulative_fill = lambda *_args, **_kwargs: (0.0, 0.0, "trade:123:stale")
     engine._record_partial_fill_to_ledger = lambda *_args, **_kwargs: pytest.fail("must not write ledger")
 
     await engine._monitor_orders("BTCUSDT")
@@ -1071,6 +1081,168 @@ def test_startup_durable_protection_hydration_blocks_without_venue_inventory() -
         None,
     )
     assert blocked == ["OPEN_ALGO_ORDERS_UNKNOWN"]
+
+
+def test_startup_stale_protection_coverage_self_heals() -> None:
+    """持仓增长后 SL/TP 停留在首腿成交量 → 启动恢复取消陈旧行而非永久阻断。"""
+
+    rows = [
+        {
+            "status": "ACTIVE",
+            "owner_id": "owner-1",
+            "protection_id": "sl-pos-1",
+            "position_id": "pos-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "order_type": "STOP_MARKET",
+            "quantity": "0.5",
+            "trigger_price": "90",
+            "stop_type": "ATR_BASED",
+            "take_profit_type": None,
+            "position_generation": 1,
+            "session_id": "session-1",
+            "exchange_order_id": "sl-1",
+        },
+        {
+            "status": "ACTIVE",
+            "owner_id": "owner-1",
+            "protection_id": "tp-pos-1",
+            "position_id": "pos-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "order_type": "TAKE_PROFIT_MARKET",
+            "quantity": "0.5",
+            "trigger_price": "120",
+            "stop_type": None,
+            "take_profit_type": "FIXED_RR",
+            "position_generation": 1,
+            "session_id": "session-1",
+            "exchange_order_id": "tp-1",
+        },
+    ]
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    store = _Store(protections=rows)
+    engine._store = store
+    engine._protection = ProtectionManager()
+    engine._protection_owner_id = "owner-1"
+    engine._position_projection = {}
+    engine._position_entry_times = {}
+    blocked: list[str] = []
+    engine._block_unowned_protection_orders = lambda ids: blocked.extend(ids)
+
+    inventory = [
+        {
+            "algoId": "sl-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "orderType": "STOP_MARKET",
+            "quantity": "0.5",
+            "triggerPrice": "90",
+            "reduceOnly": True,
+        },
+        {
+            "algoId": "tp-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "orderType": "TAKE_PROFIT_MARKET",
+            "quantity": "0.5",
+            "triggerPrice": "120",
+            "reduceOnly": True,
+        },
+    ]
+
+    assert engine._restore_durable_protection_projection(
+        {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]},
+        inventory,
+    )
+    assert blocked == []
+    assert engine._protection.all_positions() == {}
+    assert sorted(engine._stale_protection_algos) == [("BTCUSDT", "sl-1"), ("BTCUSDT", "tp-1")]
+    cancelled = [p for p in store.saved_protections if p.get("status") == "CANCELLED"]
+    assert {p["protection_id"] for p in cancelled} == {"sl-pos-1", "tp-pos-1"}
+
+
+def test_startup_protection_blocks_unowned_rows_still() -> None:
+    """无主保护行仍保持 fail-closed 阻断 —— 自愈只针对本进程所有权。"""
+
+    rows = [
+        {
+            "status": "ACTIVE",
+            "owner_id": "someone-else",
+            "protection_id": "sl-pos-1",
+            "position_id": "pos-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "order_type": "STOP_MARKET",
+            "quantity": "0.5",
+            "trigger_price": "90",
+            "stop_type": "ATR_BASED",
+            "take_profit_type": None,
+            "position_generation": 1,
+            "session_id": "session-1",
+            "exchange_order_id": "sl-1",
+        }
+    ]
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._store = _Store(protections=rows)
+    engine._protection = ProtectionManager()
+    engine._protection_owner_id = "owner-1"
+    engine._position_projection = {}
+    engine._position_entry_times = {}
+    blocked: list[str] = []
+    engine._block_unowned_protection_orders = lambda ids: blocked.extend(ids)
+
+    inventory = [
+        {
+            "algoId": "sl-1",
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "orderType": "STOP_MARKET",
+            "quantity": "0.5",
+            "triggerPrice": "90",
+            "reduceOnly": True,
+        }
+    ]
+
+    assert not engine._restore_durable_protection_projection(
+        {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]},
+        inventory,
+    )
+    assert blocked == ["PROTECTION_OWNER_OR_GENERATION_UNKNOWN:pos-1"]
+    assert not getattr(engine, "_stale_protection_algos", None)
+
+
+def test_owned_order_user_stream_fill_is_consumed() -> None:
+    """自有订单的成交必须经 user stream 事件入账(与 REST 监控幂等)。"""
+
+    from beidou_shared.types import OrderStatus
+
+    update = SimpleNamespace(
+        order_id="123",
+        order_status=OrderStatus.PARTIALLY_FILLED,
+        symbol=InstrumentId("BTCUSDT"),
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        cumulative_quantity=Quantity(amount="0.008"),
+        average_price=Price(amount="1895.85"),
+    )
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._user_stream_projector = SimpleNamespace(
+        ingest=lambda _u: SimpleNamespace(status=UserProjectionStatus.ACCEPTED, event_id="e1"),
+        fact_snapshot=lambda: {"positions": {}},
+    )
+    engine._outbox = SimpleNamespace(project_user_order_update=lambda _u: None)
+    engine._recon = SimpleNamespace(update_event_facts=lambda _f: None)
+    engine._active_order_ids = {"123"}
+    consumed: list[tuple] = []
+    engine._consume_cumulative_fill = lambda *_args, **_kwargs: consumed.append(_args) or (0.008, 1895.85, "fill-1")
+    ledger: list[tuple] = []
+    engine._record_partial_fill_to_ledger = lambda *_args, **_kwargs: ledger.append(_args) or True
+
+    assert engine.ingest_user_order_update(update) is True
+    assert len(consumed) == 1
+    assert consumed[0][0] == "123"
+    assert len(ledger) == 1
 
 
 def test_protection_cleanup_requires_fresh_matched_reconciliation() -> None:
