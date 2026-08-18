@@ -2378,6 +2378,7 @@ class AutonomousEngine:
         """
 
         try:
+            self._last_algo_inventory_genuine = False
             result = await self._adapter.get_open_algo_orders()
         except Exception as exc:
             print(f"[api] open Algo inventory failed: {type(exc).__name__}: {exc}")
@@ -2403,6 +2404,7 @@ class AutonomousEngine:
                 print("[api] testnet: treating open Algo inventory UNKNOWN as empty (retry next cycle)")
                 return []
             return None
+        self._last_algo_inventory_genuine = True
         return [dict(snapshot.raw_response) for snapshot in result.data]
 
     async def _create_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -6345,6 +6347,23 @@ class AutonomousEngine:
             if not fill_event_id or fill_row is None or str(fill_row.get("processing_state", "")) != "COMMITTED":
                 self._mark_order_unknown(order_id, symbol, f"FILL_FACT_COMMIT_UNKNOWN:{fill_event_id or 'MISSING'}")
                 return
+            # BD-FIX (final83g): 成交事实已由更早的观测路径入账(pre-ACK
+            # 用户流事件或 PARTIALLY_FILLED 轮询)。tracker 仍在说明这是
+            # 本引擎自有入场单 —— 必须用 venue 累计成交事实补建 SL/TP
+            # 保护,否则持仓裸露直至 coverage blocker LOCK。
+            if order_id not in self._close_order_ids:
+                cum_qty = float(result.get("executedQty", 0) or 0)
+                if cum_qty > 0 and raw_avg_price > 0:
+                    try:
+                        await self._ensure_entry_protection(
+                            order_id, symbol, result, qty=cum_qty, entry_price=raw_avg_price
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "entry protection deferred after committed fill for %s: %s",
+                            order_id,
+                            type(exc).__name__,
+                        )
             tracker.apply(OrderEvent.FILLED)
             self._active_order_ids.discard(order_id)
             self._order_trackers.pop(order_id, None)
@@ -6407,90 +6426,135 @@ class AutonomousEngine:
                 if account_balance > self._peak_equity:
                     self._peak_equity = account_balance
         else:
-            # 入场成交 → 创建止盈止损保护
-            for old_pid, old_pp in list(self._protection.all_positions().items()):
-                if str(old_pp.instrument_id) == symbol:
-                    self._remove_protection_with_cleanup(old_pid, symbol)
-                    await self._cancel_algo_orders(old_pid, symbol)
-                    print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
-
-            entry_price = float(avg_price)
-            qty = executed_qty
-            pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
-            pos_id = f"pos-{order_id}"
-            position_generation = self._next_position_generation(symbol)
-
-            kline_features = await self._feed.async_get_kline_features(symbol)
-            adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
-            self._require_protection_config(symbol, adaptive_cfg)
-            _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
-            if _prec:
-                self._protection.set_precision_from_rule(
-                    type(
-                        "_PrecisionRule",
-                        (),
-                        {
-                            "price_precision": _prec.get("price", 0),
-                            "qty_precision": _prec.get("quantity", 0),
-                        },
-                    )()
-                )
-            pp = self._protection.create_protection(
-                position_id=pos_id,
-                instrument_id=InstrumentId(symbol),
-                venue_id=VenueId("BINANCE"),
-                entry_price=entry_price,
-                quantity=qty,
-                side=pos_side,
-                stop_loss_config=adaptive_cfg.stop_loss_config,
-                take_profit_config=adaptive_cfg.take_profit_config,
-                owner_id=self._protection_owner_id,
-                position_generation=position_generation,
-                session_id=self._session_id,
-            )
-            self._position_entry_times[pos_id] = time.time()
-            protect_orders = [pp.stop_loss] if pp.stop_loss else []
-            protect_orders.extend(pp.take_profits)
-            # The local manager creates definitions before the venue ACK.  Keep
-            # them CREATED/PENDING until each individual conditional order is
-            # acknowledged; otherwise restart recovery would claim coverage
-            # that never existed at the exchange.
-            for p_order in protect_orders:
-                if p_order is None:
-                    continue
-                p_order.status = ProtectionStatus.CREATED
-                self._persist_protection_order(p_order, status="PENDING")
-
-            # 打印保护摘要
-            sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
-            sl_pct = (
-                (entry_price - sl_price) / entry_price * 100
-                if sl_price and pos_side == OrderSide.BUY
-                else ((sl_price - entry_price) / entry_price * 100 if sl_price else None)
-            )
-            tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
-            tp_pcts = []
-            for tp in pp.take_profits:
-                tp_px = float(tp.trigger_price.amount)
-                if pos_side == OrderSide.BUY:
-                    tp_pcts.append(f"{(tp_px - entry_price) / entry_price * 100:+.2f}%")
-                else:
-                    tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
-
-            adaptive_info = (
-                f"ATR={adaptive_cfg.atr_pct:.2f}% vol={adaptive_cfg.volatility_regime.value} "
-                f"tier={adaptive_cfg.price_tier.value} regime={adaptive_cfg.market_regime.value} "
-                f"RR={adaptive_cfg.rr_ratio:.1f}"
-            )
-            print(
-                f"[protection] ┌ {'=' * 60}\n"
-                f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
-                f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{(pp.stop_loss.stop_type.value if pp.stop_loss and pp.stop_loss.stop_type else 'N/A')}]\n"
-                f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts, strict=False))}\n"
-                f"[protection] ├─ 📊 {adaptive_info}\n"
-                f"[protection] └ {'=' * 60}"
+            # 入场成交 → 创建止盈止损保护(已提交成交事实的补建同样走此路径)
+            await self._ensure_entry_protection(
+                order_id, symbol, result, qty=executed_qty, entry_price=float(avg_price)
             )
 
+        # Update strategy risk on any fill
+        account_balance = float(self._last_account.get("totalWalletBalance", 0))
+        if account_balance > 0:
+            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
+            if account_balance > self._peak_equity:
+                self._peak_equity = account_balance
+
+
+    async def _ensure_entry_protection(
+        self,
+        order_id: str,
+        symbol: str,
+        result: dict[str, Any],
+        *,
+        qty: float,
+        entry_price: float,
+        submit: bool = True,
+    ) -> None:
+        """Create the protection projection and governed SL/TP writes for an entry.
+
+        Shared by the primary fill-commit path and the already-committed fill
+        path (pre-ACK user-stream race / partial-fill ledger booking).  The
+        ledger and position projection facts must already be committed; this
+        method only establishes the protection projection and, when
+        submit=True, submits the conditional orders to the venue.
+        """
+        entry_price = float(entry_price)
+        qty = float(qty)
+        pos_side = OrderSide.BUY if result.get("side") == "BUY" else OrderSide.SELL
+        pos_id = f"pos-{order_id}"
+        # 幂等:同一 symbol 已有同量同向投影(其他路径已建立保护)时
+        # 跳过,避免重复下单;数量/方向不一致视为旧持仓残留,由下方
+        # stale 清理后重建。
+        _same_projection = [
+            pp2
+            for pp2 in self._protection.all_positions().values()
+            if str(pp2.instrument_id) == symbol
+            and abs(float(pp2.quantity) - qty) < 1e-8
+            and pp2.side == pos_side
+        ]
+        if _same_projection:
+            return
+
+        # 入场成交 → 创建止盈止损保护
+        for old_pid, old_pp in list(self._protection.all_positions().items()):
+            if str(old_pp.instrument_id) == symbol:
+                self._remove_protection_with_cleanup(old_pid, symbol)
+                await self._cancel_algo_orders(old_pid, symbol)
+                print(f"[protection] Cleaned up stale protection for {symbol} (pos={old_pid})")
+
+        position_generation = self._next_position_generation(symbol)
+
+        kline_features = await self._feed.async_get_kline_features(symbol)
+        adaptive_cfg = AdaptiveProtectionCalculator.calculate(symbol, entry_price, kline_features)
+        self._require_protection_config(symbol, adaptive_cfg)
+        _prec = getattr(self, "_symbol_precision", {}).get(symbol, {})
+        if _prec:
+            self._protection.set_precision_from_rule(
+                type(
+                    "_PrecisionRule",
+                    (),
+                    {
+                        "price_precision": _prec.get("price", 0),
+                        "qty_precision": _prec.get("quantity", 0),
+                    },
+                )()
+            )
+        pp = self._protection.create_protection(
+            position_id=pos_id,
+            instrument_id=InstrumentId(symbol),
+            venue_id=VenueId("BINANCE"),
+            entry_price=entry_price,
+            quantity=qty,
+            side=pos_side,
+            stop_loss_config=adaptive_cfg.stop_loss_config,
+            take_profit_config=adaptive_cfg.take_profit_config,
+            owner_id=self._protection_owner_id,
+            position_generation=position_generation,
+            session_id=self._session_id,
+        )
+        self._position_entry_times[pos_id] = time.time()
+        protect_orders = [pp.stop_loss] if pp.stop_loss else []
+        protect_orders.extend(pp.take_profits)
+        # The local manager creates definitions before the venue ACK.  Keep
+        # them CREATED/PENDING until each individual conditional order is
+        # acknowledged; otherwise restart recovery would claim coverage
+        # that never existed at the exchange.
+        for p_order in protect_orders:
+            if p_order is None:
+                continue
+            p_order.status = ProtectionStatus.CREATED
+            self._persist_protection_order(p_order, status="PENDING")
+
+        # 打印保护摘要
+        sl_price = float(pp.stop_loss.trigger_price.amount) if pp.stop_loss else None
+        sl_pct = (
+            (entry_price - sl_price) / entry_price * 100
+            if sl_price and pos_side == OrderSide.BUY
+            else ((sl_price - entry_price) / entry_price * 100 if sl_price else None)
+        )
+        tp_prices = [f"{float(tp.trigger_price.amount):.2f}" for tp in pp.take_profits]
+        tp_pcts = []
+        for tp in pp.take_profits:
+            tp_px = float(tp.trigger_price.amount)
+            if pos_side == OrderSide.BUY:
+                tp_pcts.append(f"{(tp_px - entry_price) / entry_price * 100:+.2f}%")
+            else:
+                tp_pcts.append(f"{(entry_price - tp_px) / entry_price * 100:+.2f}%")
+
+        adaptive_info = (
+            f"ATR={adaptive_cfg.atr_pct:.2f}% vol={adaptive_cfg.volatility_regime.value} "
+            f"tier={adaptive_cfg.price_tier.value} regime={adaptive_cfg.market_regime.value} "
+            f"RR={adaptive_cfg.rr_ratio:.1f}"
+        )
+        print(
+            f"[protection] ┌ {'=' * 60}\n"
+            f"[protection] ├─ {symbol} {pos_side.value} {qty} @ {entry_price:.4f}\n"
+            f"[protection] ├─ 🛑 STOP LOSS:  {sl_price:.4f} ({sl_pct:+.2f}% from entry) [{(pp.stop_loss.stop_type.value if pp.stop_loss and pp.stop_loss.stop_type else 'N/A')}]\n"
+            f"[protection] ├─ 🎯 TAKE PROFIT: {', '.join(f'{p} ({pct})' for p, pct in zip(tp_prices, tp_pcts, strict=False))}\n"
+            f"[protection] ├─ 📊 {adaptive_info}\n"
+            f"[protection] └ {'=' * 60}"
+        )
+
+        if submit:
             # 提交止盈止损到交易所
             reduce_side = "SELL" if pos_side == OrderSide.BUY else "BUY"
             exchange_protection_count = 0
@@ -6593,14 +6657,6 @@ class AutonomousEngine:
                         ],
                     ]
                 )
-
-        # Update strategy risk on any fill
-        account_balance = float(self._last_account.get("totalWalletBalance", 0))
-        if account_balance > 0:
-            self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
-            if account_balance > self._peak_equity:
-                self._peak_equity = account_balance
-
     @staticmethod
     def _fact_timestamp(fact_dt: Any) -> float:
         """Convert a (possibly naive/UTC) fact timestamp to Unix seconds."""
@@ -8242,7 +8298,10 @@ class AutonomousEngine:
             # 若据此判定全部 VENUE_ROW_MISSING 并清理本地行，会把仍然存在
             # 的 55 条 ACTIVE 保护误清为 CANCELLED（final82b 实测事故，
             # 已手工恢复）。空 inventory 时本轮 defer，下一轮再评估。
-            if not existing_algos:
+            # BD-FIX (final83g): 空 inventory 仅在查询非成功(API 抖动)时 defer。
+            # 查询成功且真空(venue 无任何 algo 单)意味着首建保护可以安全下发,
+            # 否则首仓 SL/TP 永远无法建立(coverage blocker 鸡生蛋死锁)。
+            if not existing_algos and not getattr(self, "_last_algo_inventory_genuine", False):
                 print("[nearline] Protection retry deferred: algo inventory empty (API unstable)")
                 return
             semantic_issues = self._protection_inventory_semantic_issues(existing_algos)
@@ -8315,6 +8374,36 @@ class AutonomousEngine:
                     aid = str(item.get("algoId", ""))
                     if sym and aid:
                         exchange_algo_symbols.setdefault(sym, set()).add(aid)
+
+            # BD-FIX (final83g): 自愈投影缺口 —— venue 确认有持仓但保护投影缺失
+            # (成交经用户流/部分成交路径入账)时,用持久化持仓投影(独立已提交
+            # 事实)重建保护投影,由下方受治理循环补挂 SL/TP;否则持仓裸露直至
+            # coverage blocker LOCK。
+            for _sweep_sym in sorted(exchange_symbols):
+                if any(str(pp.instrument_id) == _sweep_sym for pp in self._protection.all_positions().values()):
+                    continue
+                _proj_row = self._position_projection.get(_sweep_sym)
+                if not _proj_row:
+                    continue
+                try:
+                    _sweep_qty = float(_proj_row.get("signed_quantity", 0) or 0)
+                    _sweep_entry = float(_proj_row.get("entry_price", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(_sweep_qty) <= 1e-12 or not math.isfinite(_sweep_entry) or _sweep_entry <= 0:
+                    continue
+                try:
+                    await self._ensure_entry_protection(
+                        f"recovered-{_sweep_sym}",
+                        _sweep_sym,
+                        {"side": "BUY" if _sweep_qty > 0 else "SELL"},
+                        qty=abs(_sweep_qty),
+                        entry_price=_sweep_entry,
+                        submit=False,
+                    )
+                    print(f"[nearline] 🔧 Rebuilt protection projection for {_sweep_sym} from durable facts")
+                except Exception as _sweep_exc:
+                    print(f"[nearline] ⚠️ Protection projection rebuild failed for {_sweep_sym}: {_sweep_exc}")
 
             # 优先处理提交失败的待重试持仓
             pending: set[str] = getattr(self, "_pending_protection_retry", set())

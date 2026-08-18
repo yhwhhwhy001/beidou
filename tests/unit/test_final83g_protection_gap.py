@@ -1,0 +1,217 @@
+"""final83g 回归:SL/TP 保护创建缺口修复。
+
+复现:15:53 AVAXUSDT 入场单成交事实经用户流/部分成交路径先入账,
+_process_fill 的已提交分支直接返回,保护投影从未建立 → 持仓裸露 →
+protection_coverage blocker 防抖升级 LOCKED → 停机。
+
+覆盖:
+- _process_fill 已提交分支补建 SL/TP(venue 累计成交事实)
+- 平仓订单不补建入场保护
+- _ensure_entry_protection 幂等(同量同向投影跳过,防重复下单)
+- _get_open_algo_inventory 真值空/抖动空标志
+- _retry_missing_protections 仅对抖动空 defer;真值空时近线自愈投影
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from beidou_control.plane import ControlAction
+from beidou_core.engine import AutonomousEngine
+from beidou_safety.execution.order_state import OrderEvent, OrderStateTracker
+from beidou_shared.types import OrderId, OrderSide
+
+
+class _FakeStore:
+    def __init__(self, *, fill_rows: dict | None = None, protections: list | None = None) -> None:
+        self.fill_rows = dict(fill_rows or {})
+        self._protections = list(protections or [])
+
+    def get_fill_event(self, event_id: str):
+        return self.fill_rows.get(event_id)
+
+    def restore_protections(self):
+        return list(self._protections)
+
+
+def _engine() -> AutonomousEngine:
+    return AutonomousEngine.__new__(AutonomousEngine)
+
+
+@pytest.mark.asyncio
+async def test_process_fill_already_committed_creates_protection(monkeypatch) -> None:
+    """已提交成交事实的 FILLED 轮询必须补建入场保护(根因回归)。"""
+    engine = _engine()
+    engine._store = _FakeStore(fill_rows={"trade:516462877:t1": {"processing_state": "COMMITTED"}})
+    tracker = OrderStateTracker(order_id=OrderId("516462877"))
+    tracker.apply(OrderEvent.SENT)
+    tracker.apply(OrderEvent.ACKED)
+    engine._order_trackers = {"516462877": tracker}
+    engine._order_symbols = {"516462877": "AVAXUSDT"}
+    engine._active_order_ids = {"516462877"}
+    engine._close_order_ids = set()
+    engine._filled_quantities_by_order = {"516462877": 1.0}
+    ensure = AsyncMock()
+    monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
+
+    result = {
+        "orderId": "516462877",
+        "symbol": "AVAXUSDT",
+        "side": "BUY",
+        "status": "FILLED",
+        "executedQty": "1",
+        "avgPrice": "6.31",
+        "tradeId": "t1",
+    }
+    await engine._process_fill("516462877", "AVAXUSDT", result)
+
+    ensure.assert_awaited_once()
+    kwargs = ensure.call_args.kwargs
+    assert kwargs["qty"] == 1.0
+    assert kwargs["entry_price"] == 6.31
+    assert "516462877" not in engine._order_trackers
+    assert "516462877" not in engine._active_order_ids
+
+
+@pytest.mark.asyncio
+async def test_process_fill_already_committed_close_order_skips_entry_protection(monkeypatch) -> None:
+    """平仓单的已提交成交不得触发入场保护创建。"""
+    engine = _engine()
+    engine._store = _FakeStore(fill_rows={"trade:99:t1": {"processing_state": "COMMITTED"}})
+    tracker = OrderStateTracker(order_id=OrderId("99"))
+    tracker.apply(OrderEvent.SENT)
+    tracker.apply(OrderEvent.ACKED)
+    engine._order_trackers = {"99": tracker}
+    engine._order_symbols = {"99": "AVAXUSDT"}
+    engine._active_order_ids = {"99"}
+    engine._close_order_ids = {"99"}
+    engine._filled_quantities_by_order = {"99": 1.0}
+    ensure = AsyncMock()
+    monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
+
+    result = {
+        "orderId": "99",
+        "symbol": "AVAXUSDT",
+        "side": "SELL",
+        "status": "FILLED",
+        "executedQty": "1",
+        "avgPrice": "6.31",
+        "tradeId": "t1",
+    }
+    await engine._process_fill("99", "AVAXUSDT", result)
+
+    ensure.assert_not_awaited()
+    assert "99" not in engine._order_trackers
+
+
+@pytest.mark.asyncio
+async def test_ensure_entry_protection_idempotent_for_same_projection() -> None:
+    """同 symbol 同量同向已有投影时跳过,不重复创建/下单。"""
+    engine = _engine()
+    engine._protection = SimpleNamespace(
+        all_positions=lambda: {
+            "p1": SimpleNamespace(instrument_id="AVAXUSDT", quantity=1.0, side=OrderSide.BUY)
+        },
+        create_protection=Mock(side_effect=AssertionError("must not create")),
+    )
+
+    await engine._ensure_entry_protection(
+        "516462877", "AVAXUSDT", {"side": "BUY"}, qty=1.0, entry_price=6.31, submit=False
+    )
+
+    assert engine._protection.create_protection.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_open_algo_inventory_genuine_flag() -> None:
+    """查询成功(含真空)置 genuine=True;异常/UNKNOWN 置 False。"""
+    engine = _engine()
+    engine._env_mode = SimpleNamespace(value="testnet")
+
+    engine._adapter = SimpleNamespace(
+        get_open_algo_orders=AsyncMock(return_value=SimpleNamespace(is_success=lambda: True, data=[]))
+    )
+    assert await engine._get_open_algo_inventory() == []
+    assert engine._last_algo_inventory_genuine is True
+
+    engine._adapter = SimpleNamespace(get_open_algo_orders=AsyncMock(side_effect=RuntimeError("boom")))
+    assert await engine._get_open_algo_inventory() == []
+    assert engine._last_algo_inventory_genuine is False
+
+    engine._adapter = SimpleNamespace(
+        get_open_algo_orders=AsyncMock(
+            return_value=SimpleNamespace(is_success=lambda: False, data=None, error=None)
+        )
+    )
+    assert await engine._get_open_algo_inventory() == []
+    assert engine._last_algo_inventory_genuine is False
+
+
+def _retry_engine() -> AutonomousEngine:
+    engine = _engine()
+    engine._can_write = True
+    engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)
+    engine._protection = SimpleNamespace(all_positions=lambda: {})
+    engine._store = _FakeStore()
+    engine._active_algo_ids = {}
+    engine._protection_owner_id = "owner-1"
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_retry_missing_protections_defers_only_on_non_genuine_empty(monkeypatch) -> None:
+    """抖动空 defer(不自愈);真值空继续近线自愈投影。"""
+    ensure = AsyncMock()
+
+    # 抖动空:查询失败回落 [] → defer,_ensure_entry_protection 不被调用
+    engine = _retry_engine()
+    engine._last_algo_inventory_genuine = False
+    engine._position_projection = {"AVAXUSDT": {"signed_quantity": "1", "entry_price": "6.31"}}
+    monkeypatch.setattr(engine, "_get_open_algo_inventory", AsyncMock(return_value=[]))
+    monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
+    await engine._retry_missing_protections({"AVAXUSDT"})
+    ensure.assert_not_awaited()
+
+    # 真值空:查询成功但无单 → 用持久化投影自愈重建(submit=False 交回受治理循环)
+    ensure.reset_mock()
+    engine2 = _retry_engine()
+    engine2._last_algo_inventory_genuine = True
+    engine2._position_projection = {"AVAXUSDT": {"signed_quantity": "1", "entry_price": "6.31"}}
+    monkeypatch.setattr(engine2, "_get_open_algo_inventory", AsyncMock(return_value=[]))
+    monkeypatch.setattr(engine2, "_ensure_entry_protection", ensure)
+    await engine2._retry_missing_protections({"AVAXUSDT"})
+    ensure.assert_awaited_once()
+    kwargs = ensure.call_args.kwargs
+    assert kwargs["submit"] is False
+    assert kwargs["qty"] == 1.0
+    assert kwargs["entry_price"] == 6.31
+
+
+@pytest.mark.asyncio
+async def test_retry_missing_protections_sweep_skips_existing_projection(monkeypatch) -> None:
+    """保护投影已存在时不重复自愈。"""
+    ensure = AsyncMock()
+    engine = _retry_engine()
+    engine._last_algo_inventory_genuine = True
+    engine._protection = SimpleNamespace(
+        all_positions=lambda: {
+            "p1": SimpleNamespace(
+                instrument_id="AVAXUSDT",
+                quantity=1.0,
+                side=OrderSide.BUY,
+                entry_price=6.31,
+                stop_loss=SimpleNamespace(status=SimpleNamespace(value="PENDING")),
+                take_profits=(),
+            )
+        },
+    )
+    engine._position_projection = {"AVAXUSDT": {"signed_quantity": "1", "entry_price": "6.31"}}
+    engine._symbol_precision = {}
+    engine._protection_retries = {}
+    monkeypatch.setattr(engine, "_get_open_algo_inventory", AsyncMock(return_value=[]))
+    monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
+    await engine._retry_missing_protections({"AVAXUSDT"})
+    ensure.assert_not_awaited()
