@@ -215,3 +215,88 @@ async def test_retry_missing_protections_sweep_skips_existing_projection(monkeyp
     monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
     await engine._retry_missing_protections({"AVAXUSDT"})
     ensure.assert_not_awaited()
+
+def _sl_projection(*, status_value: str = "ACTIVE") -> SimpleNamespace:
+    """构造带止损单的保护投影(跳过 S33 深路径所需字段)。"""
+    stop_loss = SimpleNamespace(
+        protection_id="sl-pos-recovered-AVAXUSDT",
+        position_id="pos-recovered-AVAXUSDT",
+        instrument_id="AVAXUSDT",
+        side=OrderSide.SELL,
+        trigger_price=SimpleNamespace(amount="6.20"),
+        order_price=None,
+        quantity=SimpleNamespace(amount="1.0"),
+        order_type="STOP_MARKET",
+        reduce_only=True,
+        status=SimpleNamespace(value=status_value),
+        stop_type=None,
+        take_profit_type=None,
+        reason="Stop Loss: ATR_BASED",
+        owner_id="owner-1",
+        position_generation=1,
+        session_id="s1",
+        created_at=None,
+        triggered_at=None,
+        correlation_id=None,
+        exchange_order_id="1000000171282363",
+    )
+    return SimpleNamespace(
+        instrument_id="AVAXUSDT",
+        quantity=1.0,
+        side=OrderSide.BUY,
+        entry_price=6.31,
+        stop_loss=stop_loss,
+        take_profits=(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_sl_skips_when_durable_active_and_inventory_genuine_empty(monkeypatch) -> None:
+    """库存真空 + durable ACTIVE 行已覆盖 → 不重复补挂止损(venue 延迟防重)。"""
+    engine = _retry_engine()
+    engine._last_algo_inventory_genuine = True
+    engine._store = _FakeStore(
+        protections=[
+            {
+                "protection_id": "sl-pos-recovered-AVAXUSDT",
+                "position_id": "pos-recovered-AVAXUSDT",
+                "symbol": "AVAXUSDT",
+                "side": "SELL",
+                "trigger_price": "6.20",
+                "quantity": "1.0",
+                "order_type": "STOP_MARKET",
+                "status": "ACTIVE",
+                "owner_id": "owner-1",
+                "position_generation": 1,
+                "session_id": "s1",
+                "exchange_order_id": "1000000171282363",
+            }
+        ]
+    )
+    engine._protection = SimpleNamespace(all_positions=lambda: {"pos-recovered-AVAXUSDT": _sl_projection()})
+    engine._symbol_precision = {}
+    engine._protection_retries = {}
+    monkeypatch.setattr(engine, "_get_open_algo_inventory", AsyncMock(return_value=[]))
+    create_algo = AsyncMock()
+    monkeypatch.setattr(engine, "_create_algo_order", create_algo)
+    await engine._retry_missing_protections({"AVAXUSDT"})
+    create_algo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_sl_places_when_no_durable_rows(monkeypatch) -> None:
+    """库存真空且无 durable ACTIVE 行(新建投影) → 照常补挂止损。"""
+    engine = _retry_engine()
+    engine._last_algo_inventory_genuine = True
+    engine._store = _FakeStore(protections=[])
+    engine._protection = SimpleNamespace(all_positions=lambda: {"pos-recovered-AVAXUSDT": _sl_projection()})
+    engine._symbol_precision = {}
+    engine._protection_retries = {}
+    monkeypatch.setattr(engine, "_get_open_algo_inventory", AsyncMock(return_value=[]))
+    create_algo = AsyncMock(return_value={"algoId": "123"})
+    monkeypatch.setattr(engine, "_create_algo_order", create_algo)
+    monkeypatch.setattr(engine, "_protection_algo_params", Mock(return_value={}))
+    monkeypatch.setattr(engine, "_persist_protection_order", Mock())
+    await engine._retry_missing_protections({"AVAXUSDT"})
+    create_algo.assert_awaited_once()
+

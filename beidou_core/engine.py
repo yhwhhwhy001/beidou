@@ -8405,6 +8405,27 @@ class AutonomousEngine:
                 except Exception as _sweep_exc:
                     print(f"[nearline] ⚠️ Protection projection rebuild failed for {_sweep_sym}: {_sweep_exc}")
 
+            # BD-FIX (final83h): 库存真空(查询成功但无行,venue 可见性延迟)时,
+            # 有 durable ACTIVE 行的保护单视为已覆盖,不重复补挂(重启恢复后
+            # 实测 4 单 vs 期望 2)。真正缺失的 durable 行会在 3 轮
+            # VENUE_ROW_MISSING 防抖后清理,清理后恢复补挂;新建投影
+            # (仅 PENDING 行)不受影响,首建路径照常。
+            _inventory_genuine_empty = (
+                bool(getattr(self, "_last_algo_inventory_genuine", False)) and not existing_algos
+            )
+            _durable_active_protection_ids: set[str] = set()
+            if _inventory_genuine_empty and self._store is not None:
+                try:
+                    _durable_active_protection_ids = {
+                        str(row.get("protection_id", "")).strip()
+                        for row in self._store.restore_protections()
+                        if str(row.get("status", "")).upper() == "ACTIVE"
+                        and str(row.get("owner_id", "")) == str(self._protection_owner_id)
+                        and str(row.get("exchange_order_id", "")).strip()
+                    }
+                except Exception as _durable_read_exc:
+                    logger.warning("durable protection read failed in retry loop: %s", type(_durable_read_exc).__name__)
+
             # 优先处理提交失败的待重试持仓
             pending: set[str] = getattr(self, "_pending_protection_retry", set())
             positions = sorted(
@@ -8712,7 +8733,14 @@ class AutonomousEngine:
                         f"expected={expected_count} server={server_count} "
                         f"retry_count={getattr(self, '_protection_retries', {}).get(pos_id, 0)}"
                     )
-                if _needs_exchange_protection(pp.stop_loss):
+                # BD-FIX (final83h): 库存真空时 durable ACTIVE 行已覆盖的
+                # 止损不重复补挂(venue 可见性延迟);durable 行经 3 轮防抖
+                # 清理后才恢复补挂。
+                _sl_covered_by_durable = _inventory_genuine_empty and bool(
+                    _durable_active_protection_ids
+                    and str(getattr(pp.stop_loss, "protection_id", "")) in _durable_active_protection_ids
+                )
+                if _needs_exchange_protection(pp.stop_loss) and not _sl_covered_by_durable:
                     # Retry the exact approved trigger.  Moving a stop after
                     # rejection changes the signed risk contract and could
                     # silently widen the permitted loss.
@@ -8752,6 +8780,10 @@ class AutonomousEngine:
                     # 无需重发 —— 旧逻辑对"总数不足"的品种重发全部 TP →
                     # ClientOrderId duplicated（final82c 实测）。
                     if getattr(tp, "exchange_order_id", "") and str(tp.exchange_order_id) in existing_ids:
+                        continue
+                    # BD-FIX (final83h): 库存真空时 durable ACTIVE 行已覆盖的
+                    # TP 不重复补挂(venue 可见性延迟)。
+                    if _inventory_genuine_empty and str(getattr(tp, "protection_id", "")) in _durable_active_protection_ids:
                         continue
                     # Take-profit retries use the same approved trigger; a
                     # venue rejection remains UNKNOWN instead of inventing a
