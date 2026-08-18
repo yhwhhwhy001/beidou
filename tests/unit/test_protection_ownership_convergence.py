@@ -1261,3 +1261,58 @@ async def test_retry_sweep_skips_symbols_with_durable_active_rows() -> None:
     rows = engine._store.restore_protections()
     assert all(r["status"] == "ACTIVE" for r in rows)
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# 6. fast-fill 竞态:子命令已终态时父意图补 ACK
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_terminal_child_parent_acks_when_children_confirmed() -> None:
+    engine = _adopt_engine(positions={})
+    acks: list[tuple[str, str]] = []
+
+    def _ack(intent_id: str, idempotency_key: str = "") -> None:
+        acks.append((intent_id, idempotency_key))
+
+    engine._outbox = SimpleNamespace(
+        restore_execution_plan=lambda _iid: SimpleNamespace(all_children_acknowledged=True),
+        ack=_ack,
+    )
+    intent = SimpleNamespace(intent_id="intent-X", idempotency_key="idem-X")
+
+    assert engine._reconcile_terminal_child_parent(intent) is True
+    assert acks == [("intent-X", "idem-X")]
+
+
+def test_reconcile_terminal_child_parent_fail_closed_on_incomplete_aggregate() -> None:
+    engine = _adopt_engine(positions={})
+    acks: list[str] = []
+
+    def _ack(intent_id: str, idempotency_key: str = "") -> None:
+        acks.append(intent_id)
+
+    engine._outbox = SimpleNamespace(
+        restore_execution_plan=lambda _iid: SimpleNamespace(all_children_acknowledged=False),
+        ack=_ack,
+    )
+    intent = SimpleNamespace(intent_id="intent-X", idempotency_key="idem-X")
+
+    assert engine._reconcile_terminal_child_parent(intent) is False
+    assert acks == []
+
+
+def test_reconcile_terminal_child_parent_fail_closed_on_missing_plan_or_outbox() -> None:
+    engine = _adopt_engine(positions={})
+    intent = SimpleNamespace(intent_id="intent-X", idempotency_key="idem-X")
+
+    # 执行聚合缺失 → 不 ACK
+    engine._outbox = SimpleNamespace(
+        restore_execution_plan=lambda _iid: None,
+        ack=lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not ack")),
+    )
+    assert engine._reconcile_terminal_child_parent(intent) is False
+
+    # outbox 未装配 → 不 ACK
+    engine._outbox = None
+    assert engine._reconcile_terminal_child_parent(intent) is False

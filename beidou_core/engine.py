@@ -3796,6 +3796,16 @@ class AutonomousEngine:
                             # 推进到终态如 FILLED）是成交事件处理的幂等重复，
                             # 静默跳过；其余异常保持 SENDING 待恢复。
                             if "TERMINAL_CHILD_STATE" in str(_claim_exc):
+                                # BD-FIX (fast-fill ack gap): 成交事件与下单
+                                # 循环竞态下,子命令已被事件路径推进终态
+                                # (FILLED),父消息若留 SENDING 只能等 15 分钟
+                                # 租约兜底(实测 SUI 首单)。此处按执行聚合
+                                # 事实补 ACK。
+                                if self._reconcile_terminal_child_parent(intent):
+                                    print(
+                                        f"[realtime] Parent intent ACKed via terminal-child "
+                                        f"reconciliation: {getattr(intent, 'intent_id', '?')}"
+                                    )
                                 continue
                             # 单条 intent 异常不应阻断整个 claim 循环；
                             # 失败的 intent 保持在 SENDING，下次重启恢复。
@@ -8931,6 +8941,37 @@ class AutonomousEngine:
                 pending[pos_id] = remaining
             else:
                 pending.pop(pos_id, None)
+
+    def _reconcile_terminal_child_parent(self, intent: Any) -> bool:
+        """BD-FIX (fast-fill ack gap): 子命令已被事件路径推进终态时补 ACK 父意图。
+
+        用户流 ORDER_TRADE_UPDATE 会先把执行子命令推进 ACKED/FILLED;
+        下单循环随后对同一子命令做转换时得到 TERMINAL_CHILD_STATE,
+        父消息若留 SENDING 只能等 15 分钟租约兜底回收(实测 SUI 首单)。
+        此处读取执行聚合事实:全部子命令已确认 → 父 ACK;聚合缺失或
+        未全确认 → 保持 SENDING 交恢复路径(fail-closed)。
+        """
+        intent_id = str(getattr(intent, "intent_id", "") or "")
+        if not intent_id:
+            return False
+        try:
+            _outbox = getattr(self, "_outbox", None)
+            if _outbox is None:
+                return False
+            _restore = getattr(_outbox, "restore_execution_plan", None)
+            if not callable(_restore):
+                return False
+            _agg = _restore(intent_id)
+            if _agg is None or not bool(getattr(_agg, "all_children_acknowledged", False)):
+                return False
+            _ack = getattr(_outbox, "ack", None)
+            if not callable(_ack):
+                return False
+            _ack(intent_id, idempotency_key=str(getattr(intent, "idempotency_key", "") or ""))
+            return True
+        except Exception:
+            # 恢复路径兜底,不放大异常(15 分钟租约回收仍是安全网)
+            return False
 
     def _dedup_ghost_protection_positions(self) -> int:
         """BD-FIX (ghost-position deadlock): 同品种重复保护投影去重。
