@@ -165,7 +165,7 @@ def write_scenario_evidence_all(
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 Testnet Certification Runner")
     parser.add_argument("--plan", default="config/g5-testnet-plan.yaml")
-    parser.add_argument("--symbol", help="显式指定只读协议探测品种")
+    parser.add_argument("--symbol", required=True, help="显式指定只读协议探测品种(不允许固定交易池回退)")
     parser.add_argument("--confirm-testnet", action="store_true", help="确认连接到 Testnet（非 Mainnet）")
     parser.add_argument(
         "--max-notional",
@@ -199,6 +199,12 @@ def main() -> int:
         action="store_true",
         help="场景内不发送真实请求(仅演练场景逻辑)",
     )
+    if "--list" in sys.argv:
+        # --list 只打印已注册场景(不访问网络、不校验 plan),不要求 --symbol;
+        # 场景执行路径仍强制显式品种。
+        for _action in parser._actions:
+            if getattr(_action, "dest", "") == "symbol":
+                _action.required = False
     args = parser.parse_args()
 
     if args.list:

@@ -115,20 +115,33 @@ async def test_backfill_skipped_when_history_already_sufficient() -> None:
 
 @pytest.mark.asyncio
 async def test_feed_raw_klines_closed_only_sorted() -> None:
-    """async_get_klines_raw 过滤形成中 bar,按 open_time 升序返回。"""
+    """async_get_klines_raw 过滤形成中 bar,按 open_time 升序返回。
+
+    时间基准取当前分钟(避免固定墙钟时间随日期推移而失效):
+    前 3 根为已闭合 bar,当前分钟为形成中 bar。
+    """
+    import time as _time
+
     feed = MarketDataFeed.__new__(MarketDataFeed)
-    t0 = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)
-    t1 = t0 + timedelta(minutes=1)
-    t2 = t0 + timedelta(minutes=2)
+    _minute_ms = 60_000
+    _now_ms = int(_time.time() * 1000)
+    _cur_min = (_now_ms // _minute_ms) * _minute_ms
+    _open_closed = [_cur_min - 3 * _minute_ms, _cur_min - 2 * _minute_ms, _cur_min - _minute_ms]
     raw = [
-        [int(t0.timestamp() * 1000), "1", "2", "0.5", "1.5", "10", int((t0 + timedelta(seconds=59)).timestamp() * 1000), "15", 3, "15", "0", "0", "1"],
-        [int(t1.timestamp() * 1000), "1.5", "2.5", "1", "2", "10", int((t1 + timedelta(seconds=59)).timestamp() * 1000), "20", 3, "20", "0", "0", "1"],
-        [int(t2.timestamp() * 1000), "2", "3", "1.5", "2.5", "10", int((t2 + timedelta(hours=1)).timestamp() * 1000), "25", 3, "25", "0", "0", "1"],  # 形成中
+        [t, "1", "2", "0.5", "1.5", "10", t + 59_000, "15", 3, "15", "0", "0", "1"]
+        for t in _open_closed
     ]
+    raw.append(
+        [_cur_min, "2.5", "3.5", "2", "3", "10", _cur_min + _minute_ms, "30", 3, "30", "0", "0", "1"]  # 形成中
+    )
     feed._api_async = AsyncMock(return_value=raw)
     rows = await feed.async_get_klines_raw("AVAXUSDT", "1m", 100)
-    assert len(rows) == 2
-    assert [r["open_time"] for r in rows] == [t0, t1]
+    expected = [
+        datetime.fromtimestamp(t / 1000, tz=timezone.utc)
+        for t in _open_closed
+    ]
+    assert len(rows) == 3
+    assert [r["open_time"] for r in rows] == expected
     assert all(r["is_closed"] for r in rows)
 
 

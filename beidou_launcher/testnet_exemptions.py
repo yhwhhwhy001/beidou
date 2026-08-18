@@ -186,4 +186,24 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         reassessment_module="M09",
         risk_note="未签名环境变量放大仓位基数 —— 签名策略提供键后应弃用环境变量路径。",
     ),
+    TestnetExemption(
+        exemption_id="EXEMPT-21",
+        title="自适应杠杆同步到交易所(BEIDOU_SYNC_VENUE_LEVERAGE=1)",
+        rationale="引擎风险模型按 dyn_leverage 计算而交易所杠杆恒 20x,实盘语义失真;"
+        "环境变量显式开启后 testnet 才把标的杠杆同步为自适应档位(整数钳制 1..125)。"
+        "live/canary 永不自动修改交易所杠杆。",
+        reassessment_module="M10",
+        risk_note="修改交易所杠杆影响强平价与保证金占用;testnet 限定且默认关闭,"
+        "任何环境激活必须由 operator 显式设置环境变量。",
+    ),
+    TestnetExemption(
+        exemption_id="EXEMPT-22",
+        title="TRADE_LITE 解析失败时 testnet 保持用户流健康",
+        rationale="TRADE_LITE(轻量用户流)与 ORDER_TRADE_UPDATE 同构,成交事实在所有环境"
+        "摄入入账;仅当单条事件解析失败时,testnet 保持流健康等待下一条事件,"
+        "避免共享 demo 账户的畸形事件把控制面拉回 NO_NEW_RISK。live/canary 仍 fail-closed。",
+        reassessment_module="M13",
+        risk_note="解析失败的成交事实在该事件内丢失(靠 REST 订单监控兜底);"
+        "M13 复核是否需要按事件类型持久化失败计数并告警。",
+    ),
 )

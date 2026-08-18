@@ -21,7 +21,7 @@ def test_exemption_registry_entries_are_complete() -> None:
     """每项特赦必须有唯一 id、非空理由与责任模块。"""
     ids = [item.exemption_id for item in TESTNET_EXEMPTIONS]
     assert len(ids) == len(set(ids)), f"重复 exemption_id: {ids}"
-    assert len(ids) == 20, f"登记表数量变化需评审: {len(ids)}"
+    assert len(ids) == 22, f"登记表数量变化需评审: {len(ids)}"
     for item in TESTNET_EXEMPTIONS:
         assert item.rationale.strip(), f"{item.exemption_id} 缺理由"
         assert item.reassessment_module.strip(), f"{item.exemption_id} 缺责任模块"

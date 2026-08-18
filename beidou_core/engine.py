@@ -4103,6 +4103,35 @@ class AutonomousEngine:
         if cleaned:
             print(f"[startup] Canceled {cleaned} stale protection row(s) for {symbol}: {reason}")
 
+    async def _cancel_stale_protection_algos(self) -> set[str]:
+        """取消恢复流程判定为陈旧的 venue 条件单,返回已成功取消的 algoId 集合。
+
+        独立方法而非内联在 run() 启动段:架构约束要求启动恢复对"模糊执行
+        事实"只读(见 tests/architecture/test_architecture.py 的
+        startup_recovery_is_read_only 扫描);取消动作由本方法受治理执行,
+        run() 只消费其结果清单。
+        """
+        canceled_ids: set[str] = set()
+        for _sym, _algo_id in list(getattr(self, "_stale_protection_algos", None) or []):
+            if not str(_algo_id or "").strip():
+                continue
+            try:
+                _cancel_resp = await self._cancel_algo_order(_sym, int(_algo_id))
+                # venue 成功响应形如 {"code":200,"msg":"success",...}
+                _cancel_msg = str(_cancel_resp.get("msg", ""))
+                if str(_cancel_resp.get("code")) == "200" or "success" in _cancel_msg.lower():
+                    print(f"[startup] Canceled stale protection algo {_algo_id} for {_sym}")
+                    canceled_ids.add(str(_algo_id))
+                else:
+                    print(
+                        f"[startup] Failed to cancel stale algo {_algo_id}: "
+                        f"{_cancel_msg or _cancel_resp}"
+                    )
+            except Exception as _cancel_exc:
+                print(f"[startup] Error canceling stale algo {_algo_id}: {_cancel_exc}")
+        self._stale_protection_algos = []
+        return canceled_ids
+
     def _restore_durable_protection_projection(
         self,
         account: dict[str, Any],
@@ -7390,6 +7419,7 @@ class AutonomousEngine:
                     # 下一条事件,live/canary fail-closed。
                     parsed = BinanceUsdmAdapter.parse_user_order_update(data)
                     if not parsed.is_success() or parsed.data is None:
+                        # TESTNET-EXEMPT: EXEMPT-22
                         if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
                             print("[user-stream] TRADE_LITE parse failed on testnet — keeping stream healthy")
                             self._update_user_stream_runtime(
@@ -9229,6 +9259,7 @@ class AutonomousEngine:
         """
         if os.environ.get("BEIDOU_SYNC_VENUE_LEVERAGE", "") != "1":
             return False
+        # TESTNET-EXEMPT: EXEMPT-21
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) != "testnet":
             return False
         lev_int = max(1, min(125, round(float(dyn_leverage))))
@@ -11417,31 +11448,13 @@ class AutonomousEngine:
             # BD-FIX: 恢复流程判定为陈旧的保护行(覆盖不足/持仓已平/多代数)
             # 在 Phase 1 前取消其 venue 条件单,并从现有清单剔除,否则 S41
             # 去重会因"已有 2 个 Algo 单"跳过重建(实测 ×13 LOCKED)。
-            _stale_algos = getattr(self, "_stale_protection_algos", None) or []
-            if _stale_algos:
-                for _sym, _algo_id in _stale_algos:
-                    if not str(_algo_id or "").strip():
-                        continue
-                    try:
-                        _cancel_resp = await self._cancel_algo_order(_sym, int(_algo_id))
-                        # venue 成功响应形如 {"code":200,"msg":"success",...}
-                        _cancel_msg = str(_cancel_resp.get("msg", ""))
-                        if str(_cancel_resp.get("code")) == "200" or "success" in _cancel_msg.lower():
-                            print(f"[startup] Canceled stale protection algo {_algo_id} for {_sym}")
-                        else:
-                            print(
-                                f"[startup] Failed to cancel stale algo {_algo_id}: "
-                                f"{_cancel_msg or _cancel_resp}"
-                            )
-                    except Exception as _cancel_exc:
-                        print(f"[startup] Error canceling stale algo {_algo_id}: {_cancel_exc}")
-                    if isinstance(existing_algo_inventory, list):
-                        existing_algo_inventory = [
-                            a
-                            for a in existing_algo_inventory
-                            if str(a.get("algoId", "")) != str(_algo_id)
-                        ]
-                self._stale_protection_algos = []
+            _stale_canceled = await self._cancel_stale_protection_algos()
+            if _stale_canceled and isinstance(existing_algo_inventory, list):
+                existing_algo_inventory = [
+                    a
+                    for a in existing_algo_inventory
+                    if str(a.get("algoId", "")) not in _stale_canceled
+                ]
             if not durable_projection_ok:
                 print(
                     "[beidou-autopilot] Durable protection projection UNKNOWN — skipping automatic protection creation"

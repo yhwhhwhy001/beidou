@@ -18,6 +18,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -78,6 +79,42 @@ _NEW_ENTRY_DECISIONS: dict[str, dict[str, str]] = {
         "call_graph": "CI/operator -> registry rebuild -> source scan only",
         "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
     },
+    # G5 认证场景协议文件（终端写由认证运行器显式驱动，仅 testnet venue）。
+    "beidou_certification/g5_scenarios/protocol/credential_failure.py": {
+        "kind": "script",
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 certification runner -> credential failure protocol scenario -> governed testnet write",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+    },
+    "beidou_certification/g5_scenarios/protocol/rate_limit.py": {
+        "kind": "script",
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 certification runner -> rate limit protocol scenario -> governed testnet write",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+    },
+    # testnet 订单流核验脚本（人工驱动的 testnet 只读探测/受控写）。
+    "scripts/testnet/verify_order_flow.py": {
+        "kind": "script",
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "owner": "Test Quality Owner",
+        "call_graph": "operator -> testnet order-flow verification script -> governed testnet write",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+    },
+}
+
+# 新发现网络导入的治理决策(否则重建写入 UNREVIEWED_NETWORK_IMPORT 并阻断验证)。
+_NEW_NETWORK_DECISIONS: dict[str, dict[str, str]] = {
+    "beidou_certification/g5_scenarios/restart/process_restart.py::urllib.request": {
+        "purpose": "LOCAL_HEALTH_READ",
+        "status": "READ_ONLY",
+        "owner": "Test Quality Owner",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+    },
 }
 
 # New terminal write call sites introduced by M19-F01 (authorized resume
@@ -104,11 +141,190 @@ _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
         "owner": "Research Owner",
         "call_graph": "factor promotion evidence validation -> dynamic write boundary",
     },
+    # G5 认证场景终端写:认证运行器显式驱动,仅 testnet venue。
+    "beidou_certification/g5_scenarios/engine/partial_fill.py::PartialFillScenario._attempt_place::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 partial-fill scenario -> governed testnet order placement -> adapter create_order",
+    },
+    "beidou_certification/g5_scenarios/engine/partial_fill.py::PartialFillScenario._close_position::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 partial-fill scenario -> governed testnet close-position order -> adapter create_order",
+    },
+    "beidou_certification/g5_scenarios/engine/partial_fill.py::PartialFillScenario.run::cancel_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 partial-fill scenario -> governed testnet cancellation -> adapter cancel_order",
+    },
+    "beidou_certification/g5_scenarios/protection/native_protection.py::NativeProtectionScenario._cancel_algo_order_impl::cancel_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 native-protection scenario -> governed testnet algo cancellation -> adapter cancel_algo_order",
+    },
+    "beidou_certification/g5_scenarios/protection/native_protection.py::NativeProtectionScenario._create_algo_order_impl::create_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 native-protection scenario -> governed testnet algo creation -> adapter create_algo_order",
+    },
+    "beidou_certification/g5_scenarios/protection/native_protection.py::NativeProtectionScenario.run::_cancel_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 native-protection scenario -> governed testnet algo cancellation wrapper",
+    },
+    "beidou_certification/g5_scenarios/protection/native_protection.py::NativeProtectionScenario.run::_create_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 native-protection scenario -> governed testnet algo creation wrapper",
+    },
+    "beidou_certification/g5_scenarios/protocol/clock_skew.py::ClockSkewScenario.run::cancel_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 clock-skew scenario -> governed testnet cancellation -> adapter cancel_order",
+    },
+    "beidou_certification/g5_scenarios/protocol/clock_skew.py::ClockSkewScenario.run::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 clock-skew scenario -> governed testnet order placement -> adapter create_order",
+    },
+    "beidou_certification/g5_scenarios/protocol/create_query_cancel.py::CreateQueryCancelScenario.run::cancel_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 create-query-cancel scenario -> governed testnet cancellation -> adapter cancel_order",
+    },
+    "beidou_certification/g5_scenarios/protocol/create_query_cancel.py::CreateQueryCancelScenario.run::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 create-query-cancel scenario -> governed testnet order placement -> adapter create_order",
+    },
+    "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py::StableClientOrderIdScenario.run::cancel_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 stable-client-order-id scenario -> governed testnet cancellation -> adapter cancel_order",
+    },
+    "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py::StableClientOrderIdScenario.run::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 stable-client-order-id scenario -> governed testnet order placement -> adapter create_order",
+    },
+    "beidou_certification/g5_scenarios/restart/process_restart.py::fetch_status_http::urllib_urlopen": {
+        "capability": "DYNAMIC_READ_BOUNDARY",
+        "status": "READ_ONLY",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 restart scenario -> local health HTTP read -> status endpoint",
+    },
+    "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py::UserStreamReconnectScenario._close_listen_key_impl::request[DELETE]": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 user-stream reconnect scenario -> governed listen-key DELETE -> testnet transport mutation",
+    },
+    # 引擎终端写调用点(源码重组后相对登记表迁移;治理语义沿用最近族)。
+    "beidou_core/engine.py::AutonomousEngine._ensure_entry_protection::_cancel_algo_orders": {
+        "capability": "CANCEL_OWNED_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "entry protection replacement -> owned stale protection cancellation batch",
+    },
+    "beidou_core/engine.py::AutonomousEngine._ensure_entry_protection::_create_algo_order": {
+        "capability": "CREATE_PROTECTION_SCOPE_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "entry protection establishment -> create SL/TP Algo order",
+    },
+    "beidou_core/engine.py::AutonomousEngine._reconciliation_segment::execute_action[RESUME]": {
+        "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "CONTROL_AUTHORITY_REQUIRED",
+        "owner": "Control Owner",
+        "call_graph": "supervisor reconciliation segment -> RESUME terminal interlock -> control plane authority",
+    },
+    "beidou_core/engine.py::AutonomousEngine._sync_venue_leverage::_api_async[POST]": {
+        "capability": "ACCOUNT_RISK_SETTING_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "adaptive leverage reconciliation -> venue leverage POST (testnet gated, EXEMPT-21)",
+    },
+    "beidou_core/engine.py::AutonomousEngine.run::_cancel_algo_order": {
+        "capability": "CANCEL_OWNED_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "engine bootstrap recovery -> owned algo cancellation -> adapter cancel_algo_order",
+    },
+    "beidou_core/engine.py::AutonomousEngine._cancel_stale_protection_algos::_cancel_algo_order": {
+        "capability": "CANCEL_OWNED_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "startup stale-protection recovery -> owned stale algo cancellation -> adapter cancel_algo_order",
+    },
+    # testnet 订单流核验脚本终端写(人工驱动)。
+    "scripts/testnet/verify_order_flow.py::main::cancel_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "testnet order-flow verification -> governed algo cancellation -> adapter cancel_algo_order",
+    },
+    "scripts/testnet/verify_order_flow.py::main::cancel_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "testnet order-flow verification -> governed cancellation -> adapter cancel_order",
+    },
+    "scripts/testnet/verify_order_flow.py::main::create_algo_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "testnet order-flow verification -> governed algo creation -> adapter create_algo_order",
+    },
+    "scripts/testnet/verify_order_flow.py::main::create_order": {
+        "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Test Quality Owner",
+        "call_graph": "testnet order-flow verification -> governed order placement -> adapter create_order",
+    },
 }
 
 # Stale terminal sources superseded by relocated call sites in main.
 _STALE_TERMINAL_SOURCES = {
     "beidou_control/api.py::ControlPlaneAPI.resume_trading::execute_action[RESUME]",
+    "beidou_core/engine.py::AutonomousEngine.run::_cancel_algo_order",
 }
 
 
@@ -121,7 +337,10 @@ def _terminal_id(source: str) -> str:
     owner = source.split("::", 1)[0].split("/", 1)[0].upper()
     tail = source.split("::")[-1].split("[", 1)[0]
     tail = "".join(ch if ch.isalnum() else "-" for ch in tail).strip("-").upper()
-    return f"WRITE-{owner}-{tail[:44]}"
+    # 同 owner+tail 的来源(如多个 G5 场景都调用 create_order)需要
+    # 唯一后缀:取 source 的短哈希,保证登记表 id 唯一(validate 拒绝重复)。
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:8].upper()
+    return f"WRITE-{owner}-{tail[:24]}-{digest}"
 
 
 def _rebuild_oracle_findings(registry: dict[str, Any]) -> list[str]:
@@ -150,6 +369,13 @@ def _rebuild_oracle_findings(registry: dict[str, Any]) -> list[str]:
         allowed = expected_governance_ids(finding, root=ROOT, registry=registry)
         previous = old.get(identity)
         if previous and previous.get("governance_id") in allowed:
+            # 复用既有声明时同步治理记录的当前字段(owner/status 等
+            # 决策更新后旧声明不得残留过期值)。
+            _record = governed.get(str(previous.get("governance_id")))
+            if isinstance(_record, dict):
+                for _field in ("owner", "status", "negative_test"):
+                    if _field in _record:
+                        previous[_field] = _record[_field]
             declarations.append(previous)
             continue
         if not allowed:
@@ -195,26 +421,36 @@ def main() -> int:
     old_network = {item["source"]: item for item in raw_network}
     new_network: list[dict[str, Any]] = []
     for source, occurrences in sorted(discovered_network.items()):
-        if source in old_network:
+        # 决策优先于旧记录:审查通过的新决策必须覆盖此前写入的
+        # UNREVIEWED_NETWORK_IMPORT 占位行(否则验证恒失败)。
+        decision = _NEW_NETWORK_DECISIONS.get(source)
+        if decision is None and source in old_network:
             record = dict(old_network[source])
             record["occurrences"] = occurrences
             new_network.append(record)
             continue
-        print(f"[review] new network import without governance decision: {source}")
+        if decision is None:
+            print(f"[review] new network import without governance decision: {source}")
+            decision = {
+                "purpose": "UNREVIEWED_NETWORK_IMPORT",
+                "status": "HARD_HOLD",
+                "owner": "Runtime Owner",
+                "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+            }
         network_id = f"NETWORK-{source.split('::')[-1].upper().replace('.', '-')[:44]}"
         new_network.append(
             {
-                "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+                "expected_rejection": decision["expected_rejection"],
                 "id": network_id,
                 "negative_test": (
                     "tests/architecture/test_registry_record_contracts.py"
                     f"::test_network_record_is_behaviorally_bound[{network_id}]"
                 ),
                 "occurrences": occurrences,
-                "owner": "Runtime Owner",
-                "purpose": "UNREVIEWED_NETWORK_IMPORT",
+                "owner": decision["owner"],
+                "purpose": decision["purpose"],
                 "source": source,
-                "status": "HARD_HOLD",
+                "status": decision["status"],
             }
         )
     registry["network_imports"] = new_network
@@ -224,10 +460,10 @@ def main() -> int:
     discovered_paths = discover_sensitive_entry_paths(ROOT)
     new_entries: list[dict[str, Any]] = []
     for path in sorted(discovered_paths):
-        if path in old_entries:
+        decision = _NEW_ENTRY_DECISIONS.get(path)
+        if decision is None and path in old_entries:
             new_entries.append(old_entries[path])
             continue
-        decision = _NEW_ENTRY_DECISIONS.get(path)
         if decision is None:
             decision = {
                 "kind": "shell" if path.endswith(".sh") else "script",
@@ -265,12 +501,12 @@ def main() -> int:
         if source in _STALE_TERMINAL_SOURCES:
             print(f"[review] dropping stale terminal source: {source}")
             continue
-        if source in old_terminal:
+        decision = _NEW_TERMINAL_DECISIONS.get(source)
+        if decision is None and source in old_terminal:
             record = dict(old_terminal[source])
             record["occurrences"] = occurrences
             new_terminal.append(record)
             continue
-        decision = _NEW_TERMINAL_DECISIONS.get(source)
         if decision is None:
             decision = {
                 "capability": "TERMINAL_WRITE_BOUNDARY",
