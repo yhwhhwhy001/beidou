@@ -4088,13 +4088,21 @@ class AutonomousEngine:
             _last_print = getattr(self, "_protection_fact_diag_last", 0.0)
             if _now - _last_print >= 60.0:
                 self._protection_fact_diag_last = _now
-                _gap_summary = [str(g.get("reason")) for g in (_evidence.get("unprotected_symbols") or [])]
+                _gap_detail = [
+                    {
+                        "symbol": str(g.get("symbol")),
+                        "reason": str(g.get("reason")),
+                        "position_qty": str(g.get("position_quantity", "")),
+                        "stop_qty": str(g.get("stop_quantity", "")),
+                    }
+                    for g in (_evidence.get("unprotected_symbols") or [])
+                ][:6]
                 logger.warning(
-                    "protection facts not clean: covered=%s gaps=%s hard=%s venue_missing=%d unowned=%d",
+                    "protection facts not clean: covered=%s gaps=%s hard=%s venue_missing=%s unowned=%d",
                     bool(covered),
-                    _gap_summary[:8],
+                    _gap_detail,
                     list(hard_issues)[:8],
-                    len(venue_missing),
+                    list(venue_missing)[:8],
                     len(unowned_ids),
                 )
         self._last_protection_fact_at = time.time()
