@@ -6949,7 +6949,15 @@ class AutonomousEngine:
         return False
 
     def _ingest_account_config_update(self, data: dict[str, Any]) -> bool:
-        """Record an account configuration change and revoke stale authority."""
+        """Ingest an informational ACCOUNT_CONFIG_UPDATE event without faulting.
+
+        Binance pushes ACCOUNT_CONFIG_UPDATE on leverage / margin-mode changes
+        (including the system's own adaptive leverage syncs and other workers'
+        changes on a shared demo account). It is not a data-stream fault and
+        not an execution-fact persistence failure: invalidate the symbol's
+        cached leverage so the next use re-fetches, and keep the user stream
+        HEALTHY (returns True).
+        """
         import logging
 
         _logger = logging.getLogger(__name__)
@@ -6979,8 +6987,10 @@ class AutonomousEngine:
         )
         if symbol:
             getattr(self, "_leverage_cache", {}).pop(symbol, None)
-        self._record_execution_fact_failure_env_guarded("ACCOUNT_CONFIG_UPDATE_REVALIDATION_REQUIRED")
-        return False
+        # BD-FIX: 信息性事件保持流健康。若判为失败,每次配置变更都会触发
+        # NO_NEW_RISK + CRITICAL 事故 + user_stream DEGRADED,形成自增强
+        # 故障循环导致下单永久阻断(a2967e0 修复、60eb91f 回归的同类故障)。
+        return True
 
     def _update_user_stream_runtime(self, **updates: Any) -> None:
         """Update redacted live user-stream evidence without storing secrets."""
