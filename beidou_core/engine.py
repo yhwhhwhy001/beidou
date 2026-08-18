@@ -4826,6 +4826,23 @@ class AutonomousEngine:
             except (TypeError, ValueError) as exc:
                 self._block_unowned_protection_orders([f"PROTECTION_RESTORE_FAILED:{type(exc).__name__}"])
                 return False
+            # BD-FIX (owner-mapping restore gap): 启动恢复挂载的 durable
+            # ACTIVE 行必须同步登记内存所有权映射 —— 旧代码只挂投影不登记,
+            # 导致 _cleanup_excess_orders 的 known_algo_ids != durable_ids
+            # 每轮恒判 PROTECTION_OWNER_MAPPING_INCOMPLETE → NO_NEW_RISK
+            # 把资格门钉死(实测重启后 44/61 意图被 ELIGIBILITY_NO_NEW_RISK
+            # 拒绝)。
+            _restored_algo_ids = {
+                str(getattr(o, "exchange_order_id", "") or "").strip()
+                for o in [projection.stop_loss, *projection.take_profits]
+                if o is not None and str(getattr(o, "exchange_order_id", "") or "").strip()
+            }
+            if _restored_algo_ids:
+                _algo_map = getattr(self, "_active_algo_ids", None)
+                if _algo_map is None:
+                    _algo_map = {}
+                    self._active_algo_ids = _algo_map
+                _algo_map.setdefault(position_id, set()).update(_restored_algo_ids)
             # BD-FIX (final82d): PENDING 止损行不挂载投影 —— 其 trigger 是
             # 上一时段的已审批意图，价格漂移后恒被交易所 -2021（立即触发）
             # 拒绝（final82c 实测：APRUSDT 现价 0.004 vs 旧 trigger 0.50）。

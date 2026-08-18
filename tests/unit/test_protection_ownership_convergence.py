@@ -1376,3 +1376,82 @@ def test_transition_child_race_safe_reraises_when_aggregate_unavailable() -> Non
 
     with pytest.raises(ValueError, match="TERMINAL_CHILD_STATE"):
         engine._transition_execution_child_race_safe("intent-X", 0, "SENDING", event_id="e")
+
+
+# ---------------------------------------------------------------------------
+# 8. 启动恢复挂载 durable 行时必须同步登记所有权映射
+# ---------------------------------------------------------------------------
+
+
+def test_restore_durable_protection_registers_active_algo_mapping() -> None:
+    """_restore_durable_protection_projection 挂载投影后必须登记
+    _active_algo_ids —— 否则 _cleanup_excess_orders 每轮
+    PROTECTION_OWNER_MAPPING_INCOMPLETE → NO_NEW_RISK 钉死资格门
+    (实测重启后 44/61 意图被 ELIGIBILITY_NO_NEW_RISK 拒绝)。"""
+    engine = _adopt_engine(
+        protections=[
+            _durable_row(
+                protection_id="sl-pos-x",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-x",
+                generation=1,
+                algo_id="algo-x-sl",
+                trigger_price="99.0",
+            ),
+            _durable_row(
+                protection_id="tp-pos-x",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="1.0",
+                position_id="pos-x",
+                generation=1,
+                algo_id="algo-x-tp",
+                trigger_price="103.0",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+        ],
+        positions={"BTCUSDT": "1.0"},
+    )
+    engine._protection_owner_unknown = False
+    engine._position_entry_times = {}
+    account = {
+        "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0", "entryPrice": "100.0"}]
+    }
+    inventory = [
+        _venue_algo(
+            "algo-x-sl",
+            "BTCUSDT",
+            side="SELL",
+            order_type="STOP_MARKET",
+            quantity="1.0",
+            trigger_price="99.0",
+            client_algo_id="bdp-x",
+        ),
+        _venue_algo(
+            "algo-x-tp",
+            "BTCUSDT",
+            side="SELL",
+            order_type="TAKE_PROFIT_MARKET",
+            quantity="1.0",
+            trigger_price="103.0",
+            client_algo_id="bdp-x",
+        ),
+    ]
+
+    ok = engine._restore_durable_protection_projection(account, inventory)
+
+    assert ok is True
+    assert engine._active_algo_ids.get("pos-x") == {"algo-x-sl", "algo-x-tp"}
+    # 与 durable ACTIVE 行完全一致 → cleanup 的映射等式成立
+    durable_ids = {
+        str(r["exchange_order_id"])
+        for r in engine._store.restore_protections()
+        if r["status"] == "ACTIVE" and r["exchange_order_id"]
+    }
+    known_ids = {a for ids in engine._active_algo_ids.values() for a in ids}
+    assert known_ids == durable_ids
