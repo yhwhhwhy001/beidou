@@ -5073,6 +5073,23 @@ class AutonomousEngine:
                 if _code == -2013 or "does not exist" in _msg or "Unknown order" in _msg:
                     self._outbox.resolve_unknown(intent_id, exchange_order_found=False)
                     resolved_count += 1
+                else:
+                    # BD-FIX: 非确定性错误码保持 UNKNOWN,但必须有可见性 ——
+                    # 旧逻辑在此静默 continue,消息可永久滞留且无任何日志
+                    # (实测旧 SUI 意图 2h+ 零痕迹)。限频告警。
+                    _now = time.time()
+                    _log_state = getattr(self, "_unknown_lookup_inconclusive_log", None)
+                    if _log_state is None:
+                        _log_state = {}
+                        self._unknown_lookup_inconclusive_log = _log_state
+                    if _log_state.get(intent_id, 0.0) < _now - 600.0:
+                        _log_state[intent_id] = _now
+                        logger.warning(
+                            "UNKNOWN intent venue response inconclusive for %s: code=%s msg=%s",
+                            intent_id,
+                            _code,
+                            _msg[:160],
+                        )
                 continue
             venue_order = raw
             if not venue_order.get("orderId"):
@@ -5569,7 +5586,7 @@ class AutonomousEngine:
                     f"control plane rejected (state={self._control.get_status().value} v{self._control.version})"
                 )
                 for remaining_idx in range(idx, n_slices):
-                    execution_aggregate = self._outbox.transition_execution_child(
+                    execution_aggregate = self._transition_execution_child_race_safe(
                         intent.intent_id,
                         remaining_idx,
                         ChildCommandState.REJECTED,
@@ -5602,7 +5619,7 @@ class AutonomousEngine:
                 _tif = tif or "GTC"
                 params["timeInForce"] = _tif
 
-            execution_aggregate = self._outbox.transition_execution_child(
+            execution_aggregate = self._transition_execution_child_race_safe(
                 intent.intent_id,
                 idx,
                 ChildCommandState.SENDING,
@@ -5619,7 +5636,7 @@ class AutonomousEngine:
             outcome = str((order or {}).get("_submit_outcome", "ACKED" if order else "UNKNOWN"))
             if outcome == "REJECTED":
                 reject_reason = str((order or {}).get("reason", "EXECUTION_CHILD_REJECTED"))
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.REJECTED,
@@ -5637,7 +5654,7 @@ class AutonomousEngine:
                 )
                 return
             if outcome == "UNKNOWN" or order is None or "orderId" not in order:
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.UNKNOWN,
@@ -5655,7 +5672,7 @@ class AutonomousEngine:
                 if not cumulative_filled.is_finite() or cumulative_filled < 0 or cumulative_filled > planned_quantity:
                     raise ValueError("invalid cumulative fill")
             except (InvalidOperation, TypeError, ValueError):
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.UNKNOWN,
@@ -5665,7 +5682,7 @@ class AutonomousEngine:
                 self._outbox.mark_unknown(intent.intent_id, "CUMULATIVE_FILL_UNKNOWN")
                 return
             if actual_status == "REJECTED":
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.REJECTED,
@@ -5713,7 +5730,7 @@ class AutonomousEngine:
                         if fill_event_id_for_retry and not fill_committed:
                             self._mark_fill_retryable(exchange_order_id, fill_event_id_for_retry)
                         logger.warning("ACK partial-fill ledger commit failed: %s", type(_fill_exc).__name__)
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.CANCELED,
@@ -5723,7 +5740,7 @@ class AutonomousEngine:
                 )
                 continue
             if actual_status not in {"NEW", "PENDING_NEW", "PENDING_CANCEL", "PARTIALLY_FILLED", "FILLED"}:
-                execution_aggregate = self._outbox.transition_execution_child(
+                execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
                     ChildCommandState.UNKNOWN,
@@ -5742,7 +5759,7 @@ class AutonomousEngine:
                     else ChildCommandState.ACKED
                 )
             )
-            execution_aggregate = self._outbox.transition_execution_child(
+            execution_aggregate = self._transition_execution_child_race_safe(
                 intent.intent_id,
                 idx,
                 child_state,
@@ -5764,6 +5781,46 @@ class AutonomousEngine:
 
         # Execution quality is updated only from authoritative fills.  Planning
         # estimates are not relabelled as realized cost or slippage here.
+
+    def _transition_execution_child_race_safe(
+        self,
+        intent_id: str,
+        sequence: int,
+        state: Any,
+        *,
+        event_id: str,
+        exchange_order_id: str = "",
+        cumulative_filled_quantity: str | None = None,
+    ) -> Any:
+        """BD-FIX (twap race): 子命令终态转换的竞态安全包装。
+
+        成交事件路径先把子命令推进 FILLED/CANCELED 后,切片循环随后对
+        同一子命令做转换会抛 TERMINAL_CHILD_STATE —— 此前该异常中止整个
+        _place_order,剩余切片永不发送、父消息滞留 SENDING(实测
+        ORDI/TIA/RUNE 4 切片计划卡死在 1/4)。终态重复转换是幂等竞态:
+        刷新执行聚合并继续;其余 ValueError 照抛。
+        """
+        try:
+            return self._outbox.transition_execution_child(
+                intent_id,
+                sequence,
+                state,
+                event_id=event_id,
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+        except ValueError as exc:
+            if "TERMINAL_CHILD_STATE" not in str(exc):
+                raise
+            _restore = getattr(self._outbox, "restore_execution_plan", None)
+            _agg = _restore(str(intent_id)) if callable(_restore) else None
+            if _agg is None:
+                raise
+            print(
+                f"[order] ⚡ child {intent_id}:{sequence} already terminal via event path "
+                f"({str(exc).rsplit(':', 1)[-1]}) — continuing execution plan"
+            )
+            return _agg
 
     async def _plan_execution(self, intent: Any, order_symbol: str, client_id: str) -> Any:
         """构建 ExecutionContext → 选择执行算法 → 生成切片计划。

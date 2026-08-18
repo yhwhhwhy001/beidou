@@ -1316,3 +1316,63 @@ def test_reconcile_terminal_child_parent_fail_closed_on_missing_plan_or_outbox()
     # outbox 未装配 → 不 ACK
     engine._outbox = None
     assert engine._reconcile_terminal_child_parent(intent) is False
+
+
+# ---------------------------------------------------------------------------
+# 7. TWAP 竞态:子命令终态重复转换不得中止执行计划
+# ---------------------------------------------------------------------------
+
+
+def test_transition_child_race_safe_continues_when_child_already_terminal() -> None:
+    engine = _adopt_engine(positions={})
+    raw_calls: list[dict[str, Any]] = []
+    fresh = SimpleNamespace(marker="fresh-aggregate")
+
+    class _Outbox:
+        def transition_execution_child(self, intent_id, sequence, state, **kw):
+            raw_calls.append({"intent_id": intent_id, "sequence": sequence, "state": state, **kw})
+            raise ValueError(f"TERMINAL_CHILD_STATE:{'FILLED'}")
+
+        def restore_execution_plan(self, intent_id):
+            return fresh
+
+    engine._outbox = _Outbox()
+
+    agg = engine._transition_execution_child_race_safe(
+        "intent-X", 0, "SENDING", event_id="send:intent-X:0"
+    )
+
+    assert agg is fresh
+    assert len(raw_calls) == 1
+
+
+def test_transition_child_race_safe_reraises_other_errors() -> None:
+    engine = _adopt_engine(positions={})
+
+    class _Outbox:
+        def transition_execution_child(self, intent_id, sequence, state, **kw):
+            raise ValueError("EXECUTION_COMMAND_FENCED_OR_CONCURRENT")
+
+        def restore_execution_plan(self, intent_id):
+            raise AssertionError("must not restore on non-terminal errors")
+
+    engine._outbox = _Outbox()
+
+    with pytest.raises(ValueError, match="EXECUTION_COMMAND_FENCED_OR_CONCURRENT"):
+        engine._transition_execution_child_race_safe("intent-X", 0, "SENDING", event_id="e")
+
+
+def test_transition_child_race_safe_reraises_when_aggregate_unavailable() -> None:
+    engine = _adopt_engine(positions={})
+
+    class _Outbox:
+        def transition_execution_child(self, intent_id, sequence, state, **kw):
+            raise ValueError("TERMINAL_CHILD_STATE:CANCELED")
+
+        def restore_execution_plan(self, intent_id):
+            return None
+
+    engine._outbox = _Outbox()
+
+    with pytest.raises(ValueError, match="TERMINAL_CHILD_STATE"):
+        engine._transition_execution_child_race_safe("intent-X", 0, "SENDING", event_id="e")
