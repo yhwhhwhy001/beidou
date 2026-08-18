@@ -4345,6 +4345,38 @@ class AutonomousEngine:
                     return False
                 row_status = str(row.get("status", "")).strip().upper()
                 is_pending = row_status == "PENDING"
+                if is_pending and exchange_order_id and inventory is not None and any(
+                    str(a.get("algoId", "")) == exchange_order_id for a in inventory
+                ):
+                    # BD-FIX: 已拿到 venue ACK 但持久化中断停留在 PENDING 的行
+                    # (实测 XRP TP:venue 存在 algoId,durable 行未推进 ACTIVE
+                    # → 覆盖检查跳过 PENDING → MISSING_TP → LOCKED)。按
+                    # ACK-backed 事实采纳为 ACTIVE(幂等:状态推进只写一次)。
+                    try:
+                        self._store.save_protection(
+                            protection_id=protection_id,
+                            position_id=str(row.get("position_id", "")),
+                            symbol=str(row.get("symbol", symbol)),
+                            side=str(row.get("side", "")),
+                            trigger_price=str(row.get("trigger_price", "") or "0"),
+                            order_price=row.get("order_price"),
+                            quantity=str(row.get("quantity", "") or "0"),
+                            order_type=str(row.get("order_type", "") or "STOP_MARKET"),
+                            status="ACTIVE",
+                            stop_type=row.get("stop_type"),
+                            take_profit_type=row.get("take_profit_type"),
+                            owner_id=str(row.get("owner_id", self._protection_owner_id)),
+                            position_generation=int(row.get("position_generation", 0) or 0),
+                            session_id=str(row.get("session_id", "") or ""),
+                            exchange_order_id=exchange_order_id,
+                        )
+                        row["status"] = "ACTIVE"
+                        is_pending = False
+                    except Exception as _adopt_exc:
+                        print(
+                            f"[startup] Failed to adopt ACK-backed protection {protection_id}: "
+                            f"{type(_adopt_exc).__name__}"
+                        )
                 if is_pending:
                     # BD-FIX (final82): PENDING 行是本地已审批但从未提交成功的
                     # 意图，不是 venue 事实 —— 不进入投影（投影契约要求
