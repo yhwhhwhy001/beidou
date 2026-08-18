@@ -4075,6 +4075,22 @@ class AutonomousEngine:
                 issues.update(str(item) for item in [*hard_issues, *unowned_ids])
             self._protection_owner_unknown = True
             self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+            # BD-FIX: 非 clean 必须可见 —— 旧实现静默置 UNKNOWN,资格门
+            # 钉死数十分钟也毫无线索(实测 NEAR 平仓后 22 连拒)。限频
+            # 打印覆盖缺口与问题清单,定位是哪一类事实在阻止放行。
+            _now = time.time()
+            _last_print = getattr(self, "_protection_fact_diag_last", 0.0)
+            if _now - _last_print >= 60.0:
+                self._protection_fact_diag_last = _now
+                _gap_summary = [str(g.get("reason")) for g in (_evidence.get("unprotected_symbols") or [])]
+                logger.warning(
+                    "protection facts not clean: covered=%s gaps=%s hard=%s venue_missing=%d unowned=%d",
+                    bool(covered),
+                    _gap_summary[:8],
+                    list(hard_issues)[:8],
+                    len(venue_missing),
+                    len(unowned_ids),
+                )
         self._last_protection_fact_at = time.time()
 
     def _adopt_orphaned_protection_algos(self, existing_algos: list[dict[str, Any]]) -> tuple[int, list[str]]:
@@ -9227,6 +9243,35 @@ class AutonomousEngine:
                                         store.remove_protection(pos_id)
                                     cleaned += 1
                                     streaks.pop(algo_id, None)
+                                    # BD-FIX (durable/memory divergence lock):
+                                    # 只清 durable 行会留下"内存投影 covered
+                                    # skip 恒真、durable 覆盖恒缺"的分叉 ——
+                                    # _update_protection_fact 按 durable 行判定
+                                    # 覆盖恒失败 → owner_unknown True → 资格门
+                                    # NO_NEW_RISK 钉死(实测 NEARUSDT 22 连拒)。
+                                    # remove_protection 按仓位整组清理 durable,
+                                    # 内存投影与所有权映射必须同步整体失效,
+                                    # 让 covered skip 失效,下一轮 S33/重试
+                                    # 重建并重持久化,避免映射/durable 分叉。
+                                    _algo_sets = getattr(self, "_active_algo_ids", {})
+                                    _algo_sets.pop(pos_id, None)
+                                    _get_pp = getattr(self._protection, "get_protection", None)
+                                    _pp = _get_pp(pos_id) if callable(_get_pp) else None
+                                    if _pp is not None:
+                                        _orders = (
+                                            [getattr(_pp, "stop_loss", None)]
+                                            if getattr(_pp, "stop_loss", None) is not None
+                                            else []
+                                        ) + list(getattr(_pp, "take_profits", []) or [])
+                                        for _ord in _orders:
+                                            if _ord is None:
+                                                continue
+                                            _ord.exchange_order_id = None
+                                            _ord.status = ProtectionStatus.CREATED
+                                        print(
+                                            f"[nearline] 🔄 Invalidated stale in-memory protection "
+                                            f"for {pos_id} (venue missing x3) — rebuild next cycle"
+                                        )
                                 except Exception:
                                     logger.warning(
                                         "stale protection cleanup: remove_protection failed for %s",
