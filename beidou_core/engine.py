@@ -8932,6 +8932,83 @@ class AutonomousEngine:
             else:
                 pending.pop(pos_id, None)
 
+    def _dedup_ghost_protection_positions(self) -> int:
+        """BD-FIX (ghost-position deadlock): 同品种重复保护投影去重。
+
+        实测事故:BNBUSDT 同时存在 recovered 投影(SL 从未 ACK)与成交
+        路径投影(SL ACTIVE),导致 R8 保护覆盖恒为 20/21 —— 所有新入场
+        在风险规则层被静默拒(1.5h 零成交)。S41 跳过按品种算法单计数,
+        幽灵投影永远拿不到自己的 SL,无法自愈。
+
+        规则(严格 fail-closed,只做确定性移除):
+        - 同品种只有 1 个投影:不动;
+        - 同品种多个投影且恰有 1 个 SL 为 ACTIVE:其余投影是幽灵,
+          移除内存投影、取消其带 algoId 的 venue 条件单,并整组删除
+          其 durable 行(仅本进程所有权行);
+        - 0 个 ACTIVE:交 S33 补发,不裁决;
+        - ≥2 个 ACTIVE:歧义,只告警不自动裁决。
+        """
+        removed = 0
+        try:
+            entries = list(self._protection.all_positions().items())
+        except Exception:
+            return 0
+        by_symbol: dict[str, list[tuple[str, Any]]] = {}
+        for pid, pp in entries:
+            sym = str(getattr(pp, "instrument_id", "") or "").strip().upper()
+            if sym:
+                by_symbol.setdefault(sym, []).append((pid, pp))
+
+        def _sl_active(pp: Any) -> bool:
+            _sl = getattr(pp, "stop_loss", None)
+            _is_active = getattr(_sl, "is_active", None)
+            return bool(_sl is not None and callable(_is_active) and _is_active())
+
+        store = getattr(self, "_store", None)
+        try:
+            all_rows = list(store.restore_protections()) if store is not None else []
+        except Exception:
+            all_rows = []
+        for sym, group in sorted(by_symbol.items()):
+            if len(group) <= 1:
+                continue
+            active = [(pid, pp) for pid, pp in group if _sl_active(pp)]
+            if len(active) == 0:
+                continue  # 无 ACTIVE 投影 —— 由 S33 重建,不去重
+            if len(active) > 1:
+                logger.warning(
+                    "ambiguous duplicate ACTIVE protection projections for %s: %s",
+                    sym,
+                    sorted(pid for pid, _ in active),
+                )
+                continue
+            keeper_pid = active[0][0]
+            for pid, pp in group:
+                if pid == keeper_pid or _sl_active(pp):
+                    continue
+                ghost_rows = [r for r in all_rows if str(r.get("position_id", "") or "").strip() == pid]
+                # 有 algoId 的幽灵行先取消 venue 条件单(并登记待取消清单),
+                # 再由 remove_protection 整组删除 —— 绝不能落 CANCELLED:
+                # 无 exchange_order_id 的 CANCELLED 行会毒化下次启动恢复
+                # (PROTECTION_ROW_SEMANTICS_UNKNOWN → 全量阻断)。
+                _algo_rows = [r for r in ghost_rows if str(r.get("exchange_order_id") or "").strip()]
+                if _algo_rows and store is not None:
+                    try:
+                        self._cancel_stale_protection_rows(sym, _algo_rows, "GHOST_POSITION_DEDUP")
+                    except Exception as exc:
+                        logger.warning(
+                            "ghost protection algo cancel failed for %s: %s", sym, type(exc).__name__
+                        )
+                self._remove_protection_with_cleanup(pid, sym)
+                self._active_algo_ids.pop(pid, None)
+                getattr(self, "_pending_protection_retry", set()).discard(pid)
+                removed += 1
+                print(
+                    f"[nearline] 👻 Deduplicated ghost protection projection for {sym} "
+                    f"(pos={pid}, keeper={keeper_pid})"
+                )
+        return removed
+
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
         """对保护单缺失的持仓进行重试；同时覆盖止损单和止盈单。
 
@@ -9065,8 +9142,25 @@ class AutonomousEngine:
             # (成交经用户流/部分成交路径入账)时,用持久化持仓投影(独立已提交
             # 事实)重建保护投影,由下方受治理循环补挂 SL/TP;否则持仓裸露直至
             # coverage blocker LOCK。
+            # BD-FIX (ghost-position deadlock): 若 durable 已有本进程所有权的
+            # ACTIVE 行,投影挂载/收养由恢复与收养路径负责 —— 此处再建
+            # recovered-* 投影只会制造第二个幽灵投影(BNBUSDT 实测)。
+            _durable_owned_symbols: set[str] = set()
+            if self._store is not None:
+                try:
+                    _durable_owned_symbols = {
+                        str(row.get("symbol", "")).strip().upper()
+                        for row in self._store.restore_protections()
+                        if str(row.get("status", "")).strip().upper() == "ACTIVE"
+                        and str(row.get("owner_id", "")) == str(self._protection_owner_id)
+                        and str(row.get("exchange_order_id", "")).strip()
+                    }
+                except Exception:
+                    _durable_owned_symbols = set()
             for _sweep_sym in sorted(exchange_symbols):
                 if any(str(pp.instrument_id) == _sweep_sym for pp in self._protection.all_positions().values()):
+                    continue
+                if _sweep_sym in _durable_owned_symbols:
                     continue
                 _proj_row = self._position_projection.get(_sweep_sym)
                 if not _proj_row:
@@ -9120,6 +9214,12 @@ class AutonomousEngine:
                     }
                 except Exception as _durable_read_exc:
                     logger.warning("durable protection read failed in retry loop: %s", type(_durable_read_exc).__name__)
+
+            # BD-FIX (ghost-position deadlock): 收养/成交/恢复三个投影来源
+            # 可能为同一品种并存多个投影(BNBUSDT 实测 recovered+fill 双投影
+            # → R8 20/21 恒拒)。每轮在补发判定前去重幽灵投影,保证 R8 覆盖
+            # 计数与事实收敛。
+            self._dedup_ghost_protection_positions()
 
             # 优先处理提交失败的待重试持仓
             pending: set[str] = getattr(self, "_pending_protection_retry", set())
@@ -9247,8 +9347,17 @@ class AutonomousEngine:
                 # BD-FIX (S41): 交易所已有 Algo 单 → 跳过;但 SL 数量未覆盖
                 # 当前持仓量(加仓后未跟随)时不得跳过,必须走 S33 重建,
                 # 否则资格门按数量覆盖判定恒拒(根因修复)。
+                # BD-FIX (ghost-position deadlock): S41 以品种算法单计数,
+                # 不能证明本持仓自己的 SL 已 ACK —— 幽灵投影(SL CREATED
+                # 未 ACK,算法单属于同品种另一投影)过去在此跳过而永远
+                # 拿不到自己的 SL,R8 覆盖 N/(N+1) 恒拒所有新入场。
+                # 现在只有本持仓自己的 SL 为 ACTIVE(或本持仓无 SL 对象、
+                # 由 durable 数量兜底判定覆盖)时才允许跳过。
                 symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
-                if symbol_algo_count >= 2 and _sl_covers:
+                _sl_active_own = _sl is not None and bool(
+                    callable(getattr(_sl, "is_active", None)) and _sl.is_active()
+                )
+                if symbol_algo_count >= 2 and _sl_covers and (_sl is None or _sl_active_own):
                     if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(f"[nearline-diag] {symbol}: s41 skip symbol_algo_count={symbol_algo_count}")
                     continue  # 已有 SL+TP 且数量覆盖
@@ -9633,7 +9742,12 @@ class AutonomousEngine:
         UNKNOWN → 终态,堵住 inflight 泄漏(幽灵在途把新订单挤到最小量)。
         """
         try:
-            _project = getattr(self._outbox, "project_order_terminal", None)
+            # BD-FIX: 事件回放/启动竞态下 outbox 可能尚未装配(实测
+            # 'AutonomousEngine' object has no attribute '_outbox'),不得
+            # 让终态投影缺失变成 AttributeError 噪声 —— 未装配时安全跳过,
+            # 由恢复/对账路径兜底投影。
+            _outbox = getattr(self, "_outbox", None)
+            _project = getattr(_outbox, "project_order_terminal", None)
             if callable(_project):
                 _project(order_id, status, cumulative_filled_quantity or None)
         except Exception as exc:

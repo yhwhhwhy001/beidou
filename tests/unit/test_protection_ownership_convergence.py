@@ -68,6 +68,15 @@ class _Protection:
     def set_precision_from_rule(self, _rule: Any) -> None:
         return None
 
+    def cancel_protection(self, position_id: str) -> list[Any]:
+        return []
+
+    def remove_position(self, position_id: str) -> None:
+        self._projections.pop(position_id, None)
+
+    def position_count(self) -> int:
+        return len(self.all_positions())
+
 
 def _venue_algo(
     algo_id: str,
@@ -858,3 +867,397 @@ async def test_retry_missing_protections_rebuilds_undersized_sl_after_position_g
     assert any(float(r["quantity"]) + 1e-8 >= 44.3 for r in sl_rows), sl_rows
     assert engine._protection_owner_unknown is False
     assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# 5. 幽灵持仓去重(R8 20/21 死锁根因修复)
+# ---------------------------------------------------------------------------
+
+
+def _projection(
+    position_id: str,
+    symbol: str,
+    *,
+    sl_status: str | None = None,
+    quantity: float = 1.0,
+    algo_id: str | None = None,
+) -> Any:
+    """构造一个 ProtectionManager 风格的投影对象(与真实实现同构)。"""
+    from beidou_shared.types import OrderSide as _OrderSide
+
+    sl = None
+    if sl_status is not None:
+        sl = SimpleNamespace(
+            protection_id=f"sl-{position_id}",
+            position_id=position_id,
+            instrument_id=symbol,
+            status=SimpleNamespace(value=sl_status),
+            is_active=lambda: sl_status == "ACTIVE",
+            quantity=SimpleNamespace(amount=str(quantity)),
+            exchange_order_id=algo_id,
+            reduce_only=True,
+        )
+    return SimpleNamespace(
+        position_id=position_id,
+        instrument_id=symbol,
+        venue_id="BINANCE",
+        entry_price=100.0,
+        quantity=quantity,
+        side=_OrderSide.BUY,
+        stop_loss=sl,
+        take_profits=[],
+        owner_id="owner-1",
+        position_generation=1,
+        session_id="session-1",
+    )
+
+
+def _dedup_engine(
+    *,
+    protections: list[dict[str, Any]],
+    projections: list[Any],
+    positions: dict[str, str] | None = None,
+) -> AutonomousEngine:
+    engine = _adopt_engine(protections=protections, positions=positions or {"BNBUSDT": "0.1"})
+    engine._active_algo_ids = {}
+    engine._position_entry_times = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    for pp in projections:
+        engine._protection.restore_position_protection(pp)
+    return engine
+
+
+def test_dedup_removes_ghost_projection_and_keeps_active_one() -> None:
+    """同品种真实(ACTIVE SL)+幽灵(CREATED SL)双投影 → 幽灵被移除。"""
+    engine = _dedup_engine(
+        protections=[
+            _durable_row(
+                protection_id="sl-pos-real",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="0.1",
+                position_id="pos-real",
+                generation=3,
+                algo_id="algo-real-sl",
+            ),
+            _durable_row(
+                protection_id="tp-pos-real",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="0.1",
+                position_id="pos-real",
+                generation=3,
+                algo_id="algo-real-tp",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+            _durable_row(
+                protection_id="sl-pos-ghost",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="0.1",
+                position_id="pos-ghost",
+                generation=2,
+                algo_id="",
+                status="PENDING",
+            ),
+            _durable_row(
+                protection_id="tp-pos-ghost",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="0.1",
+                position_id="pos-ghost",
+                generation=2,
+                algo_id="",
+                status="PENDING",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+        ],
+        projections=[
+            _projection("pos-real", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-real-sl"),
+            _projection("pos-ghost", "BNBUSDT", sl_status="CREATED"),
+        ],
+    )
+    engine._active_algo_ids = {"pos-real": {"algo-real-sl", "algo-real-tp"}}
+
+    removed = engine._dedup_ghost_protection_positions()
+
+    assert removed == 1
+    remaining = engine._protection.all_positions()
+    assert "pos-ghost" not in remaining
+    assert "pos-real" in remaining
+    rows = engine._store.restore_protections()
+    assert all(r["position_id"] != "pos-ghost" for r in rows)
+    assert "pos-ghost" not in engine._active_algo_ids
+    # R8 覆盖计数收敛:剩余持仓全部 SL ACTIVE
+    active = sum(
+        1
+        for pp in remaining.values()
+        if getattr(pp, "stop_loss", None) is not None
+        and callable(getattr(pp.stop_loss, "is_active", None))
+        and pp.stop_loss.is_active()
+    )
+    assert active == len(remaining) == 1
+
+
+def test_dedup_noop_when_no_duplicates() -> None:
+    engine = _dedup_engine(
+        protections=[],
+        projections=[_projection("pos-a", "BTCUSDT", sl_status="ACTIVE", algo_id="algo-a")],
+        positions={"BTCUSDT": "1.0"},
+    )
+    assert engine._dedup_ghost_protection_positions() == 0
+    assert set(engine._protection.all_positions()) == {"pos-a"}
+
+
+def test_dedup_fail_closed_when_multiple_active_projections() -> None:
+    """两个投影 SL 均 ACTIVE → 歧义,不自动裁决(两个都保留)。"""
+    engine = _dedup_engine(
+        protections=[],
+        projections=[
+            _projection("pos-a", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-a"),
+            _projection("pos-b", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-b"),
+        ],
+    )
+    assert engine._dedup_ghost_protection_positions() == 0
+    assert set(engine._protection.all_positions()) == {"pos-a", "pos-b"}
+
+
+def test_dedup_fail_closed_when_no_active_projection() -> None:
+    """全为幽灵(无 ACTIVE SL)→ 交 S33 重建,不裁决。"""
+    engine = _dedup_engine(
+        protections=[],
+        projections=[
+            _projection("pos-a", "BNBUSDT", sl_status="CREATED"),
+            _projection("pos-b", "BNBUSDT", sl_status=None),
+        ],
+    )
+    assert engine._dedup_ghost_protection_positions() == 0
+    assert set(engine._protection.all_positions()) == {"pos-a", "pos-b"}
+
+
+@pytest.mark.asyncio
+async def test_retry_s41_skip_requires_own_active_sl() -> None:
+    """S41 品种级算法单计数不能替本持仓自己的 SL ACK 背书。
+
+    幽灵投影(SL CREATED 未 ACK,品种 2 个算法单属于他人/其他投影)过去
+    被 S41 恒跳过 → R8 覆盖 N/(N+1) 死锁。现在必须重试本持仓 SL。
+    """
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        projection={"BTCUSDT": {"signed_quantity": "1.0", "entry_price": "100.0"}},
+        protections=[
+            _durable_row(
+                protection_id="sl-pos-p",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-p",
+                generation=1,
+                algo_id="",
+                status="PENDING",
+            ),
+            _durable_row(
+                protection_id="tp-pos-p",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="1.0",
+                position_id="pos-p",
+                generation=1,
+                algo_id="",
+                status="PENDING",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+        ],
+    )
+    engine._can_write = True
+    engine._control = SimpleNamespace(
+        get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"), execute_action=lambda action: None
+    )
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+    engine._symbol_precision = {}
+    engine._last_retry_diag = 0.0
+    placement_calls: list[dict[str, Any]] = []
+
+    async def _fake_create_algo(params: dict[str, Any]) -> dict[str, Any]:
+        placement_calls.append(dict(params))
+        return {"algoId": f"algo-new-{len(placement_calls)}"}
+
+    engine._create_algo_order = _fake_create_algo  # type: ignore[method-assign]
+    engine._protection_algo_params = lambda order, **kw: {"type": getattr(order, "order_type", "STOP_MARKET"), **kw}  # type: ignore[method-assign]
+
+    from beidou_shared.types import OrderSide as _OrderSide
+
+    sl = SimpleNamespace(
+        protection_id="sl-pos-p",
+        position_id="pos-p",
+        instrument_id="BTCUSDT",
+        status=SimpleNamespace(value="CREATED"),
+        is_active=lambda: False,
+        quantity=SimpleNamespace(amount="1.0"),
+        exchange_order_id=None,
+        stop_type=SimpleNamespace(value="ATR_BASED"),
+        take_profit_type=None,
+        order_type="STOP_MARKET",
+        trigger_price=SimpleNamespace(amount="99.0"),
+    )
+    tp = SimpleNamespace(
+        protection_id="tp-pos-p",
+        position_id="pos-p",
+        instrument_id="BTCUSDT",
+        status=SimpleNamespace(value="CREATED"),
+        is_active=lambda: False,
+        quantity=SimpleNamespace(amount="1.0"),
+        exchange_order_id=None,
+        stop_type=None,
+        take_profit_type=SimpleNamespace(value="FIXED_RR"),
+        order_type="TAKE_PROFIT_MARKET",
+        trigger_price=SimpleNamespace(amount="103.0"),
+    )
+    engine._protection.restore_position_protection(
+        SimpleNamespace(
+            position_id="pos-p",
+            instrument_id="BTCUSDT",
+            venue_id="BINANCE",
+            entry_price=100.0,
+            quantity=1.0,
+            side=_OrderSide.BUY,
+            stop_loss=sl,
+            take_profits=[tp],
+            owner_id="owner-1",
+            position_generation=1,
+            session_id="session-1",
+        )
+    )
+
+    # 品种有 2 个算法单,但属于其他命名空间/所有权 —— 不得为本持仓背书
+    algos = [
+        _venue_algo(
+            "algo-other-sl",
+            "BTCUSDT",
+            side="SELL",
+            order_type="STOP_MARKET",
+            quantity="1.0",
+            trigger_price="99.0",
+            client_algo_id="shared-ext",
+        ),
+        _venue_algo(
+            "algo-other-tp",
+            "BTCUSDT",
+            side="SELL",
+            order_type="TAKE_PROFIT_MARKET",
+            quantity="1.0",
+            trigger_price="103.0",
+            client_algo_id="shared-ext",
+        ),
+    ]
+
+    async def _fake_inventory() -> list[dict[str, Any]]:
+        return [dict(a) for a in algos]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+    engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
+    await engine._retry_missing_protections({"BTCUSDT"})
+
+    # 幽灵 SL/TP 必须重试提交,不得被 S41 跳过
+    assert len(placement_calls) >= 1
+    assert any("STOP_MARKET" in str(c.get("type")) for c in placement_calls)
+    # SL 获得 ACK 后状态推进 ACTIVE,覆盖计数收敛
+    assert engine._protection.all_positions()["pos-p"].stop_loss.status.value == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_retry_sweep_skips_symbols_with_durable_active_rows() -> None:
+    """投影缺口自愈不再为已有 durable ACTIVE 行的品种制造 recovered-* 幽灵投影。"""
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        projection={"BTCUSDT": {"signed_quantity": "1.0", "entry_price": "100.0"}},
+        protections=[
+            _durable_row(
+                protection_id="sl-pos-x",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-x",
+                generation=1,
+                algo_id="algo-x-sl",
+            ),
+            _durable_row(
+                protection_id="tp-pos-x",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="1.0",
+                position_id="pos-x",
+                generation=1,
+                algo_id="algo-x-tp",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+        ],
+    )
+    engine._can_write = True
+    engine._control = SimpleNamespace(
+        get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"), execute_action=lambda action: None
+    )
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+    engine._active_algo_ids = {"pos-x": {"algo-x-sl", "algo-x-tp"}}
+
+    algos = [
+        _venue_algo(
+            "algo-x-sl",
+            "BTCUSDT",
+            side="SELL",
+            order_type="STOP_MARKET",
+            quantity="1.0",
+            trigger_price="99.0",
+            client_algo_id="bdp-x",
+        ),
+        _venue_algo(
+            "algo-x-tp",
+            "BTCUSDT",
+            side="SELL",
+            order_type="TAKE_PROFIT_MARKET",
+            quantity="1.0",
+            trigger_price="103.0",
+            client_algo_id="bdp-x",
+        ),
+    ]
+
+    async def _fake_inventory() -> list[dict[str, Any]]:
+        return [dict(a) for a in algos]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+    engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
+    await engine._retry_missing_protections({"BTCUSDT"})
+
+    # durable 已有 ACTIVE 所有权 → 收养跳过、自愈投影缺口跳过:
+    # 不得新增 recovered-* 投影,不得新增 PENDING 行
+    assert set(engine._protection.all_positions()) == set()
+    rows = engine._store.restore_protections()
+    assert all(r["status"] == "ACTIVE" for r in rows)
+    assert len(rows) == 2
