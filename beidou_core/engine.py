@@ -4068,6 +4068,13 @@ class AutonomousEngine:
             algo_id = str(row.get("exchange_order_id") or "").strip()
             if algo_id:
                 self._stale_protection_algos.append((str(symbol).upper(), algo_id))
+                # 同步移除内存所有权映射,避免 excess-cleanup 的
+                # known_algo_ids != durable_ids → PROTECTION_OWNER_MAPPING_
+                # INCOMPLETE / OWNED_PROTECTION_MISSING 阻断振荡。
+                _algo_sets = getattr(self, "_active_algo_ids", {})
+                _pos_id = str(row.get("position_id", "") or "")
+                if _pos_id and _pos_id in _algo_sets:
+                    _algo_sets[_pos_id].discard(algo_id)
             if store and protection_id:
                 try:
                     store.save_protection(
