@@ -1,0 +1,662 @@
+"""保护所有权收敛回归测试(根因修复:消除 NO_NEW_RISK 永久死锁)。
+
+背景(事故复盘):durable 保护行丢失/未持久化而 venue 上 SL/TP 条件单
+仍然 ACTIVE 时,系统出现鸡生蛋死锁 —— 资格门要求 durable 覆盖
+(→ NO_NEW_RISK),nearline 却因 venue 已有单而 covered skip(不补发、
+不收养),两套事实永不收敛,所有新增风险意图被 ELIGIBILITY_NO_NEW_RISK
+恒拒。本组测试锁定收敛语义:
+
+1. 孤儿 bdp- 保护单可被收养进 durable 存储 → 覆盖恢复 → 资格 ELIGIBLE;
+2. 收养对歧义(方向/数量/reduce-only/多单)保持 fail-closed;
+3. 保护事实只有单一"放行"写入点,问题记录在库存验证通过后被清除;
+4. _durable_fact_status 在问题未清除时持续保持门禁关闭;
+5. nearline 补发循环在 covered skip 之前先执行收养,打破死锁;
+6. outbox 过期租约在运行时按宽限窗口恢复,不再永久卡 SENDING。
+"""
+
+from __future__ import annotations
+
+import hashlib
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from beidou_control.truth import derive_eligibility
+from beidou_core.engine import AutonomousEngine
+
+
+class _Store:
+    def __init__(self, protections: list[dict[str, Any]] | None = None) -> None:
+        self.protections = {str(r["protection_id"]): dict(r) for r in (protections or [])}
+        self.saved: list[dict[str, Any]] = []
+        self.removed: list[str] = []
+
+    def restore_protections(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.protections.values()]
+
+    def save_protection(self, **kwargs: Any) -> None:
+        row = dict(kwargs)
+        self.protections[str(row["protection_id"])] = row
+        self.saved.append(row)
+
+    def remove_protection(self, position_id: str) -> None:
+        self.removed.append(position_id)
+        self.protections = {k: v for k, v in self.protections.items() if v.get("position_id") != position_id}
+
+    def restore_position_projection(self) -> list[dict[str, Any]]:
+        return []
+
+    def restore_order_states(self) -> list[dict[str, Any]]:
+        return []
+
+
+class _Protection:
+    def __init__(self, symbols: set[str] | None = None) -> None:
+        self._symbols = set(symbols or ())
+        self._projections: dict[str, Any] = {}
+
+    def all_positions(self) -> dict[str, Any]:
+        base = {
+            sym: SimpleNamespace(instrument_id=sym, stop_loss=None, take_profits=[])
+            for sym in self._symbols
+        }
+        base.update(getattr(self, "_projections", {}))
+        return base
+
+    def restore_position_protection(self, protection: Any) -> Any:
+        self._projections[str(protection.position_id)] = protection
+        return protection
+
+
+def _venue_algo(
+    algo_id: str,
+    symbol: str,
+    *,
+    side: str,
+    order_type: str,
+    quantity: str,
+    trigger_price: str,
+    client_algo_id: str = "bdp-deadbeef",
+    reduce_only: Any = True,
+    status: str = "NEW",
+) -> dict[str, Any]:
+    return {
+        "algoId": algo_id,
+        "symbol": symbol,
+        "side": side,
+        "orderType": order_type,
+        "quantity": quantity,
+        "triggerPrice": trigger_price,
+        "clientAlgoId": client_algo_id,
+        "reduceOnly": reduce_only,
+        "algoStatus": status,
+    }
+
+
+def _adopt_engine(
+    *,
+    protections: list[dict[str, Any]] | None = None,
+    positions: dict[str, str] | None = None,
+    local_symbols: set[str] | None = None,
+    projection: dict[str, dict[str, Any]] | None = None,
+    generation: dict[str, int] | None = None,
+) -> AutonomousEngine:
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._store = _Store(protections)
+    engine._protection_owner_id = "owner-1"
+    engine._session_id = "session-1"
+    engine._protection = _Protection(local_symbols)
+    engine._position_projection = dict(projection or {})
+    engine._position_generation = dict(generation or {})
+    engine._active_algo_ids = {}
+    engine._last_algo_inventory_genuine = True
+    engine._last_account = {
+        "positions": [
+            {"symbol": sym, "positionAmt": amt, "entryPrice": "1.0"} for sym, amt in (positions or {}).items()
+        ]
+    }
+    engine._protection_issues = set()
+    engine._last_protection_hash = hashlib.sha256(b"UNKNOWN").hexdigest()
+    engine._last_protection_fact_at = 0.0
+    engine._protection_owner_unknown = True
+    return engine
+
+
+def _durable_row(
+    *,
+    protection_id: str,
+    symbol: str,
+    side: str,
+    order_type: str,
+    quantity: str,
+    position_id: str,
+    generation: int,
+    algo_id: str,
+    status: str = "ACTIVE",
+    owner_id: str = "owner-1",
+    stop_type: str | None = "ATR_BASED",
+    take_profit_type: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "protection_id": protection_id,
+        "position_id": position_id,
+        "symbol": symbol,
+        "side": side,
+        "trigger_price": "1.0",
+        "order_price": None,
+        "quantity": quantity,
+        "order_type": order_type,
+        "status": status,
+        "stop_type": stop_type,
+        "take_profit_type": take_profit_type,
+        "owner_id": owner_id,
+        "position_generation": generation,
+        "session_id": "session-1",
+        "exchange_order_id": algo_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. 孤儿保护单收养 → durable 覆盖恢复
+# ---------------------------------------------------------------------------
+
+
+def test_adoption_binds_orphaned_bdp_algos_into_durable_store_and_restores_coverage() -> None:
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+    )
+    algos = [
+        _venue_algo(
+            "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+    ]
+
+    adopted, issues = engine._adopt_orphaned_protection_algos(algos)
+
+    assert issues == []
+    assert adopted == 2
+    rows = engine._store.restore_protections()
+    assert len(rows) == 2
+    by_order_type = {r["order_type"]: r for r in rows}
+    assert set(by_order_type) == {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+    for row in rows:
+        assert row["status"] == "ACTIVE"
+        assert row["owner_id"] == "owner-1"
+        assert row["position_generation"] >= 1
+        assert row["exchange_order_id"] in {"algo-sl-1", "algo-tp-1"}
+    # 收养后 durable 覆盖成立(即使没有独立 projection 行)
+    covered, evidence = engine._assess_protection_coverage(
+        [{"symbol": "BTCUSDT", "positionAmt": "1.0"}],
+        [r for r in rows if r["status"] == "ACTIVE" and r["owner_id"] == "owner-1" and r["exchange_order_id"]],
+        {},
+    )
+    assert covered is True, evidence
+    # 收养同时挂载内存保护投影(PKG-MON-04 与 nearline 覆盖判定读投影)
+    mounted = [
+        pp
+        for pp in engine._protection.all_positions().values()
+        if str(getattr(pp, "instrument_id", "")) == "BTCUSDT" and getattr(pp, "stop_loss", None) is not None
+    ]
+    assert len(mounted) == 1
+    assert mounted[0].stop_loss is not None
+    assert mounted[0].stop_loss.exchange_order_id == "algo-sl-1"
+    assert [tp.exchange_order_id for tp in mounted[0].take_profits] == ["algo-tp-1"]
+
+
+def test_adoption_is_idempotent_and_skips_already_owned_symbols() -> None:
+    engine = _adopt_engine(
+        protections=[
+            _durable_row(
+                protection_id="p-sl",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-btc",
+                generation=3,
+                algo_id="algo-sl-old",
+            ),
+        ],
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+    )
+    algos = [
+        _venue_algo(
+            "algo-sl-old", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-old",
+            "BTCUSDT",
+            side="SELL",
+            order_type="TAKE_PROFIT_MARKET",
+            quantity="1.0",
+            trigger_price="103.0",
+        ),
+    ]
+
+    adopted, issues = engine._adopt_orphaned_protection_algos(algos)
+    # 已有 durable 所有权的品种不收养(避免与既有代数/会话冲突)
+    assert adopted == 0
+    assert issues == []
+    assert len(engine._store.restore_protections()) == 1
+
+
+def test_adoption_skips_foreign_positions_and_foreign_namespaces() -> None:
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0", "ETHUSDT": "2.0"},
+        local_symbols={"BTCUSDT"},  # ETHUSDT 是共享账户外部持仓
+    )
+    algos = [
+        _venue_algo("sl-btc", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"),
+        _venue_algo(
+            "tp-btc", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+        # 外部持仓的保护单 + 非本引擎命名空间
+        _venue_algo("sl-eth", "ETHUSDT", side="SELL", order_type="STOP_MARKET", quantity="2.0", trigger_price="9.0"),
+        _venue_algo(
+            "tp-eth", "ETHUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="2.0", trigger_price="11.0"
+        ),
+        _venue_algo(
+            "sl-f",
+            "BTCUSDT",
+            side="SELL",
+            order_type="STOP_MARKET",
+            quantity="1.0",
+            trigger_price="99.0",
+            client_algo_id="someone-else",
+        ),
+    ]
+
+    adopted, issues = engine._adopt_orphaned_protection_algos(algos)
+
+    assert issues == []
+    assert adopted == 2  # 只收养 BTCUSDT 的 bdp- 单
+    rows = engine._store.restore_protections()
+    assert all(r["symbol"] == "BTCUSDT" for r in rows)
+
+
+def test_adoption_fail_closed_on_ambiguous_or_mismatched_algos() -> None:
+    engine = _adopt_engine(positions={"BTCUSDT": "1.0"}, local_symbols={"BTCUSDT"})
+
+    # 方向错误
+    adopted, issues = engine._adopt_orphaned_protection_algos(
+        [
+            _venue_algo("sl-1", "BTCUSDT", side="BUY", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"),
+            _venue_algo(
+                "tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+            ),
+        ]
+    )
+    assert adopted == 0
+    assert any("AMBIGUOUS" in i for i in issues)
+
+    # 两个 SL(歧义)
+    adopted, issues = engine._adopt_orphaned_protection_algos(
+        [
+            _venue_algo("sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"),
+            _venue_algo("sl-2", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="98.0"),
+            _venue_algo(
+                "tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+            ),
+        ]
+    )
+    assert adopted == 0
+    assert any("AMBIGUOUS" in i for i in issues)
+
+    # SL 数量不足以覆盖持仓
+    adopted, issues = engine._adopt_orphaned_protection_algos(
+        [
+            _venue_algo("sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="0.5", trigger_price="99.0"),
+            _venue_algo(
+                "tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+            ),
+        ]
+    )
+    assert adopted == 0
+    assert any("AMBIGUOUS" in i for i in issues)
+
+    # 非 NEW/WORKING 状态不收养:SL 缺失是真实覆盖缺口,记录问题(fail-closed)
+    # 交由补发流程重建,而不是静默放行
+    adopted, issues = engine._adopt_orphaned_protection_algos(
+        [
+            _venue_algo(
+                "sl-1",
+                "BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                trigger_price="99.0",
+                status="CANCELLED",
+            ),
+            _venue_algo(
+                "tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+            ),
+        ]
+    )
+    assert adopted == 0
+    assert any("AMBIGUOUS" in i for i in issues)
+
+    # 收养失败不留下任何 durable 行(fail-closed)
+    assert engine._store.restore_protections() == []
+
+
+# ---------------------------------------------------------------------------
+# 2. 保护事实单一写入点:_update_protection_fact
+# ---------------------------------------------------------------------------
+
+
+def test_update_protection_fact_clears_issues_only_on_verified_clean_inventory() -> None:
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+        generation={"BTCUSDT": 2},
+    )
+    engine._protection_issues = {"OWNED_PROTECTION_MISSING:algo-x"}
+    engine._protection_owner_unknown = True
+
+    # 干净库存 + 收养后的覆盖 → 清除问题并放行
+    algos = [
+        _venue_algo(
+            "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+    ]
+    engine._adopt_orphaned_protection_algos(algos)
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
+
+    assert engine._protection_issues == set()
+    assert engine._protection_owner_unknown is False
+    assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+
+    # 语义问题存在时绝不放行
+    engine._update_protection_fact(
+        hard_issues=["PROTECTION_SIDE_MISMATCH:algo-sl-1"],
+        venue_missing=[],
+        unowned_ids=[],
+        genuine_inventory=True,
+    )
+    assert engine._protection_owner_unknown is True
+    assert engine._last_protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+    assert "PROTECTION_SIDE_MISMATCH:algo-sl-1" in engine._protection_issues
+
+
+def test_update_protection_fact_holds_closed_while_venue_rows_missing() -> None:
+    engine = _adopt_engine(
+        protections=[
+            _durable_row(
+                protection_id="p-sl",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-btc",
+                generation=2,
+                algo_id="algo-sl-gone",
+            ),
+        ],
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+        generation={"BTCUSDT": 2},
+    )
+    # durable 覆盖本身成立,但 venue 行缺失 → 门禁保持关闭
+    engine._update_protection_fact(
+        hard_issues=[],
+        venue_missing=["PROTECTION_VENUE_ROW_MISSING:algo-sl-gone"],
+        unowned_ids=[],
+        genuine_inventory=True,
+    )
+    assert engine._protection_owner_unknown is True
+    assert engine._last_protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+
+
+def test_update_protection_fact_skips_decision_when_inventory_not_genuine() -> None:
+    engine = _adopt_engine(positions={"BTCUSDT": "1.0"}, local_symbols={"BTCUSDT"})
+    before_hash = engine._last_protection_hash
+    before_owner = engine._protection_owner_unknown
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=False)
+    assert engine._last_protection_hash == before_hash
+    assert engine._protection_owner_unknown is before_owner
+
+
+def test_durable_fact_status_holds_gate_closed_while_issues_pending() -> None:
+    engine = _adopt_engine(
+        protections=[
+            _durable_row(
+                protection_id="p-sl",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-btc",
+                generation=2,
+                algo_id="algo-sl-1",
+            ),
+            _durable_row(
+                protection_id="p-tp",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="1.0",
+                position_id="pos-btc",
+                generation=2,
+                algo_id="algo-tp-1",
+                stop_type=None,
+                take_profit_type="FIXED_RR",
+            ),
+        ],
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+        generation={"BTCUSDT": 2},
+    )
+    engine._outbox = SimpleNamespace(stats=lambda: {"state_counts": {}})
+    engine._active_order_ids = set()
+    engine._owned_order_ids = set()
+    # 覆盖本身成立 → durable 事实干净
+    ok, reason, _ = engine._durable_fact_status()
+    assert ok is True and reason == "DURABLE_FACTS_VERIFIED"
+    # 所有权问题未清除 → 门禁保持关闭
+    engine._protection_issues = {"PROTECTION_OWNER_MAPPING_INCOMPLETE"}
+    ok, reason, _evidence = engine._durable_fact_status()
+    assert ok is False
+    assert reason == "DURABLE_PROTECTION_COVERAGE_UNKNOWN"
+    # 问题清除后恢复
+    engine._protection_issues = set()
+    ok, reason, _ = engine._durable_fact_status()
+    assert ok is True
+
+
+def test_eligibility_converges_to_eligible_after_adoption_and_issue_clear() -> None:
+    engine = _adopt_engine(positions={"BTCUSDT": "1.0"}, local_symbols={"BTCUSDT"})
+    engine._last_protection_hash = hashlib.sha256(b"UNKNOWN").hexdigest()
+    engine._protection_owner_unknown = True
+    engine._protection_issues = {"STARTUP_BLOCK"}
+    # 补齐资格推导所需的其余事实
+    for attr in (
+        "_last_market_hash",
+        "_last_account_hash",
+        "_last_order_hash",
+        "_last_position_hash",
+        "_last_ledger_hash",
+        "_last_reconciliation_hash",
+        "_last_risk_hash",
+        "_config_hash",
+        "_policy_hash",
+    ):
+        setattr(engine, attr, "hash-" + attr)
+    engine._last_market_fact_at = 1e12
+    engine._last_account_fact_at = 1e12
+    engine._last_order_fact_at = 1e12
+    engine._last_position_fact_at = 1e12
+    engine._last_ledger_fact_at = 1e12
+    engine._last_reconciliation_fact_at = 1e12
+    engine._last_protection_fact_at = 1e12
+    engine._last_risk_fact_at = 1e12
+    engine._last_config_observed_at = 1e12
+    engine._last_policy_observed_at = 1e12
+    engine._last_reconciliation_result = SimpleNamespace(status="MATCHED")
+    engine._env_mode = SimpleNamespace(value="testnet")
+    engine._control = SimpleNamespace(_action="RESUME", update_truth_snapshot=lambda snap: None)
+
+    assert derive_eligibility(engine.build_truth_snapshot()).value == "NO_NEW_RISK"
+
+    algos = [
+        _venue_algo(
+            "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+    ]
+    engine._adopt_orphaned_protection_algos(algos)
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
+
+    snap = engine.build_truth_snapshot()
+    assert snap.protection_status == "ACTIVE"
+    assert derive_eligibility(snap).value == "ELIGIBLE"
+
+
+# ---------------------------------------------------------------------------
+# 3. nearline 补发循环先收养、后 covered skip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_missing_protections_adopts_before_covered_skip() -> None:
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+        projection={"BTCUSDT": {"signed_quantity": "1.0", "entry_price": "100.0"}},
+    )
+    engine._can_write = True
+    engine._control = SimpleNamespace(get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"))
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+
+    algos = [
+        _venue_algo(
+            "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+    ]
+
+    async def _fake_inventory() -> list[dict[str, Any]]:
+        return [dict(a) for a in algos]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+    engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
+    await engine._retry_missing_protections({"BTCUSDT"})
+
+    rows = engine._store.restore_protections()
+    assert len(rows) == 2
+    assert all(r["status"] == "ACTIVE" for r in rows)
+    # 收养进内存所有权映射,covered skip 的 owned_ids 可以命中
+    assert engine._active_algo_ids.get("adopt-BTCUSDT") == {"algo-sl-1", "algo-tp-1"}
+    # 单一放行写入点:问题被清除、事实 ACTIVE
+    assert engine._protection_owner_unknown is False
+    assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_retry_missing_protections_does_not_place_duplicates_after_adoption() -> None:
+    """收养后,即使投影 SL 缺失,S41 去重也保证不重复下单(仅 durable 收养)。"""
+    engine = _adopt_engine(
+        positions={"BTCUSDT": "1.0"},
+        local_symbols={"BTCUSDT"},
+    )
+    engine._can_write = True
+    engine._control = SimpleNamespace(get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"))
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+    placement_calls: list[dict[str, Any]] = []
+
+    async def _fake_create_algo(params: dict[str, Any]) -> dict[str, Any]:
+        placement_calls.append(dict(params))
+        return {"algoId": "algo-new"}
+
+    engine._create_algo_order = _fake_create_algo  # type: ignore[method-assign]
+
+    algos = [
+        _venue_algo(
+            "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+        ),
+        _venue_algo(
+            "algo-tp-1", "BTCUSDT", side="SELL", order_type="TAKE_PROFIT_MARKET", quantity="1.0", trigger_price="103.0"
+        ),
+    ]
+
+    async def _fake_inventory() -> list[dict[str, Any]]:
+        return [dict(a) for a in algos]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+    engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
+    await engine._retry_missing_protections({"BTCUSDT"})
+
+    assert placement_calls == []  # venue 已有 2 单 → 不得重复下单
+    assert len(engine._store.restore_protections()) == 2
+
+
+# ---------------------------------------------------------------------------
+# 4. 启动恢复:OWNED_PROTECTION_MISSING 宽限重查
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_exchange_position_protections_grace_requery_avoids_false_block() -> None:
+    """刚下发的 algo 单未进库存快照(eventual consistency)时不立即阻断:
+    宽限重查一次;第二次查询可见即视为已核验。"""
+    engine = _adopt_engine(positions={"BTCUSDT": "1.0"}, local_symbols=set())
+    engine._env_mode = SimpleNamespace(value="testnet")  # 共享账户外部持仓豁免
+    engine._adapter = SimpleNamespace(reset_circuit_breaker=lambda: None)
+    engine._can_write = True
+    engine._control = SimpleNamespace(get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"))
+    engine._active_algo_ids = {"pos-btc": {"algo-sl-1", "algo-tp-1"}}
+
+    calls = 0
+
+    async def _fake_inventory() -> list[dict[str, Any]] | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return []  # 首次快照未包含刚下发的 algo 单
+        return [
+            _venue_algo(
+                "algo-sl-1", "BTCUSDT", side="SELL", order_type="STOP_MARKET", quantity="1.0", trigger_price="99.0"
+            ),
+            _venue_algo(
+                "algo-tp-1",
+                "BTCUSDT",
+                side="SELL",
+                order_type="TAKE_PROFIT_MARKET",
+                quantity="1.0",
+                trigger_price="103.0",
+            ),
+        ]
+
+    engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+
+    await engine._ensure_exchange_position_protections()
+
+    assert calls >= 2
+    assert engine._protection_issues == set()
+    assert engine._protection_owner_unknown is False

@@ -453,7 +453,30 @@ def test_postgres_worker_recovery_fences_prior_owner_even_with_same_live_lease()
     assert "lease_owner IS DISTINCT FROM %s" in "\n".join(
         sql for sql, _params in conn.cursor_state.statements if "SELECT message_id,intent_id,status" in sql
     )
-    assert recovery_select == ("worker-new", 9)
+    # 默认宽限为 0(启动恢复语义不变)
+    assert recovery_select == ("worker-new", 9, 0)
+
+
+def test_postgres_worker_runtime_recovery_applies_expired_margin() -> None:
+    """运行时周期恢复(根因修复):同 owner 的过期租约只有超过宽限窗口
+    才转 UNKNOWN,避免慢 venue 调用被自己围栏;启动恢复仍传 0。"""
+    conn = _RecordingConnection()
+    conn.cursor_state.fetchall_values.append([("msg-1", "intent-1", "SENDING")])
+    worker = OutboxWorker(db_conn=conn, lease_owner="worker-new", fencing_token=9)
+
+    assert asyncio.run(worker.recover_inflight(expired_margin_seconds=120)) == 1
+
+    recovery_select = next(
+        (
+            params
+            for sql, params in conn.cursor_state.statements
+            if sql.startswith("SELECT message_id,intent_id,status")
+        ),
+        (),
+    )
+    assert recovery_select == ("worker-new", 9, 120)
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert "lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')" in sql
 
 
 def test_postgres_intent_outbox_startup_recovery_marks_fenced_or_expired_unknown() -> None:
@@ -508,7 +531,8 @@ def test_postgres_intent_outbox_recovery_fences_prior_owner_even_with_same_live_
     )
     sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
     assert "lease_owner IS DISTINCT FROM %s" in sql
-    assert recovery_select == ("worker-new", 7)
+    # 默认宽限 0(启动恢复语义不变)
+    assert recovery_select == ("worker-new", 7, 0)
 
 
 def test_postgres_intent_outbox_startup_recovery_requires_fencing_token() -> None:

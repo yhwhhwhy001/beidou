@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -1534,6 +1535,10 @@ class AutonomousEngine:
         self._sl_unprotectable_streak: dict[str, int] = {}  # pos_id → SL 连续无法建立轮数（紧急平仓防抖）
         self._pending_protection_retry: set[str] = set()
         self._protection_owner_unknown = False
+        # BD-FIX (root): 保护所有权/语义问题记录 —— fail-closed 门禁状态。
+        # 问题仅在库存真实且语义/覆盖/所有权全部验证通过时由
+        # _update_protection_fact 单一写入点清除;不再有进程内永久锁死。
+        self._protection_issues: set[str] = set()
         # BD-FIX: TruthSnapshot 保护事实 — 初始化时所有权归属本服务 → ACTIVE
         self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
         self._last_protection_fact_at = time.time()
@@ -2873,22 +2878,18 @@ class AutonomousEngine:
                     "DURABLE_ACTIVE_ORDER_OWNER_UNKNOWN",
                     {**evidence, "order_ids": unowned_active_orders[:20]},
                 )
-            protection_ok, protection_evidence = self._assess_protection_coverage(
+            coverage_ok, protection_evidence = self._assess_protection_coverage(
                 exchange_positions,
                 active_protections,
                 local_positions,
             )
+            # BD-FIX (root): 保护事实 hash 不再由本方法写入 —— 只读判定。
+            # _protection_issues 未清除(库存语义/所有权尚未验证)时即使
+            # durable 覆盖成立也保持门禁关闭,放行仅由 _update_protection_fact
+            # 在库存验证通过后执行。本方法仅刷新事实新鲜度。
+            protection_ok = coverage_ok and not getattr(self, "_protection_issues", set())
             evidence.update(protection_evidence)
-            # BD-FIX: TruthSnapshot 保护事实周期刷新 — 保护覆盖评估随
-            # _durable_fact_status 周期运行（realtime 对账后 30s 一次 +
-            # supervisor 健康探测），每次评估都刷新事实，避免运行超过 300s 后
-            # 保护事实恒 stale → 资格恒 NOT_VERIFIABLE。覆盖失败时记录
-            # UNKNOWN 状态（fail-closed: build_truth_snapshot 的
-            # protection_status 跟随记录的 hash，未覆盖时不进入 ACTIVE）。
-            # 幂等：多次调用无副作用。
-            self._last_protection_hash = (
-                hashlib.sha256(b"ACTIVE").hexdigest() if protection_ok else hashlib.sha256(b"UNKNOWN").hexdigest()
-            )
+            evidence["protection_issues_pending"] = len(getattr(self, "_protection_issues", set()))
             self._last_protection_fact_at = time.time()
             if not protection_ok:
                 return False, "DURABLE_PROTECTION_COVERAGE_UNKNOWN", evidence
@@ -3607,6 +3608,22 @@ class AutonomousEngine:
             # 重查（按 client_id 的 identity-bound venue 事实裁决）。
             if time.time() - getattr(self, "_last_unknown_resolve", 0.0) > 60:
                 self._last_unknown_resolve = time.time()
+                # BD-FIX (root): 先回收"过期超过宽限窗口"的 SENDING/SENT
+                # 租约(实测 ENA/BTC 意图永久卡 SENDING,outbox 队列随之
+                # 停滞),再交由 venue 事实裁决 UNKNOWN。宽限 900s:父消息
+                # 租约仅 30s,而多切片计划可达 600s(TWAP),过短会打断
+                # 仍在执行的计划;卡死自愈最坏延迟 ~16 分钟,可接受。
+                # PG outbox 为同步实现,Worker 为异步实现 —— 统一兼容两者。
+                _recover_fn = getattr(self._outbox, "recover_inflight", None)
+                if callable(_recover_fn):
+                    try:
+                        _recovered = _recover_fn(expired_margin_seconds=900)
+                        if inspect.isawaitable(_recovered):
+                            _recovered = await asyncio.wait_for(_recovered, timeout=20.0)
+                        if _recovered:
+                            print(f"[realtime] Recovered {_recovered} expired in-flight outbox message(s) as UNKNOWN")
+                    except Exception as _rec_exc:
+                        logger.warning("periodic inflight recovery skipped: %s", type(_rec_exc).__name__)
                 try:
                     await asyncio.wait_for(self._resolve_unknown_outbox_intents(), timeout=20.0)
                 except Exception as _resolve_exc:
@@ -3632,13 +3649,12 @@ class AutonomousEngine:
                     # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
                     if durable_ok:
                         self._maybe_auto_resolve_incidents()
-                        # BD-FIX: 保护事实恢复后复位所有权标志（I3 审查：
-                        # 置位后进程内永不复位，瞬态 API 失败即永久锁死）
-                        if getattr(self, "_protection_owner_unknown", False):
-                            self._protection_owner_unknown = False
-                            self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
-                            self._last_protection_fact_at = time.time()
-                            print("[protection] ownership verified — protection facts restored")
+                        # BD-FIX (root): 不再在此处直接复位 owner_unknown /
+                        # 重写 protection hash —— 那是与 _durable_fact_status、
+                        # _block_unowned_protection_orders 竞争的第二个写入方,
+                        # 曾造成 ACTIVE/UNKNOWN 抖动。放行唯一入口是
+                        # _update_protection_fact(nearline 补发循环在库存
+                        # 验证通过后调用)。
                     if durable_ok and self._control.get_status() != ControlAction.RESUME:
                         # TESTNET-EXEMPT: EXEMPT-07（引擎侧自动 RESUME；
                         # 授权链挂接属 M19）
@@ -3837,7 +3853,9 @@ class AutonomousEngine:
             # fail-closed 根因修复(诊断性): 原实现完全静默 —— PG 重启时
             # 前段 PG 写失败只进 incident 内存/JSONL,日志无痕迹,后续
             # stale 累积无法定位。落一条 warning(含堆栈)使同类问题可诊断。
-            logger.warning("realtime tick error (isolated per-tick): %s: %s", type(e).__name__, str(e)[:200], exc_info=True)
+            logger.warning(
+                "realtime tick error (isolated per-tick): %s: %s", type(e).__name__, str(e)[:200], exc_info=True
+            )
         finally:
             self._last_realtime = time.time()
             self._last_realtime_mono = time.monotonic()
@@ -3850,7 +3868,9 @@ class AutonomousEngine:
         try:
             await self._reconciliation_segment()
         except Exception as exc:
-            logger.warning("reconciliation segment unexpected: %s: %s", type(exc).__name__, str(exc)[:200], exc_info=True)
+            logger.warning(
+                "reconciliation segment unexpected: %s: %s", type(exc).__name__, str(exc)[:200], exc_info=True
+            )
 
     async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
         """平仓时取消交易所上的关联条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
@@ -3948,6 +3968,16 @@ class AutonomousEngine:
         实测 1154 FAILED）。live/canary 保持置位严格语义不变。
         """
         self._protection_owner_unknown = True
+        # BD-FIX (root): 记录问题(有界)。旧语义下 owner_unknown 置位后只有
+        # 对账段的隐式复位,且 _durable_fact_status 与复位路径各自写 hash,
+        # 造成 ACTIVE/UNKNOWN 抖动与永久锁死。现在问题集是唯一门禁状态,
+        # 由 _update_protection_fact 在库存验证通过后清除。
+        _issues = getattr(self, "_protection_issues", None)
+        if _issues is None:
+            self._protection_issues = set()
+            _issues = self._protection_issues
+        if len(_issues) < 500:
+            _issues.update(str(item) for item in order_ids)
         # 诊断打印：定位投影恢复失败的触发点（final82 调试用）
         print(f"[protection] BLOCK owner_unknown: {sorted(set(order_ids))[:8]}")
         # BD-FIX: TruthSnapshot 保护事实 — 所有权无法证明 → 记录 UNKNOWN 状态
@@ -3962,6 +3992,305 @@ class AutonomousEngine:
             f"Conditional orders lack durable owner mapping: {sorted(order_ids)}",
             category="protection",
         )
+
+    def _update_protection_fact(
+        self,
+        *,
+        hard_issues: list[str],
+        venue_missing: list[str],
+        unowned_ids: list[str],
+        genuine_inventory: bool,
+    ) -> None:
+        """保护事实的唯一"放行"写入点(根因修复)。
+
+        旧设计有多个写入方互相竞争(_durable_fact_status / 对账段复位 /
+        _block_unowned_protection_orders / build_truth_snapshot 构建时重写),
+        任一瞬时不一致都产生 ACTIVE/UNKNOWN 抖动,或把资格门永久钉死在
+        NO_NEW_RISK。现在:
+
+        - UNKNOWN 方向:任何路径发现语义/所有权/覆盖问题时记录到
+          _protection_issues(_block_unowned_protection_orders 与
+          nearline 检查);
+        - ACTIVE 方向:仅本方法 —— 库存真实(非 API 抖动的空列表)、无
+          语义硬问题、无 venue 缺失、无无主单、且 durable 覆盖评估通过
+          时,才清除问题并置 ACTIVE;
+        - 库存不可信时不做任何判定(保持上次记录的事实)。
+
+        覆盖评估直接使用与资格门相同的 durable 事实,保证"放行"与
+        "资格判定"永远一致。
+        """
+        if not genuine_inventory:
+            return
+        store = getattr(self, "_store", None)
+        try:
+            rows = list(store.restore_protections()) if store is not None else []
+        except Exception as exc:
+            hard_issues = [*hard_issues, f"PROTECTION_STORE_READ_UNKNOWN:{type(exc).__name__}"]
+            rows = []
+        active_protections = [
+            row
+            for row in rows
+            if str(row.get("owner_id", "")) == str(self._protection_owner_id)
+            and str(row.get("status", "")).strip().upper() == "ACTIVE"
+            and bool(str(row.get("exchange_order_id", "")).strip())
+        ]
+        local_positions = (
+            self._protection.all_positions()
+            if callable(getattr(getattr(self, "_protection", None), "all_positions", None))
+            else {}
+        )
+        exchange_positions = [
+            row
+            for row in (getattr(self, "_last_account", {}) or {}).get("positions", [])
+            if isinstance(row, dict) and abs(float(row.get("positionAmt", 0) or 0)) > 1e-12
+        ]
+        covered, _evidence = self._assess_protection_coverage(
+            exchange_positions,
+            active_protections,
+            local_positions,
+        )
+        clean = covered and not hard_issues and not venue_missing and not unowned_ids
+        issues = getattr(self, "_protection_issues", None)
+        if issues is None:
+            self._protection_issues = set()
+            issues = self._protection_issues
+        if clean:
+            if issues or getattr(self, "_protection_owner_unknown", False):
+                print("[protection] ownership verified — protection facts restored")
+            issues.clear()
+            self._protection_owner_unknown = False
+            self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
+        else:
+            if len(issues) < 500:
+                issues.update(str(item) for item in [*hard_issues, *unowned_ids])
+            self._protection_owner_unknown = True
+            self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+        self._last_protection_fact_at = time.time()
+
+    def _adopt_orphaned_protection_algos(self, existing_algos: list[dict[str, Any]]) -> tuple[int, list[str]]:
+        """收养 venue 上本引擎命名空间(bdp-)的孤儿保护单为 durable 事实。
+
+        资格门与 nearline 覆盖判定长期使用两套不相交的事实(durable 行 vs
+        venue 库存):durable 行丢失而 venue SL/TP 仍在时,资格门要求
+        durable 覆盖(→ NO_NEW_RISK),nearline 却因 venue 已有单而 covered
+        skip,两套事实永不收敛(鸡生蛋死锁)。本方法在库存真实时把语义
+        可绑定的 SL/TP 单收养进 durable 存储(owner/generation/session
+        对齐)并登记内存所有权映射,使两套事实收敛。
+
+        任何歧义(方向/reduce-only/数量覆盖/多个 SL/TP)保持 fail-closed:
+        只记录问题、绝不收养。外部持仓(非本地所有权)与非 bdp- 命名空间
+        的单绝不触碰。
+        """
+        if not bool(getattr(self, "_last_algo_inventory_genuine", False)) or not existing_algos:
+            return 0, []
+        store = getattr(self, "_store", None)
+        if store is None:
+            return 0, []
+        account = getattr(self, "_last_account", None) or {}
+        raw_positions = account.get("positions", []) if isinstance(account, dict) else []
+        venue_positions: dict[str, tuple[Decimal, float]] = {}
+        for raw in raw_positions:
+            if not isinstance(raw, dict):
+                continue
+            symbol = str(raw.get("symbol", "")).strip().upper()
+            try:
+                amount = Decimal(str(raw.get("positionAmt", "0") or "0"))
+                entry_price = float(raw.get("entryPrice", 0) or 0)
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if not symbol or not amount.is_finite() or abs(amount) <= Decimal("1e-12"):
+                continue
+            venue_positions[symbol] = (amount, entry_price)
+        if not venue_positions:
+            return 0, []
+        _protection_mgr = getattr(self, "_protection", None)
+        _all_positions = getattr(_protection_mgr, "all_positions", None) if _protection_mgr is not None else None
+        local_symbols = {
+            str(getattr(pp, "instrument_id", ""))
+            for pp in (_all_positions().values() if callable(_all_positions) else [])
+            if str(getattr(pp, "instrument_id", ""))
+        }
+        local_symbols |= {str(sym) for sym in getattr(self, "_position_projection", {})}
+        local_symbols |= {str(sym) for sym in getattr(self, "_position_generation", {})}
+        try:
+            durable_rows = list(store.restore_protections())
+        except Exception as exc:
+            return 0, [f"PROTECTION_STORE_READ_UNKNOWN:{type(exc).__name__}"]
+        owned_symbols = {
+            str(row.get("symbol", "")).strip().upper()
+            for row in durable_rows
+            if str(row.get("status", "")).strip().upper() == "ACTIVE"
+            and str(row.get("owner_id", "")) == str(self._protection_owner_id)
+            and str(row.get("exchange_order_id", "")).strip()
+        }
+        adopted = 0
+        issues: list[str] = []
+        for symbol, (amount, entry_price) in sorted(venue_positions.items()):
+            if symbol not in local_symbols:
+                continue  # 共享账户外部持仓,不收养
+            if symbol in owned_symbols:
+                continue  # 已有 durable 所有权,不重复收养
+            expected_side = "SELL" if amount > 0 else "BUY"
+            position_qty = abs(amount)
+            candidates: list[dict[str, Any]] = []
+            for item in existing_algos:
+                if str(item.get("symbol", "")).strip().upper() != symbol:
+                    continue
+                if not str(item.get("clientAlgoId", "") or "").startswith("bdp-"):
+                    continue  # 非本引擎保护命名空间
+                # Binance openAlgoOrders 的 algoStatus 对未触发的活动单
+                # 返回 NEW(部分文档写作 WORKING),两者都表示"未触发"。
+                if str(item.get("algoStatus", "")).strip().upper() not in {"NEW", "WORKING"}:
+                    continue
+                candidates.append(item)
+            if not candidates:
+                continue
+
+            def _semantically_ok(item: dict[str, Any], exp_side: str) -> bool:
+                if str(item.get("side", "")).strip().upper() != exp_side:
+                    return False
+                reduce_only = item.get("reduceOnly")
+                if reduce_only is not True and str(reduce_only).strip().lower() not in {"1", "true", "yes"}:
+                    return False
+                try:
+                    qty = Decimal(str(item.get("quantity", "0") or "0"))
+                    trigger = Decimal(str(item.get("triggerPrice", "0") or "0"))
+                except (InvalidOperation, TypeError, ValueError):
+                    return False
+                return qty.is_finite() and qty > 0 and trigger.is_finite() and trigger > 0
+
+            sl_rows = [
+                i
+                for i in candidates
+                if str(i.get("orderType", "")).strip().upper().startswith("STOP")
+                and _semantically_ok(i, expected_side)
+            ]
+            tp_rows = [
+                i
+                for i in candidates
+                if str(i.get("orderType", "")).strip().upper().startswith("TAKE_PROFIT")
+                and _semantically_ok(i, expected_side)
+            ]
+            sl_rows = [
+                i for i in sl_rows if Decimal(str(i.get("quantity", "0") or "0")) + Decimal("1e-8") >= position_qty
+            ]
+            if len(sl_rows) != 1 or len(tp_rows) != 1:
+                issues.append(f"PROTECTION_ADOPTION_AMBIGUOUS:{symbol}")
+                continue
+            generation = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+            if generation <= 0:
+                _proj_row = getattr(self, "_position_projection", {}).get(symbol) or {}
+                try:
+                    generation = int(_proj_row.get("position_generation", 0) or 0)
+                except (TypeError, ValueError):
+                    generation = 0
+            if generation <= 0:
+                generation = self._next_position_generation(symbol)
+            position_id = f"adopt-{symbol}"
+            sl_item = sl_rows[0]
+            tp_item = tp_rows[0]
+            for item in (sl_item, tp_item):
+                algo_id = str(item.get("algoId", ""))
+                order_type = str(item.get("orderType", "") or "").strip().upper()
+                is_stop = order_type.startswith("STOP")
+                try:
+                    store.save_protection(
+                        protection_id=f"adopt-{symbol}-{algo_id}",
+                        position_id=position_id,
+                        symbol=symbol,
+                        side=expected_side,
+                        trigger_price=str(item.get("triggerPrice", "") or ""),
+                        order_price=None,
+                        quantity=str(item.get("quantity", "") or ""),
+                        order_type=order_type,
+                        status="ACTIVE",
+                        # 角色分类器:实际语义以 venue orderType 为准
+                        # (covered skip 保证不会据此重新下单)。
+                        stop_type="ATR_BASED" if is_stop else None,
+                        take_profit_type=None if is_stop else "FIXED_RR",
+                        owner_id=str(self._protection_owner_id),
+                        position_generation=generation,
+                        session_id=str(getattr(self, "_session_id", "") or ""),
+                        exchange_order_id=algo_id,
+                    )
+                    self._active_algo_ids.setdefault(position_id, set()).add(algo_id)
+                    adopted += 1
+                except Exception as exc:
+                    issues.append(f"PROTECTION_ADOPTION_PERSIST_FAILED:{symbol}:{type(exc).__name__}")
+            # BD-FIX (root): 同时挂载内存保护投影 —— PKG-MON-04 与 nearline
+            # 覆盖判定都读投影;只收养 durable 行会让 supervisor 持续报
+            # MISSING_SL/MISSING_TP,自愈闭环有缺口。
+            _has_ack_projection = any(
+                str(getattr(pp, "instrument_id", "")) == symbol and getattr(pp, "stop_loss", None) is not None
+                for pp in self._protection.all_positions().values()
+            )
+            if not _has_ack_projection:
+                try:
+                    _projection_entry = entry_price
+                    if not math.isfinite(_projection_entry) or _projection_entry <= 0:
+                        _proj_row = getattr(self, "_position_projection", {}).get(symbol) or {}
+                        try:
+                            _projection_entry = float(_proj_row.get("entry_price", 0) or 0)
+                        except (TypeError, ValueError):
+                            _projection_entry = 0.0
+                    _stop_order = ProtectionOrder(
+                        protection_id=f"adopt-{symbol}-{sl_item.get('algoId', '')!s}",
+                        position_id=position_id,
+                        instrument_id=InstrumentId(symbol),
+                        venue_id=VenueId("BINANCE"),
+                        side=OrderSide(expected_side),
+                        trigger_price=Price(amount=str(sl_item.get("triggerPrice", "") or "")),
+                        order_price=None,
+                        quantity=Quantity(amount=str(sl_item.get("quantity", "") or "")),
+                        order_type=str(sl_item.get("orderType", "") or "").strip().upper(),
+                        reduce_only=True,
+                        status=ProtectionStatus.ACTIVE,
+                        stop_type=StopLossType.ATR_BASED,
+                        take_profit_type=None,
+                        owner_id=str(self._protection_owner_id),
+                        position_generation=generation,
+                        session_id=str(getattr(self, "_session_id", "") or ""),
+                        exchange_order_id=str(sl_item.get("algoId", "")),
+                    )
+                    _tp_order = ProtectionOrder(
+                        protection_id=f"adopt-{symbol}-{tp_item.get('algoId', '')!s}",
+                        position_id=position_id,
+                        instrument_id=InstrumentId(symbol),
+                        venue_id=VenueId("BINANCE"),
+                        side=OrderSide(expected_side),
+                        trigger_price=Price(amount=str(tp_item.get("triggerPrice", "") or "")),
+                        order_price=None,
+                        quantity=Quantity(amount=str(tp_item.get("quantity", "") or "")),
+                        order_type=str(tp_item.get("orderType", "") or "").strip().upper(),
+                        reduce_only=True,
+                        status=ProtectionStatus.ACTIVE,
+                        stop_type=None,
+                        take_profit_type=TakeProfitType.FIXED_RR,
+                        owner_id=str(self._protection_owner_id),
+                        position_generation=generation,
+                        session_id=str(getattr(self, "_session_id", "") or ""),
+                        exchange_order_id=str(tp_item.get("algoId", "")),
+                    )
+                    _projection = PositionProtection(
+                        position_id=position_id,
+                        instrument_id=InstrumentId(symbol),
+                        venue_id=VenueId("BINANCE"),
+                        entry_price=float(_projection_entry),
+                        quantity=float(position_qty),
+                        side=OrderSide("BUY") if amount > 0 else OrderSide("SELL"),
+                        stop_loss=_stop_order,
+                        take_profits=[_tp_order],
+                        owner_id=str(self._protection_owner_id),
+                        position_generation=generation,
+                        session_id=str(getattr(self, "_session_id", "") or ""),
+                    )
+                    _projection.update_price_extremes(_projection.entry_price)
+                    _restore_pp = getattr(self._protection, "restore_position_protection", None)
+                    if callable(_restore_pp):
+                        _restore_pp(_projection)
+                except Exception as exc:
+                    issues.append(f"PROTECTION_ADOPTION_PROJECTION_FAILED:{symbol}:{type(exc).__name__}:{exc}")
+        return adopted, issues
 
     def _protection_inventory_semantic_issues(self, inventory: list[dict[str, Any]]) -> list[str]:
         """Compare venue Algo facts with durable protection intent semantics.
@@ -4034,15 +4363,11 @@ class AutonomousEngine:
             # 1e-8、触发价按 1e-4 量化后比较(venue 最小精度内视为一致)。
             _QTY_STEP = Decimal("0.00000001")
             _PRICE_STEP = Decimal("0.0001")
-            if expected_qty is None or actual_qty is None or expected_qty <= 0:
-                issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
-            elif abs(actual_qty - expected_qty) > _QTY_STEP / 2:
+            if expected_qty is None or actual_qty is None or expected_qty <= 0 or abs(actual_qty - expected_qty) > _QTY_STEP / 2:
                 issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
             expected_trigger = _decimal(expected.get("trigger_price"))
             actual_trigger = _decimal(actual.get("triggerPrice"))
-            if expected_trigger is None or actual_trigger is None or expected_trigger <= 0:
-                issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
-            elif abs(actual_trigger - expected_trigger) > _PRICE_STEP / 2:
+            if expected_trigger is None or actual_trigger is None or expected_trigger <= 0 or abs(actual_trigger - expected_trigger) > _PRICE_STEP / 2:
                 issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
             reduce_only = actual.get("reduceOnly")
             if reduce_only is not True and str(reduce_only).strip().lower() not in {"1", "true", "yes"}:
@@ -4096,10 +4421,7 @@ class AutonomousEngine:
                     )
                     cleaned += 1
                 except Exception as exc:
-                    print(
-                        f"[startup] Failed to cancel stale protection {protection_id}: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
+                    print(f"[startup] Failed to cancel stale protection {protection_id}: {type(exc).__name__}: {exc}")
         if cleaned:
             print(f"[startup] Canceled {cleaned} stale protection row(s) for {symbol}: {reason}")
 
@@ -4123,10 +4445,7 @@ class AutonomousEngine:
                     print(f"[startup] Canceled stale protection algo {_algo_id} for {_sym}")
                     canceled_ids.add(str(_algo_id))
                 else:
-                    print(
-                        f"[startup] Failed to cancel stale algo {_algo_id}: "
-                        f"{_cancel_msg or _cancel_resp}"
-                    )
+                    print(f"[startup] Failed to cancel stale algo {_algo_id}: {_cancel_msg or _cancel_resp}")
             except Exception as _cancel_exc:
                 print(f"[startup] Error canceling stale algo {_algo_id}: {_cancel_exc}")
         self._stale_protection_algos = []
@@ -4345,8 +4664,11 @@ class AutonomousEngine:
                     return False
                 row_status = str(row.get("status", "")).strip().upper()
                 is_pending = row_status == "PENDING"
-                if is_pending and exchange_order_id and inventory is not None and any(
-                    str(a.get("algoId", "")) == exchange_order_id for a in inventory
+                if (
+                    is_pending
+                    and exchange_order_id
+                    and inventory is not None
+                    and any(str(a.get("algoId", "")) == exchange_order_id for a in inventory)
                 ):
                     # BD-FIX: 已拿到 venue ACK 但持久化中断停留在 PENDING 的行
                     # (实测 XRP TP:venue 存在 algoId,durable 行未推进 ACTIVE
@@ -6678,7 +7000,6 @@ class AutonomousEngine:
             if account_balance > self._peak_equity:
                 self._peak_equity = account_balance
 
-
     async def _ensure_entry_protection(
         self,
         order_id: str,
@@ -6723,9 +7044,7 @@ class AutonomousEngine:
         _same_projection = [
             pp2
             for pp2 in self._protection.all_positions().values()
-            if str(pp2.instrument_id) == symbol
-            and abs(float(pp2.quantity) - qty) < 1e-8
-            and pp2.side == pos_side
+            if str(pp2.instrument_id) == symbol and abs(float(pp2.quantity) - qty) < 1e-8 and pp2.side == pos_side
         ]
         if _same_projection:
             return
@@ -6913,6 +7232,7 @@ class AutonomousEngine:
                         ],
                     ]
                 )
+
     @staticmethod
     def _fact_timestamp(fact_dt: Any) -> float:
         """Convert a (possibly naive/UTC) fact timestamp to Unix seconds."""
@@ -7064,10 +7384,7 @@ class AutonomousEngine:
             _order_id = str(getattr(update, "order_id", "") or "")
             _order_status = str(getattr(getattr(update, "order_status", None), "value", ""))
             _externally_owned = _order_id not in getattr(self, "_active_order_ids", set())
-            if (
-                result.status is UserProjectionStatus.ACCEPTED
-                and _order_status in {"FILLED", "PARTIALLY_FILLED"}
-            ):
+            if result.status is UserProjectionStatus.ACCEPTED and _order_status in {"FILLED", "PARTIALLY_FILLED"}:
                 # BD-FIX: 自有订单的成交同样经 user stream 事件入账,不再
                 # 仅依赖 REST 订单监控。监控首轮观测到"先部分成交后终态
                 # (EXPIRED/CANCELED)"的订单时按 fail-closed 保留 UNKNOWN
@@ -8181,9 +8498,9 @@ class AutonomousEngine:
                         client_algo_id = str(item.get("clientAlgoId", "") or "")
                         break
                 # BD-FIX（C2 审查）: 共享 demo 账户上其他用户的算法单
-                # 不是"残留无主"—— 只有本引擎命名空间（beidou- 前缀）
-                # 的单才允许自动取消；他人订单不构成所有权阻断。
-                if not client_algo_id or not client_algo_id.startswith("beidou-"):
+                # 不是"残留无主"—— 只有本引擎命名空间（beidou- 入场单 /
+                # bdp- 保护单）的单才允许自动取消；他人订单不构成所有权阻断。
+                if not client_algo_id or not client_algo_id.startswith(("beidou-", "bdp-")):
                     print(
                         f"[beidou-autopilot] Skip foreign Algo {algo_id} "
                         f"(clientAlgoId={client_algo_id[:24] if client_algo_id else '<empty>'}...) — not owned by this engine"
@@ -8329,6 +8646,31 @@ class AutonomousEngine:
                 venue_algo_ids = {str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None}
                 missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
                 if missing_owned_ids:
+                    # BD-FIX (root): 刚下发的 algo 单可能尚未进入库存快照
+                    # (testnet eventual consistency / API 抖动)。宽限重查一次,
+                    # 并尝试收养 venue 侧可绑定的孤儿单;仍无法证明所有权才
+                    # fail-closed 阻断 —— 问题由 nearline 周期验证清除,
+                    # 不再是进程内永久锁死。
+                    await asyncio.sleep(2.0)
+                    algos_retry = await self._get_open_algo_inventory()
+                    if isinstance(algos_retry, list):
+                        algos_resp = algos_retry
+                        venue_algo_ids = {
+                            str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None
+                        }
+                        missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
+                    if missing_owned_ids:
+                        _adopted, _adopt_issues = self._adopt_orphaned_protection_algos(algos_resp)
+                        if _adopted:
+                            print(f"[startup] 🧬 Adopted {_adopted} orphaned protection algo(s) into durable ownership")
+                        if _adopt_issues:
+                            self._block_unowned_protection_orders(_adopt_issues)
+                        known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
+                        venue_algo_ids = {
+                            str(item.get("algoId")) for item in algos_resp if item.get("algoId") is not None
+                        }
+                        missing_owned_ids = sorted(known_algo_ids - venue_algo_ids)
+                if missing_owned_ids:
                     # A durable ACTIVE row is not proof that the venue still
                     # has the protection.  Missing IDs are ambiguous (the
                     # order may have triggered, expired, or been cancelled),
@@ -8346,9 +8688,28 @@ class AutonomousEngine:
                         "[startup] Conditional-order semantics do not match durable protection; recovery remains read-only"
                     )
                     return
+                # BD-FIX (root): 收养孤儿 bdp- 保护单 —— 绑定到本地持仓的
+                # venue 条件单先进入 durable 所有权,再参与 protected 判定;
+                # 否则外部保护单会让持仓被判 UNPROTECTED 而阻断。
+                if bool(getattr(self, "_last_algo_inventory_genuine", False)) and algos_resp:
+                    _adopted, _adopt_issues = self._adopt_orphaned_protection_algos(algos_resp)
+                    if _adopted:
+                        print(f"[startup] 🧬 Adopted {_adopted} orphaned protection algo(s) into durable ownership")
+                    if _adopt_issues:
+                        self._block_unowned_protection_orders(_adopt_issues)
+                    known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
                 for item in algos_resp:
                     if str(item.get("algoId")) in known_algo_ids:
                         protected_symbols.add(str(item.get("symbol", "")))
+
+            # BD-FIX (root): 库存核验通过 → 单一放行写入点。走到此处说明
+            # 无无主单、无缺失、语义干净;覆盖评估决定最终事实。
+            self._update_protection_fact(
+                hard_issues=[],
+                venue_missing=[],
+                unowned_ids=[],
+                genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
+            )
 
             # The inventory check above is required even when every venue
             # position already has a local projection.  Only after the
@@ -8402,6 +8763,16 @@ class AutonomousEngine:
             existing_algos = await self._get_open_algo_inventory()
             if not isinstance(existing_algos, list):
                 return
+            # BD-FIX (root): 孤儿保护单收养 —— 在 unowned/映射比较之前执行,
+            # 使内存所有权映射与 durable 行先收敛;歧义仍然 fail-closed。
+            _adopted_count = 0
+            _adopt_issues: list[str] = []
+            if bool(getattr(self, "_last_algo_inventory_genuine", False)) and existing_algos:
+                _adopted_count, _adopt_issues = self._adopt_orphaned_protection_algos(existing_algos)
+                if _adopted_count:
+                    print(f"[nearline] 🧬 Adopted {_adopted_count} orphaned protection algo(s) into durable ownership")
+                if _adopt_issues:
+                    self._block_unowned_protection_orders(_adopt_issues)
             known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
             # BD-FIX（C2 审查运行时变体）: 共享 demo 账户上其他用户的
             # 算法单（非 beidou- 前缀）不构成所有权阻断 —— 排除出
@@ -8490,6 +8861,14 @@ class AutonomousEngine:
                             symbol,
                             a.get("algoId", "?"),
                         )
+            # BD-FIX (root): 清理路径同样参与保护事实收敛 —— 走到此处说明
+            # 库存真实、语义干净、映射一致,允许清除问题并置 ACTIVE。
+            self._update_protection_fact(
+                hard_issues=[],
+                venue_missing=[],
+                unowned_ids=[],
+                genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
+            )
         except Exception as e:
             print(f"[nearline] Excess order cleanup error: {e}")
 
@@ -8578,6 +8957,9 @@ class AutonomousEngine:
                 f"proj_not_in_symbols={_miss} "
                 f"pending_retry={sorted(getattr(self, '_pending_protection_retry', set()))[:5]}"
             )
+        venue_missing: list[str] = []
+        hard_issues: list[str] = []
+        unowned_algo_ids: list[str] = []
         try:
             # 查询交易所已有的 algo 订单；API 失败时使用本地缓存
             existing_algos = await self._get_open_algo_inventory()
@@ -8647,6 +9029,16 @@ class AutonomousEngine:
                     self._venue_missing_streaks = streaks
                     if cleaned:
                         print(f"[nearline] Cleaned {cleaned} stale protection(s) (no longer on venue)")
+            # BD-FIX (root): 孤儿保护单收养 —— durable 行缺失而 venue 存在
+            # 本引擎命名空间(bdp-)的 SL/TP 时,先收养进 durable 存储并登记
+            # 内存所有权映射,再进入 unowned 检查。否则 venue 已有单
+            # (covered skip)与 durable 覆盖缺失(资格门)互相锁死。
+            _adopted_count = 0
+            _adopt_issues: list[str] = []
+            if bool(getattr(self, "_last_algo_inventory_genuine", False)) and existing_algos:
+                _adopted_count, _adopt_issues = self._adopt_orphaned_protection_algos(existing_algos)
+                if _adopted_count:
+                    print(f"[nearline] 🧬 Adopted {_adopted_count} orphaned protection algo(s) into durable ownership")
             exchange_algo_symbols: dict[str, set[str]] = {}
             if api_ok:
                 known_algo_ids = {algo_id for ids in self._active_algo_ids.values() for algo_id in ids}
@@ -8699,14 +9091,23 @@ class AutonomousEngine:
                 except Exception as _sweep_exc:
                     print(f"[nearline] ⚠️ Protection projection rebuild failed for {_sweep_sym}: {_sweep_exc}")
 
+            # BD-FIX (root): 保护事实唯一"放行"写入点 —— 库存真实、语义
+            # 干净、无 venue 缺失、无无主单、durable 覆盖成立时清除问题并
+            # 置 ACTIVE;任一条件不满足保持 fail-closed。收养完成后调用,
+            # 使资格门与 nearline 事实收敛到同一结论。
+            self._update_protection_fact(
+                hard_issues=[*hard_issues, *_adopt_issues],
+                venue_missing=venue_missing,
+                unowned_ids=unowned_algo_ids,
+                genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
+            )
+
             # BD-FIX (final83h): 库存真空(查询成功但无行,venue 可见性延迟)时,
             # 有 durable ACTIVE 行的保护单视为已覆盖,不重复补挂(重启恢复后
             # 实测 4 单 vs 期望 2)。真正缺失的 durable 行会在 3 轮
             # VENUE_ROW_MISSING 防抖后清理,清理后恢复补挂;新建投影
             # (仅 PENDING 行)不受影响,首建路径照常。
-            _inventory_genuine_empty = (
-                bool(getattr(self, "_last_algo_inventory_genuine", False)) and not existing_algos
-            )
+            _inventory_genuine_empty = bool(getattr(self, "_last_algo_inventory_genuine", False)) and not existing_algos
             _durable_active_protection_ids: set[str] = set()
             if _inventory_genuine_empty and self._store is not None:
                 try:
@@ -9077,7 +9478,10 @@ class AutonomousEngine:
                         continue
                     # BD-FIX (final83h): 库存真空时 durable ACTIVE 行已覆盖的
                     # TP 不重复补挂(venue 可见性延迟)。
-                    if _inventory_genuine_empty and str(getattr(tp, "protection_id", "")) in _durable_active_protection_ids:
+                    if (
+                        _inventory_genuine_empty
+                        and str(getattr(tp, "protection_id", "")) in _durable_active_protection_ids
+                    ):
                         continue
                     # Take-profit retries use the same approved trigger; a
                     # venue rejection remains UNKNOWN instead of inventing a
@@ -9155,6 +9559,7 @@ class AutonomousEngine:
             print(f"[{tag}] {symbol}: SKIP (quantity quantization failed)")
             return None
         return float(_quantized)
+
     def _project_order_terminal(self, order_id: str, status: str, cumulative_filled_quantity: str) -> None:
         """BD-FIX (final83j): 订单监控路径兜底投影执行命令终态。
 
@@ -9248,8 +9653,12 @@ class AutonomousEngine:
                     else:
                         target = ChildCommandState.REJECTED
                     await asyncio.to_thread(
-                        _recover, intent_id, sequence, target,
-                        event_id=event_id, exchange_order_id=exchange_order_id,
+                        _recover,
+                        intent_id,
+                        sequence,
+                        target,
+                        event_id=event_id,
+                        exchange_order_id=exchange_order_id,
                     )
                     resolved += 1
                     continue
@@ -9273,19 +9682,29 @@ class AutonomousEngine:
                 if current_state == "PLANNED":
                     # PLANNED 只允许 → SENDING/REJECTED:先恢复为 SENDING 再映射
                     await asyncio.to_thread(
-                        _recover, intent_id, sequence, ChildCommandState.SENDING,
-                        event_id=f"{event_id}:to-sending", exchange_order_id=exchange_order_id,
+                        _recover,
+                        intent_id,
+                        sequence,
+                        ChildCommandState.SENDING,
+                        event_id=f"{event_id}:to-sending",
+                        exchange_order_id=exchange_order_id,
                     )
                 await asyncio.to_thread(
-                    _recover, intent_id, sequence, target,
-                    event_id=event_id, exchange_order_id=exchange_order_id,
+                    _recover,
+                    intent_id,
+                    sequence,
+                    target,
+                    event_id=event_id,
+                    exchange_order_id=exchange_order_id,
                     cumulative_filled_quantity=cum,
                 )
                 resolved += 1
             except Exception as exc:
                 logger.warning(
                     "stale execution command resolve failed %s/%s: %s",
-                    intent_id, sequence, type(exc).__name__,
+                    intent_id,
+                    sequence,
+                    type(exc).__name__,
                 )
         if resolved:
             print(f"[nearline] 🧹 Resolved {resolved} stale execution command(s) against venue facts")
@@ -9314,7 +9733,9 @@ class AutonomousEngine:
             return False
         try:
             result = await self._api_async(
-                Endpoint.LEVERAGE, method="POST", signed=True,
+                Endpoint.LEVERAGE,
+                method="POST",
+                signed=True,
                 params={"symbol": symbol, "leverage": str(lev_int)},
             )
         except Exception as exc:
@@ -9327,7 +9748,6 @@ class AutonomousEngine:
         if isinstance(result, dict) and "error" in result:
             logger.warning("venue leverage sync rejected for %s: %s", symbol, str(result.get("msg", ""))[:120])
         return False
-
 
     async def _nearline_tick(self) -> None:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
@@ -11069,16 +11489,11 @@ class AutonomousEngine:
     def build_truth_snapshot(self) -> TruthSnapshot:
         """Build a snapshot only from recorded facts, never call-time freshness."""
         now_ts = time.time()
-        # BD-FIX: protection 事实周期刷新 —— 多品种 nearline 每轮处理
-        # 10 品种、tick 周期拉长后，protection 事实只有事件驱动更新
-        # （恢复/durable gate），300s 后 stale → 资格恒 NOT_VERIFIABLE
-        # → 所有新意图被拒（final46 实测 00:34 四品种全拒）。快照
-        # 构建时刷新（与风险事实 9a65423 同语义）。
-        if getattr(self, "_protection_owner_unknown", False):
-            self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
-        # 否则保留现有 hash（ACTIVE/UNKNOWN/空 语义原样保留 ——
-        # fail-closed 语义不受刷新影响），只刷新时间戳
-        self._last_protection_fact_at = now_ts
+        # BD-FIX (root): 快照构建不再重写保护事实 —— hash 只由
+        # _block_unowned_protection_orders(UNKNOWN)与
+        # _update_protection_fact(ACTIVE/UNKNOWN)写入,事实新鲜度由
+        # 周期评估方(_durable_fact_status / nearline 补发循环)维护。
+        # 快照是只读投影:同一事实下资格判定确定,不再随调用时点抖动。
         recon_status = getattr(getattr(self, "_last_reconciliation_result", None), "status", "UNKNOWN")
         snapshot = TruthSnapshot(
             snapshot_id=f"snap-{int(now_ts * 1000)}",
@@ -11114,12 +11529,15 @@ class AutonomousEngine:
             # ACTIVE 哈希 → protection UNKNOWN → 所有意图
             # ELIGIBILITY_NO_NEW_RISK（final50 实测 03:28 717 FAILED）。
             protection_status=(
-                # protection_status 跟随记录的 hash: 仅当所有权已知且最近一次
-                # 覆盖评估记录为 ACTIVE 时才可进入 ACTIVE；覆盖缺失/未评估时
-                # 记录 UNKNOWN → NO_NEW_RISK（fail-closed）。
+                # protection_status 跟随记录的 hash: 仅当所有权已知、最近一次
+                # 覆盖评估记录为 ACTIVE、且无待处理所有权/语义问题时才可进入
+                # ACTIVE;否则 UNKNOWN → NO_NEW_RISK(fail-closed)。
+                # BD-FIX (root): 问题集直接参与判定(纯读),与 hash 写入方
+                # 共同保证"同一事实下资格判定确定、问题未清除时绝不放行"。
                 "ACTIVE"
                 if self._protection_owner_unknown is False
                 and getattr(self, "_last_protection_hash", "") == hashlib.sha256(b"ACTIVE").hexdigest()
+                and not getattr(self, "_protection_issues", set())
                 else "UNKNOWN"
             ),
             risk_status="NORMAL" if self._control._action != ControlAction.LOCK else "CRITICAL",
@@ -11494,9 +11912,7 @@ class AutonomousEngine:
             _stale_canceled = await self._cancel_stale_protection_algos()
             if _stale_canceled and isinstance(existing_algo_inventory, list):
                 existing_algo_inventory = [
-                    a
-                    for a in existing_algo_inventory
-                    if str(a.get("algoId", "")) not in _stale_canceled
+                    a for a in existing_algo_inventory if str(a.get("algoId", "")) not in _stale_canceled
                 ]
             if not durable_projection_ok:
                 print(

@@ -180,6 +180,7 @@ def _recover_sending_execution_commands(
     *,
     lease_owner: str,
     fencing_token: int,
+    expired_margin_seconds: int = 0,
 ) -> None:
     """Project crash-ambiguous child sends to UNKNOWN with durable evidence."""
 
@@ -188,15 +189,17 @@ def _recover_sending_execution_commands(
         ExecutionChildCommand,
     )
 
+    margin = max(0, int(expired_margin_seconds))
     cursor.execute(
         "SELECT c.parent_intent_id,c.sequence,c.state,c.payload::text "
         "FROM v3_execution_commands AS c "
         "JOIN v3_transactional_outbox AS o ON o.intent_id=c.parent_intent_id "
         "WHERE c.state='SENDING' AND ("
         "c.lease_owner IS DISTINCT FROM %s OR c.fencing_token<%s "
-        "OR o.status='UNKNOWN' OR o.lease_until IS NULL OR o.lease_until<CURRENT_TIMESTAMP"
+        "OR o.status='UNKNOWN' OR o.lease_until IS NULL "
+        "OR o.lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')"
         ") FOR UPDATE OF c,o SKIP LOCKED",
-        (lease_owner, fencing_token),
+        (lease_owner, fencing_token, margin),
     )
     rows = cursor.fetchall() or []
     for row in rows:
@@ -497,7 +500,7 @@ class OutboxWorker:
             )
         return target
 
-    async def recover_inflight(self) -> int:
+    async def recover_inflight(self, expired_margin_seconds: int = 0) -> int:
         """Fence prior generations/expired leases and convert sends to UNKNOWN.
 
         A process crash can leave a row in ``SENDING`` or ``SENT`` even when
@@ -505,6 +508,10 @@ class OutboxWorker:
         generation, a different lease owner, or an expired lease does not
         prove that the order was absent, so recovery records an ambiguous fact
         and requires an independent venue query before any resend.
+
+        ``expired_margin_seconds`` (BD-FIX root): 运行时周期恢复只回收
+        "过期超过宽限窗口"的租约 —— 同一 worker 正在执行的慢 venue 调用
+        不应被自己围栏。启动恢复仍传 0(进程边界,无自围栏风险)。
         """
 
         if self._fencing_token <= 0:
@@ -512,14 +519,15 @@ class OutboxWorker:
         if self._conn is None and self._connection_factory is None:
             return 0
         recovered = 0
+        margin = max(0, int(expired_margin_seconds))
         with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
             cursor.execute(
                 "SELECT message_id,intent_id,status FROM v3_transactional_outbox "
                 "WHERE status IN ('SENDING','SENT') AND ("
                 "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
-                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')"
                 ") FOR UPDATE SKIP LOCKED",
-                (self._lease_owner, self._fencing_token),
+                (self._lease_owner, self._fencing_token, margin),
             )
             rows = cursor.fetchall() or []
             for row in rows:
@@ -531,7 +539,7 @@ class OutboxWorker:
                     "fencing_token=%s,last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
                     "AND status IN ('SENDING','SENT') AND ("
                     "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
-                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')"
                     ")",
                     (
                         self._fencing_token,
@@ -539,6 +547,7 @@ class OutboxWorker:
                         message_id,
                         self._lease_owner,
                         self._fencing_token,
+                        margin,
                     ),
                 )
                 if getattr(cursor, "rowcount", 1) != 1:
@@ -1326,8 +1335,7 @@ class PostgresIntentOutbox:
             OutboxWorker._cursor_scope(conn) as cursor,
         ):
             cursor.execute(
-                "SELECT parent_intent_id,sequence,state FROM v3_execution_commands "
-                "WHERE exchange_order_id=%s",
+                "SELECT parent_intent_id,sequence,state FROM v3_execution_commands WHERE exchange_order_id=%s",
                 (str(exchange_order_id),),
             )
             row = cursor.fetchone()
@@ -1458,7 +1466,7 @@ class PostgresIntentOutbox:
             row = cursor.fetchone()
         return int(_row_value(row, "count", 0) or 0) if row is not None else 0
 
-    def recover_inflight(self) -> int:
+    def recover_inflight(self, expired_margin_seconds: int = 0) -> int:
         """Convert prior-generation/stale in-flight intents to ``UNKNOWN``.
 
         The engine uses a synchronous claim boundary, so startup recovery is
@@ -1467,12 +1475,17 @@ class PostgresIntentOutbox:
         an expired or missing lease is ambiguous even when the token is
         unchanged.  Both cases are recorded as UNKNOWN and require an
         independent client-order query.
+
+        ``expired_margin_seconds`` (BD-FIX root): 运行时周期恢复只回收
+        "过期超过宽限窗口"的租约 —— 同一 worker 正在执行的慢 venue 调用
+        不应被自己围栏。启动恢复仍传 0。
         """
 
         if self._connection_factory is None:
             return 0
         if self._fencing_token <= 0:
             raise RuntimeError("OUTBOX_FENCING_TOKEN_UNKNOWN")
+        margin = max(0, int(expired_margin_seconds))
         recovered = 0
         with (
             OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
@@ -1483,9 +1496,9 @@ class PostgresIntentOutbox:
                 "SELECT message_id,intent_id,status FROM v3_transactional_outbox "
                 "WHERE status IN ('SENDING','SENT') AND ("
                 "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
-                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')"
                 ") FOR UPDATE SKIP LOCKED",
-                (self._lease_owner, self._fencing_token),
+                (self._lease_owner, self._fencing_token, margin),
             )
             rows = cursor.fetchall() or []
             for row in rows:
@@ -1497,7 +1510,7 @@ class PostgresIntentOutbox:
                     "fencing_token=%s,last_error=%s,updated_at=CURRENT_TIMESTAMP WHERE message_id=%s "
                     "AND status IN ('SENDING','SENT') AND ("
                     "lease_owner IS DISTINCT FROM %s OR fencing_token<%s "
-                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP"
+                    "OR lease_until IS NULL OR lease_until<CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')"
                     ")",
                     (
                         self._fencing_token,
@@ -1505,6 +1518,7 @@ class PostgresIntentOutbox:
                         message_id,
                         self._lease_owner,
                         self._fencing_token,
+                        margin,
                     ),
                 )
                 if getattr(cursor, "rowcount", 1) != 1:
@@ -1527,6 +1541,7 @@ class PostgresIntentOutbox:
                 cursor,
                 lease_owner=self._lease_owner,
                 fencing_token=self._fencing_token,
+                expired_margin_seconds=margin,
             )
         return recovered
 

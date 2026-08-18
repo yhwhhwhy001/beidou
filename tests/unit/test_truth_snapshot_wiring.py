@@ -195,19 +195,32 @@ def test_reconciliation_wiring_then_eligibility_flow() -> None:
     assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
 
 
-def test_stale_protection_fact_not_verifiable_then_refresh_eligible() -> None:
-    """保护事实构建时自动刷新（BD-FIX）：多品种 tick 周期拉长后保护
-    事实只由事件驱动更新会 stale → 资格恒 NOT_VERIFIABLE。构建时按
-    owner_unknown 标志刷新（hash 语义保留），stale 不再阻断。"""
+def test_stale_protection_fact_not_verifiable_until_evaluator_refresh() -> None:
+    """保护事实由评估方周期刷新(根因修复):快照构建是只读投影,不再
+    构建时刷新 hash/时间戳。陈旧事实必须 fail-closed(NOT_VERIFIABLE),
+    直到评估方(_update_protection_fact)重新验证并写入。"""
     engine = _wired_engine()
+    engine._protection_issues = set()
+    engine._protection_owner_unknown = False
     engine._last_protection_fact_at = time.time() - 3600
-    # 构建时自动刷新 → 不再因 stale 阻断
+    # 陈旧事实 → 快照不得自行刷新 → NOT_VERIFIABLE
+    assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.NOT_VERIFIABLE
+    # 评估方(库存验证通过)刷新 → 恢复 ELIGIBLE
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
     assert derive_eligibility(engine.build_truth_snapshot()) == TradingEligibility.ELIGIBLE
-    # owner_unknown 时刷新为 UNKNOWN hash → 仍 fail-closed
-    engine._protection_owner_unknown = True
-    engine._last_protection_fact_at = time.time()
+
+
+def test_pending_protection_issues_keep_status_unknown_fail_closed() -> None:
+    """问题集未清除时,即使 hash 为 ACTIVE 也不得放行(纯读判定)。
+
+    根因修复:owner_unknown / hash 由写入方维护,快照额外直接检查问题集,
+    覆盖"评估方写入间隔内新问题产生"的窗口。
+    """
+    engine = _wired_engine()
+    engine._protection_owner_unknown = False
+    engine._protection_issues = {"PROTECTION_OWNER_MAPPING_INCOMPLETE"}
     snap = engine.build_truth_snapshot()
-    assert snap.protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+    assert snap.protection_status == "UNKNOWN"
     assert derive_eligibility(snap) == TradingEligibility.NO_NEW_RISK
 
 
@@ -249,21 +262,27 @@ def _durable_engine() -> AutonomousEngine:
     return engine
 
 
-def test_durable_fact_status_refreshes_protection_fact() -> None:
-    """覆盖 OK 时 _durable_fact_status 记录 ACTIVE 保护事实并刷新新鲜度。"""
+def test_durable_fact_status_refreshes_freshness_without_writing_hash() -> None:
+    """覆盖 OK 时 _durable_fact_status 只读判定并刷新新鲜度(根因修复):
+    hash 不再由本方法写入 —— 放行唯一入口是 _update_protection_fact,
+    消除多写入方竞争造成的 ACTIVE/UNKNOWN 抖动。"""
     engine = _durable_engine()
     engine._last_protection_fact_at = 0.0  # 陈旧
+    engine._protection_issues = set()
     ok, reason, _evidence = engine._durable_fact_status()
     assert ok and reason == "DURABLE_FACTS_VERIFIED"
-    assert engine._last_protection_hash == hashlib.sha256(b"ACTIVE").hexdigest()
+    assert not hasattr(engine, "_last_protection_hash")  # 未写入 hash
     assert time.time() - engine._last_protection_fact_at < 5
 
 
-def test_durable_fact_status_coverage_gap_records_unknown_protection() -> None:
-    """覆盖缺失时 _durable_fact_status 记录 UNKNOWN 保护事实（fail-closed）。"""
+def test_durable_fact_status_coverage_gap_fails_closed_without_writing_hash() -> None:
+    """覆盖缺失时 _durable_fact_status fail-closed(根因修复):
+    判定结果只读返回,不写 hash;门禁状态由问题集 + _update_protection_fact
+    维护,快照判定确定且不随调用时点抖动。"""
     engine = _durable_engine()
     engine._last_account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}]}
+    engine._protection_issues = set()
     ok, reason, _evidence = engine._durable_fact_status()
     assert not ok and reason == "DURABLE_PROTECTION_COVERAGE_UNKNOWN"
-    assert engine._last_protection_hash == hashlib.sha256(b"UNKNOWN").hexdigest()
+    assert not hasattr(engine, "_last_protection_hash")  # 未写入 hash
     assert time.time() - engine._last_protection_fact_at < 5
