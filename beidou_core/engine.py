@@ -8939,23 +8939,31 @@ class AutonomousEngine:
                 continue
             sequence = int(row.get("sequence", 1))
             try:
-                query = await self._adapter.query_order_by_client_id(symbol, client_id)
+                # 直查原始响应:适配器会把 -2013(Order does not exist)包装为
+                # UNKNOWN 且丢弃原始 msg,解析器无法区分"真不存在"与"查询失败"
+                raw = await self._api_async(
+                    Endpoint.ORDER,
+                    signed=True,
+                    params={"symbol": symbol, "origClientOrderId": client_id},
+                )
             except Exception as _query_exc:
                 logger.debug("stale child venue query failed for %s: %s", symbol, type(_query_exc).__name__)
                 continue
             venue_status: str | None = None
             venue_exec_qty: str | None = None
-            if query.is_success() and isinstance(query.data, dict):
-                venue_status = str(query.data.get("status", "")).upper()
-                venue_exec_qty = str(query.data.get("executedQty", "0") or "0")
-                exchange_order_id = str(query.data.get("orderId", exchange_order_id) or exchange_order_id)
-            else:
-                err = query.error
-                msg = str(getattr(err, "message", "") or "")
-                if "Order does not exist" in msg or "Unknown order" in msg:
+            if isinstance(raw, dict) and "status" in raw:
+                venue_status = str(raw.get("status", "")).upper()
+                venue_exec_qty = str(raw.get("executedQty", "0") or "0")
+                exchange_order_id = str(raw.get("orderId", exchange_order_id) or exchange_order_id)
+            elif isinstance(raw, dict):
+                msg = str(raw.get("msg", "") or "")
+                code = raw.get("code")
+                if code == -2013 or "Order does not exist" in msg or "Unknown order" in msg:
                     venue_status = "NOT_FOUND"
                 else:
                     continue
+            else:
+                continue
             event_id = f"stale-resolve:{intent_id}:{sequence}:{venue_status}"
             try:
                 if venue_status == "NOT_FOUND":

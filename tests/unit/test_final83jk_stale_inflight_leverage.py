@@ -158,13 +158,8 @@ async def test_engine_resolves_stale_child_with_venue_facts(monkeypatch) -> None
         ),
         recover_stale_child=recover,
     )
-    engine._adapter = SimpleNamespace(
-        query_order_by_client_id=AsyncMock(
-            return_value=SimpleNamespace(
-                is_success=lambda: True,
-                data={"status": "FILLED", "executedQty": "5.8", "orderId": "123"},
-            )
-        )
+    engine._api_async = AsyncMock(
+        return_value={"status": "FILLED", "executedQty": "5.8", "orderId": "123"}
     )
 
     resolved = await engine._resolve_stale_execution_commands()
@@ -190,15 +185,7 @@ async def test_engine_resolves_not_found_planned_as_rejected(monkeypatch) -> Non
         ),
         recover_stale_child=recover,
     )
-    engine._adapter = SimpleNamespace(
-        query_order_by_client_id=AsyncMock(
-            return_value=SimpleNamespace(
-                is_success=lambda: False,
-                data=None,
-                error=SimpleNamespace(message="Order does not exist"),
-            )
-        )
-    )
+    engine._api_async = AsyncMock(return_value={"code": -2013, "msg": "Order does not exist"})
 
     resolved = await engine._resolve_stale_execution_commands()
 
