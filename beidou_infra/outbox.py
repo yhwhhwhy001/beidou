@@ -1179,7 +1179,7 @@ class PostgresIntentOutbox:
             OutboxWorker._cursor_scope(conn) as cursor,
         ):
             cursor.execute(
-                "SELECT parent_intent_id,sequence,state,symbol,client_order_id,exchange_order_id"
+                "SELECT parent_intent_id,sequence,state,symbol,client_order_id,exchange_order_id,"
                 "filled_quantity,updated_at FROM v3_execution_commands "
                 "WHERE state IN ('PLANNED','SENDING','ACKED','PARTIALLY_FILLED','UNKNOWN') "
                 "AND updated_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 second') "
@@ -1259,7 +1259,7 @@ class PostgresIntentOutbox:
             )
             child = updated.children[sequence]
             cursor.execute(
-                "UPDATE v3_execution_commands SET payload=CAST(%s AS jsonb),state=%s,exchange_order_id=%s"
+                "UPDATE v3_execution_commands SET payload=CAST(%s AS jsonb),state=%s,exchange_order_id=%s,"
                 "filled_quantity=%s,updated_at=CURRENT_TIMESTAMP "
                 "WHERE parent_intent_id=%s AND sequence=%s AND state=%s",
                 (
