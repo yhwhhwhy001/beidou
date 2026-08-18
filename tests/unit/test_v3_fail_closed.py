@@ -643,11 +643,22 @@ def test_durable_protection_coverage_rejects_orphan_exchange_ack() -> None:
         "exchange_order_id": "algo-orphan",
     }
 
-    covered, evidence = engine._assess_protection_coverage([], [orphan])
+    # 本地投影仍在而 venue 无持仓 → 孤儿行是丢仓级缺口,fail-closed
+    engine._protection = SimpleNamespace(
+        all_positions=lambda: {"p-sol": SimpleNamespace(instrument_id="SOLUSDT")}
+    )
+    covered, evidence = engine._assess_protection_coverage([], [orphan], engine._protection.all_positions())
     assert covered is False
-    assert evidence["unprotected_symbols"] == [
-        {"symbol": "SOLUSDT", "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
+    assert {"symbol": "SOLUSDT", "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"} in evidence[
+        "unprotected_symbols"
     ]
+
+    # 本地无投影 + venue 无持仓 → 已平仓位置残留行,由 ghost cleanup 清理,
+    # 不构成开放仓位的覆盖缺口(实测 ENA 平仓后残留行钉死资格门 22 连拒)
+    engine._protection = SimpleNamespace(all_positions=lambda: {})
+    covered, evidence = engine._assess_protection_coverage([], [orphan], engine._protection.all_positions())
+    assert covered is True
+    assert evidence["unprotected_symbols"] == []
 
 
 def test_unknown_protection_config_freezes_new_risk_without_synthetic_defaults() -> None:

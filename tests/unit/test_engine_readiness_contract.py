@@ -912,7 +912,8 @@ def test_small_position_is_not_exempt_from_protection() -> None:
 def test_protection_coverage_rejects_orphans_and_local_position_without_venue_fact() -> None:
     engine = _engine()
     local = SimpleNamespace(instrument_id="ETHUSDT")
-    engine._protection = _Protection({"p-1": local})
+    local_sol = SimpleNamespace(instrument_id="SOLUSDT")
+    engine._protection = _Protection({"p-1": local, "p-2": local_sol})
     protections = [
         {
             "symbol": "SOLUSDT",
@@ -925,7 +926,33 @@ def test_protection_coverage_rejects_orphans_and_local_position_without_venue_fa
     ok, evidence = engine._assess_protection_coverage([], protections, engine._protection.all_positions())
     assert ok is False
     reasons = {item["reason"] for item in evidence["unprotected_symbols"]}
+    # 孤儿保护行在"本地投影仍在 + venue 无持仓"时构成缺口;ETH 本地无
+    # venue 事实同样构成缺口。
     assert reasons == {"LOCAL_POSITION_WITHOUT_VENUE_FACT", "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
+
+
+def test_protection_coverage_ignores_orphans_of_closed_positions() -> None:
+    """已平仓位置(本地无投影 + venue 无持仓)的残留保护行不关闭资格门。
+
+    SL/TP 触发平仓后 durable 行短暂残留属正常生命周期,由 ghost
+    cleanup 取消 —— 不得据此把资格门钉死(实测 ENA 平仓后 22 连拒)。
+    """
+    engine = _engine()
+    local = SimpleNamespace(instrument_id="ETHUSDT")
+    engine._protection = _Protection({"p-1": local})
+    protections = [
+        {
+            "symbol": "SOLUSDT",
+            "side": "SELL",
+            "position_generation": 1,
+            "quantity": "1",
+            "order_type": "STOP_MARKET",
+        }
+    ]
+    ok, evidence = engine._assess_protection_coverage([], protections, engine._protection.all_positions())
+    assert ok is False  # ETH 本地无 venue 事实仍 fail-closed
+    reasons = {item["reason"] for item in evidence["unprotected_symbols"]}
+    assert reasons == {"LOCAL_POSITION_WITHOUT_VENUE_FACT"}
 
 
 def test_startup_protection_recovery_checks_venue_inventory_for_local_projection() -> None:

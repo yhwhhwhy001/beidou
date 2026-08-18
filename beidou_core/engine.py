@@ -2949,8 +2949,14 @@ class AutonomousEngine:
         # safely considered flat or covered after a restart.
         for symbol in sorted(local_symbols - exchange_symbols):
             gaps.append({"symbol": symbol, "reason": "LOCAL_POSITION_WITHOUT_VENUE_FACT"})
+        # BD-FIX (closed-position orphan flap): venue 无持仓 + 本地投影也
+        # 无 = 已平仓位置(SL/TP 触发)的残留保护行 —— 由 ghost cleanup
+        # 负责取消,不构成任何开放仓位的覆盖缺口,不得据此关闭资格门
+        # (实测 ENA 平仓后残留行把门钉死 2-3 分钟,新入场全拒)。
+        # 本地投影仍在而 venue 无持仓才是丢仓级别的严重缺口,仍 fail-closed。
         for symbol in sorted(protection_symbols - exchange_symbols):
-            gaps.append({"symbol": symbol, "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"})
+            if symbol in local_symbols:
+                gaps.append({"symbol": symbol, "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"})
 
         # BD-FIX（C3 审查）: 保护覆盖只统计本地所有权可证明的持仓 ——
         # 共享 demo 账户的外部持仓不属于引擎，不得产生覆盖 gap。
