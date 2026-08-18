@@ -1165,6 +1165,190 @@ class PostgresIntentOutbox:
             Decimal("0"),
         )
 
+    def stale_child_commands(self, min_age_seconds: float = 1800.0) -> list[dict[str, Any]]:
+        """BD-FIX (final83j): 非终态且超龄的执行子命令(幽灵在途)。
+
+        这些行会持续计入 inflight_signed_quantity,把新订单的目标增量挤到
+        交易所最小下单量(实测 XRP 提案 64 币、实际只下 5.8)。引擎按 venue
+        事实裁决终态后调用 recover_stale_child 迁移。
+        """
+        if self._connection_factory is None:
+            return []
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT parent_intent_id,sequence,state,symbol,client_order_id,exchange_order_id"
+                "filled_quantity,updated_at FROM v3_execution_commands "
+                "WHERE state IN ('PLANNED','SENDING','ACKED','PARTIALLY_FILLED','UNKNOWN') "
+                "AND updated_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 second') "
+                "ORDER BY updated_at LIMIT 50",
+                (float(min_age_seconds),),
+            )
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "parent_intent_id": str(_row_value(row, "parent_intent_id", 0)),
+                "sequence": int(_row_value(row, "sequence", 1)),
+                "state": str(_row_value(row, "state", 2)),
+                "symbol": str(_row_value(row, "symbol", 3) or ""),
+                "client_order_id": str(_row_value(row, "client_order_id", 4) or ""),
+                "exchange_order_id": str(_row_value(row, "exchange_order_id", 5) or ""),
+                "filled_quantity": str(_row_value(row, "filled_quantity", 6) or "0"),
+            }
+            for row in rows
+        ]
+
+    def recover_stale_child(
+        self,
+        intent_id: str,
+        sequence: int,
+        state: Any,
+        *,
+        event_id: str,
+        exchange_order_id: str = "",
+        cumulative_filled_quantity: str | None = None,
+    ) -> None:
+        """BD-FIX (final83j): 幽灵子命令按 venue 事实裁决终态(受治理恢复)。
+
+        与 transition_execution_child 的区别:子命令行不要求活跃租约(历史
+        遗留行的租约早已过期),只要求父意图当前未被活跃租约持有 —— 避免与
+        正在执行中的意图竞争。事件幂等/终态守卫/状态机校验与主路径一致;
+        PLANNED 只允许迁移到 SENDING/REJECTED,其余映射由调用方按 venue
+        事实构造。
+        """
+        if self._connection_factory is None or self._fencing_token <= 0:
+            raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT 1 FROM v3_transactional_outbox WHERE intent_id=%s "
+                "AND lease_until IS NOT NULL AND lease_until>=CURRENT_TIMESTAMP FOR UPDATE",
+                (str(intent_id),),
+            )
+            if cursor.fetchone() is not None:
+                raise ValueError("STALE_CHILD_PARENT_ACTIVELY_LEASED")
+            cursor.execute(
+                "SELECT payload::text FROM v3_execution_commands "
+                "WHERE parent_intent_id=%s ORDER BY sequence FOR UPDATE",
+                (str(intent_id),),
+            )
+            rows = cursor.fetchall() or []
+            if not rows:
+                raise ValueError("EXECUTION_PLAN_NOT_FOUND")
+            if sequence < 0 or sequence >= len(rows):
+                raise ValueError("UNKNOWN_CHILD_SEQUENCE")
+            cursor.execute(
+                "SELECT event_id FROM v3_execution_command_events WHERE event_id=%s",
+                (str(event_id),),
+            )
+            if cursor.fetchone() is not None:
+                return
+            aggregate = self._execution_aggregate(str(intent_id), rows)
+            previous = aggregate.children[sequence].state.value
+            updated = aggregate.transition_child(
+                sequence,
+                state,
+                event_id=event_id,
+                exchange_order_id=exchange_order_id,
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+            child = updated.children[sequence]
+            cursor.execute(
+                "UPDATE v3_execution_commands SET payload=CAST(%s AS jsonb),state=%s,exchange_order_id=%s"
+                "filled_quantity=%s,updated_at=CURRENT_TIMESTAMP "
+                "WHERE parent_intent_id=%s AND sequence=%s AND state=%s",
+                (
+                    json.dumps(child.to_payload(), sort_keys=True, default=str),
+                    child.state.value,
+                    child.exchange_order_id or None,
+                    str(child.filled_quantity),
+                    str(intent_id),
+                    sequence,
+                    previous,
+                ),
+            )
+            if getattr(cursor, "rowcount", 1) != 1:
+                raise ValueError("STALE_CHILD_CONCURRENT")
+            cursor.execute(
+                "INSERT INTO v3_execution_command_events "
+                "(event_id,parent_intent_id,sequence,from_state,to_state,payload,lease_owner,fencing_token) "
+                "VALUES (%s,%s,%s,%s,%s,CAST(%s AS jsonb),%s,%s)",
+                (
+                    str(event_id),
+                    str(intent_id),
+                    sequence,
+                    previous,
+                    child.state.value,
+                    json.dumps({"reason": "STALE_CHILD_VENUE_RESOLVED"}, sort_keys=True),
+                    self._lease_owner,
+                    self._fencing_token,
+                ),
+            )
+
+    def project_order_terminal(
+        self,
+        exchange_order_id: str,
+        status: str,
+        cumulative_filled_quantity: str | None = None,
+    ) -> Any:
+        """BD-FIX (final83j): 订单监控路径按 orderId 投影终态。
+
+        用户流投影在 pre-ACK 成交竞态下会错过(子命令行尚不存在),订单监控
+        观察到 FILLED 后调用本方法兜底迁移 ACKED/PARTIALLY_FILLED/UNKNOWN
+        到终态,堵住 inflight 泄漏。
+        """
+        if self._connection_factory is None or self._fencing_token <= 0:
+            raise RuntimeError("EXECUTION_COMMAND_FENCING_TOKEN_UNKNOWN")
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "SELECT parent_intent_id,sequence,state FROM v3_execution_commands "
+                "WHERE exchange_order_id=%s",
+                (str(exchange_order_id),),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        parent_intent_id = str(_row_value(row, "parent_intent_id", 0))
+        sequence = int(_row_value(row, "sequence", 1))
+        current_state = str(_row_value(row, "state", 2))
+        from beidou_safety.execution.command_aggregate import ChildCommandState
+
+        _status = str(status).upper()
+        state_map = {
+            "FILLED": ChildCommandState.FILLED,
+            "CANCELED": ChildCommandState.CANCELED,
+            "EXPIRED": ChildCommandState.CANCELED,
+            "REJECTED": ChildCommandState.REJECTED,
+        }
+        target = state_map.get(_status)
+        if target is None or current_state in ("FILLED", "CANCELED", "REJECTED"):
+            return None
+        # PLANNED/SENDING 需要活跃租约,监控路径不处理(交恢复路径)
+        if current_state in ("PLANNED", "SENDING"):
+            return None
+        try:
+            return self.transition_execution_child(
+                parent_intent_id,
+                sequence,
+                target,
+                event_id="monitor:" + str(exchange_order_id) + ":" + _status,
+                exchange_order_id=str(exchange_order_id),
+                cumulative_filled_quantity=cumulative_filled_quantity,
+            )
+        except ValueError as exc:
+            # TERMINAL_CHILD_STATE:幂等重复,忽略
+            if "TERMINAL_CHILD_STATE" in str(exc):
+                return None
+            raise
+
     @property
     def _outbox(self) -> list[Any]:
         """Compatibility view for diagnostics; never a writable local queue."""

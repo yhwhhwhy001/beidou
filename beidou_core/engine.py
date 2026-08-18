@@ -6388,6 +6388,7 @@ class AutonomousEngine:
             self._active_order_ids.discard(order_id)
             self._order_trackers.pop(order_id, None)
             self._order_symbols.pop(order_id, None)
+            self._project_order_terminal(order_id, "FILLED", str(result.get("executedQty", "") or ""))
             return
 
         side_desc = result.get("side", "")
@@ -6416,6 +6417,7 @@ class AutonomousEngine:
         # BD-FIX: FILLED 后清理 tracker 和 symbol 映射，防止内存泄漏
         self._order_trackers.pop(order_id, None)
         self._order_symbols.pop(order_id, None)
+        self._project_order_terminal(order_id, "FILLED", str(result.get("executedQty", "") or ""))
 
         # 检查是否为平仓订单
         is_close_order = order_id in self._close_order_ids
@@ -8881,10 +8883,181 @@ class AutonomousEngine:
             print(f"[{tag}] {symbol}: SKIP (quantity quantization failed)")
             return None
         return float(_quantized)
+    def _project_order_terminal(self, order_id: str, status: str, cumulative_filled_quantity: str) -> None:
+        """BD-FIX (final83j): 订单监控路径兜底投影执行命令终态。
+
+        用户流投影在 pre-ACK 成交竞态下会错过(子命令行尚不存在),监控观察到
+        FILLED/CANCELED 后调用本方法按 orderId 迁移 ACKED/PARTIALLY_FILLED/
+        UNKNOWN → 终态,堵住 inflight 泄漏(幽灵在途把新订单挤到最小量)。
+        """
+        try:
+            _project = getattr(self._outbox, "project_order_terminal", None)
+            if callable(_project):
+                _project(order_id, status, cumulative_filled_quantity or None)
+        except Exception as exc:
+            logger.warning(
+                "order terminal projection failed for %s: %s: %s",
+                order_id,
+                type(exc).__name__,
+                str(exc)[:160],
+            )
+
+    async def _resolve_stale_execution_commands(self, *, min_age_seconds: float = 1800.0) -> int:
+        """BD-FIX (final83j): 幽灵在途命令治理 — 按 venue 事实裁决终态。
+
+        非终态且超龄的执行子命令持续计入 inflight_signed_quantity,把新订单
+        目标增量挤到交易所最小下单量。此处按 venue 订单事实裁决:
+        - FILLED → FILLED(带累计成交量);CANCELED/EXPIRED → CANCELED;
+          REJECTED → REJECTED;NEW/PARTIALLY_FILLED → 映射对应态
+        - PLANNED 只允许 → SENDING/REJECTED:先恢复 SENDING 再映射
+        - venue 无此订单(Order does not exist) → CANCELED/REJECTED
+        - venue 查询 UNKNOWN → 保留,下轮重试
+        """
+        if not self._can_write:
+            return 0
+        _list_stale = getattr(self._outbox, "stale_child_commands", None)
+        _recover = getattr(self._outbox, "recover_stale_child", None)
+        if not callable(_list_stale) or not callable(_recover):
+            return 0
+        try:
+            stale_rows = await asyncio.to_thread(_list_stale, min_age_seconds)
+        except Exception as exc:
+            logger.warning("stale execution command listing failed: %s", type(exc).__name__)
+            return 0
+        if not stale_rows:
+            return 0
+        from beidou_safety.execution.command_aggregate import ChildCommandState
+
+        resolved = 0
+        for row in stale_rows:
+            symbol = str(row.get("symbol", "")).strip()
+            client_id = str(row.get("client_order_id", "")).strip()
+            intent_id = str(row.get("parent_intent_id", "")).strip()
+            current_state = str(row.get("state", "")).strip()
+            exchange_order_id = str(row.get("exchange_order_id", "")).strip()
+            if not symbol or not intent_id or not client_id:
+                continue
+            sequence = int(row.get("sequence", 1))
+            try:
+                query = await self._adapter.query_order_by_client_id(symbol, client_id)
+            except Exception as _query_exc:
+                logger.debug("stale child venue query failed for %s: %s", symbol, type(_query_exc).__name__)
+                continue
+            venue_status: str | None = None
+            venue_exec_qty: str | None = None
+            if query.is_success() and isinstance(query.data, dict):
+                venue_status = str(query.data.get("status", "")).upper()
+                venue_exec_qty = str(query.data.get("executedQty", "0") or "0")
+                exchange_order_id = str(query.data.get("orderId", exchange_order_id) or exchange_order_id)
+            else:
+                err = query.error
+                msg = str(getattr(err, "message", "") or "")
+                if "Order does not exist" in msg or "Unknown order" in msg:
+                    venue_status = "NOT_FOUND"
+                else:
+                    continue
+            event_id = f"stale-resolve:{intent_id}:{sequence}:{venue_status}"
+            try:
+                if venue_status == "NOT_FOUND":
+                    target = (
+                        ChildCommandState.CANCELED
+                        if current_state in ("SENDING", "ACKED", "PARTIALLY_FILLED", "UNKNOWN")
+                        else ChildCommandState.REJECTED
+                    )
+                    await asyncio.to_thread(
+                        _recover, intent_id, sequence, target,
+                        event_id=event_id, exchange_order_id=exchange_order_id,
+                    )
+                    resolved += 1
+                    continue
+                if venue_status == "FILLED":
+                    target = ChildCommandState.FILLED
+                    cum = venue_exec_qty
+                elif venue_status in ("CANCELED", "EXPIRED"):
+                    target = ChildCommandState.CANCELED
+                    cum = venue_exec_qty if (venue_exec_qty and Decimal(venue_exec_qty) > 0) else None
+                elif venue_status == "REJECTED":
+                    target = ChildCommandState.REJECTED
+                    cum = None
+                elif venue_status == "NEW":
+                    target = ChildCommandState.ACKED
+                    cum = None
+                elif venue_status == "PARTIALLY_FILLED":
+                    target = ChildCommandState.PARTIALLY_FILLED
+                    cum = venue_exec_qty
+                else:
+                    continue
+                if current_state == "PLANNED":
+                    # PLANNED 只允许 → SENDING/REJECTED:先恢复为 SENDING 再映射
+                    await asyncio.to_thread(
+                        _recover, intent_id, sequence, ChildCommandState.SENDING,
+                        event_id=f"{event_id}:to-sending", exchange_order_id=exchange_order_id,
+                    )
+                await asyncio.to_thread(
+                    _recover, intent_id, sequence, target,
+                    event_id=event_id, exchange_order_id=exchange_order_id,
+                    cumulative_filled_quantity=cum,
+                )
+                resolved += 1
+            except Exception as exc:
+                logger.warning(
+                    "stale execution command resolve failed %s/%s: %s",
+                    intent_id, sequence, type(exc).__name__,
+                )
+        if resolved:
+            print(f"[nearline] 🧹 Resolved {resolved} stale execution command(s) against venue facts")
+        return resolved
+
+    async def _sync_venue_leverage(self, symbol: str, dyn_leverage: float) -> bool:
+        """BD-FIX (final83k): 自适应杠杆同步到交易所(默认关闭)。
+
+        Binance 每标的杠杆默认 20x;引擎风险模型(最大仓位/保证金/强平价)
+        按 dyn_leverage 计算却从不修改交易所杠杆 → 实际杠杆恒 20x。启用后
+        下单前把标的杠杆同步为自适应档位(整数钳制 1..125)。
+        TESTNET-EXEMPT: EXEMPT-21 — 仅 BEIDOU_SYNC_VENUE_LEVERAGE=1 且
+        testnet 环境生效;live/canary 永不自动修改交易所杠杆。
+        """
+        if os.environ.get("BEIDOU_SYNC_VENUE_LEVERAGE", "") != "1":
+            return False
+        if str(getattr(getattr(self, "_env_mode", None), "value", "")) != "testnet":
+            return False
+        lev_int = max(1, min(125, round(float(dyn_leverage))))
+        cache = getattr(self, "_venue_leverage", None)
+        if cache is None:
+            cache = {}
+            self._venue_leverage = cache
+        if cache.get(symbol) == lev_int:
+            return False
+        try:
+            result = await self._api_async(
+                Endpoint.LEVERAGE, method="POST", signed=True,
+                params={"symbol": symbol, "leverage": str(lev_int)},
+            )
+        except Exception as exc:
+            logger.warning("venue leverage sync failed for %s: %s", symbol, type(exc).__name__)
+            return False
+        if isinstance(result, dict) and "leverage" in result:
+            cache[symbol] = lev_int
+            print(f"[nearline] {symbol}: venue leverage synced → {lev_int}x (adaptive)")
+            return True
+        if isinstance(result, dict) and "error" in result:
+            logger.warning("venue leverage sync rejected for %s: %s", symbol, str(result.get("msg", ""))[:120])
+        return False
+
 
     async def _nearline_tick(self) -> None:
         """近线时钟：K线分析 → 市场状态 → Alpha DAG → 融合 → 风控 → 优化 → OrderIntent。"""
         self._last_nearline = time.time()
+
+        # BD-FIX (final83j): 幽灵在途命令治理(5 分钟节流) — 超龄非终态子命令
+        # 按 venue 事实裁决终态,否则 inflight 持续累积把新订单挤到最小量。
+        _stale_resolve_ago = time.monotonic() - getattr(self, "_last_stale_resolve_mono", 0.0)
+        if _stale_resolve_ago >= 300.0:
+            self._last_stale_resolve_mono = time.monotonic()
+            try:
+                await self._resolve_stale_execution_commands()
+            except Exception as _stale_exc:
+                logger.warning("stale execution command resolution tick failed: %s", type(_stale_exc).__name__)
 
         # BD-FIX: TruthSnapshot 风险事实周期刷新 — 近线每轮（testnet 30s，
         # 首轮启动即执行）无论是否产生信号/提案都刷新，避免 sizing 分支
@@ -9342,6 +9515,12 @@ class AutonomousEngine:
                 if not pool_capacity:
                     print(f"[nearline] {symbol}: SKIP (pool not tradable)")
                     continue
+
+                # BD-FIX (final83k): 自适应杠杆同步到交易所(env 门控)
+                try:
+                    await self._sync_venue_leverage(symbol, dyn_leverage)
+                except Exception as _lev_exc:
+                    logger.warning("venue leverage sync error for %s: %s", symbol, type(_lev_exc).__name__)
 
                 # === 5.7 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）===
                 proposals.append(
