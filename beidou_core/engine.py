@@ -9149,8 +9149,71 @@ class AutonomousEngine:
                 # 永不补发（final82d/e 实测死锁）。
                 expected_count = 1 + sum(1 for tp in pp.take_profits if _needs_exchange_protection(tp))
                 server_count = len(owned_ids)
-                # 交易所已有 >= 期望数量即视为已覆盖
-                if expected_count > 0 and server_count >= expected_count:
+                # BD-FIX (root): 覆盖判定补上"SL 数量必须覆盖当前持仓量"。
+                # 分批加仓后旧 SL 数量 < 持仓量时,单数判定(covered skip /
+                # S41)会误判已覆盖,而资格门 _assess_protection_coverage 按
+                # 数量覆盖判定 → NO_NEW_RISK 且近线永不补发(死锁变体)。
+                # 数量不足时按启动恢复同语义(STOP_COVERAGE_STALE)取消
+                # 陈旧行与 venue 条件单,再走 S33 按当前持仓量重建。
+                _sl_covers = False
+                _sl = getattr(pp, "stop_loss", None)
+                if _sl is not None:
+                    try:
+                        # ProtectionOrder.quantity 是 Quantity 值对象,取 amount
+                        _sl_qty_obj = getattr(_sl, "quantity", None)
+                        _sl_qty = getattr(_sl_qty_obj, "amount", _sl_qty_obj)
+                        _sl_covers = (
+                            float(str(_sl_qty or 0)) + 1e-8
+                            >= float(getattr(pp, "quantity", 0) or 0)
+                        )
+                    except (TypeError, ValueError):
+                        _sl_covers = False
+                else:
+                    # 投影无 SL(恢复/收养中间态):以 durable 行数量为准 ——
+                    # 与资格门 _assess_protection_coverage 同源判定,避免
+                    # 对有 durable 覆盖的品种误走取消/重建。
+                    try:
+                        _pos_qty = float(getattr(pp, "quantity", 0) or 0)
+                        _durable_sl_qty = 0.0
+                        for _row in self._store.restore_protections():
+                            if (
+                                str(_row.get("symbol", "")).strip().upper() == symbol
+                                and str(_row.get("status", "")).strip().upper() == "ACTIVE"
+                                and str(_row.get("owner_id", "")) == str(self._protection_owner_id)
+                                and str(_row.get("order_type", "") or "").strip().upper().startswith("STOP")
+                            ):
+                                try:
+                                    _durable_sl_qty = max(_durable_sl_qty, float(_row.get("quantity", 0) or 0))
+                                except (TypeError, ValueError):
+                                    continue
+                        _sl_covers = _durable_sl_qty + 1e-8 >= _pos_qty
+                    except Exception:
+                        _sl_covers = False
+                if not _sl_covers and _sl is not None and self._store is not None:
+                    try:
+                        _symbol_rows = [
+                            r
+                            for r in self._store.restore_protections()
+                            if str(r.get("symbol", "")).strip().upper() == symbol
+                        ]
+                    except Exception:
+                        _symbol_rows = []
+                    if _symbol_rows:
+                        self._cancel_stale_protection_rows(symbol, _symbol_rows, "STOP_COVERAGE_STALE")
+                        _canceled = await self._cancel_stale_protection_algos()
+                        if _canceled:
+                            exchange_algo_symbols[symbol] = {
+                                a for a in exchange_algo_symbols.get(symbol, set()) if a not in _canceled
+                            }
+                            existing_ids = exchange_algo_symbols.get(symbol, set())
+                            owned_ids = existing_ids & self._active_algo_ids.get(pos_id, set())
+                        pp.stop_loss = None
+                        print(
+                            f"[nearline] 🧹 {symbol}: stale under-sized SL cancelled "
+                            "(position grew) — rebuilding to full position quantity"
+                        )
+                # 交易所已有 >= 期望数量且 SL 数量覆盖持仓 即视为已覆盖
+                if expected_count > 0 and server_count >= expected_count and _sl_covers:
                     if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(
                             f"[nearline-diag] {symbol}: covered skip expected={expected_count} "
@@ -9181,12 +9244,14 @@ class AutonomousEngine:
                     prec = {"price": dec, "quantity": dec}
                 placed = 0
 
-                # BD-FIX (S41): 交易所已有 Algo 单 → 跳过
+                # BD-FIX (S41): 交易所已有 Algo 单 → 跳过;但 SL 数量未覆盖
+                # 当前持仓量(加仓后未跟随)时不得跳过,必须走 S33 重建,
+                # 否则资格门按数量覆盖判定恒拒(根因修复)。
                 symbol_algo_count = len(exchange_algo_symbols.get(symbol, set()))
-                if symbol_algo_count >= 2:
+                if symbol_algo_count >= 2 and _sl_covers:
                     if self._diag_throttle(f"retry-detail:{symbol}"):
                         print(f"[nearline-diag] {symbol}: s41 skip symbol_algo_count={symbol_algo_count}")
-                    continue  # 已有 SL+TP
+                    continue  # 已有 SL+TP 且数量覆盖
 
                 # --- BD-FIX (S33): 首次创建止损单（如果没有）---
                 if pp.stop_loss is None:
