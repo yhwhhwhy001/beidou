@@ -1183,7 +1183,7 @@ class PostgresIntentOutbox:
                 "filled_quantity,updated_at FROM v3_execution_commands "
                 "WHERE state IN ('PLANNED','SENDING','ACKED','PARTIALLY_FILLED','UNKNOWN') "
                 "AND updated_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 second') "
-                "ORDER BY updated_at LIMIT 50",
+                "ORDER BY updated_at LIMIT 150",
                 (float(min_age_seconds),),
             )
             rows = cursor.fetchall() or []
