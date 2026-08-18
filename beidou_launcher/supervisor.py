@@ -225,8 +225,18 @@ class BeidouSupervisor:
             # terminal-write authority.  Until a scoped capability producer is
             # installed, every exchange mutation remains blocked here as well
             # as at the adapter/REST choke points.
+            #
+            # BD-FIX (2026-08-18, 用户批准): testnet 已部署的注册语义
+            # BEIDOU_TERMINAL_WRITE_HOLD=unknown-only(.env 登记)要求写能力
+            # 不退化 —— 仅未分类突变端点 fail-closed。分类过滤由
+            # adapter/rest_client 的 typed TerminalWriteKind hold 强制执行
+            # (双层防护保留);supervisor 互锁仅在 hard 模式或非 testnet
+            # 环境保持 HARD_HOLD。live/canary 永不放行。
             del method, params
-            return False
+            return (
+                self.mode == "testnet"
+                and os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard") == "unknown-only"
+            )
 
         async def guarded_async(
             path: str,

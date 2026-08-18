@@ -212,6 +212,81 @@ def test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_
     assert calls == []
 
 
+
+
+def test_testnet_unknown_only_hold_allows_known_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """testnet + BEIDOU_TERMINAL_WRITE_HOLD=unknown-only: supervisor 互锁放行。
+
+    分类过滤仍由 adapter/rest_client 的 typed hold 强制(双层防护);
+    supervisor 仅在 hard 模式或非 testnet 环境保持 HARD_HOLD。
+    """
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "unknown-only")
+    calls: list[tuple[str, str]] = []
+
+    async def original_async(
+        path: str, method: str = "GET", signed: bool = False, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        del signed, params
+        calls.append((method, path))
+        return {"ok": True}
+
+    supervisor = BeidouSupervisor(project_root=Path("/tmp"), mode="testnet", symbols=["BTCUSDT"], port=19090)
+    supervisor.engine = SimpleNamespace(_can_write=True, _api_async=original_async, _api=lambda *a, **kw: None)
+    supervisor._install_exchange_write_interlock()
+
+    result = asyncio.run(supervisor.engine._api_async("/order", method="POST"))
+    assert result == {"ok": True}
+    assert calls == [("POST", "/order")]
+
+
+def test_live_mode_never_allows_writes_even_with_unknown_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """live/canary 永不放行 —— unknown-only 豁免仅限 testnet。"""
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "unknown-only")
+    calls: list[tuple[str, str]] = []
+
+    async def original_async(
+        path: str, method: str = "GET", signed: bool = False, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        del signed, params
+        calls.append((method, path))
+        return {"ok": True}
+
+    supervisor = BeidouSupervisor(project_root=Path("/tmp"), mode="live", symbols=["BTCUSDT"], port=19090)
+    supervisor.engine = SimpleNamespace(_can_write=True, _api_async=original_async, _api=lambda *a, **kw: None)
+    supervisor._install_exchange_write_interlock()
+
+    blocked = asyncio.run(supervisor.engine._api_async("/order", method="POST"))
+    assert blocked["error"] == -3
+    assert calls == []
+
+
+def test_testnet_hard_hold_still_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """testnet + hard(默认/显式): supervisor 互锁保持 HARD_HOLD。"""
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    monkeypatch.setenv("BEIDOU_TERMINAL_WRITE_HOLD", "hard")
+    calls: list[tuple[str, str]] = []
+
+    async def original_async(
+        path: str, method: str = "GET", signed: bool = False, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        del signed, params
+        calls.append((method, path))
+        return {"ok": True}
+
+    supervisor = BeidouSupervisor(project_root=Path("/tmp"), mode="testnet", symbols=["BTCUSDT"], port=19090)
+    supervisor.engine = SimpleNamespace(_can_write=True, _api_async=original_async, _api=lambda *a, **kw: None)
+    supervisor._install_exchange_write_interlock()
+
+    blocked = asyncio.run(supervisor.engine._api_async("/order", method="POST"))
+    assert blocked["error"] == -3
+    assert calls == []
+
+
 def test_typed_adapter_write_path_cannot_bypass_supervisor_interlock(tmp_path: Path) -> None:
     """Typed order/protection helpers must share the REST authority gate."""
 
