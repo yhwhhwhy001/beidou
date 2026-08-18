@@ -1245,6 +1245,86 @@ def test_owned_order_user_stream_fill_is_consumed() -> None:
     assert len(ledger) == 1
 
 
+def test_startup_side_flipped_protection_self_heals() -> None:
+    """持仓方向翻转(short→long)后旧保护行方向不匹配 → 取消重建而非阻断。"""
+
+    rows = [
+        {
+            "status": "ACTIVE",
+            "owner_id": "owner-1",
+            "protection_id": "sl-pos-1",
+            "position_id": "pos-1",
+            "symbol": "ETHUSDT",
+            "side": "BUY",  # 旧 short 持仓的保护方向,当前 venue 为 LONG
+            "order_type": "STOP_MARKET",
+            "quantity": "0.034",
+            "trigger_price": "1919.54",
+            "stop_type": "ATR_BASED",
+            "take_profit_type": None,
+            "position_generation": 1,
+            "session_id": "session-1",
+            "exchange_order_id": "sl-1",
+        },
+        {
+            "status": "ACTIVE",
+            "owner_id": "owner-1",
+            "protection_id": "tp-pos-1",
+            "position_id": "pos-1",
+            "symbol": "ETHUSDT",
+            "side": "BUY",
+            "order_type": "TAKE_PROFIT_MARKET",
+            "quantity": "0.034",
+            "trigger_price": "1879.4",
+            "stop_type": None,
+            "take_profit_type": "FIXED_RR",
+            "position_generation": 1,
+            "session_id": "session-1",
+            "exchange_order_id": "tp-1",
+        },
+    ]
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    store = _Store(protections=rows)
+    engine._store = store
+    engine._protection = ProtectionManager()
+    engine._protection_owner_id = "owner-1"
+    engine._position_projection = {}
+    engine._position_entry_times = {}
+    engine._active_algo_ids = {}
+    blocked: list[str] = []
+    engine._block_unowned_protection_orders = lambda ids: blocked.extend(ids)
+
+    inventory = [
+        {
+            "algoId": "sl-1",
+            "symbol": "ETHUSDT",
+            "side": "BUY",
+            "orderType": "STOP_MARKET",
+            "quantity": "0.034",
+            "triggerPrice": "1919.54",
+            "reduceOnly": True,
+        },
+        {
+            "algoId": "tp-1",
+            "symbol": "ETHUSDT",
+            "side": "BUY",
+            "orderType": "TAKE_PROFIT_MARKET",
+            "quantity": "0.034",
+            "triggerPrice": "1879.4",
+            "reduceOnly": True,
+        },
+    ]
+
+    assert engine._restore_durable_protection_projection(
+        {"positions": [{"symbol": "ETHUSDT", "positionAmt": "0.034", "entryPrice": "1890"}]},
+        inventory,
+    )
+    assert blocked == []
+    assert engine._protection.all_positions() == {}
+    assert sorted(engine._stale_protection_algos) == [("ETHUSDT", "sl-1"), ("ETHUSDT", "tp-1")]
+    cancelled = [p for p in store.saved_protections if p.get("status") == "CANCELLED"]
+    assert {p["protection_id"] for p in cancelled} == {"sl-pos-1", "tp-pos-1"}
+
+
 def test_protection_cleanup_requires_fresh_matched_reconciliation() -> None:
     engine = AutonomousEngine.__new__(AutonomousEngine)
     engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)

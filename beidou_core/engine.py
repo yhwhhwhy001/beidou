@@ -4317,6 +4317,18 @@ class AutonomousEngine:
 
             position_side = OrderSide.BUY if signed_quantity > 0 else OrderSide.SELL
             expected_protection_side = OrderSide.SELL if position_side == OrderSide.BUY else OrderSide.BUY
+            # BD-FIX: 持仓方向已翻转(外部成交/止损触发反转)后,旧保护行的
+            # 方向不再匹配(如 short 的保护单在持仓翻成 long 后仍是 BUY)。
+            # 取消本进程所有权的陈旧行与 venue 条件单,由 Phase 1 按当前
+            # 持仓方向重建 —— 而非永久阻断(实测停机期 ETH SL 触发翻转 →
+            # PROTECTION_ROW_SEMANTICS_UNKNOWN → 覆盖缺失 → 锁盘)。
+            if any(
+                str(r.get("status", "")).strip().upper() != "PENDING"
+                and str(r.get("side", "")).strip().upper() != expected_protection_side.value
+                for r in position_rows
+            ):
+                self._cancel_stale_protection_rows(symbol, position_rows, "PROTECTION_SIDE_FLIPPED")
+                continue
             stop_orders: list[ProtectionOrder] = []
             take_profit_orders: list[ProtectionOrder] = []
             stop_quantity = Decimal("0")
@@ -4342,7 +4354,6 @@ class AutonomousEngine:
                 if (
                     not protection_id
                     or (not exchange_order_id and not is_pending)
-                    or order_side != expected_protection_side
                     or not order_type
                     or not trigger_price.is_finite()
                     or trigger_price <= 0
