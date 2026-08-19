@@ -6524,6 +6524,31 @@ class AutonomousEngine:
                 if adapter_response.status is OrderStatus.REJECTED:
                     return rejected("ADAPTER_REJECTED_WITHOUT_ACK")
                 return unknown("ADAPTER_ACK_UNKNOWN")
+            # BD-FIX (venue-capped reduce-only close): 交易所把 reduce-only
+            # 平仓单按剩余持仓截断(origQty < 请求量)后回报 FILLED;适配器
+            # ACK 校验报 ACK_QUANTITY_MISMATCH → UNKNOWN。截断成交是终态
+            # venue 事实,余量禁止重发(reduce-only 恒 -2022)。此时直接采纳
+            # venue 终态走下方成交/投影路径,避免子命令卡 UNKNOWN 30 分钟
+            # 等幽灵扫描收敛 + 在途量泄漏(实测 LTCUSDT 紧急平仓 1.1 → 0.109)。
+            _ack_reason = str(order.get("reason", "")) if isinstance(order, dict) else ""
+            _venue_fact = order.get("venue_response") if isinstance(order, dict) else None
+            _is_reduce_only = bool(
+                getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False)
+            )
+            if (
+                _is_reduce_only
+                and adapter_response.status is OrderStatus.UNKNOWN
+                and _ack_reason == "ACK_QUANTITY_MISMATCH"
+                and isinstance(_venue_fact, dict)
+                and "orderId" in _venue_fact
+                and str(_venue_fact.get("status", "")).upper() == "FILLED"
+            ):
+                print(
+                    f"[order] {order_symbol}: venue-capped reduce-only FILLED adopted "
+                    f"(requested={params['quantity']} origQty={_venue_fact.get('origQty')} "
+                    f"executedQty={_venue_fact.get('executedQty')})"
+                )
+                order = _venue_fact
         except (TypeError, ValueError) as exc:
             return rejected(f"ADAPTER_REQUEST_INVALID:{type(exc).__name__}")
         except Exception as exc:
@@ -7105,22 +7130,34 @@ class AutonomousEngine:
         if delta_qty <= 0 or price <= 0:
             return
         row = self._position_projection.get(symbol, {})
-        current_qty = float(row.get("signed_quantity", 0) or 0)
-        current_entry = float(row.get("entry_price", 0) or 0)
-        signed_delta = delta_qty if side.upper() == "BUY" else -delta_qty
+        # BD-FIX (decimal projection): 浮点累加会把持仓投影写成
+        # 0.01000000000000001 之类的噪声值(实测 BNB 0.08-0.05 连算),
+        # 保护数量照抄投影 → durable SL 行 '0.01000000000000001' →
+        # 覆盖判定/资格门按位比较恒不收敛。投影是金额级 durable 事实,
+        # 全程 Decimal 运算,字符串只写规范化十进制。
+        try:
+            current_qty = Decimal(str(row.get("signed_quantity", "0") or "0"))
+            current_entry = Decimal(str(row.get("entry_price", "0") or "0"))
+        except (InvalidOperation, ValueError, TypeError):
+            current_qty = Decimal("0")
+            current_entry = Decimal("0")
+        signed_delta = Decimal(str(delta_qty)) if side.upper() == "BUY" else -Decimal(str(delta_qty))
         new_qty = current_qty + signed_delta
-        same_direction = current_qty == 0 or (current_qty > 0) == (signed_delta > 0)
-        if same_direction and abs(new_qty) > 1e-12:
+        zero = Decimal("0")
+        same_direction = current_qty == zero or (current_qty > zero) == (signed_delta > zero)
+        if same_direction and abs(new_qty) > Decimal("1e-12"):
             entry_price = (
-                (abs(current_qty) * current_entry + abs(signed_delta) * price) / abs(new_qty) if current_qty else price
+                (abs(current_qty) * current_entry + abs(signed_delta) * Decimal(str(price))) / abs(new_qty)
+                if current_qty
+                else Decimal(str(price))
             )
-        elif abs(new_qty) > 1e-12:
+        elif abs(new_qty) > Decimal("1e-12"):
             # A reversal leaves the residual quantity at the latest fill price.
-            entry_price = price
+            entry_price = Decimal(str(price))
         else:
-            entry_price = 0.0
+            entry_price = zero
         generation = int(row.get("position_generation", self._position_generation.get(symbol, 0)) or 0)
-        if current_qty and new_qty and (current_qty > 0) != (new_qty > 0):
+        if current_qty and new_qty and (current_qty > zero) != (new_qty > zero):
             generation += 1
         # BD-FIX (generation regression): 代数只增不减 —— 投影行代数可能
         # 落后于保护行已推进的代数(_ensure_entry_protection 的
@@ -7131,8 +7168,8 @@ class AutonomousEngine:
         self._position_generation[symbol] = generation
         projection = {
             "symbol": symbol,
-            "signed_quantity": f"{new_qty:.16g}",
-            "entry_price": f"{entry_price:.16g}",
+            "signed_quantity": str(new_qty),
+            "entry_price": str(entry_price),
             "position_generation": generation,
             "source_event_id": source_event_id,
         }
@@ -9308,6 +9345,64 @@ class AutonomousEngine:
                             symbol,
                             a.get("algoId", "?"),
                         )
+            # BD-FIX (orphaned protection orders): 平仓后残留在 venue 的
+            # bdp- 条件单(实测 4 个持仓对应 29 个挂单,25 个属于已平仓
+            # 标的)。旧逻辑对无持仓标的直接 continue;幽灵清理只撤销
+            # _active_algo_ids 里登记的 algoId,收养/恢复路径漏登记的订单
+            # 永久滞留,占满账户挂单额度。连续 N 轮确认(venue 无持仓 +
+            # 无本地保护投影 + 无 durable ACTIVE 行)后,撤销该标的全量
+            # bdp- 条件单。reduce-only 条件单对已平仓标的零风险,撤销
+            # 只释放挂单额度;任一条件不满足即跳过(fail-closed)。
+            _local_positions_map = (
+                self._protection.all_positions()
+                if callable(getattr(getattr(self, "_protection", None), "all_positions", None))
+                else {}
+            )
+            _local_symbols_set = {str(getattr(pp, "instrument_id", "")) for pp in _local_positions_map.values()}
+            _durable_symbols_set = {str(row.get("symbol", "")).strip().upper() for row in durable_rows}
+            _ghost_count = getattr(self, "_ghost_absence_count", {})
+            for _sym_with_pos in exchange_symbols:
+                _ghost_count.pop(f"algo:{_sym_with_pos}", None)
+            _orphan_orders: dict[str, list[dict]] = {}
+            for a in existing_algos:
+                _asym = str(a.get("symbol", "")).strip().upper()
+                if not _asym or _asym in exchange_symbols:
+                    continue
+                if not str(a.get("clientAlgoId", "") or "").startswith("bdp-"):
+                    continue
+                _orphan_orders.setdefault(_asym, []).append(a)
+            _ORPHAN_DEBOUNCE_ROUNDS = 3
+            for _asym, _orders in _orphan_orders.items():
+                if _asym in _local_symbols_set or _asym in _durable_symbols_set:
+                    _ghost_count.pop(f"algo:{_asym}", None)
+                    continue
+                count = _ghost_count.get(f"algo:{_asym}", 0) + 1
+                _ghost_count[f"algo:{_asym}"] = count
+                if count < _ORPHAN_DEBOUNCE_ROUNDS:
+                    print(
+                        f"[nearline] ⏳ Orphan algo candidate {_asym}: "
+                        f"{len(_orders)} order(s), absent {count}/{_ORPHAN_DEBOUNCE_ROUNDS} rounds, waiting"
+                    )
+                    continue
+                cancelled = 0
+                for a in _orders:
+                    try:
+                        cancel_resp = await self._cancel_algo_order(_asym, int(a["algoId"]))
+                        if "code" not in cancel_resp:
+                            cancelled += 1
+                    except Exception as _ce:
+                        logger.warning(
+                            "orphan algo cancel failed %s %s: %s",
+                            _asym,
+                            a.get("algoId", "?"),
+                            type(_ce).__name__,
+                        )
+                _ghost_count.pop(f"algo:{_asym}", None)
+                if cancelled:
+                    print(
+                        f"[nearline] 🧹 Canceled {cancelled} orphaned protection algo(s) "
+                        f"for closed position {_asym}"
+                    )
             # BD-FIX (root): 清理路径同样参与保护事实收敛 —— 走到此处说明
             # 库存真实、语义干净、映射一致,允许清除问题并置 ACTIVE。
             self._update_protection_fact(
@@ -9336,11 +9431,26 @@ class AutonomousEngine:
         if not self._policy_id_active or not self._policy_version or not self._policy_signature:
             print(f"[nearline] ⚠️ Emergency close for {symbol} blocked: signed policy unavailable")
             return False
+        # BD-FIX (venue-capped close sizing): 紧急平仓语义是"平掉当前全部
+        # 持仓",数量必须取引擎实时持仓投影,而不是保护模块可能滞后的
+        # pp.quantity —— 实测 LTCUSDT 投影 1.209 时 pp.quantity 停在 1.1,
+        # 计划量与真实剩余持仓(0.109)相差 10 倍,venue 截断后 ACK 校验
+        # 报 ACK_QUANTITY_MISMATCH、子命令卡 UNKNOWN。投影缺失时回退
+        # pp.quantity;reduce-only 保证即使偏大也只按持仓截断,绝不反向开仓。
+        _proj_row = getattr(self, "_position_projection", {}).get(symbol) or {}
+        try:
+            _proj_qty = abs(float(_proj_row.get("signed_quantity", 0) or 0))
+        except (TypeError, ValueError):
+            _proj_qty = 0.0
+        close_qty = _proj_qty if _proj_qty > 0 else float(getattr(pp, "quantity", 0.0) or 0.0)
+        if close_qty <= 0:
+            print(f"[nearline] ⚠️ Emergency close for {symbol} blocked: position quantity UNKNOWN")
+            return False
         try:
             ok = await self.enqueue_reduce_only_market(
                 symbol=symbol,
                 side=("SELL" if pp.side == OrderSide.BUY else "BUY"),
-                quantity=float(pp.quantity),
+                quantity=close_qty,
                 correlation_id=f"sl-unprotectable-{pos_id}",
                 policy_id=self._policy_id_active,
                 policy_version=self._policy_version,
@@ -9351,7 +9461,7 @@ class AutonomousEngine:
             return False
         if ok:
             self._sl_unprotectable_streak.pop(pos_id, None)
-            print(f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak})")
+            print(f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak}, qty={close_qty})")
             return True
         print(f"[nearline] ⚠️ Emergency close intent rejected for {symbol}")
         return False
@@ -9804,14 +9914,45 @@ class AutonomousEngine:
                         for pp in _existing
                     )
                 )
-                if _existing and not _side_diverged:
+                # BD-FIX (same-side quantity drift): 方向一致但数量分叉时
+                # 同样按 venue 事实重建 —— 实测 BNBUSDT venue 0.03 vs
+                # 投影 0.01000000000000001(浮点累加 + 缺腿成交),SL/TP
+                # 只覆盖 1/3 持仓且补发循环只数订单不比对数量,缺口
+                # 永不收敛。同时比对 durable 投影行与保护模块持仓视图,
+                # 任一与 venue 事实分叉都重建;容差远大于浮点噪声
+                # (相对 1e-6),避免把正常精度差误判为分叉导致每轮
+                # 重建震荡。
+                _proj_row = (getattr(self, "_position_projection", {}) or {}).get(_sweep_sym)
+                try:
+                    _proj_qty_abs = (
+                        abs(float(_proj_row.get("signed_quantity", 0) or 0)) if _proj_row else 0.0
+                    )
+                except (TypeError, ValueError):
+                    _proj_qty_abs = 0.0
+                _venue_qty = _venue_qtys.get(_sweep_sym, 0.0)
+                _qty_tolerance = max(1e-9, 1e-6 * _venue_qty)
+                _proj_qty_diverged = bool(
+                    _sweep_sym in _venue_qtys
+                    and _proj_row
+                    and abs(_proj_qty_abs - _venue_qty) > _qty_tolerance
+                )
+                _pp_qty_diverged = bool(
+                    _sweep_sym in _venue_qtys
+                    and _existing
+                    and all(
+                        abs(float(getattr(pp, "quantity", 0.0) or 0.0) - _venue_qty) > _qty_tolerance
+                        for pp in _existing
+                    )
+                )
+                _qty_diverged = _proj_qty_diverged or _pp_qty_diverged
+                _diverged = _side_diverged or _qty_diverged
+                if _existing and not _diverged:
                     continue
                 # durable ACTIVE 行存在但投影缺失:由恢复/收养路径挂载,
-                # 不制造 recovered-* 幽灵投影;方向分叉时不适用此豁免
-                # (旧方向行必须清理重建)。
-                if not _side_diverged and _sweep_sym in _durable_owned_symbols:
+                # 不制造 recovered-* 幽灵投影;方向/数量分叉时不适用此
+                # 豁免(旧行必须清理重建)。
+                if not _diverged and _sweep_sym in _durable_owned_symbols:
                     continue
-                _proj_row = self._position_projection.get(_sweep_sym)
                 if not _proj_row:
                     continue
                 try:
@@ -9819,8 +9960,8 @@ class AutonomousEngine:
                     _sweep_entry = float(_proj_row.get("entry_price", 0) or 0)
                 except (TypeError, ValueError):
                     continue
-                if _side_diverged:
-                    # 方向分叉:以 venue 方向/数量为准,旧投影由
+                if _diverged:
+                    # 方向/数量分叉:以 venue 方向/数量为准,旧投影由
                     # _ensure_entry_protection 的 stale 清理路径移除。
                     _sweep_qty = _venue_qtys.get(_sweep_sym, abs(_sweep_qty))
                     if _sweep_qty <= 1e-12:
@@ -10598,10 +10739,11 @@ class AutonomousEngine:
                 resolved += 1
             except Exception as exc:
                 logger.warning(
-                    "stale execution command resolve failed %s/%s: %s",
+                    "stale execution command resolve failed %s/%s: %s: %s",
                     intent_id,
                     sequence,
                     type(exc).__name__,
+                    str(exc)[:160],
                 )
         if resolved:
             print(f"[nearline] 🧹 Resolved {resolved} stale execution command(s) against venue facts")

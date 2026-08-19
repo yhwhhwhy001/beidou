@@ -280,7 +280,19 @@ class ExecutionChildCommand:
             if candidate > self.quantity:
                 raise ValueError("FILLED_QUANTITY_EXCEEDS_COMMAND")
             filled = candidate
-        if state is ChildCommandState.FILLED and filled != self.quantity:
+        if (
+            state is ChildCommandState.FILLED
+            and filled != self.quantity
+            and not (self.reduce_only and filled > 0)
+        ):
+            # BD-FIX (venue-capped reduce-only close): 交易所对 reduce-only
+            # 平仓单按剩余持仓截断(origQty < 请求量)后回报 FILLED ——
+            # 实测 LTCUSDT 紧急平仓本地计划 1.100、venue 实际成交 0.109。
+            # 按"满量成交"守卫拒绝会把子命令永久钉在 UNKNOWN:幽灵扫描/
+            # 监控投影每次收敛都抛 FILLED_STATE_REQUIRES_FULL_QUANTITY,
+            # 在途量(quantity-filled)永久计入 inflight,把新订单挤到
+            # 交易所最小下单量门槛之外。截断 FILLED 是终态 venue 事实,
+            # 余量对 reduce-only 禁止重发(恒 -2022),必须收敛。
             raise ValueError("FILLED_STATE_REQUIRES_FULL_QUANTITY")
         if state is ChildCommandState.PARTIALLY_FILLED and not (Decimal("0") < filled < self.quantity):
             raise ValueError("PARTIAL_STATE_REQUIRES_PARTIAL_QUANTITY")

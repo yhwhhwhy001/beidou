@@ -64,3 +64,6 @@ artifacts/evidence/
 config/policies/
 config/g5-testnet-plan.yaml
 evidence/BD-01/*.jsonl
+
+# Generated PnL reports
+artifacts/factor_pnl_report/

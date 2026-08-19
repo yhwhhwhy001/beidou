@@ -10,6 +10,8 @@ import pytest
 from beidou_control.truth import TradingEligibility
 from beidou_core.engine import AutonomousEngine
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+from beidou_exchange.core.protocol import OrderResponse
+from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_safety.execution import OrderIntent
 from beidou_safety.execution.command_aggregate import (
     ChildCommandState,
@@ -19,7 +21,16 @@ from beidou_safety.execution.command_aggregate import (
     TargetDeltaPlan,
 )
 from beidou_safety.execution.intent import IntentOutbox
-from beidou_shared.types import AccountId, AccountRef, InstrumentId, OrderSide, OrderType, Quantity, VenueId
+from beidou_shared.types import (
+    AccountId,
+    AccountRef,
+    InstrumentId,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Quantity,
+    VenueId,
+)
 
 
 def _child(sequence: int, *, side: str = "BUY", quantity: str = "1") -> ExecutionChildCommand:
@@ -612,6 +623,354 @@ def test_child_transition_rejects_ambiguous_or_regressive_facts() -> None:
             event_id="partial-regression",
             cumulative_filled_quantity="0.5",
         )
+
+
+def test_reduce_only_child_converges_on_venue_capped_filled_fact() -> None:
+    """BD-FIX: 交易所把 reduce-only 平仓单按剩余持仓截断后回报 FILLED。
+
+    本地计划量(1.100)大于真实剩余持仓(0.109)时,venue origQty/executedQty
+    都是 0.109。按"满量成交"守卫拒绝会把子命令永久钉在 UNKNOWN,在途量
+    泄漏并把新订单挤到最小下单量门槛之外。截断 FILLED 是终态 venue 事实
+    (余量对 reduce-only 恒 -2022,禁止重发),必须收敛且不再计入在途。
+    """
+    child = ExecutionChildCommand.create(
+        parent_intent_id="intent-1",
+        sequence=0,
+        symbol="LTCUSDT",
+        side="BUY",
+        quantity="1.100",
+        order_type="MARKET",
+        time_in_force="IOC",
+        client_order_id="beidou-emg-1",
+        reduce_only=True,
+        rule_snapshot_hash="rule-1",
+    )
+    aggregate = ParentExecutionAggregate.create("intent-1", [child])
+    aggregate = aggregate.transition_child(0, ChildCommandState.SENDING, event_id="send")
+    aggregate = aggregate.transition_child(
+        0, ChildCommandState.UNKNOWN, event_id="unknown", exchange_order_id="venue-1"
+    )
+    assert aggregate.children[0].signed_remaining_quantity == Decimal("1.100")
+
+    resolved = aggregate.transition_child(
+        0,
+        ChildCommandState.FILLED,
+        event_id="stale-resolve:venue-capped",
+        exchange_order_id="venue-1",
+        cumulative_filled_quantity="0.109",
+    )
+    assert resolved.children[0].state is ChildCommandState.FILLED
+    assert resolved.children[0].filled_quantity == Decimal("0.109")
+    # 终态后余量不再计入在途 —— 幽灵在途治理的核心断言。
+    assert resolved.children[0].signed_remaining_quantity == Decimal("0")
+
+
+def test_non_reduce_only_child_still_rejects_short_filled_fact() -> None:
+    """非 reduce-only 子命令必须保持满量成交守卫:部分成交的 FILLED
+    声明是歧义事实,禁止收敛(否则在途量被错误清零,剩余敞口裸奔)。"""
+    aggregate = ParentExecutionAggregate.create("intent-1", [_child(0, quantity="2")])
+    aggregate = aggregate.transition_child(0, ChildCommandState.SENDING, event_id="send")
+    with pytest.raises(ValueError, match="FILLED_STATE_REQUIRES_FULL_QUANTITY"):
+        aggregate.transition_child(
+            0,
+            ChildCommandState.FILLED,
+            event_id="fill-short",
+            exchange_order_id="venue",
+            cumulative_filled_quantity="1",
+        )
+
+
+def test_outbox_stale_child_recovery_accepts_capped_reduce_only_fill(tmp_path) -> None:
+    """SQLite outbox 层验证:recover 路径(recover_stale_child/监控投影共用
+    的 transition_execution_child)对 venue 截断成交收敛后,该标的在途量归零。"""
+    outbox = IntentOutbox(str(tmp_path / "capped-fill.db"))
+    intent = OrderIntent(
+        intent_id="intent-1",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("test")),
+        instrument_id=InstrumentId("LTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=Quantity(amount="1.1"),
+        client_order_id="beidou-intent-1",
+        idempotency_key="idem-intent-1",
+        reduce_only=True,
+    )
+    outbox.commit(intent)
+    assert outbox.claim("engine-test") is not None
+    outbox.persist_execution_plan(
+        intent.intent_id,
+        [
+            ExecutionChildCommand.create(
+                parent_intent_id=intent.intent_id,
+                sequence=0,
+                symbol="LTCUSDT",
+                side="BUY",
+                quantity="1.100",
+                order_type="MARKET",
+                time_in_force="IOC",
+                client_order_id="beidou-emg-1",
+                reduce_only=True,
+                rule_snapshot_hash="rule-1",
+            )
+        ],
+    )
+    outbox.transition_execution_child(intent.intent_id, 0, ChildCommandState.SENDING, event_id="send")
+    outbox.transition_execution_child(
+        intent.intent_id, 0, ChildCommandState.UNKNOWN, event_id="unknown", exchange_order_id="venue-1"
+    )
+    assert outbox.inflight_signed_quantity("LTCUSDT") == Decimal("1.100")
+
+    outbox.transition_execution_child(
+        intent.intent_id,
+        0,
+        ChildCommandState.FILLED,
+        event_id="stale-resolve:venue-capped",
+        exchange_order_id="venue-1",
+        cumulative_filled_quantity="0.109",
+    )
+    restored = outbox.restore_execution_plan(intent.intent_id)
+    assert restored is not None
+    assert restored.children[0].state is ChildCommandState.FILLED
+    assert outbox.inflight_signed_quantity("LTCUSDT") == Decimal("0")
+
+
+def test_engine_submit_slice_adopts_venue_capped_reduce_only_fill() -> None:
+    """BD-FIX: 适配器对截断成交报 ACK_QUANTITY_MISMATCH→UNKNOWN 时,
+    执行器直接采纳 venue 终态(FILLED),而不是把子命令钉 30 分钟 UNKNOWN。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._symbol_precision = {}
+    engine._rule_snapshot_hashes = {}
+    engine._rule_change_detected = set()
+    engine._close_order_ids = set()
+    engine._order_trackers = {}
+    engine._order_symbols = {}
+    engine._order_count = 0
+    engine._process_fill_calls: list[tuple[str, str]] = []
+
+    snap = InstrumentRuleSnapshot(
+        symbol="LTCUSDT",
+        tick_size="0.01",
+        step_size="0.001",
+        min_qty="0.001",
+        min_notional="5",
+        price_precision=2,
+        qty_precision=3,
+        observed_at="2099-01-01T00:00:00+00:00",
+    )
+
+    class FakeAdapter:
+        def get_rule_snapshot(self, _symbol: str) -> InstrumentRuleSnapshot:
+            return snap
+
+        async def create_order(self, _request) -> OrderResponse:
+            return OrderResponse(
+                venue_instrument=_request.venue_instrument,
+                account_ref=_request.account_ref,
+                order_id="",
+                client_order_id=_request.client_order_id,
+                status=OrderStatus.UNKNOWN,
+                side=_request.side,
+                order_type=_request.order_type,
+                original_quantity=_request.quantity,
+                executed_quantity=Quantity(amount="0"),
+                average_price=None,
+                commission=None,
+                correlation_id=_request.correlation_id,
+                raw_response={
+                    "reason": "ACK_QUANTITY_MISMATCH",
+                    "venue_response": {
+                        "orderId": 1571545784,
+                        "symbol": "LTCUSDT",
+                        "status": "FILLED",
+                        "clientOrderId": "beidou-emg-1",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "origQty": "0.109",
+                        "executedQty": "0.109",
+                        "avgPrice": "46.5",
+                        "reduceOnly": True,
+                    },
+                },
+            )
+
+    engine._adapter = FakeAdapter()
+
+    async def verify(_intent, *, consume_nonce: bool = False) -> bool:
+        assert consume_nonce is True
+        return True
+
+    async def process_fill(order_id: str, symbol: str, _result: dict) -> None:
+        engine._process_fill_calls.append((order_id, symbol))
+
+    engine._verify_intent_at_send = verify
+    engine._process_fill = process_fill
+
+    intent = OrderIntent(
+        intent_id="emergency-LTCUSDT-1",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+        instrument_id=InstrumentId("LTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=Quantity(amount="1.1"),
+        client_order_id="beidou-emg-1",
+        idempotency_key="idem-emg-1",
+        reduce_only=True,
+        close_position=True,
+    )
+    result = asyncio.run(
+        engine._submit_order_slice(
+            intent,
+            params={
+                "symbol": "LTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "quantity": "1.100",
+                "newClientOrderId": "beidou-emg-1",
+            },
+            order_symbol="LTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            consume_approval=True,
+        )
+    )
+    assert result is not None
+    assert result.get("orderId") == 1571545784
+    assert result.get("status") == "FILLED"
+    assert result.get("origQty") == "0.109"
+    # 采纳后按即时成交处理(状态机/账本投影),而不是返回 UNKNOWN 等待幽灵扫描。
+    assert engine._process_fill_calls == [("1571545784", "LTCUSDT")]
+    assert "1571545784" in engine._close_order_ids
+
+
+def test_engine_position_projection_uses_decimal_arithmetic() -> None:
+    """BD-FIX: 持仓投影全程 Decimal —— 浮点累加曾把 BNBUSDT 投影写成
+    0.01000000000000001,保护数量照抄后 durable SL 行带噪声、覆盖判定
+    永不收敛。0.08-0.05 必须精确等于 0.03 而非 0.030000000000000006。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._position_projection = {}
+    engine._position_generation = {}
+    saved: list[dict] = []
+
+    class FakeStore:
+        def save_position_projection(self, symbol, signed_quantity, entry_price, generation, source_event_id) -> None:
+            saved.append(
+                {
+                    "symbol": symbol,
+                    "signed_quantity": signed_quantity,
+                    "entry_price": entry_price,
+                    "generation": generation,
+                    "source_event_id": source_event_id,
+                }
+            )
+
+    engine._store = FakeStore()
+
+    engine._update_position_projection("BNBUSDT", "BUY", 0.08, 600.0, "fill-1")
+    assert engine._position_projection["BNBUSDT"]["signed_quantity"] == "0.08"
+    assert engine._position_projection["BNBUSDT"]["entry_price"] == "600.0"
+    # 反转:残余持仓按最新成交价,数量必须精确 0.03。
+    engine._update_position_projection("BNBUSDT", "SELL", 0.05, 610.0, "fill-2")
+    assert engine._position_projection["BNBUSDT"]["signed_quantity"] == "0.03"
+    assert engine._position_projection["BNBUSDT"]["entry_price"] == "610.0"
+    # 同向加仓:混合均价精确 615。
+    engine._update_position_projection("BNBUSDT", "BUY", 0.03, 620.0, "fill-3")
+    assert engine._position_projection["BNBUSDT"]["signed_quantity"] == "0.06"
+    assert engine._position_projection["BNBUSDT"]["entry_price"] == "615.0"
+    # 全平:归零后不留噪声尾数。
+    engine._update_position_projection("BNBUSDT", "SELL", 0.06, 615.0, "fill-4")
+    assert engine._position_projection["BNBUSDT"]["signed_quantity"] == "0.00"
+    assert len(saved) == 4
+    assert saved[-1]["signed_quantity"] == "0.00"
+
+
+def test_engine_submit_slice_keeps_non_reduce_only_mismatch_unknown() -> None:
+    """非 reduce-only 的 ACK 数量不一致仍是歧义事实:必须保持 UNKNOWN,
+    不得采纳 venue 响应(重复下单/错误成交都不可被静默接受)。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._symbol_precision = {}
+    engine._rule_snapshot_hashes = {}
+    engine._rule_change_detected = set()
+
+    snap = InstrumentRuleSnapshot(
+        symbol="BTCUSDT",
+        tick_size="0.01",
+        step_size="0.001",
+        min_qty="0.001",
+        min_notional="5",
+        price_precision=2,
+        qty_precision=3,
+        observed_at="2099-01-01T00:00:00+00:00",
+    )
+
+    class FakeAdapter:
+        def get_rule_snapshot(self, _symbol: str) -> InstrumentRuleSnapshot:
+            return snap
+
+        async def create_order(self, _request) -> OrderResponse:
+            return OrderResponse(
+                venue_instrument=_request.venue_instrument,
+                account_ref=_request.account_ref,
+                order_id="",
+                client_order_id=_request.client_order_id,
+                status=OrderStatus.UNKNOWN,
+                side=_request.side,
+                order_type=_request.order_type,
+                original_quantity=_request.quantity,
+                executed_quantity=Quantity(amount="0"),
+                average_price=None,
+                commission=None,
+                correlation_id=_request.correlation_id,
+                raw_response={
+                    "reason": "ACK_QUANTITY_MISMATCH",
+                    "venue_response": {
+                        "orderId": 1,
+                        "symbol": "BTCUSDT",
+                        "status": "FILLED",
+                        "clientOrderId": "beidou-1",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "origQty": "0.5",
+                        "executedQty": "0.5",
+                    },
+                },
+            )
+
+    engine._adapter = FakeAdapter()
+
+    async def verify(_intent, *, consume_nonce: bool = False) -> bool:
+        return True
+
+    engine._verify_intent_at_send = verify
+
+    intent = OrderIntent(
+        intent_id="intent-BTCUSDT-1",
+        account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId("default")),
+        instrument_id=InstrumentId("BTCUSDT"),
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=Quantity(amount="1"),
+        client_order_id="beidou-1",
+        idempotency_key="idem-1",
+    )
+    result = asyncio.run(
+        engine._submit_order_slice(
+            intent,
+            params={
+                "symbol": "BTCUSDT",
+                "side": "BUY",
+                "type": "MARKET",
+                "quantity": "1.000",
+                "newClientOrderId": "beidou-1",
+            },
+            order_symbol="BTCUSDT",
+            side="BUY",
+            order_type="MARKET",
+            consume_approval=True,
+        )
+    )
+    assert result is not None
+    assert result.get("_submit_outcome") == "UNKNOWN"
+    assert "orderId" not in result
 
 
 def test_parent_invariants_and_terminal_states() -> None:
