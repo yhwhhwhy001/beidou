@@ -3022,7 +3022,12 @@ class AutonomousEngine:
                     row_generation = int(row.get("position_generation", 0) or 0)
                 except (TypeError, ValueError):
                     continue
-                if expected_generation <= 0 or row_generation != expected_generation:
+                # BD-FIX (generation semantics): 只拒绝低于期望代数的陈旧行。
+                # 保护重建路径每次 +1,而成交记账仅在方向翻转时 +1 —— 新
+                # 保护行的代数可能高于投影/计数器的期望值;更"新"的行是
+                # 更当前的事实,不得按相等比较误杀(实测 LTC/LINK gen3 行
+                # vs 投影 gen2 → stop_qty=0 恒拒 6 连拒)。
+                if expected_generation <= 0 or row_generation < expected_generation:
                     continue
                 symbol_protections.append(row)
 
@@ -3049,6 +3054,7 @@ class AutonomousEngine:
                         "symbol": symbol,
                         "reason": "STOP_LOSS_QUANTITY_UNCOVERED",
                         "position_quantity": str(position_quantity),
+                        "position_amount": str(position_amount),
                         "stop_quantity": str(stop_quantity),
                         "total_protection_quantity": str(total_quantity),
                         "expected_side": expected_side,
@@ -4105,6 +4111,7 @@ class AutonomousEngine:
                         "symbol": str(g.get("symbol")),
                         "reason": str(g.get("reason")),
                         "position_qty": str(g.get("position_quantity", "")),
+                        "position_amt": str(g.get("position_amount", "")),
                         "stop_qty": str(g.get("stop_quantity", "")),
                     }
                     for g in (_evidence.get("unprotected_symbols") or [])

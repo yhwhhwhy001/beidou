@@ -892,3 +892,71 @@ def test_coverage_still_rejects_normal_unprotected_positions() -> None:
     )
     assert covered is False
     assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
+
+
+def test_coverage_accepts_newer_generation_protection_rows() -> None:
+    """保护重建路径每次 +1、成交记账仅翻转 +1 —— 新保护行代数可能高于
+    投影期望值;更"新"的行是更当前的事实,不得按相等比较误杀
+    (实测 LTC/LINK gen3 行 vs 投影 gen2 → stop_qty=0 恒拒 6 连拒)。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"LTCUSDT": 2}
+    engine._position_projection = {"LTCUSDT": {"position_generation": 2, "entry_price": "44.4"}}
+    engine._symbol_precision = {"LTCUSDT": {"min_quantity": "0.01", "min_notional": "5"}}
+    engine._protection_owner_id = "beidou-autopilot"
+    rows = [
+        {
+            "symbol": "LTCUSDT",
+            "side": "SELL",
+            "status": "ACTIVE",
+            "exchange_order_id": "algo-sl-new",
+            "owner_id": "beidou-autopilot",
+            "position_generation": 3,
+            "quantity": "0.801",
+            "order_type": "STOP_MARKET",
+            "stop_type": "ATR_BASED",
+        },
+        {
+            "symbol": "LTCUSDT",
+            "side": "SELL",
+            "status": "ACTIVE",
+            "exchange_order_id": "algo-tp-new",
+            "owner_id": "beidou-autopilot",
+            "position_generation": 3,
+            "quantity": "0.801",
+            "order_type": "TAKE_PROFIT_MARKET",
+            "stop_type": None,
+        },
+    ]
+
+    covered, evidence = engine._assess_protection_coverage(
+        [{"symbol": "LTCUSDT", "positionAmt": "0.801", "entryPrice": "44.4"}], rows
+    )
+    assert covered is True, evidence
+
+
+def test_coverage_still_rejects_stale_lower_generation_rows() -> None:
+    """低于期望代数的陈旧行(上一持仓实例)仍 fail-closed。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"LTCUSDT": 2}
+    engine._position_projection = {"LTCUSDT": {"position_generation": 2, "entry_price": "44.4"}}
+    engine._symbol_precision = {"LTCUSDT": {"min_quantity": "0.01", "min_notional": "5"}}
+    engine._protection_owner_id = "beidou-autopilot"
+    rows = [
+        {
+            "symbol": "LTCUSDT",
+            "side": "SELL",
+            "status": "ACTIVE",
+            "exchange_order_id": "algo-sl-old",
+            "owner_id": "beidou-autopilot",
+            "position_generation": 1,
+            "quantity": "0.801",
+            "order_type": "STOP_MARKET",
+            "stop_type": "ATR_BASED",
+        }
+    ]
+
+    covered, evidence = engine._assess_protection_coverage(
+        [{"symbol": "LTCUSDT", "positionAmt": "-0.801", "entryPrice": "44.4"}], rows
+    )
+    assert covered is False
+    assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
