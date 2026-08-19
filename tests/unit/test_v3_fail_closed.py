@@ -862,3 +862,33 @@ def test_persistent_blocker_cannot_leave_supervisor_running() -> None:
     assert _state_after_persistent_block("DEGRADED", True) == "DEGRADED"
     assert _state_after_persistent_block("LOCKED", True) == "LOCKED"
     assert _state_after_persistent_block("RUNNING", False) == "RUNNING"
+
+
+def test_coverage_exempts_dust_positions_below_min_quantity() -> None:
+    """低于交易所最小下单量的粉尘持仓无法建立保护(条件单恒被拒绝),
+    风险敞口有界 —— 豁免覆盖判定,否则资格门被永久钉死
+    (实测 BTCUSDT 0.0005 持仓 stop_qty=0 → 13 连拒)。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"BTCUSDT": 1}
+    engine._position_projection = {"BTCUSDT": {"position_generation": 1, "entry_price": "60000"}}
+    engine._symbol_precision = {"BTCUSDT": {"min_quantity": "0.001", "min_notional": "5"}}
+
+    covered, evidence = engine._assess_protection_coverage(
+        [{"symbol": "BTCUSDT", "positionAmt": "0.0005", "entryPrice": "60000"}], []
+    )
+    assert covered is True
+    assert evidence["unprotected_symbols"] == []
+
+
+def test_coverage_still_rejects_normal_unprotected_positions() -> None:
+    """非粉尘持仓缺 SL 仍 fail-closed。"""
+    engine = object.__new__(AutonomousEngine)
+    engine._position_generation = {"BTCUSDT": 1}
+    engine._position_projection = {"BTCUSDT": {"position_generation": 1, "entry_price": "60000"}}
+    engine._symbol_precision = {"BTCUSDT": {"min_quantity": "0.001", "min_notional": "5"}}
+
+    covered, evidence = engine._assess_protection_coverage(
+        [{"symbol": "BTCUSDT", "positionAmt": "0.01", "entryPrice": "60000"}], []
+    )
+    assert covered is False
+    assert evidence["unprotected_symbols"][0]["reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"

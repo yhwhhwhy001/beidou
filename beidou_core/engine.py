@@ -2983,6 +2983,18 @@ class AutonomousEngine:
             position_quantity = abs(position_amount)
             if position_quantity <= Decimal("1e-12"):
                 continue
+            # BD-FIX (dust position): 低于交易所最小下单量的粉尘持仓无法
+            # 建立保护(条件单恒被 min-notional/min-qty 拒绝),风险敞口
+            # 有界 —— 豁免覆盖判定,否则资格门被永久钉死(实测 BTCUSDT
+            # 0.0005 持仓 stop_qty=0 → 13 连拒)。min_quantity 未知时
+            # 不豁免(fail-closed)。
+            _prec_snap = getattr(self, "_symbol_precision", {}).get(symbol, {}) or {}
+            try:
+                _min_qty = float(_prec_snap.get("min_quantity", 0) or 0)
+            except (TypeError, ValueError):
+                _min_qty = 0.0
+            if _min_qty > 0 and position_quantity < Decimal(str(_min_qty)):
+                continue
             expected_side = "SELL" if position_amount > 0 else "BUY"
             projection = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
             try:
