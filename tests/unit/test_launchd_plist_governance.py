@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import os
 import plistlib
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from beidou_launcher.preflight import _launchd_plist_drift
@@ -91,6 +94,46 @@ def test_wrapper_preserves_other_exit_codes() -> None:
     assert _run_wrapper_with_exit(6) == 6
     assert _run_wrapper_with_exit(3) == 3
     assert _run_wrapper_with_exit(0) == 0
+
+
+def _run_wrapper_with_term(child_code: int, marker: Path) -> int:
+    """后台跑 wrapper + 子进程,TERM wrapper 后返回 wrapper 退出码。
+
+    BD-FIX (kickstart 孤儿进程) 回归: kickstart -k 的 TERM 必须送达
+    子进程;wrapper 中断后必须重新 wait 收集子进程真实退出码。
+    """
+    child = (
+        f'touch "{marker}"; trap "exit {child_code}" TERM; '
+        'while :; do sleep 1; done'
+    )
+    proc = subprocess.Popen(  # noqa: S603
+        [str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"), "/bin/sh", "-c", child],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), "child did not become ready before TERM"
+        os.kill(proc.pid, signal.SIGTERM)
+        return proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_wrapper_forwards_term_and_keeps_child_exit_code(tmp_path: Path) -> None:
+    """TERM 转发后 wrapper 透传子进程真实退出码(而非 143)。"""
+    marker = tmp_path / "ready"
+    assert _run_wrapper_with_term(7, marker) == 7
+
+
+def test_wrapper_maps_locked_after_term_to_zero(tmp_path: Path) -> None:
+    """TERM 触发的 LOCKED 退出(5)仍映射为 0 —— 不得因信号中断误重启。"""
+    marker = tmp_path / "ready"
+    assert _run_wrapper_with_term(5, marker) == 0
 
 
 def test_template_plist_uses_governed_restart_semantics() -> None:

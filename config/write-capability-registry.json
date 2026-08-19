@@ -780,7 +780,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "9f0091fa1e966281b5d904bd9da87b7af5d3a9b9f2ded75a92ab21e5cfb700bf",
+ "governance_digest": "012ef5c805a02aae37a69f74ca6709296c2b978fdcf4e66c3e24846acf7beeea",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "c51bd50d544aadfb6b321e7f17c5baf6e67544040ac0e97fc50b7d16bbbef313",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1035,7 +1035,7 @@
   "beidou_exchange/binance_usdm/__init__.py": "e3333fc866245cce5b58cee73c64c6d69e4ed557cf623569a63447b9ba17ece0",
   "beidou_exchange/binance_usdm/adapter.py": "a6fd681eb97bc1649c0b4c19c185615cb28015552a83d0a824227183b671a30c",
   "beidou_exchange/binance_usdm/endpoints.py": "373630abb9b9e5a35583ca26479b5a035a641f36725addacf6a821591293062a",
-  "beidou_exchange/binance_usdm/rest_client.py": "c4bc632ffa3fd5de0faef55f3f0b7059f0439206e946b409b8a5dd1fe6a8bb44",
+  "beidou_exchange/binance_usdm/rest_client.py": "dd7f6ba82889b616680805c5b9758204f92a99387b5a404b364044335751215c",
   "beidou_exchange/binance_usdm/write_guard.py": "fb5ee2245cb47f78e45c18d6c1a39a56330b0e7c2f1831b885168e3375b981e8",
   "beidou_exchange/binance_usdm/ws_client.py": "67c619fa72562d36d1fcae1ac44651ad296312e6a2dceba41db7215f9b75b546",
   "beidou_exchange/core/error_taxonomy.py": "36d5973cbbcf2ad3edee3bad84395eb7fd9d5fe006196d6ede5bd5ea4ec67487",
@@ -1284,7 +1284,7 @@
   "delivery/task-packages/BD-T18/ACCEPTANCE.yaml": "e6abe539f5bcb8caf00c90a868a64c0dbb0a3bb554dedc93fbcdda86d9e8fb4c",
   "delivery/task-packages/BD-T19/ACCEPTANCE.yaml": "fdcf451630b05df756b4242b4e9166c16c9ab4c7a5cef028f9a29c9d263d8cc8",
   "delivery/templates/evidence-manifest.template.json": "c4a336a66f4e46c8b7a542031d8361a95e69908aa980646f1e538ea8ae7d6c9a",
-  "deploy/beidou_launchd_wrapper.sh": "e092f21a67d65afb07a20aebc59ef6862c78af8d9acba8fe9ad087cc48b243b2",
+  "deploy/beidou_launchd_wrapper.sh": "ad72cdbbcefcb31c6c9fe4517113d9657805c82f83a673d0fcc3ddc794b00bc2",
   "deploy/com.beidou.autopilot.plist": "3768406a30abd89276847f663e9d1a3f5dbef92abdec6e56acb25b8fe9965528",
   "docker-compose.yml": "a81844f334dc010f306a4cb2038ace37155ffff8b653410ba5943194689063b6",
   "migrations/001_initial_schema.up.sql": "4a17f9d9443ebb92c8d722cf838571274ce6bb75ffa66fd517d83e66fd1fee4b",
@@ -2076,98 +2076,98 @@
   },
   {
    "governance_id": "WRITE-REST-CREATE-ORDER",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:226:TERMINAL_CALL:_request:POST",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:255:TERMINAL_CALL:_request:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-ORDER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-CANCEL-ORDER",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:230:TERMINAL_CALL:_request:DELETE",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:259:TERMINAL_CALL:_request:DELETE",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CANCEL-ORDER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-CREATE-ALGO",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:249:TERMINAL_CALL:_request:POST",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:278:TERMINAL_CALL:_request:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-ALGO]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-CANCEL-ALGO",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:254:TERMINAL_CALL:_request:DELETE",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:283:TERMINAL_CALL:_request:DELETE",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CANCEL-ALGO]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-CREATE-LISTEN-KEY",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:265:TERMINAL_CALL:_request:POST",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:294:TERMINAL_CALL:_request:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-CREATE-LISTEN-KEY]",
    "owner": "Market Data Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-KEEPALIVE-LISTEN-KEY",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:276:TERMINAL_CALL:_request:PUT",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:305:TERMINAL_CALL:_request:PUT",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-KEEPALIVE-LISTEN-KEY]",
    "owner": "Market Data Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-PUBLIC-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:290:TERMINAL_CALL:_request:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:319:TERMINAL_CALL:_request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-PUBLIC-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:482:DIRECT_URLLIB_REQUEST:POST",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:511:DIRECT_URLLIB_REQUEST:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:482:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:511:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:485:DIRECT_URLLIB_REQUEST:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:514:DIRECT_URLLIB_REQUEST:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:485:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:514:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:495:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:524:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-HTTPX-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:715:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:744:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-HTTPX-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-HTTPX-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:732:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:761:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-HTTPX-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"

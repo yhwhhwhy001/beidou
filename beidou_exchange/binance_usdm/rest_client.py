@@ -115,6 +115,35 @@ class BinanceRESTClient:
         session, self._session = self._session, None
         session.close()
 
+    def _reset_transport_session(self) -> None:
+        """丢弃持久 httpx.Client,下一次请求将以全新连接池重建。
+
+        BD-FIX (transport outage self-heal): 2026-08-19 18:09 网络抖动
+        (VPN/TUN 路径中断)后,旧进程内持久连接池整体失效 —— 所有请求
+        handshake timeout / 空消息 PoolTimeout,持续 80+ 分钟;同一时刻
+        新进程相同请求全部成功。半死连接无法自愈,必须在故障连击时
+        主动重建 session,否则只能靠整进程重启恢复。
+        """
+        if self._session is None:
+            return
+        with contextlib.suppress(Exception):
+            self._session.close()
+        self._session = None
+
+    def _mark_transport_failure(self) -> None:
+        """记录一次传输层失败;达到熔断阈值时打开熔断并重建 session。
+
+        BD-FIX (transport outage self-heal): 网络类异常连击说明传输层
+        已不可信(连接池半死/解析陈旧),打开熔断冷却 60s 并丢弃
+        session,冷却结束后第一次请求即用全新池重建 —— 免重启恢复。
+        5xx 等 venue 已应答的错误不经过此路径,不误重建。
+        """
+        self._rate_state.consecutive_failures += 1
+        if self._rate_state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            self._rate_state.circuit_open = True
+            self._rate_state.circuit_open_until = time.monotonic() + CIRCUIT_BREAKER_COOLDOWN
+            self._reset_transport_session()
+
     # === 公共查询（无需签名）===
 
     async def get_server_time(self) -> Result[dict]:
@@ -663,7 +692,7 @@ class BinanceRESTClient:
                 # 标记为 UNKNOWN 状态，调用方必须查询订单状态 (queryOrder) 后决定 adopt/retry。
                 is_write = method in ("POST", "PUT", "DELETE")
                 if is_write and attempt >= 0:  # 写请求第一次失败即停止
-                    self._rate_state.consecutive_failures += 1
+                    self._mark_transport_failure()
                     # M11-F03: 调试 print 改结构化 logger(原 locals() 取变量脆弱)
                     logger.warning(
                         "[rest] FAIL x%d: %s %s -> %s",
@@ -687,7 +716,7 @@ class BinanceRESTClient:
                 if attempt < self._max_retries - 1:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
-                self._rate_state.consecutive_failures += 1
+                self._mark_transport_failure()
                 # M11-F03: 调试 print 改结构化 logger(原 locals() 取变量脆弱)
                 logger.warning(
                     "[rest] FAIL x%d: %s %s -> %s",

@@ -218,6 +218,79 @@ def test_network_failure_retries_then_fails_closed(monkeypatch: pytest.MonkeyPat
     assert calls == 2
 
 
+def test_network_failure_streak_resets_transport_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BD-FIX (transport outage self-heal): 网络故障连击时丢弃持久 session。
+
+    2026-08-19 实测:网络抖动后旧进程连接池整体失效(全量超时),
+    新进程相同请求成功 —— 半死连接无法自愈。达到熔断阈值时必须
+    关闭并丢弃 session,下一次请求以全新连接池重建,免重启恢复。
+    """
+    client = BinanceRESTClient("https://demo.example", max_retries=1)
+    closed: list[bool] = []
+
+    class FakeSession:
+        def close(self) -> None:
+            closed.append(True)
+
+    client._session = FakeSession()
+    seen_sessions: list[object] = []
+
+    def fail_urlopen(request, timeout, _session=None):
+        seen_sessions.append(_session)
+        raise OSError("network down")
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fail_urlopen)
+    monkeypatch.setattr(rest_module.asyncio, "sleep", no_sleep)
+    for _ in range(5):
+        result = asyncio.run(client.get_ticker("BTCUSDT"))
+        assert result.is_success() is False
+        assert result.error is not None
+        assert result.error.category is ErrorCategory.NETWORK
+    assert client._rate_state.circuit_open is True
+    assert closed == [True]
+    assert client._session is None
+    assert all(s is not None for s in seen_sessions)
+
+
+def test_transport_session_rebuilt_after_breaker_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """熔断冷却结束后,下一次请求必须用全新连接池重建 session。"""
+    client = BinanceRESTClient("https://demo.example", max_retries=1)
+
+    class FakeSession:
+        def close(self) -> None:
+            return None
+
+    def fail_urlopen(request, timeout, _session=None):
+        raise OSError("network down")
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fail_urlopen)
+    monkeypatch.setattr(rest_module.asyncio, "sleep", no_sleep)
+
+    old_session = FakeSession()
+    client._session = old_session
+    client._rate_state.consecutive_failures = 4
+    result = asyncio.run(client.get_ticker("BTCUSDT"))
+    assert result.error is not None
+    assert result.error.category is ErrorCategory.NETWORK
+    assert client._rate_state.circuit_open is True
+    assert client._session is None
+
+    # 冷却过期 → 断路器复位,下一次请求重建全新 session
+    client._rate_state.circuit_open_until = 0
+    result = asyncio.run(client.get_ticker("BTCUSDT"))
+    assert result.error is not None
+    assert result.error.category is ErrorCategory.NETWORK
+    assert client._rate_state.circuit_open is False
+    assert client._session is not None
+    assert client._session is not old_session
+
+
 def test_rate_limit_retries_and_circuit_breaker_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     client = BinanceRESTClient("https://demo.example", max_retries=1)
     errors = 0
