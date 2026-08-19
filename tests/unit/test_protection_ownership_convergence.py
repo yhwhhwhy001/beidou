@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -1268,17 +1269,154 @@ def test_dedup_noop_when_no_duplicates() -> None:
     assert set(engine._protection.all_positions()) == {"pos-a"}
 
 
-def test_dedup_fail_closed_when_multiple_active_projections() -> None:
-    """两个投影 SL 均 ACTIVE → 歧义,不自动裁决(两个都保留)。"""
+def test_dedup_same_shape_multiple_active_keeps_highest_generation() -> None:
+    """BD-FIX (ONDO 19:51 实测): 同品种同方向同数量双 ACTIVE 是确定性冗余。
+
+    保留最高代数者,其余按幽灵清理(取消 venue algo + 删 durable 行 +
+    移除内存投影)。旧逻辑只告警不裁决,冗余投影与 venue 重复条件单
+    跨轮持久。
+    """
+    pp_a = _projection("pos-a", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-a")
+    pp_a.position_generation = 2
+    pp_b = _projection("pos-b", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-b")
+    pp_b.position_generation = 3
+    engine = _dedup_engine(
+        protections=[
+            _durable_row(
+                protection_id="sl-pos-a",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-a",
+                generation=2,
+                algo_id="algo-a",
+            ),
+            _durable_row(
+                protection_id="sl-pos-b",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-b",
+                generation=3,
+                algo_id="algo-b",
+            ),
+        ],
+        projections=[pp_a, pp_b],
+    )
+    engine._active_algo_ids = {"pos-a": {"algo-a"}, "pos-b": {"algo-b"}}
+
+    removed = engine._dedup_ghost_protection_positions()
+
+    assert removed == 1
+    remaining = engine._protection.all_positions()
+    assert set(remaining) == {"pos-b"}  # 高代数保留
+    rows = engine._store.restore_protections()
+    assert all(r["position_id"] != "pos-a" for r in rows)
+    assert "pos-a" not in engine._active_algo_ids
+    # 幽灵的 venue 条件单进入待取消清单
+    assert ("BNBUSDT", "algo-a") in getattr(engine, "_stale_protection_algos", [])
+
+
+def test_dedup_same_shape_tiebreak_prefers_fill_path_pid() -> None:
+    """平代时成交路径 pos-{orderId} 优先于 pos-recovered-/adopt- 通用投影。"""
+    pp_recovered = _projection(
+        "pos-recovered-BNBUSDT", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-rec"
+    )
+    pp_recovered.position_generation = 3
+    pp_fill = _projection("pos-351307886", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-fill")
+    pp_fill.position_generation = 3
+    engine = _dedup_engine(
+        protections=[
+            _durable_row(
+                protection_id="sl-rec",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-recovered-BNBUSDT",
+                generation=3,
+                algo_id="algo-rec",
+            ),
+            _durable_row(
+                protection_id="sl-fill",
+                symbol="BNBUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-351307886",
+                generation=3,
+                algo_id="algo-fill",
+            ),
+        ],
+        projections=[pp_recovered, pp_fill],
+    )
+    engine._active_algo_ids = {
+        "pos-recovered-BNBUSDT": {"algo-rec"},
+        "pos-351307886": {"algo-fill"},
+    }
+
+    removed = engine._dedup_ghost_protection_positions()
+
+    assert removed == 1
+    assert set(engine._protection.all_positions()) == {"pos-351307886"}
+
+
+def test_dedup_different_shape_multiple_active_warns_only() -> None:
+    """双 ACTIVE 但方向/数量分歧 → 保持 fail-closed,只告警不裁决。"""
+    pp_a = _projection("pos-a", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-a", quantity=1.0)
+    pp_b = _projection("pos-b", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-b", quantity=2.0)
     engine = _dedup_engine(
         protections=[],
-        projections=[
-            _projection("pos-a", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-a"),
-            _projection("pos-b", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-b"),
-        ],
+        projections=[pp_a, pp_b],
     )
     assert engine._dedup_ghost_protection_positions() == 0
     assert set(engine._protection.all_positions()) == {"pos-a", "pos-b"}
+
+
+# ---------------------------------------------------------------------------
+# 平仓确认后的快速清理(_venue_position_gone)
+# ---------------------------------------------------------------------------
+
+
+def test_venue_position_gone_requires_fresh_account_fact() -> None:
+    """BD-FIX: 新鲜账户快照确认无持仓才允许越过 3 轮防抖快速清理。"""
+    engine = _adopt_engine(positions={"BNBUSDT": "0.1"})
+
+    # 新鲜快照:该品种持仓为 0 → gone
+    engine._last_account = {"positions": [{"symbol": "BNBUSDT", "positionAmt": "0"}]}
+    engine._last_account_at = time.time()
+    assert engine._venue_position_gone("BNBUSDT") is True
+
+    # 快照超过 60s 不新鲜 → 不得裁决(断网期间账户停滞绝不误清)
+    engine._last_account_at = time.time() - 120.0
+    assert engine._venue_position_gone("BNBUSDT") is False
+
+    # 新鲜且仍有持仓 → 未平仓
+    engine._last_account_at = time.time()
+    engine._last_account = {"positions": [{"symbol": "BNBUSDT", "positionAmt": "0.1"}]}
+    assert engine._venue_position_gone("BNBUSDT") is False
+
+    # 新鲜但账户中没有该品种(平仓后消失)→ gone
+    engine._last_account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0"}]}
+    assert engine._venue_position_gone("BNBUSDT") is True
+
+    # 无 _last_account_at(旧进程/未设置)→ 不裁决
+    engine._last_account_at = 0.0
+    assert engine._venue_position_gone("BNBUSDT") is False
+
+
+def test_venue_position_gone_handles_malformed_account() -> None:
+    """账户结构异常时 fail-closed(False),不误清。"""
+    engine = _adopt_engine(positions={})
+    engine._last_account_at = time.time()
+    # 新鲜且账户为空(无任何持仓)→ gone
+    assert engine._venue_position_gone("BNBUSDT") is True
+    engine._last_account = {"positions": "not-a-list"}
+    assert engine._venue_position_gone("BNBUSDT") is False
+    engine._last_account = {"positions": [{"symbol": "BNBUSDT", "positionAmt": "garbage"}]}
+    assert engine._venue_position_gone("BNBUSDT") is False
 
 
 def test_dedup_fail_closed_when_no_active_projection() -> None:

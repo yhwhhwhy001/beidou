@@ -307,7 +307,15 @@ async def test_unknown_intent_ambiguous_absence_stays_unknown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_intent_terminal_partial_fill_requires_reconciliation() -> None:
+async def test_unknown_intent_terminal_partial_fill_resolves_via_venue_fact() -> None:
+    """BD-FIX (SUI 02:08 实测): 终态部分成交不再永久滞留 UNKNOWN。
+
+    身份绑定的 venue 事实(clientOrderId+symbol 匹配)是确定性终态证据:
+    order_state 持久化终态事实后消息即收敛(found=True);成交入账由
+    fill journal/对账负责,此处不据此记账。旧逻辑记录 incident 后
+    continue → 消息永久 UNKNOWN → durable_ok 恒 False → 事故永不
+    auto-resolve,且每轮解析白烧 20s 超时预算。
+    """
     resolutions: list[tuple[str, bool]] = []
     persisted: list[tuple[tuple, dict]] = []
     failures: list[str] = []
@@ -344,10 +352,59 @@ async def test_unknown_intent_terminal_partial_fill_requires_reconciliation() ->
 
     resolved = await engine._resolve_unknown_outbox_intents()
 
+    assert resolved == 1
+    assert len(persisted) == 1
+    assert persisted[0][1].get("order_id") == "42"  # 关键字参数持久化
+    assert persisted[0][1].get("status") == "CANCELED"
+    assert persisted[0][1].get("filled_qty") == "0.25"
+    assert resolutions == [("intent-unknown-partial", True)]
+    assert failures == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_intent_terminal_fact_persistence_failure_stays_unknown() -> None:
+    """终态事实持久化失败时消息保持 UNKNOWN(fail-closed,不丢证据)。"""
+    resolutions: list[tuple[str, bool]] = []
+    failures: list[str] = []
+
+    async def found_partial_terminal(*_args, **_kwargs) -> dict:
+        return {
+            "orderId": 42,
+            "clientOrderId": "beidou-intent-unknown-partial",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "1",
+            "executedQty": "0.25",
+            "avgPrice": "95000",
+            "status": "CANCELED",
+        }
+
+    def failing_save(*_args, **_kwargs):
+        raise RuntimeError("store down")
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._api_async = found_partial_terminal
+    engine._store = SimpleNamespace(save_order_state=failing_save)
+    engine._outbox = SimpleNamespace(
+        get_unknown_intents=lambda: [
+            {
+                "intent_id": "intent-unknown-partial",
+                "symbol": "BTCUSDT",
+                "client_order_id": "beidou-intent-unknown-partial",
+            }
+        ],
+        resolve_unknown=lambda intent_id, *, exchange_order_found: resolutions.append(
+            (intent_id, exchange_order_found)
+        ),
+    )
+    engine._record_execution_fact_failure_env_guarded = failures.append
+
+    resolved = await engine._resolve_unknown_outbox_intents()
+
     assert resolved == 0
-    assert persisted == []
     assert resolutions == []
-    assert failures == ["UNKNOWN_TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:intent-unknown-partial"]
+    assert failures == ["UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:intent-unknown-partial:RuntimeError"]
 
 
 @pytest.mark.asyncio

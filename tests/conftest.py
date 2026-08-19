@@ -7,11 +7,22 @@ Pytest 全局配置与 fixtures。
 
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Generator
 
 import pytest
+
+# BD-FIX (log isolation): beidou_core.engine 的模块级 FileHandler 默认写
+# evidence/beidou_engine.log —— 任何导入该模块的 pytest 进程都会把测试
+# fixture 告警混进线上日志(实测 'pos-a'/'pos-b'、'algo-sl-1' 等测试投影
+# 被误判为线上歧义)。必须在任何 beidou_core 导入之前重定向到临时文件。
+os.environ.setdefault(
+    "BEIDOU_ENGINE_LOG",
+    os.path.join(tempfile.gettempdir(), "beidou_test_engine.log"),
+)
 
 from beidou_shared.types import (
     ClockDomain,

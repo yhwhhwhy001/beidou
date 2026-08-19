@@ -156,7 +156,12 @@ _log_format = logging.Formatter(
     "%(asctime)s.%(msecs)03d [%(levelname)-7s] %(name)s - %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-_log_handler = logging.FileHandler("evidence/beidou_engine.log")
+# BD-FIX (log isolation): 模块级 FileHandler 会被所有导入本模块的进程共享
+# (包括 pytest)——测试进程的 fixture 告警混入线上 evidence 日志,曾把
+# 'pos-a'/'pos-b' 等测试投影误判为线上歧义。路径可由环境变量覆盖,
+# conftest 将测试日志重定向到临时文件。
+_log_path = os.environ.get("BEIDOU_ENGINE_LOG", "evidence/beidou_engine.log")
+_log_handler = logging.FileHandler(_log_path)
 _log_handler.setFormatter(_log_format)
 _log_handler.setLevel(logging.INFO)
 logger.addHandler(_log_handler)
@@ -5180,11 +5185,9 @@ class AutonomousEngine:
                 continue
             if not venue_executed.is_finite() or venue_executed < 0:
                 continue
-            if venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0:
-                self._record_execution_fact_failure_env_guarded(
-                    f"UNKNOWN_TERMINAL_PARTIAL_FILL_RECONCILIATION_REQUIRED:{intent_id}"
-                )
-                continue
+            _terminal_partial = (
+                venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0
+            )
             try:
                 store = getattr(self, "_store", None)
                 save_order_state = getattr(store, "save_order_state", None)
@@ -5210,6 +5213,21 @@ class AutonomousEngine:
             except Exception as exc:
                 self._record_execution_fact_failure_env_guarded(
                     f"UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:{intent_id}:{type(exc).__name__}"
+                )
+                continue
+            if _terminal_partial:
+                # BD-FIX (SUI 02:08 实测): 旧逻辑对终态部分成交的消息
+                # 记录 incident 后 continue —— 消息永久滞留 UNKNOWN,
+                # durable_ok 恒 False → 事故永不 auto-resolve,且每轮解析
+                # 白烧 20s 超时预算。身份绑定的 venue 事实(clientOrderId
+                # + symbol 匹配)本身就是确定性终态证据;成交入账由 fill
+                # journal/对账负责(此处不据此记账,不对账不重置),消息
+                # 只需收敛到终态。order_state 已持久化 venue 终态事实。
+                self._outbox.resolve_unknown(intent_id, exchange_order_found=True)
+                resolved_count += 1
+                print(
+                    f"[realtime] Resolved UNKNOWN intent {intent_id} via terminal venue fact "
+                    f"({venue_status.value}, filled={venue_executed})"
                 )
                 continue
             self._outbox.resolve_unknown(intent_id, exchange_order_found=True)
@@ -8396,6 +8414,7 @@ class AutonomousEngine:
             exchange_facts=exchange_facts,
         )
         self._last_account = account
+        self._last_account_at = time.time()  # BD-FIX: 账户快照新鲜度(平仓快速清理裁决用)
         # BD-FIX: testnet 自动授权 user stream replay baseline。
         # 两方（交易所 REST ↔ 系统账本）对拍一致即"独立验证"成立 ——
         # event_stream 侧因 sequencer 未授权而 INCOMPLETE 属预期（授权后
@@ -9176,6 +9195,36 @@ class AutonomousEngine:
             return (time.time() - _ts) < grace_seconds
         return False
 
+    def _venue_position_gone(self, symbol: str) -> bool:
+        """BD-FIX (closed-position fast cleanup): 新鲜账户快照确认品种无持仓。
+
+        与 algo 缺失(单轮)合并构成两个独立事实,允许越过 3 轮防抖
+        立即清理平仓后残留的保护行。账户快照超过 60s 即视为不新鲜,
+        不得据此裁决(断网期间账户停滞时绝不误清)。
+        """
+        _last = getattr(self, "_last_account", None)
+        if not isinstance(_last, dict):
+            return False
+        _at = float(getattr(self, "_last_account_at", 0.0) or 0.0)
+        if _at <= 0 or time.time() - _at > 60.0:
+            return False
+        positions = _last.get("positions")
+        if not isinstance(positions, list):
+            return False
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return False
+        for row in positions:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("symbol", "") or "").strip().upper() != sym:
+                continue
+            try:
+                return abs(float(row.get("positionAmt", 0) or 0)) <= 1e-12
+            except (TypeError, ValueError):
+                return False
+        return True
+
     def _dedup_ghost_protection_positions(self) -> int:
         """BD-FIX (ghost-position deadlock): 同品种重复保护投影去重。
 
@@ -9190,7 +9239,10 @@ class AutonomousEngine:
           移除内存投影、取消其带 algoId 的 venue 条件单,并整组删除
           其 durable 行(仅本进程所有权行);
         - 0 个 ACTIVE:交 S33 补发,不裁决;
-        - ≥2 个 ACTIVE:歧义,只告警不自动裁决。
+        - ≥2 个 ACTIVE 且全部同方向同数量:确定性冗余(启动恢复的
+          pos-recovered-* 与成交路径 pos-{orderId} 竞态,ONDO 19:51
+          实测)——保留最高代数者(平代时成交路径 pid 优先),其余按
+          幽灵清理;方向/数量分歧仍只告警(fail-closed)。
         """
         removed = 0
         try:
@@ -9213,6 +9265,30 @@ class AutonomousEngine:
             all_rows = list(store.restore_protections()) if store is not None else []
         except Exception:
             all_rows = []
+
+        def _remove_ghost(pid: str, sym: str, keeper_pid: str) -> bool:
+            ghost_rows = [r for r in all_rows if str(r.get("position_id", "") or "").strip() == pid]
+            # 有 algoId 的幽灵行先取消 venue 条件单(并登记待取消清单),
+            # 再由 remove_protection 整组删除 —— 绝不能落 CANCELLED:
+            # 无 exchange_order_id 的 CANCELLED 行会毒化下次启动恢复
+            # (PROTECTION_ROW_SEMANTICS_UNKNOWN → 全量阻断)。
+            _algo_rows = [r for r in ghost_rows if str(r.get("exchange_order_id") or "").strip()]
+            if _algo_rows and store is not None:
+                try:
+                    self._cancel_stale_protection_rows(sym, _algo_rows, "GHOST_POSITION_DEDUP")
+                except Exception as exc:
+                    logger.warning(
+                        "ghost protection algo cancel failed for %s: %s", sym, type(exc).__name__
+                    )
+            self._remove_protection_with_cleanup(pid, sym)
+            self._active_algo_ids.pop(pid, None)
+            getattr(self, "_pending_protection_retry", set()).discard(pid)
+            print(
+                f"[nearline] 👻 Deduplicated ghost protection projection for {sym} "
+                f"(pos={pid}, keeper={keeper_pid})"
+            )
+            return True
+
         for sym, group in sorted(by_symbol.items()):
             if len(group) <= 1:
                 continue
@@ -9220,37 +9296,42 @@ class AutonomousEngine:
             if len(active) == 0:
                 continue  # 无 ACTIVE 投影 —— 由 S33 重建,不去重
             if len(active) > 1:
-                logger.warning(
-                    "ambiguous duplicate ACTIVE protection projections for %s: %s",
-                    sym,
-                    sorted(pid for pid, _ in active),
+                # BD-FIX: 同品种同方向同数量的多 ACTIVE 是确定性冗余。
+                # 保留最高代数;平代时非 pos-recovered-/adopt- 前缀(成交
+                # 路径 pos-{orderId})优先 —— 它由最新成交事实创建。
+                _ref = active[0][1]
+                _same_shape = all(
+                    abs(float(getattr(pp, "quantity", 0) or 0) - float(getattr(_ref, "quantity", 0) or 0)) < 1e-8
+                    and getattr(pp, "side", None) == getattr(_ref, "side", None)
+                    for _, pp in active[1:]
                 )
+                if not _same_shape:
+                    logger.warning(
+                        "ambiguous duplicate ACTIVE protection projections for %s: %s",
+                        sym,
+                        sorted(pid for pid, _ in active),
+                    )
+                    continue
+
+                def _keep_score(item: tuple[str, Any]) -> tuple[int, int, str]:
+                    pid, pp = item
+                    gen = int(getattr(pp, "position_generation", 0) or 0)
+                    generic = 1 if str(pid).startswith(("pos-recovered-", "adopt-")) else 0
+                    return (gen, -generic, str(pid))
+
+                keeper_pid = max(active, key=_keep_score)[0]
+                for pid, pp in group:
+                    if pid == keeper_pid:
+                        continue
+                    if _remove_ghost(pid, sym, keeper_pid):
+                        removed += 1
                 continue
             keeper_pid = active[0][0]
             for pid, pp in group:
                 if pid == keeper_pid or _sl_active(pp):
                     continue
-                ghost_rows = [r for r in all_rows if str(r.get("position_id", "") or "").strip() == pid]
-                # 有 algoId 的幽灵行先取消 venue 条件单(并登记待取消清单),
-                # 再由 remove_protection 整组删除 —— 绝不能落 CANCELLED:
-                # 无 exchange_order_id 的 CANCELLED 行会毒化下次启动恢复
-                # (PROTECTION_ROW_SEMANTICS_UNKNOWN → 全量阻断)。
-                _algo_rows = [r for r in ghost_rows if str(r.get("exchange_order_id") or "").strip()]
-                if _algo_rows and store is not None:
-                    try:
-                        self._cancel_stale_protection_rows(sym, _algo_rows, "GHOST_POSITION_DEDUP")
-                    except Exception as exc:
-                        logger.warning(
-                            "ghost protection algo cancel failed for %s: %s", sym, type(exc).__name__
-                        )
-                self._remove_protection_with_cleanup(pid, sym)
-                self._active_algo_ids.pop(pid, None)
-                getattr(self, "_pending_protection_retry", set()).discard(pid)
-                removed += 1
-                print(
-                    f"[nearline] 👻 Deduplicated ghost protection projection for {sym} "
-                    f"(pos={pid}, keeper={keeper_pid})"
-                )
+                if _remove_ghost(pid, sym, keeper_pid):
+                    removed += 1
         return removed
 
     async def _retry_missing_protections(self, exchange_symbols: set[str]) -> None:
@@ -9340,7 +9421,14 @@ class AutonomousEngine:
                         if algo_id and algo_id in current_missing_ids:
                             streak = streaks.get(algo_id, 0) + 1
                             streaks[algo_id] = streak
-                            if streak < 3:
+                            # BD-FIX (closed-position fast cleanup): 连续缺失
+                            # 防抖保护的是"API 抖动造成的假缺失"。当新鲜账户
+                            # 快照同时确认该品种已无持仓时,两个独立事实
+                            # (algo 缺失 + 仓位已平)互相印证 —— 首轮即可清理,
+                            # 把 ORPHAN/LOCAL_WITHOUT_VENUE_FACT 造成的资格门
+                            # 关闭窗口从 ~3 轮压到 1 轮(实测 RUNE 20:03 平仓后
+                            # 20:04-20:05 一批 7 个 NO_NEW_RISK 拒绝)。
+                            if streak < 3 and not self._venue_position_gone(str(row.get("symbol", "") or "")):
                                 continue
                             pos_id = str(row.get("position_id", "")).strip()
                             if pos_id:
@@ -12230,6 +12318,7 @@ class AutonomousEngine:
             self._lifecycle.transition(ModuleState.FAILED)
             return
         self._last_account = account
+        self._last_account_at = time.time()  # BD-FIX: 账户快照新鲜度(平仓快速清理裁决用)
         permissions_ok, permission_reason = self._apply_venue_account_permissions(account)
         if not permissions_ok and self._can_write:
             self._safe_no_new_risk("auto")
