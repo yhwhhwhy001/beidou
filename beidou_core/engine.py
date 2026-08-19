@@ -6882,6 +6882,12 @@ class AutonomousEngine:
         generation = int(row.get("position_generation", self._position_generation.get(symbol, 0)) or 0)
         if current_qty and new_qty and (current_qty > 0) != (new_qty > 0):
             generation += 1
+        # BD-FIX (generation regression): 代数只增不减 —— 投影行代数可能
+        # 落后于保护行已推进的代数(_ensure_entry_protection 的
+        # _next_position_generation),直接用陈旧投影代数回写会把
+        # _position_generation 拉回低位,资格门按代数过滤把新保护行判为
+        # stop_qty=0 恒拒(实测 SOL 0.16 持仓 8 连拒)。
+        generation = max(generation, int(self._position_generation.get(symbol, 0) or 0))
         self._position_generation[symbol] = generation
         projection = {
             "symbol": symbol,

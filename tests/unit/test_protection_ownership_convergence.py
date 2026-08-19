@@ -1693,3 +1693,53 @@ def test_protection_row_fresh_grace_window() -> None:
     assert engine._protection_row_fresh("algo-a") is True
     assert engine._protection_row_fresh("algo-b") is False
     assert engine._protection_row_fresh("algo-missing") is False
+
+
+# ---------------------------------------------------------------------------
+# 10. 成交记账的持仓代数单调性(只增不减)
+# ---------------------------------------------------------------------------
+
+
+def test_position_generation_never_regresses_from_stale_projection() -> None:
+    """投影行代数落后于保护行已推进的代数时,成交记账不得把
+    _position_generation 拉回低位 —— 否则资格门按代数过滤把新保护行
+    判为 stop_qty=0 恒拒(实测 SOL 0.16 持仓 8 连拒)。"""
+    engine = _adopt_engine(positions={})
+    engine._position_projection = {
+        "SOLUSDT": {"signed_quantity": "-0.16", "entry_price": "76.89", "position_generation": 0}
+    }
+    engine._position_generation = {"SOLUSDT": 1}  # 保护行已推进到 1
+    saved: list[tuple[str, int]] = []
+
+    class _S:
+        def save_position_projection(self, symbol, qty, entry, generation, source_event_id):
+            saved.append((symbol, generation))
+
+    engine._store = _S()
+
+    # 同向加仓:投影行 gen=0,当前 gen=1 —— 不得回退到 0
+    engine._update_position_projection("SOLUSDT", "SELL", 0.07, 76.88, "fill:1")
+
+    assert engine._position_generation["SOLUSDT"] == 1
+    assert saved[-1] == ("SOLUSDT", 1)
+
+
+def test_position_generation_bumps_on_flip_and_stays_monotonic() -> None:
+    engine = _adopt_engine(positions={})
+    engine._position_projection = {
+        "SOLUSDT": {"signed_quantity": "0.79", "entry_price": "76.0", "position_generation": 1}
+    }
+    engine._position_generation = {"SOLUSDT": 1}
+    saved: list[tuple[str, int]] = []
+
+    class _S:
+        def save_position_projection(self, symbol, qty, entry, generation, source_event_id):
+            saved.append((symbol, generation))
+
+    engine._store = _S()
+
+    # 翻转(多→空):代数 +1
+    engine._update_position_projection("SOLUSDT", "SELL", 0.95, 76.9, "fill:flip")
+
+    assert engine._position_generation["SOLUSDT"] == 2
+    assert saved[-1] == ("SOLUSDT", 2)
