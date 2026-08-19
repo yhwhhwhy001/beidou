@@ -9979,15 +9979,30 @@ class AutonomousEngine:
                             break
                     if _venue_entry > 0:
                         _sweep_entry = _venue_entry
+                    _sync_signed = str(_sweep_qty if _sweep_side == "BUY" else -_sweep_qty)
+                    _sync_generation = int(
+                        getattr(self, "_position_generation", {}).get(_sweep_sym, 0) or 0
+                    )
                     self._position_projection[_sweep_sym] = {
                         "symbol": _sweep_sym,
-                        "signed_quantity": str(_sweep_qty if _sweep_side == "BUY" else -_sweep_qty),
+                        "signed_quantity": _sync_signed,
                         "entry_price": str(_sweep_entry),
-                        "position_generation": int(
-                            getattr(self, "_position_generation", {}).get(_sweep_sym, 0) or 0
-                        ),
+                        "position_generation": _sync_generation,
                         "source_event_id": "venue-side-sync",
                     }
+                    # BD-FIX (durable heal): venue 事实同步必须落库 —— 只改
+                    # 内存投影,重启后陈旧行(0.01000000000000001)复活,
+                    # 每次开机都重放一轮分叉重建。持久化与内存同值。
+                    _sync_store = getattr(self, "_store", None)
+                    if _sync_store is not None and callable(getattr(_sync_store, "save_position_projection", None)):
+                        with contextlib.suppress(Exception):
+                            _sync_store.save_position_projection(
+                                _sweep_sym,
+                                _sync_signed,
+                                str(_sweep_entry),
+                                _sync_generation,
+                                "venue-side-sync",
+                            )
                     print(
                         f"[nearline] 🔄 Venue-side divergence for {_sweep_sym}: "
                         f"projection {getattr(_existing[0], 'side', None)} → venue {_sweep_side} — rebuilding"
