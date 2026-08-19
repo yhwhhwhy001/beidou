@@ -6314,6 +6314,22 @@ class AutonomousEngine:
             if prev_hash and prev_hash != snap_hash:
                 print(f"[order] {order_symbol}: rule changed! prev={prev_hash[:16]} new={snap_hash[:16]}")
                 self._rule_change_detected.add(order_symbol)
+                # BD-FIX (adopt-on-change): 当前意图按旧规则量化,拒绝是正确
+                # 的;但必须推进已记录 hash 与精度缓存 —— 否则下一个意图
+                # 继续与旧 hash 比较 → 品种被永久拒绝(实测 187 连拒,拒绝率
+                # 随运行时间单调上升)。下一意图由 nearline 按新规则重新
+                # 签名后即可执行。
+                self._rule_snapshot_hashes[order_symbol] = snap_hash
+                self._symbol_precision[order_symbol] = {
+                    "quantity": snap.qty_precision,
+                    "price": snap.price_precision,
+                    "step_size": snap.step_size,
+                    "tick_size": snap.tick_size,
+                    "min_quantity": snap.min_qty,
+                    "min_notional": snap.min_notional,
+                    "rule_snapshot_hash": snap_hash,
+                    "rule_version": snap.rule_version,
+                }
                 return rejected("VENUE_RULE_SNAPSHOT_CHANGED")
             self._rule_snapshot_hashes[order_symbol] = snap_hash
             self._symbol_precision[order_symbol] = {

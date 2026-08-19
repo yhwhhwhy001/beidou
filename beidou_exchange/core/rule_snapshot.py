@@ -103,7 +103,14 @@ class InstrumentRuleSnapshot:
             return True
 
     def compute_hash(self) -> str:
-        """计算规则快照 hash。"""
+        """计算规则快照 hash。
+
+        BD-FIX (refresh-stability): 只对规则内容取 hash —— observed_at 是
+        刷新时刻,周期刷新(offline tick 25 分钟)会翻转全部品种的 hash,
+        执行器据此把每个品种的首个订单判为 VENUE_RULE_SNAPSHOT_CHANGED,
+        且旧实现变更后不回写已记录 hash → 品种被永久拒绝(实测 187 连拒,
+        拒绝率随运行时间单调上升)。规则本身不变时 hash 必须稳定。
+        """
         data = {
             "symbol": self.symbol,
             "tick_size": self.tick_size,
@@ -114,7 +121,6 @@ class InstrumentRuleSnapshot:
             "qty_precision": self.qty_precision,
             "contract_size": self.contract_size,
             "rule_version": self.rule_version,
-            "observed_at": self.observed_at,
             "source": self.source,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

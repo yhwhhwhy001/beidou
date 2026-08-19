@@ -365,3 +365,58 @@ class TestFaultInjection:
             passed=False,
         )
         assert result.duplicate_orders_detected == 1
+
+
+def test_rule_snapshot_hash_stable_across_refresh_times() -> None:
+    """规则内容不变时,hash 不得随刷新时刻翻转 —— 周期刷新(observed_at
+    变化)曾让执行器把每个品种的首个订单判 VENUE_RULE_SNAPSHOT_CHANGED,
+    且旧实现不回写 hash → 品种被永久拒绝(实测 187 连拒)。"""
+    from datetime import datetime, timedelta
+
+    from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
+
+    base = {
+        "symbol": "BTCUSDT",
+        "tick_size": "0.1",
+        "step_size": "0.001",
+        "min_qty": "0.001",
+        "min_notional": "20.0",
+        "price_precision": 1,
+        "qty_precision": 3,
+        "contract_size": 0.0,
+        "position_mode": "ONEWAY",
+        "rule_version": 3,
+        "source": "exchange_info",
+    }
+    t1 = datetime.now(timezone.utc).isoformat()
+    t2 = (datetime.now(timezone.utc) + timedelta(minutes=25)).isoformat()
+    s1 = InstrumentRuleSnapshot(observed_at=t1, **base)
+    s2 = InstrumentRuleSnapshot(observed_at=t2, **base)
+
+    assert s1.compute_hash() == s2.compute_hash()
+
+
+def test_rule_snapshot_hash_changes_when_rules_change() -> None:
+    from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
+
+    s1 = InstrumentRuleSnapshot(
+        symbol="BTCUSDT",
+        tick_size="0.1",
+        step_size="0.001",
+        min_qty="0.001",
+        min_notional="20.0",
+        price_precision=1,
+        qty_precision=3,
+        observed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    s2 = InstrumentRuleSnapshot(
+        symbol="BTCUSDT",
+        tick_size="0.1",
+        step_size="0.001",
+        min_qty="0.001",
+        min_notional="20.0",
+        price_precision=1,
+        qty_precision=4,  # 步长精度变化 = 真实规则变化
+        observed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    assert s1.compute_hash() != s2.compute_hash()
