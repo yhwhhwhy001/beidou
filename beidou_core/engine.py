@@ -9422,10 +9422,44 @@ class AutonomousEngine:
                     }
                 except Exception:
                     _durable_owned_symbols = set()
-            for _sweep_sym in sorted(exchange_symbols):
-                if any(str(pp.instrument_id) == _sweep_sym for pp in self._protection.all_positions().values()):
+            # BD-FIX (venue-side divergence): 内存投影方向与 venue 事实不一致
+            # (成交经用户流/外部路径翻转持仓而投影未重建)时,近线 covered
+            # skip 依据陈旧投影恒真,资格门按 venue 事实恒拒 —— 两套事实
+            # 永不收敛(实测 SOL SHORT 投影 vs venue LONG 0.13 → 8 连拒)。
+            # 与投影缺口同语义:按 venue 事实重建投影。
+            _venue_sides: dict[str, str] = {}
+            _venue_qtys: dict[str, float] = {}
+            for _ep in (getattr(self, "_last_account", {}) or {}).get("positions", []):
+                if not isinstance(_ep, dict):
                     continue
-                if _sweep_sym in _durable_owned_symbols:
+                try:
+                    _amt = float(_ep.get("positionAmt", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                _s = str(_ep.get("symbol", "")).strip().upper()
+                if _s and math.isfinite(_amt) and abs(_amt) > 1e-12:
+                    _venue_sides[_s] = "BUY" if _amt > 0 else "SELL"
+                    _venue_qtys[_s] = abs(_amt)
+            for _sweep_sym in sorted(exchange_symbols):
+                _existing = [
+                    pp
+                    for pp in self._protection.all_positions().values()
+                    if str(pp.instrument_id) == _sweep_sym
+                ]
+                _side_diverged = bool(
+                    _sweep_sym in _venue_sides
+                    and _existing
+                    and all(
+                        str(getattr(getattr(pp, "side", None), "value", "")) != _venue_sides[_sweep_sym]
+                        for pp in _existing
+                    )
+                )
+                if _existing and not _side_diverged:
+                    continue
+                # durable ACTIVE 行存在但投影缺失:由恢复/收养路径挂载,
+                # 不制造 recovered-* 幽灵投影;方向分叉时不适用此豁免
+                # (旧方向行必须清理重建)。
+                if not _side_diverged and _sweep_sym in _durable_owned_symbols:
                     continue
                 _proj_row = self._position_projection.get(_sweep_sym)
                 if not _proj_row:
@@ -9435,13 +9469,47 @@ class AutonomousEngine:
                     _sweep_entry = float(_proj_row.get("entry_price", 0) or 0)
                 except (TypeError, ValueError):
                     continue
+                if _side_diverged:
+                    # 方向分叉:以 venue 方向/数量为准,旧投影由
+                    # _ensure_entry_protection 的 stale 清理路径移除。
+                    _sweep_qty = _venue_qtys.get(_sweep_sym, abs(_sweep_qty))
+                    if _sweep_qty <= 1e-12:
+                        continue
+                    _sweep_side = _venue_sides[_sweep_sym]
+                    # 同步持久化投影为 venue 事实,避免 _ensure_entry_protection
+                    # 用陈旧投影数量重建出过度/不足的保护。
+                    _venue_entry = 0.0
+                    for _ep2 in (getattr(self, "_last_account", {}) or {}).get("positions", []):
+                        if isinstance(_ep2, dict) and str(_ep2.get("symbol", "")).strip().upper() == _sweep_sym:
+                            try:
+                                _venue_entry = float(_ep2.get("entryPrice", 0) or 0)
+                            except (TypeError, ValueError):
+                                _venue_entry = 0.0
+                            break
+                    if _venue_entry > 0:
+                        _sweep_entry = _venue_entry
+                    self._position_projection[_sweep_sym] = {
+                        "symbol": _sweep_sym,
+                        "signed_quantity": str(_sweep_qty if _sweep_side == "BUY" else -_sweep_qty),
+                        "entry_price": str(_sweep_entry),
+                        "position_generation": int(
+                            getattr(self, "_position_generation", {}).get(_sweep_sym, 0) or 0
+                        ),
+                        "source_event_id": "venue-side-sync",
+                    }
+                    print(
+                        f"[nearline] 🔄 Venue-side divergence for {_sweep_sym}: "
+                        f"projection {getattr(_existing[0], 'side', None)} → venue {_sweep_side} — rebuilding"
+                    )
+                else:
+                    _sweep_side = "BUY" if _sweep_qty > 0 else "SELL"
                 if abs(_sweep_qty) <= 1e-12 or not math.isfinite(_sweep_entry) or _sweep_entry <= 0:
                     continue
                 try:
                     await self._ensure_entry_protection(
                         f"recovered-{_sweep_sym}",
                         _sweep_sym,
-                        {"side": "BUY" if _sweep_qty > 0 else "SELL"},
+                        {"side": _sweep_side},
                         qty=abs(_sweep_qty),
                         entry_price=_sweep_entry,
                         submit=False,

@@ -77,6 +77,67 @@ class _Protection:
     def position_count(self) -> int:
         return len(self.all_positions())
 
+    def create_protection(
+        self,
+        *,
+        position_id: str,
+        instrument_id: Any,
+        venue_id: Any,
+        entry_price: float,
+        quantity: float,
+        side: Any,
+        stop_loss_config: Any,
+        take_profit_config: Any,
+        owner_id: str,
+        position_generation: int,
+        session_id: str,
+    ) -> Any:
+        sl = SimpleNamespace(
+            protection_id=f"sl-{position_id}",
+            position_id=position_id,
+            instrument_id=str(instrument_id),
+            side=SimpleNamespace(value="BUY" if str(getattr(side, "value", side)) == "SELL" else "SELL"),
+            status=SimpleNamespace(value="CREATED"),
+            is_active=lambda: False,
+            quantity=SimpleNamespace(amount=str(quantity)),
+            exchange_order_id=None,
+            order_type="STOP_MARKET",
+            stop_type=SimpleNamespace(value="ATR_BASED"),
+            take_profit_type=None,
+            trigger_price=SimpleNamespace(amount=str(entry_price)),
+            reduce_only=True,
+        )
+        tp = SimpleNamespace(
+            protection_id=f"tp-{position_id}",
+            position_id=position_id,
+            instrument_id=str(instrument_id),
+            status=SimpleNamespace(value="CREATED"),
+            is_active=lambda: False,
+            quantity=SimpleNamespace(amount=str(quantity)),
+            exchange_order_id=None,
+            side=SimpleNamespace(value="BUY" if str(getattr(side, "value", side)) == "SELL" else "SELL"),
+            order_type="TAKE_PROFIT_MARKET",
+            stop_type=None,
+            take_profit_type=SimpleNamespace(value="FIXED_RR"),
+            trigger_price=SimpleNamespace(amount=str(entry_price)),
+            reduce_only=True,
+        )
+        pp = SimpleNamespace(
+            position_id=position_id,
+            instrument_id=str(instrument_id),
+            venue_id=str(venue_id),
+            entry_price=float(entry_price),
+            quantity=float(quantity),
+            side=side,
+            stop_loss=sl,
+            take_profits=[tp],
+            owner_id=owner_id,
+            position_generation=position_generation,
+            session_id=session_id,
+        )
+        self._projections[str(position_id)] = pp
+        return pp
+
 
 def _venue_algo(
     algo_id: str,
@@ -1743,3 +1804,92 @@ def test_position_generation_bumps_on_flip_and_stays_monotonic() -> None:
 
     assert engine._position_generation["SOLUSDT"] == 2
     assert saved[-1] == ("SOLUSDT", 2)
+
+
+# ---------------------------------------------------------------------------
+# 11. 内存投影方向与 venue 事实分叉 → 按 venue 事实重建
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_rebuilds_projection_when_venue_side_diverges() -> None:
+    """成交经用户流/外部路径翻转持仓而投影未重建时,近线 covered skip
+    依据陈旧投影恒真、资格门按 venue 事实恒拒(实测 SOL SHORT 投影 vs
+    venue LONG 0.13 → 8 连拒)。补发循环必须按 venue 方向重建投影。"""
+    from beidou_shared.types import OrderSide as _OrderSide
+
+    engine = _adopt_engine(positions={}, local_symbols=set())
+    engine._env_mode = SimpleNamespace(value="testnet")
+    engine._can_write = True
+    engine._control = SimpleNamespace(
+        get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"), execute_action=lambda action: None
+    )
+    engine._protection_retries = {}
+    engine._pending_protection_persist = {}
+    engine._venue_missing_streaks = {}
+    engine._pending_protection_retry = set()
+    engine._protection_exchange_attempted = set()
+    engine._feed = SimpleNamespace()
+    engine._diag_throttle = lambda _key: True
+    engine._symbol_precision = {"SOLUSDT": {"price": 4, "quantity": 4}}
+    engine._stale_protection_algos = []
+    engine._sl_unprotectable_streak = {}
+    engine._position_generation = {"SOLUSDT": 2}
+    engine._position_entry_times = {}
+    engine._position_projection = {
+        "SOLUSDT": {"position_generation": 2, "entry_price": "76.95", "signed_quantity": "-0.24"}
+    }
+    # venue 事实:方向已翻转为 LONG 0.13;内存投影仍是 SHORT 0.24
+    engine._last_account = {
+        "positions": [{"symbol": "SOLUSDT", "positionAmt": "0.13", "entryPrice": "76.95"}]
+    }
+
+    async def _fake_kline(_symbol: str) -> dict[str, Any]:
+        return {}
+
+    engine._feed.async_get_kline_features = _fake_kline  # type: ignore[attr-defined]
+
+    import beidou_strategy.protection.adaptive as adaptive_mod
+
+    class _Cfg:
+        def __init__(self) -> None:
+            self.metadata: dict[str, Any] = {}
+            self.stop_pct = 2.0
+            self.atr_pct = 1.0
+            self.volatility_regime = SimpleNamespace(value="LOW")
+            self.price_tier = SimpleNamespace(value="MID")
+            self.market_regime = SimpleNamespace(value="RANGING")
+            self.rr_ratio = 1.0
+            self.stop_loss_config = {"type": "FIXED_PERCENT", "stop_pct": 2.0}
+            self.take_profit_config = {"type": "FIXED_RR", "rr": 1.0}
+
+    orig_calc = adaptive_mod.AdaptiveProtectionCalculator.calculate
+    adaptive_mod.AdaptiveProtectionCalculator.calculate = staticmethod(lambda *_a, **_k: _Cfg())
+    engine._require_protection_config = lambda symbol, cfg: None  # type: ignore[method-assign]
+    try:
+        # 挂载陈旧 SHORT 投影
+        old_pp = _projection("pos-old", "SOLUSDT", sl_status="ACTIVE", quantity=0.24, algo_id="algo-old")
+        old_pp.side = _OrderSide.SELL
+        engine._protection.restore_position_protection(old_pp)
+        engine._active_algo_ids = {"pos-old": {"algo-old"}}
+
+        async def _fake_inventory() -> list[dict[str, Any]]:
+            return []
+
+        engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
+        engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+        async def _noop_cancel(pid: str, sym: str) -> None:
+            return None
+
+        engine._cancel_algo_orders = _noop_cancel  # type: ignore[method-assign]
+
+        await engine._retry_missing_protections({"SOLUSDT"})
+    finally:
+        adaptive_mod.AdaptiveProtectionCalculator.calculate = orig_calc
+
+    # 陈旧 SHORT 投影被移除,新投影按 venue LONG 重建
+    remaining = engine._protection.all_positions()
+    assert "pos-old" not in remaining
+    new_pps = [pp for pid, pp in remaining.items() if str(pp.instrument_id) == "SOLUSDT"]
+    assert new_pps and str(getattr(new_pps[0].side, "value", "")) == "BUY"
+    assert abs(float(new_pps[0].quantity) - 0.13) < 1e-8
