@@ -7,7 +7,8 @@ import pytest
 
 from beidou_core.store import PersistentStore
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
-from beidou_exchange.core.user_stream import UserStreamStatus
+from beidou_exchange.core.protocol import UserStreamEvent
+from beidou_exchange.core.user_stream import UserStreamSequencer, UserStreamStatus
 from beidou_safety.execution.reconciliation import AccountFactSnapshot
 from beidou_safety.execution.user_events import UserProjectionStatus, UserStreamProjector
 from beidou_shared.types import AccountId, InstrumentId, MonetaryValue, Quantity, VenueId
@@ -374,3 +375,122 @@ def test_projection_detail_removed_on_terminal_status() -> None:
     snap = projector.fact_snapshot()
     assert order_id not in snap.open_orders
     assert order_id not in snap.open_orders_detail
+
+
+def _trade_lite_raw(
+    *,
+    event_time: int,
+    order_id: int = 999,
+    client_id: str = "cid-lite",
+    qty: str = "0.30",
+    last: str = "0.10",
+    price: str = "100",
+    trade_id: int = 500,
+    side: str = "BUY",
+) -> dict:
+    """真实 TRADE_LITE 包络:字段在顶层、无状态/累计成交量/订单类型。"""
+    return {
+        "e": "TRADE_LITE",
+        "E": event_time,
+        "T": event_time,
+        "s": "BTCUSDT",
+        "q": qty,
+        "p": price,
+        "m": False,
+        "c": client_id,
+        "S": side,
+        "L": price,
+        "l": last,
+        "t": trade_id,
+        "i": order_id,
+    }
+
+
+def _lite_update(**kwargs):
+    result = BinanceUsdmAdapter.parse_user_order_update(_trade_lite_raw(**kwargs))
+    assert result.is_success() and result.data is not None
+    return result.data
+
+
+def test_trade_lite_fills_project_by_trade_id_idempotent() -> None:
+    projector = UserStreamProjector()
+    assert _authorize(projector, _baseline(positions={})).accepted
+
+    first = _lite_update(event_time=5_000, trade_id=500, last="0.10")
+    assert projector.ingest(first).status is UserProjectionStatus.ACCEPTED
+    assert projector.fact_snapshot().positions["BTCUSDT"].amount == "0.1"
+
+    # 同一成交的 TRADE_LITE 重复送达(不同 event id)不得双计。
+    duplicate = _lite_update(event_time=5_001, trade_id=500, last="0.10")
+    assert projector.ingest(duplicate).status is UserProjectionStatus.ACCEPTED
+    assert projector.fact_snapshot().positions["BTCUSDT"].amount == "0.1"
+
+    # 同一订单的下一笔成交正常累加。
+    second = _lite_update(event_time=5_002, trade_id=501, last="0.20")
+    assert projector.ingest(second).status is UserProjectionStatus.ACCEPTED
+    assert projector.fact_snapshot().positions["BTCUSDT"].amount == "0.3"
+
+
+def test_trade_lite_and_order_trade_update_do_not_double_count() -> None:
+    """双通道(TRADE_LITE / ORDER_TRADE_UPDATE)推送同一成交只计一次。"""
+
+    # lite 先到 → 完整事件后到:累计增量必须扣除 lite 已计部分。
+    lite_first = UserStreamProjector()
+    assert _authorize(lite_first, _baseline(positions={})).accepted
+    assert lite_first.ingest(_lite_update(event_time=6_000, trade_id=600, last="0.10")).accepted
+    assert lite_first.ingest(_update(sequence=2, update_id=600, cumulative="0.10")).accepted
+    assert lite_first.fact_snapshot().positions["BTCUSDT"].amount == "0.1"
+    assert lite_first.ingest(_update(sequence=3, update_id=601, cumulative="0.20")).accepted
+    assert lite_first.fact_snapshot().positions["BTCUSDT"].amount == "0.2"
+
+    # 完整事件先到 → lite 后到:lite 按 trade_id 跳过。
+    otu_first = UserStreamProjector()
+    assert _authorize(otu_first, _baseline(positions={})).accepted
+    assert otu_first.ingest(_update(sequence=2, update_id=600, cumulative="0.10")).accepted
+    assert otu_first.ingest(_lite_update(event_time=7_000, trade_id=600, last="0.10")).accepted
+    assert otu_first.fact_snapshot().positions["BTCUSDT"].amount == "0.1"
+
+    # 混排:OTU(t1) → lite(t2) → OTU(z 覆盖 t1+t2, t2 已由 lite 计)。
+    mixed = UserStreamProjector()
+    assert _authorize(mixed, _baseline(positions={})).accepted
+    assert mixed.ingest(_update(sequence=2, update_id=700, cumulative="0.10")).accepted
+    assert mixed.ingest(_lite_update(event_time=8_000, trade_id=701, last="0.10")).accepted
+    assert mixed.ingest(_update(sequence=3, update_id=701, cumulative="0.20")).accepted
+    assert mixed.fact_snapshot().positions["BTCUSDT"].amount == "0.2"
+
+
+def test_trade_lite_without_trade_id_is_skipped_for_position_projection() -> None:
+    projector = UserStreamProjector()
+    assert _authorize(projector).accepted
+    raw = _trade_lite_raw(event_time=9_000, trade_id=900)
+    del raw["t"]
+    result = BinanceUsdmAdapter.parse_user_order_update(raw)
+    assert not result.is_success()  # trade id 是 TRADE_LITE 必备字段
+
+
+def test_unsequenced_event_does_not_poison_sequenced_stream() -> None:
+    """无序号事件被逐条拒绝,但不得把 sequencer 永久翻成不可用状态。"""
+
+    sequencer = UserStreamSequencer()
+    unsequenced = UserStreamEvent(
+        event_type="TRADE_LITE",
+        event_id="lite-1",
+        event_time_ms=1_000,
+        transaction_time_ms=1_000,
+        sequence=None,
+        raw_event={},
+    )
+    rejected = sequencer.observe(unsequenced)
+    assert not rejected.accepted
+    assert sequencer.status is not UserStreamStatus.SEQUENCE_UNAVAILABLE
+
+    sequenced = UserStreamEvent(
+        event_type="ORDER_TRADE_UPDATE",
+        event_id="otu-1",
+        event_time_ms=1_001,
+        transaction_time_ms=1_001,
+        sequence=10,
+        raw_event={},
+    )
+    assert sequencer.observe(sequenced).accepted
+    assert sequencer.last_sequence == 10

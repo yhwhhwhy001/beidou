@@ -198,9 +198,10 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
     ),
     TestnetExemption(
         exemption_id="EXEMPT-22",
-        title="TRADE_LITE 解析失败时 testnet 保持用户流健康",
-        rationale="TRADE_LITE(轻量用户流)与 ORDER_TRADE_UPDATE 同构,成交事实在所有环境"
-        "摄入入账;仅当单条事件解析失败时,testnet 保持流健康等待下一条事件,"
+        title="TRADE_LITE 解析失败或投影暂缓时 testnet 保持用户流健康",
+        rationale="TRADE_LITE(轻量用户流)字段在顶层且无订单状态/累计成交量,成交事实按 "
+        "trade_id 幂等摄入入账;仅当单条事件解析失败,或 replay baseline 授权前"
+        "无序号事件被投影器暂缓时,testnet 保持流健康等待下一条事件,"
         "避免共享 demo 账户的畸形事件把控制面拉回 NO_NEW_RISK。live/canary 仍 fail-closed。",
         reassessment_module="M13",
         risk_note="解析失败的成交事实在该事件内丢失(靠 REST 订单监控兜底);"

@@ -74,6 +74,9 @@ class OrderType(str, Enum):
     LIQUIDATION = "LIQUIDATION"
     INSURANCE = "INSURANCE"
     ADL = "ADL"
+    # BD-FIX (TRADE_LITE): 轻量用户流事件不携带订单类型字段；
+    # 缺省值必须能显式表示为 UNKNOWN 而不是伪造一个可执行类型。
+    UNKNOWN = "UNKNOWN"
 
 
 class OrderStatus(str, Enum):

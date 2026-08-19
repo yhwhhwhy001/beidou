@@ -94,8 +94,12 @@ def _projector_requiring_replay() -> UserStreamProjector:
         sequence=None,
         raw_event={},
     )
-    observation = sequencer.observe(event)  # 无序列事件 → SEQUENCE_UNAVAILABLE
+    observation = sequencer.observe(event)  # 无序列事件 → 逐条拒绝
     assert not observation.accepted
+    # BD-FIX (TRADE_LITE): 无序列事件不再把 sequencer 永久翻成
+    # SEQUENCE_UNAVAILABLE;事故现场(需要 replay 才能继续的阻塞态)
+    # 显式构造,保证下游 fail-closed 断言仍有意义。
+    sequencer._status = UserStreamStatus.SEQUENCE_UNAVAILABLE
     assert sequencer.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
     return projector
 

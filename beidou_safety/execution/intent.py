@@ -534,24 +534,33 @@ class IntentOutbox:
             "UNKNOWN": ChildCommandState.UNKNOWN,
         }
         target = state_map.get(raw_status, ChildCommandState.UNKNOWN)
-        return self.transition_execution_child(
-            identity[0],
-            identity[1],
-            target,
-            event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
-            exchange_order_id=str(getattr(update, "order_id", "") or ""),
-            cumulative_filled_quantity=(
-                cumulative
-                if terminal_partial
-                or target
-                in {
-                    ChildCommandState.PARTIALLY_FILLED,
-                    ChildCommandState.FILLED,
-                    ChildCommandState.CANCELED,
-                }
-                else None
-            ),
-        )
+        try:
+            return self.transition_execution_child(
+                identity[0],
+                identity[1],
+                target,
+                event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
+                exchange_order_id=str(getattr(update, "order_id", "") or ""),
+                cumulative_filled_quantity=(
+                    cumulative
+                    if terminal_partial
+                    or target
+                    in {
+                        ChildCommandState.PARTIALLY_FILLED,
+                        ChildCommandState.FILLED,
+                        ChildCommandState.CANCELED,
+                    }
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            # BD-FIX (stream ordering): 用户流重放/乱序会把初始 NEW 确认
+            # 送到已 PARTIALLY_FILLED/FILLED 的子命令之后(状态回归)。
+            # 状态回归不是经济事实冲突 —— 保持现有聚合(订单监控路径会
+            # 重新建立权威状态),不得把它升级为流故障。
+            if "INVALID_CHILD_TRANSITION" in str(exc) or "TERMINAL_CHILD_STATE" in str(exc):
+                return self.restore_execution_plan(str(identity[0]))
+            raise
 
     def inflight_signed_quantity(self, symbol: str) -> Decimal:
         """Return signed remaining child exposure, including UNKNOWN."""

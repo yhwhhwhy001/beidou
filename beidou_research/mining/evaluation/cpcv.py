@@ -177,7 +177,7 @@ class CPCVEvaluator:
             # 中间测试块两侧的训练样本泄漏到路径中。
             if test_indices and (cfg.purge_bars > 0 or cfg.embargo_bars > 0):
                 keep = _purge_and_embargo_mask(train_indices, test_indices, cfg.purge_bars, cfg.embargo_bars)
-                train_indices = [index for index, keep_i in zip(train_indices, keep) if keep_i]
+                train_indices = [index for index, keep_i in zip(train_indices, keep, strict=False) if keep_i]
 
             if len(train_indices) < max(cfg.min_train_samples, cfg.min_train_groups):
                 continue

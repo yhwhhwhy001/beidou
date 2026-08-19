@@ -817,7 +817,9 @@ class TestBinanceAdapter:
         assert parsed.is_success() and parsed.data is not None
         observation = UserStreamSequencer().observe(parsed.data)
         assert observation.accepted is False
-        assert observation.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
+        # BD-FIX (TRADE_LITE): 无序号事件逐条拒绝,但不得把 sequencer 翻成
+        # 粘性的 SEQUENCE_UNAVAILABLE —— 否则后续有序事件全部被拒。
+        assert observation.status is not UserStreamStatus.SEQUENCE_UNAVAILABLE
 
     @pytest.mark.asyncio
     async def test_user_sequence_gap_is_blocked(self):

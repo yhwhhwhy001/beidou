@@ -10,7 +10,6 @@ from __future__ import annotations
 import yaml
 
 from beidou_research.mining.runner import MiningRunner, PipelineConfig
-
 from tests.unit.test_fw03_e2e_mining import generate_synthetic_ohlcv
 
 

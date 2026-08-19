@@ -1249,14 +1249,65 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_user_stream_adapter",
             )
         if event_result.data.event_type not in {"ORDER_TRADE_UPDATE", "TRADE_LITE"} or not isinstance(raw, dict):
-            # TRADE_LITE 与 ORDER_TRADE_UPDATE 同构(轻量用户流),携带同样
-            # 的成交事实(e/E/T/o 信封与 i/c/s/S/o/X/x/q/z/l/L/ap 字段)。
+            # TRADE_LITE 是轻量用户流:成交事实字段在顶层(无 o 包裹),
+            # 且不携带订单类型/状态/累计成交量 —— 只表达"一笔成交发生了"。
             return Result.failure(
                 "Expected ORDER_TRADE_UPDATE/TRADE_LITE envelope",
                 category=ErrorCategory.UNKNOWN,
                 raw=raw,
                 source="binance_user_stream_adapter",
             )
+        # BD-FIX (TRADE_LITE): ORDER_TRADE_UPDATE 的执行字段嵌套在 ``o``;
+        # TRADE_LITE 的字段直接在顶层(s/q/p/m/c/S/L/l/t/i)。此前统一按
+        # ``o`` 解析,真实 TRADE_LITE 事件 100% 解析失败 → 成交事实
+        # (保护单平仓/外部订单)永不进入投影与账本。两种包络分别处理。
+        if event_result.data.event_type == "TRADE_LITE":
+            lite_order = raw
+            lite_required = ("i", "c", "s", "S", "q", "L", "l", "t")
+            if any(lite_order.get(key) in (None, "") for key in lite_required):
+                return Result.failure(
+                    "TRADE_LITE missing execution fields",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=raw,
+                    source="binance_user_stream_adapter",
+                )
+            try:
+                numeric_values = {key: Decimal(str(lite_order[key])) for key in ("q", "l", "L")}
+                if any(value < 0 for value in numeric_values.values()) or numeric_values["l"] <= 0:
+                    raise ValueError("TRADE_LITE quantity/price fields must be valid")
+                commission_asset = str(lite_order.get("N") or "USDT")
+                update = UserOrderUpdate(
+                    event=event_result.data,
+                    order_id=str(lite_order["i"]),
+                    client_order_id=str(lite_order["c"]),
+                    symbol=InstrumentId(str(lite_order["s"])),
+                    side=OrderSide(str(lite_order["S"])),
+                    # TRADE_LITE 不携带订单类型;缺省值显式 UNKNOWN,不得伪造。
+                    order_type=_safe_enum(OrderType, str(lite_order.get("o") or "UNKNOWN")),
+                    # TRADE_LITE 不携带订单状态/累计成交量。成交事实由
+                    # last_quantity/last_price + trade_id 表达,消费方必须
+                    # 按 trade_id 幂等累加,不得把 UNKNOWN 状态解释为
+                    # FILLED/CANCELED。
+                    order_status=OrderStatus.UNKNOWN,
+                    execution_type="TRADE",
+                    original_quantity=Quantity(amount=str(lite_order["q"])),
+                    cumulative_quantity=Quantity(amount="0"),
+                    last_quantity=Quantity(amount=str(lite_order["l"])),
+                    last_price=Price(amount=str(lite_order["L"])),
+                    average_price=Price(amount=str(lite_order["L"])),
+                    trade_id=str(lite_order["t"]),
+                    commission=MonetaryValue(amount=str(lite_order.get("n", "0")), currency=commission_asset),
+                    realized_pnl=None,
+                )
+            except (TypeError, ValueError, InvalidOperation) as exc:
+                return Result.failure(
+                    f"TRADE_LITE invalid: {exc}",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=raw,
+                    source="binance_user_stream_adapter",
+                )
+            return Result.success(update, source="binance_user_stream_adapter")
+
         order = raw.get("o")
         required = ("i", "c", "s", "S", "o", "X", "x", "q", "z", "l", "L", "ap")
         if not isinstance(order, dict) or any(order.get(key) in (None, "") for key in required):

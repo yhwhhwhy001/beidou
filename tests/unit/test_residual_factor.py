@@ -58,4 +58,4 @@ def test_residual_values_partial_correlation_ols_math():
     expected = [base[i] - (alpha + beta * control[i]) for i in range(n)]
 
     assert len(out) == n
-    assert all(abs(a - b) < 1e-12 for a, b in zip(out, expected))
+    assert all(abs(a - b) < 1e-12 for a, b in zip(out, expected, strict=False))

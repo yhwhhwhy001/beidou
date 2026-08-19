@@ -63,6 +63,14 @@ class UserStreamProjector:
         self._balances: dict[str, MonetaryValue] = {}
         self._cumulative_by_order: dict[str, Decimal] = {}
         self._open_orders: set[str] = set()
+        # BD-FIX (TRADE_LITE): TRADE_LITE 与 ORDER_TRADE_UPDATE 会推送同一笔
+        # 成交(多资产模式双通道)。按 trade_id 去重,任一通道先到即计,
+        # 后到者跳过 —— 避免同一成交被双计进持仓投影。
+        self._applied_trade_ids: set[str] = set()
+        # 按订单累加已由 TRADE_LITE 通道入投影的成交量。完整事件的
+        # 累计增量必须减去该值,否则"lite 先到、完整事件后到"会把
+        # lite 已计的成交重复累加。
+        self._lite_applied_by_order: dict[str, Decimal] = {}
         # M13 登记兑现: 订单参数明细(order_id → 参数),供三方对账
         # 参数级比较 —— 事件侧此前不携带 detail,detail_degraded 常态
         self._open_order_details: dict[str, dict[str, str]] = {}
@@ -358,15 +366,43 @@ class UserStreamProjector:
     def _apply_order_update(self, update: UserOrderUpdate) -> None:
         order_id = str(update.order_id)
         symbol = InstrumentId(str(update.symbol))
+        trade_id = str(update.trade_id or "")
+        if update.event.event_type == "TRADE_LITE":
+            # BD-FIX (TRADE_LITE): 轻量事件只表达"一笔成交发生了"
+            # (l/L/t),无累计成交量也无订单状态。按 trade_id 幂等应用
+            # 增量成交:同一成交的 ORDER_TRADE_UPDATE 与 TRADE_LITE
+            # 谁先到谁入投影,后到者跳过。不触碰 open_orders(无状态事实)
+            # 也不推进累计水位(水位只由携带 z 的完整事件推进)。
+            if not trade_id:
+                return
+            if trade_id in self._applied_trade_ids:
+                return
+            delta = Decimal(str(update.last_quantity.amount))
+            if not delta.is_finite() or delta <= 0:
+                raise ValueError(f"TRADE_LITE non-finite last quantity for order {order_id}")
+            signed_delta = delta if update.side.value == "BUY" else -delta
+            self._positions[symbol] = self._positions.get(symbol, Decimal("0")) + signed_delta
+            self._applied_trade_ids.add(trade_id)
+            self._lite_applied_by_order[order_id] = self._lite_applied_by_order.get(order_id, Decimal("0")) + delta
+            return
         cumulative = Decimal(str(update.cumulative_quantity.amount))
         previous = self._cumulative_by_order.get(order_id, Decimal("0"))
         if cumulative < previous:
             raise ValueError(f"cumulative quantity regressed for order {order_id}")
-        delta = cumulative - previous
+        # BD-FIX (TRADE_LITE 去重): lite 通道已计的成交必须从完整事件的
+        # 累计增量中扣除 —— "lite 先到、完整事件后到" 时 cumulative 已
+        # 包含这些成交,直接相减会双计。本事件自身的 trade 已由 lite
+        # 通道入投影时整笔跳过(水位照常推进)。
+        effective_previous = max(previous, self._lite_applied_by_order.get(order_id, Decimal("0")))
+        delta = max(Decimal("0"), cumulative - effective_previous)
+        if delta and trade_id in self._applied_trade_ids:
+            delta = Decimal("0")
         if delta:
             signed_delta = delta if update.side.value == "BUY" else -delta
             self._positions[symbol] = self._positions.get(symbol, Decimal("0")) + signed_delta
         self._cumulative_by_order[order_id] = max(previous, cumulative)
+        if trade_id:
+            self._applied_trade_ids.add(trade_id)
         # BD-FIX: 只把属于引擎的挂单投进 open_orders（共享账户过滤）
         _owned = self._owned_client_order_prefix is None or str(update.client_order_id).startswith(
             self._owned_client_order_prefix

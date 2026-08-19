@@ -1129,24 +1129,33 @@ class PostgresIntentOutbox:
             "UNKNOWN": ChildCommandState.UNKNOWN,
         }
         target = state_map.get(raw_status, ChildCommandState.UNKNOWN)
-        return self.transition_execution_child(
-            str(_row_value(row, "parent_intent_id", 0)),
-            int(_row_value(row, "sequence", 1)),
-            target,
-            event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
-            exchange_order_id=str(getattr(update, "order_id", "") or ""),
-            cumulative_filled_quantity=(
-                cumulative
-                if terminal_partial
-                or target
-                in {
-                    ChildCommandState.PARTIALLY_FILLED,
-                    ChildCommandState.FILLED,
-                    ChildCommandState.CANCELED,
-                }
-                else None
-            ),
-        )
+        try:
+            return self.transition_execution_child(
+                str(_row_value(row, "parent_intent_id", 0)),
+                int(_row_value(row, "sequence", 1)),
+                target,
+                event_id=f"user:{getattr(getattr(update, 'event', None), 'event_id', '')}",
+                exchange_order_id=str(getattr(update, "order_id", "") or ""),
+                cumulative_filled_quantity=(
+                    cumulative
+                    if terminal_partial
+                    or target
+                    in {
+                        ChildCommandState.PARTIALLY_FILLED,
+                        ChildCommandState.FILLED,
+                        ChildCommandState.CANCELED,
+                    }
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            # BD-FIX (stream ordering): 用户流重放/乱序会把初始 NEW 确认
+            # 送到已 PARTIALLY_FILLED/FILLED 的子命令之后(状态回归)。
+            # 状态回归不是经济事实冲突 —— 保持现有聚合(订单监控路径会
+            # 重新建立权威状态),不得把它升级为流故障。
+            if "INVALID_CHILD_TRANSITION" in str(exc) or "TERMINAL_CHILD_STATE" in str(exc):
+                return self.restore_execution_plan(str(_row_value(row, "parent_intent_id", 0)))
+            raise
 
     def inflight_signed_quantity(self, symbol: str) -> Decimal:
         if self._connection_factory is None:
@@ -1654,6 +1663,32 @@ class PostgresIntentOutbox:
                 fencing_token=self._fencing_token,
             )
             return self._deserialize_intent_payload(_row_value(updated, "payload", 0))
+
+    def renew_lease(self, intent_id: str, lease_seconds: float = 60.0) -> bool:
+        """Extend the current owner's lease on an in-flight parent intent.
+
+        BD-FIX (multi-slice lease expiry): 切片间 pacing(TWAP 可达分钟级)
+        远长于 claim 时的 30s 租约。租约过期后,同一 owner 的子命令转换
+        被 fencing 谓词拒绝(EXECUTION_COMMAND_FENCED_OR_CONCURRENT),
+        剩余切片永不发送。本方法只允许当前 owner + 当前 fencing
+        generation 续租;不改变状态、不产生事件(续租不是状态转换)。
+        """
+
+        if self._connection_factory is None or self._fencing_token <= 0:
+            return False
+        lease = max(1, int(lease_seconds or self._lease_seconds))
+        with (
+            OutboxWorker(connection_factory=self._connection_factory)._connection_scope() as conn,
+            OutboxWorker._transaction(conn),
+            OutboxWorker._cursor_scope(conn) as cursor,
+        ):
+            cursor.execute(
+                "UPDATE v3_transactional_outbox SET "
+                "lease_until=CURRENT_TIMESTAMP+(%s * INTERVAL '1 second'),updated_at=CURRENT_TIMESTAMP "
+                "WHERE intent_id=%s AND status='SENDING' AND lease_owner=%s AND fencing_token=%s",
+                (lease, str(intent_id), self._lease_owner, self._fencing_token),
+            )
+            return getattr(cursor, "rowcount", 1) == 1
 
     def _transition_intent(
         self,

@@ -110,16 +110,16 @@ class _FakeFeed:
 
 
 def _fake_result(**overrides) -> MiningResult:
-    fields = dict(
-        run_id="x",
-        candidates_generated=10,
-        candidates_screened=5,
-        candidates_evaluated=3,
-        candidates_passed=1,
-        evidence_bundles=[],
-        failure_taxonomy={},
-        runtime_seconds=1.5,
-    )
+    fields = {
+        "run_id": "x",
+        "candidates_generated": 10,
+        "candidates_screened": 5,
+        "candidates_evaluated": 3,
+        "candidates_passed": 1,
+        "evidence_bundles": [],
+        "failure_taxonomy": {},
+        "runtime_seconds": 1.5,
+    }
     fields.update(overrides)
     return MiningResult(**fields)
 

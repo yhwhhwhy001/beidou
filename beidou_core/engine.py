@@ -5696,6 +5696,57 @@ class AutonomousEngine:
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
                 await asyncio.sleep(slice_interval)
+                # BD-FIX (multi-slice lease expiry): 切片 pacing(最长 120s)
+                # 超过 claim 租约(30s)后,同一 owner 的子命令转换会被
+                # fencing 谓词拒绝 → EXECUTION_COMMAND_FENCED_OR_CONCURRENT,
+                # 剩余切片永不发送且父意图滞留 SENDING(实测 DOT/DOGE 等
+                # 多切片计划恒在切片 2 处中断)。睡眠后显式续租,租约覆盖
+                # 下一段 pacing + venue 往返。
+                _renew = getattr(self._outbox, "renew_lease", None)
+                if callable(_renew):
+                    try:
+                        _renew(str(intent.intent_id), lease_seconds=max(60.0, 2.0 * slice_interval + 30.0))
+                    except Exception as _renew_exc:
+                        logger.warning(
+                            "lease renewal skipped for %s: %s",
+                            getattr(intent, "intent_id", "?"),
+                            type(_renew_exc).__name__,
+                        )
+            # BD-FIX (re-execution idempotency): UNKNOWN 裁决后重新进入
+            # PENDING 的意图会重跑计划;已获 venue 确认(ACKED/部分成交/
+            # 终态)或仍处于模糊(UNKNOWN)的子命令不得重发、不得回退状态。
+            # 此前对 ACKED 子命令重发 SENDING 转换直接抛
+            # INVALID_CHILD_TRANSITION:ACKED->SENDING,中止整个重试。
+            _plan_view = execution_aggregate
+            _restore_plan = getattr(self._outbox, "restore_execution_plan", None)
+            if callable(_restore_plan):
+                try:
+                    _restored = _restore_plan(str(intent.intent_id))
+                    if _restored is not None:
+                        _plan_view = _restored
+                except Exception as _restore_exc:
+                    logger.warning(
+                        "execution plan restore skipped for %s: %s",
+                        getattr(intent, "intent_id", "?"),
+                        type(_restore_exc).__name__,
+                    )
+            if idx < len(_plan_view.children) and _plan_view.children[idx].state in {
+                ChildCommandState.ACKED,
+                ChildCommandState.PARTIALLY_FILLED,
+                ChildCommandState.FILLED,
+                ChildCommandState.CANCELED,
+                ChildCommandState.REJECTED,
+                ChildCommandState.UNKNOWN,
+            }:
+                print(
+                    f"[order] ⚡ slice {idx} of {intent.intent_id} already "
+                    f"{_plan_view.children[idx].state.value} — skipping resend"
+                )
+                if _plan_view.children[idx].state is ChildCommandState.UNKNOWN:
+                    # 模糊切片不重发;保持父意图 UNKNOWN 等 venue 裁决。
+                    self._outbox.mark_unknown(intent.intent_id, "PLAN_RESEND_SKIPPED_UNKNOWN_CHILD")
+                    return
+                continue
             params = {
                 "symbol": order_symbol,
                 "side": side,
@@ -5902,8 +5953,12 @@ class AutonomousEngine:
                 cumulative_filled_quantity=cumulative_filled_quantity,
             )
         except ValueError as exc:
-            if "TERMINAL_CHILD_STATE" not in str(exc):
+            if "TERMINAL_CHILD_STATE" not in str(exc) and "INVALID_CHILD_TRANSITION" not in str(exc):
                 raise
+            # BD-FIX (twap race / stream ordering): 终态重复转换与状态回归
+            # (事件路径已把子命令推进 ACKED/成交/终态后,切片循环仍尝试
+            # 回写更早状态)都是幂等竞态 —— 刷新执行聚合并继续;其余
+            # ValueError 照抛。
             _restore = getattr(self._outbox, "restore_execution_plan", None)
             _agg = _restore(str(intent_id)) if callable(_restore) else None
             if _agg is None:
@@ -6798,6 +6853,150 @@ class AutonomousEngine:
         )
         return True
 
+    def _order_has_committed_cumulative_fill(self, order_id: str) -> bool:
+        """True when a committed non-lite fill event exists for the order.
+
+        Once the cumulative monitor/ORDER_TRADE_UPDATE path has recorded any
+        fill for an order it owns that order's accounting; TRADE_LITE must
+        not add deltas on top of it (double posting).  Fails closed: if the
+        durable journal cannot be read, assume a cumulative fact exists.
+        """
+
+        cache = getattr(self, "_cum_fill_cache", None)
+        if cache is None:
+            cache = {}
+            self._cum_fill_cache = cache
+        cached = cache.get(str(order_id))
+        if cached is not None and time.time() - cached[0] < 30.0:
+            return bool(cached[1])
+        restore = getattr(self._store, "restore_fill_events", None)
+        if not callable(restore):
+            return True
+        try:
+            rows = restore()
+        except Exception:
+            return True
+        found = any(
+            str(row.get("order_id", "")) == str(order_id)
+            and str(row.get("processing_state", "")) == "COMMITTED"
+            and not str(row.get("fill_event_id", "")).startswith("lite:")
+            for row in rows or []
+        )
+        cache[str(order_id)] = (time.time(), found)
+        return found
+
+    def _record_trade_lite_fill(self, update: Any) -> None:
+        """Record one TRADE_LITE fill fact (delta-based, trade-id idempotent).
+
+        TRADE_LITE carries no cumulative quantity, so the durable journal
+        event is keyed by the venue trade id and committed with the order's
+        lite-applied total.  Guards prevent double counting against the
+        cumulative paths:
+          - the journal event itself is idempotent per trade id (replays);
+          - once any non-lite (cumulative) fill event is committed for the
+            order, the monitor/ORDER_TRADE_UPDATE path owns its accounting
+            and further TRADE_LITE fills are skipped;
+          - in-process, the lite-applied total must equal the fill
+            high-water mark (both are advanced only by lite commits).
+        """
+
+        order_id = str(getattr(update, "order_id", "") or "")
+        symbol = str(getattr(update, "symbol", "") or "")
+        side = str(getattr(getattr(update, "side", None), "value", "") or "")
+        trade_id = str(getattr(update, "trade_id", "") or "")
+        if not order_id or not symbol or not side or not trade_id:
+            return
+        try:
+            last_qty = float(getattr(update, "last_quantity", Quantity(amount="0")).amount)
+            last_price = float(getattr(update, "last_price", Price(amount="0")).amount)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(last_qty) or not math.isfinite(last_price) or last_qty <= 0 or last_price <= 0:
+            return
+        event_id = f"lite:{order_id}:{trade_id}"
+        existing = self._store.get_fill_event(event_id)
+        if existing is not None and str(existing.get("processing_state", "COMMITTED")) == "COMMITTED":
+            return
+        lite_applied = getattr(self, "_lite_applied_qty", None)
+        if lite_applied is None:
+            lite_applied = {}
+            self._lite_applied_qty = lite_applied
+        previous = self._filled_quantities_by_order.get(order_id, 0.0)
+        lite_total = lite_applied.get(order_id, 0.0)
+        if not math.isclose(previous, lite_total, rel_tol=1e-9, abs_tol=1e-12):
+            return  # cumulative path already owns this order's accounting
+        if self._order_has_committed_cumulative_fill(order_id):
+            return  # restart/replay: a durable cumulative fact exists
+        new_lite_total = lite_total + last_qty
+        inserted = self._store.save_fill_event(
+            event_id,
+            order_id,
+            symbol,
+            side,
+            str(last_qty),  # cumulative unknown — delta stored as reference
+            f"{last_qty:.16g}",
+            f"{last_price:.16g}",
+            "PARTIALLY_FILLED",
+        )
+        if not inserted:
+            existing = self._store.get_fill_event(event_id)
+            if existing is None or str(existing.get("processing_state", "PENDING")) != "COMMITTED":
+                return
+        pending_previous = getattr(self, "_pending_fill_previous_qty", None)
+        if pending_previous is None:
+            pending_previous = {}
+            self._pending_fill_previous_qty = pending_previous
+        pending_previous[event_id] = previous
+        # Reserve the high-water mark while the event is pending so a second
+        # TRADE_LITE cannot turn the same observation into a larger delta.
+        self._filled_quantities_by_order[order_id] = new_lite_total
+        lite_applied[order_id] = new_lite_total
+        try:
+            partial_notional = last_qty * last_price
+            is_buy = side.upper() == "BUY"
+            tx_id = f"tx-{event_id.replace(':', '-')}"
+            tx = LedgerTransaction(
+                transaction_id=tx_id,
+                transaction_type=LedgerTransactionType.FILL,
+                source_event_id=event_id,
+                postings=(
+                    Posting(
+                        posting_id=f"{tx_id}-p1",
+                        account_id=AccountId("default"),
+                        account_type=AccountType.POSITION_COST if is_buy else AccountType.CASH,
+                        venue_id=VenueId("BINANCE"),
+                        instrument_id=InstrumentId(symbol),
+                        amount=MonetaryValue(amount=str(partial_notional)),
+                        side=PostingSide.DEBIT,
+                        description=f"TRADE_LITE {side} {last_qty} {symbol} @ {last_price}",
+                    ),
+                    Posting(
+                        posting_id=f"{tx_id}-p2",
+                        account_id=AccountId("default"),
+                        account_type=AccountType.CASH if is_buy else AccountType.POSITION_COST,
+                        venue_id=VenueId("BINANCE"),
+                        instrument_id=InstrumentId(symbol),
+                        amount=MonetaryValue(amount=str(partial_notional)),
+                        side=PostingSide.CREDIT,
+                        description=f"TRADE_LITE {side} {last_qty} {symbol} @ {last_price}",
+                    ),
+                ),
+                correlation_id=CorrelationId(f"exec-{order_id}"),
+            )
+            self._post_ledger_transaction(tx)
+            self._update_position_projection(symbol, side, last_qty, last_price, event_id)
+        except Exception:
+            # Keep the in-memory lite total aligned with the rolled-back
+            # high-water mark so the fill can be retried later.
+            lite_applied[order_id] = lite_total
+            self._mark_fill_retryable(order_id, event_id)
+            raise
+        self._mark_fill_committed(order_id, event_id, new_lite_total)
+        print(
+            f"[order] TRADE_LITE FILL recorded: {symbol} {side} qty={last_qty} @ {last_price} "
+            f"notional={partial_notional:.2f}"
+        )
+
     def _consume_cumulative_fill(
         self,
         order_id: str,
@@ -7553,15 +7752,36 @@ class AutonomousEngine:
             projector = UserStreamProjector(store=self._store)
             self._user_stream_projector = projector
         result = projector.ingest(update)
+        _event_type = str(getattr(getattr(update, "event", None), "event_type", "") or "")
         if result.status in {UserProjectionStatus.ACCEPTED, UserProjectionStatus.DUPLICATE}:
-            try:
-                self._outbox.project_user_order_update(update)
-            except Exception as exc:
-                self._record_execution_fact_failure_env_guarded(
-                    f"user-stream child projection blocked for {result.event_id or '<unknown>'}: "
-                    f"{type(exc).__name__}:{exc}"
-                )
-                return False
+            # BD-FIX (stream ordering): DUPLICATE 事件此前也会再次投影子命令
+            # 状态 —— 重放时"初始 NEW 确认"落在已 PARTIALLY_FILLED 的子
+            # 命令之后会抛 INVALID_CHILD_TRANSITION → USER_EVENT_REJECTED
+            # → NO_NEW_RISK。重复事件不再重投影;ACCEPTED 才携带新事实。
+            # TRADE_LITE 不携带订单状态,子命令状态由订单监控路径建立,
+            # 也不参与子命令投影。
+            if result.status is UserProjectionStatus.ACCEPTED and _event_type != "TRADE_LITE":
+                try:
+                    self._outbox.project_user_order_update(update)
+                except Exception as exc:
+                    self._record_execution_fact_failure_env_guarded(
+                        f"user-stream child projection blocked for {result.event_id or '<unknown>'}: "
+                        f"{type(exc).__name__}:{exc}"
+                    )
+                    return False
+            # BD-FIX (TRADE_LITE): 多资产模式用户流只推轻量成交事件
+            # (无订单状态/累计成交量)。保护单(algo 单)触发的平仓订单
+            # 不在监控集,其成交若不在此入账,持仓投影恒漂移。按 trade_id
+            # 幂等记入账本与持仓投影;订单终态仍由监控/完整事件路径裁决。
+            if result.status is UserProjectionStatus.ACCEPTED and _event_type == "TRADE_LITE":
+                try:
+                    self._record_trade_lite_fill(update)
+                except Exception as _lite_exc:
+                    logger.warning(
+                        "trade-lite fill accounting failed for %s: %s",
+                        str(getattr(update, "order_id", "") or ""),
+                        type(_lite_exc).__name__,
+                    )
             # BD-FIX: 保护单（algo 单）触发的平仓订单不在引擎
             # _active_order_ids 监控集 —— 其成交只有 user stream 事件
             # 可观测。事件驱动记账保证 system 侧持仓与交易所对齐
@@ -7642,6 +7862,13 @@ class AutonomousEngine:
             self._event_stream_facts = projector.fact_snapshot()
             self._recon.update_event_facts(self._event_stream_facts)
             return True
+        if _event_type == "TRADE_LITE":
+            # BD-FIX (TRADE_LITE): 无序号轻量事件在 replay baseline 授权前
+            # 会被投影器按序拒绝。与解析失败同豁免 —— 由用户流处理器按
+            # 环境策略决定(testnet 保持流健康,live fail-closed),此处不得
+            # 触发执行事实失败/NO_NEW_RISK,否则每次启动窗口的 TRADE_LITE
+            # 都会自锁交易。
+            return False
         self._record_execution_fact_failure_env_guarded(
             f"user-stream event {result.event_id or '<unknown>'} blocked: {result.reason}"
         )
@@ -7959,11 +8186,11 @@ class AutonomousEngine:
                     self._user_stream_fault("MARGIN_CALL", terminal=True)
                     return
                 elif event_type == "TRADE_LITE":
-                    # TRADE_LITE 与 ORDER_TRADE_UPDATE 同构,携带成交事实
-                    # (含共享 demo 账户其他用户的成交)。成交必须摄入并
-                    # 入账,否则外部成交造成的持仓漂移永不收敛(对账
-                    # MISMATCHED 锁盘);解析失败时 testnet 保持流健康等待
-                    # 下一条事件,live/canary fail-closed。
+                    # TRADE_LITE(轻量用户流)携带成交事实(含共享 demo
+                    # 账户其他用户的成交)。成交必须摄入并入账,否则外部
+                    # 成交造成的持仓漂移永不收敛(对账 MISMATCHED 锁盘);
+                    # 解析失败时 testnet 保持流健康等待下一条事件,
+                    # live/canary fail-closed。
                     parsed = BinanceUsdmAdapter.parse_user_order_update(data)
                     if not parsed.is_success() or parsed.data is None:
                         # TESTNET-EXEMPT: EXEMPT-22
@@ -7979,6 +8206,23 @@ class AutonomousEngine:
                         self._user_stream_fault("TRADE_LITE_PARSE_UNKNOWN")
                         return
                     accepted = self.ingest_user_order_update(parsed.data)
+                    if not accepted:
+                        # BD-FIX (TRADE_LITE): 无序号轻量事件在 replay
+                        # baseline 授权前会被投影器按序拒绝 —— 与解析失败
+                        # 同豁免(testnet 保持流健康等待授权完成);
+                        # live/canary 保持 fail-closed。
+                        # TESTNET-EXEMPT: EXEMPT-22
+                        if str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet":
+                            print("[user-stream] TRADE_LITE projection deferred on testnet — keeping stream healthy")
+                            self._update_user_stream_runtime(
+                                status="HEALTHY",
+                                last_event_mono=time.monotonic(),
+                                listen_key_active=True,
+                                last_error="",
+                            )
+                            return
+                        self._user_stream_fault("TRADE_LITE_PROJECTION_REJECTED")
+                        return
                 elif event_type in ("STRATEGY_UPDATE", "GRID_UPDATE"):
                     # BD-FIX: 共享 demo 账户其他用户的策略/网格单更新属环境
                     # TESTNET-EXEMPT: EXEMPT-11
@@ -9371,6 +9615,8 @@ class AutonomousEngine:
                 self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
                 print("[nearline] Protection retry blocked: conditional-order inventory UNKNOWN")
                 return
+            # api_ok 判定后 existing_algos 必为 list(类型窄化依赖断言)。
+            assert isinstance(existing_algos, list)
             # BD-FIX (final82b): 空 inventory 不构成 MISSING 证据 —— testnet
             # API 抖动时 _get_open_algo_inventory 返回 []（见其 docstring），
             # 若据此判定全部 VENUE_ROW_MISSING 并清理本地行，会把仍然存在
@@ -10080,10 +10326,11 @@ class AutonomousEngine:
                     # 持仓代数 —— 旧代 SL 提交成功也会被资格门按代数过滤
                     # 成 stop_qty=0(实测 LTC)。代数是身份元数据,不改变
                     # trigger/数量等已审批风险合同。
-                    with contextlib.suppress(Exception):
-                        _gen_live = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
-                        if _gen_live > 0 and int(getattr(pp.stop_loss, "position_generation", 0) or 0) < _gen_live:
-                            pp.stop_loss.position_generation = _gen_live
+                    if pp.stop_loss is not None:
+                        with contextlib.suppress(Exception):
+                            _gen_live = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+                            if _gen_live > 0 and int(getattr(pp.stop_loss, "position_generation", 0) or 0) < _gen_live:
+                                pp.stop_loss.position_generation = _gen_live
                     algo_resp = await self._create_algo_order(
                         self._protection_algo_params(
                             pp.stop_loss,

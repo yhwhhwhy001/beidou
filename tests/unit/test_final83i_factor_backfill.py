@@ -9,7 +9,7 @@ ExpressionComponent 首轮求值前从注入的异步 K 线源重建价格/因�
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -67,7 +67,7 @@ async def test_backfill_seeds_history_and_signals_immediately() -> None:
     assert len(hist["close"]) == len(bars)
     # 第二次调用(新 bar)正常追加
     next_close = bars[-1]["close"] + 0.01
-    signal2 = await comp.generate({**context, "features": {**context["features"], "close": next_close}})
+    await comp.generate({**context, "features": {**context["features"], "close": next_close}})
     assert len(hist["close"]) == len(bars) + 1
     assert comp._backfill_source.await_count == 1
 

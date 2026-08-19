@@ -564,3 +564,39 @@ def test_postgres_unknown_intents_expose_only_identity_bound_recovery_fields() -
     query, params = conn.cursor_state.statements[-1]
     assert "status IN (%s)" in query
     assert params == ("UNKNOWN",)
+
+
+def test_postgres_intent_outbox_renew_lease_binds_to_owner_and_fence() -> None:
+    """多切片 pacing 期间续租:只允许当前 owner + fencing generation 续租。"""
+
+    conn = _RecordingConnection()
+    conn.cursor_state.rowcount = 1
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-current",
+        fencing_token=5,
+    )
+
+    assert store.renew_lease("intent-1", lease_seconds=90) is True
+
+    sql, params = conn.cursor_state.statements[-1]
+    assert "lease_until=CURRENT_TIMESTAMP+(%s * INTERVAL '1 second')" in sql
+    assert "intent_id=%s" in sql
+    assert "status='SENDING'" in sql
+    assert "lease_owner=%s" in sql
+    assert "fencing_token=%s" in sql
+    assert params == (90, "intent-1", "worker-current", 5)
+
+
+def test_postgres_intent_outbox_renew_lease_is_noop_when_unowned() -> None:
+    """租约已被他人持有(或 parent 不再是 SENDING)时续租不得生效。"""
+
+    conn = _RecordingConnection()
+    conn.cursor_state.rowcount = 0
+    store = PostgresIntentOutbox(
+        connection_factory=lambda: conn,
+        lease_owner="worker-stale",
+        fencing_token=5,
+    )
+
+    assert store.renew_lease("intent-1", lease_seconds=90) is False

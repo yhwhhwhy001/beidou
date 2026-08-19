@@ -17,7 +17,6 @@ from beidou_research.mining.evaluation.cpcv import (
     _purge_and_embargo_mask,
 )
 
-
 # ================================================================
 # 纯 Python 参考实现(测试专用,不得 import 生产代码)
 # ================================================================
@@ -72,7 +71,7 @@ def test_purge_embargo_mask_matches_reference():
         (_random_indices(3, 150, 0, 500), [0, 1, 100, 101, 102], 1, 0),
         (_random_indices(4, 100, 0, 500), [0, 1, 100, 101, 102], 0, 3),
         (_random_indices(5, 100, 0, 500), [0, 1, 100, 101, 102], 0, 0),
-        ([i for i in range(300)], [i for i in range(0, 300, 7)], 5, 5),
+        (list(range(300)), list(range(0, 300, 7)), 5, 5),
         ([0, 1, 2, 3, 4], [2], 1, 0),
         ([0, 1, 2, 3, 4], [2], 0, 2),
         ([], [2], 1, 1),

@@ -112,7 +112,11 @@ def test_recover_stale_child_planned_to_rejected() -> None:
 
     update_sql = next(s for s, _ in conn.cursor_state.statements if s.startswith("UPDATE v3_execution_commands"))
     assert "state=%s" in update_sql
-    event_stmt = next((s, params) for s, params in conn.cursor_state.statements if "v3_execution_command_events" in s and "INSERT" in s)
+    event_stmt = next(
+        (s, params)
+        for s, params in conn.cursor_state.statements
+        if "v3_execution_command_events" in s and "INSERT" in s
+    )
     assert "STALE_CHILD_VENUE_RESOLVED" in json.dumps(event_stmt[1], default=str)
 
 

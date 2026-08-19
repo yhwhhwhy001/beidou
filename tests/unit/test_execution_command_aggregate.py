@@ -325,39 +325,42 @@ def test_user_stream_terminal_partial_fill_projects_unknown(tmp_path) -> None:
 
 
 def test_trade_lite_envelope_parses_as_order_update() -> None:
-    """TRADE_LITE(轻量用户流)与 ORDER_TRADE_UPDATE 同构,必须能解析成交事实。"""
+    """TRADE_LITE(轻量用户流)字段在顶层且无订单状态,必须解析出成交事实。
+
+    真实 demo-fstream 抓包结构(2026-08-20 实测):
+    {"e":"TRADE_LITE","E":...,"T":...,"s":"BTCUSDT","q":"0.0009",
+     "p":"68130.90","m":false,"c":"beidou-...","S":"SELL","L":"68130.90",
+     "l":"0.0008","t":528914974,"i":28547636202}
+    —— 无 ``o`` 包裹、无 X/x/z/ap/n,状态只能显式 UNKNOWN。
+    """
 
     raw = {
         "e": "TRADE_LITE",
-        "E": 1787049071956,
-        "T": 1787049071955,
-        "u": 1,
-        "o": {
-            "i": 16763789717,
-            "I": 1,
-            "c": "beidou-ethusdt-entry-1787049068",
-            "s": "ETHUSDT",
-            "S": "SELL",
-            "o": "LIMIT",
-            "X": "PARTIALLY_FILLED",
-            "x": "TRADE",
-            "q": "0.008",
-            "z": "0.008",
-            "l": "0.008",
-            "L": "1895.85",
-            "ap": "1895.85",
-            "t": 1001,
-            "n": "0",
-            "N": "USDT",
-            "rp": "0",
-        },
+        "E": 1787162897848,
+        "T": 1787162897819,
+        "s": "BTCUSDT",
+        "q": "0.0009",
+        "p": "68130.90",
+        "m": False,
+        "c": "beidou-btcusdt-entry-1787162894",
+        "S": "SELL",
+        "L": "68130.90",
+        "l": "0.0008",
+        "t": 528914974,
+        "i": 28547636202,
     }
     result = BinanceUsdmAdapter.parse_user_order_update(raw)
     assert result.is_success() and result.data is not None
-    assert result.data.order_id == "16763789717"
-    assert result.data.client_order_id == "beidou-ethusdt-entry-1787049068"
-    assert result.data.order_status.value == "PARTIALLY_FILLED"
-    assert result.data.cumulative_quantity.amount == "0.008"
+    assert result.data.order_id == "28547636202"
+    assert result.data.client_order_id == "beidou-btcusdt-entry-1787162894"
+    assert result.data.symbol == InstrumentId("BTCUSDT")
+    assert result.data.side.value == "SELL"
+    assert result.data.order_status.value == "UNKNOWN"
+    assert result.data.execution_type == "TRADE"
+    assert result.data.last_quantity.amount == "0.0008"
+    assert result.data.last_price.amount == "68130.90"
+    assert result.data.trade_id == "528914974"
+    assert result.data.order_type.value == "UNKNOWN"
 
 
 def test_engine_persists_complete_multi_slice_plan_before_first_write(monkeypatch) -> None:

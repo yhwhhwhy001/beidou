@@ -71,7 +71,11 @@ class UserStreamSequencer:
                 self._last_event_time_ms = event.event_time_ms
                 self._status = UserStreamStatus.HEALTHY
                 return UserStreamObservation(True, self._status, previous, None)
-            self._status = UserStreamStatus.SEQUENCE_UNAVAILABLE
+            # BD-FIX (TRADE_LITE): 轻量用户流事件(TRADE_LITE)不携带
+            # 序号,且与有序的 ORDER_TRADE_UPDATE 混排。拒绝本事件即可,
+            # 不得把状态翻成 SEQUENCE_UNAVAILABLE —— 该状态是粘性的,
+            # 一次无序号事件会让整条流后续所有有序事件全部被拒(需要
+            # 独立 replay 才能恢复)。
             return UserStreamObservation(
                 accepted=False,
                 status=self._status,
