@@ -944,6 +944,29 @@ class BeidouSupervisor:
         except Exception as e:
             print(f"[supervisor] Alert send failed: {e}")
 
+    def _resolve_supervisor_incidents(self) -> None:
+        """清除监督器命名空间(supervisor)的活动事故。
+
+        BD-FIX: DEGRADED/LOCKED 时发出的 "Supervisor <state>" 事故没有
+        清理路径 —— 恢复 RUNNING 后仍以 DETECTED 状态残留,与事实背离
+        且持续误导运维。本方法仅在防抖器判定 RUNNING(控制面 RESUME 且
+        无 blocker)时调用,根因确已消除才清理;LOCKED 状态的事故不受影响。
+        """
+        try:
+            if self.engine is None:
+                return
+            _alerts = getattr(self.engine, "_alerts", None)
+            if _alerts is None:
+                return
+            _active = getattr(_alerts, "_active_incidents", {})
+            for _iid, _inc in list(_active.items()):
+                if str(getattr(_inc, "root_cause_category", "")) == "supervisor":
+                    with suppress(Exception):
+                        _alerts.resolve_incident(_iid)
+                        print(f"[supervisor] Auto-resolved stale supervisor incident {_iid}")
+        except Exception as e:
+            print(f"[supervisor] supervisor incident resolution failed: {e}")
+
     async def _apply_debounce_action(
         self, debounce_action: str, persistent_blockers: list[CheckResult], has_persistent: bool
     ) -> None:
@@ -997,6 +1020,14 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "PAUSED"
             else:
                 self.report.supervisor_state = "RUNNING"
+            # BD-FIX (stale supervisor incidents): DEGRADED/LOCKED 期间
+            # 发出的 "Supervisor <state>" 事故在恢复 RUNNING 后无人清理
+            # (实测 08:29 的 HIGH 事故在 RUNNING/0 blocker 后仍 DETECTED
+            # 数十分钟)。状态回到 RUNNING 且无 blocker 即事故根因消除,
+            # 由监督器清除自己命名空间(supervisor)的事故 —— 引擎侧
+            # auto-resolve 只负责 execution_fact/reconciliation/user_stream/
+            # protection 类别,不越权清理监督器事故。
+            self._resolve_supervisor_incidents()
             # BD-FIX: testnet 故障自愈后自动重新授权 RESUME；live/canary/
             # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
             # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
