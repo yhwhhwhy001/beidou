@@ -253,8 +253,8 @@ def test_native_protection_roundtrip_pass(tmp_path: Path) -> None:
     assert gone["gone"] is True
     appeared_bonus = next(s for s in steps if s.get("action") == "appeared_confirmed")
     assert appeared_bonus["algo_id"] == 9001  # appeared=true 加强证据加分项
-    orphan = next(s for s in steps if s.get("action") == "orphan_verdict")
-    assert orphan["orphan_count"] == 0 and orphan["orphans"] == []
+    poll = next(s for s in steps if s.get("action") == "protection_coverage_poll")
+    assert poll["orphan_count"] == 0 and poll["orphans"] == []
     # 恰好一次撤单(非重复),无残留
     assert exchange.cancelled == [("BTCUSDT", 9001)]
 
@@ -295,10 +295,9 @@ def test_native_protection_with_positions_coverage_pass(tmp_path: Path) -> None:
     steps = result.evidence["steps"]
     snapshot = next(s for s in steps if s.get("action") == "account_snapshot")
     assert snapshot["position_symbols"] == ["BTCUSDT"]
-    coverage = next(s for s in steps if s.get("action") == "protection_coverage")
-    assert coverage["position_symbols"] == ["BTCUSDT"] and coverage["missing"] == []
-    orphan = next(s for s in steps if s.get("action") == "orphan_verdict")
-    assert orphan["orphan_count"] == 0
+    poll = next(s for s in steps if s.get("action") == "protection_coverage_poll")
+    assert poll["position_symbols"] == ["BTCUSDT"] and poll["missing"] == []
+    assert poll["orphan_count"] == 0
     # 引擎保护单未被本场景撤掉
     assert all(algo_id != 7001 for _, algo_id in exchange.cancelled)
 
@@ -309,14 +308,16 @@ def test_native_protection_with_positions_coverage_pass(tmp_path: Path) -> None:
 def test_native_protection_orphan_algo_fail(tmp_path: Path) -> None:
     # 空账户但交易所存在未归属 algo 单(引擎缺陷或残留)→ 孤儿判定 FAIL
     exchange = _FakeAlgoExchange(open_algos=[{"algoId": 5001, "symbol": "ETHUSDT"}], next_algo_id=6001)
-    scenario = _np_scenario(exchange)
+    scenario = _np_scenario(exchange, _FakeClock())
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "ORPHAN_ALGO_DETECTED"
     steps = result.evidence["steps"]
-    orphan = next(s for s in steps if s.get("action") == "orphan_verdict")
-    assert orphan["orphan_count"] == 1
-    assert orphan["orphans"] == [{"algoId": 5001, "symbol": "ETHUSDT"}]
+    # 共享账户收敛语义:覆盖/孤儿判定按最新快照轮询,未收敛时最终轮次记录缺口
+    polls = [s for s in steps if s.get("action") == "protection_coverage_poll"]
+    assert polls
+    assert polls[-1]["orphan_count"] == 1
+    assert polls[-1]["orphans"] == [{"algoId": 5001, "symbol": "ETHUSDT"}]
 
 
 # ---- native_protection 持仓保护覆盖:有持仓但引擎未挂 SL/TP → FAIL ----
@@ -324,13 +325,14 @@ def test_native_protection_orphan_algo_fail(tmp_path: Path) -> None:
 
 def test_native_protection_missing_coverage_fail(tmp_path: Path) -> None:
     exchange = _FakeAlgoExchange(positions=[{"symbol": "BTCUSDT", "positionAmt": "0.1"}], next_algo_id=6001)
-    scenario = _np_scenario(exchange)
+    scenario = _np_scenario(exchange, _FakeClock())
     result = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
     assert result.status == ScenarioStatus.FAIL
     assert result.error_type == "MISSING_PROTECTION_ALGO"
     steps = result.evidence["steps"]
-    coverage = next(s for s in steps if s.get("action") == "protection_coverage")
-    assert coverage["missing"] == ["BTCUSDT"]
+    polls = [s for s in steps if s.get("action") == "protection_coverage_poll"]
+    assert polls
+    assert polls[-1]["missing"] == ["BTCUSDT"]
 
 
 # ---- native_protection 挂单传播延迟:轮询窗口内出现 → 仍 PASS ----

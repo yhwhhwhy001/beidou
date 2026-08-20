@@ -624,8 +624,11 @@ class PartialFillScenario(ScenarioBase):
           best_ask,GTC 普通限价(不带 iceberg);成功返回含最新
           entry_price/min_gate_qty/budget_qty/notional/order 的结果 dict
         - create_order Result 错误 → 记录 place_attempt 步骤(错误原文截断
-          300 字符)后继续下一次尝试;_PLACE_ATTEMPTS 次全败 → 抛
-          RuntimeError 携带最后一次错误原文(run() 自捕获 → FAIL)。
+          300 字符);确定性品种资格拒绝(仓位超限/协议门槛/LOT_SIZE 过滤)
+          对该品种重试无意义 —— 记录 candidate_ineligible 返回 None,
+          调用方回扫描循环继续下一候选;其余(探测-下单竞态等)继续下一次
+          尝试;_PLACE_ATTEMPTS 次全败 → 抛 RuntimeError 携带最后一次
+          错误原文(run() 自捕获 → FAIL)。
         """
         last_error = ""
         for attempt_no in range(1, _PLACE_ATTEMPTS + 1):
@@ -690,6 +693,28 @@ class PartialFillScenario(ScenarioBase):
                     "error": last_error,
                 }
             )
+            # 确定性品种资格拒绝:该品种在当前杠杆/协议下不可下单,重试无意义。
+            # 换候选继续扫描(认证轮实测 ACUUSDT "Exceeded the maximum
+            # allowable position at current leverage" 3 连败 → 场景 FAIL;
+            # 正确语义是候选不合格 → 扫描其余浅盘口品种,全灭才 N/V)。
+            if any(
+                marker in last_error
+                for marker in (
+                    "Exceeded the maximum allowable position",
+                    "maximum allowable position at current leverage",
+                    "Please sign",
+                    "Filter failure: LOT_SIZE",
+                )
+            ):
+                steps.append(
+                    {
+                        "action": "candidate_ineligible",
+                        "attempt_no": attempt_no,
+                        "symbol": symbol,
+                        "error": last_error[:200],
+                    }
+                )
+                return None
         raise RuntimeError(f"create_order 连续失败 {_PLACE_ATTEMPTS} 次: {last_error}")
 
     def _not_verifiable_liquidity(self, steps: list[dict[str, Any]], *, notional_usdt: float = 0.0) -> ScenarioResult:

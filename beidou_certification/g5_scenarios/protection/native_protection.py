@@ -335,36 +335,49 @@ class NativeProtectionScenario(ScenarioBase):
             # 事实对拍 + 持仓保护覆盖(引擎职责,只读验证;仅当有持仓时)。
             # 认证轮 #2 的 coverage missing 由 partial_fill 残留持仓引起,
             # Fix 1 平仓后不再出现该持仓,覆盖断言自然不再触发。
-            final_open = await self._get_open_algo_orders()
-            orphans = algo_orphan_verdict(final_open, position_symbols)
-            steps.append(
-                {
-                    "action": "orphan_verdict",
-                    "open_algo_count": len(final_open),
-                    "position_count": len(position_symbols),
-                    "orphan_count": len(orphans),
-                    "orphans": [{"algoId": _algo_id_of(o), "symbol": o.get("symbol")} for o in orphans],
-                }
-            )
+            # 共享 demo 账户持仓/挂单持续变化:覆盖与孤儿判定按"最新账户
+            # 快照"轮询收敛(引擎近线周期 ~30s 会为新增持仓补挂 SL/TP、
+            # 清理孤儿 algo),单次快照瞬时缺口不再误判 FAIL;60s 未收敛
+            # 才按原语义 FAIL。
+            coverage_poll_deadline_s = 60.0
+            coverage_poll_interval_s = 5.0
+            poll_elapsed = 0.0
+            coverage_ok = False
             missing_coverage: list[str] = []
-            if position_symbols:
+            orphans: list[Any] = []
+            final_open: list[Any] = []
+            while True:
+                final_open = await self._get_open_algo_orders()
+                fresh_account = await self._get_account()
+                fresh_positions = _position_symbols(fresh_account)
+                orphans = algo_orphan_verdict(final_open, fresh_positions)
                 symbols_with_algo = {a.get("symbol") for a in final_open if a.get("symbol")}
-                missing_coverage = [symbol for symbol in sorted(position_symbols) if symbol not in symbols_with_algo]
+                missing_coverage = [symbol for symbol in sorted(fresh_positions) if symbol not in symbols_with_algo]
                 steps.append(
                     {
-                        "action": "protection_coverage",
-                        "position_symbols": sorted(position_symbols),
+                        "action": "protection_coverage_poll",
+                        "position_symbols": sorted(fresh_positions),
+                        "open_algo_count": len(final_open),
                         "missing": missing_coverage,
+                        "orphan_count": len(orphans),
+                        "orphans": [{"algoId": _algo_id_of(o), "symbol": o.get("symbol")} for o in orphans],
                     }
                 )
-            if missing_coverage:
-                return self._fail(
-                    ScenarioStatus.FAIL,
-                    "MISSING_PROTECTION_ALGO",
-                    f"持仓 symbol 缺 SL/TP algo: {missing_coverage}",
-                    {"steps": steps},
-                )
-            if orphans:
+                if not missing_coverage and not orphans:
+                    coverage_ok = True
+                    break
+                if poll_elapsed >= coverage_poll_deadline_s:
+                    break
+                await self._sleep(coverage_poll_interval_s)
+                poll_elapsed += coverage_poll_interval_s
+            if not coverage_ok:
+                if missing_coverage:
+                    return self._fail(
+                        ScenarioStatus.FAIL,
+                        "MISSING_PROTECTION_ALGO",
+                        f"持仓 symbol 缺 SL/TP algo(60s 轮询未收敛): {missing_coverage}",
+                        {"steps": steps},
+                    )
                 return self._fail(
                     ScenarioStatus.FAIL,
                     "ORPHAN_ALGO_DETECTED",
