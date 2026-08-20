@@ -77,6 +77,12 @@ _CHILD_TRANSITIONS: dict[ChildCommandState, set[ChildCommandState]] = {
         ChildCommandState.FILLED,
         ChildCommandState.CANCELED,
         ChildCommandState.REJECTED,
+        # Governed resend only: the recovery path transitions an UNKNOWN child
+        # back to SENDING after a definitive venue-absence fact (Binance -2013
+        # by exact clientOrderId) proves no order was ever created.  Without
+        # this edge, a transient transport failure on one slice would leave
+        # the whole multi-slice plan permanently UNKNOWN and never resendable.
+        ChildCommandState.SENDING,
     },
     ChildCommandState.FILLED: set(),
     ChildCommandState.CANCELED: set(),

@@ -1450,7 +1450,12 @@ class PostgresIntentOutbox:
         return self._query_intents(("PENDING", "SENDING", "UNKNOWN"))
 
     def get_unknown_intents(self) -> list[dict[str, str]]:
-        """Return identity-bound UNKNOWN rows for read-after-write recovery."""
+        """Return identity-bound UNKNOWN rows for read-after-write recovery.
+
+        Includes the approval envelope so the resolver can re-arm the one-shot
+        approval after a definitive venue-absence fact (P1: nonce consumed
+        before the write would otherwise make the governed resend a dead end).
+        """
 
         intents = self._query_intents(("UNKNOWN",))
         return [
@@ -1458,6 +1463,8 @@ class PostgresIntentOutbox:
                 "intent_id": str(intent.intent_id),
                 "symbol": str(intent.instrument_id),
                 "client_order_id": str(intent.client_order_id or ""),
+                "risk_approval_id": str(getattr(intent, "risk_approval_id", "") or ""),
+                "risk_nonce": str(getattr(intent, "risk_nonce", "") or ""),
             }
             for intent in intents
         ]

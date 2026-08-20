@@ -148,6 +148,8 @@ def classify_http_error(http_status: int, response_body: str = "", binance_code:
     if binance_code < 0:
         if binance_code in (-1003, -1015, -1016, -1021):
             return (ErrorCategory.RATE_LIMIT, True)
+        if binance_code == -4015:  # P2 修复: 下单频率超限 → 瞬时,可重试
+            return (ErrorCategory.RATE_LIMIT, True)
         if binance_code in (-2014, -2015):
             return (ErrorCategory.AUTH_FAILURE, False)
         if binance_code == -2010:
@@ -158,6 +160,11 @@ def classify_http_error(http_status: int, response_body: str = "", binance_code:
             return (ErrorCategory.ORDER_REJECTED, False)
         if binance_code == -2022:
             return (ErrorCategory.POSITION_LIMIT, False)
+        # P2 修复: -4141(幂等去重:同 clientOrderId 已存在)、-1111(精度)、
+        # -1102(参数缺失/空)是确定性业务拒绝,不是 UNKNOWN —— 避免
+        # ErrorNormalizer 把它们报成 P0_CRITICAL/MANUAL 告警风暴。
+        if binance_code in (-4141, -1111, -1102):
+            return (ErrorCategory.ORDER_REJECTED, False)
         return (ErrorCategory.UNKNOWN, False)
 
     # HTTP 状态码分类
@@ -198,6 +205,13 @@ class ErrorNormalizer:
             -2021: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
             -2022: (ErrorCategory.POSITION_LIMIT, FaultSeverity.P0_CRITICAL, RecoveryAction.DEGRADE),
             -4061: (ErrorCategory.RATE_LIMIT, FaultSeverity.P1_MAJOR, RecoveryAction.RETRY),
+            # P2 修复 (告警风暴): -4141 是幂等去重恢复的正常信号,不是 P0;
+            # -4015 下单频率超限是瞬时限频,可重试;-1111/-1102 是确定性
+            # 参数拒绝,NOOP 即可。
+            -4141: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
+            -4015: (ErrorCategory.RATE_LIMIT, FaultSeverity.P1_MAJOR, RecoveryAction.RETRY),
+            -1111: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
+            -1102: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),
             # BD-FIX（M4 审查）: demo 薄盘/波动大时保护单触发价贴近市价的
             # -4164 是常规拒绝，不是 P0_CRITICAL/MANUAL
             -4164: (ErrorCategory.ORDER_REJECTED, FaultSeverity.P1_MAJOR, RecoveryAction.NOOP),

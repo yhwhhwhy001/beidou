@@ -53,6 +53,11 @@ class RiskSnapshot:
             return True
         try:
             expires = datetime.fromisoformat(self.expires_at)
+            # P2 修复: 无时区的 expires_at 与 aware now 比较会抛 TypeError
+            # 并被当成"恒过期"——fail-closed 方向安全但语义错误。补默认
+            # 时区后正常比较。
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
             return datetime.now(timezone.utc) > expires
         except (ValueError, TypeError):
             return True

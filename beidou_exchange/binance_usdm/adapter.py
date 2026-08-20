@@ -180,6 +180,9 @@ class BinanceHealthMonitor:
         self._error_counts: dict[str, int] = {}
         self._last_error_time: dict[str, datetime] = {}
         self._latency_samples: dict[str, list[float]] = {}
+        # P2 修复 (健康动态更新): 连续传输失败计数 — 达阈值降级 UNAVAILABLE,
+        # 任一成功请求恢复 HEALTHY,避免"只升不降"让瞬时不健康永久杀单。
+        self._consecutive_transport_failures = 0
 
     @property
     def venue_health(self) -> HealthStatus:
@@ -187,6 +190,17 @@ class BinanceHealthMonitor:
 
     def update_venue_health(self, status: HealthStatus) -> None:
         self._venue_health = status
+
+    def record_transport_success(self) -> None:
+        """任一真实请求成功 → HEALTHY 并复位连续失败计数。"""
+        self._consecutive_transport_failures = 0
+        self._venue_health = HealthStatus.HEALTHY
+
+    def record_transport_failure(self) -> None:
+        """连续传输失败达阈值 → UNAVAILABLE(下次成功自动恢复)。"""
+        self._consecutive_transport_failures += 1
+        if self._consecutive_transport_failures >= 3:
+            self._venue_health = HealthStatus.UNAVAILABLE
 
     def get_instrument_health(self, instrument_id: InstrumentId) -> HealthStatus:
         return self._instrument_health.get(instrument_id, HealthStatus.UNKNOWN)
@@ -333,8 +347,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_usdm_adapter",
             )
         result = await self._rest_client.request(method, path, signed=signed, params=params)
-        if path == Endpoint.SERVER_TIME and result.is_success():
-            self._health_monitor.update_venue_health(HealthStatus.HEALTHY)
+        # P2 修复 (venue 健康只升不降): 此前只有 SERVER_TIME 成功才置 HEALTHY,
+        # 启动时钟同步失败 → 恒 UNKNOWN → 所有加仓单被健康门永久拒绝。
+        # 改为: 任一真实请求成功即 HEALTHY;连续传输失败(网络/交易所不可用)
+        # 达阈值才降级 UNAVAILABLE,下次成功自动恢复。
+        if result.is_success():
+            self._health_monitor.record_transport_success()
+        else:
+            _err_cat = str(getattr(getattr(result, "error", None), "category", "") or "")
+            if _err_cat in {"NETWORK", "EXCHANGE_UNAVAILABLE", "TIMEOUT"}:
+                self._health_monitor.record_transport_failure()
         return cast(Result[Any], result)
 
     def reset_circuit_breaker(self) -> None:
@@ -553,6 +575,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         required = ("orderId", "status", "symbol", "side", "type", "origQty")
         if any(response.get(field) in (None, "") for field in required):
             return False, "ACK_IDENTITY_MISSING"
+        # P2 修复: executedQty 缺失会产出 "FILLED + executed=0" 的自相矛盾
+        # ACK —— 该字段是成交事实的必备成分,缺失即 UNKNOWN。
+        if response.get("executedQty") in (None, ""):
+            return False, "ACK_EXECUTED_QTY_MISSING"
 
         if str(response["symbol"]).upper() != str(request.venue_instrument.instrument_id).upper():
             return False, "ACK_SYMBOL_MISMATCH"
@@ -576,13 +602,23 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         try:
             requested_quantity = Decimal(str(request.quantity.amount))
             venue_quantity = Decimal(str(response["origQty"]))
-            executed_quantity = Decimal(str(response.get("executedQty", "0")))
+            executed_quantity = Decimal(str(response["executedQty"]))
         except (InvalidOperation, TypeError, ValueError):
             return False, "ACK_QUANTITY_INVALID"
+        # P2 修复 (venue-capped reduce-only close): 交易所把减仓平仓单按
+        # 剩余持仓截断(origQty < 请求量)后回报 FILLED 是合法终态,不是
+        # mismatch。采纳 venue 事实(engine 侧 reduce-only 余量禁止重发)。
+        _truncated_close = (
+            request.reduce_only
+            and str(response.get("status", "")).upper() == "FILLED"
+            and venue_quantity < requested_quantity
+            and executed_quantity == venue_quantity
+            and executed_quantity > 0
+        )
         if (
             not requested_quantity.is_finite()
             or requested_quantity <= 0
-            or venue_quantity != requested_quantity
+            or (venue_quantity != requested_quantity and not _truncated_close)
             or not executed_quantity.is_finite()
             or executed_quantity < 0
             or executed_quantity > venue_quantity
@@ -626,10 +662,16 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     if hasattr(request.order_type, "value")
                     else str(request.order_type),
                     "quantity": _format_decimal(str(request.quantity.amount)),
-                    "newClientOrderId": request.client_order_id or "",
                 }
-                # MARKET 订单不允许 timeInForce 参数
-                _is_market = str(order_params.get("type", "")).upper() == "MARKET"
+                # P2 修复: client_order_id 为空时省略参数(与 rest_client.create_order
+                # 行为一致),避免向交易所发送空值 newClientOrderId(-1102)。
+                if request.client_order_id:
+                    order_params["newClientOrderId"] = request.client_order_id
+                # MARKET/STOP_MARKET/TAKE_PROFIT_MARKET/TRAILING_STOP_MARKET
+                # 均不允许 timeInForce 参数(P2 修复: 此前只排除普通 MARKET,
+                # 市价型条件单会被错误附加 timeInForce → -1106)。
+                _market_types = {"MARKET", "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"}
+                _is_market = str(order_params.get("type", "")).upper() in _market_types
                 if not _is_market:
                     order_params["timeInForce"] = (
                         request.time_in_force.value
@@ -658,12 +700,35 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         failure["msg"][:200],
                         failure["code"],
                     )
+                    # P2 修复 (确定性拒绝被误标 UNKNOWN): -2010 余额不足/
+                    # -2019 保证金/-2022 减仓超限/参数拒绝等是确定性业务事实
+                    # (交易所保证未建单),应映射 REJECTED 让意图干净终结;
+                    # 限频/时钟偏差等 retryable 拒绝打标 retryable_rejection
+                    # (engine 转 UNKNOWN 裁决后按确定性缺席 re-arm 重发);
+                    # 只有网络/5xx/未知才是真正歧义 → UNKNOWN。
+                    # PERMISSION_DENIED(写 hold 门)不是 venue 拒绝 —— 保持
+                    # UNKNOWN:hold 是可能解除的配置状态,不得确定性终结意图。
+                    _cat = str(failure.get("category", "")).upper()
+                    _retryable = bool(failure.get("retryable"))
+                    _definitive = _cat in {
+                        "INSUFFICIENT_BALANCE",
+                        "INSUFFICIENT_MARGIN",
+                        "ORDER_REJECTED",
+                        "POSITION_LIMIT",
+                        "AUTH_FAILURE",
+                    } and not _retryable
+                    _status = OrderStatus.REJECTED if (_definitive or _retryable) else OrderStatus.UNKNOWN
+                    _reason = (
+                        f"retryable_rejection:{_cat}"
+                        if _retryable
+                        else (f"venue_rejected:{_cat}:{failure.get('code')}" if _definitive else "api_call_failed")
+                    )
                     return OrderResponse(
                         venue_instrument=request.venue_instrument,
                         account_ref=request.account_ref,
                         order_id="",
                         client_order_id=request.client_order_id,
-                        status=OrderStatus.UNKNOWN,
+                        status=_status,
                         side=request.side,
                         order_type=request.order_type,
                         original_quantity=request.quantity,
@@ -671,7 +736,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                         average_price=None,
                         commission=None,
                         correlation_id=request.correlation_id,
-                        raw_response={"reason": "api_call_failed", **failure},
+                        raw_response={"reason": _reason, **failure},
                     )
                 result = transport_result.data
                 if isinstance(result, dict) and "orderId" in result:
@@ -729,7 +794,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             commission=None,
             correlation_id=request.correlation_id,
             raw_response={
-                "reason": "real_transport_pending_BD-T18" if self._rest_client is None else "api_call_failed"
+                # P2 修复: 语义明确化 —— 该分支只可能是"未配置传输层"或
+                # 请求处理期间抛出未捕获异常,旧 reason 文本易误读为特性
+                # 开关未到位。
+                "reason": "transport_not_configured" if self._rest_client is None else "api_call_failed"
             },
         )
 
@@ -915,10 +983,14 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_order_recovery",
             )
         if not response.is_success() or not isinstance(response.data, dict):
+            # P2 修复: 保留底层 raw 错误(code/msg)—— -2013"Order does not
+            # exist" 是 query-before-retry 的确定性缺席信号,此前被丢弃后
+            # 调用方无法区分"从未成交"与"传输失败"。
+            _raw = getattr(response.error, "raw", None) if response.error is not None else None
             return Result.failure(
                 "Client-order lookup is UNKNOWN",
                 category=ErrorCategory.UNKNOWN,
-                raw=response.data,
+                raw=_raw if isinstance(_raw, dict) else response.data,
                 source="binance_order_recovery",
             )
         raw = response.data

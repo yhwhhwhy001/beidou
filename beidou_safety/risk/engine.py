@@ -726,6 +726,35 @@ class RiskApprovalSignerImpl:
         self._signed_expiry[signature] = float(expires_at)
         return True
 
+    def rearm_nonce(self, nonce: str) -> bool:
+        """Undo a consumed nonce after a definitive venue-absence fact.
+
+        A one-shot approval is consumed immediately before each venue write.
+        When read-after-write recovery proves the venue never accepted any
+        order for the bound client id (Binance -2013 definitive absence), the
+        write never happened and the identity-bound resend must be permitted —
+        otherwise a transient transport failure permanently loses the trade
+        (P1: nonce consumed before the write).  The rearm event is durably
+        appended so restart replay reaches the same end state.
+        """
+        if not nonce or nonce not in self._nonces:
+            return False
+        self._nonces.discard(nonce)
+        return self._persist_rearm(nonce)
+
+    def nonce_consumed(self, nonce: str) -> bool:
+        """Expose whether a nonce is currently replay-blocked (restart rehydrate)."""
+        return bool(nonce) and nonce in self._nonces
+
+    def restore_replay_state(self) -> int:
+        """Restore nonce/revocation replay protection from the durable JSONL.
+
+        Production hook for P1-015: the consumed-nonce set is process-local,
+        so restart recovery must replay the append-only log before any
+        rehydrated approval can be re-verified.
+        """
+        return self._restore_from_log()
+
     # ------------------------------------------------------------------
     # P1-015: Durable nonce/revocation persistence
     # ------------------------------------------------------------------
@@ -766,12 +795,36 @@ class RiskApprovalSignerImpl:
         except OSError:
             return False
 
+    def _persist_rearm(self, nonce: str) -> bool:
+        """P1-015: 持久化 rearm 事件（definitive venue absence → resend allowed）。"""
+        try:
+            import json
+            import os
+
+            directory = os.path.dirname(self._nonce_log_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            event = {"action": "rearm_nonce", "nonce": nonce, "timestamp": time.time()}
+            with open(self._nonce_log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            return True
+        except OSError:
+            return False
+
     def _restore_from_log(self) -> int:
-        """P1-015: 从 JSONL 恢复 nonce/revocation 状态。"""
+        """P1-015: 从 JSONL 恢复 nonce/revocation 状态。
+
+        The nonce log is append-only and ordered: a later ``rearm_nonce``
+        event (definitive venue absence proved no write ever happened) undoes
+        the earlier ``consume_nonce``, so restart replay reaches the same
+        end state as the live process.
+        """
         restored = 0
-        for path, expected_action, identity_field, target in [
-            (self._nonce_log_path, "consume_nonce", "nonce", self._nonces),
-            (self._revocation_log_path, "revoke", "signature", self._revoked_sigs),
+        for path, expected_action, identity_field, target, undo_action in [
+            (self._nonce_log_path, "consume_nonce", "nonce", self._nonces, "rearm_nonce"),
+            (self._revocation_log_path, "revoke", "signature", self._revoked_sigs, None),
         ]:
             try:
                 import json
@@ -785,15 +838,21 @@ class RiskApprovalSignerImpl:
                                 continue
                             try:
                                 event = json.loads(line)
-                                identity = event.get(identity_field) if isinstance(event, dict) else None
-                                if (
-                                    event.get("action") != expected_action
-                                    or not isinstance(identity, str)
-                                    or not identity
-                                ):
+                                if not isinstance(event, dict):
                                     continue
-                                target.add(identity)
-                                restored += 1
+                                action = event.get("action")
+                                identity = event.get(identity_field)
+                                if action == expected_action and isinstance(identity, str) and identity:
+                                    target.add(identity)
+                                    restored += 1
+                                elif (
+                                    undo_action is not None
+                                    and action == undo_action
+                                    and isinstance(identity, str)
+                                    and identity
+                                ):
+                                    target.discard(identity)
+                                    restored += 1
                             except (json.JSONDecodeError, AttributeError, KeyError):
                                 pass
             except OSError:
@@ -819,6 +878,10 @@ class RiskApprovalStateMachine:
     PENDING → REJECTED              (风控不通过)
     APPROVED → REVOKED              (显式撤销)
     不可逆转换：CONSUMED/EXPIRED/REVOKED/REJECTED → 不可回到 APPROVED。
+    唯一例外：CONSUMED → APPROVED 仅经 ``rearm_for_retry``，且调用方必须
+    已用交易所确定性缺席事实（-2013，按 clientOrderId 查询）证明该审批
+    绑定的订单从未被交易所接受 —— 否则重试路径会因 nonce 已消费而永久
+    丢失该笔交易（漏单）。
 
     每个批准绑定：approval_id, nonce, ttl, policy_version, risk_snapshot_hash。
     """
@@ -924,6 +987,24 @@ class RiskApprovalStateMachine:
     def is_consumed(self, aid: RiskApprovalId) -> bool:
         """检查审批是否已被消费。"""
         return self._approvals.get(aid) is ApprovalLifecycleState.CONSUMED
+
+    def rearm_for_retry(self, aid: RiskApprovalId) -> RiskDecision:
+        """CONSUMED → APPROVED，仅在确定性 venue 缺席裁决后调用。
+
+        The approval is consumed immediately before each venue write.  When
+        read-after-write recovery proves the venue never accepted any order
+        for the bound client id (Binance -2013 definitive absence), the write
+        never happened; re-arming lets the governed resend pass verification
+        instead of permanently failing with FINAL_APPROVAL_INVALID (P1 漏单).
+        EXPIRED/REVOKED/REJECTED remain irreversible.
+        """
+        if self._approvals.get(aid) is not ApprovalLifecycleState.CONSUMED:
+            return self.get(aid)
+        if self._is_expired(aid):
+            return RiskDecision.PENDING
+        self._approvals[aid] = ApprovalLifecycleState.APPROVED
+        self._consumed.discard(aid)
+        return RiskDecision.APPROVED
 
     def is_valid_for_use(
         self,

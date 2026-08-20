@@ -77,9 +77,10 @@ ORDER_STATE_TRANSITIONS: dict[OrderStatus, dict[OrderEvent, OrderStatus]] = {
     OrderStatus.FILLED: {},
     OrderStatus.CANCELED: {},
     OrderStatus.EXPIRED: {},
-    OrderStatus.REJECTED: {
-        OrderEvent.RECOVERED: OrderStatus.REJECTED,  # 恢复后保持终态
-    },
+    # P2 修复 (死代码清理): REJECTED→RECOVERED 映射项永远不可达 ——
+    # apply() 的终态守卫(见下)对一切终态事件先返回 False。移除该行,
+    # 语义由终态守卫统一保证。
+    OrderStatus.REJECTED: {},
 }
 
 

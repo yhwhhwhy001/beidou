@@ -554,11 +554,16 @@ def test_postgres_unknown_intents_expose_only_identity_bound_recovery_fields() -
 
     unknown = store.get_unknown_intents()
 
+    # P2 修复契约: 除 identity-bound 字段外,附带审批信封 —— 裁决路径在
+    # 确定性缺席时 re-arm 一次性审批,否则重试会被 FINAL_APPROVAL_INVALID
+    # 确定性杀死(P1 漏单)。
     assert unknown == [
         {
             "intent_id": "intent-pg-1",
             "symbol": "BTCUSDT",
             "client_order_id": "cid-pg-1",
+            "risk_approval_id": "approval-pg-1",
+            "risk_nonce": "nonce-pg-1",
         }
     ]
     query, params = conn.cursor_state.statements[-1]

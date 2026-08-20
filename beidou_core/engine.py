@@ -316,6 +316,10 @@ def _is_retryable_venue_rejection(reason: str) -> bool:
     属瞬时错误 —— 意图不应直接 FAILED（新意图只能等下一个新收盘
     K 线，可能数分钟无单），mark_unknown 后由运行时周期 resolve
     按 identity-bound 事实裁决恢复。
+
+    P2 修复: 适配层显式打标的 retryable_rejection:* 与 venue_health_unsafe
+    （venue 健康门瞬时拒绝）同样走 UNKNOWN 裁决——确定性缺席事实
+    (-2013) 会把审批 re-arm 并允许同一 clientOrderId 重发,不再永久杀单。
     """
     upper = str(reason).upper()
     retryable_markers = (
@@ -329,8 +333,32 @@ def _is_retryable_venue_rejection(reason: str) -> bool:
         "TIMEOUT",
         "RETRYABLE",
         "SERVICE_UNAVAILABLE",
+        "RETRYABLE_REJECTION",
+        "VENUE_HEALTH_UNSAFE",
     )
     return any(marker in upper for marker in retryable_markers)
+
+
+def _child_state_for_venue_fact(status: str, executed: Decimal) -> ChildCommandState:
+    """Map a venue order status to a child command state (user-stream 投影同语义)。
+
+    CANCELED/EXPIRED 且带部分成交时返回 UNKNOWN —— 与 outbox
+    ``project_user_order_update`` 一致,成交入账完成后由裁决路径收敛为
+    CANCELED。
+    """
+    status_upper = str(status).upper()
+    if status_upper in {"CANCELED", "EXPIRED"} and executed > 0:
+        return ChildCommandState.UNKNOWN
+    return {
+        "NEW": ChildCommandState.ACKED,
+        "PENDING_NEW": ChildCommandState.ACKED,
+        "PENDING_CANCEL": ChildCommandState.PARTIALLY_FILLED if executed > 0 else ChildCommandState.ACKED,
+        "PARTIALLY_FILLED": ChildCommandState.PARTIALLY_FILLED,
+        "FILLED": ChildCommandState.FILLED,
+        "CANCELED": ChildCommandState.CANCELED,
+        "EXPIRED": ChildCommandState.CANCELED,
+        "REJECTED": ChildCommandState.REJECTED,
+    }.get(status_upper, ChildCommandState.UNKNOWN)
 
 
 def _derive_liquidation_price(position_qty: float, entry_price: float, leverage: float) -> float | None:
@@ -1300,6 +1328,19 @@ class AutonomousEngine:
         self._can_write = self._env_mode.can_write_trades
         # P0修复: Paper/Shadow 模式的模拟执行标志（不写交易所，但需要执行 Paper 撮合）
         self._can_simulate = not self._can_write and self._env_mode.value in ("paper", "shadow", "research")
+        # P2 修复 (write hold 配置地雷): 传输层默认 hard 模式会拦掉一切写操作;
+        # 可写环境必须显式配置 BEIDOU_TERMINAL_WRITE_HOLD=hard|unknown-only,
+        # 否则把可读的阻断原因挂到 readiness,而不是静默地"健康地"全停。
+        _hold_mode = os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "").strip().lower()
+        self._terminal_write_hold_error: str | None = None
+        if self._can_write and _hold_mode not in {"hard", "unknown-only"}:
+            print(
+                "[state] ERROR: BEIDOU_TERMINAL_WRITE_HOLD must be explicitly set to "
+                "'hard' or 'unknown-only' in writable environments — terminal writes are HELD"
+            )
+            self._terminal_write_hold_error = "TERMINAL_WRITE_HOLD_UNSET"
+        elif self._can_write:
+            print(f"[state] Terminal write hold mode: {_hold_mode} (explicit)")
 
         # Config — 使用统一配置提供器，禁止直接读取 YAML
         # 加载优先级: CLI explicit > BEIDOU_ENV > env-specific file > SAFETY_ONLY
@@ -1619,6 +1660,14 @@ class AutonomousEngine:
         # 缺少密钥时 RiskApprovalSignerImpl 保持 SIGNING_UNAVAILABLE，
         # Testnet 也不得使用源码内置密钥或任何兼容旁路。
         self._approval = RiskApprovalSignerImpl(signing_key=os.environ.get("BEIDOU_SIGNING_KEY", ""))
+        # P2 修复 (nonce 跨重启): 消费过的 nonce/吊销签名从 durable JSONL
+        # 回放 —— 否则重启后 CONSUMED 归零,已消费审批可被再次验证。
+        try:
+            _replay_restored = self._approval.restore_replay_state()
+            if _replay_restored:
+                print(f"[state] Restored {_replay_restored} replay-protection record(s) from approval log")
+        except Exception as _replay_exc:
+            logger.warning("approval replay-state restore skipped: %s", type(_replay_exc).__name__)
         self._risk_sm = RiskApprovalStateMachine()
         # Rehydrate only approvals attached to unresolved durable intents.  A
         # completed/failed intent is deliberately not restored, so restart
@@ -1636,6 +1685,10 @@ class AutonomousEngine:
                         risk_snapshot_hash=str(approval["risk_snapshot_hash"]),
                         policy_version=str(approval["policy_version"]),
                     )
+                    # P2 修复: nonce 在重启前已被消费的审批恢复为 CONSUMED,
+                    # 只有确定性缺席裁决 (rearm) 才能重新放行重发。
+                    if self._approval.nonce_consumed(str(approval["nonce"])):
+                        self._risk_sm.consume(approval_id)
             except (KeyError, TypeError, ValueError):
                 # Malformed durable approval remains UNKNOWN and keeps the
                 # normal final-send verification gate closed.
@@ -2015,6 +2068,9 @@ class AutonomousEngine:
         # Order tracking
         self._order_trackers: dict[str, OrderStateTracker] = {}
         self._active_order_ids: set[str] = set()
+        # P2 修复 (pacing 阻塞): 已 claim 意图在独立任务中执行(单并发),
+        # 实时 tick 不因 TWAP 切片间隔 sleep 而停摆。
+        self._intent_tasks: set[asyncio.Task[Any]] = set()
         # Ownership is process-local until a durable intent/venue mapping is
         # re-established.  Orders discovered from the venue on startup are
         # deliberately *not* added here: a graceful shutdown may cancel only
@@ -3303,6 +3359,7 @@ class AutonomousEngine:
             "user_stream_runtime": dict(getattr(self, "_user_stream_runtime", {})),
             "state_backend_supported": self._state_backend_supported,
             "state_backend_error": self._state_backend_error,
+            "terminal_write_hold_error": getattr(self, "_terminal_write_hold_error", None),
             "policy_id": self._policy_id_active,
             "policy_version": self._policy_version,
             "policy_ready": not bool(self._policy_error),
@@ -3325,6 +3382,7 @@ class AutonomousEngine:
             "mode": self._env_mode.value,
             "state_backend_supported": self._state_backend_supported,
             "state_backend_error": self._state_backend_error,
+            "terminal_write_hold_error": getattr(self, "_terminal_write_hold_error", None),
             "policy_id": self._policy_id_active,
             "policy_version": self._policy_version,
             "policy_error": self._policy_error,
@@ -3657,6 +3715,13 @@ class AutonomousEngine:
                     await asyncio.wait_for(self._resolve_unknown_outbox_intents(), timeout=20.0)
                 except Exception as _resolve_exc:
                     logger.warning("periodic unknown-intent resolve skipped: %s", type(_resolve_exc).__name__)
+                # P2 修复 (池外品种订单无人监控): _monitor_orders 只对交易池
+                # 批次品种轮询,品种退出池后其活跃订单永不收敛。周期补一轮
+                # 池外品种的订单监控(与 UNKNOWN 裁决同频,60s)。
+                try:
+                    await asyncio.wait_for(self._monitor_orphan_orders(), timeout=15.0)
+                except Exception as _orphan_exc:
+                    logger.warning("orphan order monitoring skipped: %s", type(_orphan_exc).__name__)
 
             if time.time() - self._last_recon > 30:
                 # BD-FIX: 对账含交易所网络调用，慢响应不得阻塞实时循环
@@ -3814,34 +3879,17 @@ class AutonomousEngine:
             # P0修复: Paper/Shadow 模式也需要执行 intent（通过 _place_order 的 Paper 撮合分支）
             if self._can_write or self._can_simulate:
                 if durable_outbox:
-                    while True:
+                    # P2 修复 (pacing 阻塞实时循环): TWAP 切片间隔最长 120s,
+                    # 若在 claim 循环内同步 sleep,行情/订单监控/对账心跳全部
+                    # 停摆。改为单并发任务执行——顺序与租约/fencing 语义不变
+                    # (一次只跑一个意图),但实时 tick 立即返回继续监控。
+                    self._reap_intent_tasks()
+                    while len(getattr(self, "_intent_tasks", set())) < 1:
                         intent = self._outbox.claim(owner=self._lease_owner)
                         if intent is None:
                             break
-                        try:
-                            await self._place_order(intent)
-                        except Exception as _claim_exc:
-                            # BD-FIX (final83c): TERMINAL_CHILD_STATE（意图已
-                            # 推进到终态如 FILLED）是成交事件处理的幂等重复，
-                            # 静默跳过；其余异常保持 SENDING 待恢复。
-                            if "TERMINAL_CHILD_STATE" in str(_claim_exc):
-                                # BD-FIX (fast-fill ack gap): 成交事件与下单
-                                # 循环竞态下,子命令已被事件路径推进终态
-                                # (FILLED),父消息若留 SENDING 只能等 15 分钟
-                                # 租约兜底(实测 SUI 首单)。此处按执行聚合
-                                # 事实补 ACK。
-                                if self._reconcile_terminal_child_parent(intent):
-                                    print(
-                                        f"[realtime] Parent intent ACKed via terminal-child "
-                                        f"reconciliation: {getattr(intent, 'intent_id', '?')}"
-                                    )
-                                continue
-                            # 单条 intent 异常不应阻断整个 claim 循环；
-                            # 失败的 intent 保持在 SENDING，下次重启恢复。
-                            print(
-                                f"[realtime] Intent claim error ({getattr(intent, 'intent_id', '?')}): "
-                                f"{type(_claim_exc).__name__}: {_claim_exc}"
-                            )
+                        _task = asyncio.create_task(self._execute_claimed_intent(intent))
+                        self._intent_tasks.add(_task)
                 else:
                     for intent in unacked:
                         await self._place_order(intent)
@@ -3909,6 +3957,44 @@ class AutonomousEngine:
         except Exception as exc:
             logger.warning(
                 "reconciliation segment unexpected: %s: %s", type(exc).__name__, str(exc)[:200], exc_info=True
+            )
+
+    def _reap_intent_tasks(self) -> None:
+        """回收已完成的意图执行任务并吸收其异常（P2: pacing 不阻塞实时循环）。"""
+        for task in list(getattr(self, "_intent_tasks", set())):
+            if not task.done():
+                continue
+            self._intent_tasks.discard(task)
+            if task.cancelled():
+                continue
+            exc = task.exception()
+            if exc is not None:
+                logger.warning("intent task failed: %s: %s", type(exc).__name__, exc)
+
+    async def _execute_claimed_intent(self, intent: Any) -> None:
+        """单并发执行一条已 claim 的意图（原 claim 循环体内的逻辑平移）。"""
+        try:
+            await self._place_order(intent)
+        except Exception as _claim_exc:
+            # BD-FIX (final83c): TERMINAL_CHILD_STATE（意图已推进到终态如
+            # FILLED）是成交事件处理的幂等重复，静默跳过；其余异常保持
+            # SENDING 待恢复。
+            if "TERMINAL_CHILD_STATE" in str(_claim_exc):
+                # BD-FIX (fast-fill ack gap): 成交事件与下单循环竞态下,
+                # 子命令已被事件路径推进终态 (FILLED),父消息若留 SENDING
+                # 只能等 15 分钟租约兜底(实测 SUI 首单)。此处按执行聚合
+                # 事实补 ACK。
+                if self._reconcile_terminal_child_parent(intent):
+                    print(
+                        f"[realtime] Parent intent ACKed via terminal-child "
+                        f"reconciliation: {getattr(intent, 'intent_id', '?')}"
+                    )
+                return
+            # 单条 intent 异常不应阻断整个 claim 循环；
+            # 失败的 intent 保持在 SENDING，下次重启恢复。
+            print(
+                f"[realtime] Intent claim error ({getattr(intent, 'intent_id', '?')}): "
+                f"{type(_claim_exc).__name__}: {_claim_exc}"
             )
 
     async def _cancel_algo_orders(self, position_id: str, symbol: str) -> None:
@@ -5103,12 +5189,18 @@ class AutonomousEngine:
         self._record_execution_fact_failure_env_guarded(f"{reason}{persist_error}")
 
     async def _resolve_unknown_outbox_intents(self) -> int:
-        """Resolve UNKNOWN only from an identity-bound positive venue fact.
+        """Resolve UNKNOWN only from identity-bound positive venue facts.
 
         A failed client-order lookup is not proof that the venue never
         accepted the write.  Until the adapter exposes a separately typed,
         definitive absence result, failures stay UNKNOWN and cannot be
         requeued.
+
+        P1-2 修复: 多切片计划实际下单 id 是 "{父id}-{seq}",父 id 从未提交
+        到交易所 —— 按执行计划的切片 client_order_id 逐片裁决,任何一片
+        FOUND 即父意图收敛,全部确定性缺席才允许重发。
+        P1-1 修复: 确定性缺席时 re-arm 一次性审批(此前 nonce 已在发送前
+        消费,重试路径被 FINAL_APPROVAL_INVALID 确定性杀死 → 永久漏单)。
         """
 
         try:
@@ -5122,117 +5214,294 @@ class AutonomousEngine:
             if not isinstance(item, dict):
                 continue
             intent_id = str(item.get("intent_id", "")).strip()
-            client_id = str(item.get("client_order_id", "")).strip()
+            parent_client_id = str(item.get("client_order_id", "")).strip()
             symbol = str(item.get("symbol", "")).strip().upper()
-            if not intent_id or not client_id or not symbol:
+            if not intent_id or not parent_client_id or not symbol:
                 continue
-            try:
-                # 直查原始响应:适配器会把 -2013(Order does not exist)包装为
-                # 通用失败并丢弃原始 msg,无法区分"真不存在"与"查询失败"。
-                # 明确缺席是 venue 的确定性结论,允许把 UNKNOWN 恢复为
-                # PENDING(worker 会重新验证审批:过期审批被确定性拒绝为
-                # FAILED,不会重新下单)。
-                raw = await self._api_async(
-                    Endpoint.ORDER,
-                    signed=True,
-                    params={"symbol": symbol, "origClientOrderId": client_id},
-                )
-            except Exception as exc:
-                logger.warning(
-                    "UNKNOWN intent lookup failed for %s: %s",
+
+            # 逐切片裁决: 有执行计划用子命令 client_order_id,否则退回父 id。
+            slice_ids: list[str] = [parent_client_id]
+            _has_plan = False
+            _restore_plan = getattr(self._outbox, "restore_execution_plan", None)
+            if callable(_restore_plan):
+                try:
+                    _plan = _restore_plan(str(intent_id))
+                    if _plan is not None:
+                        _children = [str(c.client_order_id or "") for c in _plan.children]
+                        if _children:
+                            slice_ids = _children
+                            _has_plan = True
+                except Exception as _plan_exc:
+                    logger.warning(
+                        "execution plan restore skipped during UNKNOWN resolve for %s: %s",
+                        intent_id,
+                        type(_plan_exc).__name__,
+                    )
+
+            any_found = False
+            all_absent = True
+            for _seq, _slice_id in enumerate(slice_ids):
+                _verdict = await self._adjudicate_unknown_slice(
                     intent_id,
-                    type(exc).__name__,
+                    symbol,
+                    _slice_id,
+                    sequence=_seq if _has_plan else None,
                 )
-                continue
-            if not isinstance(raw, dict):
-                continue
-            if "status" not in raw:
-                _code = raw.get("code")
-                _msg = str(raw.get("msg", "") or "")
-                if _code == -2013 or "does not exist" in _msg or "Unknown order" in _msg:
-                    self._outbox.resolve_unknown(intent_id, exchange_order_found=False)
-                    resolved_count += 1
-                else:
-                    # BD-FIX: 非确定性错误码保持 UNKNOWN,但必须有可见性 ——
-                    # 旧逻辑在此静默 continue,消息可永久滞留且无任何日志
-                    # (实测旧 SUI 意图 2h+ 零痕迹)。限频告警。
-                    _now = time.time()
-                    _log_state = getattr(self, "_unknown_lookup_inconclusive_log", None)
-                    if _log_state is None:
-                        _log_state = {}
-                        self._unknown_lookup_inconclusive_log = _log_state
-                    if _log_state.get(intent_id, 0.0) < _now - 600.0:
-                        _log_state[intent_id] = _now
-                        logger.warning(
-                            "UNKNOWN intent venue response inconclusive for %s: code=%s msg=%s",
-                            intent_id,
-                            _code,
-                            _msg[:160],
-                        )
-                continue
-            venue_order = raw
-            if not venue_order.get("orderId"):
-                continue
-            if (
-                str(venue_order.get("clientOrderId", "")) != client_id
-                or str(venue_order.get("symbol", "")).strip().upper() != symbol
-            ):
-                continue
-            try:
-                venue_status = OrderStatus(str(venue_order.get("status", "")))
-                venue_executed = Decimal(str(venue_order.get("executedQty", "")))
-            except (InvalidOperation, TypeError, ValueError):
-                continue
-            if not venue_executed.is_finite() or venue_executed < 0:
-                continue
-            _terminal_partial = (
-                venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0
-            )
-            try:
-                store = getattr(self, "_store", None)
-                save_order_state = getattr(store, "save_order_state", None)
-                if not callable(save_order_state):
-                    raise RuntimeError("UNKNOWN_ORDER_FACT_STORE_UNAVAILABLE")
-                save_order_state(
-                    order_id=str(venue_order["orderId"]),
-                    symbol=symbol,
-                    side=str(venue_order["side"]),
-                    order_type=str(venue_order["type"]),
-                    quantity=str(venue_order["origQty"]),
-                    price=str(venue_order["price"]) if venue_order.get("price") not in (None, "", "0") else None,
-                    status=str(venue_order["status"]),
-                    filled_qty=str(venue_order["executedQty"]),
-                    avg_price=(
-                        str(venue_order["avgPrice"]) if venue_order.get("avgPrice") not in (None, "", "0") else None
-                    ),
-                    client_order_id=client_id,
-                    # M16-R2: UNKNOWN 恢复路径补防线字段
-                    reduce_only=str(venue_order.get("reduceOnly", "")),
-                    stop_price=str(venue_order.get("stopPrice", "")),
-                )
-            except Exception as exc:
-                self._record_execution_fact_failure_env_guarded(
-                    f"UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:{intent_id}:{type(exc).__name__}"
-                )
-                continue
-            if _terminal_partial:
-                # BD-FIX (SUI 02:08 实测): 旧逻辑对终态部分成交的消息
-                # 记录 incident 后 continue —— 消息永久滞留 UNKNOWN,
-                # durable_ok 恒 False → 事故永不 auto-resolve,且每轮解析
-                # 白烧 20s 超时预算。身份绑定的 venue 事实(clientOrderId
-                # + symbol 匹配)本身就是确定性终态证据;成交入账由 fill
-                # journal/对账负责(此处不据此记账,不对账不重置),消息
-                # 只需收敛到终态。order_state 已持久化 venue 终态事实。
+                if _verdict == "FOUND":
+                    any_found = True
+                    all_absent = False
+                elif _verdict == "INCONCLUSIVE":
+                    all_absent = False
+                # ABSENT keeps all_absent as-is
+            if any_found:
                 self._outbox.resolve_unknown(intent_id, exchange_order_found=True)
                 resolved_count += 1
-                print(
-                    f"[realtime] Resolved UNKNOWN intent {intent_id} via terminal venue fact "
-                    f"({venue_status.value}, filled={venue_executed})"
-                )
                 continue
-            self._outbox.resolve_unknown(intent_id, exchange_order_found=True)
-            resolved_count += 1
+            if all_absent:
+                # P1-1 修复: 确定性缺席 → re-arm 一次性审批,使重试路径可通过
+                # 最终发送校验(同一 clientOrderId 幂等重发)。
+                _approval_id = str(item.get("risk_approval_id", "") or "")
+                _nonce = str(item.get("risk_nonce", "") or "")
+                if _approval_id and _nonce:
+                    try:
+                        self._risk_sm.rearm_for_retry(RiskApprovalId(_approval_id))
+                    except Exception as _sm_exc:
+                        logger.warning(
+                            "approval state rearm failed for %s: %s", intent_id, type(_sm_exc).__name__
+                        )
+                    with contextlib.suppress(Exception):
+                        self._approval.rearm_nonce(_nonce)
+                self._outbox.resolve_unknown(intent_id, exchange_order_found=False)
+                resolved_count += 1
+            # 部分 inconclusive → 保持 UNKNOWN 等下一轮裁决
         return resolved_count
+
+    async def _adjudicate_unknown_slice(
+        self,
+        intent_id: str,
+        symbol: str,
+        slice_client_id: str,
+        sequence: int | None,
+    ) -> str:
+        """Query one slice client id for an UNKNOWN intent.
+
+        Returns "FOUND" | "ABSENT" | "INCONCLUSIVE".
+
+        FOUND: persist the venue fact, book terminal fills into the ledger/
+        position projection (P1-4), track non-terminal orders in the monitor
+        set, and project the durable child command.
+        ABSENT: definitive -2013 absence → transition an UNKNOWN child back to
+        SENDING so the governed resend path can send it (P1-2).
+        """
+
+        try:
+            # 直查原始响应:适配器会把 -2013(Order does not exist)包装为
+            # 通用失败并丢弃原始 msg,无法区分"真不存在"与"查询失败"。
+            raw = await self._api_async(
+                Endpoint.ORDER,
+                signed=True,
+                params={"symbol": symbol, "origClientOrderId": slice_client_id},
+            )
+        except Exception as exc:
+            logger.warning(
+                "UNKNOWN slice lookup failed for %s/%s: %s",
+                intent_id,
+                slice_client_id,
+                type(exc).__name__,
+            )
+            return "INCONCLUSIVE"
+        if not isinstance(raw, dict):
+            return "INCONCLUSIVE"
+        if "status" not in raw:
+            _code = raw.get("code")
+            _msg = str(raw.get("msg", "") or "")
+            if _code == -2013 or "does not exist" in _msg or "Unknown order" in _msg:
+                if sequence is not None:
+                    with contextlib.suppress(Exception):
+                        self._outbox.transition_execution_child(
+                            str(intent_id),
+                            sequence,
+                            ChildCommandState.SENDING,
+                            event_id=f"absent-resend:{intent_id}:{sequence}",
+                        )
+                return "ABSENT"
+            self._log_inconclusive_lookup(intent_id, _code, _msg)
+            return "INCONCLUSIVE"
+        venue_order = raw
+        if not venue_order.get("orderId"):
+            return "INCONCLUSIVE"
+        if (
+            str(venue_order.get("clientOrderId", "")) != slice_client_id
+            or str(venue_order.get("symbol", "")).strip().upper() != symbol
+        ):
+            return "INCONCLUSIVE"
+        try:
+            venue_status_text = str(venue_order.get("status", ""))
+            venue_status = OrderStatus(venue_status_text)
+            venue_executed = Decimal(str(venue_order.get("executedQty", "")))
+        except (InvalidOperation, TypeError, ValueError):
+            return "INCONCLUSIVE"
+        if not venue_executed.is_finite() or venue_executed < 0:
+            return "INCONCLUSIVE"
+        _terminal_partial = (
+            venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0
+        )
+        try:
+            store = getattr(self, "_store", None)
+            save_order_state = getattr(store, "save_order_state", None)
+            if not callable(save_order_state):
+                raise RuntimeError("UNKNOWN_ORDER_FACT_STORE_UNAVAILABLE")
+            save_order_state(
+                order_id=str(venue_order["orderId"]),
+                symbol=symbol,
+                side=str(venue_order["side"]),
+                order_type=str(venue_order["type"]),
+                quantity=str(venue_order["origQty"]),
+                price=str(venue_order["price"]) if venue_order.get("price") not in (None, "", "0") else None,
+                status=venue_status_text,
+                filled_qty=str(venue_order["executedQty"]),
+                avg_price=(
+                    str(venue_order["avgPrice"]) if venue_order.get("avgPrice") not in (None, "", "0") else None
+                ),
+                client_order_id=slice_client_id,
+                # M16-R2: UNKNOWN 恢复路径补防线字段
+                reduce_only=str(venue_order.get("reduceOnly", "")),
+                stop_price=str(venue_order.get("stopPrice", "")),
+            )
+        except Exception as exc:
+            self._record_execution_fact_failure_env_guarded(
+                f"UNKNOWN_ORDER_FACT_PERSISTENCE_FAILED:{intent_id}:{type(exc).__name__}"
+            )
+            return "INCONCLUSIVE"
+        _oid = str(venue_order["orderId"])
+        _target: ChildCommandState | None = None
+        _terminal_booked = True
+        if venue_status is OrderStatus.FILLED and venue_executed > 0:
+            # P1-4 修复: 终态成交必须入账(此前只写 order_state,持仓投影缺失)
+            _terminal_booked = await self._book_venue_terminal_fill(_oid, symbol, venue_order)
+            _target = ChildCommandState.FILLED if _terminal_booked else ChildCommandState.UNKNOWN
+        elif _terminal_partial:
+            _terminal_booked = await self._book_venue_terminal_fill(_oid, symbol, venue_order)
+            _target = ChildCommandState.CANCELED if _terminal_booked else ChildCommandState.UNKNOWN
+        else:
+            # 非终态订单纳入监控集,让 _monitor_orders 接管后续状态。
+            if venue_status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
+                if _oid not in self._order_trackers:
+                    _tracker = OrderStateTracker(order_id=OrderId(_oid))
+                    _tracker.apply(OrderEvent.SENT)
+                    _tracker.apply(OrderEvent.ACKED)
+                    if venue_status is OrderStatus.PARTIALLY_FILLED:
+                        _tracker.apply(OrderEvent.PARTIALLY_FILLED)
+                    self._order_trackers[_oid] = _tracker
+                self._order_symbols[_oid] = symbol
+                self._active_order_ids.add(_oid)
+            _target = _child_state_for_venue_fact(venue_status_text, venue_executed)
+        if sequence is not None and _target is not None:
+            with contextlib.suppress(Exception):
+                self._outbox.transition_execution_child(
+                    str(intent_id),
+                    sequence,
+                    _target,
+                    event_id=f"unknown-resolve:{intent_id}:{sequence}:{_oid}",
+                    exchange_order_id=_oid,
+                    cumulative_filled_quantity=(
+                        str(venue_order.get("executedQty", "0"))
+                        if _target
+                        in {
+                            ChildCommandState.PARTIALLY_FILLED,
+                            ChildCommandState.FILLED,
+                            ChildCommandState.CANCELED,
+                        }
+                        else None
+                    ),
+                )
+        return "FOUND"
+
+    def _log_inconclusive_lookup(self, intent_id: str, code: Any, msg: str) -> None:
+        """限频可见性: 非确定性错误码保持 UNKNOWN,但必须有日志痕迹。"""
+        _now = time.time()
+        _log_state = getattr(self, "_unknown_lookup_inconclusive_log", None)
+        if _log_state is None:
+            _log_state = {}
+            self._unknown_lookup_inconclusive_log = _log_state
+        if _log_state.get(intent_id, 0.0) < _now - 600.0:
+            _log_state[intent_id] = _now
+            logger.warning(
+                "UNKNOWN intent venue response inconclusive for %s: code=%s msg=%s",
+                intent_id,
+                code,
+                str(msg)[:160],
+            )
+
+    async def _book_venue_terminal_fill(self, order_id: str, symbol: str, payload: dict[str, Any]) -> bool:
+        """P1-4: 把裁决路径发现的终态 venue 成交入账(幂等)。
+
+        FILLED 走 _process_fill(含保护建立/平仓 PnL);CANCELED/EXPIRED 部分
+        成交走 _consume_cumulative_fill + _record_partial_fill_to_ledger,
+        与 _monitor_orders 同款路径。返回成交事实是否已 COMMITTED。
+        """
+
+        try:
+            executed = float(payload.get("executedQty", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(executed) or executed <= 0:
+            return False
+        # 无成交日志能力的存储(诊断/测试 fake)不记账 —— venue 终态事实已由
+        # 调用方 save_order_state 落库;返回 True 让子命令收敛到终态。
+        _store = getattr(self, "_store", None)
+        _save_fill = getattr(_store, "save_fill_event", None)
+        _get_fill = getattr(_store, "get_fill_event", None)
+        if not callable(_save_fill) or not callable(_get_fill):
+            return True
+        _cid = str(payload.get("clientOrderId", "") or "")
+        if "-close-" in _cid or "-emg-" in _cid or "-emergency-" in _cid:
+            self._close_order_ids.add(str(order_id))
+        tracker = self._order_trackers.get(str(order_id))
+        if tracker is None:
+            tracker = OrderStateTracker(order_id=OrderId(str(order_id)))
+            tracker.apply(OrderEvent.SENT)
+            tracker.apply(OrderEvent.ACKED)
+            self._order_trackers[str(order_id)] = tracker
+            self._order_symbols[str(order_id)] = symbol
+        status = str(payload.get("status", "")).upper()
+        if status == "FILLED":
+            self._active_order_ids.add(str(order_id))
+            try:
+                await self._process_fill(str(order_id), symbol, payload)
+            except Exception as exc:
+                self._mark_order_unknown(str(order_id), symbol, f"UNKNOWN_FILL_BOOKING_FAILED:{type(exc).__name__}")
+                return False
+            return True
+        if status in {"CANCELED", "EXPIRED"}:
+            _delta, _price, _fill_id = self._consume_cumulative_fill(
+                str(order_id), symbol, payload, status=status
+            )
+            if _delta > 0 and _price > 0 and _fill_id:
+                try:
+                    self._record_partial_fill_to_ledger(
+                        str(order_id),
+                        symbol,
+                        payload,
+                        _delta,
+                        _price,
+                        executed,
+                        _fill_id,
+                        status=status,
+                    )
+                except Exception as exc:
+                    self._mark_fill_retryable(str(order_id), _fill_id)
+                    logger.warning("terminal-partial booking failed for %s: %s", order_id, type(exc).__name__)
+                    return False
+            _fill_row = self._store.get_fill_event(_fill_id) if _fill_id else None
+            _committed = bool(_fill_row) and str(_fill_row.get("processing_state", "")) == "COMMITTED"
+            if _committed:
+                tracker.apply(OrderEvent.CANCELED)
+                self._active_order_ids.discard(str(order_id))
+                self._order_trackers.pop(str(order_id), None)
+                self._order_symbols.pop(str(order_id), None)
+            return _committed
+        return False
 
     @staticmethod
     def _protection_client_algo_id(protection_order: Any) -> str:
@@ -5443,6 +5712,22 @@ class AutonomousEngine:
                 idempotency_key=getattr(intent, "idempotency_key", "") or "",
             )
             return
+
+        # P2 修复 (30s claim 租约 vs 规划窗口): claim 只发 30s 租约,而规划
+        # (行情网络调用)+ persist_execution_plan + 首切片往返都可能超时——
+        # 超时后子命令转换被 fencing 谓词拒绝,意图滞留 SENDING 至 900s 宽限
+        # 兜底。claim 后立即续租覆盖规划+首切片(180s),切片间 pacing 的续租
+        # 逻辑保持不变。
+        _renew_fn = getattr(self._outbox, "renew_lease", None)
+        if callable(_renew_fn):
+            try:
+                _renew_fn(str(intent.intent_id), lease_seconds=180.0)
+            except Exception as _renew_exc:
+                logger.warning(
+                    "claim lease renewal skipped for %s: %s",
+                    getattr(intent, "intent_id", "?"),
+                    type(_renew_exc).__name__,
+                )
 
         # BD-FIX: Intent dead-letter — 超过最大重试次数的意图标记为失败
         if not hasattr(self, "_intent_retry_count"):
@@ -5768,6 +6053,37 @@ class AutonomousEngine:
                 ChildCommandState.SENDING,
                 event_id=f"send:{intent.intent_id}:{idx}",
             )
+            # P2 修复 (竞态窗口): _transition_execution_child_race_safe 会吞掉
+            # INVALID_CHILD_TRANSITION/TERMINAL_CHILD_STATE(事件路径抢先推进
+            # 子命令)且无成功信号 —— 此前调用方仍无条件 POST,向交易所重复
+            # 提交同一 clientOrderId。转换后复检:子命令不是 SENDING 说明
+            # 转换被吞,不得重发。
+            _post_restore = None
+            if callable(_restore_plan):
+                try:
+                    _post_restore = _restore_plan(str(intent.intent_id))
+                except Exception:
+                    _post_restore = None
+            _child_state_now = (
+                _post_restore.children[idx].state
+                if _post_restore is not None and idx < len(_post_restore.children)
+                else None
+            )
+            if _child_state_now is not None and _child_state_now is not ChildCommandState.SENDING:
+                if _child_state_now is ChildCommandState.UNKNOWN:
+                    self._outbox.mark_unknown(intent.intent_id, "PLAN_RESEND_SKIPPED_UNKNOWN_CHILD")
+                elif _child_state_now is ChildCommandState.REJECTED:
+                    self._outbox.reject(
+                        intent.intent_id,
+                        "EXECUTION_CHILD_REJECTED_BY_EVENT_PATH",
+                        idempotency_key=getattr(intent, "idempotency_key", "") or "",
+                    )
+                else:
+                    print(
+                        f"[order] ⚡ slice {idx} of {intent.intent_id} already "
+                        f"{_child_state_now.value} via event path — skipping resend"
+                    )
+                continue
             order = await self._submit_order_slice(
                 intent,
                 params=params,
@@ -5779,17 +6095,33 @@ class AutonomousEngine:
             outcome = str((order or {}).get("_submit_outcome", "ACKED" if order else "UNKNOWN"))
             if outcome == "REJECTED":
                 reject_reason = str((order or {}).get("reason", "EXECUTION_CHILD_REJECTED"))
+                _retryable_rejection = _is_retryable_venue_rejection(reject_reason)
+                # P2 修复 (retryable 拒绝可重发): 瞬时拒绝(限频/时钟偏差/健康门)
+                # 下交易所确定未建单 —— 子命令转 UNKNOWN 而非终态 REJECTED,
+                # 由裁决路径以确定性缺席事实 re-arm 审批并 UNKNOWN→SENDING 重发;
+                # 终态 REJECTED 会让子命令永远无法重发(终端态不可逆)。
                 execution_aggregate = self._transition_execution_child_race_safe(
                     intent.intent_id,
                     idx,
-                    ChildCommandState.REJECTED,
+                    ChildCommandState.UNKNOWN if _retryable_rejection else ChildCommandState.REJECTED,
                     event_id=f"reject:{intent.intent_id}:{idx}",
                 )
-                if _is_retryable_venue_rejection(reject_reason):
+                if _retryable_rejection:
                     # BD-FIX: 瞬时错误（限频/时钟偏差等）不直接 FAILED ——
                     # mark_unknown 由运行时周期 resolve 按 venue 事实裁决
                     self._outbox.mark_unknown(intent.intent_id, f"RETRYABLE_REJECTION:{reject_reason}")
                     return
+                # P2 修复 (in-flight 泄漏): 首切片永久拒绝时,其余 PLANNED 兄弟
+                # 子命令无人收尾 —— 此前只 reject 父意图即 return,PLANNED 行
+                # 继续计入 inflight_signed_quantity 达 30 分钟。与控制面中止
+                # 路径对齐:剩余子命令全部转 REJECTED 再终结父意图。
+                for remaining_idx in range(idx + 1, n_slices):
+                    execution_aggregate = self._transition_execution_child_race_safe(
+                        intent.intent_id,
+                        remaining_idx,
+                        ChildCommandState.REJECTED,
+                        event_id=f"sibling-reject:{intent.intent_id}:{remaining_idx}",
+                    )
                 self._outbox.reject(
                     intent.intent_id,
                     reject_reason,
@@ -6667,7 +6999,12 @@ class AutonomousEngine:
             f"[order] FAILED: {order_symbol} {side} — {order.get('msg', order.get('error', 'unknown'))} | raw={json.dumps(order, default=str)[:200]}"
         )
         if adapter_response.status is OrderStatus.REJECTED:
-            return rejected(str(order.get("msg", order.get("error", "ADAPTER_REJECTED"))))
+            # P2 修复 (拒绝原因透传): 适配层在 raw_response["reason"] 打标
+            # venue_rejected:<category> / retryable_rejection:<category>,
+            # 优先取结构化 reason 供 _is_retryable_venue_rejection 判定。
+            return rejected(
+                str(order.get("reason") or order.get("msg") or order.get("error") or "ADAPTER_REJECTED")
+            )
         return unknown(str(order.get("msg", order.get("error", "ORDER_ACK_UNKNOWN"))))
 
     async def _monitor_orders(self, symbol: str) -> None:
@@ -6803,6 +7140,33 @@ class AutonomousEngine:
                     f"ORDER_MONITOR_UNKNOWN:{type(e).__name__}:{str(e)[:240]}",
                 )
                 print(f"[realtime] Order monitoring error ({order_id}): {e}")
+
+    async def _monitor_orphan_orders(self, *, batch_limit: int = 10) -> None:
+        """P2 修复 (池外品种订单无人监控): 周期轮询 symbol 已退出交易池的
+        活跃订单。
+
+        _monitor_orders 只对 realtime 批次品种调用且跳过非本品种订单;
+        品种退出池后其活跃订单既不计 UNKNOWN 也未达 30 分钟超龄扫描,
+        会长期滞留在监控集与 in-flight 敞口里。此处按品种维度补一轮
+        监控(与 UNKNOWN 裁决同频 60s,批上限防刷)。
+        """
+        if not self._can_write or not self._active_order_ids:
+            return
+        pool_symbols = {str(s).upper() for s in self._trading_pool.active_instruments()}
+        orphan_symbols: set[str] = set()
+        for oid in list(self._active_order_ids):
+            sym = str(self._order_symbols.get(oid, "")).strip().upper()
+            if sym and sym not in pool_symbols:
+                orphan_symbols.add(sym)
+            if len(orphan_symbols) >= batch_limit:
+                break
+        for sym in sorted(orphan_symbols):
+            try:
+                await self._monitor_orders(sym)
+            except Exception as exc:
+                logger.warning(
+                    "orphan order monitoring failed for %s: %s", sym, type(exc).__name__
+                )
 
     def _record_partial_fill_to_ledger(
         self,
@@ -7384,8 +7748,22 @@ class AutonomousEngine:
                 if str(pp.instrument_id) == symbol:
                     entry_px = pp.entry_price
                     exit_px = float(avg_price)
-                    pos_qty = pp.quantity
-                    trade_pnl = (exit_px - entry_px) * pos_qty if pp.is_long() else (entry_px - exit_px) * pos_qty
+                    pos_qty = float(pp.quantity)
+                    # P1 修复 (部分平仓): 交易所会按剩余持仓截断 reduce-only
+                    # 平仓单(合法终态,origQty < 请求量)。此前 PnL 按全仓数量
+                    # 计算(截断单 PnL 被放大数倍),且无条件删除保护 —— 剩余
+                    # 持仓失去 SL/TP 保护。改为按实际成交量计 PnL;仅当持仓
+                    # 投影归零时才清理保护,否则保留(减仓方向 reduce-only
+                    # 超量保护由交易所按剩余持仓截断,安全)。
+                    try:
+                        closed_qty = min(float(executed_qty), pos_qty)
+                    except (TypeError, ValueError):
+                        closed_qty = 0.0
+                    if closed_qty <= 0:
+                        break
+                    trade_pnl = (
+                        (exit_px - entry_px) * closed_qty if pp.is_long() else (entry_px - exit_px) * closed_qty
+                    )
                     is_win = trade_pnl > 0
                     self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
                     if is_win:
@@ -7395,9 +7773,20 @@ class AutonomousEngine:
                     self._trade_pnls.append(trade_pnl)
                     if len(self._trade_pnls) > 10000:
                         self._trade_pnls = self._trade_pnls[-5000:]
-                    self._remove_protection_with_cleanup(pid, symbol)
-                    await self._cancel_algo_orders(pid, symbol)
-                    print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
+                    _proj_row = getattr(self, "_position_projection", {}).get(symbol) or {}
+                    try:
+                        _remaining = abs(float(_proj_row.get("signed_quantity", 0) or 0))
+                    except (TypeError, ValueError):
+                        _remaining = 0.0
+                    if _remaining <= 1e-12:
+                        self._remove_protection_with_cleanup(pid, symbol)
+                        await self._cancel_algo_orders(pid, symbol)
+                        print(f"[order] Close trade recorded: {symbol} PnL={trade_pnl:.2f}")
+                    else:
+                        print(
+                            f"[order] Partial close recorded: {symbol} closed={closed_qty:.6f} "
+                            f"remaining={_remaining:.6f} PnL={trade_pnl:.2f} — protection retained for residual"
+                        )
                     break
             account_balance = float(self._last_account.get("totalWalletBalance", 0))
             if account_balance > 0:
@@ -10891,6 +11280,21 @@ class AutonomousEngine:
                     str(exc)[:120],
                 )
                 continue
+            # P1-4 修复: 终态且带成交的 venue 事实必须入账 —— 此前只写
+            # order_state,若该成交从未经过 user stream/REST 监控路径,
+            # 本地持仓投影永久低估 → 对账 MISMATCH → 锁盘。
+            try:
+                _executed_stale = float(venue_fields.get("filled_qty", "0") or 0)
+            except (TypeError, ValueError):
+                _executed_stale = 0.0
+            if (
+                target_status in {"FILLED", "CANCELED"}
+                and _executed_stale > 0
+                and isinstance(raw, dict)
+                and "status" in raw
+            ):
+                with contextlib.suppress(Exception):
+                    await self._book_venue_terminal_fill(order_id, symbol, raw)
             # 终态事实落定后清理进程内追踪,防止残留 tracker 继续计入对账。
             self._active_order_ids.discard(order_id)
             self._owned_order_ids.discard(order_id)
@@ -11850,12 +12254,18 @@ class AutonomousEngine:
                 import secrets
 
                 nonce = secrets.token_hex(8)
+                # P2 修复 (秒级 ID 冲突): intent_id/idempotency_key 此前只用
+                # 秒级时间戳,同秒同品种的第二条意图与第一条完全同 key →
+                # commit 主键冲突被吞成 "duplicate intent in window" 静默漏单。
+                # 追加随机后缀保证唯一;client_order_id 保持确定性格式
+                # (Binance 36 字符上限,同秒同品种碰撞由 -4141 语义校验兜底)。
+                _id_suffix = secrets.token_hex(4)
 
                 approval_id = RiskApprovalId(f"nearline-{symbol}-{int(time.time())}-{nonce[:8]}")
-                intent_id = f"intent-{symbol}-{int(time.time())}"
+                intent_id = f"intent-{symbol}-{int(time.time())}-{_id_suffix}"
                 client_order_id = f"beidou-{symbol.lower()}-entry-{int(time.time())}"
                 correlation = CorrelationId(f"nearline-{int(time.time())}")
-                idempotency_key = f"idem-{symbol}-{int(time.time())}"
+                idempotency_key = f"idem-{symbol}-{int(time.time())}-{_id_suffix}"
                 # BD-FIX: 意图数量必须在创建/签名前按交易对规则量化。
                 # 执行器拒绝"量化后与签名不一致"的数量（审批绑定语义），
                 # 未量化的原始 sizing 值会导致所有订单被
@@ -12953,6 +13363,13 @@ class AutonomousEngine:
                     self._order_trackers[oid] = tracker
                     self._active_order_ids.add(oid)
                     self._order_symbols[oid] = osymbol
+                    # P2 修复 (平仓身份重启丢失): _close_order_ids 是进程内存
+                    # 集合,重启后为空 —— 在途/部分成交的平仓单成交时会被当成
+                    # 入场单补建 SL/TP 并污染 PnL 统计。按 clientOrderId 的
+                    # "-close-"/"-emergency-"/"-emg-" 模式恢复平仓身份。
+                    _restored_cid = str(o.get("clientOrderId", "") or "")
+                    if "-close-" in _restored_cid or "-emergency-" in _restored_cid or "-emg-" in _restored_cid:
+                        self._close_order_ids.add(oid)
                     # 持久化到 store，避免对账时 system_facts.open_orders 为空
                     try:
                         self._store.save_order_state(
@@ -13577,6 +13994,14 @@ class AutonomousEngine:
         """优雅关机。"""
         print("\n[beidou-autopilot] Shutting down...")
         self._running = False
+
+        # 0. 先停掉在途意图执行任务（P2: pacing 任务不再阻塞实时循环）
+        for task in list(getattr(self, "_intent_tasks", set())):
+            task.cancel()
+        for task in list(getattr(self, "_intent_tasks", set())):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        getattr(self, "_intent_tasks", set()).clear()
 
         # 1. NO_NEW_RISK
         self._safe_no_new_risk("auto")

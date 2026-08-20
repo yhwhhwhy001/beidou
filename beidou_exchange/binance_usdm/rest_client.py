@@ -13,6 +13,7 @@ import hmac
 import json
 import logging
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -86,6 +87,9 @@ class BinanceRESTClient:
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
+        # P2 修复: 懒创建的 session 会被多个 to_thread 调用并发首建 —— 加锁
+        # 避免重复构造/泄漏 client。
+        self._session_lock = threading.Lock()
         # BD-FIX (rate-budget): 高权重 GET 响应缓存（TTL 内一次传输）。
         # 缓存成功结果；失败不缓存。熔断窗口内缓存命中直接返回，
         # 使 supervisor 保护覆盖探针在熔断期间仍可消费最近的成功事实。
@@ -518,9 +522,13 @@ class BinanceRESTClient:
                 # 在线程池中执行同步 HTTP，不阻塞事件循环
                 # P1-019: 使用持久 httpx session 避免每次新建连接
                 if self._session is None:
-                    import httpx
+                    with self._session_lock:
+                        if self._session is None:
+                            import httpx
 
-                    self._session = httpx.Client(timeout=DEFAULT_HTTP_TIMEOUT, follow_redirects=False, http2=False)
+                            self._session = httpx.Client(
+                                timeout=DEFAULT_HTTP_TIMEOUT, follow_redirects=False, http2=False
+                            )
                 body, resp_headers = await asyncio.to_thread(_sync_urlopen, req, DEFAULT_HTTP_TIMEOUT, self._session)
                 data = json.loads(body)
                 self._rate_state.consecutive_failures = 0

@@ -353,11 +353,15 @@ class TestBinanceAdapter:
 
         response = await adapter.create_order(request)
 
-        assert response.status.value == "UNKNOWN"
+        # P2 修复契约: 确定性业务拒绝(-4141 幂等去重)映射为 REJECTED 而非
+        # UNKNOWN,同时保留 raw code —— engine 的 -4141 恢复路径按 code
+        # 拦截并查询既有订单,状态分类不改变幂等恢复语义。
+        assert response.status.value == "REJECTED"
         assert response.raw_response is not None
         assert response.raw_response["code"] == -4141
         assert response.raw_response["category"] == ErrorCategory.ORDER_REJECTED.value
         assert response.raw_response["retryable"] is False
+        assert response.raw_response["reason"].startswith("venue_rejected:")
 
     @pytest.mark.asyncio
     async def test_write_hold_precedes_unknown_venue_health(self):
