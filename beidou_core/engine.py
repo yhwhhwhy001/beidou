@@ -10764,6 +10764,143 @@ class AutonomousEngine:
             print(f"[nearline] 🧹 Resolved {resolved} stale execution command(s) against venue facts")
         return resolved
 
+    async def _resolve_stale_order_states(self, *, batch_limit: int = 25, min_age_seconds: float = 120.0) -> int:
+        """BD-FIX (stale order rows): 按 venue 事实收敛 UNKNOWN 订单行。
+
+        _mark_order_unknown 在 venue 查询失败时把订单行落成 UNKNOWN 占位
+        事实(side/quantity 未知)。这些行长期滞留 durable 存储 →
+        _durable_fact_status 恒返回 DURABLE_ORDER_UNKNOWN → 启动门禁阻断
+        + 事故 auto-resolve 永不触发(实测 87 行残留、4 条 CRITICAL/HIGH
+        事故 DETECTED 数小时不收敛)。venue 订单按 orderId 可查:
+        - FILLED/CANCELED/EXPIRED/REJECTED → 落终态(采用 venue 事实)
+        - NEW/PARTIALLY_FILLED → 仍是活跃单,保留 UNKNOWN 交监控路径
+        - Order does not exist → venue 从未接受或已出查询窗口 → CANCELED
+          (与幽灵子命令 NOT_FOUND 裁决同语义)
+        - 查询失败 → 保留,下轮重试
+        只读 venue 查询 + 本地 durable 回写,绝不伪造终态。
+        """
+        if not self._can_write:
+            return 0
+        store = getattr(self, "_store", None)
+        if store is None or not callable(getattr(store, "save_order_state", None)):
+            return 0
+        try:
+            rows = list(store.restore_order_states())
+        except Exception as exc:
+            logger.warning("stale order state listing failed: %s", type(exc).__name__)
+            return 0
+        now = datetime.now(timezone.utc)
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("status", "")).upper() != "UNKNOWN":
+                continue
+            updated_text = str(row.get("updated_at", "") or "")
+            if updated_text:
+                try:
+                    updated_at = datetime.fromisoformat(updated_text)
+                    if updated_at.tzinfo is None:
+                        updated_at = updated_at.replace(tzinfo=timezone.utc)
+                    if (now - updated_at).total_seconds() < min_age_seconds:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            candidates.append(row)
+            if len(candidates) >= batch_limit:
+                break
+        if not candidates:
+            return 0
+        resolved = 0
+        for row in candidates:
+            order_id = str(row.get("order_id", "")).strip()
+            symbol = str(row.get("symbol", "")).strip()
+            if not order_id or not symbol or symbol.upper() == "UNKNOWN":
+                continue
+            try:
+                raw = await self._api_async(
+                    Endpoint.ORDER,
+                    signed=True,
+                    params={"symbol": symbol, "orderId": int(order_id)},
+                )
+            except (TypeError, ValueError):
+                continue
+            venue_status: str | None = None
+            venue_fields: dict[str, Any] = {}
+            if isinstance(raw, dict) and "status" in raw:
+                venue_status = str(raw.get("status", "")).upper()
+                venue_fields = {
+                    "side": str(raw.get("side") or row.get("side") or "UNKNOWN"),
+                    "order_type": str(raw.get("type") or row.get("order_type") or "UNKNOWN"),
+                    "quantity": str(raw.get("origQty") or row.get("quantity") or "0"),
+                    "price": str(raw.get("price")) if raw.get("price") not in (None, "") else None,
+                    "filled_qty": str(raw.get("executedQty") or row.get("filled_qty") or "0"),
+                    "avg_price": str(raw.get("avgPrice")) if raw.get("avgPrice") not in (None, "") else None,
+                    "client_order_id": str(raw.get("clientOrderId") or row.get("client_order_id") or ""),
+                    "reduce_only": str(raw.get("reduceOnly", row.get("reduce_only") or "False")),
+                    "stop_price": str(raw.get("stopPrice") or row.get("stop_price") or ""),
+                }
+            elif isinstance(raw, dict):
+                msg = str(raw.get("msg", "") or "")
+                if "Order does not exist" in msg or "Unknown order" in msg:
+                    venue_status = "NOT_FOUND"
+            if venue_status is None:
+                continue
+            if venue_status in ("NEW", "PARTIALLY_FILLED"):
+                continue  # 仍活跃:监控路径负责,不得提前收敛
+            if venue_status == "FILLED":
+                target_status = "FILLED"
+            elif venue_status in ("CANCELED", "EXPIRED"):
+                target_status = "CANCELED"
+            elif venue_status == "REJECTED":
+                target_status = "REJECTED"
+            elif venue_status == "NOT_FOUND":
+                target_status = "CANCELED"
+                venue_fields = {
+                    "side": str(row.get("side") or "UNKNOWN"),
+                    "order_type": str(row.get("order_type") or "UNKNOWN"),
+                    "quantity": str(row.get("quantity") or "0"),
+                    "price": None,
+                    "filled_qty": str(row.get("filled_qty") or "0"),
+                    "avg_price": None,
+                    "client_order_id": str(row.get("client_order_id") or ""),
+                    "reduce_only": str(row.get("reduce_only") or "False"),
+                    "stop_price": str(row.get("stop_price") or ""),
+                }
+            else:
+                continue
+            try:
+                store.save_order_state(
+                    order_id,
+                    symbol,
+                    venue_fields["side"],
+                    venue_fields["order_type"],
+                    venue_fields["quantity"],
+                    venue_fields["price"],
+                    target_status,
+                    filled_qty=venue_fields["filled_qty"],
+                    avg_price=venue_fields["avg_price"],
+                    client_order_id=venue_fields["client_order_id"] or None,
+                    reduce_only=venue_fields["reduce_only"],
+                    stop_price=venue_fields["stop_price"],
+                )
+            except Exception as exc:
+                logger.warning(
+                    "stale order state persist failed %s/%s: %s: %s",
+                    symbol,
+                    order_id,
+                    type(exc).__name__,
+                    str(exc)[:120],
+                )
+                continue
+            # 终态事实落定后清理进程内追踪,防止残留 tracker 继续计入对账。
+            self._active_order_ids.discard(order_id)
+            self._owned_order_ids.discard(order_id)
+            self._order_trackers.pop(order_id, None)
+            self._order_symbols.pop(order_id, None)
+            resolved += 1
+        if resolved:
+            print(f"[nearline] 🧹 Resolved {resolved} stale UNKNOWN order state(s) against venue facts")
+        return resolved
+
     async def _sync_venue_leverage(self, symbol: str, dyn_leverage: float) -> bool:
         """BD-FIX (final83k): 自适应杠杆同步到交易所(默认关闭)。
 
@@ -10816,6 +10953,18 @@ class AutonomousEngine:
                 await self._resolve_stale_execution_commands()
             except Exception as _stale_exc:
                 logger.warning("stale execution command resolution tick failed: %s", type(_stale_exc).__name__)
+
+        # BD-FIX (stale order rows): UNKNOWN 订单行按 venue 事实收敛(2 分钟
+        # 节流)。残留 UNKNOWN 行会让 _durable_fact_status 恒
+        # DURABLE_ORDER_UNKNOWN → 启动门禁阻断 + 事故 auto-resolve 永不
+        # 触发(实测 87 行残留、4 条 CRITICAL/HIGH 事故 DETECTED 数小时)。
+        _order_state_resolve_ago = time.monotonic() - getattr(self, "_last_order_state_resolve_mono", 0.0)
+        if _order_state_resolve_ago >= 120.0:
+            self._last_order_state_resolve_mono = time.monotonic()
+            try:
+                await self._resolve_stale_order_states()
+            except Exception as _order_state_exc:
+                logger.warning("stale order state resolution tick failed: %s", type(_order_state_exc).__name__)
 
         # BD-FIX: TruthSnapshot 风险事实周期刷新 — 近线每轮（testnet 30s，
         # 首轮启动即执行）无论是否产生信号/提案都刷新，避免 sizing 分支

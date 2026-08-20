@@ -883,6 +883,181 @@ def test_engine_position_projection_uses_decimal_arithmetic() -> None:
     assert saved[-1]["signed_quantity"] == "0.00"
 
 
+def test_engine_resolves_stale_unknown_order_rows_against_venue_facts() -> None:
+    """BD-FIX: UNKNOWN 订单行按 venue 事实收敛终态。
+
+    残留 UNKNOWN 行会让 _durable_fact_status 恒 DURABLE_ORDER_UNKNOWN,
+    启动门禁阻断 + 事故 auto-resolve 永不触发(实测 87 行残留、4 条
+    CRITICAL/HIGH 事故 DETECTED 数小时)。FILLED/CANCELED/REJECTED 与
+    Order-does-not-exist 都收敛终态;NEW 保留等监控;查询失败保留。
+    """
+    engine = object.__new__(AutonomousEngine)
+    engine._can_write = True
+    engine._active_order_ids = {"1", "2"}
+    engine._owned_order_ids = {"1", "2"}
+    engine._order_trackers = {"1": object(), "2": object()}
+    engine._order_symbols = {"1": "BTCUSDT", "2": "BTCUSDT"}
+    saved: list[tuple] = []
+
+    class FakeStore:
+        def restore_order_states(self):
+            return [
+                {
+                    "order_id": "1",
+                    "symbol": "BTCUSDT",
+                    "side": "UNKNOWN",
+                    "order_type": "UNKNOWN",
+                    "quantity": "0",
+                    "price": None,
+                    "status": "UNKNOWN",
+                    "filled_qty": "0",
+                    "avg_price": None,
+                    "client_order_id": None,
+                    "reduce_only": "False",
+                    "stop_price": "0",
+                    "updated_at": "2026-08-19T19:05:13.981525+00:00",
+                },
+                {
+                    "order_id": "2",
+                    "symbol": "BTCUSDT",
+                    "side": "UNKNOWN",
+                    "order_type": "UNKNOWN",
+                    "quantity": "0",
+                    "price": None,
+                    "status": "UNKNOWN",
+                    "filled_qty": "0",
+                    "avg_price": None,
+                    "client_order_id": None,
+                    "reduce_only": "False",
+                    "stop_price": "0",
+                    "updated_at": "2026-08-19T19:05:13.981525+00:00",
+                },
+                {
+                    "order_id": "3",
+                    "symbol": "BTCUSDT",
+                    "side": "UNKNOWN",
+                    "order_type": "UNKNOWN",
+                    "quantity": "0",
+                    "price": None,
+                    "status": "UNKNOWN",
+                    "filled_qty": "0",
+                    "avg_price": None,
+                    "client_order_id": None,
+                    "reduce_only": "False",
+                    "stop_price": "0",
+                    "updated_at": "2026-08-19T19:05:13.981525+00:00",
+                },
+                {
+                    "order_id": "4",
+                    "symbol": "BTCUSDT",
+                    "side": "UNKNOWN",
+                    "order_type": "UNKNOWN",
+                    "quantity": "0",
+                    "price": None,
+                    "status": "UNKNOWN",
+                    "filled_qty": "0",
+                    "avg_price": None,
+                    "client_order_id": None,
+                    "reduce_only": "False",
+                    "stop_price": "0",
+                    "updated_at": "2026-08-19T19:05:13.981525+00:00",
+                },
+            ]
+
+        def save_order_state(
+            self,
+            order_id,
+            symbol,
+            side,
+            order_type,
+            quantity,
+            price,
+            status,
+            filled_qty="0",
+            avg_price=None,
+            client_order_id=None,
+            *,
+            reduce_only=None,
+            stop_price=None,
+        ) -> None:
+            saved.append(
+                (
+                    order_id,
+                    symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    price,
+                    status,
+                    filled_qty,
+                    avg_price,
+                    client_order_id,
+                    reduce_only,
+                    stop_price,
+                )
+            )
+
+    engine._store = FakeStore()
+
+    async def fake_api(path, method="GET", signed=False, params=None):
+        order_id = str((params or {}).get("orderId", ""))
+        if order_id == "1":
+            return {
+                "orderId": 1,
+                "symbol": "BTCUSDT",
+                "status": "FILLED",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "2",
+                "executedQty": "2",
+                "avgPrice": "10",
+                "clientOrderId": "cid-1",
+                "reduceOnly": False,
+                "stopPrice": "0",
+            }
+        if order_id == "2":
+            return {"error": 400, "msg": "Order does not exist."}
+        if order_id == "3":
+            return {
+                "orderId": 3,
+                "symbol": "BTCUSDT",
+                "status": "NEW",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "2",
+                "executedQty": "0",
+            }
+        if order_id == "4":
+            return {
+                "orderId": 4,
+                "symbol": "BTCUSDT",
+                "status": "REJECTED",
+                "side": "BUY",
+                "type": "MARKET",
+                "origQty": "2",
+                "executedQty": "0",
+            }
+        raise AssertionError(f"unexpected order query {order_id}")
+
+    engine._api_async = fake_api
+
+    resolved = asyncio.run(engine._resolve_stale_order_states(batch_limit=12, min_age_seconds=120.0))
+    assert resolved == 3
+    statuses = {row[0]: row[6] for row in saved}
+    assert statuses == {"1": "FILLED", "2": "CANCELED", "4": "REJECTED"}
+    # FILLED 采用 venue 事实(方向/类型/数量/价格)。
+    filled_row = next(row for row in saved if row[0] == "1")
+    assert filled_row[2] == "BUY"
+    assert filled_row[3] == "MARKET"
+    assert filled_row[4] == "2"
+    assert filled_row[6] == "FILLED"
+    # 进程内追踪清理,不再计入对账。
+    assert engine._active_order_ids == set()
+    assert engine._owned_order_ids == set()
+    assert engine._order_trackers == {}
+    assert engine._order_symbols == {}
+
+
 def test_engine_submit_slice_keeps_non_reduce_only_mismatch_unknown() -> None:
     """非 reduce-only 的 ACK 数量不一致仍是歧义事实:必须保持 UNKNOWN,
     不得采纳 venue 响应(重复下单/错误成交都不可被静默接受)。"""
