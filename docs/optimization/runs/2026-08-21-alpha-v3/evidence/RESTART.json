@@ -1,27 +1,28 @@
 {
   "gate_id": "RESTART",
   "status": "PASS_WITH_FAIL_CLOSED_RUNTIME",
-  "validation_commit": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
-  "worktree": "/Users/maguannan/beidou-worktrees/alpha-v3-20260821",
+  "validation_commit": "fa52771f8936447aa58069e74f16699bfc4eb4b0",
+  "worktree": "/Users/maguannan/beidou",
   "mode": "paper",
   "symbols": ["BTCUSDT"],
   "port": 19090,
   "startup": {
-    "preflight": "PASS_WITH_WORKTREE_WARN",
-    "health": "HTTP 200 HEALTHY",
-    "liveness": "HEALTHY",
-    "market_data": "PASS",
-    "algorithm_probe": "PASS",
-    "write_interlock": "PASS (can_write=false)",
-    "ready": "HTTP 503",
+    "preflight": "PASS (clean merged main worktree, current commit, isolated port available)",
+    "health": "HTTP 200, status=DEGRADED",
+    "liveness": "RUNNING during observation; stopped cleanly",
+    "market_data": "ACTIVE (WebSocket with REST fallback)",
+    "algorithm_probe": "STARTUP SELF-CHECK LOGGED PASS; readiness remained blocked",
+    "write_interlock": "PASS (can_write=false; pending/unacked outbox intents=0)",
+    "ready": "HTTP 503 (ready=false)",
     "trading_ready": false,
     "lifecycle": "DEGRADED",
-    "control_action": "NO_NEW_RISK on shutdown",
+    "control_action": "NO_NEW_RISK",
     "safety_blockers": [
       "SIGNED_POLICY_UNAVAILABLE",
       "protection ownership UNKNOWN",
       "reconciliation UNKNOWN",
-      "active critical incidents"
+      "active critical incidents",
+      "missing protection coverage"
     ]
   },
   "shutdown": {
@@ -30,11 +31,13 @@
     "final_port_state": "CLOSED",
     "owned_pending_orders_cancelled": 0,
     "unowned_orders": "LEFT_UNTOUCHED",
+    "cleanup_and_protection_placement": "SKIPPED (fresh matched reconciliation/RESUME required)",
     "checkpoint": "SAVED"
   },
   "boundary": {
     "original_testnet_pid": 98924,
     "original_testnet_touched": false,
+    "launchagent_started": false,
     "exchange_write_performed": false,
     "manual_order_or_cancel_performed": false,
     "promotion_or_live_activation": false

@@ -39,9 +39,11 @@
 ## 重启验证
 
 - 补齐隔离 worktree 的 `.beidou/` 和 `evidence/bootstrap/` 运行目录。
-- Paper mode 在 19090 端口启动两轮；`/health=HEALTHY`、liveness/market-data/algorithm probe/
-  write interlock PASS，`/ready=503`，因为真实保护/对账 UNKNOWN 而保持 NO_NEW_RISK。
-- 两轮均安全停止，端口关闭、`phase=STOPPED`，未取消或修改 unowned orders；原 PID 98924 untouched。
+- 先前隔离 Paper 运行已完成两轮验证；最终合并提交 `fa52771f8936447aa58069e74f16699bfc4eb4b0`
+  又在 `main` 工作树以 19090 端口启动验证。最终观测为 `/health=200` 且 `status=DEGRADED`、
+  `/ready=503`、`can_write=false`，保护/对账 UNKNOWN 时保持 `NO_NEW_RISK`。
+- 最终实例安全停止，端口关闭、`phase=STOPPED`，未取消或修改 unowned orders；原 PID 98924
+  untouched，LaunchAgent 未启动。
 
 ## 最终边界
 
@@ -53,4 +55,4 @@ Mainnet/live activation 仍明确不通过，不用 fixture 或运行健康事�
 - 代码/测试/CI/registry 提交：`8bffe2014205bb7dfae1a5274d88c43e365fcd6b`，消息为
   `feat(alpha-v3): close coverage and execution gates`。
 - 文档证据随后回填该代码 SHA；运行时 JSONL 告警文件继续保留在 worktree、未进入提交。
-- 推送和 main fast-forward 合并在文档证据提交后执行，并以远端 ref 复核为准。
+- 推送和 main fast-forward 合并已在文档证据提交后执行，并以远端 ref 复核为准。

@@ -11,8 +11,8 @@
   `3497/3497` statements、`1070/1070` branches，line/branch 均 `100%`。
 - compileall、Ruff、mypy、质量/硬编码/禁止模式扫描、package validation 和 registry
   校验通过。
-- 用户授权的主服务重启验证完成：新提交启动、健康接口可用、active incidents 阻断恢复，
-  最终安全停机并确认 `9090` 关闭。
+- 用户授权的最终合并提交 Paper 重启验证完成：进程启动、健康端点可用但整体为
+  `DEGRADED`、active incidents/保护缺失阻断恢复，最终安全停机并确认 `9090/19090` 均关闭。
 
 ## 不能伪造的阻断
 
@@ -28,6 +28,7 @@
 
 ## Git handoff
 
-代码修复提交为 `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；文档证据回填后将推送
-`origin/codex/alpha-v3-20260821`，再 fast-forward 合并到 `origin/main`；完成后两个远端
-ref 应指向同一最终 docs commit。服务保持停机是本轮 fail-closed 验证的安全收尾，不代表代码未交付。
+代码修复提交为 `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；文档证据已回填并推送到
+`origin/codex/alpha-v3-20260821`，随后 fast-forward 合并到 `origin/main`；最终文档提交
+完成后两个远端 ref 已核验指向同一提交。服务保持停机是本轮 fail-closed 验证的安全收尾，
+不代表代码未交付。

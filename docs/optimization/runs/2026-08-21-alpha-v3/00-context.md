@@ -26,11 +26,11 @@
 | 项目 | 当前事实 |
 |---|---|
 | Package baseline SHA | `b156881710aeeec278bfbbe75973aa8dbc83b614` |
-| Current HEAD | `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；代码提交已完成，运行时 JSONL 仍按约定不入库 |
+| Code validation HEAD | `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；代码提交已完成，运行时 JSONL 仍按约定不入库 |
 | Archive manifest | 13 个文件 SHA-256/字节数校验 PASS |
 | Python | `/Users/maguannan/ueds/.venv/bin/python`，3.14.6 |
 | 原始运行 | PID 98924，`/Users/maguannan/beidou`，Testnet，127.0.0.1:9090；只读确认、未重启 |
-| 修改后运行 | 独立 Paper，127.0.0.1:19090；两轮启动/停止，见 `14-production-validation.md` |
+| 最终合并后运行 | `fa52771f8936447aa58069e74f16699bfc4eb4b0` 上的独立 Paper，127.0.0.1:19090；启动后 DEGRADED/ready=false，安全停止，见 `14-production-validation.md` |
 
 ## 4. 本轮补齐
 
@@ -51,8 +51,9 @@
   shadow 窗口，不能作收益或 promotion 结论。
 - `GLOBAL-CI`：PASS。全量 `3532 passed`、coverage `85.020340...%`，超过 `fail_under=85`；
   静态/安全/包/registry 门禁均通过；V3 核心 3497 statements/1070 branches 为 100%/100%。
-- Restart validation：PASS_WITH_FAIL_CLOSED_RUNTIME。健康接口和算法探针通过；
-  protection/reconciliation UNKNOWN 使 `/ready` 保持 503、控制面保持 NO_NEW_RISK。
+- Restart validation：PASS_WITH_FAIL_CLOSED_RUNTIME。最终合并提交上的 Paper 进程可启动并提供
+  HTTP 200 健康端点，但状态为 DEGRADED；protection/reconciliation UNKNOWN 使 `/ready` 保持
+  503、控制面保持 NO_NEW_RISK，停止后端口关闭。
 
 ## 6. 停止条件
 

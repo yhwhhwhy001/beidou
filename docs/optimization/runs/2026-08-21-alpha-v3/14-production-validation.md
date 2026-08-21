@@ -7,24 +7,25 @@ G5 Testnet 真实执行、Paper promotion 或 Mainnet/live readiness 证据。�
 ## 目标、版本与服务边界
 
 - 执行包：`/Users/maguannan/Downloads/BEIDOU_ALPHA_V3_EXECUTION_PACKAGE.zip`
-- 部署工作树：`/Users/maguannan/beidou-worktrees/alpha-v3-20260821`
+- 部署工作树：`/Users/maguannan/beidou`
 - 启动方式：`python -m apps.strategy_engine`（强制 Paper、前台、`--no-self-heal`）
 - 监听地址：`127.0.0.1:19090`
-- 验证提交：`8bffe2014205bb7dfae1a5274d88c43e365fcd6b`
+- 验证提交：`fa52771f8936447aa58069e74f16699bfc4eb4b0`
 
-本轮先确认历史 Testnet LaunchAgent 和 `9090` 均未运行，再在隔离 worktree 以单一
-`BTCUSDT` 启动 Paper 进程。健康、市场数据和算法探针通过；`/ready=503`，安全阻断保持
-生效。进程随后安全停止，`19090` 已关闭；没有启动 LaunchAgent 或触碰历史 Testnet 实例。
+本轮先确认历史 Testnet LaunchAgent 和 `9090` 均未运行，再在合并后的 `main` 工作树以单一
+`BTCUSDT` 启动 Paper 进程。进程启动并进入运行监控，但 `/health` 返回 `DEGRADED`、
+`/ready=503`，安全阻断保持生效。进程随后安全停止，`19090` 已关闭；没有启动 LaunchAgent
+或触碰历史 Testnet 实例。
 
 ## 重启后的健康与 fail-closed 证据
 
 | 检查 | 新实例观测 |
 |---|---|
-| `/health` | HTTP 200，`HEALTHY` |
+| `/health` | HTTP 200，`status=DEGRADED` |
 | `/ready` | HTTP 503，`ready=false`，`trading_ready=false` |
-| 阻断原因 | `SIGNED_POLICY_UNAVAILABLE`、保护归属 UNKNOWN、reconciliation UNKNOWN、active critical incidents |
-| 只读信号 | market data、realtime/nearline heartbeat、algorithm probe、write interlock PASS |
-| 最终控制状态 | `lifecycle=DEGRADED`；停止时 `NO_NEW_RISK`；端口关闭 |
+| 阻断原因 | `SIGNED_POLICY_UNAVAILABLE`、保护归属 UNKNOWN、reconciliation UNKNOWN、active critical incidents、missing protection coverage |
+| 只读信号 | WebSocket market data active with REST fallback；启动自检记录 PASS；`can_write=false`；pending/unacked outbox intents=0 |
+| 最终控制状态 | `lifecycle=DEGRADED`、`NO_NEW_RISK`；保护放置/清理因缺 fresh matched reconciliation 而跳过；端口关闭 |
 | G5 / G-A7 | 仍为 `FAIL/NOT_VERIFIABLE`，本次 Paper 运行不替代真实 Testnet/OOS 证据 |
 
 本次代码修复验证了以下安全性质：active `HIGH/P1` 或 `CRITICAL/LOCKDOWN/P0` incident
@@ -45,7 +46,7 @@ unowned protection/order facts 时保持 UNKNOWN 并跳过清理/放置，未执
 
 | 验证项 | 结果 |
 |---|---|
-| unit | `3051 passed` |
+| unit | `3180 passed` |
 | integration | `20 passed` |
 | architecture | `263 passed` |
 | unit / integration / architecture | `3180 / 20 / 263 passed` |
