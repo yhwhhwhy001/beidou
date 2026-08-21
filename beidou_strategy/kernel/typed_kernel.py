@@ -28,7 +28,7 @@ class StrategyAction(str, Enum):
 
 
 class FilterResult(str, Enum):
-    PASS = "PASS"  # noqa: S105 - filter decision, not a credential
+    PASS = "PASS"  # noqa: S105  # nosec B105 - filter decision, not a credential
     VETO = "VETO"
     DEGRADE = "DEGRADE"
 
@@ -48,6 +48,8 @@ class KernelInput:
     regime_hash: str = ""
     policy_hash: str = ""
     version_hash: str = ""
+    market_state_hash: str = ""
+    benchmark_hash: str = ""
 
     def compute_input_hash(self) -> str:
         data = {
@@ -56,6 +58,14 @@ class KernelInput:
             "features": self.features,
             "regime": self.regime,
             "position": self.current_position,
+            "portfolio": self.portfolio_context,
+            "feature_hash": self.feature_hash,
+            "factor_hash": self.factor_hash,
+            "regime_hash": self.regime_hash,
+            "policy_hash": self.policy_hash,
+            "version_hash": self.version_hash,
+            "market_state_hash": self.market_state_hash,
+            "benchmark_hash": self.benchmark_hash,
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
@@ -211,6 +221,8 @@ class TypedStrategyKernel:
                 "regime_hash": inputs.regime_hash,
                 "policy_hash": inputs.policy_hash,
                 "version_hash": inputs.version_hash,
+                "market_state_hash": inputs.market_state_hash,
+                "benchmark_hash": inputs.benchmark_hash,
             },
         )
         object.__setattr__(output, "output_hash", output.compute_output_hash())

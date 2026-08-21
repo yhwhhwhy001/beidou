@@ -75,7 +75,7 @@ class CanonicalMarketEvent:
 
 
 class DQStatus(str, Enum):
-    PASS = "PASS"  # noqa: S105
+    PASS = "PASS"  # noqa: S105  # nosec B105 - data-quality status, not a credential
     FAIL = "FAIL"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     UNKNOWN = "UNKNOWN"

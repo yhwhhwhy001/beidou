@@ -28,7 +28,7 @@ class CheckSeverity(str, Enum):
 
 
 class CheckStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - monitoring status, not a credential
     WARN = "WARN"
     FAIL = "FAIL"
     UNKNOWN = "UNKNOWN"

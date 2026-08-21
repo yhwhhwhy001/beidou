@@ -1,0 +1,38 @@
+{
+  "gate_id": "RESTART",
+  "status": "PASS_WITH_FAIL_CLOSED_RUNTIME",
+  "worktree": "/Users/maguannan/beidou-worktrees/alpha-v3-20260821",
+  "mode": "paper",
+  "symbols": ["BTCUSDT"],
+  "port": 19090,
+  "processes": [94053, 94208],
+  "startup": {
+    "preflight_after_runtime_dirs": "PASS",
+    "health": "HTTP 200 HEALTHY",
+    "liveness": "HEALTHY",
+    "market_data": "PASS",
+    "algorithm_probe": "PASS",
+    "write_interlock": "PASS",
+    "control_action": "NO_NEW_RISK",
+    "ready": "HTTP 503 by fail-closed safety blockers",
+    "trading_ready": false
+  },
+  "shutdown": {
+    "first_exit_code": 5,
+    "second_exit_code": 5,
+    "final_phase": "STOPPED",
+    "final_port_state": "CLOSED",
+    "unowned_orders": "LEFT_UNTOUCHED"
+  },
+  "boundary": {
+    "original_testnet_pid": 98924,
+    "original_testnet_touched": false,
+    "exchange_write_performed": false,
+    "promotion_or_live_activation": false
+  },
+  "fail_closed_reasons": [
+    "SIGNED_POLICY_UNAVAILABLE",
+    "protection ownership UNKNOWN",
+    "reconciliation UNKNOWN"
+  ]
+}

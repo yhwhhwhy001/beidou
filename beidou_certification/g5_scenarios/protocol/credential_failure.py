@@ -49,7 +49,9 @@ def classify_auth_error(payload: Any) -> str:
 
 def _build_client() -> BinanceRESTClient:
     """构造无效凭据只读客户端(空 api_key/api_secret,仅发只读请求)。"""
-    return BinanceRESTClient(rest_url=DEMO_FAPI_URL, api_key="", api_secret="")
+    return BinanceRESTClient(  # nosec B106 - intentional empty credentials for a negative test
+        rest_url=DEMO_FAPI_URL, api_key="", api_secret=""
+    )
 
 
 def _received_exchange_error(res: Result[dict]) -> bool:

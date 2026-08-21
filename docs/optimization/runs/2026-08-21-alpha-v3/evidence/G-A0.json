@@ -1,0 +1,22 @@
+{
+  "gate_id": "G-A0",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "working_tree": "DIRTY: authorized uncommitted implementation worktree",
+  "status": "PASS",
+  "scope": "baseline, benchmark, attribution and additive read-only trace",
+  "metrics": {
+    "manifest": "PASS",
+    "full_tests": "3400 passed",
+    "benchmark_contract": "PASS",
+    "attribution_contract": "PASS",
+    "decision_trace": "PASS",
+    "compileall": "PASS",
+    "ruff": "PASS",
+    "mypy": "PASS"
+  },
+  "limitations": [
+    "Offline/contract scope only; no economic or live activation conclusion.",
+    "Original Testnet PID 98924 is outside this gate and remained untouched."
+  ]
+}

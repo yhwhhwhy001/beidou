@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - fixed local git inspection command
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -60,7 +60,7 @@ class EnvironmentMode(str, Enum):
 
 
 class StartupGateStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - gate status, not a credential
     FAIL = "FAIL"
     BLOCKED = "BLOCKED"
 
@@ -129,7 +129,7 @@ class EnvironmentGuard:
         "G7 ALL PASS",
     ]
 
-    def __init__(
+    def __init__(  # nosec B107 - empty secret defaults require provider injection
         self,
         mode: str,
         rest_url: str = "",
@@ -184,7 +184,7 @@ class EnvironmentGuard:
         if self._commit:
             return self._commit
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603, B607 - fixed git command, shell disabled
                 ["git", "rev-parse", "HEAD"],
                 capture_output=True,
                 text=True,

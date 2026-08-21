@@ -557,7 +557,7 @@ def compute_block_bootstrap_ci(
         block_size = max(1, math.floor(math.sqrt(n)))
     block_size = min(block_size, n)
     # S311 例外：分块重抽样为统计抽样用途，非安全随机
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - deterministic statistical bootstrap, not security randomness
     n_blocks = math.ceil(n / block_size)
     means: List[float] = []
     for _ in range(n_bootstraps):

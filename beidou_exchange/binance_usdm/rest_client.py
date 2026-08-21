@@ -69,7 +69,7 @@ class BinanceRESTClient:
     - 密钥自动脱敏
     """
 
-    def __init__(
+    def __init__(  # nosec B107 - empty credentials are injected by the secret provider
         self,
         rest_url: str,
         api_key: str = "",

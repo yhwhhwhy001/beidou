@@ -1,0 +1,38 @@
+{
+  "gate_id": "GLOBAL-CI",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "working_tree": "DIRTY: authorized uncommitted implementation worktree",
+  "status": "PASS",
+  "scope": "repository-wide compile, format, lint, type, tests, scans, package, security and coverage gates",
+  "commands": {
+    "compileall": "PASS",
+    "ruff_format_check": "PASS (549 files already formatted)",
+    "ruff_check": "PASS",
+    "mypy": "PASS",
+    "full_pytest": "PASS (3400 passed)",
+    "test_quality_scan": "PASS",
+    "hardcoded_scan": "PASS",
+    "forbidden_patterns": "PASS",
+    "package_validation": "PASS",
+    "global_coverage": "PASS (80.59%, threshold 78%)",
+    "v3_coverage": "PASS (100% line and branch)",
+    "registry_oracle": "PASS",
+    "bandit": "PASS (0 issues identified)",
+    "pip_audit": "PASS (no known vulnerabilities)"
+  },
+  "metrics": {
+    "full_tests": 3400,
+    "repository_coverage_percent": 80.59,
+    "global_threshold_percent": 78.0,
+    "v3_statements": 3497,
+    "v3_branches": 1070,
+    "v3_line_percent": 100.0,
+    "v3_branch_percent": 100.0
+  },
+  "limitations": [
+    "pip-audit cannot audit the local editable ueds package because it is not on PyPI.",
+    "G-A7 economic evidence remains a separate FAIL and is not hidden by code/CI PASS.",
+    "Runtime restart evidence is separate from this repository gate."
+  ]
+}

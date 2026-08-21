@@ -127,19 +127,13 @@ async def test_feed_raw_klines_closed_only_sorted() -> None:
     _now_ms = int(_time.time() * 1000)
     _cur_min = (_now_ms // _minute_ms) * _minute_ms
     _open_closed = [_cur_min - 3 * _minute_ms, _cur_min - 2 * _minute_ms, _cur_min - _minute_ms]
-    raw = [
-        [t, "1", "2", "0.5", "1.5", "10", t + 59_000, "15", 3, "15", "0", "0", "1"]
-        for t in _open_closed
-    ]
+    raw = [[t, "1", "2", "0.5", "1.5", "10", t + 59_000, "15", 3, "15", "0", "0", "1"] for t in _open_closed]
     raw.append(
         [_cur_min, "2.5", "3.5", "2", "3", "10", _cur_min + _minute_ms, "30", 3, "30", "0", "0", "1"]  # 形成中
     )
     feed._api_async = AsyncMock(return_value=raw)
     rows = await feed.async_get_klines_raw("AVAXUSDT", "1m", 100)
-    expected = [
-        datetime.fromtimestamp(t / 1000, tz=timezone.utc)
-        for t in _open_closed
-    ]
+    expected = [datetime.fromtimestamp(t / 1000, tz=timezone.utc) for t in _open_closed]
     assert len(rows) == 3
     assert [r["open_time"] for r in rows] == expected
     assert all(r["is_closed"] for r in rows)

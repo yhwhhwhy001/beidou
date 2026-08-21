@@ -1,0 +1,21 @@
+{
+  "gate_id": "G-A2",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "status": "PASS",
+  "scope": "AlphaForecast, Trend, Relative Strength, Breakout, Residual Momentum and MR consolidation",
+  "metrics": {
+    "forecast_contract": "PASS",
+    "trend_formal_entry": "PASS",
+    "relative_strength_pit_rank": "PASS",
+    "breakout_confirmation_penalty": "PASS",
+    "residual_beta_neutral_artifact": "PASS",
+    "mr_single_math_semantic": "PASS",
+    "future_leakage_guards": "PASS",
+    "full_tests": "3400 passed"
+  },
+  "limitations": [
+    "Fixture and deterministic contract evidence only; no sealed OOS result.",
+    "Legacy MR re-export remains compatibility-only with a later removal gate."
+  ]
+}

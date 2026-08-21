@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import subprocess
+import subprocess  # nosec B404 - fixed local service command
 import time
 from typing import Any, Awaitable, Callable
 
@@ -114,7 +114,7 @@ class DatabaseRestartScenario(ScenarioBase):
         且零证据;TimeoutExpired/CalledProcessError 走 run() 通用
         except Exception → FAIL(error_type 即异常类名)。
         """
-        subprocess.run(
+        subprocess.run(  # nosec B603 - fixed executable and arguments, shell disabled
             ["/opt/homebrew/bin/brew", "services", "restart", "postgresql@16"],
             check=True,
             capture_output=True,

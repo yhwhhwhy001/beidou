@@ -23,9 +23,7 @@ from beidou_lifecycle.lifecycle import ModuleLifecycle, ModuleState
 
 def test_quiescent_round_still_refreshes_snapshots(tmp_path: Path) -> None:
     """平稳期(RESUME/无 blocker/深度审计不到期)快照刷新仍被调用。"""
-    supervisor = BeidouSupervisor(
-        project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090
-    )
+    supervisor = BeidouSupervisor(project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090)
     control = ControlPlane()
     control.execute_action(ControlAction.RESUME)
     lifecycle = ModuleLifecycle("test")

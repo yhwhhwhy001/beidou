@@ -513,6 +513,7 @@ def test_user_stream_fault_freezes_ledger_on_live() -> None:
     engine._user_stream_fault("TEST_CONNECTION_FAILED", terminal=True)
 
     engine._ledger.freeze.assert_called_once()
+    assert engine._ledger.freeze.call_count == 1
 
 
 # --- 事件拒绝与账本冻结解耦（testnet 可恢复）---
@@ -559,6 +560,7 @@ def test_ingest_rejection_freezes_ledger_on_live() -> None:
 
     engine.ingest_user_order_update(_unsequenced_order_update())
     ledger.freeze.assert_called_once()
+    assert ledger.freeze.call_count == 1
 
 
 # --- 事故自动清理（与 RESUME 动作解耦）---
@@ -590,6 +592,7 @@ def test_auto_resolve_user_stream_requires_healthy_transport() -> None:
 
     engine._maybe_auto_resolve_incidents()
     alerts.resolve_incident.assert_called_once()
+    assert alerts.resolve_incident.call_count == 1
 
     # transport 未恢复 → 不 resolve
     engine2 = _engine()
@@ -599,6 +602,7 @@ def test_auto_resolve_user_stream_requires_healthy_transport() -> None:
     engine2._alerts = alerts2
     engine2._maybe_auto_resolve_incidents()
     alerts2.resolve_incident.assert_not_called()
+    assert alerts2.resolve_incident.call_count == 0
 
 
 # --- 两方一致性守卫（helper result 参数）---

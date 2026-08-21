@@ -149,7 +149,9 @@ class SQLiteBackupManager:
                         continue
                     quoted_table = '"' + table.replace('"', '""') + '"'
                     row_counts[table] = int(
-                        conn.execute(f"SELECT COUNT(*) FROM {quoted_table}").fetchone()[0]  # noqa: S608
+                        conn.execute(  # nosec B608 - table name is regex-validated and double-quoted
+                            f"SELECT COUNT(*) FROM {quoted_table}"  # noqa: S608  # nosec B608 - table name was validated above
+                        ).fetchone()[0]
                     )
         except (OSError, sqlite3.Error) as exc:
             errors.append(f"sqlite_verification_error={type(exc).__name__}: {exc}")

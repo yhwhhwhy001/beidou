@@ -60,7 +60,7 @@ class SymbolicGPGenerator:
 
     def __init__(self, config: GPConfig | None = None) -> None:
         self.config = config or GPConfig()
-        self._rng = random.Random(self.config.random_seed)
+        self._rng = random.Random(self.config.random_seed)  # nosec B311 - deterministic research search
         self._population: list[GPIndividual] = []
         self._generation: int = 0
         self._seen_hashes: set[str] = set()
@@ -78,7 +78,7 @@ class SymbolicGPGenerator:
         if cfg.max_search_budget < cfg.population_size:
             raise ValueError("max_search_budget must cover the initial population")
 
-        self._rng = random.Random(cfg.random_seed)
+        self._rng = random.Random(cfg.random_seed)  # nosec B311 - deterministic research search
         self._seen_hashes.clear()
         self._offspring_serial = 0
         self._generation = 0
@@ -121,7 +121,7 @@ class SymbolicGPGenerator:
         for ind in population:
             try:
                 ind.fitness = evaluator(ind.expression_hash)
-            except Exception:
+            except Exception:  # nosec B112 - isolate one failed research generation
                 ind.fitness = {"sharpe": -999.0, "icir": -999.0}
 
         return population
@@ -246,7 +246,7 @@ class SymbolicGPGenerator:
                 self.evolve_one_generation(evaluator)
             except Exception:
                 # 单代失败不终止搜索
-                continue
+                continue  # nosec B112 - isolate one failed research generation
 
             if progress_callback:
                 progress_callback(gen + 1, cfg.generations)

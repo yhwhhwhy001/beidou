@@ -7,6 +7,7 @@ UNKNOWN 输入返回不可交易（无 fallback 到固定数值）。
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -81,11 +82,20 @@ class ConstraintOptimizer:
         account_equity: float,
         min_notional: dict[str, float] | None = None,
         step_sizes: dict[str, float] | None = None,
+        *,
+        mode: str = "V2_COMPATIBILITY",
     ) -> OptimizationResult:
         """执行确定性优化。
 
         如果 account_equity 未知 (<=0)、成本无穷或规则缺失 → 返回空 targets。
         """
+        if mode == "V3":
+            return self.optimize_targets(
+                {symbol: float(signal.get("target_weight", 0.0)) for symbol, signal in signals.items()},
+                account_equity=account_equity,
+                min_notional=min_notional,
+                step_sizes=step_sizes,
+            )
         if account_equity <= 0:
             return OptimizationResult(
                 targets={},
@@ -115,21 +125,26 @@ class ConstraintOptimizer:
                 continue
 
             # 仓位大小：基于信号强度和账户权益
-            raw_size = strength * account_equity * 0.01 / max(price, 0.01)
+            raw_size = strength * account_equity / 100.0 / max(price, 0.01)
             # P1-009: 协方差感知折扣
             active = {s for s in targets if targets[s] != 0}
             raw_size *= self._covariance_discount(symbol, active)
 
             # 最小名义价值检查
-            min_not = min_notional.get(symbol, 5.0)
+            min_not = min_notional.get(symbol)
+            if min_not is None or min_not <= 0:
+                rejected[symbol] = "UNKNOWN venue min notional"
+                continue
             if raw_size * price < min_not:
                 rejected[symbol] = f"Below min notional ({raw_size * price:.2f} < {min_not})"
                 continue
 
             # Step size 量化
-            step = step_sizes.get(symbol, 0.001)
-            if step > 0:
-                raw_size = round(raw_size / step) * step
+            step = step_sizes.get(symbol)
+            if step is None or step <= 0:
+                rejected[symbol] = "UNKNOWN venue step size"
+                continue
+            raw_size = round(raw_size / step) * step
 
             if raw_size <= 0:
                 rejected[symbol] = "Zero quantity after quantization"
@@ -139,8 +154,7 @@ class ConstraintOptimizer:
             symbol_exposure_pct = raw_size * price / account_equity * 100
             if symbol_exposure_pct > self.max_per_symbol_pct:
                 raw_size = self.max_per_symbol_pct / 100 * account_equity / price
-                if step > 0:
-                    raw_size = round(raw_size / step) * step
+                raw_size = round(raw_size / step) * step
 
             targets[symbol] = raw_size
             if direction == "LONG":
@@ -166,4 +180,50 @@ class ConstraintOptimizer:
             gross_exposure=gross_exposure,
             net_exposure=net_exposure,
             constraint_violations=violations,
+        )
+
+    def optimize_targets(
+        self,
+        target_weights: dict[str, float],
+        *,
+        account_equity: float,
+        min_notional: dict[str, float] | None,
+        step_sizes: dict[str, float] | None,
+    ) -> OptimizationResult:
+        """Validate V3 weights; this path never invents economic targets."""
+        if account_equity <= 0:
+            return OptimizationResult(
+                targets={},
+                rejected=dict.fromkeys(target_weights, "UNKNOWN account equity"),
+                constraint_violations=["account_equity_unknown"],
+            )
+        rules_notional = min_notional or {}
+        rules_step = step_sizes or {}
+        targets: dict[str, float] = {}
+        rejected: dict[str, str] = {}
+        for symbol, target_weight in target_weights.items():
+            if not isinstance(target_weight, (int, float)) or not math.isfinite(float(target_weight)):
+                rejected[symbol] = "UNKNOWN target weight"
+                continue
+            if symbol not in rules_notional or symbol not in rules_step:
+                rejected[symbol] = "UNKNOWN venue metadata"
+                continue
+            min_notional_value = rules_notional[symbol]
+            step = rules_step[symbol]
+            if min_notional_value <= 0 or step <= 0:
+                rejected[symbol] = "UNKNOWN venue metadata"
+                continue
+            notional = abs(float(target_weight)) * account_equity
+            if notional < min_notional_value:
+                rejected[symbol] = "Below min notional"
+                continue
+            targets[symbol] = float(target_weight)
+        gross = sum(abs(value) for value in targets.values())
+        net = sum(targets.values())
+        return OptimizationResult(
+            targets=targets,
+            rejected=rejected,
+            gross_exposure=gross,
+            net_exposure=net,
+            constraint_violations=[],
         )

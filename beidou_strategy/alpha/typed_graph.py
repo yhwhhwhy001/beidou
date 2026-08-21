@@ -31,12 +31,15 @@ from beidou_shared.types import (
 )
 from beidou_strategy.alpha.contracts import (
     DEGRADE_MULTIPLIER,
+    AlphaForecast,
     DataQualityTier,
+    EnsembleForecast,
     EntryProposal,
     FilterDecision,
     FilterResult,
     StrategyProposal,
 )
+from beidou_strategy.alpha.forecast import EnsembleFuser
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +128,8 @@ class TypedGraphNode(ABC):
         return list(self._input_nodes)
 
     @abstractmethod
-    async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput: ...
+    async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
+        raise NotImplementedError
 
     def validate(self) -> bool:
         return True
@@ -273,6 +277,54 @@ class EntryNode(TypedGraphNode):
                     metadata={"error": str(e), "degraded": True},
                 )
             raise
+
+
+class ForecastNode(TypedGraphNode):
+    """V3 entry node that emits the single ``AlphaForecast`` contract."""
+
+    def __init__(self, node_id: str, forecast_fn: Any, model_version: str = "") -> None:
+        super().__init__(node_id, NodeType.ENTRY)
+        self._forecast_fn = forecast_fn
+        self.model_version = model_version
+
+    async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
+        try:
+            forecast = self._forecast_fn(context)
+            if hasattr(forecast, "__await__"):
+                forecast = await forecast
+            if not isinstance(forecast, AlphaForecast):
+                raise TypeError("ForecastNode must return AlphaForecast")
+            output = TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.ENTRY,
+                output_hash="",
+                data=forecast,
+                dq_tier=DataQualityTier.PASS
+                if forecast.expected_return_after_cost is not None
+                else DataQualityTier.DEGRADED,
+                model_version=self.model_version or str(forecast.model_version),
+                policy_version=forecast.policy_version,
+                metadata={"forecast_hash": forecast.forecast_hash},
+            )
+            return TypedNodeOutput(
+                node_id=output.node_id,
+                node_type=output.node_type,
+                output_hash=output.compute_hash(),
+                data=output.data,
+                dq_tier=output.dq_tier,
+                model_version=output.model_version,
+                policy_version=output.policy_version,
+                metadata=output.metadata,
+            )
+        except Exception as exc:
+            return TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.ENTRY,
+                output_hash="forecast_error",
+                data=None,
+                dq_tier=DataQualityTier.BLOCK,
+                metadata={"error": type(exc).__name__},
+            )
 
 
 class FilterNode(TypedGraphNode):
@@ -445,6 +497,58 @@ class FusionNode(TypedGraphNode):
         super().__init__(node_id, NodeType.FUSION)
 
     async def execute(self, inputs: dict[str, TypedNodeOutput], context: dict) -> TypedNodeOutput:
+        forecast_inputs = [inp.data for inp in inputs.values() if isinstance(inp.data, AlphaForecast)]
+        if forecast_inputs:
+            if any(inp.dq_tier == DataQualityTier.BLOCK for inp in inputs.values()):
+                return TypedNodeOutput(
+                    node_id=self.node_id,
+                    node_type=NodeType.FUSION,
+                    output_hash="forecast_blocked",
+                    data=None,
+                    dq_tier=DataQualityTier.BLOCK,
+                    metadata={"reason": "FORECAST_INPUT_BLOCKED"},
+                )
+            try:
+                ensemble = EnsembleFuser().fuse(
+                    forecast_inputs,
+                    reliability=context.get("forecast_reliability"),
+                    correlations=context.get("forecast_correlations"),
+                )
+            except Exception as exc:
+                return TypedNodeOutput(
+                    node_id=self.node_id,
+                    node_type=NodeType.FUSION,
+                    output_hash="forecast_fusion_error",
+                    data=None,
+                    dq_tier=DataQualityTier.BLOCK,
+                    metadata={"error": type(exc).__name__},
+                )
+            output = TypedNodeOutput(
+                node_id=self.node_id,
+                node_type=NodeType.FUSION,
+                output_hash="",
+                data=ensemble,
+                dq_tier=DataQualityTier.PASS
+                if ensemble.expected_return_after_cost is not None
+                else DataQualityTier.DEGRADED,
+                policy_version=ensemble.policy_version,
+                model_version=str(ensemble.model_version),
+                metadata={
+                    "forecast_hash": ensemble.forecast_hash,
+                    "conflict_score": ensemble.conflict_score,
+                    "component_count": len(ensemble.components),
+                },
+            )
+            return TypedNodeOutput(
+                node_id=output.node_id,
+                node_type=output.node_type,
+                output_hash=output.compute_hash(),
+                data=output.data,
+                dq_tier=output.dq_tier,
+                policy_version=output.policy_version,
+                model_version=output.model_version,
+                metadata=output.metadata,
+            )
         entry_proposal = None
         filter_results: list[FilterResult] = []
 
@@ -658,6 +762,10 @@ class TypedAlphaGraph:
                         # M06-F01: 完整节点输出（含 EXIT 节点类型/数据/DQ）——
                         # component_outputs 只存 data,无法区分节点类型。
                         "node_outputs": outputs,
+                        "ensemble_forecast": next(
+                            (output.data for output in outputs.values() if isinstance(output.data, EnsembleForecast)),
+                            None,
+                        ),
                     }
 
         for node_id in reversed(order):
@@ -669,9 +777,21 @@ class TypedAlphaGraph:
                         "proposal": data,
                         "component_outputs": component_outputs,
                         "node_outputs": outputs,
+                        "ensemble_forecast": next(
+                            (output.data for output in outputs.values() if isinstance(output.data, EnsembleForecast)),
+                            None,
+                        ),
                     }
 
-        return {"proposal": None, "component_outputs": component_outputs, "node_outputs": outputs}
+        return {
+            "proposal": None,
+            "component_outputs": component_outputs,
+            "node_outputs": outputs,
+            "ensemble_forecast": next(
+                (output.data for output in outputs.values() if isinstance(output.data, EnsembleForecast)),
+                None,
+            ),
+        }
 
     def compute_graph_hash(self) -> str:
         """P1-001: 图行为哈希绑定完整上下文 — 参数/模型/因子版本/代码SHA。"""

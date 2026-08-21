@@ -1,7 +1,11 @@
-"""BD-CV31: 约束组合优化器。
+"""LEGACY/BASELINE-ONLY BD-CV31 constraint optimizer.
 
 协方差 UNKNOWN/非PSD 时明确 fail-closed。
 输出 optimizer diagnostics。
+
+Alpha V3 production callers must use :class:`ActivePortfolioOptimizer` from
+``optimizer.py``.  This module remains only for historical compatibility and
+tests; it is not a V3 target generator and has no runtime callers.
 """
 
 from __future__ import annotations

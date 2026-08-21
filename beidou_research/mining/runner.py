@@ -1422,15 +1422,19 @@ class MiningRunner:
         """因子在 DAG 中的角色；从 policy generation.role 读取，默认 entry。"""
         try:
             import yaml
+        except ImportError as exc:
+            logger.warning("factor policy role unavailable; defaulting to entry: %s", type(exc).__name__)
+            return "entry"
 
+        try:
             policy_path = self.config.policy_path or "config/factor_mining_policy.yaml"
             with open(policy_path) as f:
                 policy = yaml.safe_load(f)
             role = str((policy.get("generation", {}) or {}).get("role", "entry")).strip().lower()
             if role in {"entry", "filter", "exit"}:
                 return role
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError, AttributeError, yaml.YAMLError) as exc:
+            logger.warning("factor policy role read failed; defaulting to entry: %s", type(exc).__name__)
         return "entry"
 
 
@@ -1625,10 +1629,10 @@ def build_promotion_chain(
 
 def _current_git_commit() -> str:
     """当前工作区 HEAD commit sha；无法获取时返回空串（链将因绑定缺失被门禁拒绝）。"""
-    import subprocess
+    import subprocess  # nosec B404 - fixed local git inspection command
 
     try:
-        out = subprocess.run(
+        out = subprocess.run(  # nosec B603, B607 - fixed git command, shell disabled
             ["git", "rev-parse", "HEAD"],
             capture_output=True,
             text=True,

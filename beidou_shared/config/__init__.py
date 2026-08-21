@@ -198,7 +198,7 @@ class ConfigProvider:
             "rest_base_url": "",
             "ws_base_url": "",
             "api_key_ref": "",
-            "api_secret_ref": "",
+            "api_secret_ref": "",  # nosec B105 - reference is injected by configuration
         },
         "risk": {"max_leverage": 3.0, "max_concentration_pct": 50.0, "max_position_notional": 500_000.0},
         "production": {

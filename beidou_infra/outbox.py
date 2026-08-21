@@ -649,7 +649,7 @@ class OutboxWorker:
         placeholders = ",".join("%s" for _ in from_states)
         with self._connection_scope() as conn, self._transaction(conn), self._cursor_scope(conn) as cursor:
             cursor.execute(
-                "SELECT intent_id,status FROM v3_transactional_outbox "  # noqa: S608 - placeholders are generated only from the fixed from_states tuple
+                "SELECT intent_id,status FROM v3_transactional_outbox "  # noqa: S608  # nosec B608 - fixed SQL plus generated placeholders
                 f"WHERE message_id=%s AND status IN ({placeholders}) AND lease_owner=%s AND fencing_token=%s "
                 "FOR UPDATE",
                 (message_id, *from_states, self._lease_owner, self._fencing_token),
@@ -660,7 +660,7 @@ class OutboxWorker:
             intent_id = str(_row_value(current, "intent_id", 0))
             previous = str(_row_value(current, "status", 1))
             cursor.execute(
-                f"UPDATE v3_transactional_outbox SET status=%s,{fields},updated_at=CURRENT_TIMESTAMP "  # noqa: S608
+                f"UPDATE v3_transactional_outbox SET status=%s,{fields},updated_at=CURRENT_TIMESTAMP "  # noqa: S608  # nosec B608 - fields are internal fixed transitions
                 f"WHERE message_id=%s AND status IN ({placeholders}) AND lease_owner=%s AND fencing_token=%s "
                 "RETURNING intent_id",
                 (to_status, *extra_params, message_id, *from_states, self._lease_owner, self._fencing_token),
@@ -1439,7 +1439,7 @@ class PostgresIntentOutbox:
             OutboxWorker._cursor_scope(conn) as cursor,
         ):
             cursor.execute(
-                f"SELECT payload::text FROM v3_transactional_outbox WHERE status IN ({placeholders}) "  # noqa: S608
+                f"SELECT payload::text FROM v3_transactional_outbox WHERE status IN ({placeholders}) "  # noqa: S608  # nosec B608 - placeholders are generated from fixed states
                 "ORDER BY created_at,message_id",
                 states,
             )
@@ -1749,7 +1749,7 @@ class PostgresIntentOutbox:
                 )
                 ownership_params = (self._lease_owner, self._fencing_token)
             cursor.execute(
-                "UPDATE v3_transactional_outbox SET status=%s,last_error=%s,"  # noqa: S608
+                "UPDATE v3_transactional_outbox SET status=%s,last_error=%s,"  # noqa: S608  # nosec B608 - fields are internal fixed transitions
                 "lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP "
                 f"WHERE message_id=%s AND status IN ({placeholders}) AND {ownership_clause} "
                 "RETURNING intent_id",

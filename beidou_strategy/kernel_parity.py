@@ -175,6 +175,15 @@ class StrategyKernel:
         作为诊断/兼容对象保留，不能在 typed graph 返回 ``None``（例如
         强制 VETO）时偷偷回退并产生另一份策略结果。
         """
+        context_hash = StrategyKernelContract.compute_proposal_hash(
+            {
+                "symbol": str(context.get("instrument_id", "")),
+                "features": context.get("features", {}),
+                "state": context.get("state", {}),
+                "market_state_hash": context.get("market_state_hash", ""),
+                "benchmark_hash": context.get("benchmark_hash", ""),
+            }
+        )
         if self._typed_graph is not None:
             _detailed_fn = getattr(self._typed_graph, "_execute_detailed", None)
             _detailed: dict[str, Any] = {}
@@ -219,10 +228,12 @@ class StrategyKernel:
             return {
                 "proposal": _proposal,
                 "component_outputs": _component_outputs,
+                "ensemble_forecast": _detailed.get("ensemble_forecast"),
                 "exit_signals": exit_signals,
                 "kernel": "typed_graph",
                 "mode": self.mode,
                 "graph_hash": graph_hash,
+                "context_hash": context_hash,
                 "blocked_by": "typed_graph_no_proposal" if _proposal is None else "",
             }
         if self._alpha_graph is not None:
@@ -231,6 +242,7 @@ class StrategyKernel:
                 "signals": signals,
                 "kernel": "alpha_graph",
                 "mode": self.mode,
+                "context_hash": context_hash,
             }
         return None
 

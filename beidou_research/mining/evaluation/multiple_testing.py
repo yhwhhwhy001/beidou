@@ -274,7 +274,7 @@ def compute_pbo(
     n_combos = min(n_splits, n // 2)
     pbo_count = 0
     total_comparisons = 0
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - deterministic statistical resampling, not security randomness
     half = n // 2
 
     for _ in range(n_combos):

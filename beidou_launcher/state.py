@@ -7,7 +7,7 @@ import logging
 import os
 import shlex
 import signal
-import subprocess
+import subprocess  # nosec B404 - fixed local process inspection commands
 import time
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -46,9 +46,7 @@ class InstanceLock:
             return False
         # Verify the process is actually a beidou launcher, not a reused PID.
         try:
-            import subprocess
-
-            cmdline = subprocess.run(
+            cmdline = subprocess.run(  # nosec B603, B607 - fixed ps command, shell disabled
                 ["ps", "-p", str(pid), "-o", "comm="],
                 capture_output=True,
                 text=True,
@@ -226,7 +224,7 @@ def stop_running_instance(project_root: Path) -> tuple[bool, str]:
         return False, f"拒绝停止：监督器状态已过期 ({age_seconds:.1f}s)"
 
     try:
-        process = subprocess.run(
+        process = subprocess.run(  # nosec B603, B607 - fixed ps command, shell disabled
             ["ps", "-p", str(pid), "-o", "command="],
             check=False,
             capture_output=True,

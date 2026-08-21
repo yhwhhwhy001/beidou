@@ -109,7 +109,7 @@ class BayesianParameterSearch:
         import random
 
         param_space = self.define_search_space(param_space)
-        rng = random.Random(self.config.random_seed + trial_id)
+        rng = random.Random(self.config.random_seed + trial_id)  # nosec B311 - deterministic research search
 
         params = {}
         for ps in param_space:

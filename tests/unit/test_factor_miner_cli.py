@@ -227,10 +227,7 @@ def test_run_symbols_pool_spawns_worker_processes(tmp_path):
     policy = _write_minimal_policy(tmp_path)
     _write_synthetic_store(data_root, ("BTCUSDT", "ETHUSDT"))
 
-    payloads = [
-        _payload(policy, tmp_path, symbol=sym, data_root=str(data_root))
-        for sym in ("BTCUSDT", "ETHUSDT")
-    ]
+    payloads = [_payload(policy, tmp_path, symbol=sym, data_root=str(data_root)) for sym in ("BTCUSDT", "ETHUSDT")]
     items = _run_symbols(payloads, jobs=2)
 
     assert [i["symbol"] for i in items] == ["BTCUSDT", "ETHUSDT"]

@@ -541,7 +541,6 @@ def test_database_restart_brew_timeout_self_captured_fail(tmp_path: Path) -> Non
     assert result.evidence["steps"] != []
 
 
-
 # ---- user_stream_reconnect 全流程:探针诱发断开 → 引擎自动重连恢复 → PASS ----
 
 

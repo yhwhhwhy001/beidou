@@ -1,0 +1,19 @@
+{
+  "gate_id": "G-A5",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "status": "PASS",
+  "scope": "full PnL attribution contract and completeness gate",
+  "metrics": {
+    "beta_active_alpha_timing_exposure": "PASS",
+    "decision_veto_constraint": "PASS",
+    "fees_slippage_funding": "PASS",
+    "protection": "PASS",
+    "unexplained_residual": "PRESENT",
+    "missing_facts_not_zero": "PASS",
+    "completeness_test": "PASS",
+    "full_tests": "3400 passed"
+  },
+  "limitations": [
+    "No real fill, ledger, protection or realized PnL facts were connected."
+  ]
+}

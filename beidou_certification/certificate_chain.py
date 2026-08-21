@@ -16,7 +16,7 @@ from enum import Enum
 
 
 class GateResult(str, Enum):
-    PASS = "PASS"  # noqa: S105 - certification result, not a credential
+    PASS = "PASS"  # noqa: S105  # nosec B105 - status enum, not a credential
     FAIL = "FAIL"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
     REVOKED = "REVOKED"

@@ -10,6 +10,7 @@ BD-CV22: 集成 FactorEvidence contract — NaN/空evidence/旧evidence不能PRO
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -116,6 +117,59 @@ class FactorPerformance:
     max_drawdown_pct: float | None = None
     venue_breakdown: dict[VenueId, float] = field(default_factory=dict)  # 跨所 IC 分解
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeConditionalForecastEvidence:
+    """Offline evidence used to publish a regime-specific fusion reliability."""
+
+    factor_id: str
+    regime: str
+    icir: float
+    sample_count: int
+    reliability_prior: float = 1.0
+    capacity_score: float = 1.0
+    correlation_penalty: float = 0.0
+    cost_adjusted_ic: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.factor_id.strip() or not self.regime.strip() or self.sample_count < 0:
+            raise ValueError("factor and regime identity/sample count are required")
+        values = (self.icir, self.reliability_prior, self.capacity_score, self.correlation_penalty)
+        if any(not math.isfinite(value) for value in values):
+            raise ValueError("regime evidence values must be finite")
+        if not 0.0 <= self.reliability_prior <= 1.0 or not 0.0 <= self.capacity_score <= 1.0:
+            raise ValueError("reliability and capacity must be within [0, 1]")
+        if not 0.0 <= self.correlation_penalty <= 1.0:
+            raise ValueError("correlation penalty must be within [0, 1]")
+        if self.cost_adjusted_ic is not None and not math.isfinite(self.cost_adjusted_ic):
+            raise ValueError("cost_adjusted_ic must be finite")
+
+    def reliability_score(self, *, min_samples: int = 30, icir_scale: float = 1.0) -> float:
+        """Return zero for insufficient/negative evidence, never a fake prior."""
+        if min_samples <= 0 or icir_scale <= 0 or self.sample_count < min_samples or self.icir <= 0:
+            return 0.0
+        if self.cost_adjusted_ic is not None and self.cost_adjusted_ic <= 0:
+            return 0.0
+        icir_component = min(1.0, self.icir / icir_scale)
+        diversity_component = 1.0 - self.correlation_penalty
+        return icir_component * self.reliability_prior * self.capacity_score * diversity_component
+
+
+def build_regime_reliability(
+    evidence: Iterable[RegimeConditionalForecastEvidence],
+    *,
+    regime: str,
+    min_samples: int = 30,
+) -> dict[str, float]:
+    """Build deterministic Alpha-id weights for one point-in-time regime."""
+    selected = [item for item in evidence if item.regime == regime]
+    result: dict[str, float] = {}
+    for item in sorted(selected, key=lambda value: value.factor_id):
+        if item.factor_id in result:
+            raise ValueError(f"duplicate regime evidence: {item.factor_id}")
+        result[item.factor_id] = item.reliability_score(min_samples=min_samples)
+    return result
 
 
 @dataclass(frozen=True, slots=True)

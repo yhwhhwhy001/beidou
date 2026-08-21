@@ -1321,9 +1321,7 @@ def test_dedup_same_shape_multiple_active_keeps_highest_generation() -> None:
 
 def test_dedup_same_shape_tiebreak_prefers_fill_path_pid() -> None:
     """平代时成交路径 pos-{orderId} 优先于 pos-recovered-/adopt- 通用投影。"""
-    pp_recovered = _projection(
-        "pos-recovered-BNBUSDT", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-rec"
-    )
+    pp_recovered = _projection("pos-recovered-BNBUSDT", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-rec")
     pp_recovered.position_generation = 3
     pp_fill = _projection("pos-351307886", "BNBUSDT", sl_status="ACTIVE", algo_id="algo-fill")
     pp_fill.position_generation = 3
@@ -1728,9 +1726,7 @@ def test_transition_child_race_safe_continues_when_child_already_terminal() -> N
 
     engine._outbox = _Outbox()
 
-    agg = engine._transition_execution_child_race_safe(
-        "intent-X", 0, "SENDING", event_id="send:intent-X:0"
-    )
+    agg = engine._transition_execution_child_race_safe("intent-X", 0, "SENDING", event_id="send:intent-X:0")
 
     assert agg is fresh
     assert len(raw_calls) == 1
@@ -1809,9 +1805,7 @@ def test_restore_durable_protection_registers_active_algo_mapping() -> None:
     )
     engine._protection_owner_unknown = False
     engine._position_entry_times = {}
-    account = {
-        "positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0", "entryPrice": "100.0"}]
-    }
+    account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1.0", "entryPrice": "100.0"}]}
     inventory = [
         _venue_algo(
             "algo-x-sl",
@@ -1978,9 +1972,7 @@ async def test_retry_rebuilds_projection_when_venue_side_diverges() -> None:
         "SOLUSDT": {"position_generation": 2, "entry_price": "76.95", "signed_quantity": "-0.24"}
     }
     # venue 事实:方向已翻转为 LONG 0.13;内存投影仍是 SHORT 0.24
-    engine._last_account = {
-        "positions": [{"symbol": "SOLUSDT", "positionAmt": "0.13", "entryPrice": "76.95"}]
-    }
+    engine._last_account = {"positions": [{"symbol": "SOLUSDT", "positionAmt": "0.13", "entryPrice": "76.95"}]}
 
     async def _fake_kline(_symbol: str) -> dict[str, Any]:
         return {}
@@ -2016,6 +2008,7 @@ async def test_retry_rebuilds_projection_when_venue_side_diverges() -> None:
 
         engine._get_open_algo_inventory = _fake_inventory  # type: ignore[method-assign]
         engine._flush_pending_protection_persist = lambda: None  # type: ignore[method-assign]
+
         async def _noop_cancel(pid: str, sym: str) -> None:
             return None
 

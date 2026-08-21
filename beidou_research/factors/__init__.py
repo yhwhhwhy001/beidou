@@ -9,6 +9,8 @@ from .factor import (
     FactorRecord,
     FactorRegistry,
     MarginalContribution,
+    RegimeConditionalForecastEvidence,
+    build_regime_reliability,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "FactorRecord",
     "FactorRegistry",
     "MarginalContribution",
+    "RegimeConditionalForecastEvidence",
+    "build_regime_reliability",
 ]

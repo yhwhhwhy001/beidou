@@ -173,7 +173,7 @@ class WebSocketConnection:
                 accept = line.split(b":", 1)[1].strip().decode()
         # RFC 6455 要求 Sec-WebSocket-Accept = base64(SHA1(key + GUID)) — SHA1 系协议规定
         expected = base64.b64encode(
-            hashlib.sha1((key + WS_GUID).encode()).digest()  # noqa: S324
+            hashlib.sha1((key + WS_GUID).encode()).digest()  # noqa: S324  # nosec B324 - RFC 6455 handshake
         ).decode()
         if accept != expected:
             raise WebSocketError("invalid Sec-WebSocket-Accept")

@@ -8,9 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
+from beidou_strategy.alpha.contracts import EnsembleForecast
 
 # ============================================================================
 # BD-CV30: SignedPortfolioTarget 与多空暴露代数
@@ -188,3 +191,93 @@ class RiskStateAuthority:
         if self.state in (RiskState.CORRUPT, RiskState.CRITICAL):
             return False
         return any(a.is_valid() for a in self.active_approvals)
+
+
+# ==========================================================================
+# Alpha V3 Exposure/Portfolio contracts
+# ==========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ExposureTarget:
+    """Versioned portfolio-level exposure target produced by a governor."""
+
+    target_beta: float
+    beta_min: float
+    beta_max: float
+    target_gross: float
+    gross_min: float
+    gross_max: float
+    target_net: float
+    net_min: float
+    net_max: float
+    target_volatility: float
+    confidence: float
+    reason_codes: tuple[str, ...]
+    policy_version: str
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @classmethod
+    def from_policy_values(cls, **values: object) -> ExposureTarget:
+        return cls(**values)  # type: ignore[arg-type]
+
+    def __post_init__(self) -> None:
+        numeric_names = (
+            "target_beta",
+            "beta_min",
+            "beta_max",
+            "target_gross",
+            "gross_min",
+            "gross_max",
+            "target_net",
+            "net_min",
+            "net_max",
+            "target_volatility",
+            "confidence",
+        )
+        if any(not math.isfinite(float(getattr(self, name))) for name in numeric_names):
+            raise ValueError("exposure target values must be finite")
+        if self.beta_min > self.beta_max or self.gross_min > self.gross_max or self.net_min > self.net_max:
+            raise ValueError("exposure target bounds are invalid")
+        if self.target_gross < 0 or self.gross_min < 0 or self.target_volatility < 0:
+            raise ValueError("gross and volatility targets must not be negative")
+        if not self.gross_min <= self.target_gross <= self.gross_max:
+            raise ValueError("target_gross is outside bounds")
+        if not self.beta_min <= self.target_beta <= self.beta_max:
+            raise ValueError("target_beta is outside bounds")
+        if not self.net_min <= self.target_net <= self.net_max:
+            raise ValueError("target_net is outside bounds")
+        if abs(self.target_net) > self.target_gross + 1e-12:
+            raise ValueError("gross exposure must be at least absolute net exposure")
+        if not 0 <= self.confidence <= 1 or not self.policy_version.strip():
+            raise ValueError("exposure confidence or policy version is invalid")
+        if self.timestamp.tzinfo is None:
+            raise ValueError("exposure target timestamp must be timezone-aware")
+        object.__setattr__(self, "reason_codes", tuple(str(code) for code in self.reason_codes))
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioOptimizationInput:
+    """All inputs required by the V3 active portfolio optimizer."""
+
+    forecasts: Mapping[str, EnsembleForecast]
+    current_weights: Mapping[str, float]
+    covariance: Mapping[str, Mapping[str, float]]
+    asset_betas: Mapping[str, float]
+    exposure_target: ExposureTarget
+    account_equity: float
+    fee_costs: Mapping[str, float]
+    slippage_costs: Mapping[str, float]
+    funding_costs: Mapping[str, float]
+    liquidity_limits: Mapping[str, float]
+    capacity_limits: Mapping[str, float]
+    min_notional: Mapping[str, float]
+    step_sizes: Mapping[str, float]
+    tick_sizes: Mapping[str, float]
+    policy_version: str
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.account_equity) or self.account_equity <= 0:
+            raise ValueError("account_equity must be finite and positive")
+        if not self.policy_version.strip():
+            raise ValueError("portfolio policy version is required")

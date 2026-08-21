@@ -1,0 +1,48 @@
+{
+  "gate_id": "V3-COVERAGE",
+  "status": "PASS",
+  "requested_threshold": {
+    "line": 100.0,
+    "branch": 100.0,
+    "source": "user_authorized_alpha_v3_override"
+  },
+  "tests": 3400,
+  "statements": 3497,
+  "missed_statements": 0,
+  "branches": 1070,
+  "partial_branches": 0,
+  "line_percent": 100.0,
+  "branch_percent": 100.0,
+  "modules": [
+    "beidou_strategy.state.market_state",
+    "beidou_strategy.state.benchmark",
+    "beidou_strategy.alpha.contracts",
+    "beidou_strategy.alpha._forecast_utils",
+    "beidou_strategy.alpha.breakout",
+    "beidou_strategy.alpha.forecast",
+    "beidou_strategy.alpha.mean_reversion",
+    "beidou_strategy.alpha.mean_reversion_math",
+    "beidou_strategy.alpha.pipeline",
+    "beidou_strategy.alpha.relative_strength",
+    "beidou_strategy.alpha.residual_momentum",
+    "beidou_strategy.alpha.trend",
+    "beidou_strategy.alpha.extensions",
+    "beidou_strategy.alpha.model_registry",
+    "beidou_strategy.alpha.signal_fusion",
+    "beidou_strategy.alpha.typed_graph",
+    "beidou_strategy.portfolio.contracts",
+    "beidou_strategy.portfolio.exposure_governor",
+    "beidou_strategy.portfolio.optimizer",
+    "beidou_strategy.portfolio.constraints",
+    "beidou_reporting.pnl_attribution",
+    "beidou_research.backtest.alpha_v3_challenger"
+  ],
+  "reports": [
+    "/tmp/beidou-alpha-v3-final-core-coverage.json",
+    "/tmp/beidou-alpha-v3-final-core-coverage.xml"
+  ],
+  "limitations": [
+    "This is a code/contract coverage gate, not economic evidence.",
+    "The full repository coverage command separately measured 80.59% and passed the preserved 78% CI gate."
+  ]
+}

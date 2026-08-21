@@ -33,8 +33,9 @@ from beidou_infra.outbox import PostgresIntentOutbox
 
 logger = logging.getLogger(__name__)
 
-# 共享 PG(Homebrew 本机,beidou_testnet);运行时可用 BEIDOU_G5_PG_DSN 覆盖
-PG_DSN = os.environ.get("BEIDOU_G5_PG_DSN", "postgresql://beidou_app:beidou_dev_2024@localhost:5432/beidou_testnet")
+# G5 认证必须由运行环境显式提供隔离的 Testnet PG DSN；不提供时传入
+# 一个不可连接的哨兵值，由场景自身记录 FAIL，绝不回退到内置凭据或本机数据库。
+PG_DSN = os.environ.get("BEIDOU_G5_PG_DSN", "__MISSING_BEIDOU_G5_PG_DSN__")
 
 # 探针 outbox 实例的 fencing 身份:与 _insert_test_outbox_row 写入的行一致,
 # mark_unknown 的所有权检查(lease_owner/fencing_token)才会命中。
@@ -135,8 +136,7 @@ def _recover_to_failed(conn: Any, *, intent_id: str) -> dict[str, Any]:
     """把测试行改 FAILED:模拟对账恢复的终止态,不再计入 UNKNOWN(durable gate 放行)。"""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
-            "UPDATE v3_transactional_outbox SET status='FAILED',updated_at=CURRENT_TIMESTAMP "
-            "WHERE intent_id=%s",
+            "UPDATE v3_transactional_outbox SET status='FAILED',updated_at=CURRENT_TIMESTAMP WHERE intent_id=%s",
             (intent_id,),
         )
         updated = cur.rowcount if cur.rowcount is not None else 0

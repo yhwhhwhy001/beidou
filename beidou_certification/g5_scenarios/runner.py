@@ -21,9 +21,11 @@ SCENARIO_REGISTRY: dict[str, type[ScenarioBase]] = {}
 
 
 def summarize(results: dict[str, ScenarioResult]) -> dict:
-    counts = {"total": len(results), "pass": 0, "warn": 0, "fail": 0, "not_verifiable": 0}
+    counts = {"total": len(results), "pass": 0, "warn": 0, "fail": 0, "not_verifiable": 0}  # nosec B105 - result labels
     for r in results.values():
-        key = {"PASS": "pass", "WARN": "warn", "FAIL": "fail", "NOT_VERIFIABLE": "not_verifiable"}[r.status.value]
+        key = {"PASS": "pass", "WARN": "warn", "FAIL": "fail", "NOT_VERIFIABLE": "not_verifiable"}[  # nosec B105 - result labels
+            r.status.value
+        ]
         counts[key] += 1
     return counts
 

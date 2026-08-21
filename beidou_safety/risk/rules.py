@@ -13,7 +13,7 @@ from typing import Callable
 
 
 class RuleDecision(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - risk decision, not a credential
     REJECT = "REJECT"
     UNKNOWN = "UNKNOWN"
 

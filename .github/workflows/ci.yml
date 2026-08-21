@@ -35,6 +35,22 @@ jobs:
       - name: Lint (ruff)
         run: ruff check beidou_* apps tests scripts tools delivery/scripts
 
+      - name: Alpha V3 targeted contract gates
+        run: |
+          pytest tests/unit/test_market_state_v3.py tests/unit/test_benchmark.py \
+            tests/unit/test_trend_alpha.py tests/unit/test_breakout_alpha.py \
+            tests/unit/test_relative_strength.py tests/unit/test_residual_momentum.py \
+            tests/unit/test_alpha_forecast.py tests/unit/test_multi_alpha_fusion.py \
+            tests/unit/test_exposure_governor.py tests/unit/test_active_optimizer.py \
+            tests/unit/test_full_pnl_attribution_v3.py tests/unit/test_v3_pipeline.py \
+            tests/unit/test_alpha_v3_coverage_complete.py \
+            tests/property/test_alpha_forecast_invariants.py tests/property/test_exposure_invariants.py \
+            tests/property/test_portfolio_math.py \
+            tests/integration/test_alpha_to_portfolio_v3.py tests/integration/test_regime_switching_v3.py \
+            tests/integration/test_alpha_conflict_v3.py tests/integration/test_cost_shock_v3.py \
+            tests/integration/test_attribution_completeness_v3.py tests/integration/test_alpha_v3_challenger.py -q
+          python delivery/scripts/check_forbidden_patterns.py --repo .
+
       - name: Type check (mypy)
         run: mypy beidou_shared beidou_safety beidou_strategy beidou_research beidou_policy beidou_security beidou_observability beidou_exchange beidou_lifecycle beidou_delivery beidou_autonomy beidou_infra beidou_data beidou_control beidou_chaos beidou_production beidou_reporting beidou_certification beidou_core --no-error-summary
 
@@ -65,11 +81,42 @@ jobs:
         # 对齐后任何覆盖回退都会真实失败。增量目标 85% 随模块补测推进。
         run: pytest tests/ -q --cov --cov-fail-under=78 --cov-report=xml --cov-report=term-missing
 
+      - name: Alpha V3 coverage gate (100% lines and branches)
+        # 用户授权的 V3 强制门禁；覆盖率作用域明确限定为执行包新增/改造的
+        # V3 计算与证据模块，且同时要求行覆盖与分支覆盖达到 100%。
+        run: |
+          pytest tests/ -q --cov-branch --cov-fail-under=100 \
+            --cov=beidou_strategy.state.market_state \
+            --cov=beidou_strategy.state.benchmark \
+            --cov=beidou_strategy.alpha.contracts \
+            --cov=beidou_strategy.alpha._forecast_utils \
+            --cov=beidou_strategy.alpha.breakout \
+            --cov=beidou_strategy.alpha.forecast \
+            --cov=beidou_strategy.alpha.mean_reversion \
+            --cov=beidou_strategy.alpha.mean_reversion_math \
+            --cov=beidou_strategy.alpha.pipeline \
+            --cov=beidou_strategy.alpha.relative_strength \
+            --cov=beidou_strategy.alpha.residual_momentum \
+            --cov=beidou_strategy.alpha.trend \
+            --cov=beidou_strategy.alpha.extensions \
+            --cov=beidou_strategy.alpha.model_registry \
+            --cov=beidou_strategy.alpha.signal_fusion \
+            --cov=beidou_strategy.alpha.typed_graph \
+            --cov=beidou_strategy.portfolio.contracts \
+            --cov=beidou_strategy.portfolio.exposure_governor \
+            --cov=beidou_strategy.portfolio.optimizer \
+            --cov=beidou_strategy.portfolio.constraints \
+            --cov=beidou_reporting.pnl_attribution \
+            --cov=beidou_research.backtest.alpha_v3_challenger \
+            --cov-report=xml:alpha-v3-coverage.xml --cov-report=term-missing
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage.xml
+          path: |
+            coverage.xml
+            alpha-v3-coverage.xml
 
   security:
     runs-on: ubuntu-latest

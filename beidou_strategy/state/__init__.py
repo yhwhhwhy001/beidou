@@ -1,1 +1,26 @@
-"""三维市场状态评估。方向、压力、数据质量三个正交维度。"""
+"""Canonical market-state and benchmark contracts."""
+
+from .benchmark import BenchmarkDefinition, BenchmarkSnapshot, BenchmarkSnapshotBuilder, BenchmarkType
+from .market_state import (
+    DEFAULT_MARKET_STATE_POLICY,
+    DirectionState,
+    MarketStateEstimator,
+    MarketStatePolicy,
+    MarketStateVector,
+    QualityState,
+    StressState,
+)
+
+__all__ = [
+    "DEFAULT_MARKET_STATE_POLICY",
+    "BenchmarkDefinition",
+    "BenchmarkSnapshot",
+    "BenchmarkSnapshotBuilder",
+    "BenchmarkType",
+    "DirectionState",
+    "MarketStateEstimator",
+    "MarketStatePolicy",
+    "MarketStateVector",
+    "QualityState",
+    "StressState",
+]

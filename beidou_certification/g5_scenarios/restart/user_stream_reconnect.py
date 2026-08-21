@@ -319,9 +319,7 @@ class UserStreamReconnectScenario(ScenarioBase):
                     "引擎 /status 缺 user_stream_runtime.status",
                     {"steps": steps},
                 )
-            logger.info(
-                "user_stream_reconnect: listen key 探针开始(重建 listen key 诱发引擎断开,验证引擎自动重连)"
-            )
+            logger.info("user_stream_reconnect: listen key 探针开始(重建 listen key 诱发引擎断开,验证引擎自动重连)")
             key1 = await self._create_listen_key()
             steps.append({"action": "listen_key_created", "key": _mask_key(key1), "probe": "first"})
             probe1 = await self._ws_probe(key1, self._probe_window)

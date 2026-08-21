@@ -10,7 +10,7 @@ from typing import Any
 
 
 class CheckStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - check status, not a credential
     WARN = "WARN"
     FAIL = "FAIL"
     UNKNOWN = "UNKNOWN"

@@ -9,7 +9,7 @@ import hashlib
 import json
 import plistlib
 import re
-import subprocess
+import subprocess  # nosec B404 - fixed local syntax/test commands
 import sys
 import tomllib
 from collections import Counter
@@ -41,7 +41,7 @@ _UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
 
 
 def _load_yaml_unique(source: str) -> Any:
-    return yaml.load(source, Loader=_UniqueKeyLoader)  # noqa: S506 - strict SafeLoader subclass
+    return yaml.load(source, Loader=_UniqueKeyLoader)  # noqa: S506  # nosec B506 - strict SafeLoader subclass
 
 
 _PYTHON_MARKERS = (
@@ -1010,7 +1010,7 @@ def discover_source_scan_issues(root: Path) -> list[str]:
         try:
             first_line = path.read_text(encoding="utf-8").splitlines()[0]
             interpreter = "/bin/zsh" if "zsh" in first_line else "/bin/sh"
-            result = subprocess.run(  # noqa: S603 - fixed syntax-check interpreter; no script execution
+            result = subprocess.run(  # noqa: S603  # nosec B603 - fixed syntax-check interpreter; no script execution
                 [interpreter, "-n", str(path)],
                 capture_output=True,
                 check=False,
@@ -1403,7 +1403,7 @@ def run_negative_test_gate(registry: dict[str, Any], *, root: Path) -> list[str]
         references.update(reference for reference in behavioral_tests if isinstance(reference, str))
     if not references or _GENERIC_NEGATIVE_TEST in references:
         return ["WRITE_REGISTRY_NEGATIVE_TEST_GATE_INVALID"]
-    result = subprocess.run(  # noqa: S603 - validated repository-local pytest node IDs
+    result = subprocess.run(  # noqa: S603  # nosec B603 - validated repository-local pytest node IDs
         [sys.executable, "-m", "pytest", *sorted(references), "-q"],
         cwd=root,
         capture_output=True,

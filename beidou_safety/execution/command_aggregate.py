@@ -286,11 +286,7 @@ class ExecutionChildCommand:
             if candidate > self.quantity:
                 raise ValueError("FILLED_QUANTITY_EXCEEDS_COMMAND")
             filled = candidate
-        if (
-            state is ChildCommandState.FILLED
-            and filled != self.quantity
-            and not (self.reduce_only and filled > 0)
-        ):
+        if state is ChildCommandState.FILLED and filled != self.quantity and not (self.reduce_only and filled > 0):
             # BD-FIX (venue-capped reduce-only close): 交易所对 reduce-only
             # 平仓单按剩余持仓截断(origQty < 请求量)后回报 FILLED ——
             # 实测 LTCUSDT 紧急平仓本地计划 1.100、venue 实际成交 0.109。

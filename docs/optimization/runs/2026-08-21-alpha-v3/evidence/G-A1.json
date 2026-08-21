@@ -1,0 +1,19 @@
+{
+  "gate_id": "G-A1",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "working_tree": "DIRTY: authorized uncommitted implementation worktree",
+  "status": "PASS",
+  "scope": "canonical deterministic Market State V3 and kernel/runtime hash wiring",
+  "metrics": {
+    "five_regimes": "PASS",
+    "finite_normalized_replay_stable": "PASS",
+    "invalid_core_inputs": "UNKNOWN_AND_FAIL_CLOSED",
+    "market_state_hash_in_context": "PASS",
+    "duplicate_estimator_boundary": "PASS",
+    "full_tests": "3400 passed"
+  },
+  "limitations": [
+    "This gate proves code and tests, not live activation or production readiness."
+  ]
+}

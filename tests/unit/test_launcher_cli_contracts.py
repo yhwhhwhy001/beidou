@@ -234,7 +234,12 @@ def test_enable_unbuffered_stdout_survives_non_reconfigurable_streams(monkeypatc
         def isatty(self) -> bool:
             return False
 
-    monkeypatch.setattr(cli_module.sys, "stdout", FakeCapture())
-    monkeypatch.setattr(cli_module.sys, "stderr", FakeCapture())
+    stdout = FakeCapture()
+    stderr = FakeCapture()
+    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_module.sys, "stderr", stderr)
 
     cli_module._enable_unbuffered_stdout()  # 不抛异常即通过
+
+    assert cli_module.sys.stdout is stdout
+    assert cli_module.sys.stderr is stderr

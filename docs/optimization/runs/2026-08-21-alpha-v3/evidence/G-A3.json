@@ -1,0 +1,19 @@
+{
+  "gate_id": "G-A3",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "status": "PASS",
+  "scope": "calibration, published registry, N-entry fusion and regime reliability",
+  "metrics": {
+    "checksum_and_alpha_binding": "PASS",
+    "after_cost_unknown_fail_closed": "PASS",
+    "all_entries_participate": "PASS",
+    "input_order_invariant": "PASS",
+    "contribution_conflict_trace": "PASS",
+    "reliability_diversity_correlation_penalty": "PASS",
+    "full_tests": "3400 passed",
+    "registry_oracle": "PASS"
+  },
+  "limitations": [
+    "Local calibration fixtures are not sealed production calibration or drift evidence."
+  ]
+}

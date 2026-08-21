@@ -7,7 +7,7 @@ import json
 import os
 import platform
 import socket
-import subprocess
+import subprocess  # nosec B404 - fixed local inspection commands
 import sys
 import time
 from pathlib import Path
@@ -171,7 +171,7 @@ def _postgres_authority_probe(project_root: Path, database_url: str) -> tuple[bo
 
 def current_commit(project_root: Path | None = None) -> str:
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603, B607 - fixed git/port inspection command, shell disabled
             ["git", "rev-parse", "HEAD"],
             check=False,
             capture_output=True,
@@ -186,7 +186,7 @@ def current_commit(project_root: Path | None = None) -> str:
 
 def _git_worktree_state(project_root: Path) -> tuple[bool, list[str], str]:
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603, B607 - fixed git/status inspection command, shell disabled
             ["git", "status", "--porcelain"],
             check=False,
             capture_output=True,
@@ -238,7 +238,7 @@ def _port_available(port: int) -> tuple[bool, str]:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", port))
+        sock.bind(("0.0.0.0", port))  # nosec B104 - availability probe, not a listening service
         return True, "available"
     except OSError as exc:
         return False, str(exc)

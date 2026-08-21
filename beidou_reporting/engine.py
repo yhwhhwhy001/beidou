@@ -32,6 +32,7 @@ class ReportType(str, Enum):
     FACTOR_ANALYSIS = "FACTOR_ANALYSIS"
     MODEL_DRIFT = "MODEL_DRIFT"
     COST_ATTRIBUTION = "COST_ATTRIBUTION"
+    PNL_ATTRIBUTION = "PNL_ATTRIBUTION"
     LIFECYCLE_AUDIT = "LIFECYCLE_AUDIT"
     RECONCILIATION = "RECONCILIATION"
 
@@ -172,6 +173,8 @@ class ReportGenerator:
         self._weekly_reports: list[Report] = []
         self._incident_reports: list[Report] = []
         self._custom_reports: list[Report] = []
+        self._attribution_reports: list[Report] = []
+        self._decision_traces: list[Any] = []
         self._evidence_exports: list[dict[str, Any]] = []
 
     def generate_daily_report(
@@ -625,6 +628,80 @@ class ReportGenerator:
         self._custom_reports.append(report)
         return report
 
+    def generate_pnl_attribution_report(self, period: str, record: Any) -> Report:
+        """Generate an additive Alpha V3 PnL attribution report.
+
+        The caller must finalize the record with an explicit residual policy.
+        Unknown fields remain NOT_VERIFIABLE in the report; this method never
+        fills missing economic contributions with zero.
+        """
+        from .pnl_attribution import AttributionRecord
+
+        if not isinstance(record, AttributionRecord):
+            raise TypeError("record must be an AttributionRecord")
+
+        report = Report(
+            report_id=f"pnl-attribution-{period}-{record.decision_id}",
+            report_type=ReportType.PNL_ATTRIBUTION,
+            title=f"PnL 归因 ({period})",
+            period_start=record.timestamp,
+            period_end=record.timestamp,
+            correlation_id=record.correlation_id,
+        )
+
+        references = list(record.evidence_references)
+        if record.source_hash and record.correlation_id:
+            references.append(
+                ReportReference(
+                    source="v3_attribution",
+                    query_id=record.source_hash,
+                    schema_version=record.schema_version,
+                    timestamp=record.timestamp,
+                    correlation_id=record.correlation_id,
+                )
+            )
+        report.references.extend(references)
+
+        section = ReportSection(title="Alpha V3 PnL Attribution")
+        source_ref = references[0] if references else None
+        for key, value in record.field_values().items():
+            missing = value is None or value == ""
+            entry_tier = EvidenceTier.NOT_VERIFIABLE if missing else record.evidence_tier
+            section.entries.append(
+                EvidenceEntry(
+                    key=key,
+                    value="NOT_VERIFIABLE" if missing else value,
+                    tier=entry_tier,
+                    source_ref=source_ref,
+                )
+            )
+        section.status = record.evidence_tier
+        section.summary = (
+            "归因余额已通过残差策略验证"
+            if record.evidence_tier is EvidenceTier.VERIFIED
+            else "归因证据不完整，保留 NOT_VERIFIABLE 字段"
+        )
+        report.add_section(section)
+        report.freeze()
+        self._attribution_reports.append(report)
+        self._custom_reports.append(report)
+        return report
+
+    def generate_attribution_report(self, period: str, record: Any) -> Report:
+        """Compatibility alias for callers using the shorter report name."""
+        return self.generate_pnl_attribution_report(period, record)
+
+    def record_decision_trace(self, trace: Any) -> None:
+        """Store read-only V2 lineage for later attribution joining."""
+        from .pnl_attribution import DecisionTrace
+
+        if not isinstance(trace, DecisionTrace):
+            raise TypeError("trace must be a DecisionTrace")
+        self._decision_traces.append(trace)
+
+    def get_decision_traces(self) -> list[Any]:
+        return list(self._decision_traces)
+
     def export_evidence_package(self, report: Report) -> dict[str, Any]:
         """导出冻结证据包 — JSON 格式，包含所有溯源引用。"""
         package = report.to_export_dict()
@@ -641,11 +718,15 @@ class ReportGenerator:
     def get_incident_reports(self) -> list[Report]:
         return list(self._incident_reports)
 
+    def get_pnl_attribution_reports(self) -> list[Report]:
+        return list(self._attribution_reports)
+
     def get_reports_by_type(self, report_type: ReportType) -> list[Report]:
         mapping = {
             ReportType.DAILY: self._daily_reports,
             ReportType.WEEKLY: self._weekly_reports,
             ReportType.INCIDENT: self._incident_reports,
+            ReportType.PNL_ATTRIBUTION: self._attribution_reports,
         }
         return list(mapping.get(report_type, self._custom_reports))
 

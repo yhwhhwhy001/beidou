@@ -27,7 +27,7 @@ import json
 import logging
 import os
 import signal
-import subprocess
+import subprocess  # nosec B404 - fixed local process inspection commands
 import time
 import urllib.request
 from typing import Any, Awaitable, Callable
@@ -74,7 +74,9 @@ def fetch_status_http() -> dict[str, Any]:
     database_restart/user_stream_reconnect 复用同一默认注入依赖。
     """
     try:
-        with urllib.request.urlopen(_STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(  # nosec B310 - fixed loopback status URL
+            _STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS
+        ) as resp:
             raw = resp.read()
     except OSError as exc:
         raise StatusUnreachableError(f"status unreachable: {exc}") from exc
@@ -95,7 +97,7 @@ def _process_comms(pids: list[int]) -> dict[int, str]:
     """
     if not pids:
         return {}
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603 - fixed ps command, shell disabled
         ["/bin/ps", "-A", "-o", "pid=,comm="],
         check=False,
         capture_output=True,
@@ -121,7 +123,9 @@ def engine_pid_os() -> int | None:
     EnginePidAmbiguousError(多实例并存,不可安全选择),0 → None(引擎未在跑)。
     database_restart 复用同一默认注入依赖。
     """
-    proc = subprocess.run(["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True)
+    proc = subprocess.run(  # nosec B603 - fixed process query, shell disabled
+        ["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True
+    )
     if proc.returncode != 0:
         return None
     pids = [int(line.strip()) for line in proc.stdout.splitlines() if line.strip().isdigit()]
@@ -264,7 +268,7 @@ class ProcessRestartScenario(ScenarioBase):
     @staticmethod
     def _kickstart_os() -> None:
         """真实拉起:launchctl kickstart gui/501/com.beidou.autopilot。"""
-        subprocess.run(
+        subprocess.run(  # nosec B603 - fixed launchctl command, shell disabled
             ["/bin/launchctl", "kickstart", "gui/501/com.beidou.autopilot"],
             check=True,
             capture_output=True,

@@ -542,7 +542,7 @@ class PaperMatchingEngine:
     def __init__(self, seed: int = 42):
         import random as _random
 
-        self._rng = _random.Random(seed)
+        self._rng = _random.Random(seed)  # nosec B311 - deterministic paper simulation randomness
         self._base_latency_ms: float = 50.0
         self._latency_jitter_ms: float = 30.0  # BD-CV24: 延迟抖动
         self._fill_probability: float = 0.85

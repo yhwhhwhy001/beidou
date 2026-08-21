@@ -148,6 +148,7 @@ from beidou_strategy.risk.manager import (
     StrategyRiskManager,
 )
 from beidou_strategy.state.cost_model import CostModel
+from beidou_strategy.state.market_state import MarketStateEstimator, MarketStateVector
 
 logger = logging.getLogger(__name__)
 
@@ -1255,38 +1256,33 @@ class TimeExit(AlphaComponent):
 
 
 class RealMarketStateEstimator:
-    """真实市场状态估算 — 替代始终返回 UNKNOWN 的 MarketStateEstimator。"""
+    """Compatibility projection over the canonical MarketState estimator."""
+
+    _estimator = MarketStateEstimator()
 
     @staticmethod
-    def estimate(features: dict[str, float]) -> dict[str, str]:
-        values = _validated_features(features, ("close", "sma_5", "sma_20", "ann_volatility"))
-        if values is None or values["close"] <= 0 or values["sma_5"] <= 0 or values["sma_20"] <= 0:
-            return {"direction": "UNKNOWN", "stress": "UNKNOWN", "quality": "UNKNOWN"}
-
-        ann_vol = values["ann_volatility"]
-        sma_5 = values["sma_5"]
-        sma_20 = values["sma_20"]
-        if sma_5 > sma_20 * 1.01:
-            direction = "TRENDING_UP"
-        elif sma_5 < sma_20 * 0.99:
-            direction = "TRENDING_DOWN"
-        else:
-            direction = "RANGING"
-
-        if ann_vol > 0.8:
-            stress = "HIGH"
-        elif ann_vol > 0.3:
+    def _legacy_projection(state: MarketStateVector) -> dict[str, str]:
+        """Keep the old dict boundary while preserving one state semantic."""
+        stress = state.stress.level
+        if stress in {"ELEVATED", "NORMAL"}:
             stress = "NORMAL"
-        else:
-            stress = "LOW"
-
-        quality = "RELIABLE" if ann_vol > 0 else "UNKNOWN"
-
+        elif stress == "CRISIS":
+            stress = "HIGH"
+        quality = "RELIABLE" if state.quality.tier == "GOOD" else state.quality.tier
         return {
-            "direction": direction,
+            "direction": state.direction.regime,
             "stress": stress,
             "quality": quality,
         }
+
+    @staticmethod
+    def estimate(features: dict[str, object]) -> dict[str, str]:
+        state = RealMarketStateEstimator._estimator.estimate(
+            VenueId("BINANCE"),
+            InstrumentId(str(features.get("symbol", "UNKNOWN"))),
+            features,
+        )
+        return RealMarketStateEstimator._legacy_projection(state)
 
 
 # ================================================================
@@ -2130,6 +2126,8 @@ class AutonomousEngine:
         self._order_count = 0
         self._error_count = 0
         self._last_account: dict = {}
+        self._market_state_estimator = MarketStateEstimator()
+        self._last_market_state: MarketStateVector | None = None
 
         # Health server callbacks
         self._health.set_liveness_check(self._check_liveness)
@@ -2143,6 +2141,13 @@ class AutonomousEngine:
         self._health.set_resume_handler(self._manual_resume)
         self._health.set_metrics_collector(self._collect_metrics)
         self._health.set_status_info(self._get_status_info)
+
+    def _estimate_market_state(self, features: dict[str, object], *, symbol: str | None = None) -> dict[str, str]:
+        """Evaluate the canonical state and expose a legacy dict at the boundary."""
+        instrument = InstrumentId(str(symbol or features.get("symbol", "UNKNOWN")))
+        state = self._market_state_estimator.estimate(VenueId("BINANCE"), instrument, features)
+        self._last_market_state = state
+        return RealMarketStateEstimator._legacy_projection(state)
 
     # --- Signed policy parameter helpers (BD-05) ---
 
@@ -4312,8 +4317,7 @@ class AutonomousEngine:
             sl_rows = [
                 i
                 for i in candidates
-                if str(i.get("orderType", "")).strip().upper().startswith("STOP")
-                and _semantically_ok(i, expected_side)
+                if str(i.get("orderType", "")).strip().upper().startswith("STOP") and _semantically_ok(i, expected_side)
             ]
             tp_rows = [
                 i
@@ -4513,11 +4517,21 @@ class AutonomousEngine:
             # 1e-8、触发价按 1e-4 量化后比较(venue 最小精度内视为一致)。
             _QTY_STEP = Decimal("0.00000001")
             _PRICE_STEP = Decimal("0.0001")
-            if expected_qty is None or actual_qty is None or expected_qty <= 0 or abs(actual_qty - expected_qty) > _QTY_STEP / 2:
+            if (
+                expected_qty is None
+                or actual_qty is None
+                or expected_qty <= 0
+                or abs(actual_qty - expected_qty) > _QTY_STEP / 2
+            ):
                 issues.append(f"PROTECTION_QUANTITY_MISMATCH:{algo_id}")
             expected_trigger = _decimal(expected.get("trigger_price"))
             actual_trigger = _decimal(actual.get("triggerPrice"))
-            if expected_trigger is None or actual_trigger is None or expected_trigger <= 0 or abs(actual_trigger - expected_trigger) > _PRICE_STEP / 2:
+            if (
+                expected_trigger is None
+                or actual_trigger is None
+                or expected_trigger <= 0
+                or abs(actual_trigger - expected_trigger) > _PRICE_STEP / 2
+            ):
                 issues.append(f"PROTECTION_TRIGGER_MISMATCH:{algo_id}")
             reduce_only = actual.get("reduceOnly")
             if reduce_only is not True and str(reduce_only).strip().lower() not in {"1", "true", "yes"}:
@@ -5266,9 +5280,7 @@ class AutonomousEngine:
                     try:
                         self._risk_sm.rearm_for_retry(RiskApprovalId(_approval_id))
                     except Exception as _sm_exc:
-                        logger.warning(
-                            "approval state rearm failed for %s: %s", intent_id, type(_sm_exc).__name__
-                        )
+                        logger.warning("approval state rearm failed for %s: %s", intent_id, type(_sm_exc).__name__)
                     with contextlib.suppress(Exception):
                         self._approval.rearm_nonce(_nonce)
                 self._outbox.resolve_unknown(intent_id, exchange_order_found=False)
@@ -5343,9 +5355,7 @@ class AutonomousEngine:
             return "INCONCLUSIVE"
         if not venue_executed.is_finite() or venue_executed < 0:
             return "INCONCLUSIVE"
-        _terminal_partial = (
-            venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0
-        )
+        _terminal_partial = venue_status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and venue_executed > 0
         try:
             store = getattr(self, "_store", None)
             save_order_state = getattr(store, "save_order_state", None)
@@ -5474,9 +5484,7 @@ class AutonomousEngine:
                 return False
             return True
         if status in {"CANCELED", "EXPIRED"}:
-            _delta, _price, _fill_id = self._consume_cumulative_fill(
-                str(order_id), symbol, payload, status=status
-            )
+            _delta, _price, _fill_id = self._consume_cumulative_fill(str(order_id), symbol, payload, status=status)
             if _delta > 0 and _price > 0 and _fill_id:
                 try:
                     self._record_partial_fill_to_ledger(
@@ -5494,7 +5502,7 @@ class AutonomousEngine:
                     logger.warning("terminal-partial booking failed for %s: %s", order_id, type(exc).__name__)
                     return False
             _fill_row = self._store.get_fill_event(_fill_id) if _fill_id else None
-            _committed = bool(_fill_row) and str(_fill_row.get("processing_state", "")) == "COMMITTED"
+            _committed = isinstance(_fill_row, dict) and str(_fill_row.get("processing_state", "")) == "COMMITTED"
             if _committed:
                 tracker.apply(OrderEvent.CANCELED)
                 self._active_order_ids.discard(str(order_id))
@@ -6864,9 +6872,7 @@ class AutonomousEngine:
             # 等幽灵扫描收敛 + 在途量泄漏(实测 LTCUSDT 紧急平仓 1.1 → 0.109)。
             _ack_reason = str(order.get("reason", "")) if isinstance(order, dict) else ""
             _venue_fact = order.get("venue_response") if isinstance(order, dict) else None
-            _is_reduce_only = bool(
-                getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False)
-            )
+            _is_reduce_only = bool(getattr(intent, "reduce_only", False) or getattr(intent, "close_position", False))
             if (
                 _is_reduce_only
                 and adapter_response.status is OrderStatus.UNKNOWN
@@ -7002,9 +7008,7 @@ class AutonomousEngine:
             # P2 修复 (拒绝原因透传): 适配层在 raw_response["reason"] 打标
             # venue_rejected:<category> / retryable_rejection:<category>,
             # 优先取结构化 reason 供 _is_retryable_venue_rejection 判定。
-            return rejected(
-                str(order.get("reason") or order.get("msg") or order.get("error") or "ADAPTER_REJECTED")
-            )
+            return rejected(str(order.get("reason") or order.get("msg") or order.get("error") or "ADAPTER_REJECTED"))
         return unknown(str(order.get("msg", order.get("error", "ORDER_ACK_UNKNOWN"))))
 
     async def _monitor_orders(self, symbol: str) -> None:
@@ -7164,9 +7168,7 @@ class AutonomousEngine:
             try:
                 await self._monitor_orders(sym)
             except Exception as exc:
-                logger.warning(
-                    "orphan order monitoring failed for %s: %s", sym, type(exc).__name__
-                )
+                logger.warning("orphan order monitoring failed for %s: %s", sym, type(exc).__name__)
 
     def _record_partial_fill_to_ledger(
         self,
@@ -7761,9 +7763,7 @@ class AutonomousEngine:
                         closed_qty = 0.0
                     if closed_qty <= 0:
                         break
-                    trade_pnl = (
-                        (exit_px - entry_px) * closed_qty if pp.is_long() else (entry_px - exit_px) * closed_qty
-                    )
+                    trade_pnl = (exit_px - entry_px) * closed_qty if pp.is_long() else (entry_px - exit_px) * closed_qty
                     is_win = trade_pnl > 0
                     self._strategy_risk.record_trade(self._autopilot_strategy_id, trade_pnl, is_win)
                     if is_win:
@@ -9788,10 +9788,7 @@ class AutonomousEngine:
                         )
                 _ghost_count.pop(f"algo:{_asym}", None)
                 if cancelled:
-                    print(
-                        f"[nearline] 🧹 Canceled {cancelled} orphaned protection algo(s) "
-                        f"for closed position {_asym}"
-                    )
+                    print(f"[nearline] 🧹 Canceled {cancelled} orphaned protection algo(s) for closed position {_asym}")
             # BD-FIX (root): 清理路径同样参与保护事实收敛 —— 走到此处说明
             # 库存真实、语义干净、映射一致,允许清除问题并置 ACTIVE。
             self._update_protection_fact(
@@ -9850,7 +9847,9 @@ class AutonomousEngine:
             return False
         if ok:
             self._sl_unprotectable_streak.pop(pos_id, None)
-            print(f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak}, qty={close_qty})")
+            print(
+                f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak}, qty={close_qty})"
+            )
             return True
         print(f"[nearline] ⚠️ Emergency close intent rejected for {symbol}")
         return False
@@ -10020,16 +10019,11 @@ class AutonomousEngine:
                 try:
                     self._cancel_stale_protection_rows(sym, _algo_rows, "GHOST_POSITION_DEDUP")
                 except Exception as exc:
-                    logger.warning(
-                        "ghost protection algo cancel failed for %s: %s", sym, type(exc).__name__
-                    )
+                    logger.warning("ghost protection algo cancel failed for %s: %s", sym, type(exc).__name__)
             self._remove_protection_with_cleanup(pid, sym)
             self._active_algo_ids.pop(pid, None)
             getattr(self, "_pending_protection_retry", set()).discard(pid)
-            print(
-                f"[nearline] 👻 Deduplicated ghost protection projection for {sym} "
-                f"(pos={pid}, keeper={keeper_pid})"
-            )
+            print(f"[nearline] 👻 Deduplicated ghost protection projection for {sym} (pos={pid}, keeper={keeper_pid})")
             return True
 
         for sym, group in sorted(by_symbol.items()):
@@ -10291,9 +10285,7 @@ class AutonomousEngine:
                     _venue_qtys[_s] = abs(_amt)
             for _sweep_sym in sorted(exchange_symbols):
                 _existing = [
-                    pp
-                    for pp in self._protection.all_positions().values()
-                    if str(pp.instrument_id) == _sweep_sym
+                    pp for pp in self._protection.all_positions().values() if str(pp.instrument_id) == _sweep_sym
                 ]
                 _side_diverged = bool(
                     _sweep_sym in _venue_sides
@@ -10313,17 +10305,13 @@ class AutonomousEngine:
                 # 重建震荡。
                 _proj_row = (getattr(self, "_position_projection", {}) or {}).get(_sweep_sym)
                 try:
-                    _proj_qty_abs = (
-                        abs(float(_proj_row.get("signed_quantity", 0) or 0)) if _proj_row else 0.0
-                    )
+                    _proj_qty_abs = abs(float(_proj_row.get("signed_quantity", 0) or 0)) if _proj_row else 0.0
                 except (TypeError, ValueError):
                     _proj_qty_abs = 0.0
                 _venue_qty = _venue_qtys.get(_sweep_sym, 0.0)
                 _qty_tolerance = max(1e-9, 1e-6 * _venue_qty)
                 _proj_qty_diverged = bool(
-                    _sweep_sym in _venue_qtys
-                    and _proj_row
-                    and abs(_proj_qty_abs - _venue_qty) > _qty_tolerance
+                    _sweep_sym in _venue_qtys and _proj_row and abs(_proj_qty_abs - _venue_qty) > _qty_tolerance
                 )
                 _pp_qty_diverged = bool(
                     _sweep_sym in _venue_qtys
@@ -10369,9 +10357,7 @@ class AutonomousEngine:
                     if _venue_entry > 0:
                         _sweep_entry = _venue_entry
                     _sync_signed = str(_sweep_qty if _sweep_side == "BUY" else -_sweep_qty)
-                    _sync_generation = int(
-                        getattr(self, "_position_generation", {}).get(_sweep_sym, 0) or 0
-                    )
+                    _sync_generation = int(getattr(self, "_position_generation", {}).get(_sweep_sym, 0) or 0)
                     self._position_projection[_sweep_sym] = {
                         "symbol": _sweep_sym,
                         "signed_quantity": _sync_signed,
@@ -10490,10 +10476,7 @@ class AutonomousEngine:
                         # ProtectionOrder.quantity 是 Quantity 值对象,取 amount
                         _sl_qty_obj = getattr(_sl, "quantity", None)
                         _sl_qty = getattr(_sl_qty_obj, "amount", _sl_qty_obj)
-                        _sl_covers = (
-                            float(str(_sl_qty or 0)) + 1e-8
-                            >= float(getattr(pp, "quantity", 0) or 0)
-                        )
+                        _sl_covers = float(str(_sl_qty or 0)) + 1e-8 >= float(getattr(pp, "quantity", 0) or 0)
                     except (TypeError, ValueError):
                         _sl_covers = False
                 else:
@@ -10523,10 +10506,7 @@ class AutonomousEngine:
                 # 代数落后与数量不足同语义:取消陈旧行与 venue 条件单,
                 # 走 S33 按当前代数重建。
                 _gen_current = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
-                _gen_stale = (
-                    _gen_current > 0
-                    and int(getattr(pp, "position_generation", 0) or 0) < _gen_current
-                )
+                _gen_stale = _gen_current > 0 and int(getattr(pp, "position_generation", 0) or 0) < _gen_current
                 if (not _sl_covers or _gen_stale) and _sl is not None and self._store is not None:
                     try:
                         _symbol_rows = [
@@ -11527,7 +11507,7 @@ class AutonomousEngine:
                         continue
 
                     # Market state per timeframe
-                    state = RealMarketStateEstimator.estimate(features)
+                    state = self._estimate_market_state(features, symbol=symbol)
                     print(
                         f"[nearline] {symbol}@{tf}: price={close} "
                         f"trend={state['direction']} stress={state['stress']} "
@@ -11561,6 +11541,7 @@ class AutonomousEngine:
                         "instrument_id": instrument_id,
                         "venue_id": venue_id,
                         "state": state,
+                        "market_state_hash": getattr(self._last_market_state, "state_hash", ""),
                         "_predictions": {},
                         "_position_info": pos_info,
                         # BD-FIX: 组件历史按 timeframe 隔离 —— 单例组件

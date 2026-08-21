@@ -212,8 +212,6 @@ def test_supervisor_write_interlock_requires_scoped_authority_even_when_runtime_
     assert calls == []
 
 
-
-
 def test_testnet_unknown_only_hold_allows_known_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     """testnet + BEIDOU_TERMINAL_WRITE_HOLD=unknown-only: supervisor 互锁放行。
 
@@ -644,9 +642,7 @@ def test_durable_protection_coverage_rejects_orphan_exchange_ack() -> None:
     }
 
     # 本地投影仍在而 venue 无持仓 → 孤儿行是丢仓级缺口,fail-closed
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {"p-sol": SimpleNamespace(instrument_id="SOLUSDT")}
-    )
+    engine._protection = SimpleNamespace(all_positions=lambda: {"p-sol": SimpleNamespace(instrument_id="SOLUSDT")})
     covered, evidence = engine._assess_protection_coverage([], [orphan], engine._protection.all_positions())
     assert covered is False
     assert {"symbol": "SOLUSDT", "reason": "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"} in evidence[

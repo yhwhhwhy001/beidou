@@ -1,0 +1,19 @@
+{
+  "gate_id": "G-A6",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "status": "PASS",
+  "scope": "read-only V3 shadow pipeline, runtime probe and lineage",
+  "metrics": {
+    "benchmark_state_forecast_target_trace": "PASS",
+    "schema_model_policy_hashes": "PASS",
+    "read_only_probe": "PASS",
+    "no_order_intent": "PASS",
+    "no_duplicate_v3_runtime_path": "PASS",
+    "pipeline_determinism": "PASS",
+    "full_tests": "3400 passed"
+  },
+  "limitations": [
+    "The probe is read-only and does not activate the V3 algorithm as a trading path.",
+    "Missing calibration/account/venue facts remain NOT_VERIFIABLE by design."
+  ]
+}

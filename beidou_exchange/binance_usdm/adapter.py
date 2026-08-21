@@ -710,13 +710,17 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     # UNKNOWN:hold 是可能解除的配置状态,不得确定性终结意图。
                     _cat = str(failure.get("category", "")).upper()
                     _retryable = bool(failure.get("retryable"))
-                    _definitive = _cat in {
-                        "INSUFFICIENT_BALANCE",
-                        "INSUFFICIENT_MARGIN",
-                        "ORDER_REJECTED",
-                        "POSITION_LIMIT",
-                        "AUTH_FAILURE",
-                    } and not _retryable
+                    _definitive = (
+                        _cat
+                        in {
+                            "INSUFFICIENT_BALANCE",
+                            "INSUFFICIENT_MARGIN",
+                            "ORDER_REJECTED",
+                            "POSITION_LIMIT",
+                            "AUTH_FAILURE",
+                        }
+                        and not _retryable
+                    )
                     _status = OrderStatus.REJECTED if (_definitive or _retryable) else OrderStatus.UNKNOWN
                     _reason = (
                         f"retryable_rejection:{_cat}"

@@ -195,9 +195,7 @@ class ExpressionComponent(AlphaComponent):
         # BD-FIX (final83i): 首轮求值前回填闭合历史(重启免 60 分钟预热)
         _seeded_now = False
         if len(_hist["close"]) < _MIN_BARS and self._backfill_source is not None:
-            _seeded_now = await self._maybe_backfill(
-                str(context.get("instrument_id", "UNKNOWN")), _timeframe, _hist
-            )
+            _seeded_now = await self._maybe_backfill(str(context.get("instrument_id", "UNKNOWN")), _timeframe, _hist)
         try:
             close = float(features["close"])
             high = float(features.get("high", close))

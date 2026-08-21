@@ -383,10 +383,10 @@ async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -
     with patch("asyncio.wait_for", side_effect=_simulated_timeout) as wf:
         await engine._realtime_tick()
 
-    # wait_for 包装存在，超时 25s（< 30s 对账间隔 + supervisor 60s 阈值余量）
-    # BD-FIX: 周期 UNKNOWN 意图恢复（60s 一次）也用 wait_for 包装 ——
-    # 两次 wait_for：第一次周期 resolve（20s 超时），第二次对账（25s）
-    assert wf.await_count == 2
+    # wait_for 包装存在，超时 25s（< 30s 对账间隔 + supervisor 60s 阈值余量）。
+    # 周期段现在分别保护 UNKNOWN 意图恢复（20s）、池外订单监控（15s）
+    # 和主对账（25s），三条路径都必须保持 fail-closed 且不阻塞实时循环。
+    assert wf.await_count == 3
     assert wf.await_args.kwargs["timeout"] == 25.0
     # _last_recon 被刷新 → 循环未被阻塞，30s 后重试
     assert time.time() - engine._last_recon < 5
@@ -408,10 +408,11 @@ async def test_realtime_tick_prefix_failure_does_not_block_reconciliation() -> N
     engine = object.__new__(AutonomousEngine)
     engine._tick_count = 1
     engine._trading_pool = SimpleNamespace(active_instruments=lambda: [])
+
     # 前段异常源: outbox 读取在 PG 重启时抛连接错误(reconcile 段之前)
     def _fail_unacked() -> list:
         raise RuntimeError(
-            "connection failed: connection to server at \"127.0.0.1\", "
+            'connection failed: connection to server at "127.0.0.1", '
             "port 5432 failed: FATAL: the database system is shutting down"
         )
 

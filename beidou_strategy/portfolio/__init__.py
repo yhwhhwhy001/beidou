@@ -47,5 +47,23 @@ class PortfolioState:
     total_risk_score: float = 0.0
 
 
-from .optimizer import OptimizationResult
+from .contracts import ExposureTarget, PortfolioOptimizationInput
+from .exposure_governor import ExposureGovernor, ExposurePolicy
+from .optimizer import ActiveOptimizationResult, ActivePortfolioOptimizer, ActivePortfolioPolicy, OptimizationResult
 from .optimizer import PortfolioOptimizerImpl as PortfolioOptimizer
+
+__all__ = [
+    "ActiveOptimizationResult",
+    "ActivePortfolioOptimizer",
+    "ActivePortfolioPolicy",
+    "CapitalAllocationMode",
+    "ExposureGovernor",
+    "ExposurePolicy",
+    "ExposureTarget",
+    "OptimizationResult",
+    "PortfolioOptimizationInput",
+    "PortfolioOptimizer",
+    "PortfolioState",
+    "PortfolioTarget",
+    "PositionOwnership",
+]

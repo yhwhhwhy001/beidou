@@ -610,15 +610,9 @@ def test_monitoring_reconciliation_check_guards() -> None:
         build_reconciliation_check,
     )
 
-    mismatched = build_reconciliation_check(
-        ReconciliationResult(matched=1, mismatched=1, unknown=0, unsupported=0)
-    )
+    mismatched = build_reconciliation_check(ReconciliationResult(matched=1, mismatched=1, unknown=0, unsupported=0))
     assert mismatched.status.value == "FAIL"
-    unsupported = build_reconciliation_check(
-        ReconciliationResult(matched=0, mismatched=0, unknown=0, unsupported=1)
-    )
+    unsupported = build_reconciliation_check(ReconciliationResult(matched=0, mismatched=0, unknown=0, unsupported=1))
     assert unsupported.status.value == "FAIL"  # 不支持不是干净零差异
-    clean = build_reconciliation_check(
-        ReconciliationResult(matched=1, mismatched=0, unknown=0, unsupported=0)
-    )
+    clean = build_reconciliation_check(ReconciliationResult(matched=1, mismatched=0, unknown=0, unsupported=0))
     assert clean.status.value == "PASS"

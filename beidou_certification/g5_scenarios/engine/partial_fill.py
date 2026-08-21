@@ -582,9 +582,7 @@ class PartialFillScenario(ScenarioBase):
             # 带持仓离开场景)。
             if last_executed_qty > 0 and not close_attempted:
                 try:
-                    logger.info(
-                        "close_position %s %s %s (cleanup)", close_side, _format_qty(last_executed_qty), symbol
-                    )
+                    logger.info("close_position %s %s %s (cleanup)", close_side, _format_qty(last_executed_qty), symbol)
                     await self._close_position(
                         ctx,
                         steps,

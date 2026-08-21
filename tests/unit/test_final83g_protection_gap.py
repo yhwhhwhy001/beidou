@@ -112,9 +112,7 @@ async def test_ensure_entry_protection_idempotent_for_same_projection() -> None:
     """同 symbol 同量同向已有投影时跳过,不重复创建/下单。"""
     engine = _engine()
     engine._protection = SimpleNamespace(
-        all_positions=lambda: {
-            "p1": SimpleNamespace(instrument_id="AVAXUSDT", quantity=1.0, side=OrderSide.BUY)
-        },
+        all_positions=lambda: {"p1": SimpleNamespace(instrument_id="AVAXUSDT", quantity=1.0, side=OrderSide.BUY)},
         create_protection=Mock(side_effect=AssertionError("must not create")),
     )
 
@@ -142,9 +140,7 @@ async def test_open_algo_inventory_genuine_flag() -> None:
     assert engine._last_algo_inventory_genuine is False
 
     engine._adapter = SimpleNamespace(
-        get_open_algo_orders=AsyncMock(
-            return_value=SimpleNamespace(is_success=lambda: False, data=None, error=None)
-        )
+        get_open_algo_orders=AsyncMock(return_value=SimpleNamespace(is_success=lambda: False, data=None, error=None))
     )
     assert await engine._get_open_algo_inventory() == []
     assert engine._last_algo_inventory_genuine is False
@@ -215,6 +211,7 @@ async def test_retry_missing_protections_sweep_skips_existing_projection(monkeyp
     monkeypatch.setattr(engine, "_ensure_entry_protection", ensure)
     await engine._retry_missing_protections({"AVAXUSDT"})
     ensure.assert_not_awaited()
+
 
 def _sl_projection(*, status_value: str = "ACTIVE") -> SimpleNamespace:
     """构造带止损单的保护投影(跳过 S33 深路径所需字段)。"""
@@ -299,4 +296,3 @@ async def test_retry_sl_places_when_no_durable_rows(monkeypatch) -> None:
     monkeypatch.setattr(engine, "_persist_protection_order", Mock())
     await engine._retry_missing_protections({"AVAXUSDT"})
     create_algo.assert_awaited_once()
-

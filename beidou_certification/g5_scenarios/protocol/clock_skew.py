@@ -74,9 +74,7 @@ class ClockSkewScenario(ScenarioBase):
             min_qty, step_size = min_order_quantity(ctx.symbol, info)
             ticker = _require_ok(await ctx.client.get_ticker(ctx.symbol), "get_ticker")
             price = _resting_buy_price(ctx.symbol, info, str(ticker["lastPrice"]))
-            qty = format(
-                min_gate_quantity(Decimal(str(min_qty)), Decimal(str(step_size)), Decimal(price)), "f"
-            )
+            qty = format(min_gate_quantity(Decimal(str(min_qty)), Decimal(str(step_size)), Decimal(price)), "f")
             notional = float(Decimal(qty) * Decimal(price))
             old_offset = ctx.client._clock_offset_ms
             resynced = False

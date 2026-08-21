@@ -9,12 +9,80 @@ from typing import Any
 
 from beidou_shared.types import ModelId, SchemaVersion, StrategyId
 
+from .forecast import CalibrationArtifact
+
 
 class ModelStatus(str, Enum):
     CHALLENGER = "CHALLENGER"
     CHAMPION = "CHAMPION"
     ARCHIVED = "ARCHIVED"
     RETIRED = "RETIRED"
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationRegistration:
+    """Published calibration artifact plus the evidence that authorized it."""
+
+    artifact: CalibrationArtifact
+    evidence_ids: tuple[str, ...]
+    published_by: str
+    published_at: datetime
+    alpha_id: str = ""
+
+
+class CalibrationRegistry:
+    """Small in-process registry for deterministic production artifacts.
+
+    Research code may create artifacts, but runtime callers can only consume
+    checksum-valid artifacts that have been explicitly published with evidence.
+    """
+
+    def __init__(self) -> None:
+        self._registrations: dict[str, CalibrationRegistration] = {}
+
+    def publish(
+        self,
+        artifact: CalibrationArtifact,
+        *,
+        evidence_ids: list[str] | tuple[str, ...],
+        published_by: str,
+        alpha_id: str | None = None,
+    ) -> bool:
+        evidence = tuple(sorted(str(item).strip() for item in evidence_ids if str(item).strip()))
+        publisher = published_by.strip()
+        binding = (alpha_id or artifact.artifact_id).strip()
+        if not artifact.verify_checksum() or not evidence or not publisher or not binding:
+            return False
+        existing = self._registrations.get(artifact.artifact_id)
+        if existing is not None and existing.artifact.checksum != artifact.checksum:
+            return False
+        self._registrations[artifact.artifact_id] = CalibrationRegistration(
+            artifact=artifact,
+            evidence_ids=evidence,
+            published_by=publisher,
+            published_at=datetime.now(timezone.utc),
+            alpha_id=binding,
+        )
+        return True
+
+    def get(self, artifact_id: str) -> CalibrationArtifact | None:
+        registration = self._registrations.get(artifact_id)
+        return registration.artifact if registration is not None else None
+
+    def registration(self, artifact_id: str) -> CalibrationRegistration | None:
+        return self._registrations.get(artifact_id)
+
+    def get_for_alpha(self, alpha_id: str) -> CalibrationArtifact | None:
+        """Return the published artifact explicitly bound to an Alpha id."""
+        binding = alpha_id.strip()
+        for registration in self._registrations.values():
+            if registration.alpha_id == binding:
+                return registration.artifact
+        return None
+
+    def is_published(self, artifact: CalibrationArtifact) -> bool:
+        registration = self._registrations.get(artifact.artifact_id)
+        return registration is not None and registration.artifact.checksum == artifact.checksum
 
 
 @dataclass

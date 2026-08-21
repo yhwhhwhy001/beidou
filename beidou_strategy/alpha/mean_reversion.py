@@ -6,8 +6,18 @@ Robust z-score、half-life、no-trade band、regime gate、cost gate、volatilit
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from beidou_shared.types import InstrumentId, OrderSide, SchemaVersion, StrategyId, VenueId
+
+from .contracts import AlphaForecast
+from .mean_reversion_math import estimate_half_life as estimate_half_life_result
 
 
 @dataclass
@@ -69,28 +79,10 @@ class MeanReversionEngine:
         return (price - median) / (mad * 1.4826)  # 1.4826 = normal consistency constant
 
     def estimate_half_life(self, prices: list[float]) -> float:
-        """OLS 对数回归估算半衰期（小时）。"""
-        if len(prices) < 20 or any(not math.isfinite(price) or price <= 0 for price in prices):
+        """Return the consolidated causal AR(1) half-life in bars."""
+        if len(prices) < 20:
             return 0.0
-
-        y = [math.log(p) for p in prices[1:]]
-        x = [math.log(p) for p in prices[:-1]]
-
-        n = len(y)
-        x_mean = sum(x) / n
-        y_mean = sum(y) / n
-
-        # OLS slope
-        num = sum((x[i] - x_mean) * (y[i] - y_mean) for i in range(n))
-        den = sum((x[i] - x_mean) ** 2 for i in range(n))
-        if den == 0:
-            return 0.0
-
-        slope = num / den
-        if slope <= 0 or slope >= 1:
-            return float("inf")  # No mean reversion
-
-        return -math.log(2) / math.log(slope)
+        return estimate_half_life_result(prices).half_life_bars
 
     def evaluate(
         self,
@@ -187,9 +179,8 @@ class MultiPeriodMomentum:
 
         returns_by_period = {}
         for period in self._periods:
-            if len(prices) > period:
-                ret = (prices[-1] / prices[-period - 1] - 1) if prices[-period - 1] > 0 else 0
-                returns_by_period[period] = ret
+            ret = (prices[-1] / prices[-period - 1] - 1) if prices[-period - 1] > 0 else 0
+            returns_by_period[period] = ret
 
         # P1-007: 波动率归一化方向判定（对称处理多空）
         up_count = sum(1 for r in returns_by_period.values() if r > vol_threshold)
@@ -204,11 +195,8 @@ class MultiPeriodMomentum:
 
         # P1-007: 强度改为波动率归一化（不再用任意 *20 缩放）
         returns = list(returns_by_period.values())
-        if returns and vol > 0:
-            avg_ret = sum(returns) / len(returns)
-            strength = min(0.7, abs(avg_ret) / vol)
-        else:
-            strength = 0.0
+        avg_ret = sum(returns) / len(returns)
+        strength = min(0.7, abs(avg_ret) / vol)
 
         # Persistence: consecutive same-direction periods
         signs = [1 if r > vol_threshold else -1 if r < -vol_threshold else 0 for r in returns]
@@ -228,3 +216,144 @@ class MultiPeriodMomentum:
             return MomentumResult(direction, strength, persistence, False, "DEGRADE")
 
         return MomentumResult(direction, strength, persistence, False, "ACCEPT")
+
+
+class MeanReversionAlpha:
+    """Forecast-layer adapter for the robust mean-reversion engine.
+
+    The adapter intentionally does not invent an expected return. That value
+    must come from a later calibration artifact; the legacy z-score remains a
+    raw score and direction source only.
+    """
+
+    def __init__(self, *, alpha_id: str = "mean_reversion_v3", policy_version: str = "mr-alpha-v3-policy-v1") -> None:
+        self.alpha_id = alpha_id
+        self.policy_version = policy_version
+        self.engine = MeanReversionEngine()
+
+    @staticmethod
+    def _timestamp(context: Mapping[str, Any], features: Mapping[str, Any]) -> datetime:
+        value = context.get("timestamp", features.get("timestamp"))
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        if not isinstance(value, datetime):
+            value = datetime.now(timezone.utc)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
+
+    @staticmethod
+    def _costs(
+        context: Mapping[str, Any], features: Mapping[str, Any]
+    ) -> tuple[float | None, float | None, float | None, str]:
+        raw = context.get("costs", features.get("costs"))
+        if not isinstance(raw, Mapping):
+            raw = context
+        values: list[float | None] = []
+        for name in ("expected_fee_bps", "expected_slippage_bps", "expected_funding_bps"):
+            try:
+                value = float(raw.get(name))
+            except (TypeError, ValueError):
+                value = None
+            values.append(value if value is not None and math.isfinite(value) else None)
+        source_hash = str(raw.get("source_hash", "")).strip()
+        if any(value is None for value in values) or not source_hash:
+            return None, None, None, ""
+        return values[0], values[1], values[2], source_hash
+
+    def generate_forecast(self, context: Mapping[str, Any]) -> AlphaForecast:
+        features = context.get("features", context)
+        if not isinstance(features, Mapping):
+            features = {}
+        prices_raw = features.get("prices", [])
+        prices: list[float] = []
+        if isinstance(prices_raw, (list, tuple)):
+            for value in prices_raw:
+                try:
+                    parsed = float(value)
+                except (TypeError, ValueError):
+                    prices = []
+                    break
+                if not math.isfinite(parsed) or parsed <= 0:
+                    prices = []
+                    break
+                prices.append(parsed)
+        try:
+            close = float(features.get("close", prices[-1] if prices else float("nan")))
+            volatility = float(features.get("realized_volatility", features.get("ann_volatility", float("nan"))))
+        except (TypeError, ValueError):
+            close = float("nan")
+            volatility = float("nan")
+        fee, slippage, funding, source_hash = self._costs(context, features)
+        known_cost = fee is not None and slippage is not None and funding is not None and bool(source_hash)
+        if known_cost:
+            assert fee is not None and slippage is not None and funding is not None
+            cost_bps = fee + slippage + funding
+        else:
+            cost_bps = float("nan")
+        regime = str(context.get("market_regime", features.get("market_regime", "UNKNOWN"))).upper()
+        result = self.engine.evaluate(close, prices, volatility, cost_bps, regime)
+        side: str | OrderSide = {
+            "LONG": OrderSide.BUY,
+            "SHORT": OrderSide.SELL,
+        }.get(result.signal_direction, "NO_ACTION")
+        raw_score = (
+            result.strength
+            if result.signal_direction == "LONG"
+            else -result.strength
+            if result.signal_direction == "SHORT"
+            else 0.0
+        )
+        calibrated = features.get("calibrated_expected_return", context.get("calibrated_expected_return"))
+        try:
+            expected_return = float(calibrated) if calibrated is not None else None
+        except (TypeError, ValueError):
+            expected_return = None
+        if expected_return is not None and not math.isfinite(expected_return):
+            expected_return = None
+        after_cost = None
+        if expected_return is not None and known_cost:
+            after_cost = expected_return - float(cost_bps) / 10000.0
+        feature_hash = str(features.get("feature_hash", "")).strip()
+        if not feature_hash:
+            feature_hash = hashlib.sha256(
+                json.dumps(prices, separators=(",", ":"), allow_nan=False).encode()
+            ).hexdigest()[:16]
+        liquidity = features.get("liquidity_score", features.get("liquidity"))
+        try:
+            capacity_score = min(1.0, max(0.0, float(liquidity)))
+        except (TypeError, ValueError):
+            capacity_score = None
+        return AlphaForecast(
+            alpha_id=self.alpha_id,
+            strategy_id=context.get("strategy_id", StrategyId("mean-reversion-v3")),
+            instrument_id=context.get("instrument_id", InstrumentId("UNKNOWN")),
+            venue_id=context.get("venue_id", VenueId("UNKNOWN")),
+            side=side,
+            raw_score=raw_score,
+            expected_return=expected_return,
+            expected_return_after_cost=after_cost,
+            expected_volatility=volatility if math.isfinite(volatility) and volatility >= 0 else None,
+            horizon_seconds=3600,
+            probability_positive=0.5 + 0.5 * raw_score,
+            confidence=result.confidence,
+            uncertainty=max(0.0, min(1.0, 1.0 - result.confidence)),
+            expected_fee_bps=fee,
+            expected_slippage_bps=slippage,
+            expected_funding_bps=funding,
+            market_beta=None,
+            regime_fit=0.9 if regime == "RANGING" else 0.2 if regime in {"TRENDING_UP", "TRENDING_DOWN"} else 0.0,
+            capacity_score=capacity_score,
+            model_version=SchemaVersion("3.0.0"),
+            policy_version=self.policy_version,
+            feature_hash=feature_hash or "UNKNOWN",
+            timestamp=self._timestamp(context, features),
+            cost_source_hash=source_hash,
+            schema_version=SchemaVersion("3.0.0"),
+        )
+
+    def generate(self, context: Mapping[str, Any]) -> AlphaForecast:
+        return self.generate_forecast(context)
+
+    def validate(self) -> bool:
+        return bool(self.alpha_id and self.policy_version)

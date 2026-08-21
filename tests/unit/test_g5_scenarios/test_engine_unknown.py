@@ -112,9 +112,7 @@ def test_timeout_unknown_recovery_pg_failure_self_caught_fail(tmp_path: Path, mo
     def _pg_down(*args: Any, **kwargs: Any) -> Any:
         raise ConnectionError("shared PG unreachable")
 
-    monkeypatch.setattr(
-        "beidou_certification.g5_scenarios.engine.timeout_unknown_recovery.psycopg.connect", _pg_down
-    )
+    monkeypatch.setattr("beidou_certification.g5_scenarios.engine.timeout_unknown_recovery.psycopg.connect", _pg_down)
     fake_client = type("FakeClient", (), {})()
     ctx = _ctx(fake_client, tmp_path)
     result = asyncio.run(TimeoutUnknownRecoveryScenario().run(ctx))
@@ -126,9 +124,7 @@ def test_timeout_unknown_recovery_client_unavailable_not_verifiable(tmp_path: Pa
     def _no_pg(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("client 缺失时不得触碰 PG")
 
-    monkeypatch.setattr(
-        "beidou_certification.g5_scenarios.engine.timeout_unknown_recovery.psycopg.connect", _no_pg
-    )
+    monkeypatch.setattr("beidou_certification.g5_scenarios.engine.timeout_unknown_recovery.psycopg.connect", _no_pg)
     ctx = _ctx(None, tmp_path)
     result = asyncio.run(TimeoutUnknownRecoveryScenario().run(ctx))
     assert result.status == ScenarioStatus.NOT_VERIFIABLE

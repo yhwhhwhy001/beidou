@@ -83,9 +83,7 @@ async def main() -> int:
 
     # ---- 前置:确认账户空持仓零挂单(防残留) ----
     acct = await _require_retry(client, client.get_account, "get_account")
-    resid = [
-        (p["symbol"], p["positionAmt"]) for p in acct.get("positions", []) if float(p.get("positionAmt", 0)) != 0
-    ]
+    resid = [(p["symbol"], p["positionAmt"]) for p in acct.get("positions", []) if float(p.get("positionAmt", 0)) != 0]
     open_orders = await _require_retry(client, client.get_open_orders, "get_open_orders")
     if resid:
         print(f"WARN: 账户存在残留持仓 {resid} — 先跳过入场,直接平仓清理")
@@ -180,16 +178,20 @@ async def main() -> int:
                 f"pnl={p.get('unrealizedProfit', '-')} USDT"
             )
     _show(f"步骤 3: 订单与持仓状态({symbol})")
-    print(f"  入场订单 {entry_order_id}: status={queried.get('status')} executed={queried.get('executedQty')} "
-          f"avgPrice={queried.get('avgPrice')} 更新时间={_fmt_time(queried.get('updateTime', 0))}")
+    print(
+        f"  入场订单 {entry_order_id}: status={queried.get('status')} executed={queried.get('executedQty')} "
+        f"avgPrice={queried.get('avgPrice')} 更新时间={_fmt_time(queried.get('updateTime', 0))}"
+    )
     print(f"  持仓: {position_line or '无(入场未成交)'}")
 
     # algo 列表接口 demo-fapi 不实时(认证轮 #2 证据),按 algoId 逐单查询展示
     _show("步骤 3b: SL/TP 条件挂单")
     for label, aid, px in (("SL(止损)", sl_id, sl_price), ("TP(止盈)", tp_id, tp_price)):
         if aid:
-            print(f"  {label} algoId={aid} 触发价={px:.4f} 数量={qty} "
-                  f"创建时间={datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(
+                f"  {label} algoId={aid} 触发价={px:.4f} 数量={qty} "
+                f"创建时间={datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
     # ---- 步骤 4: 清理(撤 SL/TP → 平仓 → 复核) ----
     _show("步骤 4: 清理")
@@ -205,8 +207,10 @@ async def main() -> int:
             ),
             "create_order(close)",
         )
-        print(f"  平仓单 {close.get('orderId')}: status={close.get('status')} "
-              f"avgPrice={close.get('avgPrice')} executed={close.get('executedQty')}")
+        print(
+            f"  平仓单 {close.get('orderId')}: status={close.get('status')} "
+            f"avgPrice={close.get('avgPrice')} executed={close.get('executedQty')}"
+        )
     acct3 = await _require_retry(client, client.get_account, "get_account(final)")
     final_resid = [
         (p["symbol"], p["positionAmt"]) for p in acct3.get("positions", []) if float(p.get("positionAmt", 0)) != 0

@@ -106,9 +106,7 @@ def test_recover_stale_child_planned_to_rejected() -> None:
     conn.cursor_state.fetchone_values.append(None)  # 事件非重复
     store = _outbox(conn)
 
-    store.recover_stale_child(
-        "intent-stale-1", 0, ChildCommandState.REJECTED, event_id="stale-resolve:x:0:NOT_FOUND"
-    )
+    store.recover_stale_child("intent-stale-1", 0, ChildCommandState.REJECTED, event_id="stale-resolve:x:0:NOT_FOUND")
 
     update_sql = next(s for s, _ in conn.cursor_state.statements if s.startswith("UPDATE v3_execution_commands"))
     assert "state=%s" in update_sql
@@ -125,9 +123,7 @@ def test_recover_stale_child_blocks_active_parent_lease() -> None:
     conn.cursor_state.fetchone_values.append(("intent-stale-1",))  # 父意图租约活跃
     store = _outbox(conn)
     with pytest.raises(ValueError, match="STALE_CHILD_PARENT_ACTIVELY_LEASED"):
-        store.recover_stale_child(
-            "intent-stale-1", 0, ChildCommandState.REJECTED, event_id="e1"
-        )
+        store.recover_stale_child("intent-stale-1", 0, ChildCommandState.REJECTED, event_id="e1")
 
 
 def test_project_order_terminal_fills_acked_child() -> None:
@@ -155,16 +151,20 @@ async def test_engine_resolves_stale_child_with_venue_facts(monkeypatch) -> None
     recover = Mock()
     engine._outbox = SimpleNamespace(
         stale_child_commands=Mock(
-            return_value=[{
-                "parent_intent_id": "intent-x", "sequence": 1, "state": "UNKNOWN",
-                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "",
-            }]
+            return_value=[
+                {
+                    "parent_intent_id": "intent-x",
+                    "sequence": 1,
+                    "state": "UNKNOWN",
+                    "symbol": "XRPUSDT",
+                    "client_order_id": "cid-x",
+                    "exchange_order_id": "",
+                }
+            ]
         ),
         recover_stale_child=recover,
     )
-    engine._api_async = AsyncMock(
-        return_value={"status": "FILLED", "executedQty": "5.8", "orderId": "123"}
-    )
+    engine._api_async = AsyncMock(return_value={"status": "FILLED", "executedQty": "5.8", "orderId": "123"})
 
     resolved = await engine._resolve_stale_execution_commands()
 
@@ -182,10 +182,16 @@ async def test_engine_resolves_not_found_planned_as_rejected(monkeypatch) -> Non
     recover = Mock()
     engine._outbox = SimpleNamespace(
         stale_child_commands=Mock(
-            return_value=[{
-                "parent_intent_id": "intent-x", "sequence": 0, "state": "PLANNED",
-                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "",
-            }]
+            return_value=[
+                {
+                    "parent_intent_id": "intent-x",
+                    "sequence": 0,
+                    "state": "PLANNED",
+                    "symbol": "XRPUSDT",
+                    "client_order_id": "cid-x",
+                    "exchange_order_id": "",
+                }
+            ]
         ),
         recover_stale_child=recover,
     )
@@ -204,10 +210,16 @@ async def test_engine_resolves_not_found_unknown_without_order_id_as_rejected(mo
     recover = Mock()
     engine._outbox = SimpleNamespace(
         stale_child_commands=Mock(
-            return_value=[{
-                "parent_intent_id": "intent-x", "sequence": 0, "state": "UNKNOWN",
-                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "",
-            }]
+            return_value=[
+                {
+                    "parent_intent_id": "intent-x",
+                    "sequence": 0,
+                    "state": "UNKNOWN",
+                    "symbol": "XRPUSDT",
+                    "client_order_id": "cid-x",
+                    "exchange_order_id": "",
+                }
+            ]
         ),
         recover_stale_child=recover,
     )
@@ -226,10 +238,16 @@ async def test_engine_resolves_not_found_with_order_id_as_canceled(monkeypatch) 
     recover = Mock()
     engine._outbox = SimpleNamespace(
         stale_child_commands=Mock(
-            return_value=[{
-                "parent_intent_id": "intent-x", "sequence": 0, "state": "UNKNOWN",
-                "symbol": "XRPUSDT", "client_order_id": "cid-x", "exchange_order_id": "999",
-            }]
+            return_value=[
+                {
+                    "parent_intent_id": "intent-x",
+                    "sequence": 0,
+                    "state": "UNKNOWN",
+                    "symbol": "XRPUSDT",
+                    "client_order_id": "cid-x",
+                    "exchange_order_id": "999",
+                }
+            ]
         ),
         recover_stale_child=recover,
     )
@@ -251,9 +269,7 @@ def test_recover_stale_child_closes_parent_when_all_children_rejected() -> None:
     conn.cursor_state.fetchone_values.append(("intent-stale-1",))  # UPDATE RETURNING
     store = _outbox(conn)
 
-    store.recover_stale_child(
-        "intent-stale-1", 0, ChildCommandState.REJECTED, event_id="stale-resolve:x:0:NOT_FOUND"
-    )
+    store.recover_stale_child("intent-stale-1", 0, ChildCommandState.REJECTED, event_id="stale-resolve:x:0:NOT_FOUND")
 
     parent_update = next(
         (s, p) for s, p in conn.cursor_state.statements if s.startswith("UPDATE v3_transactional_outbox")
@@ -276,8 +292,12 @@ def test_recover_stale_child_acks_parent_when_all_children_filled() -> None:
     store = _outbox(conn)
 
     store.recover_stale_child(
-        "intent-stale-1", 0, ChildCommandState.FILLED, event_id="stale-resolve:x:0:FILLED",
-        exchange_order_id="123", cumulative_filled_quantity="5.8",
+        "intent-stale-1",
+        0,
+        ChildCommandState.FILLED,
+        event_id="stale-resolve:x:0:FILLED",
+        exchange_order_id="123",
+        cumulative_filled_quantity="5.8",
     )
 
     parent_update = next(

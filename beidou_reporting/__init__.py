@@ -14,8 +14,11 @@ from .engine import (
     ReportType,
     ReportValidator,
 )
+from .pnl_attribution import AttributionRecord, DecisionTrace
 
 __all__ = [
+    "AttributionRecord",
+    "DecisionTrace",
     "EvidenceEntry",
     "EvidenceTier",
     "Report",

@@ -15,13 +15,13 @@ from enum import Enum
 
 
 class ScenarioStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - scenario status, not a credential
     FAIL = "FAIL"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
 
 
 class GateResult(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - gate status, not a credential
     FAIL = "FAIL"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
 

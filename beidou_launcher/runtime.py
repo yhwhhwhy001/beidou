@@ -10,6 +10,13 @@ from .models import CheckResult, CheckSeverity, CheckStatus
 from .registry import inspect_engine_wiring
 
 
+def build_decision_trace(probe: dict[str, Any]) -> dict[str, Any]:
+    """Build a read-only market-to-kernel trace for later PnL joining."""
+    from beidou_reporting.pnl_attribution import DecisionTrace
+
+    return DecisionTrace.from_probe(probe).to_dict()
+
+
 async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict[str, Any]:
     """使用真实公共行情执行唯一 StrategyKernel，不提交 OrderIntent。
 
@@ -38,11 +45,16 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
 
         state_builder = getattr(engine, "_estimate_market_state", None)
         state = state_builder(features) if callable(state_builder) else {}
+        canonical_state = getattr(engine, "_last_market_state", None)
+        state_to_dict = getattr(canonical_state, "to_dict", None)
+        trace_state = state_to_dict() if callable(state_to_dict) else state
         context = {
             "features": features,
             "instrument_id": InstrumentId(symbol),
             "venue_id": VenueId("BINANCE"),
             "state": state,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "market_state_hash": getattr(canonical_state, "state_hash", ""),
             "_predictions": {},
             "_position_info": {
                 "has_position": False,
@@ -52,6 +64,27 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
                 "pnl_pct": 0.0,
             },
         }
+        v3_shadow: dict[str, Any]
+        try:
+            from beidou_strategy.alpha.pipeline import AlphaV3ShadowEngine
+
+            shadow_result = AlphaV3ShadowEngine(getattr(engine, "_alpha_v3_calibration_registry", None)).evaluate(
+                context
+            )
+            v3_shadow = shadow_result.to_dict()
+            v3_shadow.update(
+                {
+                    "schema_version": str(shadow_result.ensemble_forecast.schema_version),
+                    "model_version": str(shadow_result.ensemble_forecast.model_version),
+                    "policy_version": shadow_result.ensemble_forecast.policy_version,
+                }
+            )
+        except Exception as exc:
+            v3_shadow = {
+                "status": "NOT_VERIFIABLE",
+                "failure_reasons": [f"V3_SHADOW_ERROR:{type(exc).__name__}"],
+                "error": str(exc),
+            }
         kernel = getattr(engine, "_strategy_kernel", None)
         evaluate = getattr(kernel, "evaluate", None)
         if not callable(evaluate):
@@ -94,6 +127,27 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
                 component_results[component_id] = {"node_type": str(node_type)}
         if not component_results:
             raise RuntimeError("typed graph 未提供节点执行证据")
+        probe_timestamp = str(context["timestamp"])
+        decision_trace = build_decision_trace(
+            {
+                "symbol": symbol,
+                "features": features,
+                "state": trace_state,
+                "graph_hash": graph_hash,
+                "proposal_hash": proposal_hash,
+                "context_hash": str(kernel_result.get("context_hash", "")),
+                "timestamp": probe_timestamp,
+                "market_data_hash": v3_shadow.get("benchmark_snapshot_hash"),
+                "benchmark_snapshot_hash": v3_shadow.get("benchmark_snapshot_hash"),
+                "alpha_forecast_hash": v3_shadow.get("alpha_forecast_hash"),
+                "ensemble_forecast_hash": v3_shadow.get("ensemble_forecast_hash"),
+                "exposure_target_hash": v3_shadow.get("exposure_target_hash"),
+                "portfolio_target_hash": v3_shadow.get("portfolio_target_hash"),
+                "schema_version": v3_shadow.get("schema_version"),
+                "model_version": v3_shadow.get("model_version"),
+                "policy_version": v3_shadow.get("policy_version"),
+            }
+        )
         return {
             "ok": True,
             "symbol": symbol,
@@ -102,9 +156,12 @@ async def run_read_only_algorithm_probe(engine: Any, symbols: list[str]) -> dict
             "graph_hash": graph_hash,
             "blocked_by": kernel_result.get("blocked_by", ""),
             "components": component_results,
+            "v3_shadow": v3_shadow,
+            "v3_shadow_status": v3_shadow.get("status", "NOT_VERIFIABLE"),
+            "decision_trace": decision_trace,
             "feature_count": len(features),
             "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": probe_timestamp,
         }
     except Exception as exc:
         return {

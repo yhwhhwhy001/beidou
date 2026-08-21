@@ -121,7 +121,7 @@ class MarketDataFeed:
         settings = ConfigProvider().load()
         self._rest_url = settings.exchange.rest_base_url
         self._api_key = ""  # 通过秘密提供器注入
-        self._api_secret = ""
+        self._api_secret = ""  # nosec B105 - populated only by the secret provider
         self._recv_window = DEFAULT_RECV_WINDOW_MS
 
         # BD-T03: 使用注入的 Adapter 作为唯一网络传输。独立研究工具没有

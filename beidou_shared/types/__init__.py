@@ -112,8 +112,8 @@ class RiskDecision(str, Enum):
 
 
 class GateResult(str, Enum):
-    PASS = "PASS"
-    CONDITIONAL_PASS = "CONDITIONAL_PASS"
+    PASS = "PASS"  # nosec B105 - typed status, not a credential
+    CONDITIONAL_PASS = "CONDITIONAL_PASS"  # nosec B105 - typed status, not a credential
     FAIL = "FAIL"
     UNVERIFIABLE = "UNVERIFIABLE"
 
@@ -125,7 +125,7 @@ class ClockDomain(str, Enum):
 
 
 class DataQualityTier(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - data-quality status, not a credential
     CONDITIONAL = "CONDITIONAL"
     FAIL = "FAIL"
 

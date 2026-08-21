@@ -192,7 +192,9 @@ class BeidouSupervisor:
     @staticmethod
     def _print_checks(checks: list[CheckResult]) -> None:
         for item in checks:
-            marker = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "UNKNOWN": "❔"}[item.status.value]
+            marker = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "UNKNOWN": "❔"}[  # nosec B105 - status labels
+                item.status.value
+            ]
             print(f"{marker} [{item.severity.value}] {item.name}: {item.message}")
 
     def _install_exchange_write_interlock(self) -> None:
@@ -233,10 +235,7 @@ class BeidouSupervisor:
             # (双层防护保留);supervisor 互锁仅在 hard 模式或非 testnet
             # 环境保持 HARD_HOLD。live/canary 永不放行。
             del method, params
-            return (
-                self.mode == "testnet"
-                and os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard") == "unknown-only"
-            )
+            return self.mode == "testnet" and os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard") == "unknown-only"
 
         async def guarded_async(
             path: str,
@@ -421,7 +420,12 @@ class BeidouSupervisor:
             # 监控检查状态指标: 按 check_id 分组
             for item in self.report.checks:
                 safe_id = item.check_id.replace(".", "_").replace("-", "_")
-                base[f"check_{safe_id}"] = {"PASS": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3}.get(item.status.value, 3)
+                base[f"check_{safe_id}"] = {  # nosec B105 - status-to-severity mapping
+                    "PASS": 0,
+                    "WARN": 1,
+                    "FAIL": 2,
+                    "UNKNOWN": 3,
+                }.get(item.status.value, 3)
             # 监督器状态
             base["supervisor_state"] = {
                 "RUNNING": 0,

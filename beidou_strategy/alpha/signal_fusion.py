@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 
 from beidou_shared.types import InstrumentId, VenueId
 from beidou_strategy.alpha import AlphaSignal, SignalDirection
+from beidou_strategy.alpha.contracts import AlphaForecast, EnsembleForecast
+from beidou_strategy.alpha.forecast import EnsembleFuser
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,26 @@ class SignalFuser:
 
     def __init__(self, min_agreement_ratio: float = 0.6) -> None:
         self.min_agreement_ratio = min_agreement_ratio
+        self._forecast_fuser = EnsembleFuser()
+
+    def fuse_forecasts(
+        self,
+        forecasts: list[AlphaForecast] | tuple[AlphaForecast, ...],
+        *,
+        reliability: dict[str, float] | None = None,
+        correlations: dict[tuple[str, str], float] | None = None,
+    ) -> EnsembleForecast:
+        """V3 production fusion entry point.
+
+        Legacy ``AlphaSignal`` fusion remains available only for the V2
+        compatibility caller.  All V3 forecasts use the same deterministic
+        order-independent ``EnsembleFuser`` as TypedGraph.
+        """
+        return self._forecast_fuser.fuse(
+            forecasts,
+            reliability=reliability,
+            correlations=correlations,
+        )
 
     def detect_conflict(self, signals: list[AlphaSignal]) -> tuple[bool, str]:
         if len(signals) < 2:

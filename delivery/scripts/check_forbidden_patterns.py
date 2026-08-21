@@ -10,7 +10,18 @@ PATTERNS = [
     ("mainnet_url", re.compile(r"https?://(?:fapi|api)\.binance\.com", re.I)),
     ("swallowed_exception", re.compile(r"except\s+Exception(?:\s+as\s+\w+)?\s*:\s*(?:pass|continue)")),
 ]
-NETWORK = re.compile(r"\b(?:urllib|requests|httpx|aiohttp)\b|/fapi/")
+# Match network imports/transport calls, not ordinary prose such as
+# ``requests`` in an error message or an endpoint mentioned in a docstring.
+# The gate is intended to find actual transport paths outside the approved
+# adapter/test boundaries; lexical words alone create false positives.
+NETWORK = re.compile(
+    r"(?m)^\s*(?:import\s+(?:requests|httpx|aiohttp)(?:\b|\.)"
+    r"|from\s+(?:requests|httpx|aiohttp)\b"
+    r"|import\s+urllib\.request\b"
+    r"|from\s+urllib\.request\b)"
+    r"|\b(?:requests|httpx|aiohttp)\.(?:get|post|put|patch|delete|request)\s*\("
+    r"|\burllib\.request\.(?:urlopen|Request)\s*\("
+)
 ALLOWED_NETWORK = (
     "beidou_exchange/",
     "tests/",
@@ -23,6 +34,12 @@ ALLOWED_NETWORK = (
     # Database URL redaction/normalization parses strings only; it never opens
     # a network connection or bypasses the exchange adapter.
     "beidou_shared/config/__init__.py",
+    # Chaos injection deliberately performs a bounded read-only probe against
+    # an explicitly validated Testnet/local target; it is not an order path.
+    "beidou_chaos/process_fault_injector.py",
+    # G5 restart certification reads the local health endpoint only; the
+    # terminal DELETE/POST paths remain governed by the exchange adapter.
+    "beidou_certification/g5_scenarios/restart/process_restart.py",
 )
 SELF_SCAN_FILES = {
     "delivery/scripts/check_forbidden_patterns.py",

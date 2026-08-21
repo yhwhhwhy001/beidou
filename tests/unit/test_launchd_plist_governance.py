@@ -102,10 +102,7 @@ def _run_wrapper_with_term(child_code: int, marker: Path) -> int:
     BD-FIX (kickstart 孤儿进程) 回归: kickstart -k 的 TERM 必须送达
     子进程;wrapper 中断后必须重新 wait 收集子进程真实退出码。
     """
-    child = (
-        f'touch "{marker}"; trap "exit {child_code}" TERM; '
-        'while :; do sleep 1; done'
-    )
+    child = f'touch "{marker}"; trap "exit {child_code}" TERM; while :; do sleep 1; done'
     proc = subprocess.Popen(  # noqa: S603
         [str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"), "/bin/sh", "-c", child],
         stdout=subprocess.DEVNULL,

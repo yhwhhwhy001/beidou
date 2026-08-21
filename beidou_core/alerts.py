@@ -222,7 +222,7 @@ class AlertDispatcher:
                 ).encode()
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as response:
+            with urllib.request.urlopen(req, timeout=5) as response:  # nosec B310 - webhook URL is policy-validated
                 http_status = int(getattr(response, "status", 200))
                 if http_status < 200 or http_status >= 300:
                     raise RuntimeError(f"webhook HTTP status {http_status}")

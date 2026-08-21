@@ -35,7 +35,7 @@ class CertificationGate(str, Enum):
 
 
 class ScenarioStatus(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - scenario status, not a credential
     FAIL = "FAIL"
     NOT_VERIFIABLE = "NOT_VERIFIABLE"
     NOT_RUN = "NOT_RUN"

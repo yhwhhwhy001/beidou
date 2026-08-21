@@ -33,8 +33,9 @@ from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 
 logger = logging.getLogger(__name__)
 
-# 共享 PG(Homebrew 本机,beidou_testnet);运行时可用 BEIDOU_G5_PG_DSN 覆盖
-PG_DSN = os.environ.get("BEIDOU_G5_PG_DSN", "postgresql://beidou_app:beidou_dev_2024@localhost:5432/beidou_testnet")
+# G5 认证必须由运行环境显式提供隔离的 Testnet PG DSN；不提供时传入
+# 一个不可连接的哨兵值，由场景自身记录 FAIL，绝不回退到内置凭据或本机数据库。
+PG_DSN = os.environ.get("BEIDOU_G5_PG_DSN", "__MISSING_BEIDOU_G5_PG_DSN__")
 
 _INSERT_INTENT_SQL = (
     "INSERT INTO v3_order_intents "
