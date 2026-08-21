@@ -10,7 +10,7 @@
 ## 基线与范围
 
 - 执行包：`/Users/maguannan/Downloads/BEIDOU_ALPHA_V3_EXECUTION_PACKAGE.zip`
-- 基线/代码验证 HEAD：`8bffe2014205bb7dfae1a5274d88c43e365fcd6b`
+- 基线/代码验证 HEAD：`1a14e0908bc2376ef4ea585fb3f4f43a366e8d74`
 - 工作树：`/Users/maguannan/beidou-worktrees/alpha-v3-20260821`
 - 分支：`codex/alpha-v3-20260821`
 - 主服务：`/Users/maguannan/beidou:9090`，由 `gui/501/com.beidou.autopilot` 管理。
@@ -31,9 +31,9 @@
 | G-A6 | PASS | 只读 shadow pipeline/probe/lineage |
 | G5 | `FAIL/NOT_VERIFIABLE` | 缺少独立授权的真实 Testnet create/cancel/partial-fill/race 证据、完整 readback/cleanup 和可审计 sealed 运行包；离线场景 PASS 不替代真实证据 |
 | G-A7 | `FAIL/NOT_VERIFIABLE` | 缺 sealed real OOS、同成本 walk-forward/regime 经济窗口与完整 Paper shadow 窗口 |
-| GLOBAL-CI | `PASS` | 全量 `3532 passed`，coverage `85.020340...%`，达到项目配置 `fail_under=85`；静态/包/质量/安全扫描通过 |
+| GLOBAL-CI | `PASS` | 全量 `3532 passed`，coverage `85.02117828263381%`，达到项目配置 `fail_under=85`；静态/包/质量/安全扫描和 registry oracle 通过 |
 | V3 coverage | `PASS` | 执行包精确 22 模块 `3497 statements / 1070 branches`，`0 missed / 0 partial`，line/branch 均 100% |
-| RESTART | `PASS_WITH_FAIL_CLOSED_RUNTIME / NO-GO` | 最终合并提交上的 Paper 进程启动并提供 HTTP 200 健康端点，但状态为 `DEGRADED`；active safety incidents/保护缺失正确阻断 ready/恢复，验证结束已停机 |
+| RESTART | `PASS_WITH_FAIL_CLOSED_RUNTIME / NO-GO` | 最终合并提交上的 Paper 进程启动并提供 HTTP 200 `HEALTHY` 端点，但 supervisor 为 `DEGRADED`；active safety incidents/保护缺失正确阻断 ready/恢复，验证结束已停机 |
 
 ## 已补齐内容
 
@@ -47,12 +47,12 @@
 
 ## 运行状态与安全边界
 
-最终合并提交的隔离 Paper 重启期间 `/health` 为 HTTP 200、`status=DEGRADED`，
-`/ready` 为 503、`trading_ready=false`，`can_write=false`，pending/unacked outbox intent
-为 0。保护归属/reconciliation UNKNOWN、signed policy 缺失、active critical incidents
-和 protection coverage 缺失均保持阻断；保护放置、清理和未知订单处理均跳过。验证结束确认
-Paper 进程和 `19090` 端口关闭；未启动历史 Testnet LaunchAgent，未执行人工下单、撤单或未知
-订单清理，也未触碰 Mainnet/live。
+最终合并提交的隔离 Paper 重启期间 `/health` 为 HTTP 200、`HEALTHY`，但 supervisor
+进入 `DEGRADED`；`/ready` 为 503、`trading_ready=false`，`can_write=false`，
+pending/unacked outbox intent 为 0。保护归属/reconciliation UNKNOWN、signed policy 缺失、
+active critical incidents 和 protection coverage 缺失均保持阻断；保护放置、清理和未知订单
+处理均跳过。验证结束确认 Paper 进程和 `19090` 端口关闭；未启动历史 Testnet LaunchAgent，
+未执行人工下单、撤单或未知订单清理，也未触碰 Mainnet/live。
 
 ## 不可替代的剩余条件
 

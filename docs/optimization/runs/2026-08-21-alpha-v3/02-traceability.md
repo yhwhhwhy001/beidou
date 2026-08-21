@@ -33,7 +33,7 @@
   只读 shadow；没有经济收益或生产晋级含义。
 - `G-A7`：FAIL/NOT_VERIFIABLE。当前没有 sealed real same-data/same-cost OOS 与完整
   Paper shadow 窗口；不能把 fixture PASS 解释为优于 V2 或允许 promotion。
-- `GLOBAL-CI`：PASS。全仓 `3532 passed`；全局 coverage `85.020340...%`，高于
+- `GLOBAL-CI`：PASS。全仓 `3532 passed`；全局 coverage `85.02117828263381%`，高于
   `fail_under=85`；V3 专项 22 模块 `3497 statements / 1070 branches` 为 100%/100%。
 - `RESTART`：PASS_WITH_FAIL_CLOSED_RUNTIME。隔离 Paper 进程启动两轮、健康接口通过、
   `/ready=503`、安全停止后端口关闭；原 PID 98924 未触碰。

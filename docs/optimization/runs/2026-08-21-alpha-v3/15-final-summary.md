@@ -7,7 +7,7 @@
   runtime、supervisor 和 auto-reauthorize 回归测试。
 - `3180` 个 unit、`20` 个 integration、`263` 个 architecture 测试通过；全量测试为
   `3532 passed`。
-- 全仓 coverage 为 `85.020340...%`，达到项目配置 `fail_under=85`；V3 精确 22 模块为
+- 全仓 coverage 为 `85.02117828263381%`，达到项目配置 `fail_under=85`；V3 精确 22 模块为
   `3497/3497` statements、`1070/1070` branches，line/branch 均 `100%`。
 - compileall、Ruff、mypy、质量/硬编码/禁止模式扫描、package validation 和 registry
   校验通过。
@@ -28,7 +28,8 @@
 
 ## Git handoff
 
-代码修复提交为 `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；文档证据已回填并推送到
+代码修复提交为 `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`，最终 registry oracle 修正为
+`1a14e0908bc2376ef4ea585fb3f4f43a366e8d74`；文档证据已回填并推送到
 `origin/codex/alpha-v3-20260821`，随后 fast-forward 合并到 `origin/main`；最终文档提交
 完成后两个远端 ref 已核验指向同一提交。服务保持停机是本轮 fail-closed 验证的安全收尾，
 不代表代码未交付。

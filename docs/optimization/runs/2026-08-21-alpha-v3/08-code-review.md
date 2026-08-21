@@ -28,7 +28,7 @@
   NOT_VERIFIABLE for missing economic evidence. Coverage is not used as economic evidence.
 - CI review: `.github/workflows/ci.yml:78-113` uses the global `85%` gate and the explicit
   100% line/branch gate for the 22 V3 modules; the dependency audit is bound to `python -m pip_audit`.
-- Fresh evidence: `3532` tests passed; global coverage `85.02%`; V3 coverage 3497 statements/1070
+- Fresh evidence: `3532` tests passed; global coverage `85.02117828263381%`; V3 coverage 3497 statements/1070
   branches at 100%/100%; compileall, Ruff, mypy, test-quality, hardcoded, forbidden, package,
   registry oracle, Bandit and `python -m pip_audit` passed; `git diff --check` passed.
 

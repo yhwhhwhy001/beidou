@@ -1,14 +1,14 @@
 {
   "gate_id": "RESTART",
   "status": "PASS_WITH_FAIL_CLOSED_RUNTIME",
-  "validation_commit": "fa52771f8936447aa58069e74f16699bfc4eb4b0",
+  "validation_commit": "1a14e0908bc2376ef4ea585fb3f4f43a366e8d74",
   "worktree": "/Users/maguannan/beidou",
   "mode": "paper",
   "symbols": ["BTCUSDT"],
   "port": 19090,
   "startup": {
     "preflight": "PASS (clean merged main worktree, current commit, isolated port available)",
-    "health": "HTTP 200, status=DEGRADED",
+    "health": "HTTP 200 HEALTHY",
     "liveness": "RUNNING during observation; stopped cleanly",
     "market_data": "ACTIVE (WebSocket with REST fallback)",
     "algorithm_probe": "STARTUP SELF-CHECK LOGGED PASS; readiness remained blocked",

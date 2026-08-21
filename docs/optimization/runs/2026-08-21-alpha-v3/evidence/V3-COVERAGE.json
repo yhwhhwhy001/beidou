@@ -1,7 +1,7 @@
 {
   "gate_id": "V3-COVERAGE",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "head_sha": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
+  "head_sha": "1a14e0908bc2376ef4ea585fb3f4f43a366e8d74",
   "status": "PASS",
   "requested_threshold": {
     "line": 100.0,
@@ -40,11 +40,11 @@
     "beidou_research.backtest.alpha_v3_challenger"
   ],
   "reports": [
-    "/tmp/beidou-alpha-v3-exact-final.json",
-    "/tmp/beidou-alpha-v3-exact-final.xml"
+    "/tmp/beidou-alpha-v3-exact-registry-final.json",
+    "/tmp/beidou-alpha-v3-exact-registry-final.xml"
   ],
   "limitations": [
     "This is a code/contract coverage gate, not economic evidence.",
-    "The full repository coverage command separately measured 85.0203403702188% and passed the 85% CI gate."
+    "The full repository coverage command separately measured 85.02117828263381% and passed the 85% CI gate."
   ]
 }

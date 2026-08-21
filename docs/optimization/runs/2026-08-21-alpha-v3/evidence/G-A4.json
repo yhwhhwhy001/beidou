@@ -1,7 +1,7 @@
 {
   "gate_id": "G-A4",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "head_sha": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
+  "head_sha": "1a14e0908bc2376ef4ea585fb3f4f43a366e8d74",
   "status": "PASS",
   "scope": "ExposureGovernor, V3 constraints and active portfolio optimizer",
   "metrics": {

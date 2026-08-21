@@ -10,22 +10,22 @@ G5 Testnet 真实执行、Paper promotion 或 Mainnet/live readiness 证据。�
 - 部署工作树：`/Users/maguannan/beidou`
 - 启动方式：`python -m apps.strategy_engine`（强制 Paper、前台、`--no-self-heal`）
 - 监听地址：`127.0.0.1:19090`
-- 验证提交：`fa52771f8936447aa58069e74f16699bfc4eb4b0`
+- 验证提交：`1a14e0908bc2376ef4ea585fb3f4f43a366e8d74`
 
 本轮先确认历史 Testnet LaunchAgent 和 `9090` 均未运行，再在合并后的 `main` 工作树以单一
-`BTCUSDT` 启动 Paper 进程。进程启动并进入运行监控，但 `/health` 返回 `DEGRADED`、
-`/ready=503`，安全阻断保持生效。进程随后安全停止，`19090` 已关闭；没有启动 LaunchAgent
-或触碰历史 Testnet 实例。
+`BTCUSDT` 启动 Paper 进程。进程启动并进入运行监控，稳定观测 `/health=200 HEALTHY`，但
+supervisor 状态为 `DEGRADED`、`/ready=503`，安全阻断保持生效。进程随后安全停止，`19090`
+已关闭；没有启动 LaunchAgent 或触碰历史 Testnet 实例。
 
 ## 重启后的健康与 fail-closed 证据
 
 | 检查 | 新实例观测 |
 |---|---|
-| `/health` | HTTP 200，`status=DEGRADED` |
+| `/health` | HTTP 200，`HEALTHY` |
 | `/ready` | HTTP 503，`ready=false`，`trading_ready=false` |
 | 阻断原因 | `SIGNED_POLICY_UNAVAILABLE`、保护归属 UNKNOWN、reconciliation UNKNOWN、active critical incidents、missing protection coverage |
 | 只读信号 | WebSocket market data active with REST fallback；启动自检记录 PASS；`can_write=false`；pending/unacked outbox intents=0 |
-| 最终控制状态 | `lifecycle=DEGRADED`、`NO_NEW_RISK`；保护放置/清理因缺 fresh matched reconciliation 而跳过；端口关闭 |
+| 最终控制状态 | supervisor/lifecycle=`DEGRADED`、`NO_NEW_RISK`；保护放置/清理因缺 fresh matched reconciliation 而跳过；端口关闭 |
 | G5 / G-A7 | 仍为 `FAIL/NOT_VERIFIABLE`，本次 Paper 运行不替代真实 Testnet/OOS 证据 |
 
 本次代码修复验证了以下安全性质：active `HIGH/P1` 或 `CRITICAL/LOCKDOWN/P0` incident
@@ -51,7 +51,7 @@ unowned protection/order facts 时保持 UNKNOWN 并跳过清理/放置，未执
 | architecture | `263 passed` |
 | unit / integration / architecture | `3180 / 20 / 263 passed` |
 | 全量 tests | `3532 passed`；coverage gate 通过 |
-| 全仓 coverage | `85.020340...%`，达到 `fail_under=85`，`GLOBAL-CI=PASS` |
+| 全仓 coverage | `85.02117828263381%`，达到 `fail_under=85`，`GLOBAL-CI=PASS` |
 | V3 精确 coverage | `3497/3497` statements、`1070/1070` branches，line/branch `100%/100%` |
 | compileall / Ruff / mypy / scans / package validation | 通过 |
 | G5 / G-A7 | `FAIL/NOT_VERIFIABLE`；缺少真实 Testnet 运行包和 sealed OOS/Paper 经济窗口 |
