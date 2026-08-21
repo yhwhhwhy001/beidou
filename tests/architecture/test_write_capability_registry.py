@@ -175,6 +175,21 @@ def test_governed_source_digest_detects_hidden_behavior_and_new_sources(tmp_path
     assert ".beidou/state.json" not in governed
     assert "evidence/activate.sh" in governed
 
+    (tmp_path / ".superpowers" / "run").mkdir(parents=True)
+    (tmp_path / ".superpowers" / "run" / "notes.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "artifacts" / "evidence").mkdir(parents=True)
+    (tmp_path / "artifacts" / "evidence" / "runtime.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config" / "policies").mkdir(parents=True)
+    (tmp_path / "config" / "policies" / "risk.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config" / "env.testnet.yaml").write_text("secret: local\n", encoding="utf-8")
+    (tmp_path / "config" / "env.template.yaml").write_text("secret: ''\n", encoding="utf-8")
+    governed = discover_governed_source_digests(tmp_path)
+    assert ".superpowers/run/notes.json" not in governed
+    assert "artifacts/evidence/runtime.json" not in governed
+    assert "config/policies/risk.json" not in governed
+    assert "config/env.testnet.yaml" not in governed
+    assert "config/env.template.yaml" in governed
+
 
 def test_primary_governance_implementation_is_itself_hashed() -> None:
     governed = discover_governed_source_digests(ROOT)

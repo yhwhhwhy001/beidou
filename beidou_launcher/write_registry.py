@@ -60,6 +60,27 @@ _SKIP_PARTS = {
     "docs",
     "tests",
 }
+
+
+def _is_repository_local_only(relative: Path) -> bool:
+    """Exclude ignored operator artifacts and sensitive local configuration."""
+
+    parts = relative.parts
+    if parts[:1] == (".superpowers",):
+        return True
+    if parts[:2] == ("artifacts", "evidence"):
+        return True
+    if parts[:2] == ("config", "policies"):
+        return True
+    return (
+        len(parts) == 2
+        and parts[0] == "config"
+        and parts[1].startswith("env.")
+        and parts[1].endswith(".yaml")
+        and parts[1] != "env.template.yaml"
+    )
+
+
 _REQUIRED_ENTRY_FIELDS = {
     "id",
     "path",
@@ -241,8 +262,10 @@ def _expected_entry_rejection(status: str, capability: str) -> str:
 
 def _is_skipped(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
-    return relative.as_posix() == "beidou_launcher/write_registry.py" or any(
-        part in _SKIP_PARTS for part in relative.parts
+    return (
+        relative.as_posix() == "beidou_launcher/write_registry.py"
+        or any(part in _SKIP_PARTS for part in relative.parts)
+        or _is_repository_local_only(relative)
     )
 
 
@@ -250,7 +273,7 @@ def _is_governed_source_skipped(path: Path, root: Path) -> bool:
     """Exclude non-source trees while retaining executable runtime artifacts."""
 
     relative = path.relative_to(root)
-    return any(part in _SKIP_PARTS for part in relative.parts)
+    return any(part in _SKIP_PARTS for part in relative.parts) or _is_repository_local_only(relative)
 
 
 def _yaml_execution_strings(payload: Any) -> list[str]:

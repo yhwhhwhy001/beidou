@@ -42,6 +42,29 @@ SKIP_PARTS = {
 }
 
 
+def _is_repository_local_only(relative: Path) -> bool:
+    """Mirror repository policy for ignored evidence and sensitive local config."""
+
+    parts = relative.parts
+    if parts[:1] == (".superpowers",):
+        return True
+    if parts[:2] == ("artifacts", "evidence"):
+        return True
+    if parts[:2] == ("config", "policies"):
+        return True
+    return (
+        len(parts) == 2
+        and parts[0] == "config"
+        and parts[1].startswith("env.")
+        and parts[1].endswith(".yaml")
+        and parts[1] != "env.template.yaml"
+    )
+
+
+def _is_skipped(relative: Path) -> bool:
+    return any(part in SKIP_PARTS for part in relative.parts) or _is_repository_local_only(relative)
+
+
 @dataclass(frozen=True, slots=True)
 class OracleFinding:
     path: str
@@ -61,7 +84,7 @@ def scan_source_digests(root: Path) -> dict[str, str]:
         if not path.is_file():
             continue
         relative = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in relative.parts):
+        if _is_skipped(relative):
             continue
         relative_text = relative.as_posix()
         if relative_text == "config/write-capability-registry.json":
@@ -307,7 +330,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
     findings: list[OracleFinding] = []
     for path in root.rglob("*.py"):
         relative = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in relative.parts):
+        if _is_skipped(relative):
             continue
         if relative.as_posix() in {
             "beidou_launcher/write_registry.py",
@@ -346,7 +369,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
 
     for path in root.rglob("*.sh"):
         relative = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in relative.parts):
+        if _is_skipped(relative):
             continue
         try:
             source = path.read_text(encoding="utf-8")
@@ -369,7 +392,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
                 findings.append(OracleFinding(relative.as_posix(), "SHELL_HTTP_WRITE", line_number, "curl"))
     for path in root.rglob("*.plist"):
         relative = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in relative.parts):
+        if _is_skipped(relative):
             continue
         try:
             with path.open("rb") as handle:
@@ -398,7 +421,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
     for pattern in ("*.yml", "*.yaml"):
         for path in root.rglob(pattern):
             relative = path.relative_to(root)
-            if any(part in SKIP_PARTS for part in relative.parts):
+            if _is_skipped(relative):
                 continue
             try:
                 source = path.read_text(encoding="utf-8")
@@ -416,7 +439,7 @@ def scan_repository(root: Path) -> list[OracleFinding]:
                     findings.append(OracleFinding(relative.as_posix(), "YAML_PACKAGE_NETWORK", line_number, "pip"))
     for path in root.rglob("*.cron"):
         relative = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in relative.parts):
+        if _is_skipped(relative):
             continue
         source = path.read_text(encoding="utf-8")
         for line_number, line in enumerate(source.splitlines(), start=1):
