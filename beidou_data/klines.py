@@ -5,7 +5,7 @@ BD-CV11: 集成 CanonicalMarketEvent contract。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from beidou_shared.types import Price, Quantity, VenueInstrument
@@ -202,7 +202,7 @@ class KLineGenerator:
         klines = self._klines.get(key, [])
         for i, k in enumerate(klines):
             if k.open_time == open_time:
-                revised = OHLCV(**{**new_ohlcv.__dict__, "revision_number": k.revision_number + 1})
+                revised = replace(new_ohlcv, revision_number=k.revision_number + 1)
                 klines[i] = revised
                 return revised
         raise ValueError(f"No kline found at {open_time}")

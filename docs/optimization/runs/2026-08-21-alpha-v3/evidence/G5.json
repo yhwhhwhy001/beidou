@@ -1,0 +1,26 @@
+{
+  "gate_id": "G5",
+  "status": "FAIL",
+  "verifiability": "NOT_VERIFIABLE",
+  "scope": "real Testnet execution certification required by the execution package",
+  "offline_fixture_evidence": "PASS",
+  "real_testnet_evidence": {
+    "authorized_write_run": "MISSING",
+    "create_query_cancel": "NOT_VERIFIABLE",
+    "partial_fill": "NOT_VERIFIABLE",
+    "cancel_fill_race": "NOT_VERIFIABLE",
+    "ack_loss_or_unknown_recovery": "NOT_VERIFIABLE",
+    "durable_journal_and_exchange_readback": "MISSING",
+    "cleanup_and_final_reconciliation": "MISSING"
+  },
+  "safety_boundary": {
+    "real_write_script_executed": false,
+    "manual_order_or_cancel_executed": false,
+    "offline_scenarios_are_substitutes": false
+  },
+  "failures": [
+    "No separately authorized, auditable real Testnet write run with bounded symbols, quantities, cleanup and readback evidence was supplied.",
+    "Offline G5 scenario tests prove fail-closed code contracts but cannot prove exchange execution behavior."
+  ],
+  "promotion": "NO-GO"
+}

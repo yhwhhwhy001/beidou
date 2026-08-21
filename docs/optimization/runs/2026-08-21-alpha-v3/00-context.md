@@ -37,8 +37,8 @@
 - `MarketState`、Benchmark、五类 AlphaForecast、MR consolidation、calibration
   registry、全入口 fusion、ExposureGovernor、ActivePortfolioOptimizer 和完整
   PnL attribution 已实现并接入只读 V3 shadow trace。
-- V3 核心 22 个模块加入显式 100% line/branch CI gate；未降低既有全局 78%
-  coverage gate。
+- V3 核心 22 个模块加入显式 100% line/branch CI gate；全局 coverage gate 已按执行包
+  要求恢复为 `85%`，并有 `85.02%` 的最新全量证据。
 - 官方 write-capability registry 已按当前源码重建，独立 oracle PASS。
 - 环境缺失的运行目录 `.beidou/` 与 `evidence/bootstrap/` 已补齐；未伪造缺失的
   signed policy、OOS 数据、Paper 经济窗口或账户保护事实。
@@ -49,8 +49,8 @@
   和只读 shadow probe；不等价于经济晋级或生产就绪。
 - `G-A7`：FAIL/NOT_VERIFIABLE。缺 sealed real same-data/same-cost OOS 与完整 Paper
   shadow 窗口，不能作收益或 promotion 结论。
-- `GLOBAL-CI`：PASS。3400 tests、全局 CI coverage 80.59%、静态/安全/包/registry
-  门禁均通过；V3 核心 3497 statements/1070 branches 为 100%/100%。
+- `GLOBAL-CI`：PASS。全量 `3532 passed`、coverage `85.020340...%`，超过 `fail_under=85`；
+  静态/安全/包/registry 门禁均通过；V3 核心 3497 statements/1070 branches 为 100%/100%。
 - Restart validation：PASS_WITH_FAIL_CLOSED_RUNTIME。健康接口和算法探针通过；
   protection/reconciliation UNKNOWN 使 `/ready` 保持 503、控制面保持 NO_NEW_RISK。
 

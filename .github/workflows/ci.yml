@@ -76,10 +76,8 @@ jobs:
         run: python delivery/scripts/validate_package.py
 
       - name: Coverage report
-        # M21-F02: 阈值对齐实测 78% (2026-08-16, 2693 tests)——
-        # 原 85 自设门从未达标(实测 66.5%),门禁形同虚设;
-        # 对齐后任何覆盖回退都会真实失败。增量目标 85% 随模块补测推进。
-        run: pytest tests/ -q --cov --cov-fail-under=78 --cov-report=xml --cov-report=term-missing
+        # Execution-package global gate: coverage must remain at or above 85%.
+        run: pytest tests/ -q --cov --cov-fail-under=85 --cov-report=xml --cov-report=term-missing
 
       - name: Alpha V3 coverage gate (100% lines and branches)
         # 用户授权的 V3 强制门禁；覆盖率作用域明确限定为执行包新增/改造的
@@ -130,4 +128,5 @@ jobs:
       - name: Security scan (bandit)
         run: bandit -r beidou_* -c pyproject.toml
       - name: Dependency audit
-        run: pip-audit
+        # Keep the audit bound to the interpreter installed by setup-python.
+        run: python -m pip_audit

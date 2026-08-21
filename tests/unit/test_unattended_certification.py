@@ -9,6 +9,7 @@ import pytest
 
 from beidou_certification.unattended import (
     MINIMUM_SLI_SAMPLES,
+    DailyReport,
     IncidentRecord,
     IncidentSeverity,
     SLICategory,
@@ -198,3 +199,103 @@ def test_explicit_g7_window_id_is_bound_and_path_safe(tmp_path):
         engine.create_window("plan", window_id="../escape")
     with pytest.raises(ValueError, match="already exists"):
         engine.create_window("plan", window_id="g7-operator-window")
+
+
+def _fill_all_categories(window, *, passed: bool = True) -> None:
+    for index in range(MINIMUM_SLI_SAMPLES):
+        window.sli_samples.append(
+            SLISample(
+                category=list(SLICategory)[index % len(SLICategory)],
+                value=1.0,
+                threshold=0.9,
+                passed=passed,
+                metadata={"source": "deterministic-test"},
+            )
+        )
+
+
+def test_evaluate_covers_p0_simulated_pass_rate_report_reset_and_certificate_paths(tmp_path):
+    engine, window = _mature_window(tmp_path)
+    window.incidents.append(IncidentRecord("p0", IncidentSeverity.P0, "halt", "p0"))
+    result = engine.evaluate(window.window_id)
+    assert result["status"] == "FAIL" and "P0" in result["reason"]
+
+    simulated_engine, simulated = _mature_window(tmp_path / "simulated")
+    simulated.sli_samples.append(SLISample(SLICategory.DATA_QUALITY, 1.0, 0.9, True, metadata={"simulated": True}))
+    result = simulated_engine.evaluate(simulated.window_id)
+    assert result["status"] == "NOT_VERIFIABLE" and result["is_simulated"] is True
+
+    failed_engine, failed = _mature_window(tmp_path / "failed-rate")
+    _fill_all_categories(failed, passed=True)
+    failed.sli_samples[-1].passed = False
+    result = failed_engine.evaluate(failed.window_id)
+    assert result["status"] == "FAIL" and "pass rate" in result["reason"]
+
+    reports_engine, reports = _mature_window(tmp_path / "reports")
+    _fill_all_categories(reports)
+    result = reports_engine.evaluate(reports.window_id)
+    assert result["status"] == "FAIL" and "daily reports" in result["reason"]
+
+    reset_engine, reset_window = _mature_window(tmp_path / "reset")
+    _fill_all_categories(reset_window)
+    reset_window.daily_reports = [object()] * reset_window.duration_days
+    reset_window.reset_count = 1
+    reset_window.reset_reason = "test reset"
+    result = reset_engine.evaluate(reset_window.window_id)
+    assert result["status"] == "FAIL" and "reset" in result["reason"]
+
+    complete_engine, complete = _mature_window(tmp_path / "complete")
+    _fill_all_categories(complete)
+    complete.daily_reports = [
+        DailyReport(date=f"2026-01-{index + 1:02d}", window_id=complete.window_id)
+        for index in range(complete.duration_days)
+    ]
+    certificate = complete_engine.evaluate(complete.window_id)
+    assert certificate["status"] == "PASS"
+    assert certificate["mainnet_prohibited"] is True
+    assert complete.status is WindowStatus.COMPLETED
+    assert (tmp_path / "complete" / f"{complete.window_id}-g7-certificate.json").exists()
+
+
+def test_unattended_reset_conditions_listing_and_serialization_boundaries(tmp_path):
+    engine = UnattendedCertification(str(tmp_path))
+    window = engine.create_window("plan", duration_days=2, window_id="g7-boundary")
+    engine.start_window(window.window_id)
+    triggers = engine.check_reset_conditions(
+        window.window_id,
+        duplicate_orders=2,
+        unprotected_duration_seconds=301,
+        ledger_mismatch=True,
+        evidence_gap=True,
+    )
+    assert len(triggers) == 4 and window.reset_count == 1
+    assert engine.check_reset_conditions(window.window_id) == []
+    assert engine.get_window("missing") is None
+    assert engine.list_windows()[0]["window_id"] == window.window_id
+
+    sample = SLISample(SLICategory.RECONCILIATION, 1.0, 0.9, True)
+    encoded = engine._serialize_sli(sample)
+    decoded = engine._deserialize_sli(encoded)
+    assert decoded.category is SLICategory.RECONCILIATION
+    with pytest.raises(ValueError):
+        engine._deserialize_sli("invalid")
+    with pytest.raises(ValueError):
+        engine._parse_datetime("bad", "timestamp")
+    assert engine._parse_datetime("2026-01-01T00:00:00", "timestamp").tzinfo is not None
+
+    incident = IncidentRecord("i", IncidentSeverity.P2, "title", "description")
+    incident.closed_at = datetime.now(timezone.utc)
+    incident.resolved = True
+    decoded_incident = engine._deserialize_incident(engine._serialize_incident(incident))
+    assert decoded_incident.resolved is True
+    with pytest.raises(ValueError):
+        engine._deserialize_incident(None)
+
+    report = DailyReport(date="2026-01-01", window_id=window.window_id, sli_samples=[sample])
+    report.sign()
+    decoded_report = engine._deserialize_report(
+        {**engine._serialize_report(report), "total_recovery_count": None, "recoveries": 3}
+    )
+    assert decoded_report.total_recovery_count == 3
+    with pytest.raises(ValueError):
+        engine._deserialize_report(None)

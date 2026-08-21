@@ -10,6 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from beidou_certification.gate_verifier import (
+    _number,
+    _timestamp,
+    verify_evidence_integrity,
     verify_g5_certificate,
     verify_g7_certificate,
 )
@@ -230,3 +233,35 @@ def test_g5_withdraw_not_exempt_without_allow_flag() -> None:
     assert verification.passed is False
     assert "withdraw_permission" in verification.failures
     assert "withdraw_permission_exempt" not in verification.checks
+
+
+def test_gate_verifier_parses_numbers_timestamps_and_evidence_hashes(tmp_path) -> None:
+    assert _timestamp(datetime(2026, 1, 1, tzinfo=timezone.utc)) is not None
+    assert _timestamp("2026-01-01T00:00:00Z") is not None
+    assert _timestamp("bad") is None
+    assert _timestamp(None) is None
+    assert _number(True) is None
+    assert _number("bad") is None
+    assert _number("inf") is None
+    assert _number("1.5") == 1.5
+
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("payload", encoding="utf-8")
+    import hashlib
+
+    digest = hashlib.sha256(b"payload").hexdigest()
+    ok, failures = verify_evidence_integrity({"evidence_hashes": {evidence.name: digest}}, str(tmp_path))
+    assert ok and failures == []
+    bad, failures = verify_evidence_integrity(
+        {"evidence_hashes": {"missing.json": digest, evidence.name: "wrong"}}, str(tmp_path)
+    )
+    assert not bad and any(item.startswith("MISSING_EVIDENCE") for item in failures)
+    assert any(item.startswith("HASH_MISMATCH") for item in failures)
+
+    manifest = {"name": "bundle", "evidence_hashes": {}}
+    import json
+
+    manifest["manifest_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    assert verify_evidence_integrity(manifest)[0]
+    manifest["manifest_hash"] = "wrong"
+    assert not verify_evidence_integrity(manifest)[0]

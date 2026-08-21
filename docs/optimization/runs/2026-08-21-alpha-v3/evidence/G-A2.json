@@ -12,7 +12,7 @@
     "residual_beta_neutral_artifact": "PASS",
     "mr_single_math_semantic": "PASS",
     "future_leakage_guards": "PASS",
-    "full_tests": "3400 passed"
+    "full_tests": "3532 passed"
   },
   "limitations": [
     "Fixture and deterministic contract evidence only; no sealed OOS result.",

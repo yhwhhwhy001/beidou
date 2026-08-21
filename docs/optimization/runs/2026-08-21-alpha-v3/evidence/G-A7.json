@@ -2,6 +2,7 @@
   "gate_id": "G-A7",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
   "status": "FAIL",
+  "verifiability": "NOT_VERIFIABLE",
   "scope": "challenger implementation and available offline fixture evidence",
   "metrics": {
     "fixture_contract": "PASS",
@@ -14,6 +15,7 @@
     "promotion": "NO-GO"
   },
   "failures": [
-    "No auditable sealed real same-data/same-cost OOS or completed Paper shadow window was supplied; fixture PASS cannot satisfy economic acceptance."
+    "No auditable sealed real same-data/same-cost OOS or completed Paper shadow window was supplied; fixture PASS cannot satisfy economic acceptance.",
+    "G-A7 remains blocked even though the V3 code/branch coverage gate passed."
   ]
 }

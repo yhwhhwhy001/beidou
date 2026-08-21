@@ -26,11 +26,11 @@
 - Test-validity review: `tests/unit/test_alpha_v3_core_coverage_complete.py` contains semantic
   negative/boundary assertions; `tests/integration/test_alpha_v3_challenger.py:47` preserves
   NOT_VERIFIABLE for missing economic evidence. Coverage is not used as economic evidence.
-- CI review: `.github/workflows/ci.yml:84-111` preserves the global 78% gate and adds the explicit
-  100% line/branch gate for the 22 V3 modules; no threshold was lowered.
-- Fresh evidence: 3400 tests passed; global coverage 80.59%; V3 coverage 3497 statements/1070
+- CI review: `.github/workflows/ci.yml:78-113` uses the global `85%` gate and the explicit
+  100% line/branch gate for the 22 V3 modules; the dependency audit is bound to `python -m pip_audit`.
+- Fresh evidence: `3532` tests passed; global coverage `85.02%`; V3 coverage 3497 statements/1070
   branches at 100%/100%; compileall, Ruff, mypy, test-quality, hardcoded, forbidden, package,
-  registry oracle, Bandit and pip-audit passed; `git diff --check` passed.
+  registry oracle, Bandit and `python -m pip_audit` passed; `git diff --check` passed.
 
 ## Decision
 

@@ -2,10 +2,10 @@
 
 验收结论：`CONDITIONAL_ACCEPTANCE_FOR_OFFLINE_SHADOW / NO-GO_FOR_A7_AND_UNATTENDED_TESTNET`
 
-本轮已完成执行包要求的代码审查、合同、测试、静态门禁、运行时安全修复和用户授权的
-Main Testnet 重启验证。验证同时确认了两个不可忽略的阻断：全仓 coverage 未达到项目
-配置的 `fail_under=85`，且 G5/G-A7 的独立经济证据不可验证。因此不能把本轮结果表述为
-“全部门禁通过”、Paper promotion、生产就绪或 Mainnet/live 授权。
+本轮已完成执行包要求的代码审查、合同、测试、静态门禁、覆盖率补齐、运行时安全修复和
+受控隔离 Paper/Shadow 重启验证。全局 coverage 已达到项目配置的 `fail_under=85`，V3 精确
+作用域 line/branch 均为 100%；G5/G-A7 的独立真实经济证据仍不可验证。因此不能把本轮
+结果表述为 Paper promotion、生产就绪或 Mainnet/live 授权。
 
 ## 基线与范围
 
@@ -29,9 +29,10 @@ Main Testnet 重启验证。验证同时确认了两个不可忽略的阻断：�
 | G-A4 | PASS | exposure/active optimizer/math/scenario/property |
 | G-A5 | PASS | 完整归因合同和 completeness gate；无真实 fill |
 | G-A6 | PASS | 只读 shadow pipeline/probe/lineage |
-| G-A7 | FAIL | 缺 sealed real OOS 与完整 Paper shadow 窗口 |
-| GLOBAL-CI | `FAIL_COVERAGE` | 全量 `3403 passed`，但 coverage `80.57%`，低于项目配置 `fail_under=85`；静态/包/质量扫描本身通过 |
-| V3 coverage | `PARTIAL_EVIDENCE` | 执行包列出的 V3 核心实现文件在全量 line report 中达到 100% line；包含 compatibility/额外模块的 alpha+portfolio 分支覆盖运行合计为 86.44%，不能宣称整个 V3 或全仓 line/branch 100% |
+| G5 | `FAIL/NOT_VERIFIABLE` | 缺少独立授权的真实 Testnet create/cancel/partial-fill/race 证据、完整 readback/cleanup 和可审计 sealed 运行包；离线场景 PASS 不替代真实证据 |
+| G-A7 | `FAIL/NOT_VERIFIABLE` | 缺 sealed real OOS、同成本 walk-forward/regime 经济窗口与完整 Paper shadow 窗口 |
+| GLOBAL-CI | `PASS` | 全量 `3532 passed`，coverage `85.020340...%`，达到项目配置 `fail_under=85`；静态/包/质量/安全扫描通过 |
+| V3 coverage | `PASS` | 执行包精确 22 模块 `3497 statements / 1070 branches`，`0 missed / 0 partial`，line/branch 均 100% |
 | RESTART | `PASS_WITH_FAIL_CLOSED_RUNTIME / NO-GO` | 新提交启动并提供健康接口；active safety incidents 期间正确阻断 ready/恢复；后续测试网运行出现一次自动放置请求，随后进入 `NO_NEW_RISK`，验证结束已停机 |
 
 ## 已补齐内容
@@ -41,7 +42,7 @@ Main Testnet 重启验证。验证同时确认了两个不可忽略的阻断：�
 - ExposureGovernor、active optimizer、venue/cost/liquidity/capacity fail-closed。
 - attribution completeness、runtime hash lineage、只读 V3 shadow probe。
 - V3 核心实现、registry、扫描、格式、mypy、安全审计和 active-incident 恢复阻断逻辑已补齐；
-  “V3 100% line/branch”仍不是本轮可据证据宣称的结果。
+  V3 100% line/branch 仅限执行包列出的精确 22 模块，不扩大为全仓 100%。
 - 环境运行目录 `.beidou/` 与 `evidence/bootstrap/`；不伪造 signed policy、OOS 或账户保护事实。
 
 ## 运行状态与安全边界
@@ -55,8 +56,8 @@ incident 时为 503、`trading_ready=false`，且新代码没有自动恢复风�
 
 ## 不可替代的剩余条件
 
-1. 修复并重新验证全仓 coverage，使项目配置的 `fail_under=85` 通过；同时按执行包要求补足
-   V3 核心 branch gate 的独立可复核报告，不能用局部 line 结果代替。
+1. 提供执行包要求的真实 Testnet G5 证据包：受控授权、create/query/cancel、partial-fill、
+   race/unknown、持久化 journal/readback、cleanup 和环境一致性，且不把离线 fixture 当作实测。
 2. 提供同数据、同成本、point-in-time sealed OOS 与有效 Paper shadow 窗口，并由独立流程审查
    signed policy、保护归属、reconciliation、alert delivery 和 lifecycle 事实。
 3. 只有在 G5、G-A7、归因、回滚和运行授权全部满足后，才可另行评估 promotion；本轮不授权

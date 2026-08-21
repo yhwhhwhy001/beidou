@@ -12,7 +12,7 @@
     "liquidity_capacity": "PASS",
     "stress_quality_monotonic": "PASS",
     "scenario_property_integration": "PASS",
-    "full_tests": "3400 passed"
+    "full_tests": "3532 passed"
   },
   "limitations": [
     "Offline fixture evidence only; no account, venue or order state was used for promotion."

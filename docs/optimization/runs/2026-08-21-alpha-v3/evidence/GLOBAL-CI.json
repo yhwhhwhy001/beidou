@@ -1,8 +1,8 @@
 {
   "gate_id": "GLOBAL-CI",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "working_tree": "DIRTY: authorized uncommitted implementation worktree",
+  "head_sha": "f158922",
+  "working_tree": "DIRTY: authorized implementation and evidence updates pending final commit",
   "status": "PASS",
   "scope": "repository-wide compile, format, lint, type, tests, scans, package, security and coverage gates",
   "commands": {
@@ -10,29 +10,36 @@
     "ruff_format_check": "PASS (549 files already formatted)",
     "ruff_check": "PASS",
     "mypy": "PASS",
-    "full_pytest": "PASS (3400 passed)",
+    "full_pytest": "PASS (3532 passed)",
     "test_quality_scan": "PASS",
     "hardcoded_scan": "PASS",
     "forbidden_patterns": "PASS",
     "package_validation": "PASS",
-    "global_coverage": "PASS (80.59%, threshold 78%)",
+    "global_coverage": "PASS (85.0203403702188%, threshold 85%)",
     "v3_coverage": "PASS (100% line and branch)",
     "registry_oracle": "PASS",
     "bandit": "PASS (0 issues identified)",
-    "pip_audit": "PASS (no known vulnerabilities)"
+    "pip_audit": "PASS (python -m pip_audit; local editable packages are not on PyPI)"
   },
   "metrics": {
-    "full_tests": 3400,
-    "repository_coverage_percent": 80.59,
-    "global_threshold_percent": 78.0,
+    "unit_tests": 3180,
+    "integration_tests": 20,
+    "architecture_tests": 263,
+    "full_tests": 3532,
+    "repository_coverage_percent": 85.0203403702188,
+    "global_threshold_percent": 85.0,
     "v3_statements": 3497,
     "v3_branches": 1070,
     "v3_line_percent": 100.0,
-    "v3_branch_percent": 100.0
+    "v3_branch_percent": 100.0,
+    "v3_missed_statements": 0,
+    "v3_partial_branches": 0
   },
   "limitations": [
     "pip-audit cannot audit the local editable ueds package because it is not on PyPI.",
-    "G-A7 economic evidence remains a separate FAIL and is not hidden by code/CI PASS.",
+    "G5 real Testnet execution evidence remains FAIL/NOT_VERIFIABLE and is not replaced by offline fixtures.",
+    "G-A7 economic evidence remains a separate FAIL/NOT_VERIFIABLE and is not hidden by code/CI PASS.",
+    "A bare pip-audit executable was observed resolving to an unrelated system interpreter; CI uses python -m pip_audit.",
     "Runtime restart evidence is separate from this repository gate."
   ]
 }

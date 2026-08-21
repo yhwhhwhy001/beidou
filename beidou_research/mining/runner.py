@@ -1204,10 +1204,12 @@ class MiningRunner:
         rsi = [math.nan] * n
         period = 14
         if n > period:
-            gains = [math.nan] * n
-            losses = [math.nan] * n
+            gains = [0.0] * n
+            losses = [0.0] * n
             for i in range(1, n):
                 if not (math.isfinite(closes[i]) and math.isfinite(closes[i - 1])):
+                    gains[i] = math.nan
+                    losses[i] = math.nan
                     continue
                 delta = closes[i] - closes[i - 1]
                 if delta > 0:
@@ -1752,7 +1754,9 @@ def _timeframe_to_hours(timeframe: str) -> float:
 def _correlation_p_value(correlation: float, sample_length: int) -> float:
     """Conservative normal approximation for a correlation test statistic."""
 
-    if sample_length < 4 or not math.isfinite(correlation) or abs(correlation) >= 1.0:
+    if not math.isfinite(correlation):
+        return 1.0
+    if sample_length < 4 or abs(correlation) >= 1.0:
         return 1.0 if abs(correlation) < 1.0 else 0.0
     z = abs(correlation) * math.sqrt(max(sample_length - 2, 1) / max(1.0 - correlation**2, 1e-12))
     return max(0.0, min(1.0, 2.0 * (1.0 - _normal_cdf(z))))

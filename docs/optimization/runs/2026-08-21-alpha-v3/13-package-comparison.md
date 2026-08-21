@@ -44,7 +44,8 @@
   policy 转成零值、默认规则或伪造证据。
 - 未增加绕过 Risk/Approval/Execution/Protection 的调用；V3 runtime 仅是 read-only shadow。
 - 未把 alpha improvement 转换为 leverage increase；optimizer 使用显式 exposure target 和风险约束。
-- 未降低 CI 阈值：既有全局 78% gate 保留，另增 V3 核心 100% line/branch gate。
+- 全局 CI gate 已对齐执行包/项目配置的 `85%`，另保留 V3 核心 100% line/branch gate；没有
+  通过降低阈值来取得 PASS。
 - 未把 fixture/OOS contract/health 结果解释为收益、生产就绪、Paper promotion 或 Mainnet 授权。
 - `reference/contract_skeletons.py` 未被直接复制为生产实现。
 

@@ -30,10 +30,11 @@
 
 ## 已完成：全局门禁与覆盖
 
-- 3400 个测试全部通过。
+- `3180` 个 unit、`20` 个 integration、`263` 个 architecture，完整测试套件共 `3532 passed`。
 - V3 核心 22 模块 3497 statements、1070 branches，line/branch 均 100%。
 - compileall、Ruff format/lint、mypy、test-quality、hardcoded、forbidden、package、registry
-  oracle、Bandit、pip-audit、pip check 全部通过；CI 的全局 78% coverage 命令实测 80.59%。
+  oracle、Bandit、`python -m pip_audit`、pip check 全部通过；全局 coverage 实测 `85.02%`，
+  满足 `fail_under=85`。
 - 官方 write-capability registry 已按当前源码重建，未降低任何阈值或删除安全门禁。
 
 ## 已完成：受控重启验证

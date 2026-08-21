@@ -11,7 +11,7 @@
     "unexplained_residual": "PRESENT",
     "missing_facts_not_zero": "PASS",
     "completeness_test": "PASS",
-    "full_tests": "3400 passed"
+    "full_tests": "3532 passed"
   },
   "limitations": [
     "No real fill, ledger, protection or realized PnL facts were connected."

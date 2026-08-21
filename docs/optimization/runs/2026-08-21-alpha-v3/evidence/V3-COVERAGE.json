@@ -6,7 +6,7 @@
     "branch": 100.0,
     "source": "user_authorized_alpha_v3_override"
   },
-  "tests": 3400,
+  "tests": 3532,
   "statements": 3497,
   "missed_statements": 0,
   "branches": 1070,
@@ -38,11 +38,11 @@
     "beidou_research.backtest.alpha_v3_challenger"
   ],
   "reports": [
-    "/tmp/beidou-alpha-v3-final-core-coverage.json",
-    "/tmp/beidou-alpha-v3-final-core-coverage.xml"
+    "/tmp/beidou-alpha-v3-exact-final.json",
+    "/tmp/beidou-alpha-v3-exact-final.xml"
   ],
   "limitations": [
     "This is a code/contract coverage gate, not economic evidence.",
-    "The full repository coverage command separately measured 80.59% and passed the preserved 78% CI gate."
+    "The full repository coverage command separately measured 85.0203403702188% and passed the 85% CI gate."
   ]
 }

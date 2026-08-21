@@ -24,7 +24,7 @@ V3 专项 CI 明确列出 22 个核心模块，使用 `--cov-branch --cov-fail-u
 | partial branches | 0 |
 | line coverage | 100% |
 | branch coverage | 100% |
-| full tests | 3400 passed |
+| full tests | 3532 passed |
 
 完整模块清单和机器可读结果见 `evidence/V3-COVERAGE.json`。
 
@@ -36,7 +36,7 @@ V3 专项 CI 明确列出 22 个核心模块，使用 `--cov-branch --cov-fail-u
 - `scan_test_quality.py`、`scan_hardcoded.py`、`check_forbidden_patterns.py`：PASS。
 - `validate_package.py`、`verify_write_registry.py --root .`：PASS。
 - Bandit：0 issues；pip-audit：No known vulnerabilities（本地 editable `ueds` 无 PyPI 审计源）。
-- CI 原全局覆盖命令：3400 passed，80.59%，满足保留的 78% gate。
+- CI 全局覆盖命令：3532 passed，85.020340...%，满足项目 `fail_under=85` gate。
 
 ## 运行验证
 

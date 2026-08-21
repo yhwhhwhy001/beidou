@@ -30,8 +30,11 @@
 - 增加 `test_alpha_v3_core_coverage_complete.py` 及边界/负向测试；清除 MR、registry、fusion、
   typed graph、optimizer、constraints 和 state 的未覆盖分支。
 - 官方 write-capability registry 重建；补齐安全扫描所需的逐行审查注释；未降低阈值。
-- CI 增加 22 核心模块 100% line/branch gate，保留原有全局 78% gate。
-- 最终：3400 passed；V3 3497/3497 statements、1070/1070 branches；全局 coverage 80.59%。
+- CI 增加 22 核心模块 100% line/branch gate，并将全局 gate 对齐执行包的 `85%` 要求。
+- 补齐数据、交易所适配器、WebSocket、outbox、supervisor、monitoring、runtime health、
+  certification 和 write-registry 边界测试；修复 slots OHLCV revision、Paper shadow fail-closed
+  分支以及 mining runner 非有限统计/RSI 边界。
+- 最终：`3532 passed`；V3 3497/3497 statements、1070/1070 branches；全局 coverage `85.02%`。
 
 ## 重启验证
 

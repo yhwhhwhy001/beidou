@@ -389,10 +389,16 @@ class PaperShadowRunner:
             started_at=datetime.fromtimestamp(self._start_time, tz=timezone.utc) if self._start_time else None,
             completed_at=datetime.now(timezone.utc),
         )
+        ready = False
+        reason = ""
 
         # PKG28 (BDS-P1-060): 账本写失败 → 运行无效
         if self.metrics.ledger_write_failures > 0:
-            report.gate_result = cast(Any, GateResult).INVALID
+            # ``ShadowStatus`` has an ``INVALID`` state for evidence integrity,
+            # while the shared GateResult contract intentionally has no
+            # matching pseudo-success value.  A write failure is therefore a
+            # hard gate failure, never an ad-hoc enum value.
+            report.gate_result = GateResult.FAIL
             report.status = ShadowStatus.INVALID
             report.discrepancies.append(f"ledger_write_failures: {self.metrics.ledger_write_failures}")
 

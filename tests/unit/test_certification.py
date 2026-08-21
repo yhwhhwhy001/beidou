@@ -437,3 +437,81 @@ class TestCertificationManager:
         certs = mgr.evaluate_all()
         assert len(certs) >= 1
         assert certs[0].gate == CertificationGate.G5_TESTNET
+
+
+def test_framework_marks_unrun_and_missing_evidence_not_verifiable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    from beidou_certification import engine as engine_module
+
+    framework = CertificationFramework(CertificationGate.G5_TESTNET)
+    scenario = CertificationScenario(
+        scenario_id="missing-evidence",
+        name="Missing evidence",
+        description="",
+        gate=CertificationGate.G5_TESTNET,
+        category="evidence",
+        required_evidence=["fact"],
+    )
+    framework.register_scenario(scenario)
+    certificate = framework.evaluate()
+    assert certificate.result == GateResult.UNVERIFIABLE
+    assert framework.get_result("missing-evidence") is None
+    assert framework.latest_certificate() is certificate
+
+    framework.record_result(ScenarioResult(scenario=scenario, status=ScenarioStatus.PASS, evidence={"fact": "seen"}))
+    monkeypatch.setenv("BEIDOU_SIGNING_KEY", "unit-only-key")
+    signed = framework.evaluate()
+    assert signed.signature
+    assert signed.result == GateResult.PASS
+    monkeypatch.delenv("BEIDOU_SIGNING_KEY", raising=False)
+    assert engine_module.CertificationGate.G5_TESTNET is CertificationGate.G5_TESTNET
+    assert os.environ.get("BEIDOU_SIGNING_KEY") is None
+
+
+def test_manager_rejects_invalid_or_backward_promotion_and_records_p0() -> None:
+    manager = CertificationManager()
+    g5 = G5TestnetCertification()
+    manager.register_framework(g5)
+    assert not manager.can_promote(CertificationGate.G6_SHADOW, CertificationGate.G5_TESTNET)
+    assert not manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G8_UNATTENDED)
+    assert manager.should_degrade_to(CertificationGate.G5_TESTNET) is False
+
+    blocking = CertificationScenario(
+        scenario_id="manager-p0",
+        name="P0",
+        description="",
+        gate=CertificationGate.G5_TESTNET,
+        category="safety",
+        is_blocking=True,
+    )
+    g5.register_scenario(blocking)
+    g5.record_result(ScenarioResult(scenario=blocking, status=ScenarioStatus.FAIL))
+    manager.evaluate_all()
+    assert manager.any_p0_failure() is True
+    assert manager.should_degrade_to(CertificationGate.G5_TESTNET) is True
+
+
+def test_production_ladder_stays_blocked_and_validates_shadow_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from beidou_certification import engine as engine_module
+
+    levels = [
+        engine_module.CapitalLevel("shadow", CertificationGate.G6_SHADOW, 0.0, 0.0),
+        engine_module.CapitalLevel("canary", CertificationGate.G7_L2_CANARY, 100.0, 1.0),
+    ]
+    monkeypatch.setattr(engine_module, "CAPITAL_LADDER", levels)
+    monkeypatch.setattr(engine_module, "CAPITAL_LADDER_VERIFIED", False)
+    manager = CertificationManager()
+    ladder = engine_module.ProductionLadder(manager)
+    assert ladder.current_level.level == "shadow"
+    assert ladder.max_allowed_capital == 0.0
+    assert ladder.max_allowed_leverage == 0.0
+    assert ladder.can_advance_to("unknown")[0] is False
+    assert ladder.can_advance_to("shadow")[0] is False
+    assert ladder.can_advance_to("canary")[0] is False
+    assert ladder.advance("canary") is False
+    assert ladder.validate_capital(0.0, 0.0) == (True, "OK")
+    assert ladder.validate_capital(1.0, 0.0)[0] is False
+    assert ladder.validate_capital(0.0, 1.0)[0] is False
+    assert ladder.check_and_rollback() is None
+    assert ladder.force_rollback("unit") == "Already at shadow (lowest level)"

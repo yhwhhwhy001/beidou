@@ -12,6 +12,7 @@ import math
 
 import pytest
 
+import beidou_research.mining.expression_ast as ast
 from beidou_research.mining.expression_ast import (
     EMA,
     Add,
@@ -177,6 +178,62 @@ class TestBasicEvaluation:
         for row in result:
             for v in row:
                 assert abs(v) < 1e-9, f"OLS should zero out linear dependence: {v}"
+
+    def test_every_registered_node_roundtrips_and_evaluates_semantically(self):
+        """Exercise every production node through its public serialization/eval contract."""
+        close_expr = Feature("close", ExprType.PRICE)
+        volume_expr = Feature("volume", ExprType.VOLUME)
+        scalar = Constant(2.0)
+        numeric_nodes = [
+            Constant(1.0),
+            close_expr,
+            Lag(close_expr, 1),
+            Diff(close_expr, 1),
+            PctChange(close_expr, 1),
+            RollingMean(close_expr, 3),
+            RollingStd(close_expr, 3),
+            RollingMedian(close_expr, 3),
+            RollingMAD(close_expr, 3),
+            RollingQuantile(close_expr, 3, 0.5),
+            EMA(close_expr, 3),
+            TsRank(close_expr, 3),
+            ZScore(close_expr, 3),
+            ast.RobustZScore(close_expr, 3),
+            SafeDiv(close_expr, Lag(close_expr, 1)),
+            SignedLog1p(close_expr),
+            SignedSqrt(close_expr),
+            Clip(close_expr, 1.0, 5.0),
+            Residualize(close_expr, (volume_expr,)),
+            Add(close_expr, scalar),
+            Sub(close_expr, scalar),
+            Mul(close_expr, scalar),
+            Neg(close_expr),
+            Lt(close_expr, scalar),
+            ast.Le(close_expr, scalar),
+            Gt(close_expr, scalar),
+            ast.Ge(close_expr, scalar),
+            Eq(close_expr, scalar),
+            ast.Ne(close_expr, scalar),
+        ]
+        data = {"close": [1.0, 2.0, 3.0, 4.0, 5.0], "volume": [10.0, 20.0, 30.0, 40.0, 50.0]}
+        for expr in numeric_nodes:
+            restored = from_dict(expr.to_dict())
+            assert restored == expr
+            assert expr.canonical_hash()
+            assert expr.output_type().is_numeric or expr.output_type() is ExprType.BOOLEAN
+            assert expr.complexity_score() >= 1
+            assert expr.max_lookback() >= 0
+            values = expr.evaluate_series(data)
+            assert len(values) == len(data["close"])
+
+        conditional = Where(Lt(close_expr, scalar), Constant(1.0), Constant(0.0))
+        assert conditional.evaluate_series(data) == [1.0, 0.0, 0.0, 0.0, 0.0]
+        assert from_dict(conditional.to_dict()) == conditional
+
+        cross_section = ast.CsRank(close_expr)
+        cross_values = cross_section.evaluate({"close": [[1.0, 5.0, 3.0], [2.0, 4.0, 6.0]]})
+        assert cross_values[0][0] == 0.0
+        assert cross_values[1][2] == 1.0
 
 
 # ================================================================

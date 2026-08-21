@@ -33,15 +33,15 @@
   只读 shadow；没有经济收益或生产晋级含义。
 - `G-A7`：FAIL/NOT_VERIFIABLE。当前没有 sealed real same-data/same-cost OOS 与完整
   Paper shadow 窗口；不能把 fixture PASS 解释为优于 V2 或允许 promotion。
-- `GLOBAL-CI`：PASS。全仓 `3400 passed`；CI 原全局 coverage 命令 `80.59%`，高于
-  保留的 78% gate；V3 专项 22 模块 `3497 statements / 1070 branches` 为 100%/100%。
+- `GLOBAL-CI`：PASS。全仓 `3532 passed`；全局 coverage `85.020340...%`，高于
+  `fail_under=85`；V3 专项 22 模块 `3497 statements / 1070 branches` 为 100%/100%。
 - `RESTART`：PASS_WITH_FAIL_CLOSED_RUNTIME。隔离 Paper 进程启动两轮、健康接口通过、
   `/ready=503`、安全停止后端口关闭；原 PID 98924 未触碰。
 
 ## 环境与兼容边界
 
 - `/Users/maguannan/ueds/.venv/bin/python` 3.14.6；lock 依赖、`pip check`、mypy、
-  Ruff、Bandit、pip-audit 均已复核。
+  Ruff、Bandit、`python -m pip_audit` 均已复核；审计对本地 editable 包保留不可上 PyPI 的限制。
 - 缺失运行目录 `.beidou/`、`evidence/bootstrap/` 已创建并验证可写。
 - Paper 运行观察到 `SIGNED_POLICY_UNAVAILABLE`、保护归属 UNKNOWN 和 reconciliation
   UNKNOWN；这些事实触发 `DEGRADED/NO_NEW_RISK`，没有生成伪政策或伪账户事实。
