@@ -1,7 +1,7 @@
 {
   "gate_id": "RESTART",
   "status": "PASS_WITH_FAIL_CLOSED_RUNTIME",
-  "validation_commit": "f158922d47ed1a84ffa5d52ac0b55d3545e0ee61",
+  "validation_commit": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
   "worktree": "/Users/maguannan/beidou-worktrees/alpha-v3-20260821",
   "mode": "paper",
   "symbols": ["BTCUSDT"],

@@ -10,7 +10,7 @@
 ## 基线与范围
 
 - 执行包：`/Users/maguannan/Downloads/BEIDOU_ALPHA_V3_EXECUTION_PACKAGE.zip`
-- 基线/HEAD：`77fbbc3cdf6ca8068063343c053749d9e156be61`
+- 基线/代码验证 HEAD：`8bffe2014205bb7dfae1a5274d88c43e365fcd6b`
 - 工作树：`/Users/maguannan/beidou-worktrees/alpha-v3-20260821`
 - 分支：`codex/alpha-v3-20260821`
 - 主服务：`/Users/maguannan/beidou:9090`，由 `gui/501/com.beidou.autopilot` 管理。

@@ -28,6 +28,6 @@
 
 ## Git handoff
 
-修复和验证记录将在最终代码提交后写入其 SHA，并推送到
+代码修复提交为 `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；文档证据回填后将推送
 `origin/codex/alpha-v3-20260821`，再 fast-forward 合并到 `origin/main`；完成后两个远端
-ref 应指向同一 SHA。服务保持停机是本轮 fail-closed 验证的安全收尾，不代表代码未交付。
+ref 应指向同一最终 docs commit。服务保持停机是本轮 fail-closed 验证的安全收尾，不代表代码未交付。

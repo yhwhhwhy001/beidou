@@ -1,8 +1,8 @@
 {
   "gate_id": "G-A0",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "head_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "working_tree": "DIRTY: authorized uncommitted implementation worktree",
+  "head_sha": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
+  "working_tree": "CLEAN_FOR_CODE_VALIDATION: runtime alert JSONL excluded",
   "status": "PASS",
   "scope": "baseline, benchmark, attribution and additive read-only trace",
   "metrics": {

@@ -1,8 +1,8 @@
 {
   "gate_id": "GLOBAL-CI",
   "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
-  "head_sha": "f158922",
-  "working_tree": "DIRTY: authorized implementation and evidence updates pending final commit",
+  "head_sha": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
+  "working_tree": "CLEAN_FOR_CODE_VALIDATION: two pre-existing runtime alert JSONL files intentionally excluded",
   "status": "PASS",
   "scope": "repository-wide compile, format, lint, type, tests, scans, package, security and coverage gates",
   "commands": {

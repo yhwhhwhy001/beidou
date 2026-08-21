@@ -10,7 +10,7 @@ G5 Testnet 真实执行、Paper promotion 或 Mainnet/live readiness 证据。�
 - 部署工作树：`/Users/maguannan/beidou-worktrees/alpha-v3-20260821`
 - 启动方式：`python -m apps.strategy_engine`（强制 Paper、前台、`--no-self-heal`）
 - 监听地址：`127.0.0.1:19090`
-- 验证提交：`f158922d47ed1a84ffa5d52ac0b55d3545e0ee61`（最终代码提交后更新）
+- 验证提交：`8bffe2014205bb7dfae1a5274d88c43e365fcd6b`
 
 本轮先确认历史 Testnet LaunchAgent 和 `9090` 均未运行，再在隔离 worktree 以单一
 `BTCUSDT` 启动 Paper 进程。健康、市场数据和算法探针通过；`/ready=503`，安全阻断保持

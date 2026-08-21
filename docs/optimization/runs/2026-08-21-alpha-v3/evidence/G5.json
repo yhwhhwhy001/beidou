@@ -1,5 +1,7 @@
 {
   "gate_id": "G5",
+  "baseline_sha": "b156881710aeeec278bfbbe75973aa8dbc83b614",
+  "head_sha": "8bffe2014205bb7dfae1a5274d88c43e365fcd6b",
   "status": "FAIL",
   "verifiability": "NOT_VERIFIABLE",
   "scope": "real Testnet execution certification required by the execution package",

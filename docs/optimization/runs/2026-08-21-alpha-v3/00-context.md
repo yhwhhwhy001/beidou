@@ -26,7 +26,7 @@
 | 项目 | 当前事实 |
 |---|---|
 | Package baseline SHA | `b156881710aeeec278bfbbe75973aa8dbc83b614` |
-| Current HEAD | 同上；实现尚未提交，工作树为 DIRTY |
+| Current HEAD | `8bffe2014205bb7dfae1a5274d88c43e365fcd6b`；代码提交已完成，运行时 JSONL 仍按约定不入库 |
 | Archive manifest | 13 个文件 SHA-256/字节数校验 PASS |
 | Python | `/Users/maguannan/ueds/.venv/bin/python`，3.14.6 |
 | 原始运行 | PID 98924，`/Users/maguannan/beidou`，Testnet，127.0.0.1:9090；只读确认、未重启 |
