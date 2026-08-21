@@ -44,3 +44,13 @@
 
 代码、测试、静态门禁、覆盖率和受控只读重启均已完成；A7 的真实经济证据、Paper promotion、
 Mainnet/live activation 仍明确不通过，不用 fixture 或运行健康事实替代。
+
+## Git handoff
+
+- 2026-08-21：创建提交 `3b55ec2e040da4684458708737aeaf9968b049e4`，消息为
+  `feat(alpha-v3): complete execution package and 100% core coverage`。
+- 已推送 `origin/codex/alpha-v3-20260821`，远端 SHA 核验通过。
+- 已将该分支 fast-forward 合并到远端 `origin/main`；远端 `main` 与功能分支均核验为
+  `3b55ec2e040da4684458708737aeaf9968b049e4`。
+- 原始 `/Users/maguannan/beidou` main worktree 因旧 Testnet 进程仍在运行而未被改写；
+  远端合并不等于该旧进程已重启或加载新代码。

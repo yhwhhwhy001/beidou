@@ -19,3 +19,9 @@
 
 详细内容：`12-acceptance-report.md`、`14-production-validation.md`、
 `domain-trading-readiness.md`，机器证据见 `evidence/`。
+
+## Git handoff
+
+提交 `3b55ec2e040da4684458708737aeaf9968b049e4` 已推送到
+`origin/codex/alpha-v3-20260821`，并 fast-forward 合并到远端 `origin/main`；两个远端
+ref 当前均指向该 SHA。原始 main worktree/旧 Testnet 进程未被改写或重启。
