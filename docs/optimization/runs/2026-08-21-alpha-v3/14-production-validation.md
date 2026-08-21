@@ -1,63 +1,66 @@
 # 生产验证边界与受控重启证据
 
-本文件记录的是用户授权的隔离 worktree Paper/Shadow 重启验证，不是生产发布或
-Paper promotion 证据。原始 Testnet PID 98924 保持 untouched。
+本文件记录用户授权的主服务 Testnet 重启、运行时观察和安全停机。它不是生产发布、
+Paper promotion 或 Mainnet/live readiness 证据。验证未执行人工下单、撤单或未知订单清理，
+也没有触碰 Mainnet/live。
 
-## 环境补齐与 preflight
+## 目标、版本与服务边界
 
-首次 Paper preflight 因缺少以下运行目录而阻断：
+- 执行包：`/Users/maguannan/Downloads/BEIDOU_ALPHA_V3_EXECUTION_PACKAGE.zip`
+- 部署工作树：`/Users/maguannan/beidou`
+- LaunchAgent：`gui/501/com.beidou.autopilot`
+- 监听地址：`127.0.0.1:9090`
+- 验证提交：`77fbbc3cdf6ca8068063343c053749d9e156be61`
 
-- `/Users/maguannan/beidou-worktrees/alpha-v3-20260821/.beidou`
-- `/Users/maguannan/beidou-worktrees/alpha-v3-20260821/evidence/bootstrap`
+本轮先受控停止旧实例（历史 PID `98924`），确认进程和 `9090` 监听关闭，再将 main
+工作树更新到上述提交并推送。随后通过 LaunchAgent 启动新实例；启动观测到 wrapper PID
+`11005`、Python PID `11009`，`/status` 返回的 supervisor commit 与目标提交完全一致。
+PID 仅是本轮历史观测值，不能作为当前运行状态；验证结束后服务已停止。
 
-已创建这两个工作树内目录并复跑：Python、项目布局、端口、运行目录、全部业务包导入、
-Paper 配置、EnvironmentGuard、账户读取配置和 launchd plist 检查均 PASS。没有创建或
-伪造 signed policy、账户保护、OOS 或 Paper 经济事实。
+## 重启后的健康与 fail-closed 证据
 
-## 受控启动命令
-
-```text
-/Users/maguannan/ueds/.venv/bin/python -m beidou_launcher.cli start \
-  --mode paper --symbols BTCUSDT --port 19090 \
-  --startup-timeout 120 --monitor-interval 2 \
-  --no-self-heal --max-restarts 0
-```
-
-执行两轮，观测到的进程分别为 PID `94053` 和 PID `94208`。两轮均完成启动并提供
-`http://127.0.0.1:19090/status`、`/health`、`/ready`。
-
-## 只读健康结果
-
-两轮稳定观测结果一致：
-
-| 信号 | 结果 |
+| 检查 | 新实例观测 |
 |---|---|
-| mode | `paper` |
-| liveness | `HEALTHY` |
-| lifecycle | `DEGRADED` |
-| control action | `NO_NEW_RISK` |
-| runtime market data / realtime heartbeat | PASS |
-| HTTP server / algorithm probe / write interlock | PASS |
 | `/health` | HTTP 200，`HEALTHY` |
-| `/ready` | HTTP 503，`ready=false` |
-| trading_ready | `false` |
-| blockers | protection coverage、reconciliation |
+| 初始 `/ready` | HTTP 503，`ready=false`，`trading_ready=false` |
+| 初始阻断原因 | `runtime.health.incidents`；active critical safety incident 存在 |
+| 事件短暂清除后 | `/ready` 曾短暂返回 200，随后再次出现 active incidents |
+| 最终控制状态 | `lifecycle=DEGRADED`，`control_action=NO_NEW_RISK`，`/ready=503` |
+| 最终 active incidents | 2；系统继续阻断新风险 |
+| 最终其他信号 | reconciliation `MATCHED`；事件流、用户流和实时数据检查可用，但 G5 仍为 FAIL，告警/生命周期等仍有 WARN |
 
-`/ready=503` 是正确的 fail-closed 结果：运行读取到了真实环境中的
-`SIGNED_POLICY_UNAVAILABLE`、未归属保护和 reconciliation UNKNOWN；系统没有把这些
-事实转成零值或默认状态，也没有启动新的风险。
+本次代码修复验证了以下安全性质：active `HIGH/P1` 或 `CRITICAL/LOCKDOWN/P0` incident
+存在时，runtime health 产生相应阻断，Testnet auto-reauthorize 不得把系统重新置为可交易；
+查询异常也按 fail-closed 处理。
 
-## 停止与回滚
+## 测试网副作用与停止
 
-- 两轮均通过 Ctrl-C 进入安全停止；日志显示 `write=OFF`、`can_write=False`，只取消
-  0 个自有 pending order，并留下所有 unowned orders untouched。
-- 两轮停止后 `lsof -nP -iTCP:19090 -sTCP:LISTEN` 均为空，状态文件为
-  `.beidou/supervisor-state.json`，`phase=STOPPED`、`trading_ready=false`。
-- 第二轮进程因安全防抖最终状态 `LOCKED` 退出码为 5；这是已有保护/对账 P0 blocker
-  的 fail-closed 停止，不是启动崩溃或测试绕过。
+在 incident 暂时清除的窗口内，服务自动创建过 1 条 `OrderIntent` 并产生 1 次放置请求；
+这不是本次人工执行的订单。随后新的 active incidents 出现，后续观测到的进入请求被
+`NO_NEW_RISK` 拒绝，观察窗口内没有再出现新的进入写入。未打印或记录账户凭据、订单标识
+或其他敏感值。
+
+验证结束执行 LaunchAgent `bootout`，并确认 wrapper/Python 进程不存在、`9090` 无监听、
+`launchctl print gui/501/com.beidou.autopilot` 显示服务不存在。没有执行人工订单清理，因此
+本记录不声称任何外部订单已被撤销或账户状态已被修改。
+
+## 执行包验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| unit | `3051 passed` |
+| integration | `20 passed` |
+| architecture | `263 passed` |
+| 全量 tests | `3403 passed`；命令因 coverage gate 失败退出 |
+| 全仓 coverage | `80.57%`，低于 `fail_under=85`，因此 `GLOBAL-CI=FAIL_COVERAGE` |
+| V3 核心 line evidence | 执行包列出的核心实现文件在全量 line report 中为 100% line |
+| broad alpha+portfolio branch run | `86.44%`，包含 compatibility/额外模块，不能替代核心 branch gate 报告 |
+| compileall / Ruff / mypy / scans / package validation | 通过 |
+| G5 / G-A7 | `FAIL/NOT_VERIFIABLE`；缺少独立可复核的签名策略与真实经济窗口证据 |
 
 ## 范围结论
 
-受控重启验证：`PASS_WITH_FAIL_CLOSED_RUNTIME`。它证明修改后 worktree 能够安全启动、
-提供健康/探针接口、在 UNKNOWN/P0 blocker 下不放行风险并可安全停止；不证明 A7 经济
-优越性、Paper promotion、Mainnet/live readiness，也不改变原始 Testnet 实例。
+受控重启验证：`PASS_WITH_FAIL_CLOSED_RUNTIME`；运行时发布结论：
+`NO-GO_FOR_UNATTENDED_TESTNET_AND_LIVE`。本次证据证明新提交可启动、可观测、在 active
+safety incident 下阻断恢复并可安全停机；不证明全仓 coverage 门禁、V3 全部 line/branch
+100%、A7 经济优越性、Paper promotion 或 Mainnet/live readiness。
