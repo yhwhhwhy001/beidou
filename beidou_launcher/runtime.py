@@ -10,6 +10,53 @@ from .models import CheckResult, CheckSeverity, CheckStatus
 from .registry import inspect_engine_wiring
 
 
+def active_incident_blocking_severity(incidents: list[Any]) -> CheckSeverity | None:
+    """Return the runtime check severity required by open safety incidents.
+
+    ``AlertDispatcher.get_active_incidents`` omits resolved incidents, but
+    callers may provide dictionaries or lightweight test doubles.  Treat an
+    incident as active unless its status explicitly says RESOLVED/CLOSED.
+    HIGH pauses trading; CRITICAL/LOCKDOWN are P0 authority blockers.
+    """
+
+    p1_severities = {"HIGH", "P1"}
+    p0_severities = {"CRITICAL", "LOCKDOWN", "P0"}
+    p1_found = False
+    for incident in incidents:
+        if isinstance(incident, dict):
+            raw_status = incident.get("status", "")
+            raw_severity = incident.get("severity", "")
+        else:
+            raw_status = getattr(incident, "status", "")
+            raw_severity = getattr(incident, "severity", "")
+        status = str(getattr(raw_status, "value", raw_status)).upper()
+        severity = str(getattr(raw_severity, "value", raw_severity)).upper()
+        if status in {"RESOLVED", "CLOSED"}:
+            continue
+        if severity in p0_severities:
+            return CheckSeverity.P0
+        if severity in p1_severities:
+            p1_found = True
+    return CheckSeverity.P1 if p1_found else None
+
+
+def has_active_trading_incident(engine: Any) -> bool:
+    """Return whether active incident state must revoke new-risk authority.
+
+    A missing incident boundary is tolerated only for minimal test doubles;
+    once the production boundary exists, query errors fail closed.
+    """
+
+    getter = getattr(getattr(engine, "_alerts", None), "get_active_incidents", None)
+    if not callable(getter):
+        return False
+    try:
+        incidents = list(getter())
+    except Exception:
+        return True
+    return active_incident_blocking_severity(incidents) is not None
+
+
 def build_decision_trace(probe: dict[str, Any]) -> dict[str, Any]:
     """Build a read-only market-to-kernel trace for later PnL joining."""
     from beidou_reporting.pnl_attribution import DecisionTrace
@@ -617,19 +664,27 @@ def collect_runtime_checks(
     # 由 collect_monitoring_checks() 统一执行深度检查，
     # 避免 runtime.py 与 monitoring/ 双重维护同一逻辑。
 
+    incident_query_failed = False
     try:
         incidents = list(engine._alerts.get_active_incidents())
     except Exception:
         incidents = ["INCIDENT_QUERY_FAILED"]
+        incident_query_failed = True
+    incident_severity = CheckSeverity.P0 if incident_query_failed else active_incident_blocking_severity(incidents)
     incident_ok = not incidents
-    # 事故是其他检查（对账、保护覆盖）的症状，不独立作为 P0 阻断；
-    # P0 FAIL 仅在其他检查已报告，此处降级为 P2 WARN 避免事故反馈循环。
+    incident_blocking = incident_severity is not None
+    # HIGH/CRITICAL/LOCKDOWN incidents represent unresolved safety authority
+    # loss, even when the originating check has not yet been re-collected in
+    # this monitoring cycle.  Keeping these as P2 warnings allowed testnet
+    # auto-recovery to RESUME while reconciliation incidents were still open.
     checks.append(
         CheckResult(
             check_id="runtime.health.incidents",
             name="活动事故",
-            status=CheckStatus.WARN if not incident_ok else CheckStatus.PASS,
-            severity=CheckSeverity.P2,
+            status=CheckStatus.FAIL
+            if incident_blocking
+            else (CheckStatus.WARN if not incident_ok else CheckStatus.PASS),
+            severity=incident_severity or CheckSeverity.P2,
             message="无活动事故" if incident_ok else f"活动事故: {incidents}",
             evidence={"incidents": incidents},
         )

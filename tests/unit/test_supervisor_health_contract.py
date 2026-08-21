@@ -99,6 +99,18 @@ def test_health_callbacks_revoke_readiness_for_live_blocker(tmp_path: Path) -> N
     assert health.liveness() is HealthState.DEGRADED
 
 
+def test_health_callbacks_revoke_readiness_for_active_critical_incident(tmp_path: Path) -> None:
+    supervisor, health = _supervisor_with_health(tmp_path)
+    supervisor.engine._alerts = SimpleNamespace(
+        get_active_incidents=lambda: [
+            {"incident_id": "inc-reconciliation", "severity": "CRITICAL", "status": "DETECTED"}
+        ]
+    )
+
+    assert health.readiness() is False
+    assert health.trading_readiness() == (False, "CONTROL_RESUME")
+
+
 def test_health_callbacks_report_exit_blockers_and_locked_liveness(tmp_path: Path) -> None:
     supervisor, health = _supervisor_with_health(tmp_path)
 

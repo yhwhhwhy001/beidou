@@ -132,6 +132,29 @@ def test_blocker_present_prevents_auto_authorize(tmp_path: Path) -> None:
     assert lifecycle.state is ModuleState.DEGRADED
 
 
+def test_critical_active_incident_prevents_auto_authorize(tmp_path: Path) -> None:
+    """活动 CRITICAL 事故未关闭时，testnet 不能自动恢复 RESUME。"""
+    supervisor, control, lifecycle = _post_fail_closed_supervisor(
+        tmp_path, mode="testnet", lifecycle_state=ModuleState.DEGRADED
+    )
+    supervisor.engine._alerts = SimpleNamespace(
+        get_active_incidents=lambda: [
+            {
+                "incident_id": "inc-reconciliation",
+                "severity": "CRITICAL",
+                "status": "DETECTED",
+                "title": "Reconciliation blocked",
+            }
+        ]
+    )
+
+    assert supervisor._has_active_trading_incident() is True
+    assert supervisor._maybe_testnet_auto_reauthorize() is False
+    assert supervisor._resume_authorized is False
+    assert control.get_status().value == "NO_NEW_RISK"
+    assert lifecycle.state is ModuleState.DEGRADED
+
+
 def test_locked_lifecycle_never_auto_authorizes(tmp_path: Path) -> None:
     """致命降级（_fail_closed(fatal=True) → LOCKED）不自动恢复，必须人工处置。"""
     supervisor, _control, lifecycle = _post_fail_closed_supervisor(

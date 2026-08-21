@@ -211,6 +211,34 @@ def test_critical_alert_delivery_is_a_runtime_p0_blocker() -> None:
     assert delivery.severity.value == "P0"
 
 
+def test_critical_active_incident_is_a_runtime_p0_blocker() -> None:
+    from beidou_launcher.runtime import collect_runtime_checks
+
+    engine = _runtime_engine()
+    engine._alerts = SimpleNamespace(
+        get_active_incidents=lambda: [
+            {
+                "incident_id": "inc-reconciliation",
+                "severity": "CRITICAL",
+                "status": "DETECTED",
+                "title": "Reconciliation blocked",
+            }
+        ]
+    )
+    checks, _ = collect_runtime_checks(
+        engine=engine,
+        mode="testnet",
+        port=9090,
+        resume_authorized=True,
+        algorithm_probe={"ok": True},
+        last_error_count=0,
+    )
+    incidents = next(item for item in checks if item.check_id == "runtime.health.incidents")
+    assert incidents.status is CheckStatus.FAIL
+    assert incidents.severity is CheckSeverity.P0
+    assert incidents.is_blocking is True
+
+
 def test_stopped_engine_loop_is_runtime_p0_after_resume_authorization() -> None:
     from beidou_launcher.runtime import collect_runtime_checks
 

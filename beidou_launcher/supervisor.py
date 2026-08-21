@@ -27,7 +27,11 @@ from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
 from .preflight import current_commit, run_preflight
 from .registry import inspect_engine_wiring
-from .runtime import collect_runtime_checks, run_read_only_algorithm_probe
+from .runtime import (
+    active_incident_blocking_severity,
+    collect_runtime_checks,
+    run_read_only_algorithm_probe,
+)
 from .state import EvidenceWriter, InstanceLock
 
 logger = logging.getLogger(__name__)
@@ -326,6 +330,7 @@ class BeidouSupervisor:
         return (
             self._resume_authorized
             and not self.report.blockers
+            and not self._has_active_trading_incident()
             and self._control_state() == "RESUME"
             # Readiness is a runtime certificate, not merely a control-plane
             # action.  A stale/partially-started report must not advertise
@@ -333,6 +338,18 @@ class BeidouSupervisor:
             # DEGRADED.
             and self.report.supervisor_state == "RUNNING"
         )
+
+    def _has_active_trading_incident(self) -> bool:
+        """Keep readiness fail-closed until open safety incidents resolve."""
+        if self.engine is None:
+            return False
+        getter = getattr(getattr(self.engine, "_alerts", None), "get_active_incidents", None)
+        if not callable(getter):
+            return False
+        try:
+            return active_incident_blocking_severity(list(getter())) is not None
+        except Exception:
+            return True
 
     def _install_health_callbacks(self) -> None:
         """让 HTTP readiness 与监督器证据保持一致。"""
@@ -1205,6 +1222,9 @@ class BeidouSupervisor:
         # testnet 进入）。
         if not self.self_heal:
             print("[supervisor] testnet auto re-auth SKIPPED: self_heal disabled (--no-self-heal)")
+            return False
+        if self._has_active_trading_incident():
+            print("[supervisor] testnet auto re-auth SKIPPED: active safety incident")
             return False
         if self._resume_authorized or self._control_state() == "RESUME" or self.report.blockers:
             return False
