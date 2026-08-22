@@ -78,7 +78,7 @@ def test_strategy_snapshot_excludes_research_inventory_from_stale_dependencies()
     idea = SimpleNamespace(has_authorized_active_evidence=lambda: False)
     engine = SimpleNamespace(
         _factor_registry=SimpleNamespace(_factors={"active": active, "idea": idea}),
-        _typed_graph=SimpleNamespace(_nodes={"active": object()}),
+        _typed_graph=SimpleNamespace(_nodes={"active": object(), "typed_fusion_v1": object()}),
     )
 
     assert _strategy_snapshots(engine)[0]["stale_factor_count"] == 0

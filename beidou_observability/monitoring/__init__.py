@@ -186,16 +186,25 @@ def _strategy_snapshots(engine) -> list[dict]:
             # rebuilt from evidence-authorized factors in writable modes.
             graph = getattr(engine, "_typed_graph", None)
             graph_nodes = getattr(graph, "_nodes", None)
+            component_registry = getattr(engine, "_factor_component_registry", None)
             if isinstance(graph_nodes, dict):
                 for factor_id in graph_nodes:
-                    record = records.get(str(factor_id))
+                    factor_id = str(factor_id)
+                    # TypedAlphaGraph also contains structural nodes (for
+                    # example ``typed_fusion_v1``) that are not factor
+                    # dependencies and have no FactorRecord.
+                    if isinstance(component_registry, dict):
+                        if factor_id not in component_registry:
+                            continue
+                    elif factor_id not in records:
+                        continue
+                    record = records.get(factor_id)
                     if record is None or not _has_authorized_active_evidence(record):
                         stale += 1
             else:
                 # Lightweight diagnostic engines may not expose the typed
                 # graph.  Keep the fallback scoped to registered ACTIVE
                 # components; CHALLENGER is intentionally non-production.
-                component_registry = getattr(engine, "_factor_component_registry", None)
                 if isinstance(component_registry, dict):
                     for factor_id, record in records.items():
                         if str(factor_id) not in component_registry:
