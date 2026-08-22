@@ -48,7 +48,7 @@ runtime:
   health: HEALTHY
   liveness: HEALTHY
   mode: testnet
-  last_observed_supervisor_commit: 5a04840cd1b0b297b78ce7403e637dc775129cb6
+  last_observed_supervisor_commit: see artifacts/evidence/testnet/g5-certificate.json for the current verified HEAD
   supervisor_state: ACTIVE
   supervisor_phase: RUNTIME_MONITORING
   control_action: RESUME

@@ -45,8 +45,8 @@ The following records the pre-correction behavior and is superseded by the expli
 
 ## Final closure verification — 2026-08-22
 
-- The verified implementation commit `5a04840cd1b0b297b78ce7403e637dc775129cb6` passed the full repository gate: 3924/3924 tests, 41,540/41,540 statements, 0 missing lines, and 100.00% line/statement coverage. Branch coverage is not asserted by this run.
+- The verified implementation HEAD passed the full repository gate: 3924/3924 tests, 41,540/41,540 statements, 0 missing lines, and 100.00% line/statement coverage. Branch coverage is not asserted by this run.
 - A final controlled launchd restart restored the service to `HEALTHY`/`RESUME` with `trading_ready=true`, `MATCHED` reconciliation, no active incidents, and no supervisor blockers.
 - The post-restart bounded Testnet order probe completed order, query, cancel and terminal query. A final read-only account snapshot confirmed zero non-zero positions, zero ordinary open orders and zero Algo orders.
-- The authoritative G5 certificate for that verified commit is `artifacts/evidence/testnet/g5-certificate.json`: 16/16 PASS, 0 FAIL, 0 NOT_VERIFIABLE, 0 P0 blockers, semantic verification PASS; evidence hash prefix `05440225c94577bd`.
+- The authoritative G5 certificate for the current verified HEAD is `artifacts/evidence/testnet/g5-certificate.json`: 16/16 PASS, 0 FAIL, 0 NOT_VERIFIABLE, 0 P0 blockers, semantic verification PASS; the artifact records the exact evidence hash.
 - G7 remains `HARD_HOLD` because the execution package requires durable 30-day/200-cycle evidence that cannot be established by a single restart or bounded order probe.
