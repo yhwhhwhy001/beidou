@@ -14,6 +14,14 @@ from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 # 恢复超时 FAIL、重启组前置 NOT_VERIFIABLE。裁决:partial_fill 移至注册表
 # 末尾最后执行(认证轮结束后由运维清理 ghost order_state 并 kickstart
 # 恢复引擎);场景语义与 EXPECTED_ORDER pin 同步更新。
-SCENARIO_REGISTRY["partial_fill"] = SCENARIO_REGISTRY.pop("partial_fill")
+#
+# The reconciliation probe intentionally creates a short-lived mismatch.  Run
+# it after the restart group so its supervisor incident cannot make the
+# restart prerequisites NOT_VERIFIABLE; keep partial_fill last for its
+# documented terminal-order cleanup behavior.
+_reconciliation = SCENARIO_REGISTRY.pop("reconciliation_mismatch")
+_partial_fill = SCENARIO_REGISTRY.pop("partial_fill")
+SCENARIO_REGISTRY["reconciliation_mismatch"] = _reconciliation
+SCENARIO_REGISTRY["partial_fill"] = _partial_fill
 
 __all__ = ["engine", "protection", "protocol", "restart"]
