@@ -780,14 +780,15 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "1e646d61bc340513c633e06c1b31dc284f8918446a5801fd74641777fbe132eb",
+ "governance_digest": "a5002eba5e16f649ca1d665fe8b34c7c7856f0b2ba13b692a218447b096e2da0",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "40929d5c4f1f6a65a459a1cc16ba01908723118a47fdfe06a6fbdf86e79258a6",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
   "Makefile": "06f0e6f3ffb51e911a672585c163e589b61a1b40e6adecc553a11e92cff130c3",
   "apps/autopilot/__main__.py": "596cf0c6cb347b8a9c639a681b27e1906f2ca2a30e80e8fc49d5a3a34f95b5c6",
   "apps/factor_miner/__init__.py": "58456a7fa19c7f004bb9d04f854b184464c643268c9b019f414e88d0a978e8b7",
-  "apps/factor_miner/__main__.py": "97e6ffd1c9ae3648ea3eb70712d6bd611bb23633acd2d42563e76b6891013dcd",
+  "apps/factor_miner/__main__.py": "5a892c9fcec1e26ac4bfbff46a77a225b873f7c066bbcba6bacc6a246ae4dc3d",
+  "apps/factor_miner/worker.py": "41210e9474d43f1321731763927b4c8e60c2bda7fe77836f9c0dfe3fb95c6b14",
   "apps/research_lab/__main__.py": "1401183ca8fbebdabb0034f6d7b31615b512a5eaf16f3839708e64d52dee383b",
   "apps/safety_executor/__main__.py": "23962a78c82e5b5cf1a42f5eb7395750d641616aa6216447eaa9301b1b59b965",
   "apps/strategy_engine/__main__.py": "27fd1cdaa053a4544c3d5f7d95ccc7354a2129ecb71142a27130c6a2c106e2d6",

@@ -239,6 +239,11 @@ def test_run_symbols_pool_spawns_worker_processes(tmp_path):
         assert item["result"].candidates_generated > 0
 
 
+def test_pool_worker_is_defined_in_importable_module():
+    """CLI 以 ``python -m`` 启动时，spawn 必须能导入 worker。"""
+    assert _run_symbol_worker.__module__ == "apps.factor_miner.worker"
+
+
 def test_cli_run_pool_path_two_symbols_ordered_output(tmp_path):
     data_root = tmp_path / "klines"
     policy = _write_minimal_policy(tmp_path)
