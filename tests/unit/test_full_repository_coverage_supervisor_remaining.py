@@ -393,7 +393,14 @@ def test_stale_supervisor_incident_is_cleared_before_debounce_when_it_is_the_onl
     incident = SimpleNamespace(root_cause_category="supervisor", incident_id="supervisor-degraded")
     supervisor.engine = SimpleNamespace(
         _alerts=SimpleNamespace(
-            get_active_incidents=lambda: [incident],
+            get_active_incidents=lambda: [
+                {
+                    "incident_id": incident.incident_id,
+                    "severity": "HIGH",
+                    "title": "Supervisor DEGRADED",
+                    "status": "DETECTED",
+                }
+            ],
             _active_incidents={incident.incident_id: incident},
             resolve_incident=lambda incident_id: resolved.append(incident_id),
         )
@@ -407,6 +414,7 @@ def test_stale_supervisor_incident_is_cleared_before_debounce_when_it_is_the_onl
 
     real_incident = SimpleNamespace(root_cause_category="reconciliation", incident_id="reconciliation-blocked")
     supervisor.engine._alerts.get_active_incidents = lambda: [real_incident]
+    supervisor.engine._alerts._active_incidents = {real_incident.incident_id: real_incident}
     assert supervisor._resolve_stale_supervisor_incidents_before_debounce(checks) is False
     assert resolved == ["supervisor-degraded"]
 

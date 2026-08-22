@@ -1002,13 +1002,26 @@ class BeidouSupervisor:
         """
         if self.report.supervisor_state in {"LOCKED", "FAILED", "STOPPED"} or self.engine is None:
             return False
-        getter = getattr(getattr(self.engine, "_alerts", None), "get_active_incidents", None)
-        if not callable(getter):
+        alerts = getattr(self.engine, "_alerts", None)
+        if alerts is None:
             return False
-        try:
-            incidents = list(getter())
-        except Exception:
-            return False
+        # ``AlertDispatcher.get_active_incidents()`` intentionally exposes a
+        # JSON-safe summary and therefore omits ``root_cause_category``.  Use
+        # the in-memory incident objects for this internal classification; the
+        # public summary cannot distinguish a supervisor alert from a safety
+        # incident.  Keep the public getter as a fallback for test doubles or
+        # alternate alert implementations.
+        active = getattr(alerts, "_active_incidents", None)
+        if isinstance(active, dict):
+            incidents = list(active.values())
+        else:
+            getter = getattr(alerts, "get_active_incidents", None)
+            if not callable(getter):
+                return False
+            try:
+                incidents = list(getter())
+            except Exception:
+                return False
         if not incidents:
             return False
 
