@@ -40,11 +40,11 @@ order_validation:
   cleanup_open_order_count: 0
 runtime:
   launchd_service: com.beidou.autopilot
-  launchd_runs: 4
+  last_observed_launchd_runs: 4
   health: HEALTHY
   liveness: HEALTHY
   mode: testnet
-  supervisor_commit: d373279725485aaf06d2b85c280b8a7ea9d923ed
+  last_observed_supervisor_commit: d373279725485aaf06d2b85c280b8a7ea9d923ed
   supervisor_state: DEGRADED
   supervisor_phase: RUNTIME_MONITORING
   control_action: NO_NEW_RISK
