@@ -25,6 +25,14 @@ if [ -f "$HOME/beidou/.env" ]; then
   set +a
 fi
 
+# G5's database-backed scenarios require an explicit isolated Testnet DSN.
+# The local Testnet environment already declares that DSN as DATABASE_URL;
+# expose the governed alias when an operator has not supplied a separate one.
+# There is no fallback to a network or production database.
+if [ -z "${BEIDOU_G5_PG_DSN:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+  export BEIDOU_G5_PG_DSN="$DATABASE_URL"
+fi
+
 "$@" &
 child=$!
 

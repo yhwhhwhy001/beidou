@@ -780,7 +780,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "905adc19ef639ca5e420f0d6c00dab8a7165b6ea8033604205792e6d35a58573",
+ "governance_digest": "e8f8c0a86c3a508524e15e85ad39bf442a2d5d7f6ab5a88721fe3cb4ad8a994f",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "40929d5c4f1f6a65a459a1cc16ba01908723118a47fdfe06a6fbdf86e79258a6",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1142,7 +1142,7 @@
   "delivery/task-packages/BD-T18/ACCEPTANCE.yaml": "e6abe539f5bcb8caf00c90a868a64c0dbb0a3bb554dedc93fbcdda86d9e8fb4c",
   "delivery/task-packages/BD-T19/ACCEPTANCE.yaml": "fdcf451630b05df756b4242b4e9166c16c9ab4c7a5cef028f9a29c9d263d8cc8",
   "delivery/templates/evidence-manifest.template.json": "c4a336a66f4e46c8b7a542031d8361a95e69908aa980646f1e538ea8ae7d6c9a",
-  "deploy/beidou_launchd_wrapper.sh": "ad72cdbbcefcb31c6c9fe4517113d9657805c82f83a673d0fcc3ddc794b00bc2",
+  "deploy/beidou_launchd_wrapper.sh": "b0c67bf53f887427322e42b2ab898e6d198c489523df08351c74e86989eac570",
   "deploy/com.beidou.autopilot.plist": "3768406a30abd89276847f663e9d1a3f5dbef92abdec6e56acb25b8fe9965528",
   "docker-compose.yml": "a81844f334dc010f306a4cb2038ace37155ffff8b653410ba5943194689063b6",
   "migrations/001_initial_schema.up.sql": "4a17f9d9443ebb92c8d722cf838571274ce6bb75ffa66fd517d83e66fd1fee4b",
