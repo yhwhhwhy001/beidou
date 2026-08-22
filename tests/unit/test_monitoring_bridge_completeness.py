@@ -61,6 +61,29 @@ def test_monitoring_bridge_helpers_preserve_unknown_and_audit_identity() -> None
     assert _factor_state_snapshots(SimpleNamespace(_factors=[])) == []
 
 
+def test_factor_snapshot_uses_live_performance_timestamp() -> None:
+    observed_at = datetime(2026, 8, 22, 10, 30, tzinfo=timezone.utc)
+    record = SimpleNamespace(
+        lifecycle=SimpleNamespace(value="ACTIVE"),
+        performance=[SimpleNamespace(ic_mean=0.12, timestamp=observed_at)],
+    )
+
+    states = _factor_state_snapshots(SimpleNamespace(_factors={"f1": record}))
+
+    assert states[0].last_evaluation == observed_at.timestamp()
+
+
+def test_strategy_snapshot_excludes_research_inventory_from_stale_dependencies() -> None:
+    active = SimpleNamespace(has_authorized_active_evidence=lambda: True)
+    idea = SimpleNamespace(has_authorized_active_evidence=lambda: False)
+    engine = SimpleNamespace(
+        _factor_registry=SimpleNamespace(_factors={"active": active, "idea": idea}),
+        _typed_graph=SimpleNamespace(_nodes={"active": object()}),
+    )
+
+    assert _strategy_snapshots(engine)[0]["stale_factor_count"] == 0
+
+
 def test_strategy_snapshot_handles_risk_and_factor_evidence_fail_closed() -> None:
     budget = SimpleNamespace(max_drawdown_pct=2.0)
     state = SimpleNamespace(current_drawdown_pct=5.0)

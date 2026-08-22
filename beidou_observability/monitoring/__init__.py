@@ -2,6 +2,7 @@
 
 import os
 import time
+from datetime import datetime, timezone
 
 from beidou_observability.monitoring.clock_integrity import ClockIntegrity
 from beidou_observability.monitoring.contracts import *
@@ -98,21 +99,47 @@ def _factor_state_snapshots(factor_registry) -> list:
             lifecycle = str(getattr(getattr(record, "lifecycle", None), "value", "UNKNOWN"))
             performance = getattr(record, "performance", None) or []
             value = 0.0
+            last_evaluation = 0.0
             if performance:
-                value = float(getattr(performance[-1], "ic_mean", 0.0) or 0.0)
-            # last_evaluation=0 跳过 stale 检查：FactorPerformance 无时间戳，
-            # 不能把"无时间证据"包装成"刚评估过"。
+                latest = performance[-1]
+                value = float(getattr(latest, "ic_mean", 0.0) or 0.0)
+                last_evaluation = _performance_timestamp(getattr(latest, "timestamp", None))
             states.append(
                 FactorState(
                     factor_id=str(fid),
                     value=value,
                     lifecycle=lifecycle,
-                    last_evaluation=0.0,
+                    last_evaluation=last_evaluation,
                 )
             )
         except (TypeError, ValueError, AttributeError):
             continue
     return states
+
+
+def _performance_timestamp(value) -> float:
+    """Return a performance timestamp without inventing freshness."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.timestamp()
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return 0.0
+        try:
+            return float(raw)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                return 0.0
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+    return 0.0
 
 
 def _strategy_snapshots(engine) -> list[dict]:
@@ -130,6 +157,11 @@ def _strategy_snapshots(engine) -> list[dict]:
     silence = max(0.0, time.time() - last_nearline) if last_nearline > 0 else 0.0
     drift = 0.0
     stale = 0
+
+    def _has_authorized_active_evidence(record) -> bool:
+        check = getattr(record, "has_authorized_active_evidence", None)
+        return bool(callable(check) and check())
+
     try:
         risk = getattr(engine, "_strategy_risk", None)
         if risk is not None:
@@ -148,10 +180,35 @@ def _strategy_snapshots(engine) -> list[dict]:
         registry = getattr(engine, "_factor_registry", None)
         records = getattr(registry, "_factors", None)
         if isinstance(records, dict):
-            for record in records.values():
-                check = getattr(record, "has_authorized_active_evidence", None)
-                if not (callable(check) and check()):
-                    stale += 1
+            # Count only dependencies of the executable strategy.  IDEA and
+            # PAPER_TRADING records are research inventory, not stale runtime
+            # dependencies.  The typed graph is authoritative because it is
+            # rebuilt from evidence-authorized factors in writable modes.
+            graph = getattr(engine, "_typed_graph", None)
+            graph_nodes = getattr(graph, "_nodes", None)
+            if isinstance(graph_nodes, dict):
+                for factor_id in graph_nodes:
+                    record = records.get(str(factor_id))
+                    if record is None or not _has_authorized_active_evidence(record):
+                        stale += 1
+            else:
+                # Lightweight diagnostic engines may not expose the typed
+                # graph.  Keep the fallback scoped to registered ACTIVE
+                # components; CHALLENGER is intentionally non-production.
+                component_registry = getattr(engine, "_factor_component_registry", None)
+                if isinstance(component_registry, dict):
+                    for factor_id, record in records.items():
+                        if str(factor_id) not in component_registry:
+                            continue
+                        lifecycle = str(getattr(getattr(record, "lifecycle", None), "value", ""))
+                        if lifecycle == "ACTIVE" and not _has_authorized_active_evidence(record):
+                            stale += 1
+                else:
+                    # Compatibility path for the older bridge fixture
+                    # contract, which has no execution projection at all.
+                    for record in records.values():
+                        if not _has_authorized_active_evidence(record):
+                            stale += 1
     except Exception as exc:
         import logging
 
