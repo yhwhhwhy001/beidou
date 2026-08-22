@@ -42,3 +42,11 @@ The following records the pre-correction behavior and is superseded by the expli
 - The G5 registry now runs the restart group before the intentional reconciliation disturbance, while `partial_fill` remains last. This prevents a deliberate temporary mismatch incident from invalidating the restart prerequisites.
 - Full official G5 certification then passed all 16/16 scenarios with semantic verification: 0 FAIL, 0 NOT_VERIFIABLE, 0 P0 blockers. The certificate evidence hash was `6dd256af2c902a52...` for the verified implementation commit at that run.
 - The post-certification service may retain a supervisor incident from the deliberate probes until the final controlled restart; this does not change the G5 certificate result. G7 remains `HARD_HOLD` pending its 30-day/200-cycle evidence window.
+
+## Final closure verification — 2026-08-22
+
+- The verified implementation commit `5a04840cd1b0b297b78ce7403e637dc775129cb6` passed the full repository gate: 3924/3924 tests, 41,540/41,540 statements, 0 missing lines, and 100.00% line/statement coverage. Branch coverage is not asserted by this run.
+- A final controlled launchd restart restored the service to `HEALTHY`/`RESUME` with `trading_ready=true`, `MATCHED` reconciliation, no active incidents, and no supervisor blockers.
+- The post-restart bounded Testnet order probe completed order, query, cancel and terminal query. A final read-only account snapshot confirmed zero non-zero positions, zero ordinary open orders and zero Algo orders.
+- The authoritative G5 certificate for that verified commit is `artifacts/evidence/testnet/g5-certificate.json`: 16/16 PASS, 0 FAIL, 0 NOT_VERIFIABLE, 0 P0 blockers, semantic verification PASS; evidence hash prefix `05440225c94577bd`.
+- G7 remains `HARD_HOLD` because the execution package requires durable 30-day/200-cycle evidence that cannot be established by a single restart or bounded order probe.
