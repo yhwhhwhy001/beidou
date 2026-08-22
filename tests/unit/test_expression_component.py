@@ -38,6 +38,17 @@ def test_flat_history_is_no_action() -> None:
     assert signal is not None and signal.direction == SignalDirection.NO_ACTION
 
 
+def test_records_factor_prediction_even_without_actionable_signal() -> None:
+    """无动作 bar 也必须为在线 IC/ICIR 生命周期留下预测值。"""
+    comp = ExpressionComponent(factor_id="x", expression_string="close", role="ENTRY")
+    context: dict[str, Any] | None = None
+    for _ in range(40):
+        context = _context(100.0)
+        signal = asyncio.run(comp.generate(context))
+    assert signal.direction == SignalDirection.NO_ACTION
+    assert context is not None and context["_predictions"]["x"] == 100.0
+
+
 def test_uptrend_generates_long() -> None:
     # pct_change(close, 5) 在恒定 1% 复利趋势下输出常数序列（1.01^5 - 1），
     # 滚动 z≈0 → NO_ACTION；改用同语义的 5 根动量 diff(close, 5)

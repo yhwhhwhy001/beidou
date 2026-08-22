@@ -1905,14 +1905,10 @@ class AutonomousEngine:
         # 诊断环境可以注册因子，但只有外部、可重放的 PromotionDecision 才能改变生命周期。
         self._factor_gate = FactorPromotionGate(strict=True)
         print(f"[beidou-autopilot] Factor promotion gate: strict={getattr(self._factor_gate, '_strict', True)}")
-        active_factors = [
-            fid for fid, record in self._factor_registry._factors.items() if record.has_authorized_active_evidence()
-        ]
         print(
-            f"[beidou-autopilot] Factor lifecycles: {[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
+            "[beidou-autopilot] Registered factor lifecycles before evidence bridge: "
+            f"{[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
         )
-        if not active_factors:
-            print("[beidou-autopilot] WARNING: No evidence-approved ACTIVE factors — trading signals are disabled")
 
         # Factor tracking is keyed by the complete point-in-time scope.  A
         # prediction is stored at a closed bar and only paired when the next
@@ -1977,6 +1973,14 @@ class AutonomousEngine:
         active_factors = [
             fid for fid, record in self._factor_registry._factors.items() if record.has_authorized_active_evidence()
         ]
+        print(
+            "[beidou-autopilot] Factor lifecycles after evidence bridge: "
+            f"{[(fid, r.lifecycle.value) for fid, r in self._factor_registry._factors.items()]}"
+        )
+        if active_factors:
+            print(f"[beidou-autopilot] Evidence-approved ACTIVE factors: {sorted(active_factors)}")
+        else:
+            print("[beidou-autopilot] WARNING: No evidence-approved ACTIVE factors — trading signals are disabled")
 
         # ================================================================
         # Fix 1: 接线 Factor Registry → 控制面 API
@@ -11298,7 +11302,19 @@ class AutonomousEngine:
         # TESTNET-EXEMPT: EXEMPT-21
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) != "testnet":
             return False
-        lev_int = max(1, min(125, round(float(dyn_leverage))))
+        try:
+            adaptive_target = float(dyn_leverage)
+        except (TypeError, ValueError):
+            logger.warning("venue leverage sync skipped for %s: adaptive target is non-numeric", symbol)
+            return False
+        if not math.isfinite(adaptive_target) or adaptive_target <= 0:
+            logger.warning("venue leverage sync skipped for %s: adaptive target is UNKNOWN", symbol)
+            return False
+        # Binance USDⓈ-M venue leverage is an integer in [1, 125].  The
+        # adaptive risk scalar may deliberately be 0.5x for extreme
+        # volatility, but it cannot be represented as a venue setting; keep
+        # the scalar for sizing and expose the venue clamp explicitly.
+        lev_int = max(1, min(125, round(adaptive_target)))
         cache = getattr(self, "_venue_leverage", None)
         if cache is None:
             cache = {}
@@ -11317,7 +11333,11 @@ class AutonomousEngine:
             return False
         if isinstance(result, dict) and "leverage" in result:
             cache[symbol] = lev_int
-            print(f"[nearline] {symbol}: venue leverage synced → {lev_int}x (adaptive)")
+            clamp_note = "; venue_min=1x" if adaptive_target < 1.0 else ""
+            print(
+                f"[nearline] {symbol}: venue leverage synced → {lev_int}x "
+                f"(adaptive_target={adaptive_target:.1f}x{clamp_note})"
+            )
             return True
         if isinstance(result, dict) and "error" in result:
             logger.warning("venue leverage sync rejected for %s: %s", symbol, str(result.get("msg", ""))[:120])
@@ -11585,6 +11605,20 @@ class AutonomousEngine:
                                 tf,
                                 sig_ids[:5],
                             )
+
+                        # Lifecycle evaluation is independent of whether this
+                        # bar produced an actionable proposal.  Store every
+                        # valid closed-bar forecast before the no-action
+                        # branch; otherwise quiet markets never accumulate
+                        # point-in-time samples for IC/ICIR validation.
+                        predictions = context.get("_predictions", {})
+                        self._store_factor_predictions(
+                            symbol,
+                            tf,
+                            features.get("bar_open_time"),
+                            close,
+                            predictions,
+                        )
                         if not typed_proposal and not all_signals:
                             continue
                     except Exception as exc:
@@ -11609,11 +11643,6 @@ class AutonomousEngine:
                 if best_signal is None:
                     continue
                 tf, close, features, state, signal_obj, pos_info, typed_mode, context = best_signal
-
-                # Save predictions for factor IC evaluation per timeframe
-                predictions = context.get("_predictions", {})
-                bar_open_time = features.get("bar_open_time")
-                self._store_factor_predictions(symbol, tf, bar_open_time, close, predictions)
 
                 # Build fused signal from the best timeframe's proposal
                 instrument_id = InstrumentId(symbol)

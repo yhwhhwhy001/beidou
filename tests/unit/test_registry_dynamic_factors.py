@@ -77,3 +77,15 @@ def test_dynamic_factor_components_do_not_fail_graph_check() -> None:
     assert graph.status != CheckStatus.FAIL, graph.message
     factor = next(r for r in results if r.check_id == "runtime.algorithms.factor_lifecycle")
     assert factor.status != CheckStatus.FAIL, factor.message
+
+
+def test_factor_lifecycle_message_distinguishes_idea_from_degraded() -> None:
+    engine = _FakeEngine()
+    engine._factor_registry._factors["meanrev_entry_v1"].lifecycle.value = "IDEA"
+
+    results = inspect_engine_wiring(engine, mode="testnet")
+    factor = next(r for r in results if r.check_id == "runtime.algorithms.factor_lifecycle")
+
+    assert factor.status == CheckStatus.WARN
+    assert "未进入可执行生命周期" in factor.message
+    assert "部分因子降级(DEGRADED)" not in factor.message

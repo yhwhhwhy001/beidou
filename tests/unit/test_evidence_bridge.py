@@ -299,3 +299,77 @@ def test_top_level_chain_layout_rejected(tmp_path: Path) -> None:
     assert report.applied == []
     assert any("missing_promotion_chain" in reason for _, reason in report.rejected)
     assert registry.get("tmpl_x_v1") is None
+
+
+def test_same_factor_prefers_highest_valid_lifecycle_chain(tmp_path: Path) -> None:
+    """同因子多份合法证据不应由文件名决定最终生命周期/表达式。"""
+    bundle = _valid_bundle()
+    full_chain = _chain(bundle)
+    paper_end = next(index for index, step in enumerate(full_chain) if step["to"] == "PAPER_TRADING")
+    paper_chain = full_chain[: paper_end + 1]
+    evidence_dir = _write_evidence(tmp_path, bundle, paper_chain, expression="close")
+
+    active_path = evidence_dir / "zz-active.json"
+    active_path.write_text(
+        json.dumps(
+            {
+                "factor_id": f"BTCUSDT:{bundle.candidate_id}-active",
+                "version": "2.0.0",
+                "data": {
+                    **bundle.to_dict(),
+                    "promotion_chain": full_chain,
+                    "promotion_chain_hash": _chain_hash(full_chain),
+                    "evidence_source": "historical_replay",
+                    "expression_string": "diff(close, 5)",
+                    "role": "entry",
+                },
+            }
+        )
+    )
+
+    registry = _registry()
+    component_registry = {"meanrev_entry_v1": (object, ())}
+    report = EvidenceBridge.load_and_apply(
+        registry=registry,
+        gate=FactorPromotionGate(strict=True),
+        env_mode="testnet",
+        component_registry=component_registry,
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
+        evidence_dir=str(evidence_dir),
+    )
+
+    record = registry.get("tmpl_x_v1")
+    assert record is not None and record.lifecycle == FactorLifecycle.ACTIVE
+    assert report.applied == ["tmpl_x_v1"]
+    assert component_registry["tmpl_x_v1"][0].keywords["expression_string"] == "diff(close, 5)"
+
+
+def test_rejected_chain_does_not_leave_partial_lifecycle(tmp_path: Path) -> None:
+    """链中途损坏时，已通过的前置状态也必须回滚。"""
+    bundle = _valid_bundle()
+    chain = [*_chain(bundle)[:1], {"from": "GENERATED", "to": "NOT_A_STATE"}]
+    evidence_dir = _write_evidence(tmp_path, bundle, chain)
+    victim = evidence_dir / "bundle.json"
+    data = json.loads(victim.read_text())
+    data["data"]["promotion_chain_hash"] = _chain_hash(chain)
+    victim.write_text(json.dumps(data))
+
+    registry = _registry()
+    report = EvidenceBridge.load_and_apply(
+        registry=registry,
+        gate=FactorPromotionGate(strict=True),
+        env_mode="testnet",
+        component_registry={"meanrev_entry_v1": (object, ())},
+        entry_ids={"meanrev_entry_v1"},
+        filter_ids=set(),
+        exit_ids=set(),
+        evidence_dir=str(evidence_dir),
+    )
+
+    record = registry.get("tmpl_x_v1")
+    assert report.applied == []
+    assert record is not None and record.lifecycle == FactorLifecycle.IDEA
+    assert record.promotion_history == []
+    assert any("chain_state" in reason for _, reason in report.rejected)

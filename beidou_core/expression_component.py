@@ -227,6 +227,11 @@ class ExpressionComponent(AlphaComponent):
             return self._no_action(context)
         if not math.isfinite(last):
             return self._no_action(context)
+        # Lifecycle monitoring needs the factor forecast even when the signal
+        # is below the action threshold.  Without this point-in-time value,
+        # no-action bars produced no sample and online IC/ICIR stayed at zero.
+        if self._factor_id:
+            context.setdefault("_predictions", {})[self._factor_id] = last
         _hist["value"].append(last)
         if len(_hist["value"]) < _Z_MIN:
             return self._no_action(context)

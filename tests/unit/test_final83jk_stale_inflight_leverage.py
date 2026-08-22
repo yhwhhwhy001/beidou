@@ -340,3 +340,16 @@ async def test_sync_venue_leverage_never_in_live(monkeypatch) -> None:
     monkeypatch.setenv("BEIDOU_SYNC_VENUE_LEVERAGE", "1")
     assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is False
     api.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_venue_leverage_rejects_unknown_adaptive_target(monkeypatch) -> None:
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._env_mode = SimpleNamespace(value="testnet")
+    api = AsyncMock()
+    monkeypatch.setattr(engine, "_api_async", api)
+    monkeypatch.setenv("BEIDOU_SYNC_VENUE_LEVERAGE", "1")
+
+    assert await engine._sync_venue_leverage("XRPUSDT", 0.0) is False
+    assert await engine._sync_venue_leverage("XRPUSDT", float("nan")) is False
+    api.assert_not_awaited()

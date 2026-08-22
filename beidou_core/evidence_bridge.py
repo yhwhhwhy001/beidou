@@ -64,6 +64,37 @@ class BridgeReport:
     rejected: list[tuple[str, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _ValidatedEvidence:
+    """A bundle that passed the file-level integrity checks."""
+
+    path: Path
+    factor_id: str
+    bundle: EvidenceBundle
+    chain: list[dict[str, Any]]
+    expression_string: str
+    role: str
+    economic_rationale: Any
+
+
+_LIFECYCLE_RANK: dict[FactorLifecycle, int] = {
+    state: rank
+    for rank, state in enumerate(
+        (
+            FactorLifecycle.IDEA,
+            FactorLifecycle.GENERATED,
+            FactorLifecycle.SANITY_PASSED,
+            FactorLifecycle.RESEARCH_VALIDATED,
+            FactorLifecycle.OOS_VERIFIED,
+            FactorLifecycle.COST_CAPACITY_VERIFIED,
+            FactorLifecycle.PAPER_TRADING,
+            FactorLifecycle.CHALLENGER,
+            FactorLifecycle.ACTIVE,
+        )
+    )
+}
+
+
 class EvidenceBridge:
     @staticmethod
     def load_and_apply(
@@ -83,7 +114,7 @@ class EvidenceBridge:
         if not root.exists():
             return report
         files = sorted(root.rglob("*.json"))
-        handled_factor_ids: set[str] = set()
+        candidates_by_factor: dict[str, list[_ValidatedEvidence]] = {}
         for path in files:
             try:
                 payload = json.loads(path.read_text())
@@ -138,59 +169,99 @@ class EvidenceBridge:
                     continue
 
                 factor_id = str(bundle.factor_id)
-                if factor_id in handled_factor_ids:
-                    continue  # 同因子多品种 bundle：确定性取第一个
-                handled_factor_ids.add(factor_id)
-
-                record = registry.get(factor_id)
-                if record is None:
-                    definition = FactorDefinition(
+                candidates_by_factor.setdefault(factor_id, []).append(
+                    _ValidatedEvidence(
+                        path=path,
                         factor_id=factor_id,
-                        name=f"mined-{factor_id}",
-                        version=SchemaVersion(bundle.factor_version or "2.0.0"),
-                        description=f"Mined factor {factor_id} (evidence {bundle.artifact_hash[:12]})",
-                        author="factor-miner",
-                        category="mined",
-                        universe=frozenset({VenueId("BINANCE")}),
-                        instrument_types=frozenset({"perpetual"}),
+                        bundle=bundle,
+                        chain=chain,
+                        expression_string=expression_string,
+                        role=role,
                         economic_rationale=data.get("economic_rationale", "mined factor"),
-                        lookback_period="1h",
-                        rebalance_interval="1h",
                     )
-                    record = registry.register(definition)
-
-                # F4: 组件注册在"已 ACTIVE 幂等跳过"分支之前 —
-                # skip 与晋级两条路径都注册 ExpressionComponent，
-                # 否则重启后已 ACTIVE 因子不再可交易。
-                if record.has_authorized_active_evidence():
-                    EvidenceBridge._register_expression_component(
-                        factor_id,
-                        expression_string,
-                        role,
-                        component_registry,
-                        entry_ids,
-                        filter_ids,
-                        exit_ids,
-                    )
-                    report.applied.append(factor_id)  # 已 ACTIVE：幂等跳过
-                    continue
-
-                # 逐级复验：不可直接采信文件内 approved 字段
-                applied = EvidenceBridge._apply_chain(record, gate, chain, bundle, path, report)
-                if applied:
-                    EvidenceBridge._register_expression_component(
-                        factor_id,
-                        expression_string,
-                        role,
-                        component_registry,
-                        entry_ids,
-                        filter_ids,
-                        exit_ids,
-                    )
+                )
             except Exception as exc:  # F1 隔离网：任何未预期异常只跳过该文件，不终止扫描
                 report.rejected.append((str(path), f"unhandled:{type(exc).__name__}"))
                 continue
+        # 同一 factor_id 可能有多份合法文件（不同品种、候选或版本）。
+        # 先选最高生命周期证据，再应用；如果该候选的链门禁失败，则回退到
+        # 下一份较弱但仍完整的证据。这样既不被文件名决定，也不会绕过
+        # 逐级门禁。
+        for factor_id in sorted(candidates_by_factor):
+            candidates = sorted(
+                candidates_by_factor[factor_id],
+                key=EvidenceBridge._candidate_rank,
+                reverse=True,
+            )
+            for candidate in candidates:
+                path = candidate.path
+                try:
+                    record = registry.get(factor_id)
+                    if record is None:
+                        definition = FactorDefinition(
+                            factor_id=factor_id,
+                            name=f"mined-{factor_id}",
+                            version=SchemaVersion(candidate.bundle.factor_version or "2.0.0"),
+                            description=(f"Mined factor {factor_id} (evidence {candidate.bundle.artifact_hash[:12]})"),
+                            author="factor-miner",
+                            category="mined",
+                            universe=frozenset({VenueId("BINANCE")}),
+                            instrument_types=frozenset({"perpetual"}),
+                            economic_rationale=candidate.economic_rationale,
+                            lookback_period="1h",
+                            rebalance_interval="1h",
+                        )
+                        record = registry.register(definition)
+
+                    # F4: 组件注册在"已 ACTIVE 幂等跳过"分支之前 —
+                    # skip 与晋级两条路径都注册 ExpressionComponent，
+                    # 否则重启后已 ACTIVE 因子不再可交易。
+                    if record.has_authorized_active_evidence():
+                        EvidenceBridge._register_expression_component(
+                            factor_id,
+                            candidate.expression_string,
+                            candidate.role,
+                            component_registry,
+                            entry_ids,
+                            filter_ids,
+                            exit_ids,
+                        )
+                        report.applied.append(factor_id)  # 已 ACTIVE：幂等跳过
+                        break
+
+                    # 逐级复验：不可直接采信文件内 approved 字段
+                    applied = EvidenceBridge._apply_chain(
+                        record,
+                        gate,
+                        candidate.chain,
+                        candidate.bundle,
+                        path,
+                        report,
+                    )
+                    if applied:
+                        EvidenceBridge._register_expression_component(
+                            factor_id,
+                            candidate.expression_string,
+                            candidate.role,
+                            component_registry,
+                            entry_ids,
+                            filter_ids,
+                            exit_ids,
+                        )
+                        break
+                except Exception as exc:  # F1 隔离网：单候选异常不终止扫描
+                    report.rejected.append((str(path), f"unhandled:{type(exc).__name__}"))
+                    continue
         return report
+
+    @staticmethod
+    def _candidate_rank(candidate: _ValidatedEvidence) -> tuple[int, int, str]:
+        """Return a deterministic rank that prefers the strongest chain."""
+        try:
+            target = FactorLifecycle(str(candidate.chain[-1]["to"]))
+        except (KeyError, TypeError, ValueError):
+            target = FactorLifecycle.IDEA
+        return (_LIFECYCLE_RANK.get(target, -1), len(candidate.chain), str(candidate.path))
 
     @staticmethod
     def _apply_chain(
@@ -198,75 +269,92 @@ class EvidenceBridge:
     ) -> bool:
         from beidou_research.factors.factor import FactorPerformance, PromotionDecision
 
-        for step in chain:
-            try:
-                from_state = FactorLifecycle(str(step["from"]))
-                to_state = FactorLifecycle(str(step["to"]))
-            except (KeyError, ValueError) as exc:
-                report.rejected.append((str(path), f"chain_state:{exc}"))
-                return False
-            if record.lifecycle == to_state:
-                continue
-            # 逐级复验必须强制 min_icir/min_sample 阈值（fail-closed）：
-            # 从链记录重建 FactorPerformance 传给门禁。
-            # NaN/non-finite → 0.0：门禁的 ICIR 阈值比较将拒绝该级。
-            step_icir = EvidenceBridge._as_finite_float(step.get("icir", 0.0))
-            step_ic = EvidenceBridge._as_finite_float(step.get("ic", 0.0))
-            try:
-                step_samples = int(step.get("sample_count", 0))
-            except (TypeError, ValueError):
-                step_samples = 0
-            evidence_ids = step.get("evidence_ids", [])
-            if not isinstance(evidence_ids, list):
-                evidence_ids = []
-            performance = FactorPerformance(
-                factor_id=record.definition.factor_id,
-                evaluation_period="historical",
-                sample_count=step_samples,
-                ic_mean=step_ic,
-                ic_std=0.0,
-                icir=step_icir,
-                rank_ic_mean=0.0,
-                rank_ic_std=0.0,
-                rank_icir=step_icir,
-            )
-            decision = gate.validate_evidence(
-                factor_id=record.definition.factor_id,
-                current_state=from_state,
-                target_state=to_state,
-                performance=performance,
-                evidence_ids=evidence_ids,
-                factor_version=str(step.get("factor_version", "")),
-                commit=str(step.get("commit", "")),
-                dataset_hash=str(step.get("dataset_hash", "")),
-                policy_version=str(step.get("policy_version", "")),
-                falsifier=str(step.get("falsifier", "factor-miner")),
-                evidence_bundle=bundle if to_state == FactorLifecycle.ACTIVE else None,
-            )
-            if not decision.approved:
-                report.rejected.append((str(path), f"gate_rejected@{to_state.value}:{decision.reason[:120]}"))
-                return False
-            if record.lifecycle != from_state:
-                report.rejected.append((str(path), f"chain_order_mismatch@{from_state.value}"))
-                return False
-            record.transition(to_state)
-            record.promotion_history.append(
-                PromotionDecision(
-                    decision_id=decision.decision_id,
-                    factor_id=decision.factor_id,
-                    from_state=from_state,
-                    to_state=to_state,
-                    approved=True,
-                    reason=decision.reason,
-                    factor_version=decision.factor_version,
-                    commit=decision.commit,
-                    dataset_hash=decision.dataset_hash,
-                    evidence_ids=decision.evidence_ids,
-                    policy_version=decision.policy_version,
-                    falsifier=decision.falsifier,
-                    evidence_artifact_hash=bundle.artifact_hash,
+        original_lifecycle = record.lifecycle
+        original_history_length = len(record.promotion_history)
+
+        def rollback() -> None:
+            record.lifecycle = original_lifecycle
+            del record.promotion_history[original_history_length:]
+
+        try:
+            for step in chain:
+                try:
+                    from_state = FactorLifecycle(str(step["from"]))
+                    to_state = FactorLifecycle(str(step["to"]))
+                except (KeyError, ValueError) as exc:
+                    rollback()
+                    report.rejected.append((str(path), f"chain_state:{exc}"))
+                    return False
+                if record.lifecycle == to_state:
+                    continue
+                # 逐级复验必须强制 min_icir/min_sample 阈值（fail-closed）：
+                # 从链记录重建 FactorPerformance 传给门禁。
+                # NaN/non-finite → 0.0：门禁的 ICIR 阈值比较将拒绝该级。
+                step_icir = EvidenceBridge._as_finite_float(step.get("icir", 0.0))
+                step_ic = EvidenceBridge._as_finite_float(step.get("ic", 0.0))
+                try:
+                    step_samples = int(step.get("sample_count", 0))
+                except (TypeError, ValueError):
+                    step_samples = 0
+                evidence_ids = step.get("evidence_ids", [])
+                if not isinstance(evidence_ids, list):
+                    evidence_ids = []
+                performance = FactorPerformance(
+                    factor_id=record.definition.factor_id,
+                    evaluation_period="historical",
+                    sample_count=step_samples,
+                    ic_mean=step_ic,
+                    ic_std=0.0,
+                    icir=step_icir,
+                    rank_ic_mean=0.0,
+                    rank_ic_std=0.0,
+                    rank_icir=step_icir,
                 )
-            )
+                decision = gate.validate_evidence(
+                    factor_id=record.definition.factor_id,
+                    current_state=from_state,
+                    target_state=to_state,
+                    performance=performance,
+                    evidence_ids=evidence_ids,
+                    factor_version=str(step.get("factor_version", "")),
+                    commit=str(step.get("commit", "")),
+                    dataset_hash=str(step.get("dataset_hash", "")),
+                    policy_version=str(step.get("policy_version", "")),
+                    falsifier=str(step.get("falsifier", "factor-miner")),
+                    evidence_bundle=bundle if to_state == FactorLifecycle.ACTIVE else None,
+                )
+                if not decision.approved:
+                    rollback()
+                    report.rejected.append((str(path), f"gate_rejected@{to_state.value}:{decision.reason[:120]}"))
+                    return False
+                if record.lifecycle != from_state:
+                    rollback()
+                    report.rejected.append((str(path), f"chain_order_mismatch@{from_state.value}"))
+                    return False
+                if not record.transition(to_state):
+                    rollback()
+                    report.rejected.append((str(path), f"transition_rejected@{to_state.value}"))
+                    return False
+                record.promotion_history.append(
+                    PromotionDecision(
+                        decision_id=decision.decision_id,
+                        factor_id=decision.factor_id,
+                        from_state=from_state,
+                        to_state=to_state,
+                        approved=True,
+                        reason=decision.reason,
+                        factor_version=decision.factor_version,
+                        commit=decision.commit,
+                        dataset_hash=decision.dataset_hash,
+                        evidence_ids=decision.evidence_ids,
+                        policy_version=decision.policy_version,
+                        falsifier=decision.falsifier,
+                        evidence_artifact_hash=bundle.artifact_hash,
+                    )
+                )
+        except Exception:
+            rollback()
+            raise
         report.applied.append(record.definition.factor_id)
         return True
 

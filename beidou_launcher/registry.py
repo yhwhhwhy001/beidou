@@ -193,7 +193,11 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             graph_severity,
             f"Alpha DAG 缺失、校验失败或存在拓扑错误（extra={extra_components}）"
             if graph_failed
-            else "8 个 Alpha 组件均已接线且拓扑可排序",
+            else (
+                f"Alpha DAG 可排序；未授权组件未接线: {missing_components}"
+                if missing_components
+                else "8 个 Alpha 组件均已接线且拓扑可排序"
+            ),
             evidence={
                 "expected": sorted(EXPECTED_ALPHA_COMPONENTS),
                 "actual": sorted(component_ids),
@@ -212,7 +216,10 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     extra_factors = sorted(factor_ids - EXPECTED_FACTORS)
     active = {factor_id for factor_id, state in lifecycle.items() if state in {"ACTIVE", "CHALLENGER"}}
     inactive_expected = sorted(EXPECTED_FACTORS - active)
-    # 仅因子缺失为 P0 阻断；DEGRADED 为 P2 告警（可自动恢复）
+    degraded_expected = sorted(fid for fid in inactive_expected if lifecycle.get(fid) == "DEGRADED")
+    not_ready_expected = sorted(fid for fid in inactive_expected if lifecycle.get(fid) != "DEGRADED")
+    # 仅因子缺失为 P0 阻断；未进入可执行生命周期和 DEGRADED 均为 P2
+    # 观测告警，但必须区分语义，不能把 IDEA/PAPER 误报成 DEGRADED。
     # 动态挖掘因子合法注册：extra_factors 不再 FAIL。
     truly_missing = bool(missing_factors)
     degraded_only = bool(not truly_missing and inactive_expected)
@@ -227,7 +234,13 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
             "因子缺失或未注册"
             if truly_missing
             else (
-                f"部分因子降级(DEGRADED): {inactive_expected}" if degraded_only else "因子均已注册并满足生命周期要求"
+                f"因子处于 DEGRADED: {degraded_expected}; 未进入可执行生命周期: {not_ready_expected}"
+                if degraded_expected and not_ready_expected
+                else f"因子处于 DEGRADED: {degraded_expected}"
+                if degraded_expected
+                else f"因子未进入可执行生命周期: {not_ready_expected}"
+                if not_ready_expected
+                else "因子均已注册并满足生命周期要求"
             ),
             evidence={
                 "expected": sorted(EXPECTED_FACTORS),
@@ -235,6 +248,8 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
                 "missing": missing_factors,
                 "extra": extra_factors,
                 "inactive_expected": inactive_expected,
+                "degraded_expected": degraded_expected,
+                "not_ready_expected": not_ready_expected,
                 "lifecycle": lifecycle,
                 "mode": mode,
             },
