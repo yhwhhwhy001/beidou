@@ -7,23 +7,55 @@ authority:
   exchange_testnet_order_lifecycle: true
   mainnet_or_real_funds: false
   transfers_or_permissions: false
-  restart_or_deploy: false
+  restart_or_deploy: true
   git_commit_or_push: true
-status: IN_PROGRESS
+status: COMPLETED_WITH_RUNTIME_BLOCKERS
 coverage:
-  covered: 24669
-  statements: 31742
-  missing: 7073
-  percent: 77.71722008695104
+  covered: 41537
+  statements: 41537
+  missing: 0
+  percent: 100.0
   target: 100
+  unit_tests: 3572
+  full_tests: 3924
+  branch_coverage_claim: NOT_ASSERTED
 exchange:
   host: demo-fapi.binance.com
   symbol: BTCUSDT
   can_trade: true
   can_withdraw: true
   position_mode: ONE_WAY
-  nonzero_position_count: 6
+  nonzero_position_count: 0
   open_order_count: 0
   open_algo_order_count: 0
-  mutation_performed: false
-  decision: BLOCKED_PRE_WRITE_WITHDRAWAL_PERMISSION_AND_UNKNOWN_EXPOSURE
+  mutation_performed: true
+  mutation_scope: single Testnet create_query_cancel lifecycle; terminal cancel confirmed; no residual position or open order
+  permission_decision: TESTNET_PLAN_WITHDRAWAL_EXEMPTION
+  decision: ORDER_FLOW_PASS_BUT_SYSTEM_NO_NEW_RISK_DUE_RECONCILIATION_MISMATCH
+order_validation:
+  scenario: create_query_cancel
+  result: PASS
+  final_order_state: CANCELED
+  cleanup_position_count: 0
+  cleanup_open_order_count: 0
+runtime:
+  launchd_service: com.beidou.autopilot
+  launchd_runs: 3
+  health: HEALTHY
+  liveness: HEALTHY
+  mode: testnet
+  supervisor_commit: 154b53a808b2ed8744d01c130eef6c5687ad1a09
+  supervisor_state: DEGRADED
+  supervisor_phase: RUNTIME_MONITORING
+  control_action: NO_NEW_RISK
+  trading_ready: false
+  trading_ready_reason: runtime.safety.reconciliation_authority
+  last_reconciliation: MISMATCHED
+  blockers:
+    - runtime.safety.reconciliation_authority
+    - runtime.health.incidents
+    - runtime.safety.reconciliation
+  g5_certificate: NOT_VERIFIABLE
+  g5_reason: single selected scenario passed; the 16-scenario certificate was not run
+  g7_certification: HARD_HOLD
+  g7_reason: durable 30-day/200-cycle evidence is not available

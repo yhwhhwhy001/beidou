@@ -11,3 +11,8 @@
 - Account readback: ONE_WAY mode, `canTrade=true`, `canWithdraw=true`.
 - Existing state: six non-zero positions, zero ordinary open orders and zero open Algo orders.
 - Decision: order write is temporarily stopped because existing position ownership/protection is not proven. No order was submitted, cancelled or modified.
+
+## Later authorization and execution update — 2026-08-22
+
+- The user subsequently authorized all scoped modifications, a governed launchd restart, and one bounded Binance USD-M Testnet order lifecycle. Mainnet, real funds, transfers and permission mutation remained prohibited.
+- The final state and evidence are recorded in `current-state.yaml` and `domain-execution-report.md`; the service remains fail-closed if durable reconciliation diverges from the live account.
