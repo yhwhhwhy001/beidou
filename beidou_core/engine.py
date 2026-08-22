@@ -11136,8 +11136,14 @@ class AutonomousEngine:
             print(f"[nearline] 🧹 Resolved {resolved} stale execution command(s) against venue facts")
         return resolved
 
-    async def _resolve_stale_order_states(self, *, batch_limit: int = 25, min_age_seconds: float = 120.0) -> int:
-        """BD-FIX (stale order rows): 按 venue 事实收敛 UNKNOWN 订单行。
+    async def _resolve_stale_order_states(
+        self,
+        *,
+        batch_limit: int = 25,
+        min_age_seconds: float = 120.0,
+        include_active: bool = False,
+    ) -> int:
+        """BD-FIX (stale order rows): 按 venue 事实收敛非终态订单行。
 
         _mark_order_unknown 在 venue 查询失败时把订单行落成 UNKNOWN 占位
         事实(side/quantity 未知)。这些行长期滞留 durable 存储 →
@@ -11149,6 +11155,13 @@ class AutonomousEngine:
         - Order does not exist → venue 从未接受或已出查询窗口 → CANCELED
           (与幽灵子命令 NOT_FOUND 裁决同语义)
         - 查询失败 → 保留,下轮重试
+
+        ``include_active`` is used only by the startup recovery boundary.  A
+        durable NEW/PARTIALLY_FILLED row can outlive the process that created
+        it after its fill facts were committed but its secondary order-state
+        index write failed.  Querying those rows before the first startup
+        reconciliation prevents a false system-side open-order mismatch while
+        retaining the same fail-closed handling for inconclusive venue facts.
         只读 venue 查询 + 本地 durable 回写,绝不伪造终态。
         """
         if not self._can_write:
@@ -11163,8 +11176,11 @@ class AutonomousEngine:
             return 0
         now = datetime.now(timezone.utc)
         candidates: list[dict[str, Any]] = []
+        candidate_statuses = {"UNKNOWN"}
+        if include_active:
+            candidate_statuses.update({"NEW", "PARTIALLY_FILLED", "PENDING_CANCEL"})
         for row in rows:
-            if str(row.get("status", "")).upper() != "UNKNOWN":
+            if str(row.get("status", "")).upper() not in candidate_statuses:
                 continue
             updated_text = str(row.get("updated_at", "") or "")
             if updated_text:
@@ -11276,8 +11292,26 @@ class AutonomousEngine:
                 and isinstance(raw, dict)
                 and "status" in raw
             ):
-                with contextlib.suppress(Exception):
-                    await self._book_venue_terminal_fill(order_id, symbol, raw)
+                # A user-stream fill may already have committed the ledger
+                # and position projection while the order_state secondary
+                # index remained NEW.  Do not re-book that fill under a
+                # different REST-derived event id; the committed fill journal
+                # is the authoritative idempotency boundary.
+                committed_qty = 0.0
+                try:
+                    restore_fills = getattr(store, "restore_fill_events", None)
+                    if callable(restore_fills):
+                        for fill in restore_fills() or []:
+                            if str(fill.get("order_id", "")) != order_id:
+                                continue
+                            if str(fill.get("processing_state", "COMMITTED")) != "COMMITTED":
+                                continue
+                            committed_qty = max(committed_qty, float(fill.get("cumulative_qty", 0) or 0))
+                except (TypeError, ValueError, OSError):
+                    committed_qty = 0.0
+                if committed_qty + 1e-12 < _executed_stale:
+                    with contextlib.suppress(Exception):
+                        await self._book_venue_terminal_fill(order_id, symbol, raw)
             # 终态事实落定后清理进程内追踪,防止残留 tracker 继续计入对账。
             self._active_order_ids.discard(order_id)
             self._owned_order_ids.discard(order_id)
@@ -13882,6 +13916,27 @@ class AutonomousEngine:
             await asyncio.wait_for(self._ensure_exchange_position_protections(), timeout=15.0)
         except asyncio.TimeoutError:
             print("[beidou-autopilot] Position protection recovery timed out — keeping risk gate closed")
+
+        # Durable order state can lag a venue fill when the fill journal and
+        # position projection committed but the secondary order-state write
+        # failed.  Resolve all non-terminal local rows once, before the first
+        # reconciliation, so a stale NEW row cannot manufacture an open-order
+        # mismatch across restart.  This is read-only venue adjudication; an
+        # inconclusive response remains fail-closed.
+        if self._can_write:
+            try:
+                startup_order_resolved = await asyncio.wait_for(
+                    self._resolve_stale_order_states(
+                        batch_limit=50,
+                        min_age_seconds=0.0,
+                        include_active=True,
+                    ),
+                    timeout=30.0,
+                )
+                if startup_order_resolved:
+                    print(f"[beidou-autopilot] Resolved {startup_order_resolved} stale order state(s) before reconciliation")
+            except asyncio.TimeoutError:
+                print("[beidou-autopilot] Startup order-state adjudication timed out — keeping risk gate closed")
 
         # Protection recovery happens after the first account reconciliation,
         # so the reconciliation result alone cannot authorize ACTIVE: it may

@@ -2007,6 +2007,39 @@ async def test_stale_order_state_recovery_preserves_unknown_and_books_terminal_f
     assert booked == ["12"]
     assert "12" not in engine._active_order_ids
 
+    startup_saved: list[tuple] = []
+    startup_booked: list[str] = []
+    startup = AutonomousEngine.__new__(AutonomousEngine)
+    startup._can_write = True
+    startup._active_order_ids = {"13"}
+    startup._owned_order_ids = {"13"}
+    startup._order_trackers = {}
+    startup._order_symbols = {"13": "BTCUSDT"}
+    startup._store = SimpleNamespace(
+        restore_order_states=lambda: [{"order_id": "13", "symbol": "BTCUSDT", "status": "NEW"}],
+        restore_fill_events=lambda: [],
+        save_order_state=lambda *args, **kwargs: startup_saved.append((args, kwargs)),
+    )
+    startup._book_venue_terminal_fill = lambda oid, _symbol, _raw: asyncio.sleep(0, result=startup_booked.append(oid))
+
+    async def startup_query(_endpoint, **_kwargs):
+        return {
+            "orderId": "13",
+            "symbol": "BTCUSDT",
+            "status": "FILLED",
+            "side": "BUY",
+            "type": "MARKET",
+            "origQty": "1",
+            "executedQty": "1",
+            "avgPrice": "100",
+        }
+
+    startup._api_async = startup_query
+    assert await startup._resolve_stale_order_states(min_age_seconds=0, include_active=True) == 1
+    assert startup_saved[0][0][0] == "13"
+    assert startup_saved[0][0][6] == "FILLED"
+    assert startup_booked == ["13"]
+
     absent = AutonomousEngine.__new__(AutonomousEngine)
     absent._can_write = True
     absent._store = SimpleNamespace(
