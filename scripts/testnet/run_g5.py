@@ -136,6 +136,21 @@ def _extract_account_access(observations: dict) -> dict | None:
     }
 
 
+def assess_account_permissions(
+    can_trade: object, can_withdraw: object, *, allow_withdraw_permission: bool
+) -> tuple[bool, str]:
+    """Classify account permissions while honoring the explicit Testnet plan exemption."""
+    if not isinstance(can_trade, bool) or not isinstance(can_withdraw, bool):
+        return False, "ACCOUNT_PERMISSION_UNKNOWN"
+    if can_withdraw and not allow_withdraw_permission:
+        return False, "WITHDRAWAL_PERMISSION_ENABLED"
+    if not can_trade:
+        return False, "VENUE_TRADING_DISABLED"
+    if can_withdraw:
+        return True, "TESTNET_WITHDRAWAL_PERMISSION_EXEMPT"
+    return True, "OK"
+
+
 def write_scenario_evidence_all(
     results: dict[str, ScenarioResult],
     make_context: Callable[[], ScenarioContext],
@@ -406,19 +421,20 @@ def main() -> int:
             if not math.isfinite(numeric_balance):
                 raise RuntimeError("account totalWalletBalance is non-finite")
 
-            # AC-04: withdrawal permission is a hard production blocker even
-            # on Testnet. Missing/non-boolean facts are also fail-closed.
-            if not isinstance(can_trade, bool) or not isinstance(can_withdraw, bool):
+            # AC-04: withdrawal permission remains a hard blocker by default;
+            # the Testnet plan may explicitly exempt demo-fapi's fixed
+            # canWithdraw=true fact. Missing/non-boolean facts stay fail-closed.
+            can_trade_ok, permission_status = assess_account_permissions(
+                can_trade,
+                can_withdraw,
+                allow_withdraw_permission=plan.get("allow_withdraw_permission") is True,
+            )
+            if permission_status == "ACCOUNT_PERMISSION_UNKNOWN":
                 print("  FAIL: account permission facts are missing or invalid")
-                can_trade_ok = False
-                permission_status = "ACCOUNT_PERMISSION_UNKNOWN"
-            elif can_withdraw:
+            elif permission_status == "WITHDRAWAL_PERMISSION_ENABLED":
                 print("  FAIL: venue withdrawal permission is enabled")
-                can_trade_ok = False
-                permission_status = "WITHDRAWAL_PERMISSION_ENABLED"
-            else:
-                can_trade_ok = can_trade
-                permission_status = "OK" if can_trade else "VENUE_TRADING_DISABLED"
+            elif permission_status == "TESTNET_WITHDRAWAL_PERMISSION_EXEMPT":
+                print("  PASS: demo-fapi withdrawal permission explicitly exempted by Testnet plan")
             print(f"  canTrade={can_trade} canWithdraw={can_withdraw} balance={total_balance}")
             print(f"  {'PASS' if can_trade_ok else 'FAIL'}: account access verified")
 

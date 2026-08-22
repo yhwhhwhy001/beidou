@@ -780,7 +780,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "a4477037c172010bb4297a64d53480c4b443821df051392a935a1dcb5adb1218",
+ "governance_digest": "905adc19ef639ca5e420f0d6c00dab8a7165b6ea8033604205792e6d35a58573",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "40929d5c4f1f6a65a459a1cc16ba01908723118a47fdfe06a6fbdf86e79258a6",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1167,7 +1167,7 @@
   "scripts/run_replay_fixture.py": "f22f22e4cef87f9c4d3d1658fac0e5dd5891034077c4764ffd55cd83d917c716",
   "scripts/scan_hardcoded.py": "3ec9e7a1d2a019e8cd4b09c703e9b54ca6837053a5a31a0cbdba837855e344fe",
   "scripts/scan_test_quality.py": "34b078d05952a1d2822bb45fc05ebe181dab9f62be3f4d250094b48b19fe99e2",
-  "scripts/testnet/run_g5.py": "785d1520c418878ea70761f7966d1ed04a68e3f7c85832d84c9cc375c5cc2c4a",
+  "scripts/testnet/run_g5.py": "5560eb6fbc37bb707a1b82efde7b0198a82ca23c2c4b43d0941d7fb4187d6577",
   "scripts/testnet/verify_order_flow.py": "5c75a2663de683b45acf19d30da1b18c4e115b3ad358c6117cf722ef69eea399",
   "scripts/verify_write_registry.py": "d66051d989cc77d78522a1f9e0ab25c0d44106859c1e553ebd4c36e6b42411d1",
   "start_beidou.sh": "fd934ebab88e63ee7500192bea6b8c65361f93f0301978db5d6cb55c44bef3a8",
@@ -2207,28 +2207,28 @@
   },
   {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:338:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+   "identity": "scripts/testnet/run_g5.py:353:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:343:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+   "identity": "scripts/testnet/run_g5.py:358:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-G5-DYNAMIC-REQUEST",
-   "identity": "scripts/testnet/run_g5.py:354:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "scripts/testnet/run_g5.py:369:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-G5-DYNAMIC-REQUEST]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:554:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+   "identity": "scripts/testnet/run_g5.py:570:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"

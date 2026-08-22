@@ -24,6 +24,7 @@ from scripts.testnet import run_g5 as run_g5_module
 from scripts.testnet.run_g5 import (
     _configure_scenario_logging,
     _extract_account_access,
+    assess_account_permissions,
     build_context,
     main,
     write_scenario_evidence_all,
@@ -73,6 +74,30 @@ def test_extract_account_access_missing_keys_returns_none() -> None:
     assert _extract_account_access({}) is None
     assert _extract_account_access({"account_access": {"status": "FAIL", "error": "boom"}}) is None
     assert _extract_account_access({"account_access": {"status": "PASS", "can_trade": True}}) is None
+
+
+def test_assess_account_permissions_binds_testnet_plan_exemption() -> None:
+    assert assess_account_permissions(None, True, allow_withdraw_permission=True) == (
+        False,
+        "ACCOUNT_PERMISSION_UNKNOWN",
+    )
+    assert assess_account_permissions(True, True, allow_withdraw_permission=False) == (
+        False,
+        "WITHDRAWAL_PERMISSION_ENABLED",
+    )
+    assert assess_account_permissions(True, True, allow_withdraw_permission=True) == (
+        True,
+        "TESTNET_WITHDRAWAL_PERMISSION_EXEMPT",
+    )
+    assert assess_account_permissions(False, True, allow_withdraw_permission=True) == (
+        False,
+        "VENUE_TRADING_DISABLED",
+    )
+    assert assess_account_permissions(True, False, allow_withdraw_permission=False) == (True, "OK")
+    assert assess_account_permissions(False, False, allow_withdraw_permission=False) == (
+        False,
+        "VENUE_TRADING_DISABLED",
+    )
 
 
 def test_list_flag_prints_registry(capsys, monkeypatch) -> None:
