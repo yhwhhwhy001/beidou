@@ -34,3 +34,11 @@ The following records the pre-correction behavior and is superseded by the expli
 - The official runner executed the bounded `BTCUSDT` `create_query_cancel` Testnet scenario with `--max-notional 100`. Create, query, cancel and terminal query all passed. A subsequent read-only check found zero positions and zero open orders.
 - This is a single-scenario order-flow result, not full G5 certification: the certificate remains `NOT_VERIFIABLE` until all 16 plan scenarios are run and independently verified. G7 remains `HARD_HOLD` because its durable 30-day/200-cycle evidence is unavailable.
 - After the service resumed monitoring, its durable local state diverged from the live Testnet account (15 stale non-zero positions and a balance mismatch). The service correctly entered `DEGRADED`/`NO_NEW_RISK`; no attempt was made to erase history or bypass reconciliation.
+
+## G5 completion correction — 2026-08-22
+
+- The missing G5 database context was supplied by the governed launchd wrapper: when no dedicated alias is present, `BEIDOU_G5_PG_DSN` is inherited only from the local `.env` `DATABASE_URL`; no production or network fallback exists.
+- With explicit authorization, the local durable opening and user-stream projections were rebaselined from a fresh read-only Testnet account snapshot: zero non-zero positions, zero ordinary open orders and zero Algo orders. Historical events were retained and an auditable operator rebaseline fact was written.
+- The G5 registry now runs the restart group before the intentional reconciliation disturbance, while `partial_fill` remains last. This prevents a deliberate temporary mismatch incident from invalidating the restart prerequisites.
+- Full official G5 certification then passed all 16/16 scenarios with semantic verification: 0 FAIL, 0 NOT_VERIFIABLE, 0 P0 blockers. The certificate evidence hash was `6dd256af2c902a52...` for the verified implementation commit at that run.
+- The post-certification service may retain a supervisor incident from the deliberate probes until the final controlled restart; this does not change the G5 certificate result. G7 remains `HARD_HOLD` pending its 30-day/200-cycle evidence window.

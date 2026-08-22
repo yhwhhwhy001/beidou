@@ -29,33 +29,33 @@ exchange:
   open_order_count: 0
   open_algo_order_count: 0
   mutation_performed: true
-  mutation_scope: single Testnet create_query_cancel lifecycle; terminal cancel confirmed; no residual position or open order
+  mutation_scope: full 16-scenario G5 Testnet certification plus bounded order lifecycle; terminal cleanup confirmed
   permission_decision: TESTNET_PLAN_WITHDRAWAL_EXEMPTION
-  decision: ORDER_FLOW_PASS_BUT_SYSTEM_NO_NEW_RISK_DUE_RECONCILIATION_MISMATCH
+  decision: G5_PASS_BUT_RUNTIME_INCIDENTS_REQUIRE_FINAL_RESTART_AND_G7_REMAINS_PENDING
 order_validation:
   scenario: create_query_cancel
   result: PASS
   final_order_state: CANCELED
   cleanup_position_count: 0
   cleanup_open_order_count: 0
+  full_g5_certificate: PASS
+  full_g5_scenario_count: 16
 runtime:
   launchd_service: com.beidou.autopilot
   last_observed_launchd_runs: 4
   health: HEALTHY
   liveness: HEALTHY
   mode: testnet
-  last_observed_supervisor_commit: d373279725485aaf06d2b85c280b8a7ea9d923ed
+  last_observed_supervisor_commit: 3a88e6310cd959c411f347b592367f5df5dd6eca
   supervisor_state: DEGRADED
   supervisor_phase: RUNTIME_MONITORING
   control_action: NO_NEW_RISK
   trading_ready: false
-  trading_ready_reason: runtime.safety.reconciliation_authority
-  last_reconciliation: MISMATCHED
+  trading_ready_reason: runtime.health.incidents
+  last_reconciliation: MATCHED
   blockers:
-    - runtime.safety.reconciliation_authority
     - runtime.health.incidents
-    - runtime.safety.reconciliation
-  g5_certificate: NOT_VERIFIABLE
-  g5_reason: single selected scenario passed; the 16-scenario certificate was not run
+  g5_certificate: PASS
+  g5_reason: all 16 plan scenarios passed with semantic verification
   g7_certification: HARD_HOLD
   g7_reason: durable 30-day/200-cycle evidence is not available
