@@ -988,6 +988,42 @@ class BeidouSupervisor:
         except Exception as e:
             print(f"[supervisor] supervisor incident resolution failed: {e}")
 
+    def _resolve_stale_supervisor_incidents_before_debounce(self, checks: list[CheckResult]) -> bool:
+        """Resolve self-generated alerts before they can block clean recovery.
+
+        A supervisor alert is derived from an earlier blocker.  If it is the
+        only remaining active incident, leaving it in ``runtime.health.incidents``
+        prevents the debounce state from ever reaching ``RUNNING``; that in
+        turn prevents ``_resolve_supervisor_incidents`` from being called and
+        can escalate a recovered process to ``LOCKED``.  Only non-terminal
+        supervisor states and an incident set containing *only* supervisor
+        incidents qualify.  Any real safety incident or other blocking check
+        keeps the fail-closed path intact.
+        """
+        if self.report.supervisor_state in {"LOCKED", "FAILED", "STOPPED"} or self.engine is None:
+            return False
+        getter = getattr(getattr(self.engine, "_alerts", None), "get_active_incidents", None)
+        if not callable(getter):
+            return False
+        try:
+            incidents = list(getter())
+        except Exception:
+            return False
+        if not incidents:
+            return False
+
+        def category(incident: Any) -> str:
+            if isinstance(incident, dict):
+                return str(incident.get("root_cause_category", ""))
+            return str(getattr(incident, "root_cause_category", ""))
+
+        if any(category(incident) != "supervisor" for incident in incidents):
+            return False
+        if any(item.is_blocking and item.check_id != "runtime.health.incidents" for item in checks):
+            return False
+        self._resolve_supervisor_incidents()
+        return True
+
     async def _apply_debounce_action(
         self, debounce_action: str, persistent_blockers: list[CheckResult], has_persistent: bool
     ) -> None:
@@ -1341,6 +1377,12 @@ class BeidouSupervisor:
                         evidence={"error": type(exc).__name__},
                     )
                 )
+
+            if self._resolve_stale_supervisor_incidents_before_debounce(checks):
+                # Re-read the health surface after resolving the derived
+                # incident so debounce/recovery sees the fresh fact set.
+                checks = self._runtime_checks()
+                checks = self._merge_monitoring_checks(checks)
 
             if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；

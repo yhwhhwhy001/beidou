@@ -384,6 +384,33 @@ def test_alert_resolution_and_debounce_state_transitions_are_behavioral(tmp_path
     assert failed_closed[-1][1] is False
 
 
+def test_stale_supervisor_incident_is_cleared_before_debounce_when_it_is_the_only_blocker(
+    tmp_path: Path,
+) -> None:
+    """A recovered runtime must not self-lock on its own stale alert."""
+    supervisor = _supervisor(tmp_path)
+    resolved: list[str] = []
+    incident = SimpleNamespace(root_cause_category="supervisor", incident_id="supervisor-degraded")
+    supervisor.engine = SimpleNamespace(
+        _alerts=SimpleNamespace(
+            get_active_incidents=lambda: [incident],
+            _active_incidents={incident.incident_id: incident},
+            resolve_incident=lambda incident_id: resolved.append(incident_id),
+        )
+    )
+    supervisor.report.supervisor_state = "DEGRADED"
+
+    checks = [_blocker("runtime.health.incidents")]
+
+    assert supervisor._resolve_stale_supervisor_incidents_before_debounce(checks) is True
+    assert resolved == ["supervisor-degraded"]
+
+    real_incident = SimpleNamespace(root_cause_category="reconciliation", incident_id="reconciliation-blocked")
+    supervisor.engine._alerts.get_active_incidents = lambda: [real_incident]
+    assert supervisor._resolve_stale_supervisor_incidents_before_debounce(checks) is False
+    assert resolved == ["supervisor-degraded"]
+
+
 def test_fail_closed_and_recovery_invalid_lifecycle_edges(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path)
     assert asyncio.run(supervisor._fail_closed("no engine", fatal=False)) is None
