@@ -109,10 +109,10 @@ class FactBus:
             results = [f for f in results if f.domain == domain]
         return results[-limit:]
 
-    def get_latest(self, fact_type: str) -> OperationalFact | None:
-        """获取最新的事实。"""
+    def get_latest(self, fact_type: str, *, source: str | None = None) -> OperationalFact | None:
+        """获取最新事实，可按发布来源隔离不同运行实例。"""
         for fact in reversed(self._facts):
-            if fact.fact_type == fact_type:
+            if fact.fact_type == fact_type and (source is None or fact.source == source):
                 return fact
         return None
 

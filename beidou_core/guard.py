@@ -396,7 +396,22 @@ class EnvironmentGuard:
         import glob
 
         found: list[str] = []
-        patterns = ["**/*.md", "**/*.py", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml", "**/*.cfg", "**/*.txt"]
+        patterns = [
+            "**/*.md",
+            "**/*.py",
+            "**/*.yaml",
+            "**/*.yml",
+            "**/*.json",
+            "**/*.toml",
+            "**/*.cfg",
+            "**/*.txt",
+            "**/*.db",
+            "**/*.db-shm",
+            "**/*.db-wal",
+            "**/*.pyc",
+            "**/*.png",
+            "**/*.jpg",
+        ]
         exclude_dirs = {
             ".git",
             ".venv",

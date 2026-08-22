@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -515,3 +516,140 @@ def test_production_ladder_stays_blocked_and_validates_shadow_limits(monkeypatch
     assert ladder.validate_capital(0.0, 1.0)[0] is False
     assert ladder.check_and_rollback() is None
     assert ladder.force_rollback("unit") == "Already at shadow (lowest level)"
+
+
+def test_certification_manager_and_configured_ladder_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    from beidou_certification import engine as engine_module
+
+    assert engine_module.create_l3_ramp_certification().gate is CertificationGate.G7_L3_RAMP
+    assert engine_module.create_l4_normal_certification().gate is CertificationGate.G7_L4_NORMAL
+    assert engine_module.create_l5_champion_certification().gate is CertificationGate.G7_L5_CHAMPION
+    g8 = G8UnattendedCertification()
+    unknown_owner = g8.verify_owner_disconnect(datetime.now(timezone.utc), "UNKNOWN")
+    assert unknown_owner.status is ScenarioStatus.NOT_VERIFIABLE
+
+    manager = CertificationManager()
+    assert manager.can_promote("bad", CertificationGate.G6_SHADOW) is False  # type: ignore[arg-type]
+    assert manager.can_promote(CertificationGate.G5_TESTNET, "bad") is False  # type: ignore[arg-type]
+    manager.register_framework(CertificationFramework(CertificationGate.G6_SHADOW))
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G6_SHADOW) is False
+
+    source = engine_module.CertificationFramework(CertificationGate.G5_TESTNET)
+    source_scenario = CertificationScenario(
+        "source", "Source", "", CertificationGate.G5_TESTNET, "unit", is_blocking=False
+    )
+    source.register_scenario(source_scenario)
+    source.record_result(ScenarioResult(source_scenario, ScenarioStatus.PASS))
+    source.evaluate()
+    manager = CertificationManager()
+    manager.register_framework(source)
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G6_SHADOW) is False
+
+    target = CertificationFramework(CertificationGate.G6_SHADOW)
+    target_scenario = CertificationScenario("target", "Target", "", CertificationGate.G6_SHADOW, "unit")
+    target.register_scenario(target_scenario)
+    target.record_result(ScenarioResult(target_scenario, ScenarioStatus.PASS))
+    target.evaluate()
+    manager.register_framework(target)
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G6_SHADOW) is True
+
+    # With G5 and G6 passed, a registered target still cannot skip a missing
+    # intermediate framework.
+    future = CertificationFramework(CertificationGate.G7_L3_RAMP)
+    manager.register_framework(future)
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G7_L3_RAMP) is False
+
+    intermediate = CertificationFramework(CertificationGate.G7_L2_CANARY)
+    intermediate_scenario = CertificationScenario(
+        "intermediate", "Intermediate", "", CertificationGate.G7_L2_CANARY, "unit"
+    )
+    intermediate.register_scenario(intermediate_scenario)
+    manager.register_framework(intermediate)
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G7_L3_RAMP) is False
+    intermediate.record_result(ScenarioResult(intermediate_scenario, ScenarioStatus.PASS))
+    intermediate.evaluate()
+    assert manager.can_promote(CertificationGate.G5_TESTNET, CertificationGate.G7_L2_CANARY) is True
+
+    levels = [
+        engine_module.CapitalLevel("shadow", CertificationGate.G6_SHADOW, 0.0, 0.0),
+        engine_module.CapitalLevel("canary", CertificationGate.G7_L2_CANARY, 100.0, 1.0),
+    ]
+    monkeypatch.setattr(engine_module, "CAPITAL_LADDER", levels)
+    monkeypatch.setattr(engine_module, "CAPITAL_LADDER_VERIFIED", True)
+    ladder_manager = CertificationManager()
+    ladder = engine_module.ProductionLadder(ladder_manager)
+    assert ladder.can_advance_to("canary")[0] is False
+
+    class _Manager:
+        def __init__(self, outcome: bool) -> None:
+            self.outcome = outcome
+            self.failed = False
+
+        def can_promote(self, _from, _to) -> bool:
+            return self.outcome
+
+        def any_p0_failure(self) -> bool:
+            return self.failed
+
+    good_ladder = engine_module.ProductionLadder(_Manager(True))
+    assert good_ladder.advance("canary") is True
+    assert good_ladder.current_level.level == "canary"
+    assert good_ladder.force_rollback("incident").startswith("Forced rollback")
+    assert good_ladder.current_level.level == "shadow"
+    assert good_ladder.check_and_rollback() is None
+    good_ladder.advance("canary")
+    good_ladder._cert_manager.failed = True
+    assert good_ladder.check_and_rollback() is not None
+
+    def settings_for(*, source: str, levels: list[SimpleNamespace]):
+        return SimpleNamespace(source=source, capital_ladder=SimpleNamespace(levels=levels))
+
+    valid_levels = [
+        SimpleNamespace(name="shadow", gate="G6_SHADOW", max_capital=0.0, max_leverage=0.0, min_unattended_hours=0.0),
+        SimpleNamespace(
+            name="canary", gate="G7_L2_CANARY", max_capital=100.0, max_leverage=1.0, min_unattended_hours=1.0
+        ),
+    ]
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(
+            "beidou_shared.config.ConfigProvider.load", lambda _self: settings_for(source="env", levels=valid_levels)
+        )
+        parsed, parsed_ok = engine_module._build_ladder_from_config()
+        assert parsed_ok is True and [level.level for level in parsed] == ["shadow", "canary"]
+
+    for settings in (
+        settings_for(source="safety_only:missing", levels=valid_levels),
+        settings_for(source="env", levels=[]),
+        settings_for(
+            source="env",
+            levels=[
+                SimpleNamespace(name="", gate="G6_SHADOW", max_capital=0.0, max_leverage=0.0, min_unattended_hours=0.0)
+            ],
+        ),
+        settings_for(
+            source="env",
+            levels=[
+                SimpleNamespace(name="shadow", gate="BAD", max_capital=0.0, max_leverage=0.0, min_unattended_hours=0.0)
+            ],
+        ),
+        settings_for(
+            source="env",
+            levels=[
+                SimpleNamespace(
+                    name="shadow", gate="G6_SHADOW", max_capital=-1.0, max_leverage=0.0, min_unattended_hours=0.0
+                )
+            ],
+        ),
+        settings_for(source="env", levels=[valid_levels[0]]),
+    ):
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr("beidou_shared.config.ConfigProvider.load", lambda _self, value=settings: value)
+            parsed, parsed_ok = engine_module._build_ladder_from_config()
+            assert parsed_ok is False and parsed
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(
+            "beidou_shared.config.ConfigProvider.load", lambda _self: (_ for _ in ()).throw(RuntimeError("config"))
+        )
+        parsed, parsed_ok = engine_module._build_ladder_from_config()
+        assert parsed_ok is False and parsed[0].level == "shadow"

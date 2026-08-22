@@ -355,6 +355,19 @@ def test_pre_risk_margin_effective_balance_deduction() -> None:
     assert any(r.decision != RiskDecision.APPROVED and "exceeds margin" in r.reason for r in results)
 
 
+def test_pre_risk_rejects_exhausted_available_margin() -> None:
+    results = asyncio.run(
+        PreRiskChecker().check(
+            _context(
+                account_balance=100.0,
+                current_margin=MonetaryValue(amount="100", currency="USDT"),
+                risk_increasing=True,
+            )
+        )
+    )
+    assert any("margin exhausted" in result.reason.lower() for result in results)
+
+
 def test_projection_counts_extra_inflight_notional() -> None:
     """同轮已批准敞口计入投影(batch 集体绕过窗口闭合)。"""
     from types import SimpleNamespace

@@ -53,9 +53,7 @@ class InstrumentRuleSnapshot:
         decimal_value = Decimal(value)
         if not decimal_value.is_finite() or decimal_value <= 0:
             raise ValueError("venue increment must be finite and positive")
-        exponent = decimal_value.normalize().as_tuple().exponent
-        if not isinstance(exponent, int):
-            raise ValueError("venue increment exponent is invalid")
+        exponent = int(decimal_value.normalize().as_tuple().exponent)
         return max(0, -exponent)
 
     def quantize_quantity(self, quantity: str) -> str:

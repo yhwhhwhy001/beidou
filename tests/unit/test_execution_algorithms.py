@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from beidou_safety.execution.algorithms import (
     AdaptiveSliceAlgorithm,
+    BaseExecutionAlgorithm,
     EmergencyReduceOnlyAlgorithm,
     ExecutionAlgorithmSelector,
     ExecutionAlgorithmType,
@@ -99,6 +104,12 @@ class TestPassiveAlgorithm:
         algo = PassiveAlgorithm()
         assert not algo.can_handle(ctx)
 
+    def test_plan_uses_side_specific_best_price(self):
+        buy_plan = PassiveAlgorithm().plan(_make_ctx(side=OrderSide.BUY), FIXED_ORDER_ID)
+        sell_plan = PassiveAlgorithm().plan(_make_ctx(side=OrderSide.SELL), FIXED_ORDER_ID)
+        assert buy_plan.slices[0].price == Price(amount="50000.0")
+        assert sell_plan.slices[0].price == Price(amount="50005.0")
+
 
 class TestMarketableLimitAlgorithm:
     def test_can_handle_with_limit(self):
@@ -114,6 +125,16 @@ class TestMarketableLimitAlgorithm:
         assert plan.slices[0].time_in_force == TimeInForce.IOC
         assert isinstance(plan.slices[0].price, Price)
         assert plan.slices[0].price.amount == "50005.0"
+
+    def test_plan_cancels_without_a_limit_price(self):
+        plan = MarketableLimitAlgorithm().plan(_make_ctx(limit_price=None), FIXED_ORDER_ID)
+        assert plan.is_canceled
+        assert plan.cancel_reason == "MARKETABLE_LIMIT_MISSING_LIMIT_PRICE"
+
+    def test_sell_plan_never_crosses_below_limit(self):
+        ctx = _make_ctx(side=OrderSide.SELL, limit_price=49900.0)
+        plan = MarketableLimitAlgorithm().plan(ctx, FIXED_ORDER_ID)
+        assert plan.slices[0].price == Price(amount="50000.0")
 
 
 class TestIOCAlgorithm:
@@ -164,6 +185,20 @@ class TestTWAPAlgorithm:
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert abs(plan.total_quantity() - 1.0) < 0.01
 
+    def test_rolling_replan_covers_completion_cost_and_success_paths(self):
+        algo = TWAPAlgorithm(slice_count=4, interval_seconds=30.0)
+        ctx = _make_ctx()
+        assert algo.rolling_replan(ctx, FIXED_ORDER_ID, remaining_qty=1.0, slices_completed=4).is_canceled
+        assert algo.rolling_replan(ctx, FIXED_ORDER_ID, remaining_qty=0.0, slices_completed=1).is_canceled
+
+        expensive = replace(ctx, net_alpha_bps=1.0, predicted_cost_bps=2.0)
+        assert algo.rolling_replan(expensive, FIXED_ORDER_ID, remaining_qty=1.0, slices_completed=1).is_canceled
+
+        replanned = algo.rolling_replan(ctx, FIXED_ORDER_ID, remaining_qty=0.75, slices_completed=1)
+        assert not replanned.is_canceled
+        assert len(replanned.slices) == 3
+        assert abs(replanned.total_quantity() - 0.75) < 1e-12
+
 
 class TestPOVAlgorithm:
     def test_can_handle_with_depth(self):
@@ -191,6 +226,22 @@ class TestPOVAlgorithm:
         algo = POVAlgorithm(participation_rate=0.1)
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.is_canceled
+
+    def test_plan_has_bounded_remainder_fallback(self):
+        ctx = _make_ctx(
+            bid_depth=1.0,
+            ask_depth=1.0,
+            net_alpha_bps=10.0,
+            predicted_cost_bps=1.0,
+        )
+        plan = POVAlgorithm(participation_rate=0.01).plan(ctx, FIXED_ORDER_ID)
+        assert len(plan.slices) == 52
+        assert abs(plan.total_quantity() - 1.0) < 1e-12
+
+    def test_plan_rejects_non_positive_approved_quantity(self):
+        ctx = replace(_make_ctx(), total_quantity=Quantity(amount="-1.0"))
+        with pytest.raises(RuntimeError, match="quantity conservation"):
+            POVAlgorithm().plan(ctx, FIXED_ORDER_ID)
 
 
 class TestAdaptiveSliceAlgorithm:
@@ -237,6 +288,39 @@ class TestAdaptiveSliceAlgorithm:
         algo = AdaptiveSliceAlgorithm()
         plan = algo.plan(ctx, FIXED_ORDER_ID)
         assert plan.is_canceled
+
+    def test_market_condition_slice_percentages(self):
+        algo = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25)
+        liquid = _make_ctx(spread_bps=3.0, bid_depth=100001.0)
+        wide = _make_ctx(spread_bps=25.0, bid_depth=1.0)
+        normal = _make_ctx(spread_bps=10.0, bid_depth=1.0)
+        assert algo._determine_slice_pct(liquid) == 0.25
+        assert algo._determine_slice_pct(wide) == 0.05
+        assert algo._determine_slice_pct(normal) == 0.05
+
+    def test_plan_requires_venue_quantity_rules(self):
+        ctx = _make_ctx(min_quantity=0.0)
+        with pytest.raises(ValueError, match="VENUE_RULES_UNKNOWN"):
+            AdaptiveSliceAlgorithm().plan(ctx, FIXED_ORDER_ID)
+
+    def test_plan_uses_side_price_fallbacks_and_minimums(self):
+        algo = AdaptiveSliceAlgorithm(min_slice_pct=0.05, max_slice_pct=0.25)
+        buy_without_limit = replace(_make_ctx(limit_price=None), best_ask=Price(amount="50005.0"))
+        sell_without_limit = replace(_make_ctx(side=OrderSide.SELL, limit_price=None), best_bid=Price(amount="50000.0"))
+        assert algo.plan(buy_without_limit, FIXED_ORDER_ID).slices
+        assert algo.plan(sell_without_limit, FIXED_ORDER_ID).slices
+
+        no_market_price = replace(buy_without_limit, best_bid=None, best_ask=None)
+        assert algo.plan(no_market_price, FIXED_ORDER_ID).slices
+
+        merged = algo.plan(_make_ctx(min_quantity=2.0), FIXED_ORDER_ID)
+        assert len(merged.slices) == 1
+        assert abs(merged.total_quantity() - 1.0) < 1e-12
+
+        decaying = _make_ctx(alpha_decay_seconds=0.01, net_alpha_bps=10.0, min_quantity=0.05)
+        decaying_plan = algo.plan(decaying, FIXED_ORDER_ID)
+        assert decaying_plan.slices
+        assert decaying_plan.total_quantity() <= 1.0 + 1e-12
 
 
 class TestEmergencyReduceOnlyAlgorithm:
@@ -330,6 +414,11 @@ class TestExecutionAlgorithmSelector:
         algo = sel.select(ctx)
         # Fail-Closed: 无法选择算法时返回 None，调用者应拒绝交易
         assert algo is None or algo.algorithm_type == ExecutionAlgorithmType.POST_ONLY
+
+    def test_set_approved_replaces_the_authorized_set(self):
+        sel = ExecutionAlgorithmSelector()
+        sel.set_approved({ExecutionAlgorithmType.IOC})
+        assert [algo.algorithm_type for algo in sel.approved_algorithms] == [ExecutionAlgorithmType.IOC]
 
 
 class TestSliceInvariantChecker:
@@ -430,6 +519,64 @@ class TestSliceInvariantChecker:
         plan = ExecutionPlan(algorithm=ExecutionAlgorithmType.TWAP, is_canceled=True, cancel_reason="test")
         ok, _msg = SliceInvariantChecker.validate_plan(plan, ctx)
         assert ok
+
+    def test_validate_plan_reports_invalid_slice_and_total(self):
+        ctx = _make_ctx()
+        invalid_slice = OrderSlice(
+            slice_id="invalid",
+            parent_order_id=FIXED_ORDER_ID,
+            quantity=Quantity(amount="5.0"),
+            price=Price(amount="50000"),
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.IOC,
+            algorithm=ExecutionAlgorithmType.TWAP,
+            sequence_number=0,
+        )
+        invalid_plan = ExecutionPlan(algorithm=ExecutionAlgorithmType.TWAP, slices=[invalid_slice])
+        ok, message = SliceInvariantChecker.validate_plan(invalid_plan, ctx)
+        assert not ok and "invalid" in message
+
+        first = replace(invalid_slice, slice_id="first", quantity=Quantity(amount="0.6"))
+        second = replace(invalid_slice, slice_id="second", quantity=Quantity(amount="0.6"))
+        total_plan = ExecutionPlan(algorithm=ExecutionAlgorithmType.TWAP, slices=[first, second])
+        ok, message = SliceInvariantChecker.validate_plan(total_plan, ctx)
+        assert not ok and "approved quantity" in message
+
+    def test_execution_plan_invariant_summary(self):
+        valid = ExecutionPlan(
+            algorithm=ExecutionAlgorithmType.TWAP,
+            slices=[
+                OrderSlice(
+                    slice_id="valid",
+                    parent_order_id=FIXED_ORDER_ID,
+                    quantity=Quantity(amount="0.1"),
+                    price=Price(amount="50000"),
+                    order_type=OrderType.LIMIT,
+                    time_in_force=TimeInForce.IOC,
+                    algorithm=ExecutionAlgorithmType.TWAP,
+                    sequence_number=0,
+                )
+            ],
+        )
+        invalid = replace(valid, slices=[replace(valid.slices[0], invariants_check_passed=False)])
+        assert valid.all_invariants_pass()
+        assert not invalid.all_invariants_pass()
+
+
+def test_base_algorithm_abstract_contracts_raise() -> None:
+    ctx = _make_ctx()
+    with pytest.raises(NotImplementedError):
+        BaseExecutionAlgorithm.can_handle(PostOnlyAlgorithm(), ctx)
+    with pytest.raises(NotImplementedError):
+        BaseExecutionAlgorithm.plan(PostOnlyAlgorithm(), ctx, FIXED_ORDER_ID)
+
+
+def test_base_invariant_checks_cover_market_data_and_spread_failures() -> None:
+    algo = PostOnlyAlgorithm()
+    spread_bad = replace(_make_ctx(), spread_bps=60.0, hard_slippage_limit_bps=50.0)
+    assert algo.check_invariants(spread_bad) == (False, "Spread 60.0bps exceeds hard slippage limit 50.0bps")
+    assert algo.check_invariants(replace(_make_ctx(), best_ask=None))[0] is False
+    assert algo.check_invariants(replace(_make_ctx(side=OrderSide.SELL), best_bid=None))[0] is False
 
 
 class TestExecutionContext:

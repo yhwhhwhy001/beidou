@@ -4,11 +4,27 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from beidou_research.mining.evaluation.cost_capacity import (
     CapacityEvaluator,
     CostModel,
+    SignalAwareImpactModel,
+    _compute_sharpe_annualized,
+    _compute_volatility,
+    _estimate_turnover_from_returns,
+    _find_level,
+    _find_zero_crossing,
+    _mean,
+    _std,
 )
-from beidou_research.mining.evaluation.cpcv import CPCVConfig, CPCVEvaluator
+from beidou_research.mining.evaluation.cpcv import (
+    CPCVConfig,
+    CPCVEvaluator,
+    _default_ic,
+    _is_finite,
+    _purge_and_embargo_mask,
+)
 from beidou_research.mining.evaluation.fast_screen import FastScreen
 from beidou_research.mining.evaluation.multiple_testing import (
     benjamini_hochberg,
@@ -22,7 +38,7 @@ from beidou_research.mining.evaluation.purged_walk_forward import (
     FoldConfig,
     PurgedWalkForward,
 )
-from beidou_research.mining.evaluation.stability import StabilityEvaluator
+from beidou_research.mining.evaluation.stability import StabilityEvaluator, _compute_ic, _compute_sharpe
 from beidou_shared.types import DataQualityTier
 
 # ================================================================
@@ -335,6 +351,94 @@ class TestCPCV:
         assert result.gate_result.value == "UNVERIFIABLE"
         assert result.n_paths < 20
 
+    def test_cpcv_generation_and_evaluation_fail_closed_edges(self):
+        invalid = CPCVEvaluator(CPCVConfig(n_groups=4))
+        assert invalid.generate_paths(0, []) == []
+        assert invalid.generate_paths(4, [0, 1]) == []
+        fallback = CPCVEvaluator(CPCVConfig(n_groups=8, n_test_groups=2, min_train_groups=3, min_train_samples=1))
+        paths = fallback.generate_paths(80, [0, 1, 2, 3] * 20)
+        assert paths
+        no_test_groups = CPCVEvaluator(CPCVConfig(n_groups=2, min_train_groups=2)).generate_paths(20, [0] * 20)
+        assert no_test_groups == []
+        no_k = CPCVEvaluator(CPCVConfig(n_groups=2, n_test_groups=0, min_train_groups=1)).generate_paths(
+            20, [0] * 10 + [1] * 10
+        )
+        assert no_k == []
+        too_small = CPCVEvaluator(CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10_000))
+        assert too_small.generate_paths(80, list(range(8)) * 10) == []
+
+        nan_metric = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=lambda _p, _r: float("nan"),
+        )
+        assert nan_metric.failure_reasons == ["no_completed_cpcv_paths"]
+        incomplete = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=100)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=lambda _p, _r: 0.2,
+        )
+        assert incomplete.gate_result.value == "UNVERIFIABLE"
+        complete = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=lambda _p, _r: 0.2,
+        )
+        assert complete.n_completed == 28
+        default_metric = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+        )
+        assert default_metric.n_completed > 0
+        no_labels = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate([float(i) for i in range(800)], [float(i) for i in range(800)])
+        assert no_labels.n_completed > 0
+        partial = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=10)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=(lambda _p, _r, values=iter([0.2] + [float("nan")] * 27): next(values)),
+        )
+        assert partial.gate_result.value == "UNVERIFIABLE"
+        inconsistent_values = iter([0.2, -0.2] * 14)
+        inconsistent = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=lambda _p, _r: next(inconsistent_values),
+        )
+        assert "path_inconsistency" in inconsistent.failure_reasons
+        negative = CPCVEvaluator(
+            CPCVConfig(n_groups=8, n_test_groups=2, min_train_samples=10, min_paths_for_verdict=1)
+        ).evaluate(
+            [float(i) for i in range(800)],
+            [float(i) for i in range(800)],
+            group_labels=[i // 100 for i in range(800)],
+            metric_fn=lambda _p, _r: -0.2,
+        )
+        assert "non_positive_mean_metric" in negative.failure_reasons
+        assert _purge_and_embargo_mask([0, 1], [], 2, 2).tolist() == [True, True]
+        assert _default_ic([1.0], [1.0]) == 0.0
+        assert _default_ic([1.0, 2.0, 3.0], [1.0, 1.0, 1.0]) == 0.0
+        assert _is_finite("bad") is False
+
 
 # ================================================================
 # Stability
@@ -371,6 +475,45 @@ class TestStability:
         # Higher cost → lower sharpe
         assert results[2].sub_sample_value <= results[0].sub_sample_value
 
+    def test_stability_fail_closed_and_parameter_neighborhood_boundaries(self):
+        evaluator = StabilityEvaluator(degradation_threshold=0.3)
+        predictions = [float(i) for i in range(24)]
+        returns = [float(i) for i in range(24)]
+        zero_full = evaluator.evaluate_time_split(predictions, returns, ic_full=0.0)
+        assert zero_full.is_stable is False
+
+        indicators = [float(i + 1) for i in range(12)] + [0.1 * (i + 1) for i in range(12)]
+        regime = evaluator.evaluate_volatility_regime(predictions, returns, indicators, ic_full=0.0)
+        assert regime.degradation_pct in {0.0, 1.0}
+
+        trend = [float(i + 1) for i in range(12)] + [0.1 * (i + 1) for i in range(12)]
+        trend_result = evaluator.evaluate_trend_vs_range(predictions, returns, trend, ic_full=0.5)
+        assert trend_result.dimension == "trend_vs_range"
+        zero_trend = evaluator.evaluate_trend_vs_range(predictions, returns, trend, ic_full=0.0)
+        assert zero_trend.degradation_pct in {0.0, 1.0}
+
+        empty_neighborhood = evaluator.evaluate_parameter_neighborhood(predictions, [], returns, ic_base=0.2)
+        assert empty_neighborhood.is_stable is True
+        one_neighborhood = evaluator.evaluate_parameter_neighborhood(
+            predictions,
+            [predictions[:11]],
+            returns,
+            ic_base=0.2,
+        )
+        assert one_neighborhood.metadata["n_perturbations"] == 1
+        varied = evaluator.evaluate_parameter_neighborhood(
+            predictions,
+            [predictions[:11], list(reversed(predictions[:11]))],
+            returns,
+            ic_base=0.2,
+        )
+        assert varied.metadata["ic_perturbed_std"] >= 0.0
+
+        assert evaluator.evaluate_cost_stress(predictions, returns, base_cost_bps=5.0, sharpe_base=0.0)[0].is_stable
+        assert evaluator.evaluate_time_split([1.0, 2.0], [1.0, 2.0], ic_full=0.5).degradation_pct >= 0.0
+        assert _compute_ic([1.0, 2.0, 3.0], [1.0, 1.0, 1.0]) == 0.0
+        assert _compute_sharpe([1.0]) == 0.0
+
 
 # ================================================================
 # Cost/Capacity
@@ -402,6 +545,39 @@ class TestCostModel:
         model = CostModel(taker_fee_bps=0, avg_spread_bps=0)
         assert model.is_unknown
 
+    def test_signal_impact_and_helper_boundaries(self):
+        model = CostModel(adv_30d=10_000.0, volatility=0.0)
+        assert model._legacy_impact_bps(0.0) == 0.0
+        impact_model = SignalAwareImpactModel(model)
+        assert impact_model.estimate_signal_impact([], [])[2] == ["empty_predictions"]
+        impact, turnover, warnings = impact_model.estimate_signal_impact(
+            [1.0, 2.0], [0.0, 0.0], avg_daily_volume=10_000.0, volatility=None
+        )
+        assert impact == model._legacy_impact_bps(10_000.0)
+        assert turnover == 1.0
+        assert warnings == ["volatility_unknown"]
+        assert impact_model.estimate_signal_impact([float("nan")], [0.1], avg_daily_volume=10_000.0, volatility=0.1)[
+            2
+        ] == ["no_finite_predictions"]
+        assert _mean([]) == 0.0
+        assert _mean([float("nan")]) == 0.0
+        assert _std([1.0]) == 0.0
+        assert _std([float("nan"), float("nan")]) == 0.0
+        assert _compute_volatility([]) == 0.0
+        assert _compute_volatility([float("nan")]) == 0.0
+        assert _compute_volatility([0.01, -0.01]) > 0.0
+        assert _estimate_turnover_from_returns([float("nan")]) == 1.0
+        assert _compute_sharpe_annualized([0.1]) == 0.0
+        assert _compute_sharpe_annualized([0.1, 0.1]) == 0.0
+        assert _compute_sharpe_annualized([0.01, 0.02]) > 0.0
+        assert _find_level([1.0, 2.0], [1.0, 1.0], 1.0) == 1.0
+        assert _find_zero_crossing([1.0, 2.0], [1.0, -1.0]) == pytest.approx(1.5)
+        assert _find_level([1.0, 2.0], [2.0, 1.0], 1.5) == pytest.approx(1.5)
+        positive_model = CostModel(adv_30d=100_000.0, volatility=0.02)
+        assert positive_model.impact_bps_for_size(0.0) == 0.0
+        assert positive_model.impact_bps_for_size(10_000.0, participation_rate=0.02) == pytest.approx(4.0)
+        assert positive_model.total_cost_bps(10_000.0, use_maker=True) > 0.0
+
 
 class TestCapacityEvaluator:
     def test_capacity_curve(self):
@@ -431,6 +607,32 @@ class TestCapacityEvaluator:
         evaluator = CapacityEvaluator()
         viable, _reason = evaluator.is_cost_viable(0.01, 0.015)
         assert viable
+
+    def test_capacity_empty_nonpositive_and_fallback_volatility_paths(self):
+        evaluator = CapacityEvaluator(CostModel(volatility=0.0))
+        empty = evaluator.evaluate_capacity_curve([1.0], [0.1], aum_range=[])
+        assert empty.warnings == ["empty_aum_range"]
+        non_positive = evaluator.evaluate_capacity_curve([1.0], [-0.1], aum_range=[100.0])
+        assert non_positive.warnings == ["non_positive_gross_return"]
+        positive = evaluator.evaluate_capacity_curve(
+            [1.0, -1.0], [0.01, -0.005], aum_range=[100.0], avg_daily_volume=10_000.0
+        )
+        assert positive.curve
+        assert evaluator.evaluate_capacity_curve([1.0], [0.1]).curve
+        assert evaluator.is_cost_viable(0.1, 1.0)[0] is False
+        assert "severe_cost_decay" in evaluator.is_cost_viable(0.1, 1.0)[1]
+        assert "negative_net_return" in evaluator.is_cost_viable(-0.1, 1.0)[1]
+        empty_gate = evaluator.evaluate_with_gate([1.0], [0.1], aum_range=[])
+        assert empty_gate[1] is False and empty_gate[2] == "capacity_curve_empty"
+        zero_capacity_gate = evaluator.evaluate_with_gate([1.0], [-0.1], aum_range=[10_000.0])
+        assert "zero_capacity" in zero_capacity_gate[2]
+        expensive = CapacityEvaluator(CostModel(taker_fee_bps=10_000.0, avg_spread_bps=10_000.0, slippage_bps=0.0))
+        severe_gate = expensive.evaluate_with_gate([1.0], [0.01], aum_range=[10_000.0])
+        assert severe_gate[1] is False
+        failing_gate = evaluator.evaluate_with_gate(
+            [1.0, -1.0, 1.0, -1.0], [0.02, -0.01, 0.02, -0.01], aum_range=[10_000.0], max_annual_turnover=0.0
+        )
+        assert failing_gate[1] is False
 
 
 class TestPBOSemantics:

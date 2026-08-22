@@ -444,7 +444,11 @@ def evaluate_multiple_testing(
 
     if report.bh_result is None or not report.bh_result.significant_at_05:
         failures.append("BH-FDR not significant")
-    elif candidate_index is not None and not report.bh_result.significant_at_05[candidate_index]:
+    elif (
+        candidate_index is not None
+        and 0 <= candidate_index < len(report.bh_result.significant_at_05)
+        and not report.bh_result.significant_at_05[candidate_index]
+    ):
         failures.append("candidate_not_BH_significant")
 
     report.failure_reasons = evidence_gaps + failures

@@ -16,8 +16,18 @@ import random
 
 import pytest
 
+import beidou_research.mining.evaluation.metrics as metrics_module
 from beidou_research.mining.evaluation.metrics import (
     Verifiability,
+    _as_periods,
+    _clean_pairs,
+    _clean_series,
+    _long_short_spread,
+    _ols_r2,
+    _sharpe,
+    _solve_linear_system,
+    _spearman,
+    _zscore,
     compute_block_bootstrap_ci,
     compute_cost_adjusted_metrics,
     compute_hit_rate,
@@ -360,6 +370,61 @@ def test_incremental_contribution_zero_when_no_increment():
     assert abs(out["delta_sharpe"]) < 1e-9
     assert abs(out["delta_ir"]) < 1e-9
     assert out["sample_count"] == 12 * 40
+
+
+def test_metrics_internal_and_boundary_paths_are_explicitly_verified(monkeypatch):
+    """Exercise malformed, sparse, nested, and numerically degenerate inputs."""
+    assert _as_periods([[1.0, 2.0]], [[2.0, 3.0]]) == [([1.0, 2.0], [2.0, 3.0])]
+    with pytest.raises(ValueError):
+        _as_periods([1.0], [[1.0]])
+    with pytest.raises(ValueError):
+        _as_periods([[1.0]], [[1.0], [2.0]])
+    with pytest.raises(ValueError):
+        compute_ic([1.0], [1.0, 2.0])
+    assert compute_ic(["bad", None, float("nan")], [1.0, 2.0, 3.0])["sample_count"] == 0
+    assert _clean_series(["bad", None, float("nan"), 1.0]) == [1.0]
+    with pytest.raises(ValueError):
+        _clean_pairs([1.0], [1.0, 2.0])
+    assert _clean_pairs(["bad", 1.0], [2.0, 3.0]) == [(1.0, 3.0)]
+    assert _spearman([1.0], [2.0]) == (0.0, 1)
+    assert _zscore([]) == []
+    assert _zscore([3.0, 3.0]) == [0.0, 0.0]
+    assert _long_short_spread([1.0], [2.0]) == 0.0
+    assert _sharpe([1.0]) is None
+    assert _sharpe([1.0, 1.0]) is None
+    assert _solve_linear_system([[2.0]], [4.0]) == [2.0]
+    assert _solve_linear_system([[0.0]], [1.0]) is None
+    assert _ols_r2([[1.0, 0.0], [1.0, 1.0]], [1.0, 2.0]) >= 0.0
+    assert _ols_r2([[1.0, 1.0], [1.0, 1.0]], [1.0, 1.0]) == 1.0
+    monkeypatch.setattr(metrics_module, "_solve_linear_system", lambda _mat, _rhs: None)
+    assert _ols_r2([[1.0, 0.0], [1.0, 1.0]], [1.0, 2.0]) == 1.0
+    assert compute_newey_west_tstat([0.1])["sample_count"] == 1
+    bootstrap = compute_block_bootstrap_ci([0.1, 0.2], n_bootstraps=2, seed=3)
+    assert bootstrap["ci_lower_95"] is not None
+    sparse = compute_quantile_monotonicity([1.0], [0.1], n_quantiles=3)
+    assert sparse["is_monotonic"] is False
+    empty_group = compute_quantile_monotonicity([1.0, 2.0], [0.1, 0.2], n_quantiles=5)
+    assert len(empty_group["quantile_returns"]) == 5
+    assert compute_true_vif({"a": [1.0, 2.0], "b": [2.0, 3.0]}) == {"a": 1.0, "b": 1.0}
+    invalid = compute_incremental_contribution(
+        [[1.0, 2.0]],
+        [[0.1, 0.2]],
+        [[1.0, 2.0]],
+        [[None, float("nan")]],
+    )
+    assert invalid["sample_count"] == 0
+    one_period = compute_incremental_contribution(
+        [[1.0, 2.0, 3.0]],
+        [[0.1, 0.2, 0.3]],
+        [[3.0, 2.0, 1.0]],
+        [[0.1, 0.2, 0.3]],
+    )
+    assert one_period["delta_sharpe"] == 0.0
+    assert compute_turnover([1.0, None], [0.0, 1.0]) == 0.5
+    with pytest.raises(ValueError):
+        compute_turnover([1.0], [1.0, 2.0])
+    with pytest.raises(ValueError):
+        compute_cost_adjusted_metrics([0.1, 0.2], [1.0])
 
 
 def test_incremental_contribution_positive_when_candidate_helps():

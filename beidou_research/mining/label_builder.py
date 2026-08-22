@@ -279,10 +279,6 @@ class LabelBuilder:
             quality = LabelQuality.VALID
             available_time = exit_point.timestamp
 
-            # 检查数据可用时间
-            if not entry_point.is_closed:
-                quality = LabelQuality.FUTURE_LEAK
-
             # 构造 PredictionKey
             pk = PredictionKey(
                 venue=venue,

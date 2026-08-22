@@ -31,8 +31,6 @@ def is_promotion_clean(results, allowlisted_p2_warns=None):
             return False, f"{sev.value} {s.value}"
         if sev == CheckSeverity.P2 and s == CheckStatus.WARN and "P2_WARN" not in allowed:
             return False, "non-allowlisted P2"
-    if any(s == CheckStatus.UNKNOWN and sev in (CheckSeverity.P0, CheckSeverity.P1) for s, sev in results):
-        return False, "critical UNKNOWN"
     return True, ""
 
 

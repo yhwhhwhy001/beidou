@@ -15,14 +15,25 @@ from typing import Any
 
 import pytest
 
-from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
+from beidou_certification.g5_scenarios.base import (
+    NotionalExceededError,
+    NotionalLedger,
+    ScenarioContext,
+    ScenarioStatus,
+)
+from beidou_certification.g5_scenarios.restart import user_stream_reconnect as user_stream_module
 from beidou_certification.g5_scenarios.restart.database_restart import DatabaseRestartScenario
 from beidou_certification.g5_scenarios.restart.process_restart import StatusUnreachableError
 from beidou_certification.g5_scenarios.restart.user_stream_reconnect import (
     UserStreamReconnectScenario,
+    _mask_key,
+    _user_stream_event_age,
+    _user_stream_status,
     ws_reconnect_verdict,
 )
 from beidou_certification.g5_scenarios.runner import RESTART_GROUP, SCENARIO_REGISTRY
+from beidou_exchange.binance_usdm.ws_client import OP_BINARY, OP_TEXT, WebSocketError
+from beidou_exchange.core.error_taxonomy import Result
 
 # ---- 判定纯函数(brief 单测,verbatim) ----
 
@@ -792,3 +803,156 @@ def test_user_stream_reconnect_cleanup_close_failure_still_pass(tmp_path: Path) 
     assert cleanup["first"]["ok"] is False and cleanup["second"]["ok"] is False
     policy = next(s for s in steps if s.get("action") == "cleanup_keepalive_policy")
     assert policy["keepalive_issued"] is False  # 探针 key 从不续期,60 分钟 TTL 自然过期
+
+
+def test_user_stream_helpers_and_default_probe_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _mask_key("short") == "shor...rt"
+    assert _mask_key("abcdefghijklmnop") == "abcdef...mnop"
+    assert _user_stream_status({}) is None
+    assert _user_stream_status({"user_stream_runtime": []}) is None
+    assert _user_stream_status({"user_stream_runtime": {"status": "  connected "}}) == "CONNECTED"
+    assert _user_stream_status({"user_stream_runtime": {"status": "   "}}) is None
+    assert _user_stream_event_age({}, 10.0) == (0.0, False)
+    assert _user_stream_event_age({"user_stream_runtime": {"last_event_mono": "bad"}}, 10.0) == (0.0, False)
+    assert _user_stream_event_age({"user_stream_runtime": {"last_event_mono": 12.0}}, 10.0) == (0.0, True)
+    assert _user_stream_event_age({"user_stream_runtime": {"last_event_mono": 5.0}}, 10.0) == (5.0, True)
+
+    class _Client:
+        def __init__(self, response: Result) -> None:
+            self.response = response
+            self.requests: list[tuple[str, str, bool, dict[str, str]]] = []
+
+        async def create_listen_key(self) -> Result:
+            return self.response
+
+        async def request(self, method: str, path: str, *, signed: bool, params: dict[str, str]) -> Result:
+            self.requests.append((method, path, signed, params))
+            return self.response
+
+    scenario = UserStreamReconnectScenario()
+    scenario._client = _Client(Result.failure("offline"))
+    with pytest.raises(RuntimeError, match="create_listen_key failed"):
+        asyncio.run(scenario._create_listen_key_impl())
+    scenario._client = _Client(Result.ok({"listenKey": "probe-key"}))
+    assert asyncio.run(scenario._create_listen_key_impl()) == "probe-key"
+    scenario._client = _Client(Result.ok({}))
+    with pytest.raises(RuntimeError, match="未返回"):
+        asyncio.run(scenario._create_listen_key_impl())
+    scenario._client = _Client(Result.failure("cleanup"))
+    close_result = asyncio.run(scenario._close_listen_key_impl("probe-key"))
+    assert close_result["ok"] is False
+    assert scenario._client.requests[0][0:3] == ("DELETE", user_stream_module.Endpoint.LISTEN_KEY, True)
+
+    class _ProbeWs:
+        def __init__(
+            self, messages: list[tuple[int, bytes]] | None = None, *, connect_error: Exception | None = None
+        ) -> None:
+            self.messages = list(messages or [])
+            self.connect_error = connect_error
+            self.aborted = False
+            self.frame_error: Exception | None = None
+
+        async def connect(self, _url: str, *, timeout: float) -> None:
+            del timeout
+            if self.connect_error:
+                raise self.connect_error
+
+        async def recv_message(self) -> tuple[int, bytes]:
+            if self.frame_error is not None:
+                raise self.frame_error
+            if not self.messages:
+                raise asyncio.TimeoutError
+            return self.messages.pop(0)
+
+        def abort(self) -> None:
+            self.aborted = True
+
+    created: list[_ProbeWs] = []
+
+    def make_probe_ws() -> _ProbeWs:
+        ws = _ProbeWs(connect_error=WebSocketError("handshake"))
+        created.append(ws)
+        return ws
+
+    monkeypatch.setattr(user_stream_module, "WebSocketConnection", make_probe_ws)
+    failed = asyncio.run(scenario._ws_probe_impl("probe-key", 0.01))
+    assert failed["connected"] is False and created[-1].aborted is True
+
+    def make_empty_ws() -> _ProbeWs:
+        ws = _ProbeWs()
+        created.append(ws)
+        return ws
+
+    monkeypatch.setattr(user_stream_module, "WebSocketConnection", make_empty_ws)
+    immediate = asyncio.run(scenario._ws_probe_impl("probe-key", 0.0))
+    assert immediate["connected"] is True and immediate["ack"] is True
+
+    def make_bad_frame_ws() -> _ProbeWs:
+        ws = _ProbeWs([(OP_TEXT, b"one"), (OP_BINARY, b"two")])
+        created.append(ws)
+        return ws
+
+    monkeypatch.setattr(user_stream_module, "WebSocketConnection", make_bad_frame_ws)
+    framed = asyncio.run(scenario._ws_probe_impl("probe-key", 0.01))
+    assert framed["connected"] is True and framed["frames"] == 2 and framed["ack"] is True
+
+    def make_ws_error_ws() -> _ProbeWs:
+        ws = _ProbeWs()
+        ws.frame_error = WebSocketError("frame")
+        created.append(ws)
+        return ws
+
+    monkeypatch.setattr(user_stream_module, "WebSocketConnection", make_ws_error_ws)
+    ws_error = asyncio.run(scenario._ws_probe_impl("probe-key", 0.01))
+    assert ws_error["connected"] is True and ws_error["ack"] is False
+
+
+@pytest.mark.asyncio
+async def test_user_stream_reconnect_second_probe_missing_after_status_and_notional_abort(tmp_path: Path) -> None:
+    clock = _FakeClock()
+    engine = _FakeWSRuntimeOps(clock)
+    client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
+    probe = _FakeWSProbe(
+        [
+            {"connected": True, "frames": 1, "ack": True},
+            {"connected": False, "frames": 0, "ack": False},
+        ]
+    )
+    scenario = _ws_scenario(clock, engine, client, probe)
+    failed = await scenario.run(_ctx(tmp_path, client=client))
+    assert failed.status is ScenarioStatus.FAIL and failed.error_type == "RuntimeError"
+
+    status_calls = 0
+
+    def missing_after_status() -> dict[str, Any]:
+        nonlocal status_calls
+        status_calls += 1
+        if status_calls < 3:
+            return _FakeWSRuntimeOps(clock)._payload("HEALTHY", 0.0)
+        return {"user_stream_runtime": {"last_event_mono": clock.now()}}
+
+    client = _FakeProbeClient(["probe-key-1", "probe-key-2"])
+    scenario = UserStreamReconnectScenario(
+        now=clock.now,
+        fetch_status=missing_after_status,
+        create_listen_key=client.create_listen_key,
+        close_listen_key=client.close_listen_key,
+        ws_probe=_FakeWSProbe([]).probe,
+        sleep=clock.sleep,
+        recovery_deadline=10.0,
+        poll_interval=1.0,
+    )
+    missing = await scenario.run(_ctx(tmp_path, client=client))
+    assert missing.status is ScenarioStatus.FAIL
+    assert missing.error_type == "ENGINE_NOT_RECOVERED"
+
+    with pytest.raises(NotionalExceededError):
+        await _ws_scenario(clock, _FakeWSRuntimeOps(clock), _FakeProbeClient([]), _FakeWSProbe([])).run(
+            ScenarioContext(
+                client=_FakeProbeClient([]),
+                ledger=NotionalLedger(-1.0),
+                evidence_dir=tmp_path,
+                symbol="BTCUSDT",
+                dry_run=False,
+            )
+        )

@@ -22,7 +22,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar
+from typing import ClassVar, cast
 
 _logger = logging.getLogger(__name__)
 
@@ -467,9 +467,7 @@ def compute_full_config_hash(
     - 绑定 secrets_version 和 policy_version
     - canonical JSON + SHA-256
     """
-    safe_config = _deep_strip_secrets(dict(config))
-    if not isinstance(safe_config, dict):
-        safe_config = {}
+    safe_config = cast(dict[str, object], _deep_strip_secrets(dict(config)))
 
     # 绑定版本信息（非敏感）
     safe_config["_secrets_version"] = secrets_version

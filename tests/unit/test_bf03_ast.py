@@ -739,6 +739,7 @@ class TestPrimitiveRegistry:
             "close": ExprType.PRICE,
             "volume": ExprType.VOLUME,
         }
+        assert registry.feature_defs[0].name == "close"
 
     def test_registry_parse(self, registry):
         expr = registry.parse("close + 1")
@@ -759,6 +760,156 @@ class TestPrimitiveRegistry:
 
     def test_feature_def_validation(self):
         with pytest.raises(ExpressionParseError):
+            FeatureDef(name="", type=ExprType.PRICE)
+        with pytest.raises(ExpressionTypeError):
+            FeatureDef(name="close", type="PRICE")  # type: ignore[arg-type]
+        with pytest.raises(ExpressionParseError):
+            FeatureDef(name="close", type=ExprType.PRICE, min_window=True)  # type: ignore[arg-type]
+        with pytest.raises(ExpressionParseError):
+            FeatureDef(name="close", type=ExprType.PRICE, max_window=True)  # type: ignore[arg-type]
+        with pytest.raises(ExpressionParseError):
             FeatureDef(name="close", type=ExprType.PRICE, min_window=0)
         with pytest.raises(ExpressionParseError):
             FeatureDef(name="close", type=ExprType.PRICE, min_window=5, max_window=3)
+
+
+def test_ast_scalar_helpers_and_parser_operator_edges() -> None:
+    assert math.isnan(ast._median([]))
+    assert math.isnan(ast._std([1.0]))
+    assert ast._quantile([1.0, 3.0], 0.0) == 1.0
+    assert ast._quantile([1.0, 3.0], 0.25) == 1.5
+    assert math.isnan(ast._rank_of([1.0], 1.0))
+
+    feature_types = {"close": ExprType.PRICE, "open": ExprType.PRICE, "volume": ExprType.VOLUME}
+    for source in (
+        "close > 1",
+        "close >= 1",
+        "close < 1",
+        "close <= 1",
+        "close == 1",
+        "close != 1",
+        "+close",
+        "-close",
+        "close * 2",
+        "True",
+        "diff(close, 1)",
+        "rolling_std(close, 2)",
+        "rolling_median(close, 2)",
+        "rolling_mad(close, 2)",
+        "rolling_quantile(close, 2, 0.5)",
+        "ema(close, 2)",
+        "ts_rank(close, 2)",
+        "cs_rank(close)",
+        "zscore(close, 2)",
+        "robust_zscore(close, 2)",
+        "safe_div(close, open)",
+        "signed_log1p(close)",
+        "signed_sqrt(close)",
+        "clip(close, 0, 1)",
+        "where(close > 1, close, open)",
+        "residualize(close, open, volume)",
+    ):
+        assert parse_expression(source, feature_types)
+
+    with pytest.raises(ExpressionParseError, match="整数"):
+        parse_expression("lag(close, 1.5)", feature_types)
+    with pytest.raises(ExpressionTypeError, match="window"):
+        parse_expression("rolling_quantile(close, 0, 0.5)", feature_types)
+    with pytest.raises(ExpressionParseError, match="数值常量"):
+        parse_expression("rolling_quantile(close, 2, close)", feature_types)
+    with pytest.raises(UnsupportedExpressionError):
+        parse_expression("~close", feature_types)
+    with pytest.raises(UnsupportedExpressionError):
+        parse_expression("close.__call__()", feature_types)
+    with pytest.raises(ExpressionParseError, match="参数"):
+        parse_expression("safe_div(close)", feature_types)
+    with pytest.raises(UnsupportedExpressionError, match="关键字"):
+        parse_expression("safe_div(close, open, epsilon=1)", feature_types)
+    with pytest.raises(UnsupportedExpressionError, match="比较运算符"):
+        parse_expression("close is 1", feature_types)
+    with pytest.raises(ExpressionParseError):
+        parse_expression(1, feature_types)  # type: ignore[arg-type]
+    with pytest.raises(ExpressionParseError):
+        parse_expression("   ", feature_types)
+
+
+def test_ast_node_validation_serialization_and_edge_evaluation() -> None:
+    with pytest.raises(ExpressionTypeError):
+        Constant(1.0, ExprType.BOOLEAN)
+    with pytest.raises(ExpressionTypeError):
+        Constant(True, ExprType.SCALAR)
+    with pytest.raises(ExpressionTypeError):
+        Diff(Constant(True, ExprType.BOOLEAN), 1)
+    with pytest.raises(ExpressionTypeError):
+        PctChange(Constant(True, ExprType.BOOLEAN), 1)
+
+    constant = Constant(1.0)
+    object.__setattr__(constant, "dtype", "invalid")
+    with pytest.raises(ExpressionTypeError):
+        constant.validate_types()
+    constant = Constant(1.0)
+    object.__setattr__(constant, "value", True)
+    with pytest.raises(ExpressionTypeError):
+        constant.validate_types()
+    constant = Constant(1.0)
+    object.__setattr__(constant, "dtype", ExprType.BOOLEAN)
+    with pytest.raises(ExpressionTypeError):
+        constant.validate_types()
+    constant = Constant(1.0)
+    object.__setattr__(constant, "value", float("inf"))
+    with pytest.raises(ExpressionError):
+        constant.validate_types()
+    Constant(True, ExprType.BOOLEAN).validate_types()
+
+    feature = Feature("close", ExprType.PRICE)
+    object.__setattr__(feature, "name", "")
+    with pytest.raises(ExpressionError):
+        feature.validate_types()
+    feature = Feature("close", ExprType.PRICE)
+    object.__setattr__(feature, "type", "invalid")
+    with pytest.raises(ExpressionTypeError):
+        feature.validate_types()
+
+    with pytest.raises(ExpressionTypeError):
+        RollingQuantile(close(), 0, 0.5)
+    with pytest.raises(ExpressionTypeError):
+        RollingQuantile(close(), 2, "bad")  # type: ignore[arg-type]
+
+    cross = CsRank(close())
+    assert cross.canonicalize() == cross
+    assert cross.children == (close(),)
+    assert from_dict(cross.to_dict()) == cross
+    assert math.isnan(cross.evaluate({"close": [[1.0]]})[0][0])
+
+    assert SafeDiv(close(), Constant(2.0)).output_type() is ExprType.PRICE
+    assert SafeDiv(close(), volume()).output_type() is ExprType.RATE
+    with pytest.raises(ExpressionTypeError):
+        SafeDiv(close(), volume(), epsilon=0.0)
+    with pytest.raises(ExpressionTypeError):
+        SafeDiv(close(), volume(), epsilon=True)  # type: ignore[arg-type]
+    assert SignedLog1p(Feature("ret", ExprType.RETURN)).output_type() is ExprType.RETURN
+    assert SignedSqrt(Feature("ret", ExprType.RETURN)).output_type() is ExprType.RETURN
+    with pytest.raises(ExpressionTypeError):
+        Clip(close(), True, 1.0)  # type: ignore[arg-type]
+
+    residual = Residualize(close(), (volume(),))
+    assert from_dict(residual.to_dict()) == residual
+    assert residual._eval({"close": [], "volume": []}) == []
+    mismatched = residual._eval({"close": [[1.0], [2.0]], "volume": [[1.0]]})
+    assert mismatched == [[1.0], [2.0]]
+    with pytest.raises(ExpressionTypeError):
+        Residualize(close(), [volume()])  # type: ignore[arg-type]
+    with pytest.raises(ExpressionTypeError):
+        Residualize(Constant(True, ExprType.BOOLEAN))
+    with pytest.raises(ExpressionTypeError):
+        Residualize(close(), (Constant(True, ExprType.BOOLEAN),))
+
+    condition = Feature("condition", ExprType.BOOLEAN)
+    where = Where(condition, close(), close())
+    assert where.canonicalize() == where
+    assert where.children == (condition, close(), close())
+    assert from_dict(where.to_dict()) == where
+    evaluated = where.evaluate({"condition": [[float("nan")]], "close": [[1.0]]})
+    assert math.isnan(evaluated[0][0])
+
+    assert Mul(Constant(1.0), Constant(1.0)).canonicalize() == Constant(1.0)

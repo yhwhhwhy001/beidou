@@ -132,6 +132,15 @@ class TestDSRPBOAdapter:
         dsr_input = adapter.prepare_dsr_input(empty_pnl)
         assert dsr_input["error"] == "pnl_not_verifiable"
 
+    def test_prepare_pbo_input_splits_in_sample_and_out_of_sample(self) -> None:
+        adapter = DSRPBOAdapter()
+        valid = StrategyPnL(net_returns=(0.01, -0.005) * 6)
+        prepared = adapter.prepare_pbo_input([valid, StrategyPnL(net_returns=()), valid])
+        assert prepared["n_total"] == 3
+        assert len(prepared["is_sharpes"]) == 1
+        assert len(prepared["oos_sharpes"]) == 2
+        assert prepared["oos_sharpes"][0] == 0.0
+
 
 class TestMutationPnLKernel:
     """PKG04: Mutation 测试 — 证明内核不可绕过。"""
@@ -195,3 +204,30 @@ class TestProfitFactor:
         kernel = StrategyPnLKernel()
         metrics = kernel.evaluate(pnl, periods_per_year=252)
         assert metrics.profit_factor == 0.0
+
+
+def test_pnl_kernel_input_cleanup_cost_and_metric_edges() -> None:
+    kernel = StrategyPnLKernel()
+    empty = StrategyPnL(net_returns=())
+    assert empty.annualized_return == 0.0
+    assert empty.annualized_return_for(8760) == 0.0
+    assert kernel.compute_pnl([0.1], [100.0]).net_returns == ()
+    assert kernel.compute_pnl([float("nan"), float("nan")], [100.0, 101.0]).net_returns == ()
+
+    cleaned = kernel.compute_pnl([1.0, -1.0, 0.0], [0.0, 100.0, 101.0], costs_bps=[1.0])
+    assert len(cleaned.net_returns) == 2
+    assert (
+        kernel.evaluate(
+            StrategyPnL(net_returns=tuple([0.01, -0.01] * 6)),
+            positions=[0.0, 1.0, -1.0],
+        ).turnover
+        >= 0.0
+    )
+    assert kernel.evaluate(StrategyPnL(net_returns=(0.0,) * 12)).profit_factor == 0.0
+
+    assert StrategyPnLKernel._compute_max_drawdown([]) == 0.0
+    assert kernel.compute_sortino_from_pnl(empty) is None
+    assert kernel.compute_sortino_from_pnl(StrategyPnL(net_returns=(0.01,) * 12)) is None
+    assert kernel.compute_sortino_from_pnl(StrategyPnL(net_returns=(-0.01,) * 12)) is None
+    sortino = kernel.compute_sortino_from_pnl(StrategyPnL(net_returns=(0.01, -0.02, 0.03, -0.01) * 3))
+    assert sortino is not None

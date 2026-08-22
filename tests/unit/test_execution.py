@@ -476,6 +476,122 @@ class TestImmutableLedger:
         ledger.post(fee_tx)
         assert ledger.is_balanced()
 
+    def test_ledger_validation_projection_and_query_boundaries(self):
+        with pytest.raises(ValueError, match="source_event_id"):
+            LedgerTransaction(
+                transaction_id="missing-event",
+                transaction_type=LedgerTransactionType.FILL,
+                postings=self._make_fill_tx("nested", "nested").postings,
+                source_event_id=" ",
+            )
+        with pytest.raises(ValueError, match="requires"):
+            LedgerTransaction(
+                transaction_id="too-short",
+                transaction_type=LedgerTransactionType.FILL,
+                postings=(self._make_fill_tx("nested", "nested").postings[0],),
+                source_event_id="event",
+            )
+
+        ledger = ImmutableLedger()
+        tx = self._make_fill_tx("tx-query", "event-query")
+        ledger.post(tx)
+        ledger.freeze()
+        assert ledger.is_frozen is True
+        with pytest.raises(RuntimeError, match="frozen"):
+            ledger.validate(self._make_fill_tx("tx-frozen", "event-frozen"))
+
+        duplicate_tx_id = self._make_fill_tx("tx-query", "event-other")
+        duplicate_ledger = ImmutableLedger()
+        duplicate_ledger.post(tx)
+        with pytest.raises(RuntimeError, match="duplicate transaction_id"):
+            duplicate_ledger.post(duplicate_tx_id)
+
+        with pytest.raises(ValueError, match="not found"):
+            ledger.reverse_transaction("missing", "rev", "reason")
+
+        bad_posting = Posting(
+            "bad",
+            AccountId("main"),
+            AccountType.CASH,
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            MonetaryValue(amount="not-a-number"),
+            PostingSide.DEBIT,
+        )
+        bad_tx = LedgerTransaction(
+            transaction_id="bad-values",
+            transaction_type=LedgerTransactionType.ADJUSTMENT,
+            postings=(bad_posting, bad_posting),
+            source_event_id="bad-values-event",
+        )
+        with pytest.raises(ValueError, match="Invalid monetary amount"):
+            bad_tx.is_balanced()
+        with pytest.raises(ValueError, match="Invalid amount"):
+            bad_tx.total_debit()
+        bad_credit = LedgerTransaction(
+            transaction_id="bad-credit",
+            transaction_type=LedgerTransactionType.ADJUSTMENT,
+            postings=(
+                Posting(
+                    "good-debit",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount="1"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "bad-credit",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount="not-a-number"),
+                    PostingSide.CREDIT,
+                ),
+            ),
+            source_event_id="bad-credit-event",
+        )
+        with pytest.raises(ValueError, match="Invalid amount"):
+            bad_credit.total_credit()
+        dirty = ImmutableLedger()
+        dirty._transactions.append(bad_tx)
+        assert dirty.get_balance(AccountId("main"), VenueId("BINANCE")).amount == "0"
+        assert dirty.get_trial_balance() == {}
+        assert dirty.get_transactions_by_type(LedgerTransactionType.ADJUSTMENT) == [bad_tx]
+        assert dirty.get_transactions_by_event("bad-values-event") == [bad_tx]
+        assert dirty.get_transactions_by_correlation(CorrelationId("missing")) == []
+        assert dirty._get_transaction("missing") is None
+        imbalanced = LedgerTransaction(
+            transaction_id="imbalanced-projection",
+            transaction_type=LedgerTransactionType.ADJUSTMENT,
+            postings=(
+                Posting(
+                    "imbalanced-debit",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount="2"),
+                    PostingSide.DEBIT,
+                ),
+                Posting(
+                    "imbalanced-credit",
+                    AccountId("main"),
+                    AccountType.CASH,
+                    VenueId("BINANCE"),
+                    InstrumentId("BTCUSDT"),
+                    MonetaryValue(amount="1"),
+                    PostingSide.CREDIT,
+                ),
+            ),
+            source_event_id="imbalanced-event",
+        )
+        imbalanced_ledger = ImmutableLedger()
+        imbalanced_ledger._transactions.append(imbalanced)
+        assert imbalanced_ledger.is_balanced() is False
+
 
 class TestReconciliation:
     def _complete_snapshot(self, balance: str = "10000", source: str = "SYSTEM") -> AccountFactSnapshot:

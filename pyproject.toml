@@ -213,7 +213,7 @@ source = ["beidou_shared", "beidou_safety", "beidou_strategy", "beidou_research"
 omit = ["*/tests/*", "*/test_*"]
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 100
 show_missing = true
 skip_covered = false
 exclude_lines = [

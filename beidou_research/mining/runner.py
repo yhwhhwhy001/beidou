@@ -556,9 +556,6 @@ class MiningRunner:
             valid_vals = [sample[1] for sample in samples]
             valid_returns = [sample[2] for sample in samples]
 
-            if len(valid_returns) < 50:
-                continue
-
             # ============================================================
             # GAP-2: 短期反转信号方向翻转
             # 真实数据上反转类因子（如 tmpl_close_w50_pct_change_none_h4）

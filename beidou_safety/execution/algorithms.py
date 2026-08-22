@@ -110,12 +110,12 @@ class BaseExecutionAlgorithm(ABC):
     @abstractmethod
     def can_handle(self, ctx: ExecutionContext) -> bool:
         """Return whether this concrete algorithm can safely handle ``ctx``."""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def plan(self, ctx: ExecutionContext, order_id: OrderId) -> ExecutionPlan:
         """Build a governed plan; concrete algorithms must implement this."""
-        ...
+        raise NotImplementedError
 
     def check_invariants(self, ctx: ExecutionContext) -> tuple[bool, str]:
         """检查在途不变量。"""

@@ -70,17 +70,6 @@ class PurgedWFCVResult:
                 is_significant=False,
             )
 
-        if n_samples < 10 or n_splits < 1:
-            return cls(
-                n_splits=0,
-                train_sizes=[],
-                test_sizes=[],
-                embargo_sizes=[],
-                oos_scores=[],
-                mean_score=float("nan"),
-                std_score=float("nan"),
-                is_significant=False,
-            )
         _retired()
 
 

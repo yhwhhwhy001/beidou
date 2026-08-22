@@ -8,6 +8,8 @@ database or send an order.
 from __future__ import annotations
 
 import json
+import sys
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -240,7 +242,8 @@ def test_postgres_plan_restore_and_child_transition_unknowns() -> None:
 
 
 def test_postgres_diagnostics_and_claim_lease_queries_are_identity_bound() -> None:
-    child_payload = json.dumps(_child().to_payload())
+    sending_child = _child().transition(ChildCommandState.SENDING, event_id="send")
+    child_payload = json.dumps(sending_child.to_payload())
     cursor = _Cursor()
     cursor.many = [[(child_payload,)], [("i", 0, "SENDING", "BTCUSDT", "cid", "", "0", "old")]]
     store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
@@ -412,3 +415,355 @@ def test_postgres_read_diagnostics_and_transition_ownership_branches() -> None:
     )
     with pytest.raises(ValueError, match="from_states"):
         store._transition_intent("i", target="X", event_type="TEST", from_states=(), owner_required=None)
+
+
+@pytest.mark.asyncio
+async def test_outbox_worker_factory_cursor_and_transition_races(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NoContextCursor:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def execute(self, *_args: object) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        def fetchone(self) -> object:
+            return None
+
+        def fetchall(self) -> list[object]:
+            return []
+
+    cursor = _NoContextCursor()
+
+    class _NoContextConn:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def cursor(self) -> _NoContextCursor:
+            return cursor
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = _NoContextConn()
+    worker = OutboxWorker(connection_factory=lambda: conn, lease_owner="w", fencing_token=1)
+    with worker._connection_scope() as scoped:
+        assert scoped is conn
+    assert conn.closed
+    with worker._cursor_scope(conn) as scoped_cursor:
+        assert scoped_cursor is cursor
+    assert cursor.closed
+
+    with pytest.raises(RuntimeError, match="FENCING"):
+        await OutboxWorker().recover_inflight()
+    with pytest.raises(RuntimeError, match="FENCING"):
+        await OutboxWorker().mark_failed("m", "bad")
+    assert not await OutboxWorker(fencing_token=1)._transition_owned(
+        "m", from_states=("SENDING",), to_status="SENT", event_type="x", fields="sent_at=NULL"
+    )
+
+    cursor = _Cursor()
+    cursor.one = [None]
+    worker = OutboxWorker(db_conn=_Conn(cursor), lease_owner="w", fencing_token=1)
+    assert await worker.resolve_unknown("m", exchange_order_found=False) == "UNKNOWN"
+
+    sending_child = _child().transition(ChildCommandState.SENDING, event_id="send")
+    child_payload = json.dumps(sending_child.to_payload())
+    cursor = _Cursor()
+    cursor.many = [
+        [{"message_id": "m", "intent_id": "i", "status": "SENDING"}],
+        [{"parent_intent_id": "i", "sequence": 0, "state": "SENDING", "payload": child_payload}],
+    ]
+    cursor.rowcount = 0
+    worker = OutboxWorker(db_conn=_Conn(cursor), lease_owner="w", fencing_token=1)
+    assert await worker.recover_inflight() == 0
+
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": "i", "status": "SENDING", "retry_count": 1, "max_retries": 5}]
+    cursor.rowcount = 0
+    worker = OutboxWorker(db_conn=_Conn(cursor), lease_owner="w", fencing_token=1)
+    assert await worker.mark_failed("m", "retry") == "UNKNOWN"
+
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": "i", "status": "SENDING"}, None]
+    worker = OutboxWorker(db_conn=_Conn(cursor), lease_owner="w", fencing_token=1)
+    assert not await worker._transition_owned(
+        "m", from_states=("SENDING",), to_status="SENT", event_type="x", fields="sent_at=NULL"
+    )
+
+    processed: list[str] = []
+    worker = OutboxWorker(fencing_token=1)
+
+    async def claim(*, batch_size: int = 10) -> list[object]:
+        assert batch_size == 10
+        return [SimpleNamespace(message_id="ok"), SimpleNamespace(message_id="unknown")]
+
+    worker.claim = claim  # type: ignore[method-assign]
+
+    async def send(claim: object) -> bool:
+        return claim.message_id == "ok"
+
+    async def mark_sent(message_id: str) -> bool:
+        processed.append("sent:" + message_id)
+        return True
+
+    async def mark_unknown(message_id: str, reason: str) -> bool:
+        processed.append(f"unknown:{message_id}:{reason}")
+        return True
+
+    worker.send = send  # type: ignore[method-assign]
+    worker.mark_sent = mark_sent  # type: ignore[method-assign]
+    worker.mark_unknown = mark_unknown  # type: ignore[method-assign]
+    assert await worker.process_batch() == 1
+    assert processed == ["sent:ok", "unknown:unknown:TRANSPORT_RESULT_UNKNOWN"]
+
+    class _Psycopg:
+        @staticmethod
+        def connect(dsn: str) -> object:
+            return dsn
+
+    monkeypatch.setitem(sys.modules, "psycopg", _Psycopg())
+    dsn_store = PostgresIntentOutbox("postgresql://unit")
+    assert dsn_store._connection_factory() == "postgresql://unit"
+
+
+def test_postgres_commit_and_plan_contract_rejections() -> None:
+    no_key = replace(_intent("no-key"), idempotency_key="")
+    assert len(PostgresIntentOutbox._intent_key(no_key)) == 32
+
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(_Cursor()), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="ENVELOPE_INCOMPLETE"):
+        store.commit(replace(_intent("incomplete"), risk_approval_signature=""))
+    with pytest.raises(ValueError, match="APPROVAL_REQUIRED"):
+        assert store.commit(
+            replace(
+                _intent("missing-approval"),
+                risk_approval_id="",
+                risk_approval_signature="",
+                risk_expires_at=None,
+            )
+        )
+    with pytest.raises(ValueError, match="FIELDS_REQUIRED"):
+        store.commit(replace(_intent("missing-field"), risk_nonce=""))
+    with pytest.raises(ValueError, match="EXPIRY_REQUIRED"):
+        store.commit(replace(_intent("reduce-no-expiry"), reduce_only=True, risk_expires_at=None))
+    with pytest.raises(ValueError, match="EXPIRED"):
+        store.commit(replace(_intent("expired"), risk_expires_at=1.0))
+
+    naive = replace(_intent("naive"), created_at=__import__("datetime").datetime.now())
+    cursor = _Cursor()
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.commit(naive)
+    assert cursor.statements
+
+    intent = _intent("idempotent")
+    key = store._intent_key(intent)
+    payload = store._intent_payload(intent, key)
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": intent.intent_id, "payload": json.dumps(payload)}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.commit(intent) == key
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": intent.intent_id, "payload": json.dumps({"different": True})}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="PAYLOAD_CONFLICT"):
+        store.commit(intent)
+
+    child = _child("plan")
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": "plan"}]
+    cursor.many = [[(json.dumps(child.to_payload()),)]]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    restored = store.persist_execution_plan("plan", [child])
+    assert restored.children[0].command_hash == child.command_hash
+
+    other = ExecutionChildCommand.create(
+        parent_intent_id="plan",
+        sequence=0,
+        symbol="ETHUSDT",
+        side="BUY",
+        quantity="0.1",
+        order_type="MARKET",
+        time_in_force="GTC",
+        client_order_id="client-other",
+    )
+    cursor = _Cursor()
+    cursor.one = [{"intent_id": "plan"}]
+    cursor.many = [[(json.dumps(child.to_payload()),)]]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="PLAN_CONFLICT"):
+        store.persist_execution_plan("plan", [other])
+
+    empty = PostgresIntentOutbox.__new__(PostgresIntentOutbox)
+    empty._connection_factory = None
+    assert empty.restore_execution_plan("missing") is None
+
+
+def test_postgres_execution_projection_and_stale_recovery_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    child_payload = json.dumps(_child("exec").to_payload())
+    store = PostgresIntentOutbox.__new__(PostgresIntentOutbox)
+    store._connection_factory = None
+    store._fencing_token = 0
+    with pytest.raises(RuntimeError, match="FENCING"):
+        store.transition_execution_child("exec", 0, ChildCommandState.SENDING, event_id="x")
+    with pytest.raises(RuntimeError, match="STORE_UNKNOWN"):
+        store.inflight_signed_quantity("BTCUSDT")
+    with pytest.raises(RuntimeError, match="FENCING"):
+        store.recover_stale_child("exec", 0, ChildCommandState.REJECTED, event_id="x")
+
+    cursor = _Cursor()
+    cursor.many = [[(child_payload,)]]
+    cursor.one = [{"event_id": "already"}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    aggregate = store.transition_execution_child("exec", 0, ChildCommandState.SENDING, event_id="already")
+    assert aggregate.children[0].state is ChildCommandState.PLANNED
+
+    cursor = _Cursor()
+    cursor.many = [[(child_payload,)]]
+    cursor.one = [None, None]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="UNKNOWN_CHILD_SEQUENCE"):
+        store.transition_execution_child("exec", 99, ChildCommandState.SENDING, event_id="bad-sequence")
+
+    cursor = _Cursor()
+    cursor.many = [[(child_payload,)]]
+    cursor.one = [None, None]
+    cursor.rowcount = 0
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="FENCED_OR_CONCURRENT"):
+        store.transition_execution_child("exec", 0, ChildCommandState.SENDING, event_id="race")
+
+    cursor = _Cursor()
+    cursor.one = [None]
+    cursor.many = [[]]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="PLAN_NOT_FOUND"):
+        store.recover_stale_child("exec", 0, ChildCommandState.REJECTED, event_id="missing")
+
+    cursor = _Cursor()
+    cursor.one = [None, None]
+    cursor.many = [[(child_payload,)]]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="UNKNOWN_CHILD_SEQUENCE"):
+        store.recover_stale_child("exec", 99, ChildCommandState.REJECTED, event_id="bad")
+
+    cursor = _Cursor()
+    cursor.one = [None, {"event_id": "duplicate"}]
+    cursor.many = [[(child_payload,)]]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.recover_stale_child("exec", 0, ChildCommandState.REJECTED, event_id="duplicate") is None
+
+    cursor = _Cursor()
+    cursor.one = [None, None]
+    cursor.many = [[(child_payload,)]]
+    cursor.rowcount = 0
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    with pytest.raises(ValueError, match="STALE_CHILD_CONCURRENT"):
+        store.recover_stale_child("exec", 0, ChildCommandState.REJECTED, event_id="race-stale")
+
+    update = SimpleNamespace(
+        client_order_id="cid",
+        order_status=SimpleNamespace(value="NEW"),
+        cumulative_quantity=SimpleNamespace(amount="0"),
+        order_id="ex",
+        event=SimpleNamespace(event_id="event"),
+    )
+    cursor = _Cursor()
+    cursor.one = [{"parent_intent_id": "exec", "sequence": 0}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    monkeypatch.setattr(
+        store,
+        "transition_execution_child",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("INVALID_CHILD_TRANSITION")),
+    )
+    monkeypatch.setattr(store, "restore_execution_plan", lambda _intent_id: "restored")
+    assert store.project_user_order_update(update) == "restored"
+    cursor = _Cursor()
+    cursor.one = [{"parent_intent_id": "exec", "sequence": 0}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    monkeypatch.setattr(
+        store, "transition_execution_child", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("OTHER"))
+    )
+    with pytest.raises(ValueError, match="OTHER"):
+        store.project_user_order_update(update)
+
+    cursor = _Cursor()
+    cursor.one = [{"parent_intent_id": "exec", "sequence": 0, "state": "ACKED"}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    monkeypatch.setattr(
+        store,
+        "transition_execution_child",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("TERMINAL_CHILD_STATE")),
+    )
+    assert store.project_order_terminal("ex", "FILLED") is None
+    cursor = _Cursor()
+    cursor.one = [{"parent_intent_id": "exec", "sequence": 0, "state": "ACKED"}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    monkeypatch.setattr(
+        store, "transition_execution_child", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("OTHER"))
+    )
+    with pytest.raises(ValueError, match="OTHER"):
+        store.project_order_terminal("ex", "FILLED")
+
+
+def test_postgres_diagnostics_stats_and_wrapper_fail_closed_paths() -> None:
+    empty = PostgresIntentOutbox.__new__(PostgresIntentOutbox)
+    empty._connection_factory = None
+    empty._fencing_token = 0
+    empty._lease_owner = "w"
+    assert empty.restore_pending_approvals() == []
+    assert empty.unacked() == []
+    assert empty.renew_lease("i") is False
+    assert (
+        empty._transition_intent("i", target="ACKED", event_type="x", from_states=("SENDING",), owner_required=True)
+        is False
+    )
+    empty.dead_letter("i", "reason")
+    empty.mark_unknown("i", "reason")
+    empty.resolve_unknown("i", exchange_order_found=True)
+    empty.resolve_unknown("i", exchange_order_found=False)
+
+    cursor = _Cursor()
+    cursor.many = [
+        [{"status": "PENDING", "count": 2}, {"status": "UNKNOWN", "count": 1}, {"status": "DEAD_LETTER", "count": 3}]
+    ]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.stats == {
+        "state_counts": {"PENDING": 2, "UNKNOWN": 1, "DEAD_LETTER": 3},
+        "pending_count": 3,
+        "outbox_size": 6,
+        "unknown_count": 1,
+        "dead_letter_count": 3,
+    }
+
+    cursor = _Cursor()
+    cursor.one = [
+        {"message_id": "m", "intent_id": "i", "payload": json.dumps(store._intent_payload(_intent("claim"), "k"))},
+        None,
+    ]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.claim("w") is None
+
+    cursor = _Cursor()
+    cursor.one = [None]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.duplicate_order_count_24h() is None
+    cursor = _Cursor()
+    cursor.one = [{"total": 2, "identified": 1, "distinct_client_ids": 1, "distinct_idempotency_keys": 1}]
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.duplicate_order_count_24h() is None
+
+    class _BrokenCursor(_Cursor):
+        def execute(self, *_args: object) -> None:
+            raise RuntimeError("schema")
+
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(_BrokenCursor()), lease_owner="w", fencing_token=3)
+    assert store.duplicate_order_count_24h() is None
+
+    cursor = _Cursor()
+    cursor.many = [[{"message_id": "m", "intent_id": "i", "status": "SENDING"}], []]
+    cursor.rowcount = 0
+    store = PostgresIntentOutbox(connection_factory=lambda: _Conn(cursor), lease_owner="w", fencing_token=3)
+    assert store.recover_inflight() == 0

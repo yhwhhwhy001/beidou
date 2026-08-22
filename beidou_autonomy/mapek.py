@@ -113,11 +113,6 @@ class MAPEKController:
         if not matches:
             return RecoveryAction.LOCK, "No similar fingerprint found; safe default is LOCK"
         best = matches[0]
-        if best.similarity_score < self._similarity_threshold:
-            return (
-                RecoveryAction.LOCK,
-                f"Best match similarity {best.similarity_score:.2f} below threshold {self._similarity_threshold}",
-            )
         if not best.is_approved:
             return RecoveryAction.DEGRADE_TO_NO_NEW_RISK, "Best match has no approved runbook; degrading"
         if best.recommended_action == RecoveryAction.RESTART_MODULE:

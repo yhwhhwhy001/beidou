@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import beidou_research.mining.label_builder as label_builder_module
 from beidou_research.mining.contracts import (
     LabelQuality,
     LabelSpec,
@@ -17,6 +18,8 @@ from beidou_research.mining.label_builder import (
     CostEstimate,
     LabelBuilder,
     PricePoint,
+    _compute_return,
+    _is_valid_price,
 )
 from beidou_shared.types import (
     FactorId,
@@ -151,6 +154,27 @@ class TestLabelBuilder:
         assert labels
         assert labels[0].expected_cost_bps == pytest.approx(25.5)
         assert labels[0].cost_model_version == configured.model_version
+
+    def test_cost_model_contract_rejects_invalid_and_nonfinite_values(self):
+        class Broken:
+            taker_fee_bps = "bad"
+            avg_spread_bps = 1.0
+            slippage_bps = 1.0
+            funding_rate_8h_pct = 0.01
+
+        with pytest.raises(TypeError, match="unsupported_cost_model_contract"):
+            LabelBuilder(cost_model=Broken())._cost_for_hold(4.0)
+
+        class NonFinite:
+            taker_fee_bps = float("nan")
+            avg_spread_bps = 1.0
+            slippage_bps = 1.0
+            funding_rate_8h_pct = 0.01
+
+        with pytest.raises(ValueError, match="non_finite_cost_model"):
+            LabelBuilder(cost_model=NonFinite())._cost_for_hold(4.0)
+
+        assert _is_valid_price(object()) is False
 
     def test_missing_requested_price_type_is_not_filled_from_close(self, sample_prices):
         point = sample_prices[0]
@@ -419,7 +443,7 @@ class TestLabelBuilder:
                 mark=100.0 + i,
                 mid=100.0 + i,
                 vwap=100.0 + i,
-                is_closed=(i < 9),
+                is_closed=(i not in {0, 9}),
             )  # 最后一个是未闭合 K 线
             for i in range(10)
         ]
@@ -437,6 +461,36 @@ class TestLabelBuilder:
         # 未闭合的 entry 和 exit 应被跳过
         for label in labels:
             assert label.quality_status == LabelQuality.VALID
+
+    def test_missing_price_and_nonfinite_return_are_fail_closed(self, label_builder, sample_prices, monkeypatch):
+        missing = list(sample_prices[:8])
+        for point in missing:
+            point.mark = None
+        labels = label_builder.build_labels(
+            missing,
+            LabelSpec(label_id="missing-mark", horizon_bars=2, price_type=PriceType.MARK),
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            FactorId("test"),
+            SchemaVersion("1.0.0"),
+        )
+        assert labels
+        assert all(label.quality_status == LabelQuality.MISSING_PRICE for label in labels)
+
+        monkeypatch.setattr(label_builder_module, "_compute_return", lambda *_args: float("nan"))
+        assert (
+            label_builder.build_labels(
+                sample_prices[:8],
+                LabelSpec(label_id="nan-return", horizon_bars=2),
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                FactorId("test"),
+                SchemaVersion("1.0.0"),
+            )
+            == []
+        )
 
     def test_triple_barrier_basic(self, label_builder):
         """Triple-barrier 标签基本功能。"""
@@ -569,6 +623,56 @@ class TestLabelBuilder:
         )
         assert len(labels) > 0
         assert all(l.label_value == 0.0 for l in labels)
+
+    def test_triple_barrier_skips_invalid_entries_and_future_points(self, label_builder):
+        from datetime import timedelta
+
+        base = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+        values = [100.0, 0.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+        points = [
+            PricePoint(
+                VenueId("BINANCE"),
+                InstrumentId("BTCUSDT"),
+                "1h",
+                base + timedelta(hours=i),
+                close=value,
+                mark=value,
+                mid=value,
+                vwap=value,
+                is_closed=(i != 0),
+            )
+            for i, value in enumerate(values)
+        ]
+        points[2].close = 0.0
+        labels = label_builder.build_triple_barrier_labels(
+            points,
+            LabelSpec(label_id="tb-boundary", horizon_bars=2, cost_adjusted=False),
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            FactorId("test"),
+            SchemaVersion("1.0.0"),
+            upper_barrier=50.0,
+            lower_barrier=-50.0,
+            max_hold_bars=4,
+        )
+        assert labels
+        points[0].is_closed = True
+        labels_with_bad_future = label_builder.build_triple_barrier_labels(
+            points,
+            LabelSpec(label_id="tb-invalid-future", horizon_bars=2, cost_adjusted=False),
+            VenueId("BINANCE"),
+            InstrumentId("BTCUSDT"),
+            "1h",
+            FactorId("test"),
+            SchemaVersion("1.0.0"),
+            upper_barrier=50.0,
+            lower_barrier=-50.0,
+            max_hold_bars=4,
+        )
+        assert labels_with_bad_future
+        assert _compute_return(100.0, 110.0, ReturnType.RESIDUAL) == pytest.approx(0.1)
+        assert _compute_return(100.0, 110.0, object()) == pytest.approx(0.1)  # type: ignore[arg-type]
 
     def test_label_available_time_after_end(self, label_builder, sample_prices):
         """标签可用时间 ≥ label_end_time。"""

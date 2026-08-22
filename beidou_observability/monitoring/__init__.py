@@ -443,9 +443,22 @@ def collect_monitoring_checks(
         # durable local projection and the authorized user-stream facts by
         # ``engine._reconcile``.  A matching REST/local position comparison
         # alone must never advertise PASS for a write-capable process.
-        # P1-048: 优先从 FactBus 获取对账事实，fallback 到 engine 私有字段
+        # P1-048: 优先从 FactBus 获取对账事实，fallback 到 engine 私有字段.
+        # Refresh the public fact projection before reading it.  For legacy
+        # test doubles and external publishers, only the default ``engine``
+        # source is accepted; this prevents a stale fact emitted by a prior
+        # AutonomousEngine instance from poisoning the current check.
         bus = get_fact_bus()
-        recon_fact = bus.get_latest("reconciliation_result")
+        fact_source_id = getattr(engine, "_fact_bus_source_id", None)
+        collector = getattr(engine, "collect_operational_facts", None)
+        if callable(collector):
+            try:
+                collector()
+                fact_source_id = getattr(engine, "_fact_bus_source_id", fact_source_id)
+            except Exception:
+                fact_source_id = None
+        recon_source = f"engine._reconcile:{fact_source_id}" if fact_source_id else "engine"
+        recon_fact = bus.get_latest("reconciliation_result", source=recon_source)
         # PKG02 (BDS-P0-001): 所有环境统一对账检查标准。
         # BD-FIX: demo-fapi 慢网络 + 因子组件负载下循环 60-70s 一圈；
         # 90s 阈值保留新鲜度语义且消除边界摩擦（2026-08-13 验收校准）

@@ -39,8 +39,6 @@ class FencingLease:
         """租约是否仍然有效。UNKNOWN 状态视为无效（fail-closed）。"""
         if self.state != LeaseState.ACQUIRED:
             return False
-        if self.state == LeaseState.UNKNOWN:  # type: ignore[comparison-overlap]  # 状态机防回归断言
-            return False  # 显式拒绝
         if time.monotonic() - self.acquired_at > self.ttl_seconds:
             self.state = LeaseState.EXPIRED
             return False

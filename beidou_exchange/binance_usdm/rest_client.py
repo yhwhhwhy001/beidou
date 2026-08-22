@@ -575,7 +575,11 @@ class BinanceRESTClient:
                 err_data: Any = None
                 try:
                     err_data = json.loads(error_body)
-                    binance_code = err_data.get("code", 0)
+                    raw_code = err_data.get("code", 0) if isinstance(err_data, dict) else 0
+                    try:
+                        binance_code = int(raw_code or 0)
+                    except (TypeError, ValueError):
+                        binance_code = 0
                 except Exception:
                     binance_code = 0
 
@@ -629,6 +633,9 @@ class BinanceRESTClient:
                         retry_after = min(30.0, max(0.0, float(retry_after_raw)))
                     except (TypeError, ValueError):
                         retry_after = float(attempt + 1)
+                    if binance_code == -1021:
+                        with contextlib.suppress(Exception):
+                            await self._resync_clock_offset()
                     if attempt < self._max_retries - 1:
                         await asyncio.sleep(retry_after)
                         continue
@@ -658,9 +665,6 @@ class BinanceRESTClient:
                     # 偏移再重试 —— 旧逻辑用同一偏移重新签名必然再败
                     # （I1 审查：demo 服务器时钟落后超 recvWindow 时
                     # 所有签名请求确定性 -1021）
-                    if binance_code == -1021:
-                        with contextlib.suppress(Exception):
-                            await self._resync_clock_offset()
                     wait = 0.5 * (2**attempt)
                     await asyncio.sleep(wait)
                     continue

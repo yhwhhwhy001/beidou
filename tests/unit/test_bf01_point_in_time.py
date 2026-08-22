@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -172,6 +173,8 @@ class TestPointInTimeJoin:
         label = _make_label(pk)
         result = join.store_label(label)
         assert result.label_value == 0.02
+        assert join.store_label(label) is label
+        assert join.has_overlapping_labels(VenueId("BINANCE"), InstrumentId("BTCUSDT"), "1h") is False
 
     def test_join_valid(self):
         """有效预测和标签成功连接。"""
@@ -323,6 +326,52 @@ class TestPointInTimeJoin:
         result = join.join(pred)
         assert result.is_valid
 
+    def test_join_uses_explicit_scope_and_rejects_future_or_unavailable_labels(self):
+        join = PointInTimeJoin()
+        pk = _make_pk(hour=12, horizon=4)
+        pred = _make_pred(pk)
+        label = _make_label(pk, label_id="scoped")
+        scope = (pk.venue, pk.symbol, pk.timeframe)
+        assert join.join(pred, {scope: {"scoped": label}}).is_valid
+
+        future_pk = _make_pk(hour=12, horizon=4)
+        object.__setattr__(future_pk, "data_available_time", _t(14))
+        future_pred = _make_pred(future_pk)
+        future_result = join.join(future_pred, {scope: {"scoped": label}})
+        assert "future_data" in future_result.failure_reason
+        future_join = PointInTimeJoin()
+        future_join.store_prediction(future_pred)
+        future_join.store_label(label)
+        _future_results, future_report = future_join.join_all()
+        assert future_report.future_data_blocked == 1
+
+        unavailable = _make_label(pk, label_id="unavailable")
+        object.__setattr__(unavailable, "label_available_time", _t(11))
+        unavailable_result = join.join(pred, {scope: {"scoped": unavailable}})
+        assert "label_not_available" in unavailable_result.failure_reason
+
+        join.store_prediction(pred)
+        join.store_label(label)
+        results, report = join.join_all()
+        assert results and report.total_predictions == 1
+        assert report.matched == 1
+
+        quality_join = PointInTimeJoin()
+        bad = _make_label(pk, label_id="bad", quality=LabelQuality.STALE)
+        quality_join.store_prediction(pred)
+        quality_join.store_label(bad)
+        _results, quality_report = quality_join.join_all()
+        assert quality_report.quality_filtered == 1
+        original_join = quality_join.join
+        quality_join.join = lambda _pred, _scope=None: SimpleNamespace(  # type: ignore[method-assign]
+            is_valid=False,
+            failure_reason="cross_timeframe",
+            prediction=pred,
+        )
+        _results, cross_report = quality_join.join_all([pred])
+        assert cross_report.cross_timeframe_blocked == 1
+        quality_join.join = original_join  # type: ignore[method-assign]
+
 
 # ================================================================
 # ClosedBarEnforcer tests
@@ -451,6 +500,8 @@ class TestClosedBarEnforcer:
         )
         enforcer.register_bar(bar)
         assert not enforcer.enforce(pred)
+        assert not enforcer.is_bar_available(pk.venue, pk.symbol, pk.timeframe, _t(10), _t(20))
+        assert enforcer.enforce(pred, bar_provider=lambda **_kwargs: True) is True
 
 
 # ================================================================
@@ -482,6 +533,13 @@ class TestFutureDataGuard:
         pred = _make_pred(pk)
         violations = guard.assert_no_future_data([pred])
         assert len(violations) == 0
+
+    def test_future_data_guard_detects_mutated_negative_fixture(self):
+        pk = _make_pk(hour=12)
+        object.__setattr__(pk, "data_available_time", _t(14))
+        pred = _make_pred(pk)
+        assert FutureDataGuard.assert_no_future_data([pred])
+        assert FutureDataGuard.inject_future_data_should_fail(pred) is True
 
     def test_prediction_key_rejects_future_at_construction(self):
         """PredictionKey 在构造时就拒绝未来数据 — 这是设计正确的。"""
@@ -556,3 +614,18 @@ class TestIsolationValidator:
         labels_5m = [_make_label(_make_pk(timeframe="5m"), label_value=-0.01)]
 
         assert IsolationValidator.validate_timeframe_isolation(labels_1h, labels_5m) is False
+
+    def test_timeframe_isolation_empty_and_contamination_edges(self):
+        assert IsolationValidator.validate_batch([]) == []
+        assert IsolationValidator.validate_timeframe_isolation([], []) is True
+        contaminated_1h = [_make_label(_make_pk(timeframe="5m"), label_id="bad-1")]
+        contaminated_5m = [_make_label(_make_pk(timeframe="1h"), label_id="bad-2")]
+        assert IsolationValidator.validate_timeframe_isolation(contaminated_1h, []) is False
+        assert IsolationValidator.validate_timeframe_isolation([], contaminated_5m) is False
+        assert (
+            IsolationValidator.validate_timeframe_isolation(
+                [_make_label(_make_pk(timeframe="1h"), label_id="one")],
+                [_make_label(_make_pk(timeframe="5m", hour=14), label_id="five")],
+            )
+            is True
+        )

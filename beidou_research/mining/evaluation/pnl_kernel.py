@@ -216,8 +216,6 @@ class StrategyPnLKernel:
                 prev_pos = abs(positions[len(net_returns)])
                 curr_pos = abs(positions[len(net_returns) + 1])
                 turnover_cost = abs(curr_pos - prev_pos) * c
-            else:
-                turnover_cost = c
             net_returns.append(g - turnover_cost)
 
         return StrategyPnL(net_returns=tuple(net_returns))

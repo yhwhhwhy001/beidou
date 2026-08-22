@@ -14,13 +14,22 @@ from typing import Any
 
 import pytest
 
-from beidou_certification.g5_scenarios.base import NotionalLedger, ScenarioContext, ScenarioStatus
+from beidou_certification.g5_scenarios.base import (
+    NotionalExceededError,
+    NotionalLedger,
+    ScenarioContext,
+    ScenarioStatus,
+)
 from beidou_certification.g5_scenarios.protection.double_worker_fencing import (
     DoubleWorkerFencingScenario,
     fencing_verdict,
 )
 from beidou_certification.g5_scenarios.protection.native_protection import (
     NativeProtectionScenario,
+    _algo_id_of,
+    _far_trigger_price,
+    _position_symbols,
+    _require_ok,
     algo_orphan_verdict,
 )
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
@@ -489,6 +498,121 @@ def test_native_protection_result_none_data_fail(tmp_path: Path) -> None:
     assert result.error_type == "RuntimeError"
     assert "get_account" in result.error_message and "no data" in result.error_message
     assert not any(s.get("action") == "algo_created" for s in result.evidence["steps"])
+
+
+def test_native_protection_helpers_and_default_client_boundaries() -> None:
+    assert _require_ok(Result.ok({"ok": True}), "read") == {"ok": True}
+    with pytest.raises(RuntimeError, match="read failed"):
+        _require_ok(Result.failure("offline"), "read")
+    with pytest.raises(RuntimeError, match="no data"):
+        _require_ok(Result.success(None), "read")
+    assert _position_symbols(
+        {
+            "positions": [
+                None,
+                {"symbol": "BTCUSDT", "positionAmt": "bad"},
+                {"symbol": "ETHUSDT", "positionAmt": "0"},
+                {"symbol": "", "positionAmt": "1"},
+                {"symbol": "SOLUSDT", "positionAmt": "2"},
+            ]
+        }
+    ) == {"SOLUSDT"}
+    assert _algo_id_of({}) is None
+    assert _algo_id_of({"algoId": "bad"}) is None
+    assert _algo_id_of({"algoId": "7"}) == 7
+    assert _far_trigger_price("BTCUSDT", _EXCHANGE_INFO, "60000") == "30000.00"
+
+    class _Client:
+        async def get_account(self) -> Result:
+            return Result.ok({"positions": []})
+
+        async def get_exchange_info(self, _symbol: str) -> Result:
+            return Result.ok(_EXCHANGE_INFO)
+
+        async def get_ticker(self, _symbol: str) -> Result:
+            return Result.ok({"lastPrice": "60000"})
+
+        async def get_open_algo_orders(self) -> Result:
+            return Result.ok([{"algoId": 1}, "ignored"])
+
+        async def create_algo_order(self, _params: dict[str, Any]) -> Result:
+            return Result.ok({"algoId": 1})
+
+        async def cancel_algo_order(self, _symbol: str, _algo_id: int) -> Result:
+            return Result.ok({"algoId": 1})
+
+    scenario = NativeProtectionScenario()
+    scenario._client = _Client()
+    assert asyncio.run(scenario._get_account_impl()) == {"positions": []}
+    assert asyncio.run(scenario._get_exchange_info_impl("BTCUSDT")) == _EXCHANGE_INFO
+    assert asyncio.run(scenario._get_ticker_impl("BTCUSDT"))["lastPrice"] == "60000"
+    assert asyncio.run(scenario._get_open_algo_orders_impl()) == [{"algoId": 1}]
+    assert asyncio.run(scenario._create_algo_order_impl({"symbol": "BTCUSDT"})) == {"algoId": 1}
+    assert asyncio.run(scenario._cancel_algo_order_impl("BTCUSDT", 1)) == {"algoId": 1}
+
+    class _BadClient(_Client):
+        async def get_open_algo_orders(self) -> Result:
+            return Result.ok({"not": "list"})
+
+        async def create_algo_order(self, _params: dict[str, Any]) -> Result:
+            return Result.ok(["not-object"])
+
+        async def cancel_algo_order(self, _symbol: str, _algo_id: int) -> Result:
+            return Result.ok(["not-object"])
+
+    scenario._client = _BadClient()
+    with pytest.raises(RuntimeError, match="非列表"):
+        asyncio.run(scenario._get_open_algo_orders_impl())
+    with pytest.raises(RuntimeError, match="非对象"):
+        asyncio.run(scenario._create_algo_order_impl({}))
+    with pytest.raises(RuntimeError, match="非对象"):
+        asyncio.run(scenario._cancel_algo_order_impl("BTCUSDT", 1))
+
+
+def test_native_protection_create_missing_id_cleanup_failure_and_notional_abort(tmp_path: Path) -> None:
+    exchange = _FakeAlgoExchange()
+
+    async def missing_id(_params: dict[str, Any]) -> dict[str, Any]:
+        return {"algoStatus": "NEW"}
+
+    scenario = NativeProtectionScenario(
+        get_account=exchange.get_account,
+        get_exchange_info=exchange.get_exchange_info,
+        get_ticker=exchange.get_ticker,
+        get_open_algo_orders=exchange.get_open_algo_orders,
+        create_algo_order=missing_id,
+        cancel_algo_order=exchange.cancel_algo_order,
+    )
+    missing = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
+    assert missing.status is ScenarioStatus.FAIL and "algoId" in missing.error_message
+
+    async def always_fail_cancel(_symbol: str, _algo_id: int) -> dict[str, Any]:
+        raise RuntimeError("cancel unavailable")
+
+    scenario = NativeProtectionScenario(
+        get_account=exchange.get_account,
+        get_exchange_info=exchange.get_exchange_info,
+        get_ticker=exchange.get_ticker,
+        get_open_algo_orders=exchange.get_open_algo_orders,
+        create_algo_order=exchange.create_algo_order,
+        cancel_algo_order=always_fail_cancel,
+    )
+    failed = asyncio.run(scenario.run(_ctx(tmp_path, client=exchange)))
+    assert failed.status is ScenarioStatus.FAIL
+    assert any(step.get("action") == "cleanup_cancel_algo" and step["ok"] is False for step in failed.evidence["steps"])
+
+    with pytest.raises(NotionalExceededError):
+        asyncio.run(
+            scenario.run(
+                ScenarioContext(
+                    client=exchange,
+                    ledger=NotionalLedger(-1.0),
+                    evidence_dir=tmp_path,
+                    symbol="BTCUSDT",
+                    dry_run=False,
+                )
+            )
+        )
 
 
 # ---- double_worker_fencing dry_run:NOT_VERIFIABLE 且不触碰任何真实资源 ----

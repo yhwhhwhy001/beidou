@@ -21,8 +21,10 @@ from beidou_observability.monitoring import (
 )
 from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
+    CheckSeverity,
     CheckStatus,
     ComponentHealth,
+    MonitoringCheckResult,
     PositionModeEvidence,
     TraceStage,
 )
@@ -334,3 +336,180 @@ def test_collect_monitoring_checks_converts_component_failures_to_blocking_facts
     assert any(
         item.check_id == "runtime.chaos.health" and item.status.value == CheckStatus.FAIL.value for item in results
     )
+
+
+def test_monitoring_bridge_covers_malformed_optional_sources(monkeypatch) -> None:
+    import beidou_observability.monitoring as monitoring
+    import beidou_observability.monitoring.checks.execution as execution_checks
+    import beidou_observability.monitoring.checks.factors as factor_checks
+    import beidou_observability.monitoring.checks.modules as module_checks
+    import beidou_observability.monitoring.checks.monitor_self as monitor_self_checks
+    import beidou_observability.monitoring.checks.strategies as strategy_checks
+
+    class _BrokenRecords(dict):
+        def values(self):
+            raise RuntimeError("factor records unavailable")
+
+    broken_engine = SimpleNamespace(
+        _autopilot_strategy_id="alpha",
+        _last_nearline=0.0,
+        _strategy_risk=SimpleNamespace(
+            get_budget=lambda _sid: (_ for _ in ()).throw(RuntimeError("risk unavailable")),
+            get_state=lambda _sid: None,
+        ),
+        _factor_registry=SimpleNamespace(_factors=_BrokenRecords()),
+    )
+    assert _strategy_snapshots(broken_engine)[0]["stale_factor_count"] == 0
+
+    now = time.time()
+
+    class _BadPosition:
+        instrument_id = "BTCUSDT"
+        quantity = "bad"
+        side = SimpleNamespace(value="BUY")
+
+    class _InactiveTracker:
+        def __init__(self):
+            self.status = SimpleNamespace(value="NEW")
+            self.events = []
+
+        def is_terminal(self):
+            return False
+
+    engine = SimpleNamespace(
+        _can_write=True,
+        _env_mode=SimpleNamespace(value="paper"),
+        _last_account={"positions": []},
+        _protection=SimpleNamespace(all_positions=lambda: {"zero": SimpleNamespace(quantity=0), "bad": _BadPosition()}),
+        _ledger=SimpleNamespace(_transactions=[]),
+        _factor_registry=SimpleNamespace(_factors={}),
+        _strategy_risk=SimpleNamespace(),
+        _autopilot_strategy_id="alpha",
+        _last_realtime=now,
+        _last_nearline=now,
+        _last_offline=now,
+        _last_recon=now,
+        _last_reconciliation_result=SimpleNamespace(matched=True, status="MATCHED", checked_at=object()),
+        _order_trackers={"inactive": _InactiveTracker()},
+        _active_order_ids=set(),
+        _order_symbols={},
+        _chaos_engine=None,
+        collect_operational_facts=lambda: (_ for _ in ()).throw(RuntimeError("collector unavailable")),
+    )
+    snapshot = {"ok": True, "account": {"positions": [{"symbol": "BTCUSDT", "positionAmt": "0"}]}}
+
+    monkeypatch.setattr(
+        module_checks, "check_module_progress", lambda _contracts: (_ for _ in ()).throw(RuntimeError("progress"))
+    )
+    monkeypatch.setattr(
+        execution_checks, "check_order_trace", lambda _traces: (_ for _ in ()).throw(RuntimeError("trace"))
+    )
+    monkeypatch.setattr(
+        monitor_self_checks,
+        "check_component_health",
+        lambda _health: [
+            MonitoringCheckResult(
+                check_id="component",
+                status=CheckStatus.PASS,
+                severity=CheckSeverity.P1,
+                message="ok",
+            )
+        ],
+    )
+    monkeypatch.setattr(factor_checks, "check_factors", lambda _states: (_ for _ in ()).throw(RuntimeError("factors")))
+    monkeypatch.setattr(
+        factor_checks,
+        "check_strategies",
+        lambda _states: (_ for _ in ()).throw(RuntimeError("factor strategies")),
+    )
+    monkeypatch.setattr(
+        strategy_checks,
+        "check_strategy_signal_silence",
+        lambda _states: (_ for _ in ()).throw(RuntimeError("silence")),
+    )
+    monkeypatch.setattr(
+        strategy_checks,
+        "check_strategy_risk_drift",
+        lambda _states: (_ for _ in ()).throw(RuntimeError("drift")),
+    )
+    monkeypatch.setattr(
+        strategy_checks,
+        "check_strategy_version_drift",
+        lambda _states: (_ for _ in ()).throw(RuntimeError("version")),
+    )
+
+    results = collect_monitoring_checks(
+        engine=engine,
+        exchange_account_snapshot=snapshot,
+        algorithm_probe={"ok": True},
+        position_mode_evidence=SimpleNamespace(mode="INVALID_MODE"),
+        supervisor=SimpleNamespace(
+            _monitoring_component_health=[
+                ComponentHealth(component="bridge", healthy=True, last_error="", consecutive_failures=0)
+            ]
+        ),
+    )
+    ids = {item.check_id for item in results}
+    assert "runtime.monitoring.module_progress" in ids
+    assert "runtime.execution.order_trace" in ids
+    assert "runtime.factors.health" in ids
+    assert "runtime.factors.strategies" in ids
+    assert "runtime.strategy.silence" in ids
+    assert "runtime.strategy.risk_drift" in ids
+    assert "runtime.strategy.version_drift" in ids
+
+    # A successful collector refreshes the source identity; a broken registry
+    # is reported as an explicit discovery failure rather than disappearing.
+    engine.collect_operational_facts = lambda: None
+    collect_monitoring_checks(engine=engine, exchange_account_snapshot=snapshot, algorithm_probe={"ok": True})
+
+    class _BrokenRegistry:
+        @property
+        def _factors(self):
+            raise RuntimeError("registry unavailable")
+
+    discovery_engine = SimpleNamespace(
+        _can_write=False,
+        _env_mode=SimpleNamespace(value="paper"),
+        _last_account={"positions": []},
+        _protection=SimpleNamespace(all_positions=lambda: {}),
+        _ledger=SimpleNamespace(_transactions=[]),
+        _factor_registry=_BrokenRegistry(),
+        _strategy_risk=None,
+        _last_realtime=now,
+        _last_nearline=now,
+        _last_offline=now,
+        _last_recon=now,
+        _chaos_engine=None,
+    )
+    discovery_results = collect_monitoring_checks(
+        engine=discovery_engine,
+        exchange_account_snapshot=snapshot,
+        algorithm_probe={"ok": True},
+    )
+    assert any(item.check_id == "runtime.factors.discovery" for item in discovery_results)
+
+    strategy_engine = SimpleNamespace(
+        _can_write=False,
+        _env_mode=SimpleNamespace(value="paper"),
+        _last_account={"positions": []},
+        _protection=SimpleNamespace(all_positions=lambda: {}),
+        _ledger=SimpleNamespace(_transactions=[]),
+        _factor_registry=None,
+        _strategy_risk=object(),
+        _autopilot_strategy_id="alpha",
+        _last_realtime=now,
+        _last_nearline=now,
+        _last_offline=now,
+        _last_recon=now,
+        _chaos_engine=None,
+    )
+    monkeypatch.setattr(
+        monitoring, "_strategy_snapshots", lambda _engine: (_ for _ in ()).throw(RuntimeError("snapshot"))
+    )
+    strategy_results = collect_monitoring_checks(
+        engine=strategy_engine,
+        exchange_account_snapshot=snapshot,
+        algorithm_probe={"ok": True},
+    )
+    assert any(item.check_id == "runtime.strategy.discovery" for item in strategy_results)

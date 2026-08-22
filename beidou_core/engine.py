@@ -3453,6 +3453,14 @@ class AutonomousEngine:
         from beidou_observability.monitoring.fact_bus import FactDomain, OperationalFact, get_fact_bus
 
         bus = get_fact_bus()
+        # A process may construct more than one engine during a supervisor
+        # handoff or a test restart.  Give each publisher a stable source so
+        # monitoring never consumes another engine instance's reconciliation
+        # fact from the process-wide bus.
+        fact_source_id = getattr(self, "_fact_bus_source_id", None)
+        if not fact_source_id:
+            fact_source_id = f"{id(self):x}"
+            self._fact_bus_source_id = fact_source_id
         facts: dict[str, OperationalFact] = {}
 
         # Reconciliation fact
@@ -3466,7 +3474,7 @@ class AutonomousEngine:
                 "checked_at": str(getattr(recon, "checked_at", "")),
                 "differences": list(getattr(recon, "differences", [])),
             },
-            source="engine._reconcile",
+            source=f"engine._reconcile:{fact_source_id}",
         )
         bus.publish(facts["reconciliation"])
 
@@ -5977,14 +5985,7 @@ class AutonomousEngine:
                         ChildCommandState.REJECTED,
                         event_id=f"control-reject:{intent.intent_id}:{remaining_idx}",
                     )
-                if idx == 0:
-                    self._outbox.reject(
-                        intent.intent_id,
-                        f"CONTROL_GATE_{self._control.get_status().value}",
-                        idempotency_key=getattr(intent, "idempotency_key", "") or "",
-                    )
-                else:
-                    self._outbox.mark_unknown(intent.intent_id, "PARTIAL_PLAN_ABORTED_BY_CONTROL_GATE")
+                self._outbox.mark_unknown(intent.intent_id, "PARTIAL_PLAN_ABORTED_BY_CONTROL_GATE")
                 return  # 提前终止 TWAP，不再发送剩余切片
             # 切片间等待（首个切片立即发送）
             if idx > 0 and slice_interval > 0:
@@ -10341,8 +10342,6 @@ class AutonomousEngine:
                     # 方向/数量分叉:以 venue 方向/数量为准,旧投影由
                     # _ensure_entry_protection 的 stale 清理路径移除。
                     _sweep_qty = _venue_qtys.get(_sweep_sym, abs(_sweep_qty))
-                    if _sweep_qty <= 1e-12:
-                        continue
                     _sweep_side = _venue_sides[_sweep_sym]
                     # 同步持久化投影为 venue 事实,避免 _ensure_entry_protection
                     # 用陈旧投影数量重建出过度/不足的保护。
@@ -11630,8 +11629,6 @@ class AutonomousEngine:
                         f"strength={getattr(proposal, 'strength', 0):.3f}"
                     )
                     # 使用 SignalFuser 融合多时间框架信号
-                    from beidou_strategy.alpha import AlphaSignal
-
                     direction = SignalDirection.LONG if side == OrderSide.BUY else SignalDirection.SHORT
                     alpha_signal = AlphaSignal(
                         strategy_id=self._autopilot_strategy_id,
@@ -13398,6 +13395,9 @@ class AutonomousEngine:
         # 断路器必须在 exchangeInfo 加载前复位，否则上一个 session 的
         # 失败计数会阻挡精度加载 → 订单全部失败 → 断路器再次打开。
         self._adapter.reset_circuit_breaker()
+        # Keep the adapter-sync input deterministic when exchangeInfo raises
+        # before returning a response.
+        exchange_info: dict[str, Any] = {}
         try:
             exchange_info, info_ok = await asyncio.wait_for(self._api_async_safe(Endpoint.EXCHANGE_INFO), timeout=30.0)
             if not info_ok or not isinstance(exchange_info, dict):
@@ -13496,6 +13496,13 @@ class AutonomousEngine:
                     print(
                         "[beidou-autopilot] WARNING: Position recovery skipped (API unavailable) — user stream kept alive"
                     )
+                    # Position recovery happens before the normal WARMING /
+                    # VALIDATING milestones.  Walk the lifecycle through those
+                    # audited states so the intended DEGRADED result is not
+                    # rejected as an illegal BOOTSTRAPPING transition.
+                    if self._lifecycle.state == ModuleState.BOOTSTRAPPING:
+                        self._lifecycle.transition(ModuleState.WARMING)
+                        self._lifecycle.transition(ModuleState.VALIDATING)
                     self._lifecycle.transition(ModuleState.DEGRADED)
                     if not getattr(self, "_health_started", False):
                         self._health.start()

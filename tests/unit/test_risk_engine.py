@@ -1,5 +1,8 @@
 """PKG-20A/B/C: Risk Engine 测试。"""
 
+import asyncio
+from pathlib import Path
+
 import pytest
 
 from beidou_safety.risk import PreRiskContext
@@ -196,6 +199,40 @@ class TestRiskApproval:
             )
         )
 
+    def test_rearm_nonce_persists_and_replay_restores_ordered_state(self, tmp_path):
+        signer = self._make_signer()
+        signer._nonce_log_path = str(tmp_path / "approval_nonces.jsonl")
+        signer._revocation_log_path = str(tmp_path / "approval_revocations.jsonl")
+        aid = RiskApprovalId("approval-rearm")
+        sig = signer.sign(aid, nonce="nonce-rearm")
+        assert asyncio.run(signer.verify(aid, signature=sig, nonce="nonce-rearm"))
+        assert signer.nonce_consumed("nonce-rearm")
+        assert signer.rearm_nonce("") is False
+        assert signer.rearm_nonce("missing") is False
+        assert signer.rearm_nonce("nonce-rearm") is True
+        assert not signer.nonce_consumed("nonce-rearm")
+
+        Path(signer._nonce_log_path).write_text(
+            "[]\n"
+            '{"action":"consume_nonce","nonce":"restored"}\n'
+            '{"action":"rearm_nonce","nonce":"restored"}\n'
+            "{malformed\n",
+            encoding="utf-8",
+        )
+        restarted = self._make_signer()
+        restarted._nonce_log_path = signer._nonce_log_path
+        restarted._revocation_log_path = signer._revocation_log_path
+        assert restarted.restore_replay_state() == 2
+        assert not restarted.nonce_consumed("restored")
+
+    def test_rearm_nonce_fail_closed_on_persistence_error(self, tmp_path):
+        signer = self._make_signer()
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+        signer._nonce_log_path = str(blocked / "nonce.jsonl")
+        signer._nonces.add("nonce-error")
+        assert signer.rearm_nonce("nonce-error") is False
+
     def test_signing_unavailable_verify_denied(self, monkeypatch):
         """密钥不可用时 verify() 一律返回 False。"""
         monkeypatch.delenv("BEIDOU_SIGNING_KEY", raising=False)
@@ -224,3 +261,19 @@ class TestPostRisk:
         for i in range(6):
             monitor.record_violation(f"violation {i}")
         assert monitor.recommend_degradation()
+
+
+def test_risk_approval_rearm_lifecycle_edges(monkeypatch):
+    sm = RiskApprovalStateMachine()
+    unknown = RiskApprovalId("rearm-unknown")
+    assert sm.rearm_for_retry(unknown) == RiskDecision.PENDING
+
+    aid = RiskApprovalId("rearm-consumed")
+    sm.approve(aid, nonce="n-rearm")
+    sm.consume(aid)
+    assert sm.rearm_for_retry(aid) == RiskDecision.APPROVED
+    assert sm.is_valid_for_use(aid, nonce="n-rearm")
+
+    sm.consume(aid)
+    monkeypatch.setattr(sm, "_is_expired", lambda _aid: True)
+    assert sm.rearm_for_retry(aid) == RiskDecision.PENDING

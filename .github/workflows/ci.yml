@@ -76,8 +76,8 @@ jobs:
         run: python delivery/scripts/validate_package.py
 
       - name: Coverage report
-        # Execution-package global gate: coverage must remain at or above 85%.
-        run: pytest tests/ -q --cov --cov-fail-under=85 --cov-report=xml --cov-report=term-missing
+        # Execution-package global gate: the full repository must remain at 100% line coverage.
+        run: pytest tests/ -q --cov --cov-fail-under=100 --cov-report=xml --cov-report=term-missing
 
       - name: Alpha V3 coverage gate (100% lines and branches)
         # 用户授权的 V3 强制门禁；覆盖率作用域明确限定为执行包新增/改造的

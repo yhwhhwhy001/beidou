@@ -1486,8 +1486,6 @@ class Add(Expression):
                 rest.append(Constant(total, dtype))
             elif not rest:
                 rest.append(Constant(0.0, dtype))
-        if not rest:
-            return Constant(0.0, ExprType.SCALAR)
         rest.sort(key=_canon_key)
         node = rest[0]
         for nxt in rest[1:]:

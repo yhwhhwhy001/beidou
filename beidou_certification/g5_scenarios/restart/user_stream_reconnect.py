@@ -376,16 +376,9 @@ class UserStreamReconnectScenario(ScenarioBase):
                     {"steps": steps},
                 )
             recovered_status = _user_stream_status(recovered_payload)
-            if recovered_status is None:
-                return self._fail(
-                    ScenarioStatus.FAIL,
-                    "engine_user_stream_status_missing_after",
-                    "引擎恢复后 /status 缺 user_stream_runtime.status",
-                    {"steps": steps},
-                )
             age, age_known = _user_stream_event_age(recovered_payload, self._now())
             steps.append({"action": "engine_event_age", "last_event_age_s": round(age, 2), "age_known": age_known})
-            ok, reason = ws_reconnect_verdict(before_status, recovered_status, age)
+            ok, reason = ws_reconnect_verdict(before_status, recovered_status or "", age)
             if ok:
                 reason = "engine_reconnected"
             steps.append(

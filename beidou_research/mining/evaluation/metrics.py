@@ -281,8 +281,6 @@ def _long_short_spread(preds: Sequence[Value], rets: Sequence[Value]) -> float:
         return 0.0
     k = max(1, round(n * 0.2))
     k = min(k, n // 2)
-    if k == 0:
-        return 0.0
     top = [v for _, v in pairs[-k:]]
     bottom = [v for _, v in pairs[:k]]
     return _mean(top) - _mean(bottom)
@@ -366,8 +364,6 @@ def compute_ic(predictions: SignalInput, returns: SignalInput) -> Dict[str, floa
         ic, n = _pearson(p, r)
         ics.append(ic)
         total_samples += n
-    if not ics:
-        return {"ic_mean": 0.0, "ic_std": 0.0, "sample_count": 0}
     return {
         "ic_mean": _mean(ics),
         "ic_std": _std(ics),
@@ -391,8 +387,6 @@ def compute_rank_ic(predictions: SignalInput, returns: SignalInput) -> Dict[str,
         ric, n = _spearman(p, r)
         rank_ics.append(ric)
         total_samples += n
-    if not rank_ics:
-        return {"rank_ic_mean": 0.0, "rank_ic_std": 0.0, "sample_count": 0}
     return {
         "rank_ic_mean": _mean(rank_ics),
         "rank_ic_std": _std(rank_ics),

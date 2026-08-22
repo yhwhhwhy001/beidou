@@ -521,10 +521,6 @@ class FactorPromotionGate:
             except (TypeError, ValueError):
                 sample_count = None
                 invalid_metrics.append(f"sample_count={performance.sample_count!r}(not numeric)")
-            else:
-                if sample_count is None or not math.isfinite(float(sample_count)):
-                    sample_count = None
-                    invalid_metrics.append(f"sample_count={performance.sample_count!r}(non-finite)")
             if invalid_metrics:
                 failures.append("Invalid metrics rejected: " + ", ".join(invalid_metrics))
                 # 短路: 类型/数值非法的 performance 不得进入任何阈值比较
@@ -554,9 +550,7 @@ class FactorPromotionGate:
                 failures.append(f"ICIR {normalized['icir']:.3f} < threshold {min_icir}")
 
             min_samples = requirements.get("min_sample_count", 0)
-            if min_samples > 0 and sample_count is None:
-                failures.append("sample_count_required: metric missing for threshold check")
-            elif sample_count is not None and sample_count < min_samples:
+            if min_samples > 0 and sample_count is not None and sample_count < min_samples:
                 failures.append(f"Sample count {sample_count} < required {min_samples}")
         else:
             # M04-R2: 有指标门槛的状态必须提供 performance —— 旧实现

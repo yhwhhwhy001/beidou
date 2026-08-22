@@ -168,6 +168,9 @@ class IntentOutbox:
 
     @staticmethod
     def _serialize_intent(intent: OrderIntent, key: str) -> str:
+        risk_expires_at = intent.risk_expires_at
+        if isinstance(risk_expires_at, datetime):
+            risk_expires_at = risk_expires_at.timestamp()
         return json.dumps(
             {
                 "intent_id": intent.intent_id,
@@ -196,7 +199,7 @@ class IntentOutbox:
                 "risk_snapshot_hash": intent.risk_snapshot_hash,
                 "risk_policy_version": intent.risk_policy_version,
                 "risk_nonce": intent.risk_nonce,
-                "risk_expires_at": intent.risk_expires_at,
+                "risk_expires_at": risk_expires_at,
                 "net_alpha_bps": intent.net_alpha_bps,
                 "predicted_cost_bps": intent.predicted_cost_bps,
             },
