@@ -174,6 +174,8 @@ class ReconciliationEngine:
         now: datetime | None = None,
         balance_rel_tolerance: Decimal = Decimal("0.0001"),
         stale_exempt_second: bool = False,
+        left_label: str = "system",
+        right_label: str = "exchange",
     ) -> ReconciliationResult:
         """Compare two independently captured snapshots without mutating state.
 
@@ -186,6 +188,10 @@ class ReconciliationEngine:
         流的"活"由 transport readiness（event_age）证明，对账职责是状态
         一致；低频环境（demo 凌晨无事件）投影时间戳自基线/最后事件起
         冻结，属于"状态无变化"而非"事实失效"。
+
+        ``left_label``/``right_label`` 控制 Balance mismatch 消息中的来源
+        轴标签（默认 system/exchange），三方对账复用本原语时按真实来源
+        传参，避免第三条轴误标。
         """
 
         checked_at = now or datetime.now(timezone.utc)
@@ -320,7 +326,8 @@ class ReconciliationEngine:
         max_tolerance = max(abs_tolerance, rel_tolerance * max(system_balance, exchange_balance))
         if bal_diff > max_tolerance:
             diffs.append(
-                f"Balance mismatch: system={system_facts.balance.amount} exchange={exchange_facts.balance.amount} "
+                f"Balance mismatch: {left_label}={system_facts.balance.amount} "
+                f"{right_label}={exchange_facts.balance.amount} "
                 f"diff={float(bal_diff):.6f} tolerance={float(max_tolerance):.6f}"
             )
 
@@ -584,6 +591,8 @@ class ReconciliationEngine:
                     now=checked_at,
                     balance_rel_tolerance=balance_rel_tolerance,
                     stale_exempt_second=True,
+                    left_label="system",
+                    right_label="event_stream",
                 ),
             ),
             (
@@ -595,6 +604,8 @@ class ReconciliationEngine:
                     now=checked_at,
                     balance_rel_tolerance=balance_rel_tolerance,
                     stale_exempt_second=True,
+                    left_label="exchange",
+                    right_label="event_stream",
                 ),
             ),
         )
