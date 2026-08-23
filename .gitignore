@@ -67,3 +67,11 @@ evidence/BD-01/*.jsonl
 
 # Generated PnL reports
 artifacts/factor_pnl_report/
+
+# Worktree / SDD scratch (not part of the repo)
+.worktrees/
+.superpowers/
+
+# Runtime-written LOCKED snapshots (P3) must not dirty the git tree
+# -- preflight git_worktree P0 would then refuse engine start
+evidence/locked-*.json
