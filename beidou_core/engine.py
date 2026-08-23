@@ -4294,11 +4294,26 @@ class AutonomousEngine:
             # 不与该分支 60s 限频打印耦合 —— 持久化每轮评估都要做。
             for _g in _gap_detail:
                 _g_sym = str(_g.get("symbol", "")).strip()
-                if not _g_sym:
+                _g_reason = str(_g.get("reason", "")).strip()
+                if not _g_sym or not _g_reason:
+                    continue
+                # R10(a): E2 已接管的 symbol (last_reason=SL_UNPROTECTABLE)
+                # 不回写 —— 否则 gap 刷新把 reason 翻回 gap reason, 与 E2
+                # 确认阶梯语义打架; 记录归属保持清晰: E2 拥有 → 恒显式。
+                _owned_row = None
+                _get_rec = getattr(store, "_get_record", None)
+                if callable(_get_rec):
+                    try:
+                        _owned_row = _get_rec("protection_exposure", f"exposure:{_g_sym}")
+                    except Exception:
+                        _owned_row = None
+                if _owned_row is not None and isinstance(_owned_row, dict) and "payload" in _owned_row:
+                    _owned_row = _owned_row["payload"]
+                if _owned_row and str(_owned_row.get("last_reason", "") or "") == "SL_UNPROTECTABLE":
                     continue
                 self._persist_protection_exposure(
                     _g_sym,
-                    str(_g.get("reason", "")),
+                    _g_reason,
                     now=time.time,
                     increment=False,
                 )
@@ -9976,12 +9991,14 @@ class AutonomousEngine:
                 _delete("protection_exposure", f"exposure:{symbol}")
 
     async def _run_slow_fuse(self, *, now: float | None = None, env: Any = None) -> int:
-        """4-E3 慢引信: 纯卡死(无显式拒绝)≥7200s → 逐品种紧急平仓。
+        """4-E3 慢引信: 裸露 ≥7200s → 逐品种触发 E2 受治理平仓阶梯。
 
-        - 显式拒绝 (last_reason=SL_UNPROTECTABLE) 已由 E2 快路径处置, 此处跳过
+        - R10(b): 纯按 age≥7200 触发, 忽略 last_reason —— SL_UNPROTECTABLE
+          行同样调用 E2 (ladder 推进), enqueue 由 E2 的 attempts≥3 + 跨度
+          ≥60s 门控; enqueue 成功 → 记录清除 → 自然停止; 失败 → 下轮重试。
         - testnet 默认开启; live/canary 默认关闭且不得被默认值绕过 (spec D-6)
         - 每品种独立判定, 绝不使用账户级 EMERGENCY_FLATTEN (spec D-7)
-        - 平仓前后各发一次告警
+        - 平仓前后各发一次告警 (send_incident category+title 去重)
         """
         import os as _os
         import time as _time
@@ -10006,11 +10023,14 @@ class AutonomousEngine:
             return 0
         fired = 0
         for r in rows:
-            age = _ts - float(r.get("unprotectable_since", 0.0) or 0.0)
+            try:
+                age = _ts - float(r.get("unprotectable_since", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue  # 脏行跳过, 不炸整个 sweep (R10 minor 4)
             if age < 7200.0:
                 continue
-            if str(r.get("last_reason", "")) == "SL_UNPROTECTABLE":
-                continue  # E2 快路径负责
+            # R10(b): 不再按 last_reason 跳过 —— 显式拒绝 (SL_UNPROTECTABLE)
+            # 行同样调用 E2 推进确认阶梯 (enqueue 由 E2 门控)。
             symbol = str(r.get("symbol", ""))
             _alerts = getattr(self, "_alerts", None)
             if _alerts is not None:
@@ -10023,7 +10043,9 @@ class AutonomousEngine:
                     )
             # _maybe_emergency_close_unprotectable 内部会读 pp.side 判方向、
             # pp.quantity 做回退 —— 传最小替身而非 None (投影优先, 替身只兜底):
-            # 方向由 _position_projection 的 signed_quantity 符号派生。
+            # pp.side 传**持仓方向** (引擎约定, E2 在 enqueue 处再翻转成
+            # 减仓方向): 多头 (signed_quantity>0) → BUY, 空头 → SELL。
+            # 反了会令 E2 发射加仓方向被 reduce-only 拒绝 (R10 Critical 1)。
             _proj = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
             try:
                 _signed = float(_proj.get("signed_quantity", 0.0) or 0.0)
@@ -10032,7 +10054,7 @@ class AutonomousEngine:
             if _signed == 0.0:
                 continue
             _pp = SimpleNamespace(
-                side=OrderSide.SELL if _signed > 0 else OrderSide.BUY,
+                side=OrderSide.BUY if _signed > 0 else OrderSide.SELL,
                 quantity=abs(_signed),
             )
             try:
