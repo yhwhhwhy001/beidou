@@ -150,14 +150,25 @@ class HealthDebounce:
                 supervisor.state = new_state
     """
 
-    window: deque[tuple[float, bool]] = field(default_factory=deque)
+    window: deque[tuple[float, bool, bool]] = field(default_factory=deque)
     window_seconds: float = 60.0
     degrade_after: int = 6  # 启动期容忍更长的瞬态
     lock_after: int = 12  # 给算法探针/用户流/对账充分的稳定时间
     recover_after: int = 3
 
-    def feed(self, has_persistent_blocker: bool, now: float | None = None) -> str | None:
+    def feed(
+        self,
+        has_persistent_blocker: bool,
+        *,
+        repairable: bool = False,
+        now: float | None = None,
+    ) -> str | None:
         """记录一次检查结果，返回建议状态变更或 None（保持不变）。
+
+        A/B 分流 (2026-08-24): repairable=True 的阻断 (新开仓保护待建等
+        引擎活着能修的情形) 只计入 DEGRADED 路径, 永不计入 LOCKED ——
+        LOCKED 是进程退出, 会让"待建保护"变成永久裸奔 (见 spec D-3)。
+        B 类维持原语义逐位不变: 纯 B 输入下本实现与旧版逐轮输出一致。
 
         Returns:
             "DEGRADED" | "LOCKED" | "RUNNING" | None
@@ -165,24 +176,32 @@ class HealthDebounce:
         import time
 
         ts = now if now is not None else time.monotonic()
-        self.window.append((ts, has_persistent_blocker))
+        self.window.append((ts, has_persistent_blocker, bool(repairable)))
 
         # 清理过期样本
         cutoff = ts - self.window_seconds
         while self.window and self.window[0][0] < cutoff:
             self.window.popleft()
 
-        recent = [blocked for _, blocked in self.window]
+        recent = [blocked for _, blocked, _ in self.window]
 
         # 必须有一定样本量才判定（避免启动初期单次 FAIL 触发降级）
         if len(recent) < self.degrade_after:
             return None
 
-        # LOCKED: 连续 lock_after 次全部持久阻断
-        if len(recent) >= self.lock_after and all(recent[-self.lock_after :]):
+        # LOCKED: 连续 lock_after 次全部持久阻断, 且最近 lock_after 个样本
+        # 中至少含一个 B 类(不可修复)样本 —— A 类永不 LOCKED; A+B 并存
+        # 按 B 计数, 真故障出现即可从已积累的阻断历史直接升级
+        # (plan test-3: "第 12 轮混入 B 类 → 按 B 计, 立即 LOCKED")。
+        # 纯 B 输入下"窗口内含 B"恒真, 与旧语义逐位一致。
+        if (
+            len(recent) >= self.lock_after
+            and all(recent[-self.lock_after :])
+            and any(not rep for _, _, rep in list(self.window)[-self.lock_after :])
+        ):
             return "LOCKED"
 
-        # DEGRADED: 连续 degrade_after 次全部持久阻断
+        # DEGRADED: 连续 degrade_after 次全部持久阻断 (A/B 都算)
         if all(recent[-self.degrade_after :]):
             return "DEGRADED"
 

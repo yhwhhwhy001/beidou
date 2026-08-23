@@ -479,7 +479,7 @@ def test_monitor_records_g7_persistence_failure_and_engine_terminal_states(tmp_p
     supervisor._refresh_exchange_algo_snapshot = lambda: asyncio.sleep(0)  # type: ignore[method-assign]
     supervisor._record_g7_certification_evidence = lambda _checks: (_ for _ in ()).throw(RuntimeError("persist"))  # type: ignore[method-assign]
     supervisor._apply_debounce_action = lambda *_args: asyncio.sleep(0)  # type: ignore[method-assign]
-    supervisor._health_debounce.feed = lambda _value: None
+    supervisor._health_debounce.feed = lambda _value, **_kwargs: None  # A/B 分流后带 repairable= 关键字
     supervisor._is_trading_ready = lambda: False  # type: ignore[method-assign]
     supervisor._g7_tracker = SimpleNamespace(
         set_durable_window_state=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("tracker")),

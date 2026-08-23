@@ -68,6 +68,33 @@ async def _refresh_snapshot_safe(coro: Any, *, timeout: float = 25.0) -> None:
         return
 
 
+_REPAIRABLE_PROTECTION_REASONS: frozenset[str] = frozenset(
+    {
+        "STOP_LOSS_QUANTITY_UNCOVERED",
+        "MISSING_SL",
+        "MISSING_TP",
+        "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION",
+    }
+)
+
+_COVERAGE_REPAIRABLE_ISSUES: frozenset[str] = frozenset({"MISSING_SL", "MISSING_TP"})
+
+
+def _coverage_message_repairable(b: CheckResult, owned: set[str]) -> bool:
+    """R2: coverage 检查按 message issue token 分类。
+
+    message 形如 "Protection: MISSING_SL, MISSING_TP" (issues 以 ", "
+    连接); 全部 token ∈ {MISSING_SL, MISSING_TP} 且 entity_id 属于
+    本地所有权符号集才可修复, 否则 fail-closed 按 B。
+    """
+    message = str(getattr(b, "message", "") or "")
+    tokens = [t.strip() for t in message.split("Protection:", 1)[-1].split(",") if t.strip()]
+    if not tokens or not all(t in _COVERAGE_REPAIRABLE_ISSUES for t in tokens):
+        return False
+    entity_id = str((getattr(b, "evidence", None) or {}).get("entity_id", "") or "")
+    return bool(entity_id) and entity_id in owned
+
+
 def summarize_blockers(blockers: list) -> str:
     """聚合重复 blocker：同 (check_id, message) 合并为 check_id(×N)。
 
@@ -1206,6 +1233,59 @@ class BeidouSupervisor:
         }
     )
 
+    def _classify_repairable(self, blockers: list[CheckResult]) -> bool:
+        """A/B 分类: 全部阻断均为可修复缺口 → True (永不 LOCKED)。
+
+        reason 缺失或含任何不可修复项 → False (fail-closed 按 B)。
+        A 类 reason 全集见模块级 ``_REPAIRABLE_PROTECTION_REASONS``:
+        gap_detail 检查直接携带 reason, incidents 证据经 gap_reasons 字段。
+
+        R2 (2026-08-24): ``runtime.safety.protection_coverage`` 阻断按
+        message 的 issue token 分类 —— 全部 token ∈ {MISSING_SL, MISSING_TP}
+        且全部 entity_id ∈ 引擎本地所有权符号集 (``_position_generation``
+        ∪ ``_position_projection`` 的键) 才可修复; 含 DUP(...)/GHOST/未知
+        token, 或任何 entity 非本地所有 (共享 testnet 账户的外部持仓)
+        → 非可修复 (fail-closed)。引擎未就绪时所有权不可证明 → 按 B。
+        """
+        if not blockers:
+            return False
+        engine = getattr(self, "engine", None)
+        owned: set[str] = set()
+        if engine is not None:
+            owned.update(str(sym) for sym in (getattr(engine, "_position_generation", None) or {}))
+            owned.update(str(sym) for sym in (getattr(engine, "_position_projection", None) or {}))
+        reasons: list[str] = []
+        coverage_repairable = False  # coverage 阻断走 message 分类, 不进 reasons
+        for b in blockers:
+            ev = getattr(b, "evidence", None) or {}
+            if not isinstance(ev, dict):
+                return False
+            if b.check_id == "runtime.safety.protection_coverage":
+                if not _coverage_message_repairable(b, owned):
+                    return False
+                coverage_repairable = True
+                continue
+            gaps = ev.get("gaps")
+            incs = ev.get("incidents")
+            if gaps:
+                for g in gaps:
+                    # reason 缺失/无法分类 → 按 B
+                    if not isinstance(g, dict) or not g.get("reason"):
+                        return False
+                    reasons.append(str(g["reason"]))
+            if incs:
+                inc_list = [i for i in incs if isinstance(i, dict)]
+                # 任一 incident 缺 gap_reasons → 按 B (A+B 并存按 B)
+                if not inc_list or not all(i.get("gap_reasons") for i in inc_list):
+                    return False
+                for inc in inc_list:
+                    reasons.extend(str(r) for r in inc["gap_reasons"])
+            if not gaps and not incs:
+                # 非 protection 语义的阻断 (execution_fact/reconciliation/
+                # supervisor/realtime) 没有 reason → 严格按 B
+                return False
+        return all(r in _REPAIRABLE_PROTECTION_REASONS for r in reasons) and (bool(reasons) or coverage_repairable)
+
     async def _recover_if_validated(self, checks: list[CheckResult]) -> bool:
         """在仍有有效授权时，经过 RECOVERING→VALIDATING→ACTIVE。
 
@@ -1456,8 +1536,10 @@ class BeidouSupervisor:
             # 速度；它不能让任何 P0/P1 事实失真继续持有 RESUME 授权。
             persistent_blockers = [b for b in blockers if b.check_id not in self._TRANSIENT_CHECK_IDS]
             has_persistent = bool(persistent_blockers)
-
-            debounce_action = self._health_debounce.feed(has_persistent)
+            # A/B 分流: 全部阻断均可修复 (保护缺口, 引擎活着能修) → 永不
+            # LOCKED; 任一不可修复/无法分类 → 按 B 走原防抖语义。
+            repairable = self._classify_repairable(persistent_blockers)
+            debounce_action = self._health_debounce.feed(has_persistent, repairable=repairable)
             # M00-F03: 分支链抽至 _apply_debounce_action（转移门控 + 静默背压，
             # 可独立测试）。None = 防抖器样本不足,保持当前状态不动作。
             if debounce_action is not None:
@@ -1638,3 +1720,9 @@ class BeidouSupervisor:
                     with suppress(asyncio.CancelledError):
                         await self._engine_task
             self.lock.release()
+
+
+# 模块级别名: 测试与调用方既可用 ``BeidouSupervisor._classify_repairable``
+# (self 绑定), 也可 ``from beidou_launcher.supervisor import
+# _classify_repairable`` 后对任意容器做 __get__ 绑定 (plan test-5 写法)。
+_classify_repairable = BeidouSupervisor._classify_repairable
