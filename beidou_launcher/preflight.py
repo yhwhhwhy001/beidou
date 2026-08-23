@@ -169,6 +169,41 @@ def _postgres_authority_probe(project_root: Path, database_url: str) -> tuple[bo
     return True, "PostgreSQL authority and migration head verified", evidence
 
 
+def _g5_journal_check(
+    journal_rows: list[dict[str, Any]],
+    *,
+    probe_error: str | None = None,
+) -> CheckResult:
+    """G5 污染基线后进程被硬杀会留下搁浅 journal —— P0 阻断启动。
+
+    只检测不修复 (检查无副作用): 修复由 g5 场景下次启动自愈, 或人工
+    执行场景的 _recover_from_journal。probe_error 为查询异常类型时按
+    PASS + evidence 记录 (PG 权威连通性由 state_backend_connection
+    专门探测, 此处不重复阻断)。
+    """
+    evidence: dict[str, Any] = {"journal_count": len(journal_rows)}
+    if probe_error is not None:
+        evidence["probe_error"] = probe_error
+    if not journal_rows:
+        return _result(
+            "startup.safety.g5_baseline_journal", "G5 基线 journal",
+            True, CheckSeverity.P1, "无搁浅的 G5 基线污染", "",
+            evidence=evidence,
+        )
+    return _result(
+        "startup.safety.g5_baseline_journal", "G5 基线 journal",
+        False, CheckSeverity.P0,
+        "无搁浅的 G5 基线污染",
+        "检测到搁浅的 G5 基线污染 (record_type='g5_journal', record_id="
+        "'reconciliation_mismatch:baseline')。上次认证运行在污染窗口内被"
+        "硬杀, 基线 balance_amount 可能仍是哨兵值 \"1\"。修复: 重新运行 "
+        "g5 reconciliation_mismatch 场景 (启动时自动还原), 或人工将 "
+        "account_opening_projection/default:BINANCE 还原为 journal 内 "
+        "original_payload 后删除 g5_journal 行。",
+        evidence=evidence,
+    )
+
+
 def current_commit(project_root: Path | None = None) -> str:
     try:
         result = subprocess.run(  # nosec B603, B607 - fixed git/port inspection command, shell disabled
@@ -579,6 +614,24 @@ def _run_preflight(
                         evidence=postgres_evidence,
                     )
                 )
+                # G5 基线 journal 搁浅检测:污染窗口内被硬杀会留下 g5_journal,
+                # P0 阻断启动(只检测不修复)。查询异常按 PASS + evidence 记录
+                # error —— PG 权威连通性已由 state_backend_connection 专门探测,
+                # 此处不重复阻断。
+                journal_rows: list[dict[str, Any]] = []
+                journal_probe_error: str | None = None
+                try:
+                    import psycopg
+
+                    with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn:
+                        cur = conn.execute(
+                            "SELECT payload::text FROM v3_runtime_records "
+                            "WHERE record_type='g5_journal'"
+                        )
+                        journal_rows = [{"payload": json.loads(str(r[0]))} for r in cur.fetchall()]
+                except Exception as exc:
+                    journal_probe_error = type(exc).__name__
+                checks.append(_g5_journal_check(journal_rows, probe_error=journal_probe_error))
             fencing_token_text = os.environ.get("BEIDOU_FENCING_TOKEN", "").strip()
             try:
                 fencing_token_ok = int(fencing_token_text) > 0

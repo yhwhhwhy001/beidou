@@ -14,6 +14,10 @@
    observed differences(引擎 system/exchange 快照的仓位差 + 余额差行)对拍
 - 不真实下单;notional 记账 0;dry_run 早退不碰 PG;run() 自捕获异常返回 FAIL;
   任何路径(finally)都恢复原始基线。
+- 基线 journal:污染前先写 g5_journal 记录(original_payload + corrupted_at),
+  还原成功后删除。进程在污染窗口内被硬杀(SIGKILL/OOM/断电)后留下搁浅
+  journal —— 下次运行启动时先自愈还原基线再进入流程;launcher preflight
+  检测到搁浅 journal 时 P0 阻断启动(只检测不修复,修复由场景自愈)。
 """
 
 from __future__ import annotations
@@ -47,6 +51,12 @@ _BASELINE_RECORD_TYPE = "account_opening_projection"
 _BASELINE_RECORD_ID = "default:BINANCE"
 _CORRUPTED_BALANCE = "1"
 
+# 基线污染 journal:写坏基线前先记录 original_payload,还原成功后删除;
+# 进程在污染窗口内被硬杀时凭它自愈还原(preflight 亦检测其搁浅,见
+# beidou_launcher/preflight.py::_g5_journal_check)。
+_JOURNAL_RECORD_TYPE = "g5_journal"
+_JOURNAL_RECORD_ID = "reconciliation_mismatch:baseline"
+
 # 引擎对账周期实测 ~32s(2026-08-17 06:09:11 → 06:09:43 MATCHED 事件间隔);
 # 等待窗口按计划:≥35s 后开始轮询(覆盖一轮周期),60s 未观察到 MISMATCHED
 # → NOT_VERIFIABLE;恢复后再轮询 ≤60s 断言 MATCHED。
@@ -63,6 +73,7 @@ _UPSERT_SQL = (
     "payload=excluded.payload,updated_at=excluded.updated_at"
 )
 _BASELINE_READ_SQL = "SELECT payload::text FROM v3_runtime_records WHERE record_type=%s AND record_id=%s"
+_DELETE_RECORD_SQL = "DELETE FROM v3_runtime_records WHERE record_type=%s AND record_id=%s"
 _RECON_EVENT_SQL = (
     "SELECT event_id,payload::text,occurred_at FROM v3_runtime_events "
     "WHERE record_type=%s AND occurred_at>=%s "
@@ -115,6 +126,21 @@ def _upsert_record(conn: Any, record_type: str, record_id: str, payload: dict[st
             _UPSERT_SQL,
             (record_type, record_id, json.dumps(payload, ensure_ascii=False, default=str)),
         )
+
+
+def _delete_record(conn: Any, record_type: str, record_id: str) -> None:
+    """删除记录(SQL DELETE,与 _upsert_record 同风格;journal 还原成功后清理,幂等)。"""
+    with conn.transaction():
+        conn.execute(_DELETE_RECORD_SQL, (record_type, record_id))
+
+
+def _recover_from_journal(journal_row: dict[str, Any]) -> dict[str, Any]:
+    """从搁浅 journal 还原原始基线 payload (纯函数, 便于测试)。"""
+    payload = journal_row.get("payload", journal_row) if isinstance(journal_row, dict) else {}
+    original = payload.get("original_payload")
+    if not isinstance(original, dict):
+        raise RuntimeError("JOURNAL_PAYLOAD_MISSING: g5_journal 缺少 original_payload")
+    return original
 
 
 def _latest_reconciliation_event(conn: Any, *, after: str) -> dict[str, Any] | None:
@@ -261,6 +287,25 @@ class ReconciliationMismatchScenario(ScenarioBase):
         steps: list[dict[str, Any]],
         started: float,
     ) -> ScenarioResult:
+        # 污染前先写 journal:进程在污染窗口内被硬杀(SIGKILL/OOM/断电)后,
+        # 下次运行凭 journal 的 original_payload 自愈还原基线;还原成功后
+        # 删除(见下文 restore_verify 之后),否则每次启动都会重复还原。
+        t_corrupt = self._now()
+        scenario_run_id = str(self._now())
+        _upsert_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID, {
+            "original_payload": dict(original_payload),
+            "corrupted_at": _iso_from(t_corrupt),
+            "scenario_run_id": scenario_run_id,
+        })
+        steps.append(
+            {
+                "action": "journal_written",
+                "record_type": _JOURNAL_RECORD_TYPE,
+                "record_id": _JOURNAL_RECORD_ID,
+                "corrupted_at": _iso_from(t_corrupt),
+                "scenario_run_id": scenario_run_id,
+            }
+        )
         corrupted = dict(original_payload)
         corrupted["balance_amount"] = _CORRUPTED_BALANCE
         positions_untouched = position_diff(
@@ -278,7 +323,6 @@ class ReconciliationMismatchScenario(ScenarioBase):
             }
         )
         _upsert_record(conn, _BASELINE_RECORD_TYPE, _BASELINE_RECORD_ID, corrupted)
-        t_corrupt = self._now()
         mismatch_event = await self._poll_for_status(
             conn,
             after=_iso_from(t_corrupt),
@@ -359,6 +403,10 @@ class ReconciliationMismatchScenario(ScenarioBase):
                 ),
             }
         )
+        if restored_ok:
+            # 还原成功后 journal 必删:否则下次启动会把已还原的基线再自愈还原一遍
+            _delete_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
+            steps.append({"action": "journal_deleted", "ok": True})
         return ScenarioResult(
             self.scenario_id,
             ScenarioStatus.PASS if restored_ok else ScenarioStatus.FAIL,
@@ -376,6 +424,10 @@ class ReconciliationMismatchScenario(ScenarioBase):
         steps: list[dict[str, Any]] = []
         conn: Any = None
         original_payload: dict[str, Any] | None = None
+        # 本运行是否已确证 journal 与 original_payload 一致(为 True 时 finally
+        # 兜底还原成功后可以安全删除 journal;为 False 时宁可留存 journal 让
+        # preflight P0 阻断,也不删了 journal 却留下被污染的基线)。
+        journal_resolved = False
         try:
             ctx.ledger.record(self.scenario_id, 0.0)
             if ctx.dry_run:
@@ -401,13 +453,34 @@ class ReconciliationMismatchScenario(ScenarioBase):
                     "positions": {str(k): str(v) for k, v in dict(original_payload.get("positions", {})).items()},
                 }
             )
+            # 搁浅 journal 自愈:上次运行在污染窗口内被硬杀 → 基线可能仍是
+            # 哨兵值 "1";先还原 journal 内的 original_payload 并删除 journal,
+            # 后续流程必须以还原后的真基线为 original(否则会把哨兵基线当
+            # 原始值,结束时把污染再写回去)。
+            journal_row = _read_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
+            journal_resolved = journal_row is None
+            if journal_row is not None:
+                stranded = _recover_from_journal(journal_row)
+                _upsert_record(conn, _BASELINE_RECORD_TYPE, _BASELINE_RECORD_ID, stranded)
+                _delete_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
+                original_payload = stranded
+                journal_resolved = True
+                steps.append(
+                    {
+                        "action": "recovered_stranded_journal",
+                        "hash": _payload_hash(stranded),
+                    }
+                )
             return await self._execute_flow(conn, original_payload, steps, started)
         except NotionalExceededError:
             raise  # 名义超限交给 runner fail-fast(资金保护优先)
         except Exception as exc:
             return self._fail(ScenarioStatus.FAIL, type(exc).__name__, str(exc)[:300], {"steps": steps})
         finally:
-            # 任何路径都必须恢复原始基线(finally 兜底;恢复后幂等 UPSERT 无副作用)
+            # 任何路径都必须恢复原始基线(finally 兜底;恢复后幂等 UPSERT 无副作用)。
+            # journal 只在基线被确证还原(且与 journal 一致)后删除 —— 任何路径
+            # 最终要么「成功还原 + journal 已删」,要么「journal 留存待下次自愈 /
+            # preflight P0 阻断」,绝不删了 journal 却留下被污染的基线。
             if conn is not None and original_payload is not None:
                 try:
                     _upsert_record(conn, _BASELINE_RECORD_TYPE, _BASELINE_RECORD_ID, original_payload)
@@ -420,6 +493,15 @@ class ReconciliationMismatchScenario(ScenarioBase):
                             "hash": _payload_hash(original_payload),
                         }
                     )
+                    if restored_ok and journal_resolved:
+                        try:
+                            if _read_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID) is not None:
+                                _delete_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
+                                steps.append({"action": "journal_deleted_finally", "ok": True})
+                        except Exception as exc:
+                            steps.append(
+                                {"action": "journal_deleted_finally", "ok": False, "error": str(exc)[:200]}
+                            )
                 except Exception as exc:
                     steps.append({"action": "restore_baseline_finally", "ok": False, "error": str(exc)[:200]})
                 finally:
