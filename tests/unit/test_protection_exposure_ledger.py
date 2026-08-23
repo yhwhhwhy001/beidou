@@ -131,3 +131,45 @@ def test_projection_zero_clears_exposure() -> None:
     # 完全平仓: 数量归零 (short 0.0008 被 BUY 0.0008 平掉)。
     engine._update_position_projection("BTCUSDT", "BUY", delta_qty=0.0008, price=60000, source_event_id="evt-1")
     assert engine._store._get_record("protection_exposure", "exposure:BTCUSDT") is None
+
+
+def test_gap_refresh_without_increment_keeps_attempts_and_since() -> None:
+    """R9: 纯卡死缺口刷新 — increment=False 创建 attempts=1, 刷新不膨胀、
+    since 不重置 (保留原始裸露起点), last_reason 仅在值不同时更新。"""
+    engine = _engine()
+    first = engine._persist_protection_exposure(
+        "BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED", now=time.time, increment=False
+    )
+    assert first["attempts"] == 1
+    since = first["unprotectable_since"]
+    # 30s 后同 reason 刷新: attempts 仍 1, since 不重置
+    later = engine._persist_protection_exposure(
+        "BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED",
+        now=lambda: time.time() + 30, increment=False,
+    )
+    assert later["attempts"] == 1
+    assert later["unprotectable_since"] == since
+    assert later["last_reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
+    # reason 变化 → 更新 last_reason, 但 attempts/since 仍不动
+    changed = engine._persist_protection_exposure(
+        "BTCUSDT", "VENUE_POSITION_QUANTITY_UNKNOWN",
+        now=lambda: time.time() + 60, increment=False,
+    )
+    assert changed["attempts"] == 1
+    assert changed["unprotectable_since"] == since
+    assert changed["last_reason"] == "VENUE_POSITION_QUANTITY_UNKNOWN"
+
+
+def test_e2_increment_true_unchanged_after_gap_records() -> None:
+    """R9: E2 路径 increment=True 行为不变 — gap 记录之上继续累计连击确认,
+    并以 SL_UNPROTECTABLE 覆盖 reason (E3 随即交接 E2, 语义闭环)。"""
+    engine = _engine()
+    engine._persist_protection_exposure(
+        "BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED", now=time.time, increment=False
+    )
+    rec = engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=time.time)
+    assert rec["attempts"] == 2
+    assert rec["last_reason"] == "SL_UNPROTECTABLE"
+    # E2 再次确认 → attempts 继续累计 (既有 3 连确认语义不变)
+    rec2 = engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=time.time)
+    assert rec2["attempts"] == 3

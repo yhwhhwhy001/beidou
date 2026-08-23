@@ -4287,6 +4287,21 @@ class AutonomousEngine:
                 for g in (_evidence.get("unprotected_symbols") or [])
             ][:6]
             self._last_protection_gap_detail = list(_gap_detail)
+            # R9: 纯卡死记录 —— 覆盖缺口即裸露, 每轮评估落 exposure 记录
+            # (reason=gap reason, increment=False: attempts 不膨胀、since
+            # 保留原始裸露起点), 供 3c stuck 告警与 4-E3 慢引信消费。
+            # 显式拒绝仍由 E2 以 SL_UNPROTECTABLE 覆盖, 语义不冲突。
+            # 不与该分支 60s 限频打印耦合 —— 持久化每轮评估都要做。
+            for _g in _gap_detail:
+                _g_sym = str(_g.get("symbol", "")).strip()
+                if not _g_sym:
+                    continue
+                self._persist_protection_exposure(
+                    _g_sym,
+                    str(_g.get("reason", "")),
+                    now=time.time,
+                    increment=False,
+                )
             # BD-FIX: 非 clean 必须可见 —— 旧实现静默置 UNKNOWN,资格门
             # 钉死数十分钟也毫无线索(实测 NEAR 平仓后 22 连拒)。限频
             # 打印覆盖缺口与问题清单,定位是哪一类事实在阻止放行。
@@ -9889,12 +9904,18 @@ class AutonomousEngine:
         reason: str,
         *,
         now: Any = None,
+        increment: bool = True,
     ) -> dict[str, Any]:
         """持久化"保护无法建立"裸露时钟 (重启不清除)。
 
         与内存态连击计数不同, 该记录是 3c stuck 告警与 4-E3 慢引信的
         唯一真相源。position_generation 变化时重新起算 —— 旧仓的账
         不得杀新仓。
+
+        increment=False (覆盖缺口刷新路径, R9): attempts 仅在创建时=1,
+        刷新不膨胀 (attempts 计数专属于 E2 连击确认语义); unprotectable_since
+        刷新不重置 (保留原始裸露起点); last_reason 仅在值不同时更新。
+        E2 路径 (increment=True) 行为不变: 每次调用累计一次确认。
         """
         import time as _time
         _clock = now if callable(now) else _time.time
@@ -9924,12 +9945,19 @@ class AutonomousEngine:
         if old and int(old.get("position_generation", 0) or 0) != _gen:
             self._clear_protection_exposure(symbol)
             old = None
-        attempts = int((old or {}).get("attempts", 0)) + 1 if old else 1
+        if old is None:
+            attempts = 1
+        elif increment:
+            attempts = int(old.get("attempts", 0)) + 1
+        else:
+            attempts = int(old.get("attempts", 0)) or 1
+        _old_reason = str((old or {}).get("last_reason", "") or "")
+        _new_reason = str(reason)[:120]
         payload = {
             "symbol": symbol,
             "position_generation": _gen,
             "unprotectable_since": (old or {}).get("unprotectable_since", _ts),
-            "last_reason": str(reason)[:120],
+            "last_reason": _new_reason if _new_reason != _old_reason else _old_reason,
             "attempts": attempts,
         }
         _write = getattr(_store, "_write_record", None)
