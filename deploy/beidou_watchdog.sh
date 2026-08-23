@@ -114,11 +114,19 @@ if [ -f "$STUCK_FILE" ]; then
       last_alert_ts=0
       [ -f "$STATE_DIR/stuck_last_alert" ] && last_alert_ts=$(stat -f %m "$STATE_DIR/stuck_last_alert" 2>/dev/null || echo 0)
       if [ $(( now - last_alert_ts )) -ge 1800 ]; then
-        log "FROZEN 卡死标记超 30 分钟未刷新 (引擎循环疑似停止), 发起 kickstart"
+        log "FROZEN 卡死标记超 30 分钟未刷新 (引擎循环疑似停止), 发起 kickstart -k"
         notify "北斗引擎疑似冻结" "卡死标记超过 30 分钟未刷新, 引擎循环可能已停; watchdog 将尝试重启"
         touch "$STATE_DIR/stuck_last_alert"
-        if launchctl kickstart "$SERVICE" >>"$LOG_FILE" 2>&1; then
-          log "FROZEN kickstart 成功"
+        # 必须带 -k: 冻结分支的前提是"进程活着", launchd 对已在运行的 job
+        # 会忽略不带 -k 的 start 消息 (exit 0) —— 裸 kickstart 在这里是
+        # no-op, 会每 30 分钟记一条假的 "FROZEN kickstart 成功" 却永不
+        # 重启。-k 的误杀风险可接受: 标记 mtime 过期 >1800s 意味着引擎近
+        # 30 分钟没刷新标记, 而健康引擎每近线 tick (≤30s) 必刷新 ——
+        # 阈值本身已排除"忙但健康"的情形, 无需收紧。
+        # 主重启路径 (line ~210) 的裸 kickstart 保持不动: 那里 pgrep 已
+        # 失败、job 未运行, 不带 -k 语义正确。
+        if launchctl kickstart -k "$SERVICE" >>"$LOG_FILE" 2>&1; then
+          log "FROZEN kickstart -k 成功"
         else
           log "ERROR 冻结恢复 kickstart 失败"
         fi
