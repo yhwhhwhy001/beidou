@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  北斗引擎看守进程 (watchdog) 的 launchd 定义。
+
+  安装:
+    cp deploy/com.beidou.watchdog.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.beidou.watchdog.plist
+
+  与 com.beidou.autopilot 的分工: autopilot 的 wrapper 将 supervisor 的
+  LOCKED (exit 5) 映射为 exit 0, 使 launchd 的 KeepAlive={SuccessfulExit:false}
+  不再拉起 —— 这是阻止"拉起→立刻 LOCKED→再拉起"循环的有意设计 (M00-F07-R2)。
+  本看守进程在其之外承担熔断判断: 有限次自动重启 + 本机告警, 因此不需要
+  (也不应) 修改 wrapper 的退出码语义。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.beidou.watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/maguannan/beidou/deploy/beidou_watchdog.sh</string>
+    </array>
+
+    <!-- 每 60 秒执行一次巡检后退出。刻意不使用 KeepAlive:
+         StartInterval 模式下脚本正常退出即完成一次巡检,
+         若配 KeepAlive 会导致其被无限重启。 -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 日志写到仓库之外: 既避免污染 git 树 (会阻断引擎启动预检),
+         也避开 macOS TCC 保护目录 (~/Documents 等会导致 exit 126)。 -->
+    <key>StandardOutPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou-watchdog/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou-watchdog/stderr.log</string>
+</dict>
+</plist>
