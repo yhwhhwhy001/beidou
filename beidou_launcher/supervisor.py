@@ -78,9 +78,25 @@ def summarize_blockers(blockers: list) -> str:
     """
     if not blockers:
         return "(none)"
+    # 可观测性修复: incidents 检查的 message 是事故列表的 repr,
+    # 旧逻辑取列表首项 —— 首项常是 WARNING 级非阻断事故, 导致
+    # 14/19 次 LOCKED 的真实致死原因被 message[:80] 截断吞掉。
+    # 改为优先展示 severity 最高的那条 (CRITICAL/HIGH 才是阻断源)。
+    # R7: 展示文本只在分组循环内局部计算 (作分组键), 绝不改写输入对象
+    # —— LOCKED 快照与 supervisor-state.json 的 message 保持原始完整内容。
+    _PRIORITY = {"LOCKDOWN": 4, "CRITICAL": 3, "P0": 3, "HIGH": 2, "P1": 2, "WARNING": 1, "P2": 0}
     groups: dict[tuple[str, str], list] = {}
     for item in blockers:
-        groups.setdefault((item.check_id, item.message), []).append(item)
+        display = item.message
+        if str(getattr(item, "check_id", "")) == "runtime.health.incidents":
+            incs = ((item.evidence or {}).get("incidents") or []) if isinstance(getattr(item, "evidence", None), dict) else []
+            if incs:
+                inc = max(incs, key=lambda i: _PRIORITY.get(str(i.get("severity", "")).upper(), 0))
+                display = (
+                    f"活动事故(首列最高级): [{inc.get('severity')}] {inc.get('title')} "
+                    f"{str(inc.get('description', ''))[:120]}"
+                )
+        groups.setdefault((item.check_id, display), []).append(item)
     parts: list[str] = []
     for (check_id, message), items in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0][0])):
         entity_ids = sorted({str((item.evidence or {}).get("entity_id", "")) for item in items} - {""})
@@ -88,6 +104,29 @@ def summarize_blockers(blockers: list) -> str:
         parts.append(f"{check_id}(×{len(items)}){entity_part}: {message[:80]}")
     text = "; ".join(parts)
     return text if len(text) <= 400 else text[:397] + "..."
+
+
+def _write_locked_snapshot(
+    blockers: list[CheckResult],
+    *,
+    base_dir: Path | None = None,
+    now: float | None = None,
+) -> Path:
+    """LOCKED 时落未截断的完整阻断快照, 修复根因不可恢复问题。"""
+    import json as _json
+    import time as _time
+    ts = now if now is not None else _time.time()
+    base = Path(base_dir) if base_dir is not None else (
+        Path(os.environ.get("BEIDOU_LOCKED_SNAPSHOT_DIR", "evidence"))
+    )
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"locked-{ts:.0f}.json"
+    payload = {
+        "locked_at": ts,
+        "blockers": [b.to_dict() for b in blockers],
+    }
+    path.write_text(_json.dumps(payload, ensure_ascii=False, indent=2))
+    return path
 
 
 def _apply_g5_dev_exemption(checks: list[CheckResult], mode: str, exempt: bool) -> list[CheckResult]:
@@ -1055,6 +1094,12 @@ class BeidouSupervisor:
                 )
                 self.report.supervisor_state = "LOCKED"
                 self._last_blocker_fingerprint = summarize_blockers(persistent_blockers)
+                # 快照写入非致命: OSError (磁盘满/目录只读) 不得中断 LOCKED
+                # 转移 —— 否则 _send_supervisor_alert 永不执行, 终态告警静默丢失。
+                try:
+                    _write_locked_snapshot(persistent_blockers)  # 新增
+                except Exception as exc:
+                    logger.warning("LOCKED 快照写入失败 (不阻断终态转移): %s", exc)
                 self._send_supervisor_alert("LOCKED", persistent_blockers)
         elif debounce_action == "DEGRADED":
             # PKG02 (BDS-P0-001): 所有环境统一降级行为。

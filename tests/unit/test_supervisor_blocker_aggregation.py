@@ -16,6 +16,7 @@ HIGH 告警 → 日志与 webhook 风暴（P0-19）。
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -166,6 +167,90 @@ async def test_new_blocker_type_during_degraded_triggers_alert(tmp_path: Path) -
     await supervisor._apply_debounce_action("DEGRADED", new_blockers, has_persistent=True)
     assert len(alerts.sent) == 2
     assert "reconciliation" in alerts.sent[-1][2]
+
+
+def test_incidents_summary_prefers_critical_over_first_item() -> None:
+    from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
+    from beidou_launcher.supervisor import summarize_blockers
+    blocker = CheckResult(
+        check_id="runtime.health.incidents", name="活动事故",
+        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        message="活动事故",
+        evidence={"incidents": [
+            {"incident_id": "inc-1-realtime", "severity": "WARNING",
+             "title": "Realtime tick error", "status": "DETECTED"},
+            {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
+             "title": "Reconciliation blocked", "status": "DETECTED"},
+        ]},
+    )
+    text = summarize_blockers([blocker])
+    assert "CRITICAL" in text
+    assert "Reconciliation blocked" in text
+    # 首项 WARNING 不得再占据摘要主体
+    assert "Realtime tick error" not in text
+
+
+def test_incidents_summary_does_not_rewrite_blocker_message() -> None:
+    """R7: 摘要展示文本仅作局部分组键, 不得改写 blocker 原始 message
+    (supervisor-state.json 与 LOCKED 快照依赖原始完整内容)。"""
+    from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
+    from beidou_launcher.supervisor import summarize_blockers
+    incidents = [
+        {"incident_id": "inc-1-realtime", "severity": "WARNING",
+         "title": "Realtime tick error", "status": "DETECTED"},
+        {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
+         "title": "Reconciliation blocked", "status": "DETECTED"},
+    ]
+    original_message = f"活动事故: {incidents}"
+    blocker = CheckResult(
+        check_id="runtime.health.incidents", name="活动事故",
+        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        message=original_message,
+        evidence={"incidents": incidents},
+    )
+    summarize_blockers([blocker])
+    assert blocker.message == original_message  # 未被就地改写
+
+
+@pytest.mark.asyncio
+async def test_locked_snapshot_failure_does_not_interrupt_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7-Important1: 快照写入失败 (目录被文件占位 → OSError) 不得中断
+    LOCKED 转移 —— 状态仍置 LOCKED, 终态告警仍发出。"""
+    blocked_dir = tmp_path / "not-a-dir"
+    blocked_dir.write_text("occupied by a file")
+    monkeypatch.setenv("BEIDOU_LOCKED_SNAPSHOT_DIR", str(blocked_dir))
+    supervisor, alerts, _control = _supervisor_with_fake_engine(tmp_path)
+    blockers = _protection_blockers(2)
+    await supervisor._apply_debounce_action("LOCKED", blockers, has_persistent=True)
+    assert supervisor.report.supervisor_state == "LOCKED"
+    assert len(alerts.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_locked_snapshot_keeps_original_blocker_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7-Important2: LOCKED 快照保存原始完整 message (事故 repr), 而非截断合成摘要。"""
+    monkeypatch.setenv("BEIDOU_LOCKED_SNAPSHOT_DIR", str(tmp_path))
+    supervisor, alerts, _control = _supervisor_with_fake_engine(tmp_path)
+    incidents = [
+        {"incident_id": "inc-1-realtime", "severity": "WARNING",
+         "title": "Realtime tick error", "status": "DETECTED"},
+        {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
+         "title": "Reconciliation blocked", "status": "DETECTED",
+         "description": "Balance mismatch: system=1 exchange=10736.5 "
+                        "diff=10735.5 tolerance=107.36"},
+    ]
+    original_message = f"活动事故: {incidents}"
+    blocker = CheckResult(
+        check_id="runtime.health.incidents", name="活动事故",
+        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        message=original_message,
+        evidence={"incidents": incidents},
+    )
+    await supervisor._apply_debounce_action("LOCKED", [blocker], has_persistent=True)
+    snapshots = sorted(tmp_path.glob("locked-*.json"))
+    assert len(snapshots) == 1
+    payload = json.loads(snapshots[0].read_text())
+    assert payload["blockers"][0]["message"] == original_message
 
 
 def test_supervisor_debounce_window_supports_lock_after(tmp_path: Path) -> None:
