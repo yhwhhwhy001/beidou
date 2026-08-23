@@ -75,3 +75,5 @@ artifacts/factor_pnl_report/
 # Runtime-written LOCKED snapshots (P3) must not dirty the git tree
 # -- preflight git_worktree P0 would then refuse engine start
 evidence/locked-*.json
+evidence/beidou_alerts.jsonl
+evidence/beidou_alerts.jsonl.delivery.jsonl
