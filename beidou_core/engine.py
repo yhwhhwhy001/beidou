@@ -157,18 +157,47 @@ _log_format = logging.Formatter(
     "%(asctime)s.%(msecs)03d [%(levelname)-7s] %(name)s - %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-# BD-FIX (log isolation): 模块级 FileHandler 会被所有导入本模块的进程共享
-# (包括 pytest)——测试进程的 fixture 告警混入线上 evidence 日志,曾把
-# 'pos-a'/'pos-b' 等测试投影误判为线上歧义。路径可由环境变量覆盖,
-# conftest 将测试日志重定向到临时文件。
-_log_path = os.environ.get("BEIDOU_ENGINE_LOG", "evidence/beidou_engine.log")
-_log_handler = logging.FileHandler(_log_path)
-_log_handler.setFormatter(_log_format)
-_log_handler.setLevel(logging.INFO)
-logger.addHandler(_log_handler)
+# BD-FIX (log isolation, 2026-08-24): 原实现在模块级直接创建 FileHandler,
+# 于是**任何** import beidou_core.engine 的进程都会打开并写入
+# evidence/beidou_engine.log —— pytest、运维/诊断脚本、REPL 皆然。后果是
+# 该文件无法反映引擎进程的真实生命周期: 实测一个只做只读查询的诊断脚本
+# 在单分钟内写入 2825 行, 致使按日志时间戳推算的运行/停机时长完全失真,
+# 也曾把 'pos-a'/'pos-b' 等测试投影误判为线上歧义。
+# 靠环境变量逐个场景重定向 (conftest 即如此) 属打补丁: 每个新场景都得记得
+# 设置, 迟早遗漏。现改为显式装配 —— 导入不再有写文件副作用, 只有确实要
+# 运行引擎的进程调用 attach_engine_file_log()。
+_ENGINE_LOG_DEFAULT = "evidence/beidou_engine.log"
+_log_handler: logging.Handler | None = None
+
 logger.setLevel(logging.INFO)
 # 避免重复日志
 logger.propagate = False
+
+
+def attach_engine_file_log(path: str | None = None) -> logging.Handler | None:
+    """为引擎进程装配文件日志 handler (幂等)。
+
+    仅应由真正运行引擎的入口调用 (beidou_launcher.cli 的 start 路径)。
+    导入本模块的旁路进程不调用, 因而不会污染引擎日志。
+    路径优先级: 显式参数 > BEIDOU_ENGINE_LOG 环境变量 > 默认 evidence 路径。
+    """
+    global _log_handler
+    if _log_handler is not None:
+        return _log_handler
+    target = path or os.environ.get("BEIDOU_ENGINE_LOG") or _ENGINE_LOG_DEFAULT
+    try:
+        parent = os.path.dirname(target)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        handler = logging.FileHandler(target)
+    except OSError:
+        # 日志装配失败不得阻断引擎启动; stdout 仍由 launchd 捕获。
+        return None
+    handler.setFormatter(_log_format)
+    handler.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    _log_handler = handler
+    return handler
 
 
 def _validate_params_positive(value: Any, *, name: str, max_value: float | None = None) -> bool:

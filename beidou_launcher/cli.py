@@ -118,6 +118,15 @@ def main(
 
     os.chdir(root)
     os.environ["BEIDOU_ENV"] = mode
+
+    # 引擎文件日志装配点。beidou_core.engine 不再在模块导入时创建
+    # FileHandler —— 否则任何导入它的旁路进程 (pytest/运维脚本/REPL) 都会
+    # 写入 evidence/beidou_engine.log, 使其无法反映引擎进程的真实生命周期。
+    # 必须在 chdir 之后调用, 相对路径 evidence/ 才解析到项目根。
+    from beidou_core.engine import attach_engine_file_log
+
+    attach_engine_file_log()
+
     parsed_symbols = _parse_symbols(symbols)
     if not parsed_symbols:
         raise click.ClickException("必须显式提供 --symbols；固定 DEFAULT/ALL 交易池已禁用")
