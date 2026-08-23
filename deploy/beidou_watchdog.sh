@@ -55,17 +55,14 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG_FILE"; }
 #   通知中心 (display notification) 在本机不可达 —— macOS 26.7 下 launchd
 #   后台进程没有授权入口, osascript 返回成功但通知从不出现, 属静默失败,
 #   曾据此误以为告警已接通。改用:
-#     say            —— 立即引起注意, 无需任何权限
 #     display dialog —— 持久停留直至点击, 人不在场时回来仍能看到
-#   两者均已验证在 launchd 后台上下文可用。
+#   已验证在 launchd 后台上下文可用。语音播报 (say) 曾一并使用, 应用户
+#   要求移除 —— 弹窗本身已足够且不打扰。
 # 必须异步: display dialog 会阻塞至用户点击, 而本脚本由 StartInterval=60
 # 周期调度, 阻塞将导致巡检实例重叠。子 shell 在父进程退出后独立存活 (已验证)。
 notify() {
-  local title="$1" msg="$2" speech="${3:-北斗引擎异常}"
-  (
-    say -v Ting-Ting "$speech" 2>/dev/null
-    osascript -e "display dialog \"${msg//\"/\\\"}\" with title \"${title//\"/\\\"}\" buttons {\"知道了\"} default button 1 with icon caution giving up after 1800" >/dev/null 2>&1
-  ) &
+  local title="$1" msg="$2"
+  osascript -e "display dialog \"${msg//\"/\\\"}\" with title \"${title//\"/\\\"}\" buttons {\"知道了\"} default button 1 with icon caution giving up after 1800" >/dev/null 2>&1 &
 }
 
 fail_count=0
@@ -123,7 +120,7 @@ fi
 # 开发者改代码期间无需任何手工操作, 提交后自动恢复看守。
 if [ ! -f "$REPO/beidou_launcher/preflight.py" ]; then
   log "ERROR 仓库路径校验失败: $REPO 不是北斗仓库 —— 看守无法判断可启动性, 跳过重启"
-  notify "北斗看守配置异常" "仓库路径解析为 ${REPO} —— 非北斗仓库；自动重启已停用，需人工检查 watchdog 安装位置" "北斗看守配置异常，自动重启已停用"
+  notify "北斗看守配置异常" "仓库路径解析为 ${REPO} —— 非北斗仓库；自动重启已停用，需人工检查 watchdog 安装位置"
   exit 0
 fi
 if ! dirty=$(git -C "$REPO" status --porcelain 2>/dev/null); then
@@ -134,7 +131,7 @@ if [ -n "$dirty" ]; then
   n=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
   log "SKIP 工作区有 $n 项未提交变更, 引擎预检会拒绝启动, 跳过自动重启 (不计入熔断)"
   if [ $(( (now - down_since) % 1800 )) -lt 60 ]; then
-    notify "北斗引擎停机（源码未提交）" "工作区有 $n 项未提交变更，引擎预检会拒绝启动，已跳过自动重启；提交后自动恢复" "北斗引擎停机，源码有未提交变更，已跳过自动重启"
+    notify "北斗引擎停机（源码未提交）" "工作区有 $n 项未提交变更，引擎预检会拒绝启动，已跳过自动重启；提交后自动恢复"
   fi
   exit 0
 fi
@@ -143,7 +140,7 @@ if [ "$fail_count" -ge "$MAX_FAILS" ]; then
   # 熔断态: 每 30 分钟提醒一次, 避免通知轰炸
   if [ $(( (now - down_since) % 1800 )) -lt 60 ]; then
     log "HALT 熔断中 (连续 $fail_count 次重启后仍无法存活), 已停机 $(( (now - down_since) / 60 )) 分钟"
-    notify "北斗引擎停机（熔断）" "连续 $fail_count 次自动重启均未稳定运行，已停止自动重启，需人工处置" "北斗引擎停机，自动重启已熔断，需要人工处理"
+    notify "北斗引擎停机（熔断）" "连续 $fail_count 次自动重启均未稳定运行，已停止自动重启，需人工处置"
   fi
   exit 0
 fi
@@ -164,8 +161,8 @@ last_restart=$now
 save_state
 log "RESTART kickstart $SERVICE (第 $fail_count/$MAX_FAILS 次)"
 if launchctl kickstart "$SERVICE" >>"$LOG_FILE" 2>&1; then
-  notify "北斗引擎已自动重启" "检测到停机，已发起第 $fail_count/$MAX_FAILS 次自动重启" "北斗引擎已自动重启"
+  notify "北斗引擎已自动重启" "检测到停机，已发起第 $fail_count/$MAX_FAILS 次自动重启"
 else
   log "ERROR kickstart 返回非零"
-  notify "北斗引擎重启失败" "kickstart 执行失败，需人工检查" "北斗引擎重启失败，需要人工检查"
+  notify "北斗引擎重启失败" "kickstart 执行失败，需人工检查"
 fi
