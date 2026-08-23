@@ -9947,6 +9947,85 @@ class AutonomousEngine:
             with contextlib.suppress(Exception):
                 _delete("protection_exposure", f"exposure:{symbol}")
 
+    async def _run_slow_fuse(self, *, now: float | None = None, env: Any = None) -> int:
+        """4-E3 慢引信: 纯卡死(无显式拒绝)≥7200s → 逐品种紧急平仓。
+
+        - 显式拒绝 (last_reason=SL_UNPROTECTABLE) 已由 E2 快路径处置, 此处跳过
+        - testnet 默认开启; live/canary 默认关闭且不得被默认值绕过 (spec D-6)
+        - 每品种独立判定, 绝不使用账户级 EMERGENCY_FLATTEN (spec D-7)
+        - 平仓前后各发一次告警
+        """
+        import os as _os
+        import time as _time
+        _ts = now if now is not None else _time.time()
+        _env = env if env is not None else _os.environ
+        _mode = str(getattr(getattr(self, "_env_mode", None), "value", "") or "")
+        enabled = (
+            _mode == "testnet"
+            or str(_env.get("BEIDOU_NAKED_POSITION_AUTOCLOSE", "")) == "1"
+        )
+        if not enabled:
+            return 0
+        _store = getattr(self, "_store", None)
+        rows: list[dict] = []
+        _records = getattr(_store, "_records", None)
+        if _store is None or not callable(_records):
+            return 0
+        try:
+            raw = _records("protection_exposure")
+            rows = [dict(r.get("payload") if isinstance(r, dict) and "payload" in r else r) for r in raw]
+        except Exception:
+            return 0
+        fired = 0
+        for r in rows:
+            age = _ts - float(r.get("unprotectable_since", 0.0) or 0.0)
+            if age < 7200.0:
+                continue
+            if str(r.get("last_reason", "")) == "SL_UNPROTECTABLE":
+                continue  # E2 快路径负责
+            symbol = str(r.get("symbol", ""))
+            _alerts = getattr(self, "_alerts", None)
+            if _alerts is not None:
+                with contextlib.suppress(Exception):
+                    _alerts.send_incident(
+                        AlertSeverity.CRITICAL,
+                        "Naked position slow-fuse armed",
+                        f"{symbol} 裸露 {age:.0f}s, 即将自动平仓",
+                        category="protection",
+                    )
+            # _maybe_emergency_close_unprotectable 内部会读 pp.side 判方向、
+            # pp.quantity 做回退 —— 传最小替身而非 None (投影优先, 替身只兜底):
+            # 方向由 _position_projection 的 signed_quantity 符号派生。
+            _proj = getattr(self, "_position_projection", {}).get(symbol, {}) or {}
+            try:
+                _signed = float(_proj.get("signed_quantity", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                _signed = 0.0
+            if _signed == 0.0:
+                continue
+            _pp = SimpleNamespace(
+                side=OrderSide.SELL if _signed > 0 else OrderSide.BUY,
+                quantity=abs(_signed),
+            )
+            try:
+                ok = await self._maybe_emergency_close_unprotectable(
+                    f"slow-fuse-{symbol}", symbol, _pp,
+                    now=lambda: _ts,
+                )
+            except Exception:
+                ok = False
+            if ok:
+                fired += 1
+                if _alerts is not None:
+                    with contextlib.suppress(Exception):
+                        _alerts.send_incident(
+                            AlertSeverity.CRITICAL,
+                            "Naked position auto-closed by slow fuse",
+                            f"{symbol} 裸露超过 7200s, 已发起逐品种平仓",
+                            category="protection",
+                        )
+        return fired
+
     def _update_stuck_marker(
         self,
         *,
@@ -12660,6 +12739,11 @@ class AutonomousEngine:
         except Exception as e:
             self._error_count += 1
             print(f"[nearline] ERROR: {e}")
+
+        # Task 7 (4-E3): 慢引信 —— 纯卡死(无显式拒绝)≥7200s 逐品种紧急平仓。
+        # 告警/执行失败均不阻断本轮近线周期 (fail-closed 到下一轮重试)。
+        with contextlib.suppress(Exception):
+            await self._run_slow_fuse()
 
     async def _sync_exchange_state(self) -> None:
         """近线后全量对账自愈：补齐遗漏的成交追踪，重建保护单。
