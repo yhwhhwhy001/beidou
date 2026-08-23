@@ -690,6 +690,34 @@ def collect_runtime_checks(
         )
     )
 
+    # gap reason 贯通 (可观测性修复): 保护缺口明细单独成检查, 供 supervisor
+    # A/B 分流区分"引擎可修复的覆盖缺口"与"真故障"。有缺口时必须是 FAIL
+    # 而非 WARN —— supervisor 只把 FAIL/UNKNOWN 的 P0/P1 检查收进 blockers
+    # 列表并进入防抖;WARN 永远进不了 blockers, 分流机制会静默失效。
+    # severity 保持 P1 (报告型证据; 资格门已由 protection 覆盖检查另行阻断)。
+    _gap_detail = getattr(engine, "_last_protection_gap_detail", None) or []
+    _repairable = (
+        bool(_gap_detail)
+        and all(
+            str(g.get("reason", ""))
+            in {"STOP_LOSS_QUANTITY_UNCOVERED", "MISSING_SL", "MISSING_TP",
+                "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
+            for g in _gap_detail
+        )
+    )
+    checks.append(
+        CheckResult(
+            check_id="runtime.safety.protection_gap_detail",
+            name="保护缺口明细",
+            status=CheckStatus.FAIL if _gap_detail else CheckStatus.PASS,
+            severity=CheckSeverity.P1,
+            message=(
+                f"保护缺口: {_gap_detail}" if _gap_detail else "无保护缺口"
+            ),
+            evidence={"gaps": _gap_detail, "repairable": _repairable},
+        )
+    )
+
     # Webhook delivery is part of the unattended safety certificate when the
     # dispatcher exposes durable delivery state.  Older test doubles without
     # this method are left untouched; the production dispatcher must not hide

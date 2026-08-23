@@ -1610,6 +1610,10 @@ class AutonomousEngine:
         # 问题仅在库存真实且语义/覆盖/所有权全部验证通过时由
         # _update_protection_fact 单一写入点清除;不再有进程内永久锁死。
         self._protection_issues: set[str] = set()
+        # gap reason 贯通 (可观测性修复): 最近一次保护事实评估的缺口
+        # 明细, 供 runtime 检查与 supervisor A/B 分流消费。最多 6 条,
+        # 每条 {"symbol": str, "reason": str}。
+        self._last_protection_gap_detail: list[dict[str, str]] = []
         # BD-FIX: TruthSnapshot 保护事实 — 初始化时所有权归属本服务 → ACTIVE
         self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
         self._last_protection_fact_at = time.time()
@@ -4157,11 +4161,20 @@ class AutonomousEngine:
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
+        # gap reason 贯通: 事故携带当前缺口明细, 供 supervisor A/B 分流
+        # 区分"引擎可修复的覆盖缺口"与"真故障" (P5 分类器读
+        # ev["incidents"][i]["gap_reasons"])。
+        _gap_reasons = [
+            str(g.get("reason", ""))
+            for g in (getattr(self, "_last_protection_gap_detail", None) or [])
+            if g.get("reason")
+        ]
         self._alerts.send_incident(
             AlertSeverity.CRITICAL,
             "Protection ownership unknown",
             f"Conditional orders lack durable owner mapping: {sorted(order_ids)}",
             category="protection",
+            gap_reasons=_gap_reasons,
         )
 
     def _update_protection_fact(
@@ -4231,11 +4244,29 @@ class AutonomousEngine:
             issues.clear()
             self._protection_owner_unknown = False
             self._last_protection_hash = hashlib.sha256("ACTIVE".encode()).hexdigest()
+            self._last_protection_gap_detail = []
         else:
             if len(issues) < 500:
                 issues.update(str(item) for item in [*hard_issues, *unowned_ids])
             self._protection_owner_unknown = True
             self._last_protection_hash = hashlib.sha256("UNKNOWN".encode()).hexdigest()
+            # 最近缺口明细持久于内存供 runtime/supervisor 消费
+            # (A/B 分流的唯一 reason 来源)。键名显式区分"绝对值"与"带符号":
+            # 二者对空头必然异号 (position_quantity = abs(position_amount)),
+            # 旧名 position_qty /position_amt 看似同量纲的两种写法, 曾被误读为
+            # 符号矛盾 bug。abs_qty 与 stop_qty 同量纲, 是覆盖比较的那一对;
+            # signed_amt 只用于判方向(>0 → 需 SELL 止损)。
+            _gap_detail = [
+                {
+                    "symbol": str(g.get("symbol")),
+                    "reason": str(g.get("reason")),
+                    "position_abs_qty": str(g.get("position_quantity", "")),
+                    "position_signed_amt": str(g.get("position_amount", "")),
+                    "stop_qty": str(g.get("stop_quantity", "")),
+                }
+                for g in (_evidence.get("unprotected_symbols") or [])
+            ][:6]
+            self._last_protection_gap_detail = list(_gap_detail)
             # BD-FIX: 非 clean 必须可见 —— 旧实现静默置 UNKNOWN,资格门
             # 钉死数十分钟也毫无线索(实测 NEAR 平仓后 22 连拒)。限频
             # 打印覆盖缺口与问题清单,定位是哪一类事实在阻止放行。
@@ -4243,21 +4274,6 @@ class AutonomousEngine:
             _last_print = getattr(self, "_protection_fact_diag_last", 0.0)
             if _now - _last_print >= 60.0:
                 self._protection_fact_diag_last = _now
-                # 键名显式区分"绝对值"与"带符号": 二者对空头必然异号
-                # (position_quantity = abs(position_amount)), 旧名 position_qty
-                # /position_amt 看似同量纲的两种写法, 曾被误读为符号矛盾 bug。
-                # abs_qty 与 stop_qty 同量纲, 是覆盖比较的那一对; signed_amt
-                # 只用于判方向(>0 → 需 SELL 止损)。
-                _gap_detail = [
-                    {
-                        "symbol": str(g.get("symbol")),
-                        "reason": str(g.get("reason")),
-                        "position_abs_qty": str(g.get("position_quantity", "")),
-                        "position_signed_amt": str(g.get("position_amount", "")),
-                        "stop_qty": str(g.get("stop_quantity", "")),
-                    }
-                    for g in (_evidence.get("unprotected_symbols") or [])
-                ][:6]
                 logger.warning(
                     "protection facts not clean: covered=%s gaps=%s hard=%s venue_missing=%s unowned=%d",
                     bool(covered),

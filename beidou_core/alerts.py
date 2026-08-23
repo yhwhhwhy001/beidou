@@ -67,8 +67,13 @@ class AlertDispatcher:
         description: str,
         auto_action: AutoAction | None = None,
         category: str = "runtime",
+        gap_reasons: list[str] | None = None,
     ) -> Incident:
-        """创建并分发事故告警。相同 category+title 的事故自动去重，更新已有事故。"""
+        """创建并分发事故告警。相同 category+title 的事故自动去重，更新已有事故。
+
+        ``gap_reasons``: 保护覆盖缺口 reason 明细 (可观测性修复), 随
+        incident 贯通到 get_active_incidents, 供 supervisor A/B 分流消费。
+        """
         # Deduplicate: if an active incident with the same category+title exists,
         # update it instead of creating a new one.
         dedup_key = f"{category}:{title}"
@@ -78,6 +83,7 @@ class AlertDispatcher:
                 if existing_key == dedup_key:
                     # Update the existing incident in place
                     existing_inc.description = description
+                    existing_inc.gap_reasons = list(gap_reasons or [])
                     existing_inc._last_updated = datetime.now(timezone.utc)  # M21: 运行时字段
                     return existing_inc
 
@@ -90,6 +96,7 @@ class AlertDispatcher:
             description=description,
             root_cause_category=category,
             auto_action=auto_action or AutoAction.ALERT,
+            gap_reasons=list(gap_reasons or []),
         )
 
         # P0 永不抑制
@@ -405,6 +412,8 @@ class AlertDispatcher:
                     "title": i.title,
                     "status": i.status.value,
                     "detected_at": i.detected_at.isoformat(),
+                    "description": str(getattr(i, "description", "") or "")[:300],
+                    "gap_reasons": [str(r) for r in (getattr(i, "gap_reasons", None) or [])],
                 }
                 for i in self._active_incidents.values()
             ]

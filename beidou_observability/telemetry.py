@@ -74,6 +74,9 @@ class Incident:
     resolved_at: datetime | None = None
     evidence_snapshots: list[dict[str, Any]] = field(default_factory=list)
     related_incidents: list[str] = field(default_factory=list)
+    # 可观测性修复: 保护覆盖缺口 reason 明细, 供 supervisor A/B 分流消费
+    # (get_active_incidents 以 gap_reasons 字段暴露)。
+    gap_reasons: list[str] = field(default_factory=list)
     # M21: 运行时字段 —— 去重更新时由 AlertManager 就地刷新
     _last_updated: datetime | None = None
 
