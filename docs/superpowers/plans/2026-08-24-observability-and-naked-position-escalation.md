@@ -44,7 +44,7 @@
 
 ---
 
-## Task P1: 对账 Balance mismatch 消息标签参数化
+## Task 1: 对账 Balance mismatch 消息标签参数化
 
 **Files:**
 - Modify: `beidou_safety/execution/reconciliation.py`(compare 签名 ~line 169;balance 消息 ~line 323;compare_three_way 调用 ~line 567-600)
@@ -183,7 +183,7 @@ git commit -m "fix(recon): Balance mismatch 标签参数化, 第三条轴不再�
 
 ---
 
-## Task P2: gap reason 贯通(引擎 → 事故 → 监督器证据)
+## Task 2: gap reason 贯通(引擎 → 事故 → 监督器证据)
 
 **Files:**
 - Modify: `beidou_core/engine.py`(`_update_protection_fact` ~line 4246,非 clean 分支末尾;`__init__` ~line 1606 附近加字段)
@@ -369,7 +369,7 @@ git commit -m "feat(observability): gap reason 贯通到 incident 与 runtime �
 
 ---
 
-## Task P3: blocker 摘要修复 + LOCKED 完整快照
+## Task 3: blocker 摘要修复 + LOCKED 完整快照
 
 **Files:**
 - Modify: `beidou_launcher/supervisor.py`(`summarize_blockers` ~line 71;`_apply_debounce_action` LOCKED 分支 ~line 1048-1058)
@@ -532,7 +532,7 @@ git commit -m "fix(observability): LOCKED 摘要优先展示真实阻断事故, 
 
 ---
 
-## Task P4: protection_exposure 持久化裸露时钟 + E1/E2 重构
+## Task 4: protection_exposure 持久化裸露时钟 + E1/E2 重构
 
 **Files:**
 - Modify: `beidou_core/engine.py`(新增 `_persist_protection_exposure` / `_clear_protection_exposure`;重构 `_maybe_emergency_close_unprotectable` ~line 9842)
@@ -727,7 +727,7 @@ git commit -m "fix(safety): 裸仓时钟持久化 (protection_exposure), 重启�
 
 ---
 
-## Task P5: HealthDebounce A/B 两路计数 + supervisor 分类
+## Task 5: HealthDebounce A/B 两路计数 + supervisor 分类
 
 **Files:**
 - Modify: `beidou_launcher/models.py`(`HealthDebounce.feed` ~line 159)
@@ -942,7 +942,7 @@ git commit -m "feat(fail-closed): 防抖 A/B 分流 —— 可修复缺口永不
 
 ---
 
-## Task P6: stuck 标记 + watchdog 卡死告警
+## Task 6: stuck 标记 + watchdog 卡死告警
 
 **Files:**
 - Modify: `beidou_core/engine.py`(新增 `_update_stuck_marker`;调用点放在 nearline 主循环末尾或 `_update_protection_fact` 之后)
@@ -1124,7 +1124,7 @@ git commit -m "feat(alert): 保护卡死标记 —— A 类永不 LOCKED 的配�
 
 ---
 
-## Task P7: 4-E3 慢引信(7200s 自动平仓,env 门控)
+## Task 7: 4-E3 慢引信(7200s 自动平仓,env 门控)
 
 **Files:**
 - Modify: `beidou_core/engine.py`(新增 `_run_slow_fuse`;nearline 主循环调用一次)
@@ -1330,7 +1330,7 @@ git commit -m "feat(safety): 裸仓慢引信 7200s 逐品种平仓, testnet 默�
 
 ---
 
-## Task P8: G5 基线 journal(写/删/恢复)+ preflight 搁浅检测
+## Task 8: G5 基线 journal(写/删/恢复)+ preflight 搁浅检测
 
 **Files:**
 - Modify: `beidou_certification/g5_scenarios/engine/reconciliation_mismatch.py`(`run()` ~line 374;`_execute_flow` ~line 257)
@@ -1502,7 +1502,7 @@ git commit -m "fix(g5): 基线污染 journal 化 —— 硬杀可自愈, preflig
 
 ---
 
-## Task P9: 全量回归 + 实机验证
+## Task 9: 全量回归 + 实机验证
 
 **Files:** 无新代码;若回归暴露问题,回对应任务修复。
 
