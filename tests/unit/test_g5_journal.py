@@ -31,6 +31,7 @@ _BASELINE_RECORD_TYPE = "account_opening_projection"
 _BASELINE_RECORD_ID = "default:BINANCE"
 _JOURNAL_KEY = (_JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
 _BASELINE_KEY = (_BASELINE_RECORD_TYPE, _BASELINE_RECORD_ID)
+_CORRUPTED_BALANCE = "1"
 
 _ORIGINAL_PAYLOAD: dict[str, Any] = {
     "account_id": "default",
@@ -62,14 +63,26 @@ class _FlowConn:
 
     DELETE 真的从内存 records 移除(验证 journal 删净);事件在轮询查询时
     依次返回,配合假时钟驱动场景全流程,无需真实时间等待。
+    故障注入:fail_restore_upsert=True 时还原写(非哨兵值)抛错;falsify_
+    restored_baseline=True 时还原写被"篡改"(模拟 DB 未真正生效),驱动
+    restore_verify 失败 —— 两者都用于验证 fail-closed 的 journal 留存路径。
     """
 
-    def __init__(self, *, baseline: dict[str, Any] | None = None, journal: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        baseline: dict[str, Any] | None = None,
+        journal: dict[str, Any] | None = None,
+        fail_restore_upsert: bool = False,
+        falsify_restored_baseline: bool = False,
+    ) -> None:
         self.records: dict[tuple[str, str], dict[str, Any]] = {}
         if baseline is not None:
             self.records[_BASELINE_KEY] = baseline
         if journal is not None:
             self.records[_JOURNAL_KEY] = journal
+        self.fail_restore_upsert = fail_restore_upsert
+        self.falsify_restored_baseline = falsify_restored_baseline
         self.upserted: list[tuple[str, str]] = []
         self.journal_writes: list[dict[str, Any]] = []
         self._mismatch_sent = False
@@ -80,6 +93,11 @@ class _FlowConn:
         if normalized.startswith("INSERT INTO v3_runtime_records"):
             payload = json.loads(str(values[2]))
             key = (str(values[0]), str(values[1]))
+            restoring = key == _BASELINE_KEY and str(payload.get("balance_amount")) != _CORRUPTED_BALANCE
+            if self.fail_restore_upsert and restoring:
+                raise RuntimeError("fake restore failure")
+            if self.falsify_restored_baseline and restoring:
+                payload = {**payload, "balance_amount": "999"}
             self.records[key] = payload
             self.upserted.append(key)
             if key == _JOURNAL_KEY:
@@ -268,3 +286,46 @@ def test_stranded_journal_recovered_on_run_and_flow_uses_true_original(
     assert _JOURNAL_KEY not in conn.records
     assert len(conn.journal_writes) == 1
     assert conn.journal_writes[0]["original_payload"] == _ORIGINAL_PAYLOAD
+
+
+# ---- fail-closed 保留路径:还原未确证成功时 journal 必须留存(preflight P0 依赖) ----
+
+
+def test_finally_restore_failure_keeps_journal(tmp_path: Any, monkeypatch: Any) -> None:
+    """finally 兜底还原失败(restored_ok=False)→ 不删 journal,留存待自愈。"""
+    conn = _FlowConn(baseline=_ORIGINAL_PAYLOAD, fail_restore_upsert=True)
+    result = _run_with_conn(conn, _ctx(tmp_path), monkeypatch)
+    assert result.status == ScenarioStatus.FAIL
+    steps = result.evidence["steps"]
+    assert next(s for s in steps if s.get("action") == "restore_baseline_finally")["ok"] is False
+    # fail-closed:还原失败绝不能删 journal(否则被污染的基线将无任何记录)
+    assert _JOURNAL_KEY in conn.records
+
+
+def test_unrecoverable_journal_kept_when_recovery_raises(tmp_path: Any, monkeypatch: Any) -> None:
+    """journal 存在但缺 original_payload → 自愈抛错,还原虽成功但仍留存 journal。"""
+    corrupted = dict(_ORIGINAL_PAYLOAD)
+    corrupted["balance_amount"] = _CORRUPTED_BALANCE
+    conn = _FlowConn(
+        baseline=corrupted,
+        journal={"corrupted_at": "2026-08-24T02:00:00+00:00"},  # 缺 original_payload
+    )
+    result = _run_with_conn(conn, _ctx(tmp_path), monkeypatch)
+    assert result.status == ScenarioStatus.FAIL
+    assert "JOURNAL_PAYLOAD_MISSING" in result.error_message
+    steps = result.evidence["steps"]
+    assert next(s for s in steps if s.get("action") == "restore_baseline_finally")["ok"] is True
+    # journal 与 original_payload 的一致性未被确证 → 宁可留存 journal(P0 阻断)
+    assert _JOURNAL_KEY in conn.records
+
+
+def test_restore_verify_failure_keeps_journal_in_flow() -> None:
+    """流程内 restore_verify 失败(BASELINE_NOT_RESTORED)→ flow 级删除跳过。"""
+    conn = _FlowConn(baseline=_ORIGINAL_PAYLOAD, falsify_restored_baseline=True)
+    steps: list[dict[str, Any]] = []
+    result = asyncio.run(_scenario()._execute_flow(conn, _ORIGINAL_PAYLOAD, steps, time.monotonic()))
+    assert result.status == ScenarioStatus.FAIL
+    assert result.error_type == "BASELINE_NOT_RESTORED"
+    assert next(s for s in steps if s.get("action") == "restore_verify")["ok"] is False
+    assert not any(s.get("action") == "journal_deleted" for s in steps)
+    assert _JOURNAL_KEY in conn.records

@@ -211,7 +211,15 @@ def test_g5_reconciliation_mismatch_read_missing_notional_and_restore_failure(
     restore_conn = _RecordConnection()
     monkeypatch.setattr(mismatch_module.psycopg, "connect", lambda *_args, **_kwargs: restore_conn)
     payload = {"balance_amount": "100", "positions": {}}
-    monkeypatch.setattr(mismatch_module, "_read_record", lambda *_args: payload)
+    # 仅基线 key(default:BINANCE)返回 payload,journal key 返回 None —— 否则
+    # run() 的 journal 读取会拿到非 journal dict,自愈 _recover_from_journal 抛
+    # JOURNAL_PAYLOAD_MISSING 提前 FAIL,覆盖不到「_execute_flow 抛错 → finally
+    # 还原」的原路径。
+    monkeypatch.setattr(
+        mismatch_module,
+        "_read_record",
+        lambda *_args: payload if len(_args) >= 3 and str(_args[2]) == "default:BINANCE" else None,
+    )
 
     async def fail_flow(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("flow failed")

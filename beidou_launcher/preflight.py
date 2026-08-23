@@ -169,6 +169,13 @@ def _postgres_authority_probe(project_root: Path, database_url: str) -> tuple[bo
     return True, "PostgreSQL authority and migration head verified", evidence
 
 
+# G5 基线污染 journal 的记录键(与 beidou_certification/g5_scenarios/engine/
+# reconciliation_mismatch.py 的 _JOURNAL_RECORD_TYPE/_JOURNAL_RECORD_ID 同值;
+# 不 import 场景模块 —— preflight 保持轻量,避免拉入 SCENARIO_REGISTRY 链)。
+_G5_JOURNAL_RECORD_TYPE = "g5_journal"
+_G5_JOURNAL_RECORD_ID = "reconciliation_mismatch:baseline"
+
+
 def _g5_journal_check(
     journal_rows: list[dict[str, Any]],
     *,
@@ -626,7 +633,8 @@ def _run_preflight(
                     with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn:
                         cur = conn.execute(
                             "SELECT payload::text FROM v3_runtime_records "
-                            "WHERE record_type='g5_journal'"
+                            "WHERE record_type=%s AND record_id=%s",
+                            (_G5_JOURNAL_RECORD_TYPE, _G5_JOURNAL_RECORD_ID),
                         )
                         journal_rows = [{"payload": json.loads(str(r[0]))} for r in cur.fetchall()]
                 except Exception as exc:
