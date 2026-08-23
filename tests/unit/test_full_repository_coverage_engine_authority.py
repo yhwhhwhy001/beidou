@@ -1655,18 +1655,79 @@ def test_auto_resolve_incidents_no_alert_authority_is_a_noop() -> None:
     assert engine._alerts is None
 
 
+class _ExposureStore:
+    """与 _MemStore 同形的持久化替身: 记录活在其内部 dict, 返回 bare dict 行。"""
+
+    def __init__(self) -> None:
+        self.records: dict[tuple[str, str], dict] = {}
+
+    def _get_record(self, record_type: str, record_id: str):
+        return self.records.get((record_type, record_id))
+
+    def _write_record(self, record_type: str, record_id: str, payload: dict, **kw) -> bool:
+        self.records[(record_type, record_id)] = dict(payload)
+        return True
+
+    def _delete_record(self, record_type: str, record_id: str) -> None:
+        self.records.pop((record_type, record_id), None)
+
+
+class _ExposureClock:
+    """可控时钟: 默认不推进 (紧凑重试), 由 advance() 跨过 60s 下限。"""
+
+    def __init__(self) -> None:
+        self.t = 10_000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float = 60.0) -> None:
+        self.t += seconds
+
+
 @pytest.mark.asyncio
 async def test_emergency_close_and_protection_lifecycle_boundaries() -> None:
+    """紧急平仓判据: 持久化裸露时钟 + 60s 跨度下限 + 数量取投影。
+
+    BD-FIX (naked exposure ledger): 连击计数移入 protection_exposure 记录,
+    不再因引擎重启/pos_id 翻转清零;E2 要求 3 次确认跨 ≥60s。
+    """
+    clock = _ExposureClock()
     pp = SimpleNamespace(quantity=2.0, side=OrderSide.BUY)
-    engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._sl_unprotectable_streak = {}
-    engine._policy_id_active = ""
-    engine._policy_version = ""
-    engine._policy_signature = ""
-    engine._position_projection = {"BTCUSDT": {"signed_quantity": "bad"}}
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is False
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is False
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is False
+
+    def _base_engine() -> AutonomousEngine:
+        engine = AutonomousEngine.__new__(AutonomousEngine)
+        engine._store = _ExposureStore()
+        engine._position_generation = {"BTCUSDT": 1}
+        engine._sl_unprotectable_streak = {}
+        engine._policy_id_active = ""
+        engine._policy_version = ""
+        engine._policy_signature = ""
+        engine._position_projection = {"BTCUSDT": {"signed_quantity": "bad"}}
+        return engine
+
+    def _seed_exposure(engine: AutonomousEngine, *, clock: _ExposureClock) -> None:
+        engine._store._write_record(
+            "protection_exposure",
+            "exposure:BTCUSDT",
+            {
+                "symbol": "BTCUSDT",
+                "position_generation": 1,
+                "unprotectable_since": clock() - 120,
+                "last_reason": "SL_UNPROTECTABLE",
+                "attempts": 3,
+            },
+        )
+
+    engine = _base_engine()
+    # 前两轮连击不足 3 → 等待确认; 第 3 轮达线但跨度 <60s → 紧凑重试被拦。
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
+
+    # 跨度满足后签名策略缺失 → 仍拒绝紧急平仓 (fail-closed)。
+    clock.advance(120)
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
 
     engine._policy_id_active = "policy"
     engine._policy_version = "v1"
@@ -1674,35 +1735,42 @@ async def test_emergency_close_and_protection_lifecycle_boundaries() -> None:
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "1.25"}}
     calls: list[dict] = []
     engine.enqueue_reduce_only_market = lambda **kwargs: calls.append(kwargs) or asyncio.sleep(0, result=False)
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is False
+    # 放行后数量取引擎投影 1.25, 方向按持仓 BUY → SELL 平仓。
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
     assert calls[-1]["side"] == "SELL" and calls[-1]["quantity"] == 1.25
+    assert calls[-1]["correlation_id"] == "sl-unprotectable-p"
 
-    engine._sl_unprotectable_streak["p"] = 2
+    # enqueue 异常 → 失败, 记录保留 (不误判成功)。
+    clock.advance(120)
     engine.enqueue_reduce_only_market = lambda **kwargs: (_ for _ in ()).throw(OSError("outbox"))
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is False
-    engine._sl_unprotectable_streak["p"] = 2
-    engine.enqueue_reduce_only_market = lambda **kwargs: asyncio.sleep(0, result=True)
-    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp) is True
-    assert "p" not in engine._sl_unprotectable_streak
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is False
 
-    bad_projection = AutonomousEngine.__new__(AutonomousEngine)
-    bad_projection._sl_unprotectable_streak = {"bad": 2}
+    # enqueue 成功 → True 且清除该 symbol 的裸露时钟记录。
+    clock.advance(120)
+    engine.enqueue_reduce_only_market = lambda **kwargs: asyncio.sleep(0, result=True)
+    assert await engine._maybe_emergency_close_unprotectable("p", "BTCUSDT", pp, now=clock) is True
+    assert engine._store._get_record("protection_exposure", "exposure:BTCUSDT") is None
+
+    # 投影数量非法 → 回退 pp.quantity (2.0) 仍可平仓; 此处 enqueue 返回 False。
+    bad_projection = _base_engine()
+    _seed_exposure(bad_projection, clock=clock)
     bad_projection._policy_id_active = "policy"
     bad_projection._policy_version = "v1"
     bad_projection._policy_signature = "sig"
     bad_projection._position_projection = {"BTCUSDT": {"signed_quantity": "not-a-number"}}
     bad_projection.enqueue_reduce_only_market = lambda **_kwargs: asyncio.sleep(0, result=False)
-    assert await bad_projection._maybe_emergency_close_unprotectable("bad", "BTCUSDT", pp) is False
+    assert await bad_projection._maybe_emergency_close_unprotectable("bad", "BTCUSDT", pp, now=clock) is False
 
-    no_qty = AutonomousEngine.__new__(AutonomousEngine)
-    no_qty._sl_unprotectable_streak = {"p": 2}
+    # 投影缺失且 pp.quantity=0 → 数量 UNKNOWN, 拒绝平仓 (fail-closed)。
+    no_qty = _base_engine()
+    _seed_exposure(no_qty, clock=clock)
     no_qty._policy_id_active = "policy"
     no_qty._policy_version = "v1"
     no_qty._policy_signature = "sig"
     no_qty._position_projection = {}
     assert (
         await no_qty._maybe_emergency_close_unprotectable(
-            "p", "BTCUSDT", SimpleNamespace(quantity=0, side=OrderSide.BUY)
+            "p", "BTCUSDT", SimpleNamespace(quantity=0, side=OrderSide.BUY), now=clock
         )
         is False
     )

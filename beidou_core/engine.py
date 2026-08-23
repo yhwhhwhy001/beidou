@@ -9855,7 +9855,70 @@ class AutonomousEngine:
         except Exception as e:
             print(f"[nearline] Excess order cleanup error: {e}")
 
-    async def _maybe_emergency_close_unprotectable(self, pos_id: str, symbol: str, pp: Any) -> bool:
+    def _persist_protection_exposure(
+        self,
+        symbol: str,
+        reason: str,
+        *,
+        now: Any = None,
+    ) -> dict[str, Any]:
+        """持久化"保护无法建立"裸露时钟 (重启不清除)。
+
+        与内存态连击计数不同, 该记录是 3c stuck 告警与 4-E3 慢引信的
+        唯一真相源。position_generation 变化时重新起算 —— 旧仓的账
+        不得杀新仓。
+        """
+        import time as _time
+        _clock = now if callable(now) else _time.time
+        _ts = _clock()
+        _store = getattr(self, "_store", None)
+        if _store is None:
+            return {}
+        _gen = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
+        key = f"exposure:{symbol}"
+        old = None
+        _get = getattr(_store, "_get_record", None)
+        if callable(_get):
+            try:
+                old = _get("protection_exposure", key)
+            except Exception:
+                old = None
+        if (
+            old
+            and int(
+                (old.get("payload") if isinstance(old, dict) and "payload" in old else old).get(
+                    "position_generation", 0
+                )
+                or 0
+            )
+            != _gen
+        ):
+            self._clear_protection_exposure(symbol)
+            old = None
+        attempts = int((old or {}).get("attempts", 0)) + 1 if old else 1
+        payload = {
+            "symbol": symbol,
+            "position_generation": _gen,
+            "unprotectable_since": (old or {}).get("unprotectable_since", _ts),
+            "last_reason": str(reason)[:120],
+            "attempts": attempts,
+        }
+        _write = getattr(_store, "_write_record", None)
+        if callable(_write):
+            with contextlib.suppress(Exception):
+                _write("protection_exposure", key, payload)
+        return payload
+
+    def _clear_protection_exposure(self, symbol: str) -> None:
+        _store = getattr(self, "_store", None)
+        if _store is None:
+            return
+        _delete = getattr(_store, "_delete_record", None)
+        if callable(_delete):
+            with contextlib.suppress(Exception):
+                _delete("protection_exposure", f"exposure:{symbol}")
+
+    async def _maybe_emergency_close_unprotectable(self, pos_id: str, symbol: str, pp: Any, *, now: Any = None) -> bool:
         """SL 连续无法建立（-2021 立即触发 / adaptive blocked）→ 紧急平仓。
 
         BD-FIX (final83): 持仓深亏时基于入场价的止损已越过现价，交易所
@@ -9864,10 +9927,17 @@ class AutonomousEngine:
         reduce-only 紧急平仓路径（enqueue_reduce_only_market，仅持久化
         意图，执行仍走唯一 fenced executor 写路径）。
         """
-        streak = self._sl_unprotectable_streak.get(pos_id, 0) + 1
-        self._sl_unprotectable_streak[pos_id] = streak
+        import time as _time
+        now = now if callable(now) else _time.time
+        rec = self._persist_protection_exposure(symbol, "SL_UNPROTECTABLE", now=now)
+        streak = int(rec.get("attempts", 0) or 0)
+        since = float(rec.get("unprotectable_since", 0.0) or 0.0)
         if streak < 3:
             print(f"[nearline] ⚠️ {symbol}: stop unprotectable x{streak}/3 (waiting for confirmation)")
+            return False
+        # E2 跨度下限: 3 次确认必须跨 ≥60s, 防紧凑重试一秒连打三枪。
+        if now() - since < 60.0:
+            print(f"[nearline] ⚠️ {symbol}: unprotectable x{streak} but span<60s, hold")
             return False
         if not self._policy_id_active or not self._policy_version or not self._policy_signature:
             print(f"[nearline] ⚠️ Emergency close for {symbol} blocked: signed policy unavailable")
@@ -9901,7 +9971,7 @@ class AutonomousEngine:
             print(f"[nearline] ⚠️ Emergency close enqueue failed for {symbol}: {exc}")
             return False
         if ok:
-            self._sl_unprotectable_streak.pop(pos_id, None)
+            self._clear_protection_exposure(symbol)
             print(
                 f"[nearline] 🚨 Emergency flatten enqueued for {symbol} (stop unprotectable x{streak}, qty={close_qty})"
             )
