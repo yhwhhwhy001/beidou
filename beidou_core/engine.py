@@ -4243,12 +4243,17 @@ class AutonomousEngine:
             _last_print = getattr(self, "_protection_fact_diag_last", 0.0)
             if _now - _last_print >= 60.0:
                 self._protection_fact_diag_last = _now
+                # 键名显式区分"绝对值"与"带符号": 二者对空头必然异号
+                # (position_quantity = abs(position_amount)), 旧名 position_qty
+                # /position_amt 看似同量纲的两种写法, 曾被误读为符号矛盾 bug。
+                # abs_qty 与 stop_qty 同量纲, 是覆盖比较的那一对; signed_amt
+                # 只用于判方向(>0 → 需 SELL 止损)。
                 _gap_detail = [
                     {
                         "symbol": str(g.get("symbol")),
                         "reason": str(g.get("reason")),
-                        "position_qty": str(g.get("position_quantity", "")),
-                        "position_amt": str(g.get("position_amount", "")),
+                        "position_abs_qty": str(g.get("position_quantity", "")),
+                        "position_signed_amt": str(g.get("position_amount", "")),
                         "stop_qty": str(g.get("stop_quantity", "")),
                     }
                     for g in (_evidence.get("unprotected_symbols") or [])
