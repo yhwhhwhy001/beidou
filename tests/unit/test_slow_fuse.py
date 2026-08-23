@@ -254,3 +254,16 @@ def test_slow_fuse_dirty_row_does_not_break_sweep():
     import asyncio
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 1 and engine._slow_fuse_fired == ["BTCUSDT"]
+
+
+def test_persist_protection_exposure_accepts_float_now():
+    """M-6: _persist_protection_exposure 的 now 参数接受 float 时间戳
+    (与 _run_slow_fuse/_update_stuck_marker 一致), 不再默默忽略非 callable。"""
+    engine = _engine([])
+    rec = engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=1234.5)
+    assert rec["unprotectable_since"] == 1234.5
+    assert rec["attempts"] == 1
+    # 再次传 float: 更新路径同样吃 float 时间戳
+    rec2 = engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=2234.5)
+    assert rec2["unprotectable_since"] == 1234.5  # 起点不重置
+    assert rec2["attempts"] == 2

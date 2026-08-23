@@ -5,6 +5,9 @@
   MISSING_TP, ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION};
 - coverage 检查 (R2): message issue token 全部 ∈ {MISSING_SL, MISSING_TP}
   且全部 entity_id ∈ 引擎本地所有权符号集才可修复;
+- R12: 分类只吃每 tick 新鲜事实 —— 仅 gap_detail 的 evidence.gaps 提供
+  A 证据; incidents 的 gap_reasons 是重发时的陈旧快照, 不参与分类
+  (只作可观测性展示), 任何 incidents blocker 有它在即整体按 B;
 - 其余 (含 LOCAL_POSITION_WITHOUT_VENUE_FACT、execution_fact、reconciliation、
   supervisor、realtime) 全按 B; A+B 并存按 B; reason 缺失/无法分类按 B。
 """
@@ -119,7 +122,13 @@ def test_classifier_gap_reason_missing_is_b() -> None:
     assert supervisor._classify_repairable([gap_missing_reason]) is False
 
 
-def test_classifier_incidents_gap_reasons_repairable() -> None:
+def test_classifier_incidents_never_provide_a_evidence() -> None:
+    """R12: incidents 携带再多的 gap_reasons 也不提供 A 证据 → 整体 False。
+
+    事故的 gap_reasons 只在重发时更新, A 期创建的事故在 gap 清除后残留
+    stale reasons —— 若据此判 A, 真 B 类 owner-unknown 会永不 LOCKED
+    (I-2 fail-open)。incidents 的 gap_reasons 只作可观测性展示。
+    """
     supervisor = _bind_classifier()
     ok = CheckResult(
         check_id="runtime.health.incidents",
@@ -139,7 +148,39 @@ def test_classifier_incidents_gap_reasons_repairable() -> None:
             ]
         },
     )
-    assert supervisor._classify_repairable([ok]) is True
+    assert supervisor._classify_repairable([ok]) is False
+
+
+def test_classifier_gap_detail_plus_incidents_is_b() -> None:
+    """R12: gap_detail 提供 A 证据时, 与 incidents blocker 并存 → 整体按 B。"""
+    supervisor = _bind_classifier()
+    gap = CheckResult(
+        check_id="runtime.safety.protection_gap_detail",
+        name="x",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P1,
+        message="x",
+        evidence={"gaps": [{"symbol": "BTCUSDT", "reason": "MISSING_SL"}], "repairable": True},
+    )
+    inc = CheckResult(
+        check_id="runtime.health.incidents",
+        name="活动事故",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P0,
+        message="x",
+        evidence={
+            "incidents": [
+                {
+                    "incident_id": "i1",
+                    "severity": "CRITICAL",
+                    "title": "protection",
+                    "status": "DETECTED",
+                    "gap_reasons": ["MISSING_SL"],
+                },
+            ]
+        },
+    )
+    assert supervisor._classify_repairable([gap, inc]) is False
 
 
 def test_classifier_mixed_incidents_is_b() -> None:

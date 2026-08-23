@@ -1237,8 +1237,17 @@ class BeidouSupervisor:
         """A/B 分类: 全部阻断均为可修复缺口 → True (永不 LOCKED)。
 
         reason 缺失或含任何不可修复项 → False (fail-closed 按 B)。
-        A 类 reason 全集见模块级 ``_REPAIRABLE_PROTECTION_REASONS``:
-        gap_detail 检查直接携带 reason, incidents 证据经 gap_reasons 字段。
+        A 类 reason 全集见模块级 ``_REPAIRABLE_PROTECTION_REASONS``。
+
+        R12 (2026-08-24): 分类只吃每 tick 新鲜事实 —— 仅
+        ``runtime.safety.protection_gap_detail`` 的 evidence.gaps 提供 A
+        证据 (A-whitelist 校验); incident dict 的 ``gap_reasons`` 是重发时
+        的陈旧快照 (A 期创建的事故在 gap 清除后残留 stale reasons), 只作
+        可观测性展示 (P2 发送路径保留), 不再参与分类。其余任何 blocker
+        (含 ``runtime.health.incidents``) 一律不提供 A 证据, 有它在即整体
+        按 B —— 消除 I-2 (真 B 类 owner-unknown 永不 LOCKED 的 fail-open)
+        与 I-3 (E3 armed incident 无 gap_reasons 把 A 拖成 B, 引擎 LOCKED
+        退出, 与 A-never-LOCKED 矛盾)。
 
         R2 (2026-08-24): ``runtime.safety.protection_coverage`` 阻断按
         message 的 issue token 分类 —— 全部 token ∈ {MISSING_SL, MISSING_TP}
@@ -1265,24 +1274,19 @@ class BeidouSupervisor:
                     return False
                 coverage_repairable = True
                 continue
+            # R12: 其余任何 blocker (含 runtime.health.incidents) 一律不
+            # 提供 A 证据, 有它在即整体按 B (fail-closed)。
+            if b.check_id != "runtime.safety.protection_gap_detail":
+                return False
             gaps = ev.get("gaps")
-            incs = ev.get("incidents")
             if gaps:
                 for g in gaps:
                     # reason 缺失/无法分类 → 按 B
                     if not isinstance(g, dict) or not g.get("reason"):
                         return False
                     reasons.append(str(g["reason"]))
-            if incs:
-                inc_list = [i for i in incs if isinstance(i, dict)]
-                # 任一 incident 缺 gap_reasons → 按 B (A+B 并存按 B)
-                if not inc_list or not all(i.get("gap_reasons") for i in inc_list):
-                    return False
-                for inc in inc_list:
-                    reasons.extend(str(r) for r in inc["gap_reasons"])
-            if not gaps and not incs:
-                # 非 protection 语义的阻断 (execution_fact/reconciliation/
-                # supervisor/realtime) 没有 reason → 严格按 B
+            else:
+                # 空证据路径: gap_detail 无 gaps → 无 A 证据 → 按 B
                 return False
         return all(r in _REPAIRABLE_PROTECTION_REASONS for r in reasons) and (bool(reasons) or coverage_repairable)
 

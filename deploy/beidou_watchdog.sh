@@ -84,17 +84,45 @@ fi
 # 引擎每轮扫描 protection_exposure, 存在 ≥30 分钟未建起保护的持仓时
 # 写 stuck 标记 (引擎侧已按 mtime 续写, 所以以文件 mtime 判断时效);
 # 此处读到即弹窗, 用 stuck_last_alert 标记节流 30 分钟。
+# R11: 健康引擎 30s 内会刷新/删除 stuck —— mtime 过期 >1800s 意味着
+# 引擎循环已死 (冻结但进程活着, 能过下方存活判定), 旧逻辑直接 rm 等于
+# 销毁唯一证据且永不告警。现改为: 引擎主动清除时写 stuck.cleared 墓碑,
+# watchdog 据此区分"正常清除"(rm 两文件) 与"疑似冻结"(升级告警 +
+# kickstart 一次, 不 rm stuck)。
 STUCK_FILE="$STATE_DIR/stuck"
+CLEARED_FILE="$STATE_DIR/stuck.cleared"
 if [ -f "$STUCK_FILE" ]; then
   stuck_mtime=$(stat -f %m "$STUCK_FILE" 2>/dev/null || echo 0)
-  if [ $(( now - stuck_mtime )) -gt 1800 ]; then
-    rm -f "$STUCK_FILE"   # 引擎已消除卡死却未能删文件 → 过期清理
-  else
+  if [ $(( now - stuck_mtime )) -le 1800 ]; then
+    # 新鲜标记 (引擎循环仍在续写): 现有节流弹窗逻辑不变
     last_alert_ts=0
     [ -f "$STATE_DIR/stuck_last_alert" ] && last_alert_ts=$(stat -f %m "$STATE_DIR/stuck_last_alert" 2>/dev/null || echo 0)
     if [ $(( now - last_alert_ts )) -ge 1800 ]; then
       notify "北斗引擎保护卡死" "有持仓超过 30 分钟未能建立保护（详见 ${STUCK_FILE}）。引擎已停止开新仓但仍在尝试修复；请检查后决定是否人工处置。"
       touch "$STATE_DIR/stuck_last_alert"
+    fi
+  elif [ -f "$CLEARED_FILE" ] && [ $(( now - $(stat -f %m "$CLEARED_FILE" 2>/dev/null || echo 0) )) -le 1800 ]; then
+    # 引擎留下新鲜清除墓碑 → 卡死已正常消除, 清理两个文件
+    rm -f "$STUCK_FILE" "$CLEARED_FILE"
+    log "CLEARED 卡死已消除 (stuck.cleared 墓碑在 30 分钟内), 移除 stuck 标记"
+  else
+    # 标记过期且无新鲜墓碑 → 引擎循环已死 (冻结但进程活着)。仅当进程
+    # 存活时升级告警 + kickstart 一次; 进程已死则主重启路径 (含熔断计数)
+    # 处理, 此处不得绕过熔断账本重复 kickstart。stuck_last_alert 节流
+    # 30 分钟, 不 rm stuck —— 保留唯一证据。
+    if pgrep -f "beidou start" >/dev/null 2>&1; then
+      last_alert_ts=0
+      [ -f "$STATE_DIR/stuck_last_alert" ] && last_alert_ts=$(stat -f %m "$STATE_DIR/stuck_last_alert" 2>/dev/null || echo 0)
+      if [ $(( now - last_alert_ts )) -ge 1800 ]; then
+        log "FROZEN 卡死标记超 30 分钟未刷新 (引擎循环疑似停止), 发起 kickstart"
+        notify "北斗引擎疑似冻结" "卡死标记超过 30 分钟未刷新, 引擎循环可能已停; watchdog 将尝试重启"
+        touch "$STATE_DIR/stuck_last_alert"
+        if launchctl kickstart "$SERVICE" >>"$LOG_FILE" 2>&1; then
+          log "FROZEN kickstart 成功"
+        else
+          log "ERROR 冻结恢复 kickstart 失败"
+        fi
+      fi
     fi
   fi
 fi

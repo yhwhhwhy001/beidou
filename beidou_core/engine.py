@@ -9933,8 +9933,17 @@ class AutonomousEngine:
         E2 路径 (increment=True) 行为不变: 每次调用累计一次确认。
         """
         import time as _time
-        _clock = now if callable(now) else _time.time
-        _ts = _clock()
+        # M-6: now 接受 float 时间戳 (与 _run_slow_fuse/_update_stuck_marker
+        # 一致), 不再默默忽略非 callable —— 传 float 直接当时间戳用。
+        if now is None:
+            _ts = _time.time()
+        elif callable(now):
+            _ts = now()
+        else:
+            try:
+                _ts = float(now)
+            except (TypeError, ValueError):
+                _ts = _time.time()
         _store = getattr(self, "_store", None)
         if _store is None:
             # sqlite/paper 回退 store 无 generic record API: 本函数与
@@ -10100,16 +10109,26 @@ class AutonomousEngine:
                 rows = [dict(r.get("payload") if isinstance(r, dict) and "payload" in r else r) for r in raw]
             except Exception:
                 rows = []
-        stuck = [
-            {
-                "symbol": str(r.get("symbol", "")),
-                "reason": str(r.get("last_reason", "")),
-                "unprotectable_since": float(r.get("unprotectable_since", 0.0) or 0.0),
-                "age_s": _ts - float(r.get("unprotectable_since", 0.0) or 0.0),
-            }
-            for r in rows
-            if _ts - float(r.get("unprotectable_since", 0.0) or 0.0) >= 1800.0
-        ]
+        # R11: float 转换逐行 try/except —— 生产 PG 返回裸 payload 行, 一条
+        # 脏行 (非数值 unprotectable_since) 若抛穿整个列表推导, 标记永不写出
+        # → mtime 过期 → watchdog 误判冻结删标记, 两个 fail-open 边同链。
+        # 脏行跳过, 不得中断其余行。
+        stuck: list[dict] = []
+        for r in rows:
+            try:
+                _since = float(r.get("unprotectable_since", 0.0) or 0.0)
+                _age = _ts - _since
+            except (TypeError, ValueError):
+                continue  # 脏行跳过, 不中断其余行 (R11)
+            if _age >= 1800.0:
+                stuck.append(
+                    {
+                        "symbol": str(r.get("symbol", "")),
+                        "reason": str(r.get("last_reason", "")),
+                        "unprotectable_since": _since,
+                        "age_s": _age,
+                    }
+                )
         _dir = state_dir or _os.path.expanduser(
             "~/Library/Application Support/beidou-watchdog"
         )
@@ -10118,6 +10137,13 @@ class AutonomousEngine:
             if _os.path.exists(marker):
                 try:
                     _os.remove(marker)
+                except OSError:
+                    pass
+                # R11 墓碑: 引擎主动清除 (卡死已消除) 留痕, watchdog 据此
+                # 区分"正常清除"与"引擎循环已死 (标记过期无人续写)"。
+                try:
+                    with open(_os.path.join(_dir, "stuck.cleared"), "w") as fh:
+                        _json.dump({"cleared_at": _ts}, fh)
                 except OSError:
                     pass
             return False
