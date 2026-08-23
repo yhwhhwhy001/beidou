@@ -9947,6 +9947,62 @@ class AutonomousEngine:
             with contextlib.suppress(Exception):
                 _delete("protection_exposure", f"exposure:{symbol}")
 
+    def _update_stuck_marker(
+        self,
+        *,
+        now: float | None = None,
+        state_dir: str | None = None,
+    ) -> bool:
+        """扫描 protection_exposure, ≥1800s 者写 watchdog stuck 标记。
+
+        这是 A 类永不 LOCKED 的配套告警 (spec 3c/D-4): 把"静默停机"
+        换成"静默卡死"不可接受, 必须先叫醒人。
+        """
+        import json as _json
+        import os as _os
+        import time as _time
+        _ts = now if now is not None else _time.time()
+        _store = getattr(self, "_store", None)
+        rows: list[dict] = []
+        _records = getattr(_store, "_records", None)
+        if _store is not None and callable(_records):
+            try:
+                raw = _records("protection_exposure")
+                rows = [dict(r.get("payload") if isinstance(r, dict) and "payload" in r else r) for r in raw]
+            except Exception:
+                rows = []
+        stuck = [
+            {
+                "symbol": str(r.get("symbol", "")),
+                "reason": str(r.get("last_reason", "")),
+                "unprotectable_since": float(r.get("unprotectable_since", 0.0) or 0.0),
+                "age_s": _ts - float(r.get("unprotectable_since", 0.0) or 0.0),
+            }
+            for r in rows
+            if _ts - float(r.get("unprotectable_since", 0.0) or 0.0) >= 1800.0
+        ]
+        _dir = state_dir or _os.path.expanduser(
+            "~/Library/Application Support/beidou-watchdog"
+        )
+        marker = _os.path.join(_dir, "stuck")
+        if not stuck:
+            if _os.path.exists(marker):
+                try:
+                    _os.remove(marker)
+                except OSError:
+                    pass
+            return False
+        try:
+            _os.makedirs(_dir, exist_ok=True)
+            with open(marker, "w") as fh:
+                _json.dump(
+                    {"stuck": True, "items": stuck, "updated_at": _ts},
+                    fh, ensure_ascii=False,
+                )
+        except OSError:
+            pass
+        return True
+
     async def _maybe_emergency_close_unprotectable(self, pos_id: str, symbol: str, pp: Any, *, now: Any = None) -> bool:
         """SL 连续无法建立（-2021 立即触发 / adaptive blocked）→ 紧急平仓。
 
@@ -10561,6 +10617,11 @@ class AutonomousEngine:
                 unowned_ids=unowned_algo_ids,
                 genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
             )
+
+            # Task 6 (3c/D-4): A 类永不 LOCKED 的配套告警 —— 每轮近线扫描
+            # 后刷新 stuck 标记 (文件 mtime 即"引擎还活着"的心跳), watchdog
+            # 读到 age≥1800s 即弹窗。消除后自动删标记。
+            self._update_stuck_marker()
 
             # BD-FIX (final83h): 库存真空(查询成功但无行,venue 可见性延迟)时,
             # 有 durable ACTIVE 行的保护单视为已覆盖,不重复补挂(重启恢复后

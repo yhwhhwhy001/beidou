@@ -1528,6 +1528,17 @@ class BeidouSupervisor:
                 checks = self._runtime_checks()
                 checks = self._merge_monitoring_checks(checks)
 
+            # Task 6 (3c/D-4): A 类永不 LOCKED 的配套告警 —— 每轮监控循环
+            # 刷新 stuck 标记 (文件 mtime 即"引擎还活着"的心跳)。getattr 防御
+            # 引擎替身 (测试替身无该方法), 异常静默: 标记是尽力而为的告警,
+            # 不得反噬主循环。
+            _update_stuck = getattr(self.engine, "_update_stuck_marker", None)
+            if callable(_update_stuck):
+                try:
+                    _update_stuck()
+                except Exception:
+                    pass
+
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
             blockers = self.report.blockers

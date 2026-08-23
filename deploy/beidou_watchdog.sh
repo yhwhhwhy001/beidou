@@ -80,6 +80,25 @@ if [ -f "$PAUSE_FILE" ]; then
   exit 0
 fi
 
+# --- 0.5 引擎卡死告警 (A 类永不 LOCKED 的配套) ---
+# 引擎每轮扫描 protection_exposure, 存在 ≥30 分钟未建起保护的持仓时
+# 写 stuck 标记 (引擎侧已按 mtime 续写, 所以以文件 mtime 判断时效);
+# 此处读到即弹窗, 用 stuck_last_alert 标记节流 30 分钟。
+STUCK_FILE="$STATE_DIR/stuck"
+if [ -f "$STUCK_FILE" ]; then
+  stuck_mtime=$(stat -f %m "$STUCK_FILE" 2>/dev/null || echo 0)
+  if [ $(( now - stuck_mtime )) -gt 1800 ]; then
+    rm -f "$STUCK_FILE"   # 引擎已消除卡死却未能删文件 → 过期清理
+  else
+    last_alert_ts=0
+    [ -f "$STATE_DIR/stuck_last_alert" ] && last_alert_ts=$(stat -f %m "$STATE_DIR/stuck_last_alert" 2>/dev/null || echo 0)
+    if [ $(( now - last_alert_ts )) -ge 1800 ]; then
+      notify "北斗引擎保护卡死" "有持仓超过 30 分钟未能建立保护（详见 ${STUCK_FILE}）。引擎已停止开新仓但仍在尝试修复；请检查后决定是否人工处置。"
+      touch "$STATE_DIR/stuck_last_alert"
+    fi
+  fi
+fi
+
 # --- 1. 服务是否仍在 launchd 域内 ---
 # 被 bootout (人工下线) 时不干预 —— 那是运维意图, 不是故障。
 if ! launchctl print "$SERVICE" >/dev/null 2>&1; then
