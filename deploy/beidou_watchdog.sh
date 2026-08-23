@@ -17,12 +17,20 @@
 #     存活不足即再停机  → 计数+1, 退避翻倍 (2→4→8 分钟)
 #     连续 3 次未存活   → 停止自动重启, 仅告警, 转人工
 #
-# 维护模式: touch <STATE_DIR>/pause 可暂停看守 (手工调试/改代码时使用,
-#   避免 watchdog 在 git 树脏导致预检阻断时空耗熔断次数)。
+# 自动维护模式: 无需任何手工操作。引擎停机时若 git 工作区有未提交变更,
+#   预检 preflight.git_worktree 必然拒绝启动, 看守据此自动跳过重启且不计入
+#   熔断额度, 提交后自动恢复 —— 开发期间不必记得暂停看守。
+# 手动覆盖 (可选): touch <STATE_DIR>/pause 完全停用看守, rm 即恢复。
+#   仅在需要连引擎一起停掉做别的事时使用。
 
 set -uo pipefail
 
 SERVICE="gui/501/com.beidou.autopilot"
+# 仓库根目录: 本脚本位于 <repo>/deploy/ 下, 上跳一级即仓库根。
+# 允许 BEIDOU_REPO 覆盖 (供测试使用)。解析结果必须通过标志文件校验 ——
+# 脚本若被复制到别处运行, 相对定位会指向错误目录, 导致 git 检查恒失败、
+# 看守静默失效, 必须让这种情况明确暴露而不是悄悄跳过。
+REPO="${BEIDOU_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # 运行时状态与日志固定写到仓库之外。
 #   - 本脚本随仓库分发 (deploy/), 若状态文件与脚本同目录会持续污染 git 树,
 #     进而触发引擎启动预检的 git_worktree 检查, 阻断引擎启动。
@@ -94,6 +102,29 @@ if [ "$down_since" -eq 0 ]; then
   down_since=$now
   save_state
   log "DOWN 未检测到引擎进程 (fail_count=$fail_count)"
+fi
+
+# --- 3.5 源码树可启动性 (自动维护模式) ---
+# 引擎预检 preflight.git_worktree 在 testnet(写模式) 下对
+# `git status --porcelain` 非空即判 P0 FAIL 拒绝启动 (含未跟踪文件)。
+# 此时 kickstart 必然失败, 重启只会空耗熔断额度, 故直接跳过 ——
+# 开发者改代码期间无需任何手工操作, 提交后自动恢复看守。
+if [ ! -f "$REPO/beidou_launcher/preflight.py" ]; then
+  log "ERROR 仓库路径校验失败: $REPO 不是北斗仓库 —— 看守无法判断可启动性, 跳过重启"
+  notify "北斗看守配置异常" "仓库路径解析为 ${REPO} —— 非北斗仓库；自动重启已停用，需人工检查 watchdog 安装位置"
+  exit 0
+fi
+if ! dirty=$(git -C "$REPO" status --porcelain 2>/dev/null); then
+  log "SKIP 无法读取 git 工作区状态 ($REPO), 保守跳过自动重启"
+  exit 0
+fi
+if [ -n "$dirty" ]; then
+  n=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
+  log "SKIP 工作区有 $n 项未提交变更, 引擎预检会拒绝启动, 跳过自动重启 (不计入熔断)"
+  if [ $(( (now - down_since) % 1800 )) -lt 60 ]; then
+    notify "北斗引擎停机（源码未提交）" "工作区有 $n 项未提交变更，引擎预检会拒绝启动，已跳过自动重启；提交后自动恢复"
+  fi
+  exit 0
 fi
 
 if [ "$fail_count" -ge "$MAX_FAILS" ]; then
