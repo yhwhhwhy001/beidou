@@ -1634,6 +1634,7 @@ class AutonomousEngine:
             symbol = str(protection.get("symbol", ""))
             generation = int(protection.get("position_generation") or 0)
             self._position_generation[symbol] = max(self._position_generation.get(symbol, 0), generation)
+        self._backfill_position_generation_from_projection()
         self._last_order_placed_at: float = 0.0  # 最近一次下单时间戳（用于对账宽限期）
         # The selected outbox uses the same configured authority as the store;
         # SQLite remains only for Paper or an explicitly blocked diagnostic
@@ -4110,6 +4111,25 @@ class AutonomousEngine:
             session_id=str(getattr(p_order, "session_id", self._session_id) or ""),
             exchange_order_id=str(exchange_order_id) if exchange_order_id else None,
         )
+        if persisted_status == "ACTIVE":
+            # BD-FIX (naked exposure ledger): 保护 ACTIVE 确认 = 保护已建立,
+            # 清除该 symbol 的裸露时钟 —— 否则陈年 attempts≥3 记录在下次
+            # 裸仓第一轮就双门通过, 无 3 连确认直接平仓。
+            self._clear_protection_exposure(str(p_order.instrument_id))
+
+    def _backfill_position_generation_from_projection(self) -> None:
+        """启动时从持久化投影行回填持仓代数 (可测试接缝)。
+
+        BD-FIX (naked exposure ledger): 代数重建不能只看 ACTIVE 保护行 ——
+        裸仓品种(保护无法建立)没有 ACTIVE 行, 仅靠保护行恢复会把代数归 0,
+        重启后第一次 _persist_protection_exposure 就把持久化裸露时钟当"新仓"
+        清掉重起算, "重启不清除"的修复要害会静默失效。投影行是金额级
+        durable 事实, 从投影行回填代数, 与保护行恢复取 max。
+        """
+        for _sym, _proj_row in self._position_projection.items():
+            _proj_gen = int((_proj_row or {}).get("position_generation", 0) or 0)
+            if _proj_gen > 0:
+                self._position_generation[_sym] = max(self._position_generation.get(_sym, 0), _proj_gen)
 
     def _resolve_position_generation(self, symbol: str, pp: Any) -> int:
         """M11-R2: S33 重建止损的持仓代数解析(可测试接缝)。
@@ -4927,6 +4947,10 @@ class AutonomousEngine:
                             exchange_order_id=exchange_order_id,
                         )
                         row["status"] = "ACTIVE"
+                        # BD-FIX (naked exposure ledger): ACK 采纳为 ACTIVE =
+                        # 保护已建立, 同样清除裸露时钟 (与 _persist_protection_order
+                        # 的 ACTIVE 确认路径一致)。
+                        self._clear_protection_exposure(str(row.get("symbol", symbol)))
                         is_pending = False
                     except Exception as _adopt_exc:
                         print(
@@ -7602,6 +7626,10 @@ class AutonomousEngine:
             source_event_id,
         )
         self._position_projection[symbol] = projection
+        if new_qty == zero:
+            # BD-FIX (naked exposure ledger): 持仓归零 → 清除裸露时钟。
+            # 否则旧仓的陈年记录 (attempts≥3) 在新仓代数未变时杀新仓。
+            self._clear_protection_exposure(symbol)
 
     def _commit_fill_facts(
         self,
@@ -9873,6 +9901,10 @@ class AutonomousEngine:
         _ts = _clock()
         _store = getattr(self, "_store", None)
         if _store is None:
+            # sqlite/paper 回退 store 无 generic record API: 本函数与
+            # _maybe_emergency_close_unprotectable 静默 no-op, 紧急平仓在该
+            # 模式不生效 —— 有意为之: PG 不可用时引擎本就 trading BLOCKED
+            # (engine.py:1564), 宁可不触发也不误触发。
             return {}
         _gen = int(getattr(self, "_position_generation", {}).get(symbol, 0) or 0)
         key = f"exposure:{symbol}"
@@ -9883,16 +9915,13 @@ class AutonomousEngine:
                 old = _get("protection_exposure", key)
             except Exception:
                 old = None
-        if (
-            old
-            and int(
-                (old.get("payload") if isinstance(old, dict) and "payload" in old else old).get(
-                    "position_generation", 0
-                )
-                or 0
-            )
-            != _gen
-        ):
+        # 兼容两种行形状: 生产 PG store 返回 bare payload dict; 部分替身/
+        # 未来 store 返回 {"payload": ...} 包裹行 —— 统一先解包, 后续
+        # generation/attempts/unprotectable_since 读取不再分叉 (wrapped 行
+        # 不解包会读成 since=0 → 立即升级, fail-unsafe)。
+        if old is not None and isinstance(old, dict) and "payload" in old:
+            old = old["payload"]
+        if old and int(old.get("position_generation", 0) or 0) != _gen:
             self._clear_protection_exposure(symbol)
             old = None
         attempts = int((old or {}).get("attempts", 0)) + 1 if old else 1
