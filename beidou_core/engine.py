@@ -168,6 +168,7 @@ def _apply_testnet_event_stream_exemption(
     system/exchange pair.
     """
 
+    # TESTNET-EXEMPT: EXEMPT-01
     if not result.matched and environment == "testnet" and event_facts is not None:
         differences = [str(difference) for difference in result.differences or []]
         two_way_differences = [
@@ -1366,7 +1367,7 @@ class AutonomousEngine:
         self._symbols = normalized_symbols
         self._cli_mode = mode  # CLI 参数: research/paper/shadow/testnet/safety_only
         self._producer_only = bool(producer_only)
-        if self._producer_only and mode != "testnet":
+        if self._producer_only and mode != "testnet":  # testnet 模式限定（G5 producer）
             raise ValueError("G5_PRODUCER_TESTNET_ONLY")
 
         # 封闭运行模式枚举 — 决定写能力
@@ -4792,8 +4793,7 @@ class AutonomousEngine:
         gate closed and returns ``False``; it never adopts or cancels a row.
         """
 
-        if bool(getattr(self, "_producer_only", False)):
-            return True
+        read_only = bool(getattr(self, "_producer_only", False))
 
         try:
             rows = list(self._store.restore_protections())
@@ -4846,6 +4846,9 @@ class AutonomousEngine:
             ]
             hard_issues = [i for i in semantic_issues if not i.startswith("PROTECTION_VENUE_ROW_MISSING:")]
             if venue_missing and not hard_issues:
+                if read_only:
+                    self._block_unowned_protection_orders(venue_missing)
+                    return False
                 # 所有问题都是"交易所缺失" → 保护单已被触发/取消/过期
                 # → 清理本地过期记录，而非永久阻断。
                 store = getattr(self, "_store", None)
@@ -4929,6 +4932,11 @@ class AutonomousEngine:
             ]
             conflict_owners = {str(row.get("owner_id", "")).strip() for row in conflict_rows}
             if conflict_owners == {str(self._protection_owner_id)}:
+                if read_only:
+                    self._block_unowned_protection_orders(
+                        [f"PROTECTION_MULTIPLE_ACTIVE_GENERATIONS:{symbol}" for symbol in conflicting_symbols]
+                    )
+                    return False
                 # BD-FIX: 多代数残留(旧持仓的保护行未被清理,新持仓重建了
                 # 另一组行)。取消本进程所有权的全部冲突行与 venue 条件单,
                 # 由 Phase 1 按 venue 持仓量重建 —— 而非永久阻断(实测
@@ -4972,6 +4980,9 @@ class AutonomousEngine:
                 return False
             venue_position = venue_positions.get(symbol)
             if venue_position is None:
+                if read_only:
+                    self._block_unowned_protection_orders([f"POSITION_FLAT_ON_VENUE:{symbol}"])
+                    return False
                 # BD-FIX: 持仓已在交易所平掉但本地保护行残留。取消本进程
                 # 所有权的行与 venue 条件单(Phase 1 只为 venue 持仓重建,
                 # 平仓的标的不再需要保护),而非永久阻断。
@@ -5000,6 +5011,9 @@ class AutonomousEngine:
                 and str(r.get("side", "")).strip().upper() != expected_protection_side.value
                 for r in position_rows
             ):
+                if read_only:
+                    self._block_unowned_protection_orders([f"PROTECTION_SIDE_FLIPPED:{symbol}"])
+                    return False
                 self._cancel_stale_protection_rows(symbol, position_rows, "PROTECTION_SIDE_FLIPPED")
                 continue
             stop_orders: list[ProtectionOrder] = []
@@ -5024,6 +5038,11 @@ class AutonomousEngine:
                     and inventory is not None
                     and any(str(a.get("algoId", "")) == exchange_order_id for a in inventory)
                 ):
+                    if read_only:
+                        self._block_unowned_protection_orders(
+                            [f"PROTECTION_PENDING_REQUIRES_ADOPTION:{protection_id}"]
+                        )
+                        return False
                     # BD-FIX: 已拿到 venue ACK 但持久化中断停留在 PENDING 的行
                     # (实测 XRP TP:venue 存在 algoId,durable 行未推进 ACTIVE
                     # → 覆盖检查跳过 PENDING → MISSING_TP → LOCKED)。按
@@ -5140,6 +5159,9 @@ class AutonomousEngine:
                 # S33 重建 SL。
                 pass
             elif len(stop_orders) != 1 or stop_quantity < abs(signed_quantity):
+                if read_only:
+                    self._block_unowned_protection_orders([f"STOP_COVERAGE_STALE:{symbol}"])
+                    return False
                 # BD-FIX: 陈旧保护(持仓在多腿入场后增长,SL/TP 停留在首腿
                 # 成交量)。取消本进程所有权的陈旧行与 venue 条件单,由
                 # Phase 1 按 venue 持仓量重建 —— 而非永久阻断(实测 18:46
@@ -7455,6 +7477,44 @@ class AutonomousEngine:
         cache[str(order_id)] = (time.time(), found)
         return found
 
+    def _committed_fill_qty_covers(self, order_id: str, cumulative_qty: float) -> bool:
+        """Prove that durable committed fill deltas cover a venue cumulative fill.
+
+        ``TRADE_LITE`` can commit before the later cumulative order update.  In
+        that race the in-memory high-water mark makes the cumulative delta
+        zero, so no cumulative event row exists.  Only durable committed deltas
+        for the same order may certify that observation; missing, malformed or
+        unreadable facts remain fail-closed.
+        """
+
+        try:
+            target = Decimal(str(cumulative_qty))
+        except (InvalidOperation, ValueError, TypeError):
+            return False
+        if not target.is_finite() or target <= 0:
+            return False
+        restore = getattr(self._store, "restore_fill_events", None)
+        if not callable(restore):
+            return False
+        try:
+            rows = restore()
+        except Exception:
+            return False
+        committed = Decimal("0")
+        for row in rows or []:
+            if str(row.get("order_id", "")) != str(order_id):
+                continue
+            if str(row.get("processing_state", "")) != "COMMITTED":
+                continue
+            try:
+                delta = Decimal(str(row.get("delta_qty", "0") or "0"))
+            except (InvalidOperation, ValueError, TypeError):
+                return False
+            if not delta.is_finite() or delta <= 0:
+                return False
+            committed += delta
+        return committed >= target
+
     def _record_trade_lite_fill(self, update: Any) -> None:
         """Record one TRADE_LITE fill fact (delta-based, trade-id idempotent).
 
@@ -7870,7 +7930,13 @@ class AutonomousEngine:
             # COMMITTED.  An in-memory high-water mark or a PENDING journal
             # row cannot certify the ledger/position projection after a crash.
             fill_row = self._store.get_fill_event(fill_event_id) if fill_event_id else None
-            if not fill_event_id or fill_row is None or str(fill_row.get("processing_state", "")) != "COMMITTED":
+            exact_event_committed = (
+                bool(fill_event_id)
+                and fill_row is not None
+                and str(fill_row.get("processing_state", "")) == "COMMITTED"
+            )
+            committed_coverage = self._committed_fill_qty_covers(order_id, raw_executed_qty)
+            if not exact_event_committed and not committed_coverage:
                 self._mark_order_unknown(order_id, symbol, f"FILL_FACT_COMMIT_UNKNOWN:{fill_event_id or 'MISSING'}")
                 return
             # BD-FIX (final83g): 成交事实已由更早的观测路径入账(pre-ACK
@@ -10174,7 +10240,7 @@ class AutonomousEngine:
         _env = env if env is not None else _os.environ
         _mode = str(getattr(getattr(self, "_env_mode", None), "value", "") or "")
         enabled = (
-            _mode == "testnet"
+            _mode == "testnet"  # testnet 模式裸仓风险收敛（非风险放宽）
             or str(_env.get("BEIDOU_NAKED_POSITION_AUTOCLOSE", "")) == "1"
         )
         if not enabled:

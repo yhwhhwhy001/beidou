@@ -514,6 +514,46 @@ def test_restore_durable_protection_projection_valid_ack_pending_and_unknown_mat
         assert expected in probe._blocked
 
 
+def test_g5_producer_hydrates_ack_backed_protection_without_persistent_writes() -> None:
+    account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]}
+    store = _ProtectionStore(_active_protection_rows())
+    engine = _restore_engine(store)
+    engine._producer_only = True
+
+    assert engine._restore_durable_protection_projection(account, _protection_inventory()) is True
+    assert set(engine._protection.all_positions()) == {"pos"}
+    assert set(engine._active_algo_ids["pos"]) == {"sl1", "tp1"}
+    assert store.saved == []
+    assert store.removed == []
+
+
+def test_g5_producer_rejects_missing_venue_protection_without_cleanup() -> None:
+    account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]}
+    store = _ProtectionStore(_active_protection_rows())
+    engine = _restore_engine(store)
+    engine._producer_only = True
+
+    assert (
+        engine._restore_durable_protection_projection(
+            account,
+            [
+                {
+                    "algoId": "other",
+                    "symbol": "ETHUSDT",
+                    "side": "SELL",
+                    "quantity": "1",
+                    "triggerPrice": "90",
+                    "reduceOnly": True,
+                }
+            ],
+        )
+        is False
+    )
+    assert any(issue.startswith("PROTECTION_VENUE_ROW_MISSING:") for issue in engine._blocked)
+    assert store.saved == []
+    assert store.removed == []
+
+
 def test_restore_durable_protection_projection_conflicts_pending_and_role_errors() -> None:
     account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]}
     inventory = _protection_inventory()

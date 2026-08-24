@@ -1916,6 +1916,65 @@ async def test_engine_process_fill_recovery_exception_and_cumulative_race_paths(
     await unknown._process_fill("entry-order", "BTCUSDT", {"executedQty": "1", "avgPrice": "100"})
     assert "FILL_FACT_COMMIT_UNKNOWN" in reasons[-1][-1]
 
+    lite_committed = _process_engine()
+    lite_committed._consume_cumulative_fill = lambda *_args, **_kwargs: (
+        0.0,
+        100.0,
+        "order:entry-order:cum:1:avg:100",
+    )
+    lite_committed._store = SimpleNamespace(
+        get_fill_event=lambda _event_id: None,
+        restore_fill_events=lambda: [
+            {
+                "fill_event_id": "lite:entry-order:trade-1",
+                "order_id": "entry-order",
+                "delta_qty": "1",
+                "processing_state": "COMMITTED",
+            }
+        ],
+    )
+    reasons = []
+    lite_committed._mark_order_unknown = lambda *args: reasons.append(args)
+    await lite_committed._process_fill(
+        "entry-order",
+        "BTCUSDT",
+        {"executedQty": "1", "avgPrice": "100", "side": "BUY"},
+    )
+    assert reasons == []
+    assert lite_committed._ensure_calls and "entry-order" not in lite_committed._active_order_ids
+
+    insufficient = _process_engine()
+    insufficient._consume_cumulative_fill = lambda *_args, **_kwargs: (
+        0.0,
+        100.0,
+        "order:entry-order:cum:1:avg:100",
+    )
+    insufficient._store = SimpleNamespace(
+        get_fill_event=lambda _event_id: None,
+        restore_fill_events=lambda: [
+            {
+                "fill_event_id": "lite:entry-order:trade-1",
+                "order_id": "entry-order",
+                "delta_qty": "0.5",
+                "processing_state": "COMMITTED",
+            }
+        ],
+    )
+    reasons = []
+    insufficient._mark_order_unknown = lambda *args: reasons.append(args)
+    await insufficient._process_fill(
+        "entry-order",
+        "BTCUSDT",
+        {"executedQty": "1", "avgPrice": "100", "side": "BUY"},
+    )
+    assert "FILL_FACT_COMMIT_UNKNOWN" in reasons[-1][-1]
+
+    unreadable = _process_engine()
+    unreadable._store = SimpleNamespace(
+        restore_fill_events=lambda: (_ for _ in ()).throw(OSError("database unavailable"))
+    )
+    assert unreadable._committed_fill_qty_covers("entry-order", 1.0) is False
+
     deferred = _process_engine()
     deferred._consume_cumulative_fill = lambda *_args, **_kwargs: (0.0, 100.0, "committed")
     deferred._ensure_entry_protection = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("protection"))
