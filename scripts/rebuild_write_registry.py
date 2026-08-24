@@ -52,6 +52,23 @@ _NEW_ENTRY_DECISIONS: dict[str, dict[str, str]] = {
         "call_graph": "launchd -> governed wrapper -> canonical launcher (beidou start)",
         "expected_rejection": "CANONICAL_LAUNCHER_REQUIRED",
     },
+    # M00-F07-R2: watchdog 只负责受控 kickstart，不能绕过 canonical launcher。
+    "deploy/beidou_watchdog.sh": {
+        "kind": "shell",
+        "capability": "RUNTIME_ACTIVATION",
+        "status": "HARD_HOLD",
+        "owner": "Runtime Owner",
+        "call_graph": "launchd -> governed watchdog -> autopilot kickstart -> canonical launcher",
+        "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
+    },
+    "deploy/com.beidou.watchdog.plist": {
+        "kind": "script",
+        "capability": "RUNTIME_ACTIVATION",
+        "status": "HARD_HOLD",
+        "owner": "Runtime Owner",
+        "call_graph": "launchd -> governed watchdog script -> autopilot kickstart -> canonical launcher",
+        "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
+    },
     # M22: PITR 启用脚本写宿主机 PG 配置（本地运维迁移族）。
     "scripts/enable_pitr.sh": {
         "kind": "shell",

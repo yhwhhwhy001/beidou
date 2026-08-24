@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import os
 import signal
@@ -111,14 +110,18 @@ def summarize_blockers(blockers: list) -> str:
     # 改为优先展示 severity 最高的那条 (CRITICAL/HIGH 才是阻断源)。
     # R7: 展示文本只在分组循环内局部计算 (作分组键), 绝不改写输入对象
     # —— LOCKED 快照与 supervisor-state.json 的 message 保持原始完整内容。
-    _PRIORITY = {"LOCKDOWN": 4, "CRITICAL": 3, "P0": 3, "HIGH": 2, "P1": 2, "WARNING": 1, "P2": 0}
+    priority = {"LOCKDOWN": 4, "CRITICAL": 3, "P0": 3, "HIGH": 2, "P1": 2, "WARNING": 1, "P2": 0}
     groups: dict[tuple[str, str], list] = {}
     for item in blockers:
         display = item.message
         if str(getattr(item, "check_id", "")) == "runtime.health.incidents":
-            incs = ((item.evidence or {}).get("incidents") or []) if isinstance(getattr(item, "evidence", None), dict) else []
+            incs = (
+                ((item.evidence or {}).get("incidents") or [])
+                if isinstance(getattr(item, "evidence", None), dict)
+                else []
+            )
             if incs:
-                inc = max(incs, key=lambda i: _PRIORITY.get(str(i.get("severity", "")).upper(), 0))
+                inc = max(incs, key=lambda i: priority.get(str(i.get("severity", "")).upper(), 0))
                 display = (
                     f"活动事故(首列最高级): [{inc.get('severity')}] {inc.get('title')} "
                     f"{str(inc.get('description', ''))[:120]}"
@@ -156,23 +159,6 @@ def _write_locked_snapshot(
     return path
 
 
-def _apply_g5_dev_exemption(checks: list[CheckResult], mode: str, exempt: bool) -> list[CheckResult]:
-    """M22-F05 (codex merge 回归修复): 已登记 dev 便利豁免的启动层应用。
-
-    豁免登记由 cli 层显式读 env 后以参数传入(架构测试要求本文件
-    与 preflight 源码不含豁免标签)。preflight 保持严格 —— G5 检查
-    永不缺席、status 恒为真实判定;启动层仅在豁免登记时把 G5 阻断
-    语义降级为 P2(FAIL+P2 不阻断,证据与输出保留)。未登记豁免时
-    任何 G5 缺失仍硬阻断。豁免只作用于 testnet 写模式。
-    """
-    if not (exempt and mode == "testnet"):
-        return checks
-    return [
-        dataclasses.replace(check, severity=CheckSeverity.P2) if check.check_id == "preflight.g5_certificate" else check
-        for check in checks
-    ]
-
-
 class BeidouSupervisor:
     def __init__(
         self,
@@ -185,7 +171,6 @@ class BeidouSupervisor:
         monitor_interval: float = MONITOR_INTERVAL,
         self_heal: bool = True,
         max_restarts: int = MAX_RESTARTS,
-        g5_dev_exemption: bool = False,
     ) -> None:
         self.project_root = project_root
         self.mode = mode
@@ -193,7 +178,6 @@ class BeidouSupervisor:
         self.port = port
         self.startup_timeout = startup_timeout
         self.monitor_interval = monitor_interval
-        self.g5_dev_exemption = g5_dev_exemption
         self.self_heal = self_heal
         self.max_restarts = max_restarts
         self.recovery_window_seconds: float = 600.0  # 10 分钟滑动窗口
@@ -1538,10 +1522,8 @@ class BeidouSupervisor:
             # 不得反噬主循环。
             _update_stuck = getattr(self.engine, "_update_stuck_marker", None)
             if callable(_update_stuck):
-                try:
+                with suppress(Exception):
                     _update_stuck()
-                except Exception:
-                    pass
 
             self.report.phase = "RUNTIME_MONITORING"
             self.report.replace_phase_checks("runtime.", checks)
@@ -1616,7 +1598,6 @@ class BeidouSupervisor:
         # Preflight is strictly read-only. Do not create a PID lock or write
         # supervisor evidence until every blocking fact has passed.
         preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
-        preflight = _apply_g5_dev_exemption(preflight, self.mode, self.g5_dev_exemption)
         self.report.phase = "PREFLIGHT"
         self.report.replace_phase_checks("preflight.", preflight)
         self._print_checks(preflight)

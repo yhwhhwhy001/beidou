@@ -517,33 +517,20 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
     assert "force_stop_existing" not in source
 
 
-def test_g5_dev_exemption_applies_only_at_launcher_layer(
-    monkeypatch: pytest.MonkeyPatch,
+def test_legacy_g5_fast_start_cannot_downgrade_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """M22-F05: 已登记 dev 豁免只在启动层降级 G5 阻断语义。
+    """A legacy fast-start environment variable must not bypass G5."""
+    from beidou_launcher import supervisor as supervisor_module
+    from beidou_launcher.supervisor import BeidouSupervisor
 
-    preflight 恒为严格判定(FAIL+P0);豁免由 cli 层显式读 env 传参,
-    supervisor 启动层在豁免登记时把 G5 降为 P2(不阻断),检查与证据
-    保留;未登记或非 testnet 不降级。
-    """
-    from beidou_launcher.supervisor import _apply_g5_dev_exemption
-
+    monkeypatch.setenv("BEIDOU_DEV_FAST_START", "1")
     g5_fail = CheckResult("preflight.g5_certificate", "G5 Testnet 证书", CheckStatus.FAIL, CheckSeverity.P0, "x")
-    other_p0 = CheckResult("preflight.python", "Python 版本", CheckStatus.FAIL, CheckSeverity.P0, "x")
+    monkeypatch.setattr(supervisor_module, "run_preflight", lambda *_args: ([g5_fail], None))
 
-    applied = _apply_g5_dev_exemption([g5_fail, other_p0], "testnet", exempt=True)
-    by_id = {check.check_id: check for check in applied}
-    assert by_id["preflight.g5_certificate"].severity is CheckSeverity.P2
-    assert by_id["preflight.g5_certificate"].status is CheckStatus.FAIL
-    assert by_id["preflight.g5_certificate"].is_blocking is False
-    assert by_id["preflight.python"].severity is CheckSeverity.P0  # 其他检查不受影响
-
-    strict = _apply_g5_dev_exemption([g5_fail], "testnet", exempt=False)
-    assert strict[0].severity is CheckSeverity.P0
-    assert strict[0].is_blocking is True
-
-    paper_mode = _apply_g5_dev_exemption([g5_fail], "paper", exempt=True)
-    assert paper_mode[0].severity is CheckSeverity.P0
+    supervisor = BeidouSupervisor(project_root=tmp_path, mode="testnet", symbols=["BTCUSDT"], port=19090)
+    assert asyncio.run(supervisor.run()) == 2
+    assert supervisor.report.blockers[0].severity is CheckSeverity.P0
 
 
 def test_launchagent_template_is_direct_and_fail_closed() -> None:

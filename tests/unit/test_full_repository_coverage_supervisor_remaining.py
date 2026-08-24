@@ -184,9 +184,7 @@ def test_g7_producer_noop_and_monitor_scheduler_exception_are_safe(tmp_path: Pat
 
     asyncio.run(supervisor_module._refresh_snapshot_safe(broken_snapshot()))
     check = _blocker("preflight.g5_certificate")
-    downgraded = supervisor_module._apply_g5_dev_exemption([check], "testnet", True)
-    assert downgraded[0].severity is CheckSeverity.P2
-    assert supervisor_module._apply_g5_dev_exemption([check], "paper", True)[0].severity is CheckSeverity.P0
+    assert check.is_blocking is True
 
 
 def test_g7_producer_records_sli_batch_and_deduplicates_incidents(tmp_path: Path) -> None:

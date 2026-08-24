@@ -149,10 +149,6 @@ def main(
         monitor_interval=monitor_interval,
         self_heal=self_heal,
         max_restarts=max_restarts,
-        # M22-F05: 已登记 dev 便利豁免(.env 配置/wrapper 注入)——仅在
-        # 此层读取 env 并显式传参;preflight/supervisor 源码不含该
-        # 标签(架构测试硬约束),G5 检查永不缺席、status 恒真实。
-        g5_dev_exemption=bool(os.environ.get("BEIDOU_DEV_FAST_START")),
     )
     try:
         exit_code = asyncio.run(supervisor.run())
