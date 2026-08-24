@@ -9139,6 +9139,17 @@ class AutonomousEngine:
                 ):
                     local_projection_candidate = True
                     break
+            # A prior process can have persisted zero mutable projections
+            # while the durable fill replay still contains the old net
+            # position.  That state must re-enter the same governed flat
+            # reconciliation path on restart; otherwise the helper is never
+            # called and the account remains permanently MISMATCHED.
+            if not local_projection_candidate:
+                durable_facts = self._build_system_reconciliation_facts()
+                for quantity in dict(getattr(durable_facts, "positions", {}) or {}).values():
+                    if abs(Decimal(str(getattr(quantity, "amount", quantity)))) > Decimal("1e-12"):
+                        local_projection_candidate = True
+                        break
         except Exception:
             # A local-state read failure is itself UNKNOWN.  Let the ordinary
             # reconciliation path record the failure rather than attempting a
@@ -10502,6 +10513,31 @@ class AutonomousEngine:
                 return False
             generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
 
+        # A previous recovery may already have zeroed the mutable position
+        # projection and removed protections before the durable replay origin
+        # was advanced.  Include every non-zero symbol in the complete
+        # durable replay so that restart can retry the same governed rebase.
+        build_system_facts = getattr(self, "_build_system_reconciliation_facts", None)
+        if not callable(build_system_facts):
+            return False
+        try:
+            system_facts = build_system_facts()
+        except Exception:
+            return False
+        if not bool(getattr(system_facts, "complete", False)):
+            return False
+        system_positions = getattr(system_facts, "positions", {})
+        try:
+            for fact_symbol, quantity in dict(system_positions).items():
+                symbol_text = str(fact_symbol).strip().upper()
+                amount = Decimal(str(getattr(quantity, "amount", quantity)))
+                if not symbol_text or not amount.is_finite():
+                    return False
+                if abs(amount) > Decimal("1e-12"):
+                    local_symbols.add(symbol_text)
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+
         if not local_symbols:
             return False
         if any(abs(venue_amounts.get(symbol, Decimal("0"))) > Decimal("1e-12") for symbol in local_symbols):
@@ -10600,31 +10636,26 @@ class AutonomousEngine:
         if set(getattr(self, "_pending_stop_intent", {})) & (set(local_positions) | durable_position_ids):
             return False
 
-        # The durable replay must also be flat.  A REST zero readback cannot
-        # silently overwrite a committed local fill that the ledger still
-        # considers open.
-        build_system_facts = getattr(self, "_build_system_reconciliation_facts", None)
-        if not callable(build_system_facts):
-            return False
+        # The current net positions in the complete durable replay do not
+        # have to be flat: a historical fill journal can legitimately
+        # describe a position which has since been closed at the venue.  The
+        # independent flat account read above is the authority for the new
+        # current-state baseline; fill rows remain immutable and are included
+        # in the evidence hash.
         try:
-            system_facts = build_system_facts()
-        except Exception:
-            return False
-        if not bool(getattr(system_facts, "complete", False)):
-            return False
-        system_positions = getattr(system_facts, "positions", {})
-        for symbol in local_symbols:
-            system_amount = Decimal("0")
-            for fact_symbol, quantity in dict(system_positions).items():
-                if str(fact_symbol).strip().upper() != symbol:
-                    continue
-                try:
-                    system_amount = Decimal(str(getattr(quantity, "amount", quantity)))
-                except (InvalidOperation, TypeError, ValueError):
+            durable_system_positions = {
+                str(fact_symbol).strip().upper(): str(getattr(quantity, "amount", quantity))
+                for fact_symbol, quantity in dict(system_positions).items()
+            }
+            for amount_text in durable_system_positions.values():
+                if not Decimal(str(amount_text)).is_finite():
                     return False
-                break
-            if not system_amount.is_finite() or abs(system_amount) > Decimal("1e-12"):
-                return False
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+
+        save_opening = getattr(store, "save_account_opening_projection", None)
+        if not callable(save_opening):
+            return False
 
         snapshot_payload = {
             "account_positions": sorted((symbol, str(amount)) for symbol, amount in venue_amounts.items()),
@@ -10641,17 +10672,65 @@ class AutonomousEngine:
             json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()[:32]
         source_event_id = f"venue-flat-reconciliation:{snapshot_hash}"
+        evidence_payload = {
+            "venue_snapshot": snapshot_payload,
+            "durable_system_positions_before_rebase": durable_system_positions,
+            "committed_fill_event_ids": sorted(
+                str(row.get("fill_event_id", "")) for row in fill_rows if str(row.get("fill_event_id", ""))
+            ),
+        }
+        evidence_hash = hashlib.sha256(
+            json.dumps(evidence_payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        baseline_captured_at = datetime.now(timezone.utc).isoformat()
+        baseline_positions = {
+            symbol: str(amount)
+            for symbol, amount in venue_amounts.items()
+            if abs(amount) > Decimal("1e-12")
+        }
+
+        def _mark_flat_cleanup_incomplete() -> None:
+            issues = getattr(self, "_protection_issues", None)
+            if isinstance(issues, set):
+                issues.add("FLAT_RECONCILIATION_CLEANUP_INCOMPLETE")
+            self._protection_owner_unknown = True
+
+        # Advance the durable replay origin before clearing process-local
+        # protection state.  This is a governed Testnet-only recovery fact,
+        # not an exchange write and not a deletion of the fill journal.  If
+        # the baseline cannot be persisted, leave every local fact untouched.
+        try:
+            save_opening(
+                projection_id=f"flat-reconciliation-{snapshot_hash}",
+                account_id="default",
+                venue_id="BINANCE",
+                balance_amount=str(account.get("totalWalletBalance", "0")),
+                balance_currency="USDT",
+                balance_decimals=8,
+                positions=baseline_positions,
+                open_orders=[str(row.get("orderId")) for row in open_orders],
+                captured_at=baseline_captured_at,
+                source="TESTNET_VENUE_FLAT_RECONCILIATION",
+                fact_version=f"venue-account:{account.get('updateTime', '') or snapshot_hash!s}",
+                evidence_hash=f"sha256:{evidence_hash}",
+                approval_id=f"reconciliation-governed:{source_event_id}",
+                complete=True,
+            )
+        except Exception:
+            logger.warning("flat venue baseline persistence failed", exc_info=True)
+            return False
 
         # Persist the zero projection before removing local protection rows.
-        # If persistence fails, the old local facts remain in memory and the
-        # safety gate stays closed rather than presenting a partial repair as
-        # complete.
+        # If persistence fails, the already-recorded flat baseline remains an
+        # auditable recovery fact and the protection gate is kept closed until
+        # the next startup can finish the deterministic cleanup.
         for symbol in sorted(local_symbols):
             generation = generations.get(symbol, 0)
             try:
                 store.save_position_projection(symbol, "0", "0", generation, source_event_id)
             except Exception:
                 logger.warning("flat venue projection persistence failed for %s", symbol, exc_info=True)
+                _mark_flat_cleanup_incomplete()
                 return False
             self._position_projection[symbol] = {
                 "symbol": symbol,
@@ -10677,6 +10756,7 @@ class AutonomousEngine:
                 self._remove_protection_with_cleanup(position_id, symbol)
             except Exception:
                 logger.warning("flat venue local protection cleanup failed for %s", position_id, exc_info=True)
+                _mark_flat_cleanup_incomplete()
                 return False
 
         remove_protection = getattr(store, "remove_protection", None)
@@ -10693,9 +10773,11 @@ class AutonomousEngine:
                     remove_protection(position_id)
                 except Exception:
                     logger.warning("flat venue durable protection cleanup failed for %s", position_id, exc_info=True)
+                    _mark_flat_cleanup_incomplete()
                     return False
             if str(row.get("status", "")).strip().upper() == "PENDING":
                 if not callable(save_protection):
+                    _mark_flat_cleanup_incomplete()
                     return False
                 try:
                     save_protection(
@@ -10717,6 +10799,7 @@ class AutonomousEngine:
                     )
                 except Exception:
                     logger.warning("flat venue pending protection cancellation failed for %s", position_id, exc_info=True)
+                    _mark_flat_cleanup_incomplete()
                     return False
 
         active_algo_ids = getattr(self, "_active_algo_ids", {})

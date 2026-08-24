@@ -33,6 +33,18 @@ class _Store:
         self.saved: list[dict[str, Any]] = []
         self.removed: list[str] = []
         self.projections: dict[str, dict[str, Any]] = {}
+        self.opening = {
+            "complete": 1,
+            "balance_amount": "1000",
+            "balance_currency": "USDT",
+            "balance_decimals": 8,
+            "positions": {},
+            "fact_version": "opening-1",
+            "captured_at": "2026-08-24T00:00:00+00:00",
+            "source": "TEST",
+            "evidence_hash": "opening-hash",
+            "approval_id": "opening-approval",
+        }
 
     def restore_protections(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.protections.values()]
@@ -66,17 +78,20 @@ class _Store:
         }
 
     def restore_account_opening_projection(self, _account_id: str, _venue_id: str) -> dict[str, Any]:
-        return {
+        return dict(self.opening)
+
+    def save_account_opening_projection(self, **kwargs: Any) -> None:
+        self.opening = {
             "complete": 1,
-            "balance_amount": "1000",
-            "balance_currency": "USDT",
-            "balance_decimals": 8,
-            "positions": {},
-            "fact_version": "opening-1",
-            "captured_at": "2026-08-24T00:00:00+00:00",
-            "source": "TEST",
-            "evidence_hash": "opening-hash",
-            "approval_id": "opening-approval",
+            "balance_amount": str(kwargs["balance_amount"]),
+            "balance_currency": str(kwargs["balance_currency"]),
+            "balance_decimals": int(kwargs["balance_decimals"]),
+            "positions": dict(kwargs["positions"]),
+            "fact_version": str(kwargs["fact_version"]),
+            "captured_at": str(kwargs["captured_at"]),
+            "source": str(kwargs["source"]),
+            "evidence_hash": str(kwargs["evidence_hash"]),
+            "approval_id": str(kwargs["approval_id"]),
         }
 
     def restore_fill_events(self) -> list[dict[str, Any]]:
@@ -1520,6 +1535,55 @@ def test_authoritative_flat_snapshot_converges_stale_local_position() -> None:
     assert engine._store.projections["XRPUSDT"]["signed_quantity"] == "0"
     assert engine._protection.all_positions() == {}
     assert engine._store.restore_protections() == []
+
+
+def test_flat_snapshot_rebases_durable_fill_replay_without_erasing_fill_history() -> None:
+    engine = _flat_reconciliation_engine()
+    historical_fill = {
+        "fill_event_id": "fill-xrp-history",
+        "event_time": "2026-08-24T00:00:01+00:00",
+        "processing_state": "COMMITTED",
+        "symbol": "XRPUSDT",
+        "side": "BUY",
+        "delta_qty": "1.0",
+    }
+    engine._store.restore_fill_events = lambda: [dict(historical_fill)]
+
+    converged = engine._converge_flat_local_positions(
+        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+        [],
+    )
+
+    assert converged is True
+    assert engine._store.opening["source"] == "TESTNET_VENUE_FLAT_RECONCILIATION"
+    assert engine._store.restore_fill_events() == [historical_fill]
+    facts = engine._build_system_reconciliation_facts()
+    assert facts.complete is True
+    assert facts.positions == {}
+
+
+def test_flat_snapshot_retries_after_mutable_projection_was_already_zeroed() -> None:
+    engine = _flat_reconciliation_engine()
+    historical_fill = {
+        "fill_event_id": "fill-xrp-retry",
+        "event_time": "2026-08-24T00:00:01+00:00",
+        "processing_state": "COMMITTED",
+        "symbol": "XRPUSDT",
+        "side": "BUY",
+        "delta_qty": "1.0",
+    }
+    engine._store.restore_fill_events = lambda: [dict(historical_fill)]
+    engine._store.protections = {}
+    engine._protection._projections.clear()
+    engine._position_projection["XRPUSDT"]["signed_quantity"] = "0"
+
+    assert engine._converge_flat_local_positions(
+        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+        [],
+    ) is True
+    assert engine._store.opening["source"] == "TESTNET_VENUE_FLAT_RECONCILIATION"
 
 
 def test_flat_snapshot_does_not_converge_when_algo_inventory_is_not_genuine() -> None:
