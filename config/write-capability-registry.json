@@ -813,7 +813,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "454edc2e6fb3e64ba235d0309acdd8a86e920c119b39dcfb017bac7d3d89650a",
+ "governance_digest": "ace0b3872fabd5c1b6a187be4335148448eb06b2028dfaf6f7c2fac43b3c0f60",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "40929d5c4f1f6a65a459a1cc16ba01908723118a47fdfe06a6fbdf86e79258a6",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -886,7 +886,7 @@
   "beidou_control/plane.py": "ec50b2d2b4329fe206d4f98063a81d2c11171a6d235464bf2bccd6d26cec6c1d",
   "beidou_control/truth.py": "efcb7ca7c9c3c03c2c9865d02ea82c0da3aaaf56b5632f89147ee8baee9844d4",
   "beidou_core/__init__.py": "4b41d4e38978088ae4b60ca9ea555a6231e72afe2785982067aca79d800d14ff",
-  "beidou_core/alerts.py": "5be086da4eb2e99919d091acb89506a5e34f26a73af63f1e96bcba5653d6dd7f",
+  "beidou_core/alerts.py": "ebf7e1f0188670ff86e183d1922186b7c560059a8f5862528d7733914c06beaf",
   "beidou_core/engine.py": "686112bff364e5885daeb7845ba5a0fcc9e41a31aab50f671fa3c5e6f5611721",
   "beidou_core/evidence_bridge.py": "3924ea990cbbafdcf8cc4c3721ae37de703d53f943832458ac68df9c37eced71",
   "beidou_core/expression_component.py": "2327f91d255d99e2f453f6c756309fbbf8122ce551c828e9321c0f0af819f5e5",
@@ -976,7 +976,7 @@
   "beidou_observability/monitoring/fact_collector.py": "bcc6d00567cd79cc01dd9caa65bab9711f19a10948ab3b9d3c2abd841185a60a",
   "beidou_observability/monitoring/frequency_policy.py": "92cebd49d2e893ed4c1834d11966f48b674b3b11f16cdce82d3e4e6cde65dfc0",
   "beidou_observability/monitoring/health_aggregator.py": "fcf8effb8989b4086a44cae1792dc00b19074405396fb4ad181c62b6bd030d17",
-  "beidou_observability/monitoring/incident_manager.py": "e961553a92a07e22d8f405572ca1a8104b1c8b1e6bced36a882f10a9be386e19",
+  "beidou_observability/monitoring/incident_manager.py": "a4eb36e0c072fa305e18b8fe1392299b6e0933244fd25c3627ce9dad452fc931",
   "beidou_observability/monitoring/instrumentation.py": "a9b53759275234492ad36d16a0cc31d7a27bc63413b22f11589feb66941dd560",
   "beidou_observability/monitoring/p0_immediate_trigger.py": "14b954a8937c22211be91396585e9138f7f7a08353fcd52603114beef1a60562",
   "beidou_observability/monitoring/rate_limit_budget.py": "4f4f8548266a05f0dae0509c6b09e9580af5b10459d42bc260a181b93e9ee67e",
@@ -988,7 +988,7 @@
   "beidou_observability/monitoring/snapshot_broker.py": "953ea017e900307f8428b38a360d3e8bbf47084c37ae628724b065d7ab18b7bf",
   "beidou_observability/monitoring/storm_detector.py": "e6fb1a477cb21bc57b2398d4e45880cca56fec4b516ff5e095c6115140691e1c",
   "beidou_observability/monitoring/watchdog.py": "74f35aeb9d7e86ea22638a8c66a2fd5a7a534cf543174d712845ae58c85f8902",
-  "beidou_observability/telemetry.py": "1f02feb15fb84fc40c41afa41651b4a21c3fc220ed12e98cab65295df3b24f4b",
+  "beidou_observability/telemetry.py": "5066a5a8c0c575648b692a62e84a86c46eb832f527a54cdd9f203aebdbfc2066",
   "beidou_policy/__init__.py": "4c641b6ec5b201093fb20472c945f9e9d0c11eab1d017f48d323b97831297c2c",
   "beidou_policy/loader.py": "3b32167db434be0ddf109e0ca9731eec336626154190409f81ca450665222d59",
   "beidou_policy/registry.py": "2f3672e3571d6e022ec029ea5ff68711d8f40111afb56dd2f305ecda9f75ca6d",
@@ -1439,64 +1439,64 @@
    "status": "HARD_HOLD"
   },
   {
+   "governance_id": "WRITE-BEIDOU_CORE-HTTP-31E03C06",
+   "identity": "beidou_core/alerts.py:211:LEXICAL_NETWORK_SURFACE:network",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-HTTP-31E03C06]",
+   "owner": "Runtime Owner",
+   "status": "HARD_HOLD"
+  },
+  {
    "governance_id": "WRITE-ALERT-WEBHOOK-REQUEST",
-   "identity": "beidou_core/alerts.py:231:DIRECT_URLLIB_REQUEST:POST",
+   "identity": "beidou_core/alerts.py:348:DIRECT_URLLIB_REQUEST:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ALERT-WEBHOOK-REQUEST]",
    "owner": "SRE Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ALERT-WEBHOOK-REQUEST",
-   "identity": "beidou_core/alerts.py:231:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:348:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ALERT-WEBHOOK-REQUEST]",
    "owner": "SRE Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ALERT-WEBHOOK-REQUEST",
-   "identity": "beidou_core/alerts.py:232:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:349:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ALERT-WEBHOOK-REQUEST]",
    "owner": "SRE Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ALERT-WEBHOOK-REQUEST",
-   "identity": "beidou_core/alerts.py:232:NETWORK_TRANSPORT_CALL:urllib.urlopen",
+   "identity": "beidou_core/alerts.py:349:NETWORK_TRANSPORT_CALL:urllib.urlopen",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ALERT-WEBHOOK-REQUEST]",
    "owner": "SRE Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ALERT-WEBHOOK-REQUEST",
-   "identity": "beidou_core/alerts.py:233:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:350:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ALERT-WEBHOOK-REQUEST]",
    "owner": "SRE Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "NETWORK-ALERTS-URLLIB",
-   "identity": "beidou_core/alerts.py:415:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:535:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-ALERTS-URLLIB]",
    "owner": "Runtime Owner",
    "status": "READ_ONLY"
   },
   {
    "governance_id": "NETWORK-ALERTS-URLLIB",
-   "identity": "beidou_core/alerts.py:416:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:536:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-ALERTS-URLLIB]",
    "owner": "Runtime Owner",
    "status": "READ_ONLY"
   },
   {
    "governance_id": "NETWORK-ALERTS-URLLIB",
-   "identity": "beidou_core/alerts.py:50:LEXICAL_NETWORK_SURFACE:network",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-ALERTS-URLLIB]",
-   "owner": "Runtime Owner",
-   "status": "READ_ONLY"
-  },
-  {
-   "governance_id": "NETWORK-ALERTS-URLLIB",
-   "identity": "beidou_core/alerts.py:82:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/alerts.py:62:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[NETWORK-ALERTS-URLLIB]",
    "owner": "Runtime Owner",
    "status": "READ_ONLY"
@@ -2777,6 +2777,17 @@
    "occurrences": 1,
    "owner": "Control Owner",
    "source": "beidou_control/plane.py::ControlPlane.execute_authorized_resume::execute_action[RESUME]",
+   "status": "HARD_HOLD"
+  },
+  {
+   "call_graph": "UNREVIEWED: newly discovered terminal write path",
+   "capability": "TERMINAL_WRITE_BOUNDARY",
+   "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+   "id": "WRITE-BEIDOU_CORE-HTTP-31E03C06",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-HTTP-31E03C06]",
+   "occurrences": 1,
+   "owner": "Runtime Owner",
+   "source": "beidou_core/alerts.py::AlertDispatcher._enqueue_webhook::http[PUT]",
    "status": "HARD_HOLD"
   },
   {
