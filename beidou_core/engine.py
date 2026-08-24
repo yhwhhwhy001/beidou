@@ -9139,6 +9139,16 @@ class AutonomousEngine:
                 ):
                     local_projection_candidate = True
                     break
+            # A durable naked-exposure marker is itself a local recovery
+            # candidate even when mutable position/protection projections
+            # were already zeroed.  Otherwise it can keep the slow-fuse
+            # incident active without reaching fresh-inventory cleanup.
+            if not local_projection_candidate:
+                exposure_records = getattr(self._store, "_records", None)
+                if not callable(exposure_records):
+                    local_projection_candidate = True
+                else:
+                    local_projection_candidate = bool(exposure_records("protection_exposure"))
             # A prior process can have persisted zero mutable projections
             # while the durable fill replay still contains the old net
             # position.  That state must re-enter the same governed flat
@@ -9172,16 +9182,16 @@ class AutonomousEngine:
                     algo_inventory = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=8.0)
                 except Exception as exc:
                     logger.warning("flat-position Algo inventory read unavailable: %s", type(exc).__name__)
-            if isinstance(algo_inventory, list) and self._converge_flat_local_positions(
-                account, open_orders, algo_inventory
-            ):
-                with contextlib.suppress(Exception):
-                    self._update_protection_fact(
-                        hard_issues=[],
-                        venue_missing=[],
-                        unowned_ids=[],
-                        genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
-                    )
+            if isinstance(algo_inventory, list):
+                self._clear_stale_flat_protection_exposures(account, open_orders, algo_inventory)
+                if self._converge_flat_local_positions(account, open_orders, algo_inventory):
+                    with contextlib.suppress(Exception):
+                        self._update_protection_fact(
+                            hard_issues=[],
+                            venue_missing=[],
+                            unowned_ids=[],
+                            genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
+                        )
 
         exchange_positions: dict[InstrumentId, Quantity] = {}
         for position in account["positions"]:
@@ -10513,6 +10523,36 @@ class AutonomousEngine:
                 return False
             generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
 
+        # protection_exposure is a durable local safety fact, but it is not
+        # returned by restore_protections() once the corresponding position
+        # has already gone flat.  Include it in the same governed convergence
+        # candidate set so a stale naked-exposure marker cannot survive a
+        # fresh, complete venue-flat readback and keep readiness blocked
+        # forever.  A non-flat venue position or any unresolved execution fact
+        # still fails closed below; this does not classify exposure as flat by
+        # itself.
+        records = getattr(store, "_records", None)
+        if not callable(records):
+            return False
+        try:
+            exposure_rows = list(records("protection_exposure"))
+        except Exception:
+            return False
+        for row in exposure_rows:
+            if not isinstance(row, dict):
+                return False
+            symbol_text = str(row.get("symbol", "")).strip().upper()
+            if not symbol_text:
+                return False
+            local_symbols.add(symbol_text)
+            try:
+                generation = int(row.get("position_generation", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if generation < 0:
+                return False
+            generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
+
         # A previous recovery may already have zeroed the mutable position
         # projection and removed protections before the durable replay origin
         # was advanced.  Include every non-zero symbol in the complete
@@ -10836,6 +10876,190 @@ class AutonomousEngine:
             f"symbols={sorted(local_symbols)} source={source_event_id}"
         )
         return True
+
+    def _clear_stale_flat_protection_exposures(
+        self,
+        account: dict[str, Any],
+        open_orders: list[dict[str, Any]],
+        algo_inventory: list[dict[str, Any]],
+    ) -> set[str]:
+        """Clear naked-exposure markers proven stale by current facts.
+
+        A protection-exposure row can outlive the zero position projection it
+        describes.  That marker is not itself a position and must not keep
+        the slow-fuse incident active after a fresh complete account readback
+        proves the venue is flat.  This seam is narrower than the position
+        rebase above: it never changes a position projection or opening
+        baseline, and it refuses to clear while any target protection, order,
+        fill, or pending execution fact remains unresolved.
+        """
+
+        if str(getattr(getattr(self, "_env_mode", None), "name", "")).upper() != "TESTNET":
+            return set()
+        if not bool(getattr(self, "_can_write", False)):
+            return set()
+        observed_at = float(getattr(self, "_last_account_at", 0.0) or 0.0)
+        if observed_at <= 0 or time.time() - observed_at > 60.0:
+            return set()
+        if not isinstance(account, dict) or "totalWalletBalance" not in account:
+            return set()
+        if not isinstance(open_orders, list) or not isinstance(algo_inventory, list):
+            return set()
+        if not bool(getattr(self, "_last_algo_inventory_genuine", False)):
+            return set()
+
+        venue_amounts = self._validated_account_position_amounts(account)
+        if venue_amounts is None:
+            return set()
+
+        store = getattr(self, "_store", None)
+        records = getattr(store, "_records", None)
+        delete_record = getattr(store, "_delete_record", None)
+        if store is None or not callable(records) or not callable(delete_record):
+            return set()
+        try:
+            raw_exposures = list(records("protection_exposure"))
+        except Exception:
+            return set()
+
+        exposures: dict[str, dict[str, Any]] = {}
+        for raw in raw_exposures:
+            row = raw.get("payload") if isinstance(raw, dict) and "payload" in raw else raw
+            if not isinstance(row, dict):
+                return set()
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if not symbol:
+                return set()
+            exposures[symbol] = row
+        if not exposures:
+            return set()
+
+        candidates = {
+            symbol
+            for symbol in exposures
+            if abs(venue_amounts.get(symbol, Decimal("0"))) <= Decimal("1e-12")
+        }
+        if not candidates:
+            return set()
+
+        # Complete typed inventories are required; an empty or malformed row
+        # is UNKNOWN rather than evidence that the target symbol is clear.
+        for order in open_orders:
+            if not isinstance(order, dict):
+                return set()
+            order_id = str(order.get("orderId", "")).strip()
+            symbol = str(order.get("symbol", "")).strip().upper()
+            if not order_id or not symbol:
+                return set()
+            if symbol in candidates:
+                candidates.discard(symbol)
+        for order in algo_inventory:
+            if not isinstance(order, dict):
+                return set()
+            algo_id = str(order.get("algoId", "")).strip()
+            symbol = str(order.get("symbol", "")).strip().upper()
+            if not algo_id or not symbol:
+                return set()
+            if symbol in candidates:
+                candidates.discard(symbol)
+        if not candidates:
+            return set()
+
+        projections = getattr(self, "_position_projection", {})
+        if not isinstance(projections, dict):
+            return set()
+        for symbol in list(candidates):
+            row = projections.get(symbol)
+            if row is None:
+                continue
+            if not isinstance(row, dict):
+                return set()
+            try:
+                signed_quantity = Decimal(str(row.get("signed_quantity", "0") or "0"))
+            except (InvalidOperation, TypeError, ValueError):
+                return set()
+            if not signed_quantity.is_finite():
+                return set()
+            if abs(signed_quantity) > Decimal("1e-12"):
+                candidates.discard(symbol)
+        if not candidates:
+            return set()
+
+        try:
+            local_positions = dict(self._protection.all_positions())
+            durable_protections = list(store.restore_protections())
+        except Exception:
+            return set()
+        for position in local_positions.values():
+            symbol = str(getattr(position, "instrument_id", "")).strip().upper()
+            if symbol in candidates:
+                candidates.discard(symbol)
+        for row in durable_protections:
+            if not isinstance(row, dict):
+                return set()
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if symbol in candidates:
+                candidates.discard(symbol)
+        if not candidates:
+            return set()
+
+        # A zero account amount cannot override an unresolved local execution
+        # fact that may still recreate the position on the next replay.
+        try:
+            order_rows = list(store.restore_order_states())
+            fill_rows = list(store.restore_fill_events())
+        except Exception:
+            return set()
+        terminal_statuses = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        for row in order_rows:
+            if not isinstance(row, dict):
+                return set()
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if symbol in candidates and str(row.get("status", "")).strip().upper() not in terminal_statuses:
+                candidates.discard(symbol)
+        for row in fill_rows:
+            if not isinstance(row, dict):
+                return set()
+            symbol = str(row.get("symbol", "")).strip().upper()
+            state = str(row.get("processing_state", "COMMITTED")).strip().upper()
+            if symbol in candidates and state != "COMMITTED":
+                candidates.discard(symbol)
+        if not candidates:
+            return set()
+
+        outbox = getattr(self, "_outbox", None)
+        unacked = getattr(outbox, "unacked", None)
+        if not callable(unacked):
+            return set()
+        try:
+            if list(unacked()):
+                return set()
+        except Exception:
+            return set()
+        if (
+            getattr(self, "_pending_fill_retry", set())
+            or getattr(self, "_pending_fill_previous_qty", {})
+            or getattr(self, "_pending_protection_persist", {})
+            or getattr(self, "_pending_protection_retry", set())
+            or getattr(self, "_pending_stop_intent", {})
+        ):
+            return set()
+
+        cleared: set[str] = set()
+        for symbol in sorted(candidates):
+            try:
+                delete_record("protection_exposure", f"exposure:{symbol}")
+            except Exception as exc:
+                logger.warning(
+                    "stale flat protection exposure cleanup failed for %s: %s",
+                    symbol,
+                    type(exc).__name__,
+                )
+                continue
+            cleared.add(symbol)
+        if cleared:
+            print(f"[recon] Cleared stale flat protection exposure marker(s): symbols={sorted(cleared)}")
+        return cleared
 
     def _venue_position_gone(self, symbol: str) -> bool:
         """BD-FIX (closed-position fast cleanup): 新鲜账户快照确认品种无持仓。

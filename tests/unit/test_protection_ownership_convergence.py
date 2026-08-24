@@ -33,6 +33,7 @@ class _Store:
         self.saved: list[dict[str, Any]] = []
         self.removed: list[str] = []
         self.projections: dict[str, dict[str, Any]] = {}
+        self.exposures: dict[str, dict[str, Any]] = {}
         self.opening = {
             "complete": 1,
             "balance_amount": "1000",
@@ -48,6 +49,15 @@ class _Store:
 
     def restore_protections(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.protections.values()]
+
+    def _records(self, record_type: str) -> list[dict[str, Any]]:
+        if record_type != "protection_exposure":
+            return []
+        return [dict(r) for r in self.exposures.values()]
+
+    def _delete_record(self, record_type: str, record_id: str) -> None:
+        if record_type == "protection_exposure":
+            self.exposures.pop(str(record_id), None)
 
     def save_protection(self, **kwargs: Any) -> None:
         row = dict(kwargs)
@@ -1584,6 +1594,95 @@ def test_flat_snapshot_retries_after_mutable_projection_was_already_zeroed() -> 
         [],
     ) is True
     assert engine._store.opening["source"] == "TESTNET_VENUE_FLAT_RECONCILIATION"
+
+
+def test_flat_snapshot_clears_stale_protection_exposure_marker() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._store.exposures = {
+        "exposure:TIAUSDT": {
+            "symbol": "TIAUSDT",
+            "attempts": 1,
+            "last_reason": "LOCAL_POSITION_WITHOUT_VENUE_FACT",
+            "position_generation": 29,
+            "unprotectable_since": 1_787_536_572.423299,
+        }
+    }
+
+    assert engine._converge_flat_local_positions(
+        {
+            "totalWalletBalance": "1000",
+            "positions": [
+                {"symbol": "XRPUSDT", "positionAmt": "0"},
+                {"symbol": "TIAUSDT", "positionAmt": "0"},
+            ],
+        },
+        [],
+        [],
+    ) is True
+    assert engine._store.projections["TIAUSDT"]["signed_quantity"] == "0"
+    assert engine._store.exposures == {}
+
+
+def test_flat_exposure_cleanup_does_not_touch_live_position_on_same_account() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._store.protections["sl-wif"] = _durable_row(
+        protection_id="sl-wif",
+        symbol="WIFUSDT",
+        side="SELL",
+        order_type="STOP_MARKET",
+        quantity="26.2",
+        position_id="pos-wif",
+        generation=20,
+        algo_id="algo-wif-sl",
+    )
+    engine._store.exposures = {
+        "exposure:TIAUSDT": {
+            "symbol": "TIAUSDT",
+            "last_reason": "LOCAL_POSITION_WITHOUT_VENUE_FACT",
+            "position_generation": 29,
+            "unprotectable_since": 1_787_536_572.423299,
+        }
+    }
+    engine._position_projection["WIFUSDT"] = {
+        "symbol": "WIFUSDT",
+        "signed_quantity": "26.2",
+        "entry_price": "0.2014",
+        "position_generation": 20,
+        "source_event_id": "fill-wif",
+    }
+    engine._protection._projections["pos-wif"] = SimpleNamespace(
+        instrument_id="WIFUSDT",
+        position_generation=20,
+        stop_loss=None,
+        take_profits=[],
+    )
+
+    cleared = engine._clear_stale_flat_protection_exposures(
+        {
+            "totalWalletBalance": "1000",
+            "positions": [
+                {"symbol": "XRPUSDT", "positionAmt": "0"},
+                {"symbol": "TIAUSDT", "positionAmt": "0"},
+                {"symbol": "WIFUSDT", "positionAmt": "26.2"},
+            ],
+        },
+        [],
+        [
+            _venue_algo(
+                "algo-wif-sl",
+                "WIFUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="26.2",
+                trigger_price="0.1942",
+            )
+        ],
+    )
+
+    assert cleared == {"TIAUSDT"}
+    assert engine._store.exposures == {}
+    assert engine._position_projection["WIFUSDT"]["signed_quantity"] == "26.2"
+    assert "pos-wif" in engine._protection.all_positions()
 
 
 def test_flat_snapshot_does_not_converge_when_algo_inventory_is_not_genuine() -> None:
