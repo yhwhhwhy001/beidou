@@ -42,8 +42,7 @@ contract, gate, test, registry and evidence changes.
 - Fresh compileall, Ruff format/lint, full mypy, test-quality, hardcoded-value,
   forbidden-pattern, package validation and write-capability registry oracle:
   PASS.
-- Bandit: no issues identified. pip-audit: no known vulnerabilities; the local
-  editable `ueds` package is not published on PyPI and is therefore not audited.
+- Bandit: no issues identified. pip-audit: no known vulnerabilities.
 
 ## Runtime boundary and restart evidence
 

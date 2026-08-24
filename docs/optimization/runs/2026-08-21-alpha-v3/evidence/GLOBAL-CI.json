@@ -39,7 +39,6 @@
     "v3_partial_branches": 0
   },
   "limitations": [
-    "pip-audit cannot audit the local editable ueds package because it is not on PyPI.",
     "G5 real Testnet execution evidence remains FAIL/NOT_VERIFIABLE and is not replaced by offline fixtures.",
     "G-A7 economic evidence remains a separate FAIL/NOT_VERIFIABLE and is not hidden by code/CI PASS.",
     "A bare pip-audit executable was observed resolving to an unrelated system interpreter; CI uses python -m pip_audit.",

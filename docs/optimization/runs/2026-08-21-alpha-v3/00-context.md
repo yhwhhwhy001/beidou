@@ -28,7 +28,7 @@
 | Package baseline SHA | `b156881710aeeec278bfbbe75973aa8dbc83b614` |
 | Code validation HEAD | `1a14e0908bc2376ef4ea585fb3f4f43a366e8d74`；代码与 registry 修正已提交，运行时 JSONL 仍按约定不入库 |
 | Archive manifest | 13 个文件 SHA-256/字节数校验 PASS |
-| Python | `/Users/maguannan/ueds/.venv/bin/python`，3.14.6 |
+| Python | 3.14.6 |
 | 原始运行 | PID 98924，`/Users/maguannan/beidou`，Testnet，127.0.0.1:9090；只读确认、未重启 |
 | 最终合并后运行 | `1a14e0908bc2376ef4ea585fb3f4f43a366e8d74` 上的独立 Paper，127.0.0.1:19090；健康端点 200、ready=false，安全停止，见 `14-production-validation.md` |
 

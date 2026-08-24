@@ -40,8 +40,8 @@
 
 ## 环境与兼容边界
 
-- `/Users/maguannan/ueds/.venv/bin/python` 3.14.6；lock 依赖、`pip check`、mypy、
-  Ruff、Bandit、`python -m pip_audit` 均已复核；审计对本地 editable 包保留不可上 PyPI 的限制。
+- Python 3.14.6；lock 依赖、`pip check`、mypy、Ruff、Bandit、`python -m pip_audit`
+  均已复核。
 - 缺失运行目录 `.beidou/`、`evidence/bootstrap/` 已创建并验证可写。
 - Paper 运行观察到 `SIGNED_POLICY_UNAVAILABLE`、保护归属 UNKNOWN 和 reconciliation
   UNKNOWN；这些事实触发 `DEGRADED/NO_NEW_RISK`，没有生成伪政策或伪账户事实。

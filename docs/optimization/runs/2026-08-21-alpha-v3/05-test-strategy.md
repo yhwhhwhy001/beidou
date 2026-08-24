@@ -35,7 +35,7 @@ V3 专项 CI 明确列出 22 个核心模块，使用 `--cov-branch --cov-fail-u
 - 全仓 mypy：PASS。
 - `scan_test_quality.py`、`scan_hardcoded.py`、`check_forbidden_patterns.py`：PASS。
 - `validate_package.py`、`verify_write_registry.py --root .`：PASS。
-- Bandit：0 issues；pip-audit：No known vulnerabilities（本地 editable `ueds` 无 PyPI 审计源）。
+- Bandit：0 issues；pip-audit：No known vulnerabilities。
 - CI 全局覆盖命令：3532 passed，`85.02117828263381%`，满足项目 `fail_under=85` gate。
 
 ## 运行验证
