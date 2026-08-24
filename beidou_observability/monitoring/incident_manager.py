@@ -1,5 +1,6 @@
 """统一事故生命周期、持久化回放、去重和 remediation allowlist (MON09)。"""
 
+import hashlib
 import json
 import logging
 import threading
@@ -229,6 +230,22 @@ class IncidentManager:
         """Create/update a telemetry Incident and durably record its event."""
         key = dedupe_key or f"{category}:{title}"
         action = auto_action or AutoAction.ALERT
+        canonical_evidence = {
+            "category": category,
+            "dedupe_key": key,
+            "description": description,
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "severity": severity.value,
+            "source_check_id": source_check_id,
+            "title": title,
+        }
+        effective_evidence_hash = (
+            evidence_hash
+            or hashlib.sha256(
+                json.dumps(canonical_evidence, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        )
         with self._alert_lock:
             existing = self.get_active_alert(key)
             if existing is not None:
@@ -251,7 +268,7 @@ class IncidentManager:
                 existing.entity_type = entity_type or existing.entity_type
                 existing.entity_id = entity_id or existing.entity_id
                 existing.correlation_id = correlation_id or existing.correlation_id
-                existing.evidence_hash = evidence_hash or existing.evidence_hash
+                existing.evidence_hash = effective_evidence_hash or existing.evidence_hash
                 existing.gap_reasons = list(gap_reasons or [])
                 existing._last_updated = datetime.now(timezone.utc)
                 current = (
@@ -282,7 +299,7 @@ class IncidentManager:
                 source_check_id=source_check_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
-                evidence_hash=evidence_hash,
+                evidence_hash=effective_evidence_hash,
                 auto_action=action,
                 detected_at=now,
                 gap_reasons=list(gap_reasons or []),

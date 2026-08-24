@@ -247,8 +247,7 @@ def test_p0_monitoring_check_bridges_to_unified_incident_and_resolves(tmp_path) 
     snapshot = {"ok": True, "account": engine._last_account, "observed_at": now}
     failed = collect_monitoring_checks(engine=engine, exchange_account_snapshot=snapshot, algorithm_probe={"ok": True})
     assert any(
-        item.check_id == "runtime.safety.reconciliation"
-        and item.status.value == CheckStatus.FAIL.value
+        item.check_id == "runtime.safety.reconciliation" and item.status.value == CheckStatus.FAIL.value
         for item in failed
     )
     active = alerts.get_active_incidents()

@@ -26,6 +26,7 @@ from beidou_observability.telemetry import (
     Incident,
 )
 from beidou_reporting.engine import ReportGenerator
+from beidou_shared.types import CorrelationId
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +98,8 @@ class AlertDispatcher:
         """创建并分发事故告警。
 
         事故生命周期由 ``monitoring.IncidentManager`` 统一管理；此类只做
-        入口编排、抑制和渠道投递。``auto_action`` 是由 severity 派生的
-        声明字段，不会在 Dispatcher 内执行控制动作。
+        入口编排、抑制和渠道投递。``auto_action`` 仅是显式声明字段，缺省
+        为 ``ALERT``，不会在 Dispatcher 内执行控制动作。
 
         ``gap_reasons``: 保护覆盖缺口 reason 明细, 随 incident 贯通到
         get_active_incidents, 供 supervisor A/B 分流消费。
@@ -120,7 +121,7 @@ class AlertDispatcher:
                 source_check_id=source_check_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
-                correlation_id=correlation_id,
+                correlation_id=CorrelationId(correlation_id) if correlation_id else None,
                 evidence_hash=evidence_hash,
                 gap_reasons=gap_reasons,
             )
@@ -141,7 +142,7 @@ class AlertDispatcher:
                 source_check_id=source_check_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
-                correlation_id=correlation_id,
+                correlation_id=CorrelationId(correlation_id) if correlation_id else None,
                 evidence_hash=evidence_hash,
                 auto_action=effective_action,
                 gap_reasons=list(gap_reasons or []),
@@ -527,7 +528,9 @@ class AlertDispatcher:
                 source_check_id=str(record.get("source_check_id", "")),
                 entity_type=str(record.get("entity_type", "")),
                 entity_id=str(record.get("entity_id", "")),
-                correlation_id=str(record.get("correlation_id", "")) or None,
+                correlation_id=CorrelationId(str(record.get("correlation_id", "")))
+                if record.get("correlation_id")
+                else None,
                 evidence_hash=str(record.get("evidence_hash", "")),
                 auto_action=AutoAction(str(record["auto_action"])),
                 detected_at=detected_at.astimezone(timezone.utc),
