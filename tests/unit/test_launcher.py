@@ -72,9 +72,11 @@ def test_console_script_aliases() -> None:
     }
 
 
-def test_launcher_requires_explicit_symbol_universe() -> None:
+def test_launcher_parses_optional_symbol_override() -> None:
     from beidou_launcher.cli import _parse_symbols
 
+    assert _parse_symbols(None) == []
+    assert _parse_symbols("") == []
     assert _parse_symbols("BTCUSDT, ethusdt") == ["BTCUSDT", "ETHUSDT"]
     assert _parse_symbols("BTCUSDT, btcusdt") == ["BTCUSDT"]
     assert _parse_symbols("DEFAULT") == []

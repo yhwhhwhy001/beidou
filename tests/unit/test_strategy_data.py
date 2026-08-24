@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from beidou_data.datasets import DatasetManager
 from beidou_data.feature_store import FeatureStore, FeatureVector
 from beidou_data.trading_pool import PoolLifecycle, TradingPoolManager
+from beidou_data.trading_pool_lifecycle import discover_startup_candidates
 from beidou_shared.types import (
     InstrumentId,
     MonetaryValue,
@@ -35,6 +36,25 @@ class TestDatasetManager:
 
 
 class TestTradingPool:
+    def test_startup_candidates_are_discovered_without_fixed_symbols(self):
+        exchange_info = {
+            "symbols": [
+                {"symbol": "ETHUSDT", "status": "TRADING", "contractType": "PERPETUAL", "quoteAsset": "USDT"},
+                {"symbol": "BTCUSDT", "status": "TRADING", "contractType": "PERPETUAL", "quoteAsset": "USDT"},
+                {"symbol": "BTCUSD", "status": "TRADING", "contractType": "PERPETUAL", "quoteAsset": "USD"},
+                {"symbol": "ADAUSDT", "status": "BREAK", "contractType": "PERPETUAL", "quoteAsset": "USDT"},
+                {
+                    "symbol": "ETHUSDT_220930",
+                    "status": "TRADING",
+                    "contractType": "CURRENT_QUARTER",
+                    "quoteAsset": "USDT",
+                },
+            ]
+        }
+
+        assert discover_startup_candidates(exchange_info, max_instruments=1) == ["BTCUSDT"]
+        assert discover_startup_candidates(exchange_info, max_instruments=10) == ["BTCUSDT", "ETHUSDT"]
+
     def test_lifecycle(self):
         mgr = TradingPoolManager()
         vi = VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId("BTCUSDT"))

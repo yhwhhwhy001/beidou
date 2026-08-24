@@ -67,6 +67,48 @@ async def _refresh_snapshot_safe(coro: Any, *, timeout: float = 25.0) -> None:
         return
 
 
+async def resolve_trading_pool_symbols(settings: Any) -> list[str]:
+    """Resolve a bounded startup universe through the read-only exchange pool.
+
+    ``--symbols`` remains an explicit override, but an empty request now asks
+    the trading-pool boundary for candidates.  Only public ``exchangeInfo`` is
+    queried here; lifecycle scoring and activation remain inside
+    ``AutonomousEngine``.  Missing configuration, an unavailable snapshot, or
+    an empty candidate set is an error and therefore keeps startup blocked.
+    """
+
+    try:
+        rest_url = str(settings.exchange.rest_base_url or "").strip()
+    except AttributeError as exc:
+        raise RuntimeError("TRADING_POOL_ENDPOINT_UNKNOWN") from exc
+    if not rest_url:
+        raise RuntimeError("TRADING_POOL_ENDPOINT_UNKNOWN")
+    try:
+        max_instruments = int(settings.production.max_instruments)
+    except (AttributeError, TypeError, ValueError):
+        max_instruments = 0
+    if max_instruments <= 0:
+        raise RuntimeError("TRADING_POOL_CAPACITY_UNKNOWN")
+
+    from beidou_data.trading_pool_lifecycle import discover_startup_candidates
+    from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+    from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+
+    client = BinanceRESTClient(rest_url=rest_url, max_retries=1)
+    adapter = BinanceUsdmAdapter(rest_client=client)
+    try:
+        result = await adapter.request("GET", Endpoint.EXCHANGE_INFO)
+        if not result.is_success():
+            raise RuntimeError("TRADING_POOL_EXCHANGE_INFO_UNKNOWN")
+        candidates = discover_startup_candidates(result.data, max_instruments=max_instruments)
+    finally:
+        client.close()
+
+    if not candidates:
+        raise RuntimeError("TRADING_POOL_EMPTY")
+    return candidates
+
+
 _REPAIRABLE_PROTECTION_REASONS: frozenset[str] = frozenset(
     {
         "STOP_LOSS_QUANTITY_UNCOVERED",
@@ -1659,6 +1701,16 @@ class BeidouSupervisor:
             self.report.supervisor_state = "BLOCKED"
             print("❌ 启动前置检查未通过，系统未启动。")
             return 2
+
+        if not self.symbols:
+            print("[supervisor] 未提供 --symbols，正在从交易池解析候选标的…")
+            try:
+                self.symbols = await resolve_trading_pool_symbols(_settings)
+            except Exception as exc:
+                print(f"❌ 交易池解析失败，启动保持阻断: {type(exc).__name__}")
+                return 2
+            self.report.symbols = list(self.symbols)
+            print(f"[supervisor] 交易池已提供 {len(self.symbols)} 个候选标的")
 
         locked, lock_message = self.lock.acquire()
         if not locked:

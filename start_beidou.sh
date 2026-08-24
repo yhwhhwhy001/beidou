@@ -6,7 +6,7 @@
 set -eu
 
 usage() {
-    echo "usage: start_beidou.sh start --mode MODE --symbols SYMBOLS [launcher options]" >&2
+    echo "usage: start_beidou.sh start --mode MODE [--symbols SYMBOLS] [launcher options]" >&2
     echo "       start_beidou.sh doctor|status|stop [launcher options]" >&2
 }
 
@@ -26,22 +26,13 @@ esac
 
 if [ "$action" = "start" ]; then
     mode_seen=false
-    symbols_seen=false
     mode_count=0
-    symbols_count=0
     expect_mode=false
-    expect_symbols=false
     for argument in "$@"; do
         if [ "$expect_mode" = true ]; then
             [ -n "$argument" ] || { usage; exit 64; }
             mode_seen=true
             expect_mode=false
-            continue
-        fi
-        if [ "$expect_symbols" = true ]; then
-            [ -n "$argument" ] || { usage; exit 64; }
-            symbols_seen=true
-            expect_symbols=false
             continue
         fi
         case "$argument" in
@@ -53,17 +44,9 @@ if [ "$action" = "start" ]; then
                 mode_count=$((mode_count + 1))
                 mode_seen=true
                 ;;
-            --symbols)
-                symbols_count=$((symbols_count + 1))
-                expect_symbols=true
-                ;;
-            --symbols=?*)
-                symbols_count=$((symbols_count + 1))
-                symbols_seen=true
-                ;;
         esac
     done
-    if [ "$expect_mode" = true ] || [ "$expect_symbols" = true ] || [ "$mode_seen" != true ] || [ "$symbols_seen" != true ] || [ "$mode_count" -ne 1 ] || [ "$symbols_count" -ne 1 ]; then
+    if [ "$expect_mode" = true ] || [ "$mode_seen" != true ] || [ "$mode_count" -ne 1 ]; then
         usage
         exit 64
     fi

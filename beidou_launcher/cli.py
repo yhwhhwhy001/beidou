@@ -13,7 +13,6 @@ import click
 from .checks import find_project_root
 from .manifest import (
     DEFAULT_MODE,
-    DEFAULT_SYMBOLS,
     HEALTH_PORT,
     MAX_RESTARTS,
     MONITOR_INTERVAL,
@@ -45,7 +44,9 @@ def _enable_unbuffered_stdout() -> None:
             continue  # 不可 reconfigure 的流（如某些测试捕获器）保持默认
 
 
-def _parse_symbols(value: str) -> list[str]:
+def _parse_symbols(value: str | None) -> list[str]:
+    if not value:
+        return []
     values = [item.strip().upper() for item in value.split(",") if item.strip()]
     if any(item in {"ALL", "DEFAULT"} for item in values):
         return []
@@ -62,9 +63,9 @@ def _parse_symbols(value: str) -> list[str]:
 @click.option("--mode", type=click.Choice(SUPPORTED_MODES), default=DEFAULT_MODE, show_default=True)
 @click.option(
     "--symbols",
-    default=",".join(DEFAULT_SYMBOLS),
+    default=None,
     show_default=False,
-    help="显式指定交易品种，逗号分隔；不允许 DEFAULT/ALL 固定交易池回退。",
+    help="可选的交易品种覆盖，逗号分隔；未提供时由交易池自动解析。",
 )
 @click.option("--port", type=click.IntRange(1024, 65535), default=HEALTH_PORT, show_default=True)
 @click.option("--startup-timeout", type=click.FloatRange(30.0, 900.0), default=STARTUP_TIMEOUT, show_default=True)
@@ -92,7 +93,7 @@ def _parse_symbols(value: str) -> list[str]:
 def main(
     action: str,
     mode: str,
-    symbols: str,
+    symbols: str | None,
     port: int,
     startup_timeout: float,
     monitor_interval: float,
@@ -151,8 +152,8 @@ def main(
     attach_engine_file_log()
 
     parsed_symbols = _parse_symbols(symbols)
-    if not parsed_symbols:
-        raise click.ClickException("必须显式提供 --symbols；固定 DEFAULT/ALL 交易池已禁用")
+    if symbols and not parsed_symbols:
+        raise click.ClickException("--symbols 不能使用 DEFAULT/ALL 或空交易品种")
 
     # BD-CV53: 启动就绪门禁 — 进程启动默认 NO_NEW_RISK
     from beidou_launcher.readiness_gate import ReadinessGate, StartupPhase

@@ -38,14 +38,17 @@ pip install -e ".[dev]"
 ## 使用
 
 ```bash
-# 启动时必须显式指定交易品种；默认运行模式为 Testnet
-beidou --symbols BTCUSDT,ETHUSDT
+# 一键启动：未提供 --symbols 时直接从交易池解析候选标的
+beidou --mode paper
 
-# Testnet
+# 也可以显式限定本次候选标的
+beidou --mode paper --symbols BTCUSDT,ETHUSDT
+
+# Testnet（需要显式选择运行模式；交易对仍可由交易池自动解析）
 export BEIDOU_BINANCE_API_KEY='...'
 export BEIDOU_BINANCE_API_SECRET='...'
 export BEIDOU_SIGNING_KEY='至少16字符的独立签名密钥'
-beidou --mode testnet --symbols BTCUSDT,ETHUSDT
+beidou --mode testnet
 
 # 诊断、状态和停止
 beidou doctor --mode testnet

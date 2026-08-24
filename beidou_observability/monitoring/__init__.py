@@ -283,6 +283,12 @@ def collect_monitoring_checks(
 
     def convert(result, *, name: str) -> CheckResult:
         """MonitoringCheckResult → 监督器 CheckResult。"""
+        evidence_hash = str(getattr(result, "evidence_hash", "") or "")
+        if not evidence_hash:
+            try:
+                evidence_hash = str(result.compute_evidence_hash())
+            except (AttributeError, TypeError, ValueError):
+                evidence_hash = ""
         return CheckResult(
             check_id=result.check_id,
             name=name,
@@ -295,7 +301,8 @@ def collect_monitoring_checks(
                 "observed_at": result.observed_at,
                 "fact_age_ms": result.fact_age_ms,
                 "source": result.source,
-                "evidence_hash": result.evidence_hash,
+                "evidence_hash": evidence_hash,
+                "correlation_id": result.correlation_id,
                 "remediation": result.remediation,
                 "policy_version": result.policy_version,
             },
@@ -331,6 +338,27 @@ def collect_monitoring_checks(
             message=f"MONITORING_CHECK_ERROR:{type(exc).__name__}:{exc}"[:500],
             evidence={"error_type": type(exc).__name__},
         )
+
+    def bridge_p0_results() -> None:
+        """Send deep P0 facts to the unified Incident path immediately."""
+        alerts = getattr(engine, "_alerts", None)
+        bridge = getattr(alerts, "bridge_monitoring_check", None)
+        if not callable(bridge):
+            return
+        for item in results:
+            item_severity = str(getattr(getattr(item, "severity", None), "value", getattr(item, "severity", "")))
+            if item_severity != "P0":
+                continue
+            try:
+                bridge(item)
+            except Exception as exc:
+                # The check result remains in the supervisor stream; a failed
+                # bridge is diagnostic and must not turn FAIL into PASS.
+                import logging
+
+                logging.getLogger("beidou.monitoring").error(
+                    "P0 incident bridge failed for %s: %s", getattr(item, "check_id", ""), type(exc).__name__
+                )
 
     # === 1. 账户健康 (MON03/INV-002) ===
     snapshot = exchange_account_snapshot if isinstance(exchange_account_snapshot, dict) else None
@@ -713,4 +741,5 @@ def collect_monitoring_checks(
         except Exception as exc:
             results.append(failure("runtime.chaos.health", "ChaosEngine 健康", CheckSeverity.P2, exc))
 
+    bridge_p0_results()
     return results

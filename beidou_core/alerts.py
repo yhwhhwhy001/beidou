@@ -5,17 +5,22 @@ P0 (CRITICAL/LOCKDOWN) 永不抑制，立即发送。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import queue
 import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from beidou_observability.monitoring.incident_manager import IncidentManager
 from beidou_observability.telemetry import (
+    SEVERITY_AUTO_ACTIONS,
     AlertSeverity,
     AlertSuppressor,
     AutoAction,
@@ -35,17 +40,24 @@ class AlertDispatcher:
         alerts_file: str = "evidence/beidou_alerts.jsonl",
         delivery_file: str | None = None,
         max_delivery_attempts: int = 5,
+        webhook_timeout: float = 5.0,
+        incident_manager: IncidentManager | None = None,
+        start_webhook_worker: bool = True,
     ) -> None:
         if max_delivery_attempts < 1:
             raise ValueError("max_delivery_attempts must be positive")
+        if webhook_timeout <= 0:
+            raise ValueError("webhook_timeout must be positive")
         self._webhook_url = webhook_url
+        self._webhook_timeout = float(webhook_timeout)
         self._alerts_file = alerts_file
         self._delivery_file = Path(delivery_file or f"{alerts_file}.delivery.jsonl")
         self._max_delivery_attempts = max_delivery_attempts
         self._suppressor = AlertSuppressor(window_seconds=300.0)
         self._report_generator = ReportGenerator()
         self._lock = threading.Lock()
-        self._active_incidents: dict[str, Incident] = {}
+        self._incident_manager = incident_manager or IncidentManager(event_log_path=alerts_file)
+        self._active_incidents: dict[str, Incident] = self._incident_manager.alert_incidents
         self._alert_count: dict[str, int] = {}
         self._tz = timezone(__import__("datetime").timedelta(hours=8))
         self._start_time = datetime.now(self._tz)
@@ -54,7 +66,15 @@ class AlertDispatcher:
         self._delivery_load_errors: list[str] = []
         self._delivery_persistence_error = False
         self._delivery_io_lock = threading.Lock()
+        self._webhook_queue: queue.Queue[str] = queue.Queue()
+        self._queued_delivery_ids: set[str] = set()
+        self._queued_incidents: dict[str, Incident] = {}
+        self._webhook_stop = threading.Event()
+        self._webhook_thread: threading.Thread | None = None
+        self._webhook_drain_on_close = True
         self._load_delivery_state()
+        if self._webhook_url and start_webhook_worker:
+            self._start_webhook_worker()
 
     def set_portfolio_provider(self, fn: Callable[[], str]) -> None:
         """注入持仓摘要提供器，webhook 推送时追加到描述末尾。"""
@@ -68,47 +88,82 @@ class AlertDispatcher:
         auto_action: AutoAction | None = None,
         category: str = "runtime",
         gap_reasons: list[str] | None = None,
+        source_check_id: str = "",
+        entity_type: str = "",
+        entity_id: str = "",
+        correlation_id: str | None = None,
+        evidence_hash: str = "",
+        dedupe_key: str | None = None,
     ) -> Incident:
-        """创建并分发事故告警。相同 category+title 的事故自动去重，更新已有事故。
+        """创建并分发事故告警。
 
-        ``gap_reasons``: 保护覆盖缺口 reason 明细 (可观测性修复), 随
-        incident 贯通到 get_active_incidents, 供 supervisor A/B 分流消费。
+        事故生命周期由 ``monitoring.IncidentManager`` 统一管理；此类只做
+        入口编排、抑制和渠道投递。``auto_action`` 是由 severity 派生的
+        声明字段，不会在 Dispatcher 内执行控制动作。
+
+        ``gap_reasons``: 保护覆盖缺口 reason 明细, 随 incident 贯通到
+        get_active_incidents, 供 supervisor A/B 分流消费。
         """
-        # Deduplicate: if an active incident with the same category+title exists,
-        # update it instead of creating a new one.
-        dedup_key = f"{category}:{title}"
-        with self._lock:
-            for existing_inc in list(self._active_incidents.values()):
-                existing_key = f"{getattr(existing_inc, 'root_cause_category', '')}:{existing_inc.title}"
-                if existing_key == dedup_key:
-                    # Update the existing incident in place
-                    existing_inc.description = description
-                    existing_inc.gap_reasons = list(gap_reasons or [])
-                    existing_inc._last_updated = datetime.now(timezone.utc)  # M21: 运行时字段
-                    return existing_inc
+        effective_dedupe_key = dedupe_key or f"{category}:{title}"
+        effective_action = auto_action or SEVERITY_AUTO_ACTIONS.get(severity, AutoAction.NOOP)
 
-        incident_id = f"inc-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S%f')}-{category}"
-
-        incident = Incident(
-            incident_id=incident_id,
-            severity=severity,
-            title=title,
-            description=description,
-            root_cause_category=category,
-            auto_action=auto_action or AutoAction.ALERT,
-            gap_reasons=list(gap_reasons or []),
-        )
+        # Preserve the historical ordering: an existing active incident is
+        # updated before suppression is considered.
+        existing = self._incident_manager.get_active_alert(effective_dedupe_key)
+        if existing is not None:
+            incident, _created = self._incident_manager.create_or_dedupe_alert(
+                severity,
+                title,
+                description,
+                auto_action=effective_action,
+                category=category,
+                dedupe_key=effective_dedupe_key,
+                source_check_id=source_check_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                correlation_id=correlation_id,
+                evidence_hash=evidence_hash,
+                gap_reasons=gap_reasons,
+            )
+            return incident
 
         # P0 永不抑制
-        if severity in (AlertSeverity.CRITICAL, AlertSeverity.LOCKDOWN):
-            self._dispatch(incident)
-            return incident
-
         # 检查抑制 (BD-FIX: 传递 category/title 用于指纹去重)
-        if self._suppressor.should_suppress(severity, f"{category}:{title}", category=category, title=title):
-            return incident
+        if severity not in (AlertSeverity.CRITICAL, AlertSeverity.LOCKDOWN) and self._suppressor.should_suppress(
+            severity, effective_dedupe_key, category=category, title=title
+        ):
+            return Incident(
+                incident_id=f"suppressed-{datetime.now(self._tz).strftime('%Y%m%d%H%M%S%f')}",
+                severity=severity,
+                title=title,
+                description=description,
+                root_cause_category=category,
+                dedupe_key=effective_dedupe_key,
+                source_check_id=source_check_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                correlation_id=correlation_id,
+                evidence_hash=evidence_hash,
+                auto_action=effective_action,
+                gap_reasons=list(gap_reasons or []),
+            )
 
-        self._dispatch(incident)
+        incident, created = self._incident_manager.create_or_dedupe_alert(
+            severity,
+            title,
+            description,
+            auto_action=effective_action,
+            category=category,
+            dedupe_key=effective_dedupe_key,
+            source_check_id=source_check_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            correlation_id=correlation_id,
+            evidence_hash=evidence_hash,
+            gap_reasons=gap_reasons,
+        )
+        if created:
+            self._dispatch(incident)
         return incident
 
     def _dispatch(self, incident: Incident) -> None:
@@ -116,15 +171,11 @@ class AlertDispatcher:
             self._active_incidents[incident.incident_id] = incident
             self._alert_count[incident.severity.value] = self._alert_count.get(incident.severity.value, 0) + 1
 
-        # 写入 JSONL 文件
-        self._write_to_file(incident)
-
-        # Webhook
+        # The IncidentManager has already durably recorded OPEN.  Persist a
+        # replayable delivery fact before handing the network work to a worker.
         if self._webhook_url:
-            # Queue before attempting network delivery.  A process crash
-            # between these two operations leaves a replayable PENDING fact.
             self._record_delivery_event(incident, "PENDING", attempts=0)
-            self._send_webhook(incident)
+            self._enqueue_webhook(incident)
 
         # 生成事故报告
         try:
@@ -139,12 +190,84 @@ class AlertDispatcher:
         except Exception as exc:
             logger.error("incident report generation failed for %s: %s", incident.incident_id, type(exc).__name__)
 
+    def _start_webhook_worker(self) -> None:
+        if self._webhook_thread is not None and self._webhook_thread.is_alive():
+            return
+        self._webhook_stop.clear()
+        self._webhook_drain_on_close = True
+        self._webhook_thread = threading.Thread(
+            target=self._webhook_worker_loop,
+            name="beidou-alert-webhook",
+            daemon=True,
+        )
+        self._webhook_thread.start()
+
+    def _enqueue_webhook(self, incident: Incident) -> bool:
+        with self._lock:
+            if incident.incident_id in self._queued_delivery_ids:
+                return False
+            self._queued_delivery_ids.add(incident.incident_id)
+            self._queued_incidents[incident.incident_id] = incident
+        self._webhook_queue.put(incident.incident_id)
+        return True
+
+    def _webhook_worker_loop(self) -> None:
+        while True:
+            try:
+                incident_id = self._webhook_queue.get(timeout=0.2)
+            except queue.Empty:
+                if self._webhook_stop.is_set():
+                    return
+                continue
+            try:
+                if self._webhook_stop.is_set() and not self._webhook_drain_on_close:
+                    continue
+                with self._lock:
+                    incident = self._queued_incidents.get(incident_id) or self._active_incidents.get(incident_id)
+                if incident is None:
+                    incident = self._incident_manager.get_alert_by_id(incident_id)
+                if incident is not None:
+                    self._send_webhook(incident)
+            except Exception as exc:
+                logger.error("webhook worker failed for alert %s: %s", incident_id, type(exc).__name__)
+            finally:
+                with self._lock:
+                    self._queued_delivery_ids.discard(incident_id)
+                    self._queued_incidents.pop(incident_id, None)
+                self._webhook_queue.task_done()
+
+    def flush_delivery(self, *, timeout: float = 5.0) -> bool:
+        """Wait for queued webhook work without changing durable retry state."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            if self._webhook_queue.unfinished_tasks == 0:
+                return True
+            time.sleep(0.01)
+        return self._webhook_queue.unfinished_tasks == 0
+
+    def close(self, *, flush: bool = False, timeout: float = 5.0) -> None:
+        """Stop the daemon worker; pending work remains replayable when not flushed."""
+        if flush:
+            self.flush_delivery(timeout=timeout)
+        self._webhook_drain_on_close = bool(flush)
+        self._webhook_stop.set()
+        worker = self._webhook_thread
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=max(0.0, float(timeout)))
+        self._webhook_thread = None
+
     def _write_to_file(self, incident: Incident) -> None:
         record = {
             "incident_id": incident.incident_id,
             "severity": incident.severity.value,
             "title": incident.title,
             "description": incident.description,
+            "category": str(getattr(incident, "root_cause_category", "") or "runtime"),
+            "source_check_id": str(getattr(incident, "source_check_id", "") or ""),
+            "entity_type": str(getattr(incident, "entity_type", "") or ""),
+            "entity_id": str(getattr(incident, "entity_id", "") or ""),
+            "correlation_id": str(getattr(incident, "correlation_id", "") or ""),
+            "evidence_hash": str(getattr(incident, "evidence_hash", "") or ""),
             "auto_action": incident.auto_action.value,
             "detected_at": incident.detected_at.isoformat(),
             "status": incident.status.value,
@@ -229,7 +352,7 @@ class AlertDispatcher:
                 ).encode()
 
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=5) as response:  # nosec B310 - webhook URL is policy-validated
+            with urllib.request.urlopen(req, timeout=self._webhook_timeout) as response:  # nosec B310 - webhook URL is policy-validated
                 http_status = int(getattr(response, "status", 200))
                 if http_status < 200 or http_status >= 300:
                     raise RuntimeError(f"webhook HTTP status {http_status}")
@@ -267,6 +390,7 @@ class AlertDispatcher:
                 # LOCKED → 跨重启残留 → 崩溃循环）。DEAD_LETTER 的
                 # attempts 已打满，重试前重置预算。
                 if float(record.get("next_retry_at", 0.0)) <= current_time
+                and str(record.get("incident_id", "")) not in self._queued_delivery_ids
                 and (
                     (
                         record.get("status") in {"PENDING", "FAILED"}
@@ -285,14 +409,16 @@ class AlertDispatcher:
                 continue
             if str(record.get("status", "")) == "DEAD_LETTER":
                 # 重试死信前重置 attempts，重新获得完整预算
-                with self._lock:
-                    self._delivery_state[str(record.get("incident_id", ""))] = {
-                        **record,
-                        "attempts": 0,
-                        "status": "PENDING",
-                    }
-            self._send_webhook(incident)
-            retried += 1
+                self._record_delivery_event(incident, "PENDING", attempts=0)
+            elif str(record.get("status", "")) == "FAILED":
+                self._record_delivery_event(
+                    incident,
+                    "PENDING",
+                    attempts=int(record.get("attempts", 0)),
+                    next_retry_at=0.0,
+                )
+            if self._enqueue_webhook(incident):
+                retried += 1
         return retried
 
     def get_delivery_health(self) -> dict[str, Any]:
@@ -302,6 +428,8 @@ class AlertDispatcher:
             statuses = [record.get("status") for record in records]
             return {
                 "configured": bool(self._webhook_url),
+                "timeout_seconds": self._webhook_timeout,
+                "queued": self._webhook_queue.unfinished_tasks,
                 "pending": sum(status in {"PENDING", "FAILED"} for status in statuses),
                 "failed": sum(status == "FAILED" for status in statuses),
                 "dead_letter": sum(status == "DEAD_LETTER" for status in statuses),
@@ -330,6 +458,12 @@ class AlertDispatcher:
             "severity": incident.severity.value,
             "title": incident.title,
             "description": incident.description,
+            "category": str(getattr(incident, "root_cause_category", "") or "runtime"),
+            "source_check_id": str(getattr(incident, "source_check_id", "") or ""),
+            "entity_type": str(getattr(incident, "entity_type", "") or ""),
+            "entity_id": str(getattr(incident, "entity_id", "") or ""),
+            "correlation_id": str(getattr(incident, "correlation_id", "") or ""),
+            "evidence_hash": str(getattr(incident, "evidence_hash", "") or ""),
             "auto_action": incident.auto_action.value,
             "detected_at": incident.detected_at.isoformat(),
             "status": status,
@@ -389,6 +523,13 @@ class AlertDispatcher:
                 severity=AlertSeverity(str(record["severity"])),
                 title=str(record["title"]),
                 description=str(record["description"]),
+                root_cause_category=str(record.get("category", "runtime")),
+                dedupe_key=str(record.get("dedupe_key") or f"{record.get('category', 'runtime')}:{record['title']}"),
+                source_check_id=str(record.get("source_check_id", "")),
+                entity_type=str(record.get("entity_type", "")),
+                entity_id=str(record.get("entity_id", "")),
+                correlation_id=str(record.get("correlation_id", "")) or None,
+                evidence_hash=str(record.get("evidence_hash", "")),
                 auto_action=AutoAction(str(record["auto_action"])),
                 detected_at=detected_at.astimezone(timezone.utc),
             )
@@ -396,12 +537,70 @@ class AlertDispatcher:
             logger.error("cannot reconstruct pending alert incident: %s", type(exc).__name__)
             return None
 
-    def resolve_incident(self, incident_id: str) -> None:
-        with self._lock:
-            incident = self._active_incidents.get(incident_id)
-            if incident:
-                incident.resolve("resolved")
-                del self._active_incidents[incident_id]
+    def resolve_incident(
+        self,
+        incident_id: str,
+        *,
+        resolution: str = "resolved",
+        evidence_hash: str = "",
+    ) -> None:
+        self._incident_manager.resolve_alert(
+            incident_id,
+            resolution=resolution,
+            evidence_hash=evidence_hash,
+        )
+
+    def bridge_monitoring_check(self, result: Any) -> Incident | None:
+        """Open or resolve a P0 Incident directly from a deep-monitor result."""
+        severity = getattr(getattr(result, "severity", None), "value", getattr(result, "severity", ""))
+        if str(severity) != "P0":
+            return None
+        status = str(getattr(getattr(result, "status", None), "value", getattr(result, "status", "UNKNOWN")))
+        evidence = dict(getattr(result, "evidence", None) or {})
+        check_id = str(getattr(result, "check_id", "") or "monitoring.unknown")
+        entity_type = str(evidence.get("entity_type", getattr(result, "entity_type", "")) or "")
+        entity_id = str(evidence.get("entity_id", getattr(result, "entity_id", "")) or "")
+        correlation_id = str(evidence.get("correlation_id", getattr(result, "correlation_id", "")) or "")
+        evidence_hash = str(evidence.get("evidence_hash", "") or "")
+        if not evidence_hash:
+            try:
+                payload = result.to_dict()
+            except AttributeError:
+                payload = {
+                    "check_id": check_id,
+                    "status": status,
+                    "severity": str(severity),
+                    "message": str(getattr(result, "message", "")),
+                    "evidence": evidence,
+                }
+            evidence_hash = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+            ).hexdigest()
+        dedupe_key = f"monitoring:{check_id}:{entity_type}:{entity_id}"
+        if status in {"FAIL", "UNKNOWN"}:
+            gap_reasons = [str(item.get("reason", "")) for item in (evidence.get("gaps") or []) if item.get("reason")]
+            return self.send_incident(
+                AlertSeverity.CRITICAL,
+                str(getattr(result, "name", "") or check_id),
+                str(getattr(result, "message", "") or status),
+                category="monitoring",
+                source_check_id=check_id,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                correlation_id=correlation_id or None,
+                evidence_hash=evidence_hash,
+                dedupe_key=dedupe_key,
+                gap_reasons=gap_reasons,
+            )
+        if status == "PASS":
+            existing = self._incident_manager.get_active_alert(dedupe_key)
+            if existing is not None:
+                self.resolve_incident(
+                    existing.incident_id,
+                    resolution=f"monitoring check recovered: {check_id}",
+                    evidence_hash=evidence_hash,
+                )
+        return None
 
     def get_active_incidents(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -413,6 +612,14 @@ class AlertDispatcher:
                     "status": i.status.value,
                     "detected_at": i.detected_at.isoformat(),
                     "description": str(getattr(i, "description", "") or "")[:300],
+                    "category": str(getattr(i, "root_cause_category", "") or "runtime"),
+                    "dedupe_key": str(getattr(i, "dedupe_key", "") or ""),
+                    "source_check_id": str(getattr(i, "source_check_id", "") or ""),
+                    "entity_type": str(getattr(i, "entity_type", "") or ""),
+                    "entity_id": str(getattr(i, "entity_id", "") or ""),
+                    "correlation_id": str(getattr(i, "correlation_id", "") or ""),
+                    "evidence_hash": str(getattr(i, "evidence_hash", "") or ""),
+                    "auto_action": i.auto_action.value,
                     "gap_reasons": [str(r) for r in (getattr(i, "gap_reasons", None) or [])],
                 }
                 for i in self._active_incidents.values()

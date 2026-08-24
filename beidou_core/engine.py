@@ -1619,6 +1619,7 @@ class AutonomousEngine:
         self._alerts = AlertDispatcher(
             webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
             alerts_file=self._settings.infrastructure.alerts_file,
+            webhook_timeout=self._settings.infrastructure.webhook_timeout,
         )
         self._alerts.set_portfolio_provider(self._portfolio_summary)
         self._health = HealthServer(
@@ -15417,7 +15418,14 @@ class AutonomousEngine:
         )
         print("[beidou-autopilot] 3. Checkpoint saved")
 
-        # 4. Close store
+        # 4. Stop alert delivery worker.  Unflushed deliveries remain PENDING
+        # in the sidecar and are replayed by the next process generation.
+        try:
+            self._alerts.close(flush=False)
+        except Exception as exc:
+            logger.warning("alert worker shutdown failed: %s", type(exc).__name__)
+
+        # 5. Close store
         self._store.close()
         self._health.stop()
-        print("[beidou-autopilot] 4. Shutdown complete.")
+        print("[beidou-autopilot] 5. Shutdown complete.")

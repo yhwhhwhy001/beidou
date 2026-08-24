@@ -19,19 +19,20 @@ def _sandboxed_wrapper(tmp_path: Path) -> Path:
     return wrapper
 
 
-def test_wrapper_requires_explicit_start_mode_and_symbols(tmp_path: Path) -> None:
+def test_wrapper_requires_start_mode_but_resolves_symbols_in_launcher(tmp_path: Path) -> None:
     wrapper = _sandboxed_wrapper(tmp_path)
 
     missing_all = subprocess.run(  # noqa: S603 - test-owned executable path
         [str(wrapper)], capture_output=True, text=True, check=False
     )
-    missing_symbols = subprocess.run(  # noqa: S603 - test-owned executable path
+    one_click = subprocess.run(  # noqa: S603 - test-owned executable path
         [str(wrapper), "start", "--mode", "safety_only"], capture_output=True, text=True, check=False
     )
 
     assert missing_all.returncode == 64
-    assert missing_symbols.returncode == 64
-    assert "delegated:" not in missing_all.stdout + missing_symbols.stdout
+    assert one_click.returncode == 0
+    assert "delegated:start --mode safety_only" in one_click.stdout
+    assert "delegated:" not in missing_all.stdout
 
 
 def test_wrapper_execs_only_the_canonical_launcher(tmp_path: Path) -> None:

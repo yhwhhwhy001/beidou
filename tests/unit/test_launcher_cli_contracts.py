@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import runpy
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -170,12 +172,98 @@ def test_cli_start_requires_bounded_symbols_and_runs_supervisor(tmp_path, monkey
     assert captured["self_heal"] is False
     assert captured["max_restarts"] == 0
 
+    captured.clear()
+    one_click = runner.invoke(cli_module.main, ["start", "--mode", "paper"])
+    assert one_click.exit_code == 7
+    assert captured["symbols"] == []
+
     class InterruptedSupervisor(Supervisor):
         async def run(self) -> int:
             raise KeyboardInterrupt
 
     monkeypatch.setattr(cli_module, "BeidouSupervisor", InterruptedSupervisor)
     assert runner.invoke(cli_module.main, ["start", "--symbols", "BTCUSDT"]).exit_code == 130
+
+
+def test_trading_pool_startup_resolution_uses_read_only_exchange_info(monkeypatch) -> None:
+    import beidou_exchange.binance_usdm.adapter as adapter_module
+    import beidou_exchange.binance_usdm.rest_client as rest_client_module
+    import beidou_launcher.supervisor as supervisor_module
+
+    class Result:
+        def __init__(self) -> None:
+            self.data = {
+                "symbols": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "status": "TRADING",
+                        "contractType": "PERPETUAL",
+                        "quoteAsset": "USDT",
+                    },
+                    {
+                        "symbol": "BTCUSDT",
+                        "status": "TRADING",
+                        "contractType": "PERPETUAL",
+                        "quoteAsset": "USDT",
+                    },
+                ]
+            }
+
+        def is_success(self) -> bool:
+            return True
+
+    class Client:
+        closed = False
+
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["rest_url"] == "https://pool.invalid"
+            assert kwargs["max_retries"] == 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Adapter:
+        def __init__(self, *, rest_client) -> None:
+            self.rest_client = rest_client
+
+        async def request(self, method, path):
+            assert method == "GET"
+            assert path == "/fapi/v1/exchangeInfo"
+            return Result()
+
+    monkeypatch.setattr(rest_client_module, "BinanceRESTClient", Client)
+    monkeypatch.setattr(adapter_module, "BinanceUsdmAdapter", Adapter)
+
+    settings = SimpleNamespace(
+        exchange=SimpleNamespace(rest_base_url="https://pool.invalid"),
+        production=SimpleNamespace(max_instruments=1),
+    )
+    assert asyncio.run(supervisor_module.resolve_trading_pool_symbols(settings)) == ["BTCUSDT"]
+
+
+def test_supervisor_blocks_before_lock_when_trading_pool_resolution_fails(tmp_path, monkeypatch) -> None:
+    import beidou_launcher.supervisor as supervisor_module
+    from beidou_launcher.supervisor import BeidouSupervisor
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "run_preflight",
+        lambda *_args: ([], SimpleNamespace()),
+    )
+
+    async def fail_resolution(_settings) -> list[str]:
+        raise RuntimeError("TRADING_POOL_EMPTY")
+
+    monkeypatch.setattr(supervisor_module, "resolve_trading_pool_symbols", fail_resolution)
+    supervisor = BeidouSupervisor(
+        project_root=tmp_path,
+        mode="paper",
+        symbols=[],
+        port=19090,
+    )
+
+    assert asyncio.run(supervisor.run()) == 2
+    assert not (tmp_path / ".beidou" / "beidou.pid").exists()
 
 
 def test_python_module_entrypoints_delegate_to_click_command(tmp_path, monkeypatch) -> None:

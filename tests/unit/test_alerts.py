@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from urllib.error import URLError
 
@@ -35,6 +36,7 @@ def test_webhook_failure_is_persisted_and_replayable(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("urllib.request.urlopen", fail)
     incident = dispatcher.send_incident(AlertSeverity.CRITICAL, "P0", "delivery test")
+    assert dispatcher.flush_delivery(timeout=2)
     health = dispatcher.get_delivery_health()
     assert health["pending"] == 1
     assert health["failed"] == 1
@@ -63,6 +65,7 @@ def test_webhook_failure_is_persisted_and_replayable(tmp_path: Path, monkeypatch
         delivery_file=str(delivery_file),
     )
     assert restarted.retry_pending(max_items=1, now=10**12) == 1
+    assert restarted.flush_delivery(timeout=2)
     assert restarted.get_delivery_health()["delivered"] == 1
 
 
@@ -191,10 +194,12 @@ def test_alert_dispatcher_suppression_reconstruction_dead_letter_and_report_edge
         delivery_file=str(delivery_file),
     )
     incident = dispatcher.send_incident(AlertSeverity.CRITICAL, "dead", "x")
+    assert dispatcher.flush_delivery(timeout=2)
     record = dispatcher._delivery_state[incident.incident_id]
     record.update(status="DEAD_LETTER", attempts=99, next_retry_at=0.0)
     dispatcher._send_webhook = lambda _incident: True  # type: ignore[method-assign]
     assert dispatcher.retry_pending(now=1.0) == 1
+    assert dispatcher.flush_delivery(timeout=2)
     assert dispatcher._delivery_state[incident.incident_id]["attempts"] == 0
 
     dispatcher._delivery_state["missing"] = {
@@ -227,3 +232,91 @@ def test_alert_dispatcher_suppression_reconstruction_dead_letter_and_report_edge
         delivery_file=str(blank_file),
     )
     assert blank.get_delivery_health()["unknown"] == 0
+
+
+def test_incident_lifecycle_is_durable_and_exposes_operational_identity(tmp_path: Path) -> None:
+    alerts_file = tmp_path / "incidents.jsonl"
+    first = AlertDispatcher(alerts_file=str(alerts_file))
+    incident = first.send_incident(
+        AlertSeverity.CRITICAL,
+        "reconciliation mismatch",
+        "venue and ledger differ",
+        category="monitoring",
+        source_check_id="runtime.safety.reconciliation",
+        entity_type="account",
+        entity_id="paper-1",
+        correlation_id="corr-1",
+        evidence_hash="evidence-1",
+    )
+
+    restarted = AlertDispatcher(alerts_file=str(alerts_file))
+    active = restarted.get_active_incidents()
+    assert active and active[0]["incident_id"] == incident.incident_id
+    assert active[0]["category"] == "monitoring"
+    assert active[0]["source_check_id"] == "runtime.safety.reconciliation"
+    assert active[0]["correlation_id"] == "corr-1"
+    assert active[0]["evidence_hash"] == "evidence-1"
+
+    same = restarted.send_incident(
+        AlertSeverity.CRITICAL,
+        "reconciliation mismatch",
+        "venue and ledger differ",
+        category="monitoring",
+        source_check_id="runtime.safety.reconciliation",
+        entity_type="account",
+        entity_id="paper-1",
+        correlation_id="corr-1",
+        evidence_hash="evidence-1",
+    )
+    assert same.incident_id == incident.incident_id
+
+    restarted.resolve_incident(incident.incident_id, resolution="reconciliation restored", evidence_hash="evidence-2")
+    assert restarted.get_active_incidents() == []
+    events = [json.loads(line) for line in alerts_file.read_text().splitlines()]
+    assert events[-1]["event_type"] == "RESOLUTION"
+    assert events[-1]["resolution"] == "reconciliation restored"
+
+
+def test_default_auto_action_is_severity_declaration_only(tmp_path: Path) -> None:
+    dispatcher = AlertDispatcher(alerts_file=str(tmp_path / "actions.jsonl"))
+    high = dispatcher.send_incident(AlertSeverity.HIGH, "high", "x")
+    critical = dispatcher.send_incident(AlertSeverity.CRITICAL, "critical", "x")
+    assert high.auto_action is AutoAction.PAUSE_TRADING
+    assert critical.auto_action is AutoAction.EXIT_ONLY
+    assert dispatcher.get_active_incidents()[0]["auto_action"] in {"PAUSE_TRADING", "EXIT_ONLY"}
+
+
+def test_webhook_delivery_is_queued_and_uses_configured_timeout(tmp_path: Path, monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[float] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def blocked(_request, *, timeout):
+        calls.append(timeout)
+        started.set()
+        release.wait(timeout=2)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", blocked)
+    dispatcher = AlertDispatcher(
+        webhook_url="https://example.test/hook",
+        webhook_timeout=0.25,
+        alerts_file=str(tmp_path / "queued.jsonl"),
+        delivery_file=str(tmp_path / "queued.delivery.jsonl"),
+    )
+    dispatcher.send_incident(AlertSeverity.CRITICAL, "queued", "x")
+    assert started.wait(timeout=1)
+    assert calls == [0.25]
+    release.set()
+    assert dispatcher.flush_delivery(timeout=2)
+    assert dispatcher.get_delivery_health()["delivered"] == 1
+    dispatcher.close()

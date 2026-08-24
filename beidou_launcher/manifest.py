@@ -6,8 +6,9 @@ from .registry import EXPECTED_ALPHA_COMPONENTS, EXPECTED_FACTORS, REQUIRED_ENGI
 
 SUPPORTED_MODES = ("research", "paper", "shadow", "testnet", "safety_only")
 DEFAULT_MODE = "safety_only"
-# A writable runtime must receive an explicit, versioned universe.  There is
-# intentionally no fixed-symbol fallback in the launcher.
+# Kept as an empty compatibility export for callers that imported the old
+# manifest.  Startup no longer treats this as a symbol source; an omitted
+# override is resolved from the read-only trading-pool discovery path.
 DEFAULT_SYMBOLS: tuple[str, ...] = ()
 HEALTH_PORT = 9090
 STARTUP_TIMEOUT = 300.0

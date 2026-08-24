@@ -67,6 +67,11 @@ class Incident:
     description: str
     correlation_id: CorrelationId | None = None
     root_cause_category: str | None = None
+    dedupe_key: str = ""
+    source_check_id: str = ""
+    entity_type: str = ""
+    entity_id: str = ""
+    evidence_hash: str = ""
     status: IncidentStatus = IncidentStatus.DETECTED
     auto_action: AutoAction = AutoAction.NOOP
     detected_at: datetime = field(default_factory=lambda: datetime.now(timezone(timedelta(hours=8))))
@@ -77,6 +82,7 @@ class Incident:
     # 可观测性修复: 保护覆盖缺口 reason 明细, 供 supervisor A/B 分流消费
     # (get_active_incidents 以 gap_reasons 字段暴露)。
     gap_reasons: list[str] = field(default_factory=list)
+    resolution_reason: str = ""
     # M21: 运行时字段 —— 去重更新时由 AlertManager 就地刷新
     _last_updated: datetime | None = None
 
@@ -88,6 +94,7 @@ class Incident:
     def resolve(self, resolution: str) -> None:
         self.status = IncidentStatus.RESOLVED
         self.resolved_at = datetime.now(timezone.utc)
+        self.resolution_reason = resolution
 
     def capture_evidence(self, snapshot: dict[str, Any]) -> None:
         snapshot["captured_at"] = datetime.now(timezone.utc).isoformat()

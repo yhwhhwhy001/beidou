@@ -7,6 +7,7 @@ visible as blocking results.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -220,6 +221,53 @@ def test_collect_monitoring_checks_factbus_and_writable_authority_paths() -> Non
     )
     recon = next(item for item in passed if item.check_id == "runtime.safety.reconciliation")
     assert recon.status.value == CheckStatus.PASS.value
+
+
+def test_p0_monitoring_check_bridges_to_unified_incident_and_resolves(tmp_path) -> None:
+    from beidou_core.alerts import AlertDispatcher
+
+    reset_fact_bus()
+    now = time.time()
+    alerts = AlertDispatcher(alerts_file=str(tmp_path / "monitoring-alerts.jsonl"))
+    engine = SimpleNamespace(
+        _alerts=alerts,
+        _can_write=True,
+        _env_mode=SimpleNamespace(value="paper"),
+        _last_account={"totalWalletBalance": "100", "positions": []},
+        _protection=SimpleNamespace(all_positions=lambda: {}),
+        _ledger=SimpleNamespace(_transactions=[]),
+        _factor_registry=None,
+        _last_realtime=now,
+        _last_nearline=now,
+        _last_offline=now,
+        _last_recon=now,
+        _last_reconciliation_result=None,
+        _chaos_engine=SimpleNamespace(run_chaos_cycle=lambda: None),
+    )
+    snapshot = {"ok": True, "account": engine._last_account, "observed_at": now}
+    failed = collect_monitoring_checks(engine=engine, exchange_account_snapshot=snapshot, algorithm_probe={"ok": True})
+    assert any(
+        item.check_id == "runtime.safety.reconciliation"
+        and item.status.value == CheckStatus.FAIL.value
+        for item in failed
+    )
+    active = alerts.get_active_incidents()
+    reconciliation = [item for item in active if item["source_check_id"] == "runtime.safety.reconciliation"]
+    assert reconciliation
+    assert reconciliation[0]["category"] == "monitoring"
+    assert reconciliation[0]["evidence_hash"]
+
+    engine._last_reconciliation_result = SimpleNamespace(
+        matched=True,
+        status=SimpleNamespace(value="MATCHED"),
+        checked_at=datetime.fromtimestamp(time.time(), tz=timezone.utc),
+    )
+    collect_monitoring_checks(engine=engine, exchange_account_snapshot=snapshot, algorithm_probe={"ok": True})
+    assert not [
+        item for item in alerts.get_active_incidents() if item["source_check_id"] == "runtime.safety.reconciliation"
+    ]
+    events = [json.loads(line) for line in (tmp_path / "monitoring-alerts.jsonl").read_text().splitlines()]
+    assert any(event.get("event_type") == "RESOLUTION" for event in events)
 
 
 def test_collect_monitoring_checks_exercises_positions_orders_factors_and_factbus() -> None:

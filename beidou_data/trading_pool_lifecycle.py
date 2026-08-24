@@ -32,6 +32,42 @@ _DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
 }
 
 
+def discover_startup_candidates(exchange_info: object, *, max_instruments: int) -> list[str]:
+    """Select bounded perpetual-USDT candidates for an empty startup request.
+
+    The launcher may be invoked without ``--symbols``.  In that case the
+    exchange's read-only ``exchangeInfo`` snapshot is the source of the
+    candidate universe; the lifecycle pool still owns observation, scoring,
+    promotion, and activation after construction.  No fixed symbol or
+    ``DEFAULT``/``ALL`` sentinel is introduced here.
+    """
+
+    if max_instruments <= 0 or not isinstance(exchange_info, dict):
+        return []
+    raw_symbols = exchange_info.get("symbols")
+    if not isinstance(raw_symbols, list):
+        return []
+
+    candidates: set[str] = set()
+    for raw in raw_symbols:
+        if not isinstance(raw, dict):
+            continue
+        symbol = str(raw.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        if str(raw.get("status", "")).strip().upper() != "TRADING":
+            continue
+        if str(raw.get("contractType", "")).strip().upper() != "PERPETUAL":
+            continue
+        if str(raw.get("quoteAsset", "")).strip().upper() != "USDT":
+            continue
+        if symbol in {"ALL", "DEFAULT"}:
+            continue
+        candidates.add(symbol)
+
+    return sorted(candidates)[:max_instruments]
+
+
 @dataclass
 class InstrumentScore:
     """标的综合评分。"""
