@@ -57,6 +57,10 @@ fi
 # wrapper 先于兜底任务死亡时, launchd 会清理其残留后台任务)。
 # 语义: 占用本实例目标端口的 beidou 进程必然阻碍 preflight("北斗实例
 # 已运行"), 清理是启动的必要前提; 用 BEIDOU_NO_ORPHAN_CLEANUP=1 可禁用。
+# BD-FIX-2b (2026-08-25 认证误伤实测): 只杀"父进程已死"(PPID=1)的
+# 真孤儿 —— 并行实例(G5 producer 等)的引擎父 wrapper 存活, 属受管
+# 进程, 必须放行; 否则 autopilot 重启循环会每 30s 误杀一次 producer,
+# G5 认证 readiness 恒超时。
 if [ "${BEIDOU_NO_ORPHAN_CLEANUP:-0}" != "1" ]; then
   _port=""
   _args=("$@")
@@ -71,6 +75,11 @@ if [ "${BEIDOU_NO_ORPHAN_CLEANUP:-0}" != "1" ]; then
     _cmd=$(ps -p "$_pid" -o command= 2>/dev/null || true)
     case "$_cmd" in
       *beidou*)
+        _ppid=$(ps -p "$_pid" -o ppid= 2>/dev/null | tr -d ' ')
+        if [ -n "$_ppid" ] && [ "$_ppid" != "1" ] && kill -0 "$_ppid" 2>/dev/null; then
+          echo "BD-FIX-2: port $_port held by managed beidou pid=$_pid (ppid=$_ppid) — not an orphan, leaving" >&2
+          continue
+        fi
         echo "BD-FIX-2: killing orphan beidou pid=$_pid on port $_port" >&2
         kill -9 "$_pid" 2>/dev/null || true
         sleep 1
