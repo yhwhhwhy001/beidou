@@ -6,7 +6,6 @@ PKG-04: Observability 测试。
 from __future__ import annotations
 
 from beidou_observability.telemetry import (
-    SEVERITY_AUTO_ACTIONS,
     AlertSeverity,
     AlertSuppressor,
     AutoAction,
@@ -128,17 +127,10 @@ class TestAlertSuppressor:
         assert not suppressor.should_suppress(AlertSeverity.WARNING, "warn-2")
 
 
-class TestSeverityAutoActions:
-    """自动动作绑定测试。"""
+class TestAlertControlBoundary:
+    """报警模块不隐式执行 severity 到控制动作的映射。"""
 
-    def test_critical_triggers_exit_only(self) -> None:
-        assert SEVERITY_AUTO_ACTIONS[AlertSeverity.CRITICAL] == AutoAction.EXIT_ONLY
+    def test_telemetry_has_no_unwired_auto_action_mapping(self) -> None:
+        import beidou_observability.telemetry as telemetry
 
-    def test_lockdown_triggers_lock(self) -> None:
-        assert SEVERITY_AUTO_ACTIONS[AlertSeverity.LOCKDOWN] == AutoAction.LOCK
-
-    def test_high_triggers_pause(self) -> None:
-        assert SEVERITY_AUTO_ACTIONS[AlertSeverity.HIGH] == AutoAction.PAUSE_TRADING
-
-    def test_info_noop(self) -> None:
-        assert SEVERITY_AUTO_ACTIONS[AlertSeverity.INFO] == AutoAction.NOOP
+        assert not hasattr(telemetry, "SEVERITY_AUTO_ACTIONS")

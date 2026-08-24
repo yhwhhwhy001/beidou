@@ -17,7 +17,7 @@ from beidou_certification.g5_scenarios.restart.process_restart import (
     EnginePidAmbiguousError,
     StatusUnreachableError,
 )
-from beidou_observability.telemetry import AlertSeverity, AlertSuppressor, AutoAction
+from beidou_observability.telemetry import AlertSeverity, AlertSuppressor
 from beidou_strategy.protection.adaptive import AdaptiveProtectionCalculator
 
 
@@ -186,7 +186,7 @@ def test_telemetry_suppressor_fingerprint_count_and_action_edges() -> None:
         assert not suppressor.should_suppress(AlertSeverity.WARNING, f"key-{index}", "db", "failure 123")
     assert suppressor.should_suppress(AlertSeverity.WARNING, "key-3", "db", "failure 456")
     assert suppressor.get_fingerprint_count("db", "failure 789") == 4
-    assert suppressor.get_auto_action(AlertSeverity.WARNING) is AutoAction.ALERT
+    assert not hasattr(suppressor, "get_auto_action")
 
 
 def test_adaptive_protection_blocked_feature_and_rr_boundaries() -> None:

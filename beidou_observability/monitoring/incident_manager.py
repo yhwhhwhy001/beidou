@@ -18,7 +18,6 @@ from beidou_observability.monitoring.contracts import (
 )
 from beidou_observability.monitoring.storm_detector import StormDetector
 from beidou_observability.telemetry import (
-    SEVERITY_AUTO_ACTIONS,
     AlertSeverity,
     AutoAction,
 )
@@ -229,7 +228,7 @@ class IncidentManager:
     ) -> tuple[AlertIncident, bool]:
         """Create/update a telemetry Incident and durably record its event."""
         key = dedupe_key or f"{category}:{title}"
-        action = auto_action or SEVERITY_AUTO_ACTIONS.get(severity, AutoAction.NOOP)
+        action = auto_action or AutoAction.ALERT
         with self._alert_lock:
             existing = self.get_active_alert(key)
             if existing is not None:

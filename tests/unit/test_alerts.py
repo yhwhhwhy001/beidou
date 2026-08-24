@@ -280,10 +280,10 @@ def test_incident_lifecycle_is_durable_and_exposes_operational_identity(tmp_path
 def test_default_auto_action_is_severity_declaration_only(tmp_path: Path) -> None:
     dispatcher = AlertDispatcher(alerts_file=str(tmp_path / "actions.jsonl"))
     high = dispatcher.send_incident(AlertSeverity.HIGH, "high", "x")
-    critical = dispatcher.send_incident(AlertSeverity.CRITICAL, "critical", "x")
-    assert high.auto_action is AutoAction.PAUSE_TRADING
+    critical = dispatcher.send_incident(AlertSeverity.CRITICAL, "critical", "x", auto_action=AutoAction.EXIT_ONLY)
+    assert high.auto_action is AutoAction.ALERT
     assert critical.auto_action is AutoAction.EXIT_ONLY
-    assert dispatcher.get_active_incidents()[0]["auto_action"] in {"PAUSE_TRADING", "EXIT_ONLY"}
+    assert {item["auto_action"] for item in dispatcher.get_active_incidents()} == {"ALERT", "EXIT_ONLY"}
 
 
 def test_webhook_delivery_is_queued_and_uses_configured_timeout(tmp_path: Path, monkeypatch) -> None:

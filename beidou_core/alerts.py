@@ -1,6 +1,6 @@
-"""告警通道 — JSONL 文件 + Webhook 通知。
+"""告警通道 — 统一 Incident JSONL 事件 + 异步 Webhook 队列。
 
-P0 (CRITICAL/LOCKDOWN) 永不抑制，立即发送。
+P0 (CRITICAL/LOCKDOWN) 永不抑制，并在本地事件持久化后立即入队。
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from typing import Any
 
 from beidou_observability.monitoring.incident_manager import IncidentManager
 from beidou_observability.telemetry import (
-    SEVERITY_AUTO_ACTIONS,
     AlertSeverity,
     AlertSuppressor,
     AutoAction,
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class AlertDispatcher:
-    """多渠道告警分发器。"""
+    """多渠道告警分发器；不执行控制动作。"""
 
     def __init__(
         self,
@@ -105,7 +104,7 @@ class AlertDispatcher:
         get_active_incidents, 供 supervisor A/B 分流消费。
         """
         effective_dedupe_key = dedupe_key or f"{category}:{title}"
-        effective_action = auto_action or SEVERITY_AUTO_ACTIONS.get(severity, AutoAction.NOOP)
+        effective_action = auto_action or AutoAction.ALERT
 
         # Preserve the historical ordering: an existing active incident is
         # updated before suppression is considered.
@@ -603,6 +602,8 @@ class AlertDispatcher:
         return None
 
     def get_active_incidents(self) -> list[dict[str, Any]]:
+        if self._incident_manager.get_alert_load_errors():
+            raise RuntimeError("INCIDENT_STORE_UNKNOWN")
         with self._lock:
             return [
                 {

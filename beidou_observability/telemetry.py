@@ -37,15 +37,6 @@ class AutoAction(str, Enum):
     LOCK = "LOCK"
 
 
-SEVERITY_AUTO_ACTIONS: dict[AlertSeverity, AutoAction] = {
-    AlertSeverity.INFO: AutoAction.NOOP,
-    AlertSeverity.WARNING: AutoAction.ALERT,
-    AlertSeverity.HIGH: AutoAction.PAUSE_TRADING,
-    AlertSeverity.CRITICAL: AutoAction.EXIT_ONLY,
-    AlertSeverity.LOCKDOWN: AutoAction.LOCK,
-}
-
-
 @dataclass(frozen=True, slots=True)
 class Span:
     span_id: str
@@ -203,6 +194,3 @@ class AlertSuppressor:
             return 0
         self._fingerprints[fp] = [t for t in self._fingerprints[fp] if (now - t).total_seconds() < self._window_seconds]
         return len(self._fingerprints[fp])
-
-    def get_auto_action(self, severity: AlertSeverity) -> AutoAction:
-        return SEVERITY_AUTO_ACTIONS.get(severity, AutoAction.NOOP)
