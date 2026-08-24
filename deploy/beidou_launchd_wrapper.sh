@@ -33,6 +33,13 @@ if [ -z "${BEIDOU_G5_PG_DSN:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
   export BEIDOU_G5_PG_DSN="$DATABASE_URL"
 fi
 
+# The G5 producer may use only listen-key session control for its own user
+# stream.  Keep its engine terminal-write hold hard even when the shared .env
+# carries the normal Testnet unknown-only setting.
+if [ "${BEIDOU_G5_PRODUCER:-}" = "1" ]; then
+  export BEIDOU_TERMINAL_WRITE_HOLD="hard"
+fi
+
 "$@" &
 child=$!
 

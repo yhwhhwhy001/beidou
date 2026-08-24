@@ -53,7 +53,12 @@ def _parse_symbols(value: str) -> list[str]:
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("action", required=False, default="start", type=click.Choice(["start", "doctor", "status", "stop"]))
+@click.argument(
+    "action",
+    required=False,
+    default="start",
+    type=click.Choice(["start", "g5-producer", "doctor", "status", "stop"]),
+)
 @click.option("--mode", type=click.Choice(SUPPORTED_MODES), default=DEFAULT_MODE, show_default=True)
 @click.option(
     "--symbols",
@@ -72,6 +77,12 @@ def _parse_symbols(value: str) -> list[str]:
 )
 @click.option("--self-heal/--no-self-heal", default=True, show_default=True)
 @click.option(
+    "--confirm-g5-producer",
+    is_flag=True,
+    default=False,
+    help="确认启动仅供 G5 Testnet 认证使用的 producer-only 引擎；不会授予策略下单能力。",
+)
+@click.option(
     "--max-restarts",
     type=click.IntRange(0, 20),
     default=MAX_RESTARTS,
@@ -86,6 +97,7 @@ def main(
     startup_timeout: float,
     monitor_interval: float,
     self_heal: bool,
+    confirm_g5_producer: bool,
     max_restarts: int,
 ) -> None:
     """北斗一键启动、深度自检、状态查询和安全停止。
@@ -115,6 +127,17 @@ def main(
         ok, message = stop_running_instance(root)
         click.echo(message)
         raise SystemExit(0 if ok else 1)
+
+    producer_only = action == "g5-producer"
+    if producer_only:
+        if mode != "testnet":
+            raise click.ClickException("g5-producer 仅允许 --mode testnet")
+        if not confirm_g5_producer:
+            raise click.ClickException("g5-producer 必须显式提供 --confirm-g5-producer")
+        # The producer is a hard-held evidence runtime.  Do not inherit the
+        # normal Testnet unknown-only terminal-write hold into this path.
+        os.environ["BEIDOU_G5_PRODUCER"] = "1"
+        os.environ["BEIDOU_TERMINAL_WRITE_HOLD"] = "hard"
 
     os.chdir(root)
     os.environ["BEIDOU_ENV"] = mode
@@ -149,6 +172,7 @@ def main(
         monitor_interval=monitor_interval,
         self_heal=self_heal,
         max_restarts=max_restarts,
+        producer_only=producer_only,
     )
     try:
         exit_code = asyncio.run(supervisor.run())

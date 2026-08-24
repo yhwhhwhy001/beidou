@@ -1547,6 +1547,22 @@ def test_authoritative_flat_snapshot_converges_stale_local_position() -> None:
     assert engine._store.restore_protections() == []
 
 
+def test_g5_producer_can_converge_stale_local_position_without_exchange_write() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._can_write = False
+    engine._producer_only = True
+    account = {
+        "totalWalletBalance": "1000",
+        "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}],
+    }
+
+    converged = engine._converge_flat_local_positions(account, [], [])
+
+    assert converged is True
+    assert engine._position_projection["XRPUSDT"]["signed_quantity"] == "0"
+    assert engine._store.projections["XRPUSDT"]["signed_quantity"] == "0"
+
+
 def test_flat_snapshot_rebases_durable_fill_replay_without_erasing_fill_history() -> None:
     engine = _flat_reconciliation_engine()
     historical_fill = {

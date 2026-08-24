@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import json
 import logging
 import math
 import os
 import re
+import subprocess
 import sys
 import time
+import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +41,11 @@ from beidou_certification.g5_scenarios.base import (
     ScenarioResult,
     ScenarioStatus,
     write_scenario_evidence,
+)
+from beidou_launcher.g5_producer import (
+    PRODUCER_ENVIRONMENT_MARKER,
+    producer_launchd_target,
+    producer_status_verdict,
 )
 from beidou_launcher.models import CheckResult
 
@@ -59,6 +67,76 @@ def fail_fast(reason: str) -> None:
     with open(evidence_dir / "g5-certificate.json", "w") as f:
         json.dump(cert, f, indent=2)
     sys.exit(1)
+
+
+def _producer_status_http() -> dict[str, object] | None:
+    """Read the loopback producer status without importing its engine."""
+
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9090/status", timeout=5) as response:  # nosec B310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def start_g5_producer_service(project_root: Path) -> str:
+    """Load and start the isolated G5 launchd producer, then await readiness."""
+
+    plist = project_root / "deploy" / "com.beidou.g5-producer.plist"
+    if not plist.is_file():
+        raise RuntimeError(f"G5 producer launchd template missing: {plist}")
+    target = producer_launchd_target()
+    domain = target.rsplit("/", 1)[0]
+    already_loaded = subprocess.run(  # nosec B603 - fixed launchctl subcommand and checked plist path  # noqa: S603
+        ["/bin/launchctl", "print", target], check=False, capture_output=True, text=True
+    )
+    if already_loaded.returncode == 0:
+        raise RuntimeError(f"G5 producer service already loaded: {target}")
+    try:
+        subprocess.run(  # nosec B603 - fixed launchctl subcommand and repository-local plist  # noqa: S603
+            ["/bin/launchctl", "bootstrap", domain, str(plist)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(  # nosec B603 - fixed launchctl target from governed label  # noqa: S603
+            ["/bin/launchctl", "kickstart", target], check=True, capture_output=True, text=True
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        subprocess.run(  # nosec B603 - cleanup of the exact producer label only  # noqa: S603
+            ["/bin/launchctl", "bootout", target], check=False, capture_output=True, text=True
+        )
+        raise RuntimeError(f"G5 producer launchd startup failed: {type(exc).__name__}") from exc
+    deadline = time.monotonic() + 120.0
+    last_reason = "status_unreachable"
+    try:
+        while time.monotonic() < deadline:
+            payload = _producer_status_http()
+            if payload is not None:
+                ready, reason = producer_status_verdict(payload)
+                if ready:
+                    print(f"G5 producer ready: {target}")
+                    return target
+                last_reason = reason
+            time.sleep(2.0)
+    except KeyboardInterrupt:
+        subprocess.run(  # nosec B603 - cleanup of the exact producer label only  # noqa: S603
+            ["/bin/launchctl", "bootout", target], check=False, capture_output=True, text=True
+        )
+        raise
+    subprocess.run(  # nosec B603 - cleanup of the exact producer label only  # noqa: S603
+        ["/bin/launchctl", "bootout", target], check=False, capture_output=True, text=True
+    )
+    raise RuntimeError(f"G5 producer readiness timeout: {last_reason}")
+
+
+def stop_g5_producer_service(target: str) -> None:
+    """Unload only the dedicated G5 producer service."""
+
+    subprocess.run(  # nosec B603 - cleanup of the exact governed producer label  # noqa: S603
+        ["/bin/launchctl", "bootout", target], check=False, capture_output=True, text=True
+    )
 
 
 def blocking_preflight_checks(checks: list[CheckResult]) -> list[CheckResult]:
@@ -246,6 +324,13 @@ def main() -> int:
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
 
+    # Database-backed G5 scenarios bind their DSN at module import time.  The
+    # local Testnet environment exposes the same isolated database as
+    # DATABASE_URL; map it before any scenario module can be imported without
+    # ever printing or persisting the credential-bearing value.
+    if not os.environ.get("BEIDOU_G5_PG_DSN") and os.environ.get("DATABASE_URL"):
+        os.environ["BEIDOU_G5_PG_DSN"] = os.environ["DATABASE_URL"]
+
     # Never start a certification probe from an unreproducible artifact.  The
     # same preflight used by the launcher is a hard gate here, before any REST
     # client is constructed or any exchange request is attempted.
@@ -332,10 +417,32 @@ def main() -> int:
     print("API key: configured (value withheld)")
 
     # 1e: Commit hash
-    import subprocess
-
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(f"Commit: {commit}")
+
+    # The normal launcher cannot start until a current G5 certificate exists.
+    # For this certification run, load a separate, non-KeepAlive launchd
+    # service whose engine can observe user-stream/reconciliation facts but
+    # cannot place, cancel, or mutate terminal orders.  The runner itself
+    # remains the only owner of the bounded Testnet scenario writes.
+    producer_mode = not args.dry_run
+    producer_target: str | None = None
+
+    def cleanup_producer() -> None:
+        nonlocal producer_target
+        if producer_target is not None:
+            stop_g5_producer_service(producer_target)
+            producer_target = None
+
+    if producer_mode:
+        os.environ[PRODUCER_ENVIRONMENT_MARKER] = "1"
+        try:
+            producer_target = start_g5_producer_service(project_root)
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+            fail_fast(f"G5 producer startup blocked: {type(exc).__name__}: {exc}")
+        atexit.register(cleanup_producer)
+    else:
+        os.environ.pop(PRODUCER_ENVIRONMENT_MARKER, None)
 
     # ================================================================
     # G5 Gate 2: 导入认证框架
@@ -589,6 +696,8 @@ def main() -> int:
     )
     results = runner.run_selected(only=args.scenario, skip_restart=args.skip_restart)
     results = write_scenario_evidence_all(results, make_context, scenario_evidence_dir)
+    cleanup_producer()
+    atexit.unregister(cleanup_producer)
 
     # S2 实测账户事实覆盖 runner 占位默认;未测量时返回 None,由 runner 保守默认兜底
     account_access = _extract_account_access(observations)
@@ -601,6 +710,8 @@ def main() -> int:
     )
     # 合并 legacy 观察与认证模式(M20-F02: 认证模式必须显式标注,缺失视为伪造拒绝)
     certificate["certification_mode"] = args.certification_mode
+    certificate["runtime_mode"] = "G5_PRODUCER_ONLY" if producer_mode else "DRY_RUN"
+    certificate["engine_terminal_writes_held"] = producer_mode
     certificate["observations"] = observations
     if observation_failures:
         certificate["status"] = "FAIL"

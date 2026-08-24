@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from beidou_core.engine import _apply_testnet_event_stream_exemption
 from beidou_safety.execution.reconciliation import (
     AccountFactSnapshot,
     ReconciliationEngine,
@@ -106,6 +107,43 @@ def test_balance_and_both_open_order_directions_are_reported() -> None:
     order_difference = next(difference for difference in result.differences if "Open orders mismatch" in difference)
     assert "system-only" in order_difference
     assert "exchange-only" in order_difference
+
+
+def test_testnet_event_stream_exemption_does_not_hide_two_way_mismatch() -> None:
+    result = ReconciliationResult(
+        matched=False,
+        status=ReconciliationStatus.MISMATCHED,
+        differences=["Balance mismatch: system=1 exchange=2 diff=1.000000 tolerance=0.020000"],
+    )
+
+    checked = _apply_testnet_event_stream_exemption(
+        result,
+        environment="testnet",
+        event_facts=None,
+    )
+
+    assert checked.matched is False
+    assert checked.status is ReconciliationStatus.MISMATCHED
+    assert checked.differences
+
+
+def test_testnet_event_stream_exemption_only_handles_event_side_drift() -> None:
+    event_facts = _facts("EVENT_STREAM")
+    result = ReconciliationResult(
+        matched=False,
+        status=ReconciliationStatus.MISMATCHED,
+        differences=["system/event_stream: Balance mismatch: system=1 event_stream=2"],
+    )
+
+    checked = _apply_testnet_event_stream_exemption(
+        result,
+        environment="testnet",
+        event_facts=event_facts,
+    )
+
+    assert checked.matched is True
+    assert checked.status is ReconciliationStatus.MATCHED
+    assert checked.differences == []
 
 
 def test_position_rule_binding_rejects_missing_invalid_and_mismatched_steps() -> None:

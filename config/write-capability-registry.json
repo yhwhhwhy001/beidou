@@ -527,6 +527,17 @@
    "status": "HARD_HOLD"
   },
   {
+   "call_graph": "G5 certification runner -> dedicated launchd producer -> producer-only canonical launcher",
+   "capability": "RUNTIME_ACTIVATION",
+   "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
+   "id": "ENTRY-COM_BEIDOU_G5_PRODUCER",
+   "kind": "script",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-COM_BEIDOU_G5_PRODUCER]",
+   "owner": "Test Quality Owner",
+   "path": "deploy/com.beidou.g5-producer.plist",
+   "status": "HARD_HOLD"
+  },
+  {
    "call_graph": "launchd -> governed watchdog script -> autopilot kickstart -> canonical launcher",
    "capability": "RUNTIME_ACTIVATION",
    "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
@@ -802,7 +813,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "a37a97bbc286a0d98d3f7356a363a9a9f96e0aa020a6ada4dd4841072c523992",
+ "governance_digest": "15568ebb9db313450480248b2d0050ba7a51be1581088d290a8ab9ef0f23d3ce",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "40929d5c4f1f6a65a459a1cc16ba01908723118a47fdfe06a6fbdf86e79258a6",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -857,9 +868,9 @@
   "beidou_certification/g5_scenarios/protocol/duplicate_request.py": "9951d44aeb4fcc434892d68de52eec8fbff09756e3f12651cf5d81fecd5491ec",
   "beidou_certification/g5_scenarios/protocol/rate_limit.py": "294efef4aa2121e4ad8b30bcfa7ee109322c30d8a84393012614a2d6de3720c4",
   "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py": "d692652932384ffe3c5fc3f738828059b3471e700d9fdc2d2ab92c03638e3cb9",
-  "beidou_certification/g5_scenarios/restart/__init__.py": "1bef26f7e902b2c771738d99fb47a5a005fdb95babf44d8af43d9380d98feaa3",
+  "beidou_certification/g5_scenarios/restart/__init__.py": "05d868704edba365fbb414b960999fdb3849db22cfd3f0f11e64e261ff473232",
   "beidou_certification/g5_scenarios/restart/database_restart.py": "4624df3862590d62fd9abc62721758579b5200c261203d83357940a6ce121ee1",
-  "beidou_certification/g5_scenarios/restart/process_restart.py": "83eaaf446a17ce362a1648d936b548249ece35efa39917ccfd6792f91effa72a",
+  "beidou_certification/g5_scenarios/restart/process_restart.py": "20f127855a4a1dc6b7155eaff362652ee7ce19763a125eca3c1e8f64879beea0",
   "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py": "41ae5e491052eb939a7df28a4831f66ec12eb4b476197ba3abc2e75a5b9de46b",
   "beidou_certification/g5_scenarios/runner.py": "7733b4596c2f3b4f6e6490d995a1fc9b7247e84c532422486d8a7ed465223c60",
   "beidou_certification/gate_verifier.py": "c60d147fa9494ab9eba5db946a6e9031f0522d6cd299552514dd97b193a12b14",
@@ -876,7 +887,7 @@
   "beidou_control/truth.py": "efcb7ca7c9c3c03c2c9865d02ea82c0da3aaaf56b5632f89147ee8baee9844d4",
   "beidou_core/__init__.py": "4b41d4e38978088ae4b60ca9ea555a6231e72afe2785982067aca79d800d14ff",
   "beidou_core/alerts.py": "5be086da4eb2e99919d091acb89506a5e34f26a73af63f1e96bcba5653d6dd7f",
-  "beidou_core/engine.py": "4e3b20f9d21e32a5a07b7bef0ec97ec179023a03fec4f3871368d30caf2f28eb",
+  "beidou_core/engine.py": "de6794c00bf55441f3a5907c0568a334b6c47bc169f12e5557a64fe39decae85",
   "beidou_core/evidence_bridge.py": "3924ea990cbbafdcf8cc4c3721ae37de703d53f943832458ac68df9c37eced71",
   "beidou_core/expression_component.py": "2327f91d255d99e2f453f6c756309fbbf8122ce551c828e9321c0f0af819f5e5",
   "beidou_core/feed.py": "7de362fb53ef1cd41e60f3f69b004f63cf6d235be9253f021202ca565405a8b5",
@@ -906,9 +917,9 @@
   "beidou_exchange/account_discovery/__init__.py": "e4a0c9777212007bb1feb298c64ad941fe105b94fdeeb5768dc4b364f08b719b",
   "beidou_exchange/account_discovery/checker.py": "781314ee1a9d1c9a3b1f364703ef31ff358d05e12e1a725368d2c06e3d3d881a",
   "beidou_exchange/binance_usdm/__init__.py": "e3333fc866245cce5b58cee73c64c6d69e4ed557cf623569a63447b9ba17ece0",
-  "beidou_exchange/binance_usdm/adapter.py": "f190d137345600bf33e57f6161f16cb9535f7eb0028896ef28ea6a9e9adbca82",
+  "beidou_exchange/binance_usdm/adapter.py": "af80b1d31669fbd387439ecbf68acd911480ee5f9fb39f4ecd5ee4c16774dcf2",
   "beidou_exchange/binance_usdm/endpoints.py": "373630abb9b9e5a35583ca26479b5a035a641f36725addacf6a821591293062a",
-  "beidou_exchange/binance_usdm/rest_client.py": "3370c3fb0906de34b0e3ff25b3e6990254694ae62831bd734b7684a82de02b7f",
+  "beidou_exchange/binance_usdm/rest_client.py": "46a5aa55b3403259f1a3a405b4076b99d3c602dbd743a86c41519b77bf01026d",
   "beidou_exchange/binance_usdm/write_guard.py": "fb5ee2245cb47f78e45c18d6c1a39a56330b0e7c2f1831b885168e3375b981e8",
   "beidou_exchange/binance_usdm/ws_client.py": "a78cca7f5009ce0239bb1bccbdcab1beeeca7621758ca3041cea77dfd06e302f",
   "beidou_exchange/core/error_taxonomy.py": "f88373a255f9879bc8fcf953bc8c85ed03110eb0c020c31768bdf7de1efadf31",
@@ -924,13 +935,14 @@
   "beidou_infra/event_store.py": "441c531332aa44b0e16cbf33f4736d209675a9580e23fb20659bede863e52224",
   "beidou_infra/ha.py": "74aa3e0471134b69a09c5f628b5ce8c5e20ef9e19f7ef9284f860c3ff7383ae8",
   "beidou_infra/lease.py": "5d03b4154e6fad988e8209db54c9a7209bc44b5300548c0079bdffe49e3fd1b0",
-  "beidou_infra/outbox.py": "d41dc5eb12286b70c951bd5d911c0ce6e35d43e177bad41862a38b716a214d5d",
+  "beidou_infra/outbox.py": "047add7edf63b244fb3e8dfdf03785d61ea98911cadab7dbea7d4e6f93e5d1db",
   "beidou_infra/postgres_store.py": "11d156b8b7f1bb1a5662200bd23d3c93bfce0ea25dda4c89e75fa33163c47618",
   "beidou_infra/store_adapter.py": "491a6d405eb0ef0943768fdd0518957a29481919de6b74a667b353b574506d12",
   "beidou_launcher/__init__.py": "ad853d030dec87fce400af17354e5d88b8660c83a11d7f8c842190d07c10ac98",
   "beidou_launcher/__main__.py": "3129adff95e0f38b87ab34cddfc27082c7892bcaec267ff5d40f160fdf55b44a",
   "beidou_launcher/checks.py": "feb00f8545aa0bcc0f8cbe8871a60d76d7297ceafb3e72d5748e4f944d77f821",
-  "beidou_launcher/cli.py": "7ca53ec44fe73819d61a370ca6dd90198d51fcec7459f575f10f7bd2f42bd406",
+  "beidou_launcher/cli.py": "9cf304665ac23cb8b9f46fabfdc578f3df319490cb8f73dc481150f2209fdde2",
+  "beidou_launcher/g5_producer.py": "63293dce016ecabef2b10e6aa17a10801183325149be79def382640d8e6e635c",
   "beidou_launcher/g7_tracker.py": "9af18dff9be5f9b92ff6070a68221d1fc093c975f9a3fe2f0c8581a717c6d732",
   "beidou_launcher/manifest.py": "c59116a1ec1108c36e2cb5f146b778b112f5e7b0173a63ffd6918e15d72e5ff5",
   "beidou_launcher/models.py": "f0c1f5df472758defede49c3736b293a03fd041b82579ae9e0dbba3a3a9169ca",
@@ -939,7 +951,7 @@
   "beidou_launcher/registry.py": "2e23c263736e52be3c007f208650b604df6cee5409a4e1acc1108e376f63fb48",
   "beidou_launcher/runtime.py": "968a65be36d88f2450ffc50bddb62205901dcc542357e8b8161e128c93b60597",
   "beidou_launcher/state.py": "a2552a21cf1db5b1a1585ac334e513bc10464e61ab2953a044892a67c73ba27d",
-  "beidou_launcher/supervisor.py": "99bb74b7e0995925402e0edcdb75e8879649c0d0e2892e747a80f8c276c42e2a",
+  "beidou_launcher/supervisor.py": "e5710ce28822e0ce272bf54d2e0dc473eee11c916f17998e48457e5b67301512",
   "beidou_launcher/testnet_exemptions.py": "c9ca00c223ad7a42c6b0ad78eef805cec961155e5eb004cf32632056edc4e447",
   "beidou_launcher/write_registry.py": "6eb1fe9c8c1ebd9f04f1f01179d223cf31d3b0aa8c086b3b18115f663ff20985",
   "beidou_lifecycle/__init__.py": "ffbcaaf02e7010bcef8cc1b91ef7d58684d13c8486cc30486c98c09b73fc71c8",
@@ -1165,9 +1177,10 @@
   "delivery/task-packages/BD-T18/ACCEPTANCE.yaml": "e6abe539f5bcb8caf00c90a868a64c0dbb0a3bb554dedc93fbcdda86d9e8fb4c",
   "delivery/task-packages/BD-T19/ACCEPTANCE.yaml": "fdcf451630b05df756b4242b4e9166c16c9ab4c7a5cef028f9a29c9d263d8cc8",
   "delivery/templates/evidence-manifest.template.json": "c4a336a66f4e46c8b7a542031d8361a95e69908aa980646f1e538ea8ae7d6c9a",
-  "deploy/beidou_launchd_wrapper.sh": "b0c67bf53f887427322e42b2ab898e6d198c489523df08351c74e86989eac570",
+  "deploy/beidou_launchd_wrapper.sh": "0e8c69fecb2230feb487b7b23300440e7362ddc357cefa1faef98584a5c9ab14",
   "deploy/beidou_watchdog.sh": "1a8d693691981253a1fa4bfae89dccb094e57375d31fd3735cba7f4f2500b49c",
   "deploy/com.beidou.autopilot.plist": "3768406a30abd89276847f663e9d1a3f5dbef92abdec6e56acb25b8fe9965528",
+  "deploy/com.beidou.g5-producer.plist": "4167098f4c9a542541939093252c418503455055677a644cdcb9652c46902ee8",
   "deploy/com.beidou.watchdog.plist": "89ba7a89b5118403b400766a503cf06b6285b098b7238632f323083ed6fa3cb1",
   "docker-compose.yml": "a81844f334dc010f306a4cb2038ace37155ffff8b653410ba5943194689063b6",
   "migrations/001_initial_schema.up.sql": "4a17f9d9443ebb92c8d722cf838571274ce6bb75ffa66fd517d83e66fd1fee4b",
@@ -1186,13 +1199,13 @@
   "scripts/migrate_config_v2.py": "15115de7350d967d011912a39a869363a29be4b062bda0c284ae5022d8187762",
   "scripts/mining_cron.sh": "e7fcf34ae1a8caa8df7162b8088b41717916080c027f30b0585e1b84d7540e94",
   "scripts/monitor_daemon.py": "26ef238c338b223d685c1b5080fc1e45e800e5557039c2a34ae3d8398f411656",
-  "scripts/rebuild_write_registry.py": "47f234c6ed85016212839975a135c01962a87eae8bebe18585f79f50abeb86b1",
+  "scripts/rebuild_write_registry.py": "88b4851f15bc1d0b4fa08ff266713baefd590735a6290770e06aa694cb7919e8",
   "scripts/recalibrate_r_m03_1.py": "469af191fae5bd65c625aa81aa7556a7e28ecef63901b0a8924b3c3ddabccb6b",
   "scripts/run_migrations.py": "2a7838ce336c3743f0483053822675776bf7a73cbeb28bad93de57565c50aca0",
   "scripts/run_replay_fixture.py": "f22f22e4cef87f9c4d3d1658fac0e5dd5891034077c4764ffd55cd83d917c716",
   "scripts/scan_hardcoded.py": "3ec9e7a1d2a019e8cd4b09c703e9b54ca6837053a5a31a0cbdba837855e344fe",
   "scripts/scan_test_quality.py": "34b078d05952a1d2822bb45fc05ebe181dab9f62be3f4d250094b48b19fe99e2",
-  "scripts/testnet/run_g5.py": "5560eb6fbc37bb707a1b82efde7b0198a82ca23c2c4b43d0941d7fb4187d6577",
+  "scripts/testnet/run_g5.py": "c980a6b2e2e6a6805d9943b72523896d9482a8d842ac7aec9ebce3ffe5617db1",
   "scripts/testnet/verify_order_flow.py": "5c75a2663de683b45acf19d30da1b18c4e115b3ad358c6117cf722ef69eea399",
   "scripts/verify_write_registry.py": "d66051d989cc77d78522a1f9e0ab25c0d44106859c1e553ebd4c36e6b42411d1",
   "start_beidou.sh": "fd934ebab88e63ee7500192bea6b8c65361f93f0301978db5d6cb55c44bef3a8",
@@ -1399,14 +1412,14 @@
   },
   {
    "governance_id": "WRITE-BEIDOU_CERTIFICATION-URLLIB-URLOPEN-F8D4EE7F",
-   "identity": "beidou_certification/g5_scenarios/restart/process_restart.py:77:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_certification/g5_scenarios/restart/process_restart.py:83:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CERTIFICATION-URLLIB-URLOPEN-F8D4EE7F]",
    "owner": "Test Quality Owner",
    "status": "READ_ONLY"
   },
   {
    "governance_id": "WRITE-BEIDOU_CERTIFICATION-URLLIB-URLOPEN-F8D4EE7F",
-   "identity": "beidou_certification/g5_scenarios/restart/process_restart.py:77:NETWORK_TRANSPORT_CALL:urllib.urlopen",
+   "identity": "beidou_certification/g5_scenarios/restart/process_restart.py:83:NETWORK_TRANSPORT_CALL:urllib.urlopen",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CERTIFICATION-URLLIB-URLOPEN-F8D4EE7F]",
    "owner": "Test Quality Owner",
    "status": "READ_ONLY"
@@ -1489,339 +1502,339 @@
    "status": "READ_ONLY"
   },
   {
+   "governance_id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
+   "identity": "beidou_core/engine.py:10001:TERMINAL_CALL:_cancel_algo_order",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CLEANUP-EXCESS-ALGO]",
+   "owner": "Execution Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
+   "identity": "beidou_core/engine.py:10051:TERMINAL_CALL:_cancel_algo_order",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CLEANUP-EXCESS-ALGO]",
+   "owner": "Execution Owner",
+   "status": "HARD_HOLD"
+  },
+  {
    "governance_id": "WRITE-ENGINE-RETRY-PROTECTION",
-   "identity": "beidou_core/engine.py:11851:TERMINAL_CALL:_create_algo_order",
+   "identity": "beidou_core/engine.py:11915:TERMINAL_CALL:_create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-RETRY-PROTECTION]",
    "owner": "Safety Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-RETRY-PROTECTION",
-   "identity": "beidou_core/engine.py:11986:TERMINAL_CALL:_create_algo_order",
+   "identity": "beidou_core/engine.py:12050:TERMINAL_CALL:_create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-RETRY-PROTECTION]",
    "owner": "Safety Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-RETRY-PROTECTION",
-   "identity": "beidou_core/engine.py:12033:TERMINAL_CALL:_create_algo_order",
+   "identity": "beidou_core/engine.py:12097:TERMINAL_CALL:_create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-RETRY-PROTECTION]",
    "owner": "Safety Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:12170:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:12234:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:12331:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:12395:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-BEIDOU_CORE-API-ASYNC-9CAF5B34",
-   "identity": "beidou_core/engine.py:12483:TERMINAL_CALL:_api_async:POST",
+   "identity": "beidou_core/engine.py:12547:TERMINAL_CALL:_api_async:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-API-ASYNC-9CAF5B34]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-NEARLINE-CANCEL",
-   "identity": "beidou_core/engine.py:12584:TERMINAL_CALL:_cancel_algo_orders",
+   "identity": "beidou_core/engine.py:12648:TERMINAL_CALL:_cancel_algo_orders",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-NEARLINE-CANCEL]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:12795:LEXICAL_CALLABLE_SURFACE:lambda",
+   "identity": "beidou_core/engine.py:12859:LEXICAL_CALLABLE_SURFACE:lambda",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:13900:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:13964:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14404:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14468:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14424:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14488:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14437:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14501:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14521:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:14585:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14594:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14658:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14677:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14741:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14683:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:14747:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:14888:TERMINAL_CALL:_create_algo_order",
+   "identity": "beidou_core/engine.py:14952:TERMINAL_CALL:_create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:1492:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
-   "owner": "Engineering Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:1501:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+   "identity": "beidou_core/engine.py:1527:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-SHUTDOWN-CANCEL",
-   "identity": "beidou_core/engine.py:15220:TERMINAL_CALL:_api_async:DELETE",
+   "identity": "beidou_core/engine.py:15298:TERMINAL_CALL:_api_async:DELETE",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SHUTDOWN-CANCEL]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
+   "governance_id": "ENTRY-ENGINE-INTERNAL",
+   "identity": "beidou_core/engine.py:1536:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
+   "owner": "Engineering Owner",
+   "status": "HARD_HOLD"
+  },
+  {
    "governance_id": "WRITE-ENGINE-ASYNC-DYNAMIC-REQUEST",
-   "identity": "beidou_core/engine.py:2451:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_core/engine.py:2486:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-ASYNC-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-SAFE-DYNAMIC-REQUEST",
-   "identity": "beidou_core/engine.py:2468:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_core/engine.py:2503:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SAFE-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-CREATE-ALGO-ADAPTER",
-   "identity": "beidou_core/engine.py:2530:TERMINAL_CALL:create_algo_order",
+   "identity": "beidou_core/engine.py:2565:TERMINAL_CALL:create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CREATE-ALGO-ADAPTER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-CANCEL-ALGO-ADAPTER",
-   "identity": "beidou_core/engine.py:2561:TERMINAL_CALL:cancel_algo_order",
+   "identity": "beidou_core/engine.py:2596:TERMINAL_CALL:cancel_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CANCEL-ALGO-ADAPTER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-SYNC-DYNAMIC-REQUEST",
-   "identity": "beidou_core/engine.py:2589:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_core/engine.py:2624:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SYNC-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-LEVERAGE",
-   "identity": "beidou_core/engine.py:2756:TERMINAL_CALL:_api_async:POST",
+   "identity": "beidou_core/engine.py:2791:TERMINAL_CALL:_api_async:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-LEVERAGE]",
    "owner": "Risk Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-LEVERAGE",
-   "identity": "beidou_core/engine.py:2785:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:2820:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-LEVERAGE]",
    "owner": "Risk Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:3530:LEXICAL_CALLABLE_SURFACE:lambda",
+   "identity": "beidou_core/engine.py:3574:LEXICAL_CALLABLE_SURFACE:lambda",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:3544:LEXICAL_CALLABLE_SURFACE:lambda",
+   "identity": "beidou_core/engine.py:3588:LEXICAL_CALLABLE_SURFACE:lambda",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-BEIDOU_CORE-EXECUTE-ACTION-894DD704",
-   "identity": "beidou_core/engine.py:3812:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_core/engine.py:3856:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-EXECUTE-ACTION-894DD704]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-CANCEL-ALGO-BATCH",
-   "identity": "beidou_core/engine.py:4065:TERMINAL_CALL:_cancel_algo_order",
+   "identity": "beidou_core/engine.py:4109:TERMINAL_CALL:_cancel_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CANCEL-ALGO-BATCH]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDER-1FDD695E",
-   "identity": "beidou_core/engine.py:4722:TERMINAL_CALL:_cancel_algo_order",
+   "identity": "beidou_core/engine.py:4768:TERMINAL_CALL:_cancel_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDER-1FDD695E]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:5449:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:5498:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-PLACE-ORDER",
-   "identity": "beidou_core/engine.py:6225:TERMINAL_CALL:_submit_order_slice",
+   "identity": "beidou_core/engine.py:6274:TERMINAL_CALL:_submit_order_slice",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-PLACE-ORDER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-SUBMIT-SLICE",
-   "identity": "beidou_core/engine.py:6891:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_core/engine.py:6940:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SUBMIT-SLICE]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-SUBMIT-SLICE",
-   "identity": "beidou_core/engine.py:6975:TERMINAL_CALL:create_order",
+   "identity": "beidou_core/engine.py:7024:TERMINAL_CALL:create_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-SUBMIT-SLICE]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:7155:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:7204:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-FILL-CANCEL-PROTECTION",
-   "identity": "beidou_core/engine.py:7917:TERMINAL_CALL:_cancel_algo_orders",
+   "identity": "beidou_core/engine.py:7966:TERMINAL_CALL:_cancel_algo_orders",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-FILL-CANCEL-PROTECTION]",
    "owner": "Safety Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDERS-3165CD34",
-   "identity": "beidou_core/engine.py:8002:TERMINAL_CALL:_cancel_algo_orders",
+   "identity": "beidou_core/engine.py:8051:TERMINAL_CALL:_cancel_algo_orders",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDERS-3165CD34]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDERS-3165CD34",
-   "identity": "beidou_core/engine.py:8117:TERMINAL_CALL:_create_algo_order",
+   "identity": "beidou_core/engine.py:8166:TERMINAL_CALL:_create_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-BEIDOU_CORE-CANCEL-ALGO-ORDERS-3165CD34]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:9090:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:9146:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:9096:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:9152:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:9108:TERMINAL_CALL:_api_async_safe:DYNAMIC",
+   "identity": "beidou_core/engine.py:9164:TERMINAL_CALL:_api_async_safe:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-ENGINE-INTERNAL",
-   "identity": "beidou_core/engine.py:9372:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_core/engine.py:9425:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-ENGINE-INTERNAL]",
    "owner": "Engineering Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-UNOWNED-RECOVERY-CANCEL",
-   "identity": "beidou_core/engine.py:9583:TERMINAL_CALL:_cancel_algo_order",
+   "identity": "beidou_core/engine.py:9643:TERMINAL_CALL:_cancel_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-UNOWNED-RECOVERY-CANCEL]",
    "owner": "Safety Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ENGINE-REPLACE-PROTECTION-CANCEL",
-   "identity": "beidou_core/engine.py:9691:TERMINAL_CALL:cancel_algo_order",
+   "identity": "beidou_core/engine.py:9753:TERMINAL_CALL:cancel_algo_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-REPLACE-PROTECTION-CANCEL]",
    "owner": "Safety Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
-   "identity": "beidou_core/engine.py:9939:TERMINAL_CALL:_cancel_algo_order",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CLEANUP-EXCESS-ALGO]",
-   "owner": "Execution Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "WRITE-ENGINE-CLEANUP-EXCESS-ALGO",
-   "identity": "beidou_core/engine.py:9989:TERMINAL_CALL:_cancel_algo_order",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ENGINE-CLEANUP-EXCESS-ALGO]",
-   "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
@@ -1952,35 +1965,35 @@
   },
   {
    "governance_id": "WRITE-ADAPTER-CREATE-ALGO",
-   "identity": "beidou_exchange/binance_usdm/adapter.py:1147:TERMINAL_CALL:request:POST",
+   "identity": "beidou_exchange/binance_usdm/adapter.py:1154:TERMINAL_CALL:request:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CREATE-ALGO]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ADAPTER-CANCEL-ALGO",
-   "identity": "beidou_exchange/binance_usdm/adapter.py:1254:TERMINAL_CALL:request:DELETE",
+   "identity": "beidou_exchange/binance_usdm/adapter.py:1261:TERMINAL_CALL:request:DELETE",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CANCEL-ALGO]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ADAPTER-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/adapter.py:349:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/adapter.py:356:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ADAPTER-CREATE-ORDER",
-   "identity": "beidou_exchange/binance_usdm/adapter.py:687:TERMINAL_CALL:request:POST",
+   "identity": "beidou_exchange/binance_usdm/adapter.py:694:TERMINAL_CALL:request:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CREATE-ORDER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-ADAPTER-CANCEL-ORDER",
-   "identity": "beidou_exchange/binance_usdm/adapter.py:811:TERMINAL_CALL:request:DELETE",
+   "identity": "beidou_exchange/binance_usdm/adapter.py:818:TERMINAL_CALL:request:DELETE",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-ADAPTER-CANCEL-ORDER]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
@@ -2036,49 +2049,49 @@
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:515:DIRECT_URLLIB_REQUEST:POST",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:522:DIRECT_URLLIB_REQUEST:POST",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:515:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:522:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:518:DIRECT_URLLIB_REQUEST:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:525:DIRECT_URLLIB_REQUEST:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:518:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:525:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-URLLIB-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:532:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:539:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-URLLIB-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-HTTPX-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:756:LEXICAL_NETWORK_SURFACE:network",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:763:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-HTTPX-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-REST-HTTPX-DYNAMIC-REQUEST",
-   "identity": "beidou_exchange/binance_usdm/rest_client.py:773:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_exchange/binance_usdm/rest_client.py:780:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-REST-HTTPX-DYNAMIC-REQUEST]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
@@ -2106,105 +2119,112 @@
   },
   {
    "governance_id": "WRITE-SUPERVISOR-RECOVERY-RESUME",
-   "identity": "beidou_launcher/supervisor.py:1310:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_launcher/supervisor.py:1361:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-RECOVERY-RESUME]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-RECOVERY-RESUME",
-   "identity": "beidou_launcher/supervisor.py:1351:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_launcher/supervisor.py:1402:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-RECOVERY-RESUME]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-AUTO-RESUME",
-   "identity": "beidou_launcher/supervisor.py:1412:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_launcher/supervisor.py:1463:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-AUTO-RESUME]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-AUTO-RESUME",
-   "identity": "beidou_launcher/supervisor.py:1427:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_launcher/supervisor.py:1478:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-AUTO-RESUME]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:1619:RUNTIME_CONSTRUCTOR:AutonomousEngine",
+   "identity": "beidou_launcher/supervisor.py:1674:RUNTIME_CONSTRUCTOR:AutonomousEngine",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
+   "owner": "Runtime Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "ENTRY-SUPERVISOR",
+   "identity": "beidou_launcher/supervisor.py:1678:RUNTIME_CONSTRUCTOR:AutonomousEngine",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-START-RESUME",
-   "identity": "beidou_launcher/supervisor.py:1695:TERMINAL_CALL:execute_action:RESUME",
+   "identity": "beidou_launcher/supervisor.py:1757:TERMINAL_CALL:execute_action:RESUME",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-START-RESUME]",
    "owner": "Control Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-ASYNC-ALIAS",
-   "identity": "beidou_launcher/supervisor.py:304:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:312:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-ASYNC-ALIAS]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-GETATTR-REQUEST",
-   "identity": "beidou_launcher/supervisor.py:314:TERMINAL_CALL:_api:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:322:TERMINAL_CALL:_api:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-GETATTR-REQUEST]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:325:UNRESOLVED_WRITE_CALLABLE:callback:request",
+   "identity": "beidou_launcher/supervisor.py:333:UNRESOLVED_WRITE_CALLABLE:callback:request",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-SUPERVISOR-GETATTR-REQUEST",
-   "identity": "beidou_launcher/supervisor.py:343:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:351:TERMINAL_CALL:request:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SUPERVISOR-GETATTR-REQUEST]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:359:UNRESOLVED_WRITE_CALLABLE:stored:execute_action",
+   "identity": "beidou_launcher/supervisor.py:367:UNRESOLVED_WRITE_CALLABLE:stored:execute_action",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:483:LEXICAL_CALLABLE_SURFACE:lambda",
+   "identity": "beidou_launcher/supervisor.py:527:LEXICAL_CALLABLE_SURFACE:lambda",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:535:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:579:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:574:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:618:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-SUPERVISOR",
-   "identity": "beidou_launcher/supervisor.py:634:TERMINAL_CALL:_api_async:DYNAMIC",
+   "identity": "beidou_launcher/supervisor.py:678:TERMINAL_CALL:_api_async:DYNAMIC",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-SUPERVISOR]",
    "owner": "Runtime Owner",
    "status": "HARD_HOLD"
@@ -2245,32 +2265,74 @@
    "status": "READ_ONLY"
   },
   {
+   "governance_id": "net-scripts-testnet-run_g5-py--urllib-request",
+   "identity": "scripts/testnet/run_g5.py:299:LEXICAL_NETWORK_SURFACE:network",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[net-scripts-testnet-run_g5-py--urllib-request]",
+   "owner": "Test Quality Owner",
+   "status": "READ_ONLY"
+  },
+  {
+   "governance_id": "net-scripts-testnet-run_g5-py--urllib-request",
+   "identity": "scripts/testnet/run_g5.py:377:LEXICAL_NETWORK_SURFACE:network",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[net-scripts-testnet-run_g5-py--urllib-request]",
+   "owner": "Test Quality Owner",
+   "status": "READ_ONLY"
+  },
+  {
+   "governance_id": "net-scripts-testnet-run_g5-py--urllib-request",
+   "identity": "scripts/testnet/run_g5.py:379:LEXICAL_NETWORK_SURFACE:network",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[net-scripts-testnet-run_g5-py--urllib-request]",
+   "owner": "Test Quality Owner",
+   "status": "READ_ONLY"
+  },
+  {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:353:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+   "identity": "scripts/testnet/run_g5.py:460:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:358:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+   "identity": "scripts/testnet/run_g5.py:465:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "WRITE-G5-DYNAMIC-REQUEST",
-   "identity": "scripts/testnet/run_g5.py:369:TERMINAL_CALL:request:DYNAMIC",
+   "identity": "scripts/testnet/run_g5.py:476:TERMINAL_CALL:request:DYNAMIC",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-G5-DYNAMIC-REQUEST]",
+   "owner": "Test Quality Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "WRITE-G5-DYNAMIC-REQUEST",
+   "identity": "scripts/testnet/run_g5.py:478:LEXICAL_NETWORK_SURFACE:network",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-G5-DYNAMIC-REQUEST]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
   },
   {
    "governance_id": "ENTRY-G5-RUNNER",
-   "identity": "scripts/testnet/run_g5.py:570:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+   "identity": "scripts/testnet/run_g5.py:677:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-G5-RUNNER]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66",
+   "identity": "scripts/testnet/run_g5.py:76:LEXICAL_NETWORK_SURFACE:network",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66]",
+   "owner": "Test Quality Owner",
+   "status": "READ_ONLY"
+  },
+  {
+   "governance_id": "WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66",
+   "identity": "scripts/testnet/run_g5.py:76:NETWORK_TRANSPORT_CALL:urllib.urlopen",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66]",
+   "owner": "Test Quality Owner",
+   "status": "READ_ONLY"
   },
   {
    "governance_id": "WRITE-SCRIPTS-CANCEL-ALGO-ORDER-9A2344A9",
@@ -2435,6 +2497,16 @@
    "owner": "SRE Owner",
    "purpose": "LOCAL_HEALTH_READ",
    "source": "scripts/monitor_daemon.py::urllib.request",
+   "status": "READ_ONLY"
+  },
+  {
+   "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+   "id": "net-scripts-testnet-run_g5-py--urllib-request",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_network_record_is_behaviorally_bound[net-scripts-testnet-run_g5-py--urllib-request]",
+   "occurrences": 1,
+   "owner": "Test Quality Owner",
+   "purpose": "LOCAL_HEALTH_READ",
+   "source": "scripts/testnet/run_g5.py::urllib.request",
    "status": "READ_ONLY"
   }
  ],
@@ -3527,6 +3599,17 @@
    "occurrences": 1,
    "owner": "SRE Owner",
    "source": "scripts/monitor_daemon.py::run_checks_v12::urllib_urlopen",
+   "status": "READ_ONLY"
+  },
+  {
+   "call_graph": "G5 certification runner -> local producer health HTTP read -> status endpoint",
+   "capability": "LOCAL_HEALTH_READ",
+   "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+   "id": "WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-SCRIPTS-URLLIB-URLOPEN-F999BF66]",
+   "occurrences": 1,
+   "owner": "Test Quality Owner",
+   "source": "scripts/testnet/run_g5.py::_producer_status_http::urllib_urlopen",
    "status": "READ_ONLY"
   },
   {

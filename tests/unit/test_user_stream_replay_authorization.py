@@ -14,7 +14,8 @@ testnet 自动授权 baseline；live/canary 保持人工治理授权语义不变
 - sequencer 处于 SEQUENCE_UNAVAILABLE 时 helper 授权成功，之后无序列
   事件可被 ingest（核心回归：复现 02:27 下单后停机场景）
 - sequencer 已 HEALTHY 时幂等跳过（不重复授权）
-- live 环境 / 不可写环境永不自动授权
+- live 环境 / 普通不可写环境永不自动授权
+- 隔离的 G5 producer 可在 REST 对账匹配后授权，但不获得 terminal writes
 - 授权失败不冻结账本、不发 incident（自动路径不得触发 fail-closed）
 - _reconcile MATCHED 路径集成调用 helper
 """
@@ -71,11 +72,13 @@ def _engine(
     *,
     env_mode: str = "testnet",
     can_write: bool = True,
+    producer_only: bool = False,
     projector: UserStreamProjector | None = None,
 ) -> AutonomousEngine:
     engine = AutonomousEngine.__new__(AutonomousEngine)
     engine._env_mode = SimpleNamespace(value=env_mode, can_write_trades=can_write)
     engine._can_write = can_write
+    engine._producer_only = producer_only
     engine._user_stream_projector = projector
     engine._user_stream_runtime = {}
     engine._event_stream_facts = None
@@ -218,6 +221,19 @@ def test_non_writable_env_never_authorizes() -> None:
 
     assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-abc") is False
     assert projector.sequencer.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
+
+
+def test_g5_producer_authorizes_replay_without_terminal_write_capability() -> None:
+    """G5 隔离 producer 需要消费测试事件，但不能打开 terminal writes。"""
+    projector = _projector_requiring_replay()
+    engine = _engine(can_write=False, producer_only=True, projector=projector)
+
+    assert engine._maybe_authorize_user_stream_baseline(_baseline_facts(), "recon-g5") is True
+    assert engine._can_write is False
+    assert engine._producer_only is True
+    assert projector.sequencer.status is UserStreamStatus.HEALTHY
+    assert projector.sequencer._unsequenced_allowed is True
+    assert projector.ingest(_unsequenced_order_update()).status is UserProjectionStatus.ACCEPTED
 
 
 def test_authorization_failure_does_not_freeze_or_incident() -> None:

@@ -69,6 +69,17 @@ _NEW_ENTRY_DECISIONS: dict[str, dict[str, str]] = {
         "call_graph": "launchd -> governed watchdog script -> autopilot kickstart -> canonical launcher",
         "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
     },
+    # G5 certification uses a separate, non-KeepAlive producer that can only
+    # observe Testnet user-stream/reconciliation state; all engine terminal
+    # writes remain hard-held and the G5 runner owns bounded scenario writes.
+    "deploy/com.beidou.g5-producer.plist": {
+        "kind": "script",
+        "capability": "RUNTIME_ACTIVATION",
+        "status": "HARD_HOLD",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 certification runner -> dedicated launchd producer -> producer-only canonical launcher",
+        "expected_rejection": "NONCANONICAL_ENTRYPOINT_HELD",
+    },
     # M22: PITR 启用脚本写宿主机 PG 配置（本地运维迁移族）。
     "scripts/enable_pitr.sh": {
         "kind": "shell",
@@ -127,6 +138,13 @@ _NEW_ENTRY_DECISIONS: dict[str, dict[str, str]] = {
 # 新发现网络导入的治理决策(否则重建写入 UNREVIEWED_NETWORK_IMPORT 并阻断验证)。
 _NEW_NETWORK_DECISIONS: dict[str, dict[str, str]] = {
     "beidou_certification/g5_scenarios/restart/process_restart.py::urllib.request": {
+        "purpose": "LOCAL_HEALTH_READ",
+        "status": "READ_ONLY",
+        "owner": "Test Quality Owner",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+    },
+    "scripts/testnet/run_g5.py::urllib.request": {
+        "id": "net-scripts-testnet-run_g5-py--urllib-request",
         "purpose": "LOCAL_HEALTH_READ",
         "status": "READ_ONLY",
         "owner": "Test Quality Owner",
@@ -351,6 +369,13 @@ _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
         "owner": "Test Quality Owner",
         "call_graph": "G5 restart scenario -> local health HTTP read -> status endpoint",
     },
+    "scripts/testnet/run_g5.py::_producer_status_http::urllib_urlopen": {
+        "capability": "LOCAL_HEALTH_READ",
+        "status": "READ_ONLY",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+        "owner": "Test Quality Owner",
+        "call_graph": "G5 certification runner -> local producer health HTTP read -> status endpoint",
+    },
     "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py::UserStreamReconnectScenario._close_listen_key_impl::request[DELETE]": {
         "capability": "TESTNET_CERTIFICATION_WRITE_HELD",
         "status": "HARD_HOLD",
@@ -548,7 +573,9 @@ def main() -> int:
                 "owner": "Runtime Owner",
                 "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
             }
-        network_id = f"NETWORK-{source.split('::')[-1].upper().replace('.', '-')[:44]}"
+        network_id = str(
+            decision.get("id") or f"NETWORK-{source.split('::')[-1].upper().replace('.', '-')[:44]}"
+        )
         new_network.append(
             {
                 "expected_rejection": decision["expected_rejection"],

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -392,6 +393,28 @@ def test_postgres_intent_outbox_binds_claim_and_transition_to_service_owner() ->
     assert claim_params and claim_params[0][0] == "beidou-autopilot"
     transition_params = [params for sql, params in conn.cursor_state.statements if "SET status=%s,last_error" in sql]
     assert transition_params and "beidou-autopilot" in transition_params[0]
+
+
+def test_postgres_unacked_uses_db_created_at_for_legacy_payload() -> None:
+    conn = _RecordingConnection()
+    legacy_payload = PostgresIntentOutbox._intent_payload(_intent(), "idem-intent-pg-legacy")
+    del legacy_payload["created_at"]
+    conn.cursor_state.fetchall_values.append(
+        [
+            {
+                "payload": json.dumps(legacy_payload),
+                "created_at": datetime(2026, 8, 24, 1, 2, 3, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    store = PostgresIntentOutbox(connection_factory=lambda: conn, fencing_token=7)
+
+    restored = store.unacked()
+
+    assert restored[0].intent_id == _intent().intent_id
+    assert restored[0].created_at == datetime(2026, 8, 24, 1, 2, 3, tzinfo=timezone.utc)
+    sql = "\n".join(statement for statement, _params in conn.cursor_state.statements)
+    assert "SELECT payload::text,created_at FROM v3_transactional_outbox" in sql
 
 
 def test_postgres_intent_outbox_cannot_ack_pending_or_unowned_intent() -> None:

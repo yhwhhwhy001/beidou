@@ -147,3 +147,28 @@ async def test_non_writable_engine_does_not_restart(monkeypatch: pytest.MonkeyPa
 
     start.assert_not_awaited()
     assert engine._user_stream_restart_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_g5_producer_restarts_user_stream_while_terminal_writes_are_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G5 may recover its session without authorizing terminal writes."""
+
+    engine = _engine(
+        _can_write=False,
+        _producer_only=True,
+        _USER_STREAM_RESTART_BACKOFF_S=0.0,
+    )
+    stop = AsyncMock()
+    start = AsyncMock(return_value=True)
+    monkeypatch.setattr(engine, "_stop_user_stream", stop)
+    monkeypatch.setattr(engine, "_start_user_stream", start)
+
+    engine._user_stream_fault("LISTEN_KEY_EXPIRED", terminal=True)
+    await engine._user_stream_restart_task
+
+    stop.assert_awaited_once()
+    start.assert_awaited_once()
+    assert engine._user_stream_runtime["status"] == "CONNECTED"
+    assert engine._user_stream_runtime["listen_key_active"] is True

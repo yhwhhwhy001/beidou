@@ -24,7 +24,7 @@ from beidou_safety.execution.recovery import RecoveryEngine
 
 from .manifest import MAX_RESTARTS, MONITOR_INTERVAL, STARTUP_TIMEOUT
 from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
-from .preflight import current_commit, run_preflight
+from .preflight import current_commit, run_g5_producer_preflight, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import (
     active_incident_blocking_severity,
@@ -171,9 +171,13 @@ class BeidouSupervisor:
         monitor_interval: float = MONITOR_INTERVAL,
         self_heal: bool = True,
         max_restarts: int = MAX_RESTARTS,
+        producer_only: bool = False,
     ) -> None:
         self.project_root = project_root
         self.mode = mode
+        self.producer_only = bool(producer_only)
+        if self.producer_only and mode != "testnet":
+            raise ValueError("G5_PRODUCER_TESTNET_ONLY")
         self.symbols = symbols
         self.port = port
         self.startup_timeout = startup_timeout
@@ -275,7 +279,7 @@ class BeidouSupervisor:
                 "msg": f"WRITE_BLOCKED_BY_SUPERVISOR: {method.upper()} {path} in {mode}; authority_not_active",
             }
 
-        def write_allowed(method: str, params: dict[str, Any] | None = None) -> bool:
+        def write_allowed(path: str, method: str, params: dict[str, Any] | None = None) -> bool:
             # M00-C01 containment: runtime readiness, DELETE, reduceOnly, and
             # closePosition classify intent but do not prove ownership or grant
             # terminal-write authority.  Until a scoped capability producer is
@@ -288,7 +292,11 @@ class BeidouSupervisor:
             # adapter/rest_client 的 typed TerminalWriteKind hold 强制执行
             # (双层防护保留);supervisor 互锁仅在 hard 模式或非 testnet
             # 环境保持 HARD_HOLD。live/canary 永不放行。
-            del method, params
+            if self.producer_only:
+                # The producer needs only the authenticated listen-key
+                # lifecycle to observe user-stream recovery.  All order,
+                # protection, leverage and unknown mutations remain held.
+                return path == Endpoint.LISTEN_KEY
             return self.mode == "testnet" and os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard") == "unknown-only"
 
         async def guarded_async(
@@ -297,7 +305,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params)
+            _blocked = method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(path, method, params)
             if _blocked:
                 print(f"[supervisor] BLOCKED: {method} {path}")
                 return record(path, method)
@@ -309,7 +317,7 @@ class BeidouSupervisor:
             signed: bool = False,
             params: dict[str, Any] | None = None,
         ) -> Any:
-            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(path, method, params):
                 return record(path, method)
             return original_sync(path, method=method, signed=signed, params=params)
 
@@ -333,7 +341,7 @@ class BeidouSupervisor:
                 params: dict[str, Any] | None = None,
                 write_account_id: str | None = None,
             ) -> Any:
-                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(method, params):
+                if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not write_allowed(path, method, params):
                     record(path, method)
                     return Result.failure(
                         "WRITE_BLOCKED_BY_SUPERVISOR: authority_not_active",
@@ -388,6 +396,37 @@ class BeidouSupervisor:
             # DEGRADED.
             and self.report.supervisor_state == "RUNNING"
         )
+
+    def _is_g5_producer_ready(self) -> bool:
+        """Return the separate producer-only readiness certificate.
+
+        This is intentionally not an alias for trading readiness: a producer
+        is useful to the G5 restart scenarios only while the control plane is
+        held at ``NO_NEW_RISK`` and the normal ``RESUME`` authority is absent.
+        """
+
+        if not self.producer_only or self.engine is None:
+            return False
+        if self.report.supervisor_state != "RUNNING" or not bool(getattr(self.engine, "_running", False)):
+            return False
+        if self._control_state() != "NO_NEW_RISK":
+            return False
+        if not bool(getattr(self.engine, "_state_backend_supported", False)):
+            return False
+        reconciliation = getattr(self.engine, "_last_reconciliation_result", None)
+        if reconciliation is None or not bool(getattr(reconciliation, "matched", False)):
+            return False
+        checked_at = getattr(reconciliation, "checked_at", None)
+        try:
+            age = time.time() - float(checked_at.timestamp())
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if not (0.0 <= age <= 90.0):
+            return False
+        stream_ready, _evidence = self.engine._user_stream_readiness()
+        if not stream_ready:
+            return False
+        return not any(item.is_blocking for item in self.report.blockers)
 
     def _has_active_trading_incident(self) -> bool:
         """Keep readiness fail-closed until open safety incidents resolve."""
@@ -451,10 +490,15 @@ class BeidouSupervisor:
 
         def status_info() -> dict[str, Any]:
             base = dict(engine._get_status_info())
+            base["g5_producer_mode"] = self.producer_only
+            base["g5_producer_writes_held"] = self.producer_only
+            base["g5_producer_ready"] = self._is_g5_producer_ready()
             base["supervisor"] = {
                 "state": self.report.supervisor_state,
                 "phase": self.report.phase,
                 "trading_ready": self._is_trading_ready(),
+                "g5_producer_mode": self.producer_only,
+                "g5_producer_ready": self._is_g5_producer_ready(),
                 "control_state": self._control_state(),
                 "commit": self.report.commit,
                 "blockers": [item.check_id for item in self.report.blockers],
@@ -1142,7 +1186,14 @@ class BeidouSupervisor:
                         with suppress(Exception):
                             _engine._control.execute_action(ControlAction.NO_NEW_RISK)
         elif debounce_action == "RUNNING":
-            if self._control_state() != "RESUME":
+            # G5 producer intentionally keeps the control plane at
+            # NO_NEW_RISK. Its supervisor state reflects runtime health,
+            # not trading authority; marking it PAUSED here makes the
+            # producer status contract fail after a transient probe incident
+            # even though all writes remain held by the producer interlock.
+            if self.producer_only:
+                self.report.supervisor_state = "RUNNING"
+            elif self._control_state() != "RESUME":
                 self.report.supervisor_state = "PAUSED"
             else:
                 self.report.supervisor_state = "RUNNING"
@@ -1158,7 +1209,7 @@ class BeidouSupervisor:
             # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
             # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
             # 非 RESUME、无 blocker、lifecycle 为 DEGRADED 才动作。
-            if self.mode == "testnet" and not self._resume_authorized:
+            if self.mode == "testnet" and not self._resume_authorized and not self.producer_only:
                 self._maybe_testnet_auto_reauthorize()
         else:
             # UNCHANGED: 防抖器计数中。
@@ -1597,7 +1648,10 @@ class BeidouSupervisor:
 
         # Preflight is strictly read-only. Do not create a PID lock or write
         # supervisor evidence until every blocking fact has passed.
-        preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
+        if self.producer_only:
+            preflight, _settings = run_g5_producer_preflight(self.project_root, self.port)
+        else:
+            preflight, _settings = run_preflight(self.project_root, self.mode, self.port)
         self.report.phase = "PREFLIGHT"
         self.report.replace_phase_checks("preflight.", preflight)
         self._print_checks(preflight)
@@ -1616,7 +1670,12 @@ class BeidouSupervisor:
 
             from beidou_core.engine import AutonomousEngine
 
-            self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
+            if self.producer_only:
+                self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode, producer_only=True)
+            else:
+                # Keep the ordinary supervisor construction contract stable
+                # for normal runtimes and their lightweight test doubles.
+                self.engine = AutonomousEngine(symbols=self.symbols, mode=self.mode)
             self.engine._health._port = self.port
             # _last_realtime 保持引擎默认值 (0.0)，确保首个 tick 立即执行
             self._install_exchange_write_interlock()
@@ -1686,7 +1745,10 @@ class BeidouSupervisor:
             # (BD-CV02 AC-02-04)。门禁拒绝时不授权 —— 保持 NO_NEW_RISK;
             # testnet 由 _maybe_testnet_auto_reauthorize 兜底,live/canary
             # 需人工重启重新授权(生产安全语义,supervisor 注释 1031 行)。
-            allowed, reason = self._authorize_resume_via_truth_snapshot()
+            if self.producer_only:
+                allowed, reason = False, "G5_PRODUCER_NO_RESUME"
+            else:
+                allowed, reason = self._authorize_resume_via_truth_snapshot()
             self._resume_authorized = allowed
             if allowed:
                 if self._control_state() != "RESUME":

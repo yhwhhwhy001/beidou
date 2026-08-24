@@ -308,7 +308,14 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         #   仅未分类突变端点(UNKNOWN) hold,已知 kind(下单/取消/
         #   减仓/保护/listen key)放行 —— 写能力不退化
         _hold_mode = os.environ.get("BEIDOU_TERMINAL_WRITE_HOLD", "hard")
-        if write_request is not None and (_hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN):
+        producer_session_write = (
+            os.environ.get("BEIDOU_G5_PRODUCER") == "1"
+            and write_request is not None
+            and write_request.kind is TerminalWriteKind.SESSION_CONTROL
+        )
+        if write_request is not None and not producer_session_write and (
+            _hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN
+        ):
             reason = (
                 "UNCLASSIFIED_TERMINAL_WRITE"
                 if write_request.kind is TerminalWriteKind.UNKNOWN

@@ -6,7 +6,7 @@
 1. 前置:pgrep 记录当前引擎 PID;读 /status 基线(trading_ready=True 且
    recon=MATCHED,否则 NOT_VERIFIABLE("engine_not_ready_before_restart"));
    PG durable 快照(opening 基线 record hash + UNKNOWN outbox message_id 集)
-2. SIGKILL 旧 PID → launchctl kickstart gui/501/com.beidou.autopilot →
+2. SIGKILL 旧 PID → launchctl kickstart（G5 producer 使用 -k）→
    轮询 ≤120s 等新进程(新 PID ≠ 旧 PID 且 /status 可达;超时 FAIL)
 3. 等 /status trading_ready=True 且 recon=MATCHED(≤180s;超时 FAIL)
 4. durable 恢复验证:opening 基线 hash 未变、无新增 UNKNOWN outbox 行
@@ -43,6 +43,12 @@ from beidou_certification.g5_scenarios.base import (
 )
 from beidou_certification.g5_scenarios.engine.ack_loss import PG_DSN
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
+from beidou_launcher.g5_producer import (
+    PRODUCER_ENVIRONMENT_MARKER,
+    producer_launchd_target,
+    producer_process_pattern,
+    producer_status_verdict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +129,8 @@ def engine_pid_os() -> int | None:
     EnginePidAmbiguousError(多实例并存,不可安全选择),0 → None(引擎未在跑)。
     database_restart 复用同一默认注入依赖。
     """
-    proc = subprocess.run(  # nosec B603 - fixed process query, shell disabled
-        ["/usr/bin/pgrep", "-f", "beidou start"], check=False, capture_output=True, text=True
+    proc = subprocess.run(  # nosec B603 - fixed process query, shell disabled  # noqa: S603
+        ["/usr/bin/pgrep", "-f", producer_process_pattern()], check=False, capture_output=True, text=True
     )
     if proc.returncode != 0:
         return None
@@ -147,6 +153,9 @@ def parse_engine_status(payload: dict) -> tuple[bool, str]:
     - trading_ready=False 且 recon=MATCHED → (False, "ENGINE_NOT_READY")
     - trading_ready=False 且 recon 非 MATCHED → (False, "RECON_{status}")
     """
+    if payload.get("g5_producer_mode") is True:
+        return producer_status_verdict(payload)
+
     trading_ready = payload.get("trading_ready")
     recon = payload.get("last_reconciliation")
     if trading_ready is None or not isinstance(recon, dict):
@@ -267,9 +276,22 @@ class ProcessRestartScenario(ScenarioBase):
 
     @staticmethod
     def _kickstart_os() -> None:
-        """真实拉起:launchctl kickstart gui/501/com.beidou.autopilot。"""
-        subprocess.run(  # nosec B603 - fixed launchctl command, shell disabled
-            ["/bin/launchctl", "kickstart", "gui/501/com.beidou.autopilot"],
+        """真实拉起当前认证轮绑定的 launchd 服务。
+
+        G5 producer 的 plist 使用 ``KeepAlive=false``，且场景先杀 Python
+        子进程；wrapper 可能仍在 launchd 的 active window 中等待子进程退出。
+        裸 ``kickstart`` 会被 launchd 当作 no-op，因此 producer 重启必须用
+        ``-k`` 强制结束 wrapper 并启动新实例。普通 autopilot 保持原有裸
+        ``kickstart`` 语义。
+        """
+        producer_mode = os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1"
+        target = producer_launchd_target() if producer_mode else _KICKSTART_TARGET
+        command = ["/bin/launchctl", "kickstart"]
+        if producer_mode:
+            command.append("-k")
+        command.append(target)
+        subprocess.run(  # nosec B603 - fixed launchctl command, shell disabled  # noqa: S603
+            command,
             check=True,
             capture_output=True,
             text=True,
@@ -446,9 +468,14 @@ class ProcessRestartScenario(ScenarioBase):
             t_kill = self._now()
             self._sigkill(old_pid)
             steps.append({"action": "sigkill", "pid": old_pid})
-            logger.info("process_restart: launchctl kickstart %s", _KICKSTART_TARGET)
+            target = (
+                producer_launchd_target()
+                if os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1"
+                else _KICKSTART_TARGET
+            )
+            logger.info("process_restart: launchctl kickstart %s", target)
             self._kickstart()
-            steps.append({"action": "kickstart", "target": _KICKSTART_TARGET})
+            steps.append({"action": "kickstart", "target": target})
             new_pid = await self._wait_for_new_process(old_pid, since=t_kill, steps=steps)
             restart_elapsed = self._now() - t_kill
             t_up = self._now()

@@ -152,6 +152,34 @@ from beidou_strategy.state.market_state import MarketStateEstimator, MarketState
 
 logger = logging.getLogger(__name__)
 
+
+def _apply_testnet_event_stream_exemption(
+    result: ReconciliationResult,
+    *,
+    environment: str,
+    event_facts: AccountFactSnapshot | None,
+) -> ReconciliationResult:
+    """Downgrade only event-stream-only drift in the bounded Testnet path.
+
+    A two-way reconciliation has no event facts. It must therefore remain
+    strict: a system/exchange mismatch is an execution-safety blocker even
+    on the shared Testnet account. The exemption is valid only when a real
+    event-stream snapshot exists and the mismatch does not include the
+    system/exchange pair.
+    """
+
+    if not result.matched and environment == "testnet" and event_facts is not None:
+        differences = [str(difference) for difference in result.differences or []]
+        two_way_differences = [
+            difference for difference in differences if difference.startswith("system/exchange")
+        ]
+        if not two_way_differences and differences:
+            print("[recon] testnet: event-stream drift (reference only) — treated as matched")
+            result.matched = True
+            result.differences = []
+            result.status = ReconciliationStatus.MATCHED
+    return result
+
 # BD-FIX (O1): 基本结构化日志 — 写入文件并添加时间戳/级别/correlation_id
 _log_format = logging.Formatter(
     "%(asctime)s.%(msecs)03d [%(levelname)-7s] %(name)s - %(message)s",
@@ -1329,7 +1357,7 @@ class AutonomousEngine:
     _USER_STREAM_RESTART_MAX_ATTEMPTS = 3
     _USER_STREAM_RESTART_BACKOFF_S = 15.0
 
-    def __init__(self, symbols: list[str], mode: str = "paper") -> None:
+    def __init__(self, symbols: list[str], mode: str = "paper", *, producer_only: bool = False) -> None:
         normalized_symbols = list(
             dict.fromkeys(str(symbol).strip().upper() for symbol in symbols if str(symbol).strip())
         )
@@ -1337,6 +1365,9 @@ class AutonomousEngine:
             raise ValueError("EXPLICIT_SYMBOL_UNIVERSE_REQUIRED")
         self._symbols = normalized_symbols
         self._cli_mode = mode  # CLI 参数: research/paper/shadow/testnet/safety_only
+        self._producer_only = bool(producer_only)
+        if self._producer_only and mode != "testnet":
+            raise ValueError("G5_PRODUCER_TESTNET_ONLY")
 
         # 封闭运行模式枚举 — 决定写能力
         from beidou_core.guard import EnvironmentMode
@@ -1350,7 +1381,11 @@ class AutonomousEngine:
         }
         self._env_mode = _MODE_MAP.get(mode, EnvironmentMode.SAFETY_ONLY)
         # 是否允许 POST/PUT/DELETE 交易写请求
-        self._can_write = self._env_mode.can_write_trades
+        # A G5 producer observes the real Testnet account, user stream and
+        # reconciliation loop, but it is never an order-producing engine.
+        # Keep the environment as TESTNET for endpoint semantics while
+        # removing the engine's terminal-write capability at construction.
+        self._can_write = self._env_mode.can_write_trades and not self._producer_only
         # P0修复: Paper/Shadow 模式的模拟执行标志（不写交易所，但需要执行 Paper 撮合）
         self._can_simulate = not self._can_write and self._env_mode.value in ("paper", "shadow", "research")
         # P2 修复 (write hold 配置地雷): 传输层默认 hard 模式会拦掉一切写操作;
@@ -1659,7 +1694,7 @@ class AutonomousEngine:
         # transport status and a recent parsed event; the default is therefore
         # NOT_STARTED/UNKNOWN and cannot be promoted by a REST snapshot.
         self._user_stream_runtime: dict[str, Any] = {
-            "status": "NOT_STARTED" if self._can_write else "NOT_REQUIRED",
+            "status": "NOT_STARTED" if (self._can_write or self._producer_only) else "NOT_REQUIRED",
             "last_event_mono": None,
             "last_state_mono": None,
             "listen_key_active": False,
@@ -2860,9 +2895,11 @@ class AutonomousEngine:
     def _check_liveness(self) -> HealthState:
         """Expose stalled event-loop state instead of unconditional HEALTHY."""
 
-        if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
+        if (getattr(self, "_can_write", False) or getattr(self, "_producer_only", False)) and not getattr(
+            self, "_running", False
+        ):
             return HealthState.UNHEALTHY
-        if getattr(self, "_can_write", False) and not self._user_stream_readiness()[0]:
+        if (getattr(self, "_can_write", False) or getattr(self, "_producer_only", False)) and not self._user_stream_readiness()[0]:
             return HealthState.UNHEALTHY
         if self._running and self._realtime_age_seconds() > 15.0:
             return HealthState.UNHEALTHY
@@ -3183,7 +3220,7 @@ class AutonomousEngine:
         by merely injecting a replay baseline.
         """
 
-        if not bool(getattr(self, "_can_write", False)):
+        if not (bool(getattr(self, "_can_write", False)) or bool(getattr(self, "_producer_only", False))):
             return True, {"status": "NOT_REQUIRED", "required": False}
         runtime = getattr(self, "_user_stream_runtime", {})
         if not isinstance(runtime, dict):
@@ -3212,7 +3249,10 @@ class AutonomousEngine:
         # 停流保护语义不变；live/canary 保持严格 event_age）
         effective_max_age = 300.0 if status in ("CONNECTED", "UNKNOWN") or startup_grace else max_event_age
         projector_ok = projector_status not in {"GAP", "SEQUENCE_UNAVAILABLE"}
-        require_complete_projection = True
+        # The producer certifies transport recovery, not trading projection
+        # authority.  It intentionally does not grant replay authorization or
+        # mutate position/protection ownership facts.
+        require_complete_projection = not bool(getattr(self, "_producer_only", False))
         # BD-FIX: testnet 的"流活性"按 transport 判定（CONNECTED/HEALTHY +
         # listenKey 有效），不要求事件新鲜。demo 低频环境（凌晨 10+ 分钟
         # 无事件）中"无事件=无成交=无风险积累"，账户状态由 REST 对账
@@ -3254,7 +3294,9 @@ class AutonomousEngine:
         # advertise readiness.  ``not self._running`` is only acceptable for
         # zero-write diagnostics; allowing RESUME+stopped to pass here makes
         # an independent health endpoint claim that a dead executor is ready.
-        if getattr(self, "_can_write", False) and not getattr(self, "_running", False):
+        if (getattr(self, "_can_write", False) or getattr(self, "_producer_only", False)) and not getattr(
+            self, "_running", False
+        ):
             return False
         durable_ok, _, _ = self._durable_fact_status()
         if not durable_ok:
@@ -3428,6 +3470,8 @@ class AutonomousEngine:
             "control_action": self._control.get_status().value,
             "symbols": self._symbols,
             "mode": self._env_mode.value,
+            "g5_producer_mode": bool(getattr(self, "_producer_only", False)),
+            "g5_producer_writes_held": bool(getattr(self, "_producer_only", False)),
             "state_backend_supported": self._state_backend_supported,
             "state_backend_error": self._state_backend_error,
             "terminal_write_hold_error": getattr(self, "_terminal_write_hold_error", None),
@@ -4714,6 +4758,8 @@ class AutonomousEngine:
         startup_recovery_is_read_only 扫描);取消动作由本方法受治理执行,
         run() 只消费其结果清单。
         """
+        if bool(getattr(self, "_producer_only", False)):
+            return set()
         canceled_ids: set[str] = set()
         for _sym, _algo_id in list(getattr(self, "_stale_protection_algos", None) or []):
             if not str(_algo_id or "").strip():
@@ -4745,6 +4791,9 @@ class AutonomousEngine:
         would submit a duplicate SL/TP pair).  Any ambiguity leaves the risk
         gate closed and returns ``False``; it never adopts or cancels a row.
         """
+
+        if bool(getattr(self, "_producer_only", False)):
+            return True
 
         try:
             rows = list(self._store.restore_protections())
@@ -8565,7 +8614,14 @@ class AutonomousEngine:
         # BD-FIX: 终端故障后限次自动重启（demo listenKey 周期性失效自愈）。
         # 记录故障与 incident 之后调度；_restart_user_stream_after_fault 内部
         # 再校验停止/在途/重试上限，双重保护避免重复 WS 与无限循环。
-        if terminal and bool(getattr(self, "_can_write", False)):
+        # The isolated Testnet G5 producer keeps terminal order/protection
+        # writes hard-held, but it still owns the authenticated session
+        # lifecycle needed to exercise recovery.  Do not let that producer
+        # remain FAILED merely because normal terminal writes are disabled.
+        if terminal and (
+            bool(getattr(self, "_can_write", False))
+            or bool(getattr(self, "_producer_only", False))
+        ):
             with contextlib.suppress(RuntimeError):
                 if getattr(self, "_user_stream_restart_attempts", 0) < self._USER_STREAM_RESTART_MAX_ATTEMPTS:
                     self._user_stream_restart_task = asyncio.create_task(self._restart_user_stream_after_fault(reason))
@@ -8623,7 +8679,7 @@ class AutonomousEngine:
         into a REST-only writable mode.
         """
 
-        if not bool(getattr(self, "_can_write", False)):
+        if not (bool(getattr(self, "_can_write", False)) or bool(getattr(self, "_producer_only", False))):
             self._update_user_stream_runtime(status="NOT_REQUIRED", listen_key_active=False)
             return True
         existing_task = getattr(self, "_user_ws_task", None)
@@ -9274,17 +9330,14 @@ class AutonomousEngine:
         # 重建路径周期性分歧（final75 实测 BEAT 符号反转、余额 4997
         # 恒定）。system/exchange 两方仍严格（差异阻断不变）；
         # live/canary 保持三方严格。
-        if (
-            # TESTNET-EXEMPT: EXEMPT-13
-            not result.matched and str(getattr(getattr(self, "_env_mode", None), "value", "")) == "testnet"
-        ):
-            _diffs = [str(d) for d in getattr(result, "differences", []) or []]
-            _two_way_diffs = [d for d in _diffs if str(d).startswith("system/exchange")]
-            if not _two_way_diffs and _diffs:
-                print("[recon] testnet: event-stream drift (reference only) — treated as matched")
-                result.matched = True
-                result.differences = []
-                result.status = ReconciliationStatus.MATCHED
+        # TESTNET-EXEMPT: EXEMPT-13. A missing event projection means this
+        # is the strict two-way system/exchange path; never let the
+        # event-stream exemption turn that mismatch into a false match.
+        result = _apply_testnet_event_stream_exemption(
+            result,
+            environment=str(getattr(getattr(self, "_env_mode", None), "value", "")),
+            event_facts=event_facts,
+        )
         self._last_reconciliation_result = result
         if bool(getattr(result, "matched", False)):
             self._last_matched_reconciliation_mono = time.monotonic()
@@ -9458,7 +9511,9 @@ class AutonomousEngine:
         ORDER_TRADE_UPDATE 必被拒（USER_EVENT_REJECTED）→ fault → STOPPED →
         DEGRADED → LOCKED 停机。recon MATCHED（REST/系统/事件三方独立对拍）
         即投影器 docstring 要求的 "independently verified" 基线，testnet 据此
-        自动授权；live/canary 保持人工治理授权语义（与 1cd1208 环境区分一致）。
+        自动授权；隔离的 G5 producer 也可使用该只读 REST 基线处理测试事件，
+        但仍保持 terminal order/protection writes held；live/canary 保持人工治理
+        授权语义（与 1cd1208 环境区分一致）。
 
         幂等：sequencer 已 HEALTHY 时跳过。授权失败只 defer（事件流保持
         fail-closed），不冻结账本、不发 incident —— 自动路径不得触发
@@ -9472,7 +9527,10 @@ class AutonomousEngine:
             differences = [str(d) for d in getattr(result, "differences", []) or []]
             if any(str(d).startswith("system/exchange") for d in differences):
                 return False
-        if not bool(getattr(self, "_can_write", False)):
+        if not (
+            bool(getattr(self, "_can_write", False))
+            or bool(getattr(self, "_producer_only", False))
+        ):
             # TESTNET-EXEMPT: EXEMPT-13
             return False
         if str(getattr(self._env_mode, "value", "")) != "testnet":
@@ -9542,6 +9600,8 @@ class AutonomousEngine:
         幽灵单品种共存时幽灵单永远无法清理 → owner_unknown 永久置位
         （final81/final82 实测 3 个幽灵 symbol 死锁）。
         """
+        if bool(getattr(self, "_producer_only", False)):
+            return unowned_algo_ids, existing_algo_inventory
         if not unowned_algo_ids:
             return unowned_algo_ids, existing_algo_inventory
 
@@ -9622,6 +9682,8 @@ class AutonomousEngine:
         governed recovery state machine must take over; this compatibility
         check never submits an unowned raw Algo order.
         """
+        if bool(getattr(self, "_producer_only", False)):
+            return
         ctrl_state = self._control.get_status()
         skip_exchange_orders = ctrl_state in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN)
         if skip_exchange_orders:
@@ -10437,12 +10499,14 @@ class AutonomousEngine:
         order inventories are complete and empty for the symbol, and no local
         execution fact can still produce a late fill.  The operation only
         appends a durable zero projection and marks local protection rows
-        inactive; it never calls a venue write endpoint.
+        inactive; it never calls a venue write endpoint.  The isolated G5
+        producer may use this local-only seam because its terminal write
+        interlock remains hard-held.
         """
 
         if str(getattr(getattr(self, "_env_mode", None), "name", "")).upper() != "TESTNET":
             return False
-        if not bool(getattr(self, "_can_write", False)):
+        if not bool(getattr(self, "_can_write", False)) and not bool(getattr(self, "_producer_only", False)):
             return False
         observed_at = float(getattr(self, "_last_account_at", 0.0) or 0.0)
         if observed_at <= 0 or time.time() - observed_at > 60.0:
@@ -15132,6 +15196,16 @@ class AutonomousEngine:
 
         async def _nearline_loop() -> None:
             while self._running:
+                if self._producer_only:
+                    # G5 producer evidence must not evaluate/commit strategy
+                    # proposals.  The supervisor's read-only algorithm probe
+                    # remains the only strategy observation in this runtime;
+                    # still advance the module heartbeat so generic
+                    # observability does not mistake an intentional no-op for
+                    # a stalled nearline task.
+                    self._last_nearline = time.time()
+                    await asyncio.sleep(10)
+                    continue
                 try:
                     _nearline_interval = 30 if self._env_mode.value == "testnet" else 300
                     if time.time() - self._last_nearline >= _nearline_interval:
@@ -15145,6 +15219,10 @@ class AutonomousEngine:
                 await asyncio.sleep(10)
 
         async def _offline_loop() -> None:
+            if self._producer_only:
+                while self._running:
+                    await asyncio.sleep(60)
+                return
             _offline_interval = 300 if self._env_mode.value == "testnet" else 3600
             # 首次运行：启动后 60s 执行首次宇宙评估
             _first_tick_done = False

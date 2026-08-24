@@ -9,5 +9,13 @@ from beidou_certification.g5_scenarios.restart import (
     process_restart,
     user_stream_reconnect,
 )
+from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
+
+# Imports are kept in canonical order for tooling, then the registry is
+# explicitly ordered so the destructive restart probes run before the
+# user-stream probe can induce a transient incident.
+for _scenario_id in ("process_restart", "database_restart", "user_stream_reconnect"):
+    _scenario = SCENARIO_REGISTRY.pop(_scenario_id)
+    SCENARIO_REGISTRY[_scenario_id] = _scenario
 
 __all__ = ["database_restart", "process_restart", "user_stream_reconnect"]

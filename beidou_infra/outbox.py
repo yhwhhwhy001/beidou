@@ -1390,9 +1390,19 @@ class PostgresIntentOutbox:
         return self.unacked()
 
     @staticmethod
-    def _deserialize_intent_payload(payload: Any) -> Any:
+    def _deserialize_intent_payload(payload: Any, *, created_at: Any = None) -> Any:
         from beidou_safety.execution.intent import IntentOutbox
 
+        data = _json_payload(payload)
+        if "created_at" not in data and created_at is not None:
+            # Older outbox payloads predate the serialized timestamp. The
+            # database column is authoritative and is required by the intent
+            # model; use it only as a compatibility read fallback. Do not
+            # fabricate a timestamp when both sources are absent.
+            if isinstance(created_at, datetime) and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            data["created_at"] = created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
+            payload = json.dumps(data, sort_keys=True, default=str)
         return IntentOutbox._deserialize_intent(str(payload))
 
     def restore_pending_approvals(self) -> list[dict[str, Any]]:
@@ -1439,12 +1449,26 @@ class PostgresIntentOutbox:
             OutboxWorker._cursor_scope(conn) as cursor,
         ):
             cursor.execute(
-                f"SELECT payload::text FROM v3_transactional_outbox WHERE status IN ({placeholders}) "  # noqa: S608  # nosec B608 - placeholders are generated from fixed states
+                f"SELECT payload::text,created_at FROM v3_transactional_outbox WHERE status IN ({placeholders}) "  # noqa: S608  # nosec B608 - placeholders are generated from fixed states
                 "ORDER BY created_at,message_id",
                 states,
             )
             rows = cursor.fetchall() or []
-        return [self._deserialize_intent_payload(_row_value(row, "payload", 0)) for row in rows]
+        intents: list[Any] = []
+        for row in rows:
+            try:
+                row_created_at = _row_value(row, "created_at", 1)
+            except (IndexError, KeyError, TypeError):
+                # Keep compatibility with lightweight DB-API test doubles and
+                # fail closed if a legacy row has no authoritative timestamp.
+                row_created_at = None
+            intents.append(
+                self._deserialize_intent_payload(
+                    _row_value(row, "payload", 0),
+                    created_at=row_created_at,
+                )
+            )
+        return intents
 
     def unacked(self) -> list[Any]:
         return self._query_intents(("PENDING", "SENDING", "UNKNOWN"))
