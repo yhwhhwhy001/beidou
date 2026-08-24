@@ -32,6 +32,7 @@ class _Store:
         self.protections = {str(r["protection_id"]): dict(r) for r in (protections or [])}
         self.saved: list[dict[str, Any]] = []
         self.removed: list[str] = []
+        self.projections: dict[str, dict[str, Any]] = {}
 
     def restore_protections(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.protections.values()]
@@ -46,6 +47,42 @@ class _Store:
         self.protections = {k: v for k, v in self.protections.items() if v.get("position_id") != position_id}
 
     def restore_position_projection(self) -> list[dict[str, Any]]:
+        return []
+
+    def save_position_projection(
+        self,
+        symbol: str,
+        signed_quantity: str,
+        entry_price: str,
+        position_generation: int,
+        source_event_id: str,
+    ) -> None:
+        self.projections[str(symbol)] = {
+            "symbol": str(symbol),
+            "signed_quantity": str(signed_quantity),
+            "entry_price": str(entry_price),
+            "position_generation": int(position_generation),
+            "source_event_id": str(source_event_id),
+        }
+
+    def restore_account_opening_projection(self, _account_id: str, _venue_id: str) -> dict[str, Any]:
+        return {
+            "complete": 1,
+            "balance_amount": "1000",
+            "balance_currency": "USDT",
+            "balance_decimals": 8,
+            "positions": {},
+            "fact_version": "opening-1",
+            "captured_at": "2026-08-24T00:00:00+00:00",
+            "source": "TEST",
+            "evidence_hash": "opening-hash",
+            "approval_id": "opening-approval",
+        }
+
+    def restore_fill_events(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_active_orders(self) -> list[dict[str, Any]]:
         return []
 
     def restore_order_states(self) -> list[dict[str, Any]]:
@@ -1415,6 +1452,128 @@ def test_venue_position_gone_handles_malformed_account() -> None:
     assert engine._venue_position_gone("BNBUSDT") is False
     engine._last_account = {"positions": [{"symbol": "BNBUSDT", "positionAmt": "garbage"}]}
     assert engine._venue_position_gone("BNBUSDT") is False
+
+
+# ---------------------------------------------------------------------------
+# 权威空仓快照驱动的本地残留投影收敛
+# ---------------------------------------------------------------------------
+
+
+def _flat_reconciliation_engine() -> AutonomousEngine:
+    engine = _adopt_engine(
+        protections=[
+            _durable_row(
+                protection_id="sl-xrp",
+                symbol="XRPUSDT",
+                side="SELL",
+                order_type="STOP_MARKET",
+                quantity="1.0",
+                position_id="pos-xrp",
+                generation=4,
+                algo_id="algo-xrp",
+            )
+        ],
+        local_symbols={"XRPUSDT"},
+        projection={
+            "XRPUSDT": {
+                "symbol": "XRPUSDT",
+                "signed_quantity": "1.0",
+                "entry_price": "0.55",
+                "position_generation": 4,
+                "source_event_id": "fill:old",
+            }
+        },
+        generation={"XRPUSDT": 4},
+    )
+    engine._outbox = SimpleNamespace(unacked=lambda: [], stats={"state_counts": {}})
+    engine._env_mode = SimpleNamespace(name="TESTNET", value="testnet")
+    engine._can_write = True
+    engine._last_account_at = time.time()
+    engine._position_entry_times = {}
+    engine._protection_exchange_attempted = set()
+    engine._protection._symbols.clear()
+    engine._protection._projections["pos-xrp"] = SimpleNamespace(
+        instrument_id="XRPUSDT",
+        position_generation=4,
+        stop_loss=None,
+        take_profits=[],
+    )
+    engine._last_algo_inventory_genuine = True
+    return engine
+
+
+def test_authoritative_flat_snapshot_converges_stale_local_position() -> None:
+    engine = _flat_reconciliation_engine()
+    account = {
+        "totalWalletBalance": "1000",
+        "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}],
+    }
+
+    converged = engine._converge_flat_local_positions(account, [], [])
+
+    assert converged is True
+    assert engine._position_projection["XRPUSDT"]["signed_quantity"] == "0"
+    assert engine._position_projection["XRPUSDT"]["entry_price"] == "0"
+    assert engine._position_projection["XRPUSDT"]["source_event_id"].startswith(
+        "venue-flat-reconciliation:"
+    )
+    assert engine._store.projections["XRPUSDT"]["signed_quantity"] == "0"
+    assert engine._protection.all_positions() == {}
+    assert engine._store.restore_protections() == []
+
+
+def test_flat_snapshot_does_not_converge_when_algo_inventory_is_not_genuine() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._last_algo_inventory_genuine = False
+    before = dict(engine._position_projection["XRPUSDT"])
+
+    assert engine._converge_flat_local_positions(
+        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+        [],
+    ) is False
+    assert engine._position_projection["XRPUSDT"] == before
+    assert engine._protection.all_positions()
+
+
+def test_flat_snapshot_does_not_converge_with_unresolved_execution() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._outbox = SimpleNamespace(
+        unacked=lambda: [SimpleNamespace(instrument_id="XRPUSDT")],
+        stats={"state_counts": {"UNKNOWN": 1}},
+    )
+    before = dict(engine._position_projection["XRPUSDT"])
+
+    assert engine._converge_flat_local_positions(
+        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+        [],
+    ) is False
+    assert engine._position_projection["XRPUSDT"] == before
+    assert engine._protection.all_positions()
+
+
+def test_startup_defers_genuine_empty_algo_inventory_to_reconciliation() -> None:
+    engine = _flat_reconciliation_engine()
+
+    assert engine._restore_durable_protection_projection(
+        {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+    ) is True
+    assert engine._store.restore_protections()
+
+
+def test_startup_keeps_non_genuine_empty_algo_inventory_blocked() -> None:
+    engine = _flat_reconciliation_engine()
+    engine._last_algo_inventory_genuine = False
+    blocked: list[str] = []
+    engine._block_unowned_protection_orders = lambda reasons: blocked.extend(reasons)
+
+    assert engine._restore_durable_protection_projection(
+        {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+        [],
+    ) is False
+    assert blocked == ["OPEN_ALGO_ORDERS_EMPTY"]
 
 
 def test_dedup_fail_closed_when_no_active_projection() -> None:

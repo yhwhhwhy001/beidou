@@ -2490,6 +2490,8 @@ class AutonomousEngine:
 
         try:
             self._last_algo_inventory_genuine = False
+            self._last_algo_inventory = None
+            self._last_algo_inventory_at = 0.0
             result = await self._adapter.get_open_algo_orders()
         except Exception as exc:
             print(f"[api] open Algo inventory failed: {type(exc).__name__}: {exc}")
@@ -2516,7 +2518,10 @@ class AutonomousEngine:
                 return []
             return None
         self._last_algo_inventory_genuine = True
-        return [dict(snapshot.raw_response) for snapshot in result.data]
+        inventory = [dict(snapshot.raw_response) for snapshot in result.data]
+        self._last_algo_inventory = inventory
+        self._last_algo_inventory_at = time.time()
+        return inventory
 
     async def _create_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
         """Create one Algo order and expose only a typed ACK/raw failure."""
@@ -4752,6 +4757,22 @@ class AutonomousEngine:
             self._block_unowned_protection_orders(["OPEN_ALGO_ORDERS_UNKNOWN"])
             return False
         if not inventory:
+            # A successful, typed empty inventory combined with a complete
+            # flat account is a real venue fact, not the API-failure shape
+            # handled by the Testnet adapter.  Defer the append-only local
+            # projection convergence to the initial reconciliation, where
+            # ordinary orders and unresolved execution facts are checked too.
+            # Do not raise OPEN_ALGO_ORDERS_EMPTY here, otherwise the later
+            # read-only reconciliation can never clear the stale local row.
+            account_amounts = self._validated_account_position_amounts(account)
+            if bool(getattr(self, "_last_algo_inventory_genuine", False)) and account_amounts is not None and all(
+                abs(amount) <= Decimal("1e-12") for amount in account_amounts.values()
+            ):
+                print(
+                    "[startup] Conditional-order inventory is genuinely empty and the venue account is flat; "
+                    "deferring stale local projection convergence to reconciliation"
+                )
+                return True
             # BD-FIX (final82b): 空 inventory 不构成 MISSING 证据（testnet
             # API 抖动时 _get_open_algo_inventory 返回 []）。fail-closed
             # 阻断但不清理本地行 —— 空 inventory 判定"全部缺失"曾把 55 条
@@ -9096,6 +9117,61 @@ class AutonomousEngine:
             result.differences = ["INCOMPLETE_FACT: malformed exchange open-order row"]
             return self._record_reconciliation_failure(result)
 
+        # Capture the same successful account read used below before any
+        # readback-only local convergence.  A zero position is not inferred
+        # from a failed request; it is eligible only when the typed Algo
+        # inventory is also fresh and genuine.
+        self._last_account = account
+        self._last_account_at = time.time()
+        local_projection_candidate = False
+        try:
+            for row in (getattr(self, "_position_projection", {}) or {}).values():
+                try:
+                    if abs(Decimal(str(row.get("signed_quantity", "0") or "0"))) > Decimal("1e-12"):
+                        local_projection_candidate = True
+                except (InvalidOperation, TypeError, ValueError):
+                    local_projection_candidate = True
+            local_projection_candidate = local_projection_candidate or bool(self._protection.all_positions())
+            for row in self._store.restore_protections():
+                if (
+                    str(row.get("owner_id", "")) == str(getattr(self, "_protection_owner_id", ""))
+                    and str(row.get("status", "")).strip().upper() in {"ACTIVE", "PENDING"}
+                ):
+                    local_projection_candidate = True
+                    break
+        except Exception:
+            # A local-state read failure is itself UNKNOWN.  Let the ordinary
+            # reconciliation path record the failure rather than attempting a
+            # projection repair with incomplete local evidence.
+            local_projection_candidate = True
+
+        if local_projection_candidate:
+            algo_inventory = None
+            cached_inventory = getattr(self, "_last_algo_inventory", None)
+            cached_at = float(getattr(self, "_last_algo_inventory_at", 0.0) or 0.0)
+            if (
+                bool(getattr(self, "_last_algo_inventory_genuine", False))
+                and isinstance(cached_inventory, list)
+                and cached_at > 0
+                and time.time() - cached_at <= 60.0
+            ):
+                algo_inventory = list(cached_inventory)
+            else:
+                try:
+                    algo_inventory = await asyncio.wait_for(self._get_open_algo_inventory(), timeout=8.0)
+                except Exception as exc:
+                    logger.warning("flat-position Algo inventory read unavailable: %s", type(exc).__name__)
+            if isinstance(algo_inventory, list) and self._converge_flat_local_positions(
+                account, open_orders, algo_inventory
+            ):
+                with contextlib.suppress(Exception):
+                    self._update_protection_fact(
+                        hard_issues=[],
+                        venue_missing=[],
+                        unowned_ids=[],
+                        genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
+                    )
+
         exchange_positions: dict[InstrumentId, Quantity] = {}
         for position in account["positions"]:
             if not isinstance(position, dict) or "symbol" not in position or "positionAmt" not in position:
@@ -10301,6 +10377,382 @@ class AutonomousEngine:
                 return False
             return (time.time() - _ts) < grace_seconds
         return False
+
+    @staticmethod
+    def _validated_account_position_amounts(account: dict[str, Any]) -> dict[str, Decimal] | None:
+        """Parse a complete account position list without treating absence as zero."""
+
+        positions = account.get("positions") if isinstance(account, dict) else None
+        if not isinstance(positions, list):
+            return None
+        amounts: dict[str, Decimal] = {}
+        for row in positions:
+            if not isinstance(row, dict):
+                return None
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if not symbol or symbol in amounts:
+                return None
+            try:
+                amount = Decimal(str(row.get("positionAmt")))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+            if not amount.is_finite():
+                return None
+            amounts[symbol] = amount
+        return amounts
+
+    def _converge_flat_local_positions(
+        self,
+        account: dict[str, Any],
+        open_orders: list[dict[str, Any]],
+        algo_inventory: list[dict[str, Any]],
+    ) -> bool:
+        """Converge stale local exposure only after an independent flat readback.
+
+        This is deliberately narrower than classifying
+        ``LOCAL_POSITION_WITHOUT_VENUE_FACT`` as repairable.  It is a Testnet
+        recovery seam for the specific case where the same fresh account
+        snapshot proves the venue position is flat, ordinary and conditional
+        order inventories are complete and empty for the symbol, and no local
+        execution fact can still produce a late fill.  The operation only
+        appends a durable zero projection and marks local protection rows
+        inactive; it never calls a venue write endpoint.
+        """
+
+        if str(getattr(getattr(self, "_env_mode", None), "name", "")).upper() != "TESTNET":
+            return False
+        if not bool(getattr(self, "_can_write", False)):
+            return False
+        observed_at = float(getattr(self, "_last_account_at", 0.0) or 0.0)
+        if observed_at <= 0 or time.time() - observed_at > 60.0:
+            return False
+        if not isinstance(account, dict) or "totalWalletBalance" not in account:
+            return False
+        if not isinstance(open_orders, list) or not isinstance(algo_inventory, list):
+            return False
+        if not bool(getattr(self, "_last_algo_inventory_genuine", False)):
+            return False
+
+        venue_amounts = self._validated_account_position_amounts(account)
+        if venue_amounts is None:
+            return False
+
+        try:
+            local_positions = dict(self._protection.all_positions())
+        except Exception:
+            return False
+        store = getattr(self, "_store", None)
+        if store is None:
+            return False
+        restore_protections = getattr(store, "restore_protections", None)
+        if not callable(restore_protections):
+            return False
+        try:
+            durable_rows = list(restore_protections())
+        except Exception:
+            return False
+
+        local_symbols: set[str] = set()
+        generations: dict[str, int] = {}
+        for symbol, row in (getattr(self, "_position_projection", {}) or {}).items():
+            symbol_text = str(symbol).strip().upper()
+            if not symbol_text or not isinstance(row, dict):
+                return False
+            try:
+                signed_quantity = Decimal(str(row.get("signed_quantity", "0") or "0"))
+                generation = int(row.get("position_generation", 0) or 0)
+            except (InvalidOperation, TypeError, ValueError, OverflowError):
+                return False
+            if not signed_quantity.is_finite() or generation < 0:
+                return False
+            generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
+            if abs(signed_quantity) > Decimal("1e-12"):
+                local_symbols.add(symbol_text)
+
+        for position_id, position in local_positions.items():
+            symbol_text = str(getattr(position, "instrument_id", "")).strip().upper()
+            if not symbol_text:
+                return False
+            local_symbols.add(symbol_text)
+            try:
+                generation = int(getattr(position, "position_generation", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if generation < 0:
+                return False
+            generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
+
+        for row in durable_rows:
+            if not isinstance(row, dict):
+                return False
+            status = str(row.get("status", "")).strip().upper()
+            if status not in {"ACTIVE", "PENDING"}:
+                continue
+            if str(row.get("owner_id", "")) != str(getattr(self, "_protection_owner_id", "")):
+                continue
+            symbol_text = str(row.get("symbol", "")).strip().upper()
+            if not symbol_text:
+                return False
+            local_symbols.add(symbol_text)
+            try:
+                generation = int(row.get("position_generation", 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return False
+            if generation < 0:
+                return False
+            generations[symbol_text] = max(generations.get(symbol_text, 0), generation)
+
+        if not local_symbols:
+            return False
+        if any(abs(venue_amounts.get(symbol, Decimal("0"))) > Decimal("1e-12") for symbol in local_symbols):
+            return False
+
+        # A typed inventory is still required to prove that no order exists
+        # for the symbol.  A malformed row is UNKNOWN, not an empty inventory.
+        for order in open_orders:
+            if not isinstance(order, dict):
+                return False
+            order_id = str(order.get("orderId", "")).strip()
+            symbol_text = str(order.get("symbol", "")).strip().upper()
+            if not order_id or not symbol_text:
+                return False
+            if symbol_text in local_symbols:
+                return False
+        for order in algo_inventory:
+            if not isinstance(order, dict):
+                return False
+            algo_id = str(order.get("algoId", "")).strip()
+            symbol_text = str(order.get("symbol", "")).strip().upper()
+            if not algo_id or not symbol_text:
+                return False
+            if symbol_text in local_symbols:
+                return False
+
+        # Do not erase a local projection while an order/fill can still arrive
+        # and recreate the position.  Unknown and dead-letter execution facts
+        # remain blockers even when the venue happens to be flat right now.
+        try:
+            order_rows = list(store.restore_order_states())
+        except Exception:
+            return False
+        terminal_statuses = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        for row in order_rows:
+            if not isinstance(row, dict):
+                return False
+            status = str(row.get("status", "")).strip().upper()
+            symbol_text = str(row.get("symbol", "")).strip().upper()
+            if status not in terminal_statuses and (status == "UNKNOWN" or symbol_text in local_symbols):
+                return False
+
+        try:
+            fill_rows = list(store.restore_fill_events())
+        except Exception:
+            return False
+        for row in fill_rows:
+            if not isinstance(row, dict):
+                return False
+            symbol_text = str(row.get("symbol", "")).strip().upper()
+            state = str(row.get("processing_state", "COMMITTED")).strip().upper()
+            if not symbol_text or state not in {"COMMITTED", "PENDING"}:
+                return False
+            if state == "PENDING" and symbol_text in local_symbols:
+                return False
+
+        outbox = getattr(self, "_outbox", None)
+        unacked = getattr(outbox, "unacked", None)
+        if not callable(unacked):
+            return False
+        try:
+            if list(unacked()):
+                return False
+        except Exception:
+            return False
+        stats = getattr(outbox, "stats", None)
+        try:
+            stats = stats() if callable(stats) else stats
+        except Exception:
+            return False
+        if not isinstance(stats, dict) or not isinstance(stats.get("state_counts"), dict):
+            return False
+        state_counts = stats["state_counts"]
+        try:
+            unresolved_execution = any(
+                int(state_counts.get(state, 0) or 0) > 0
+                for state in ("PENDING", "SENDING", "UNKNOWN", "DEAD_LETTER")
+            )
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if unresolved_execution:
+            return False
+        if getattr(self, "_pending_fill_retry", set()) or getattr(self, "_pending_fill_previous_qty", {}):
+            return False
+        if getattr(self, "_pending_protection_persist", {}):
+            return False
+        pending_position_ids = {str(position_id) for position_id in getattr(self, "_pending_protection_retry", set())}
+        durable_position_ids = {
+            str(row.get("position_id", "")).strip()
+            for row in durable_rows
+            if str(row.get("owner_id", "")) == str(getattr(self, "_protection_owner_id", ""))
+            and str(row.get("symbol", "")).strip().upper() in local_symbols
+        }
+        if pending_position_ids & (set(local_positions) | durable_position_ids):
+            return False
+        if set(getattr(self, "_pending_stop_intent", {})) & (set(local_positions) | durable_position_ids):
+            return False
+
+        # The durable replay must also be flat.  A REST zero readback cannot
+        # silently overwrite a committed local fill that the ledger still
+        # considers open.
+        build_system_facts = getattr(self, "_build_system_reconciliation_facts", None)
+        if not callable(build_system_facts):
+            return False
+        try:
+            system_facts = build_system_facts()
+        except Exception:
+            return False
+        if not bool(getattr(system_facts, "complete", False)):
+            return False
+        system_positions = getattr(system_facts, "positions", {})
+        for symbol in local_symbols:
+            system_amount = Decimal("0")
+            for fact_symbol, quantity in dict(system_positions).items():
+                if str(fact_symbol).strip().upper() != symbol:
+                    continue
+                try:
+                    system_amount = Decimal(str(getattr(quantity, "amount", quantity)))
+                except (InvalidOperation, TypeError, ValueError):
+                    return False
+                break
+            if not system_amount.is_finite() or abs(system_amount) > Decimal("1e-12"):
+                return False
+
+        snapshot_payload = {
+            "account_positions": sorted((symbol, str(amount)) for symbol, amount in venue_amounts.items()),
+            "open_orders": sorted(
+                (str(row.get("orderId")), str(row.get("symbol", "")).strip().upper()) for row in open_orders
+            ),
+            "algo_orders": sorted(
+                (str(row.get("algoId")), str(row.get("symbol", "")).strip().upper())
+                for row in algo_inventory
+            ),
+            "fact_version": str(account.get("updateTime", "")),
+        }
+        snapshot_hash = hashlib.sha256(
+            json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()[:32]
+        source_event_id = f"venue-flat-reconciliation:{snapshot_hash}"
+
+        # Persist the zero projection before removing local protection rows.
+        # If persistence fails, the old local facts remain in memory and the
+        # safety gate stays closed rather than presenting a partial repair as
+        # complete.
+        for symbol in sorted(local_symbols):
+            generation = generations.get(symbol, 0)
+            try:
+                store.save_position_projection(symbol, "0", "0", generation, source_event_id)
+            except Exception:
+                logger.warning("flat venue projection persistence failed for %s", symbol, exc_info=True)
+                return False
+            self._position_projection[symbol] = {
+                "symbol": symbol,
+                "signed_quantity": "0",
+                "entry_price": "0",
+                "position_generation": generation,
+                "source_event_id": source_event_id,
+            }
+
+        # Local protection rows are no longer backed by a venue position.  The
+        # store operations retain their audit history (ACTIVE → CANCELLED in
+        # production stores); no exchange cancellation is issued here because
+        # the typed Algo inventory already proved that no such order is open.
+        local_position_ids = {
+            str(position_id)
+            for position_id, position in local_positions.items()
+            if str(getattr(position, "instrument_id", "")).strip().upper() in local_symbols
+        }
+        all_local_position_ids = local_position_ids | durable_position_ids
+        for position_id in sorted(local_position_ids):
+            symbol = str(getattr(local_positions[position_id], "instrument_id", "")).strip().upper()
+            try:
+                self._remove_protection_with_cleanup(position_id, symbol)
+            except Exception:
+                logger.warning("flat venue local protection cleanup failed for %s", position_id, exc_info=True)
+                return False
+
+        remove_protection = getattr(store, "remove_protection", None)
+        save_protection = getattr(store, "save_protection", None)
+        for row in durable_rows:
+            if str(row.get("owner_id", "")) != str(getattr(self, "_protection_owner_id", "")):
+                continue
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if symbol not in local_symbols:
+                continue
+            position_id = str(row.get("position_id", "")).strip()
+            if position_id and position_id not in local_position_ids and callable(remove_protection):
+                try:
+                    remove_protection(position_id)
+                except Exception:
+                    logger.warning("flat venue durable protection cleanup failed for %s", position_id, exc_info=True)
+                    return False
+            if str(row.get("status", "")).strip().upper() == "PENDING":
+                if not callable(save_protection):
+                    return False
+                try:
+                    save_protection(
+                        protection_id=str(row.get("protection_id", "")),
+                        position_id=position_id,
+                        symbol=symbol,
+                        side=str(row.get("side", "")),
+                        trigger_price=str(row.get("trigger_price", "0") or "0"),
+                        order_price=row.get("order_price"),
+                        quantity=str(row.get("quantity", "0") or "0"),
+                        order_type=str(row.get("order_type", "STOP_MARKET") or "STOP_MARKET"),
+                        status="CANCELLED",
+                        stop_type=row.get("stop_type"),
+                        take_profit_type=row.get("take_profit_type"),
+                        owner_id=str(row.get("owner_id", "")),
+                        position_generation=int(row.get("position_generation", 0) or 0),
+                        session_id=str(row.get("session_id", "") or ""),
+                        exchange_order_id=row.get("exchange_order_id"),
+                    )
+                except Exception:
+                    logger.warning("flat venue pending protection cancellation failed for %s", position_id, exc_info=True)
+                    return False
+
+        active_algo_ids = getattr(self, "_active_algo_ids", {})
+        pending_protection_retry: set[str] = getattr(self, "_pending_protection_retry", set())
+        venue_missing_streaks = getattr(self, "_venue_missing_streaks", {})
+        position_entry_times = getattr(self, "_position_entry_times", {})
+        for position_id in all_local_position_ids:
+            if isinstance(active_algo_ids, dict):
+                active_algo_ids.pop(position_id, None)
+            if isinstance(pending_protection_retry, set):
+                pending_protection_retry.discard(position_id)
+            if isinstance(position_entry_times, dict):
+                position_entry_times.pop(position_id, None)
+        for row in durable_rows:
+            if (
+                str(row.get("symbol", "")).strip().upper() in local_symbols
+                and isinstance(venue_missing_streaks, dict)
+            ):
+                venue_missing_streaks.pop(str(row.get("exchange_order_id", "")).strip(), None)
+
+        for symbol in local_symbols:
+            self._clear_protection_exposure(symbol)
+        pending_stop_intent = getattr(self, "_pending_stop_intent", None)
+        if isinstance(pending_stop_intent, dict):
+            for position_id in local_position_ids:
+                pending_stop_intent.pop(position_id, None)
+        self._last_protection_gap_detail = [
+            gap
+            for gap in (getattr(self, "_last_protection_gap_detail", []) or [])
+            if str(gap.get("symbol", "")).strip().upper() not in local_symbols
+        ]
+        print(
+            "[recon] Converged stale local flat position(s) from independent venue readback: "
+            f"symbols={sorted(local_symbols)} source={source_event_id}"
+        )
+        return True
 
     def _venue_position_gone(self, symbol: str) -> bool:
         """BD-FIX (closed-position fast cleanup): 新鲜账户快照确认品种无持仓。
