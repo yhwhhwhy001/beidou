@@ -17,6 +17,17 @@
 # 新进程绑定失败, 必须人工 kill -9。改为后台运行 + trap 转发
 # TERM/INT, 并设 25s 兜底强杀(先于 launchd ExitTimeOut=30 的 SIGKILL),
 # 保证 kickstart 语义可靠: 旧进程必然退出、新进程必然接管端口。
+#
+# BD-FIX-2 (kickstart 孤儿复发, 实测 2026-08-25 01:52): 上述路径仍有
+# 失效窗口 —— wrapper 先于兜底任务死亡时(trap 未执行/launchd 直接
+# SIGKILL wrapper), launchd 会清理 wrapper 进程组内的残留后台任务,
+# 25s 兜底随之消失, 忽略 TERM 的子进程变孤儿占用端口, 新实例
+# preflight "北斗实例已运行" 循环 exit 3。双保险:
+#   1) 独立孤儿守护(python os.setsid 脱离 job 进程组): wrapper 死而
+#      child 未死 → kill -9 child;
+#   2) 启动前端口清理: 目标端口仍被 beidou 进程占用时校验命令行后
+#      强杀(可用 BEIDOU_NO_ORPHAN_CLEANUP=1 禁用)。
+# LOCKED exit-5 → 0 的映射语义不变。
 
 if [ -f "$HOME/beidou/.env" ]; then
   set -a
@@ -40,8 +51,89 @@ if [ "${BEIDOU_G5_PRODUCER:-}" = "1" ]; then
   export BEIDOU_TERMINAL_WRITE_HOLD="hard"
 fi
 
+# BD-FIX-2 (kickstart 孤儿兜底, 2026-08-25 实测): 启动前若目标端口仍被
+# 上一代 beidou 孤儿实例占用, 校验命令行后强杀 —— 保证新实例第一次
+# preflight 即通过。不依赖旧 wrapper 的信号转发(实测该路径可失效:
+# wrapper 先于兜底任务死亡时, launchd 会清理其残留后台任务)。
+# 语义: 占用本实例目标端口的 beidou 进程必然阻碍 preflight("北斗实例
+# 已运行"), 清理是启动的必要前提; 用 BEIDOU_NO_ORPHAN_CLEANUP=1 可禁用。
+if [ "${BEIDOU_NO_ORPHAN_CLEANUP:-0}" != "1" ]; then
+  _port=""
+  _args=("$@")
+  for ((_i = 0; _i < ${#_args[@]}; _i++)); do
+    if [ "${_args[$_i]}" = "--port" ]; then
+      _port="${_args[$((_i + 1))]:-9090}"
+      break
+    fi
+  done
+  _port="${_port:-9090}"
+  for _pid in $(lsof -ti tcp:"$_port" -sTCP:LISTEN 2>/dev/null || true); do
+    _cmd=$(ps -p "$_pid" -o command= 2>/dev/null || true)
+    case "$_cmd" in
+      *beidou*)
+        echo "BD-FIX-2: killing orphan beidou pid=$_pid on port $_port" >&2
+        kill -9 "$_pid" 2>/dev/null || true
+        sleep 1
+        ;;
+    esac
+  done
+fi
+
 "$@" &
 child=$!
+
+# BD-FIX-2 (独立孤儿守护): 用 python os.setsid 脱离 launchd job 的
+# 进程组/session —— 实测 launchd 会在 wrapper 退出后清理其进程组内的
+# 残留后台任务(trap 里的 25s 兜底因此失效), 脱离后的守护不受影响。
+# 守护契约: child 先死 → 守护自然退出(正常路径); wrapper 先死而 child
+# 未死 → kill -9 child(防孤儿), 随后退出。绝不改变 wrapper 的退出码
+# 映射(LOCKED exit 5 → 0 语义不受影响)。
+if command -v python3 >/dev/null 2>&1; then
+  # 注意: 必须用 $$(bash 子 shell 中保持为主 shell 即 wrapper 的 PID),
+  # 实测 $PPID 在后台子 shell 中展开为 wrapper 的父进程 PID —— 守护会
+  # 误判 wrapper 存活而永不触发强杀。
+  (
+    python3 - "$child" "$$" >/dev/null 2>&1 <<'PYEOF'
+import os, signal, subprocess, sys, time
+
+child_pid = int(sys.argv[1])
+wrapper_pid = int(sys.argv[2])
+try:
+    os.setsid()
+except OSError:
+    pass  # 已脱离或无法脱离时继续尽力而为
+
+def alive(pid):
+    """kill(pid, 0) 对僵尸进程仍成功; 用 ps stat 排除 Z 态。"""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return not out.startswith("Z")
+    except Exception:
+        return True  # 无法判定时按存活处理(宁可多杀一次)
+
+for _ in range(1200):  # 最长约 20 分钟, 超过即放弃(极端场景交给端口清理)
+    if not alive(child_pid):
+        break
+    if not alive(wrapper_pid):
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except OSError:
+            pass
+        time.sleep(2)
+        if not alive(child_pid):
+            break
+        # child 未死则继续循环再杀(信号竞态下的重试)
+    time.sleep(1)
+PYEOF
+  ) &
+fi
 
 forward_term() {
   kill -TERM "$child" 2>/dev/null || true
