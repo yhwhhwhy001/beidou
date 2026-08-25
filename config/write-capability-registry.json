@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "71c3a83163a03e709e1c436630ab4fe794d139d909bee15113cf0167226851e3",
+ "governance_digest": "a5579061145c2fd3a7f641c23808fff31795a92e3923584f187bb57d56241852",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -800,7 +800,8 @@
   "apps/alpha_app/composition.py": "b8eb56a7ce9f6fa08ca60c747f3176af4b327cef8a9a32e09283798d24abb95d",
   "apps/autopilot/__main__.py": "596cf0c6cb347b8a9c639a681b27e1906f2ca2a30e80e8fc49d5a3a34f95b5c6",
   "apps/factor_miner/__init__.py": "58456a7fa19c7f004bb9d04f854b184464c643268c9b019f414e88d0a978e8b7",
-  "apps/factor_miner/__main__.py": "97e6ffd1c9ae3648ea3eb70712d6bd611bb23633acd2d42563e76b6891013dcd",
+  "apps/factor_miner/__main__.py": "dcfc947262da2f2105ad153253cb8ab1035c344a982808ec977134f8c5eca74c",
+  "apps/factor_miner/worker.py": "66d1862d9fb2b05e85fdcffcf15ab593ac5108cdb34d7d9614d90f02057d1e6c",
   "apps/research_lab/__main__.py": "1401183ca8fbebdabb0034f6d7b31615b512a5eaf16f3839708e64d52dee383b",
   "apps/safety_executor/__main__.py": "23962a78c82e5b5cf1a42f5eb7395750d641616aa6216447eaa9301b1b59b965",
   "apps/strategy_engine/__main__.py": "27fd1cdaa053a4544c3d5f7d95ccc7354a2129ecb71142a27130c6a2c106e2d6",
@@ -1022,11 +1023,11 @@
   "beidou_research/mining/label_builder.py": "a8153cb6d69d892b917112dc2d063f79335f9dd5c83ef59e6fc8ff95fbe77f50",
   "beidou_research/mining/leakage_guard.py": "32684cf88ba0f49a831842f9cb343e787bfdeab3ba573cafad0f8ff8da5a8131",
   "beidou_research/mining/migration.py": "5686de2e6187759074f0a7d66ec6763732bebbc8c4223cd847b3e57ffc683ddc",
-  "beidou_research/mining/orchestrator.py": "980c939d93de9595b2b31f68016339c59e3a1b7924feef652f758ce60455b384",
+  "beidou_research/mining/orchestrator.py": "d71be86a7c2b84a27ab9d9b0f1e8f335e9666982fc3bb059d8de41cf027ee2df",
   "beidou_research/mining/persistence.py": "d9366d675a1d8cc26bd10219888074a9e5112bc096a8fa0accb1d9173fcbb518",
   "beidou_research/mining/point_in_time.py": "54530515a3b19b3ddefef5647c67da0b69b2091b6af67ed1c4f6dae11037f70d",
   "beidou_research/mining/primitive_library.py": "a67db2c89a7ac3768511efc8ef691b037b2cdba499c84ba1790ddd2d9f3ac151",
-  "beidou_research/mining/runner.py": "c2abb86bd25f2cf72ce70d5a21613e92c8550dd3d2f9cea697e53a5d1a23f946",
+  "beidou_research/mining/runner.py": "12bbf273990f49d0602de4dc0047c2be20dc83ccc6827893f3b9ae118c86e883",
   "beidou_research/mining/schema_pg.sql": "825fb9eb21009803249779dddd24f4fbd7f99881a38d1e21f6ab257b22f6fd30",
   "beidou_research/mining/selection/__init__.py": "5e81de0111ce44f950f584a4cfe7c851f9a21061a2605225ec9578e434eb274b",
   "beidou_research/mining/selection/ensemble.py": "96385c5d084367f186beab27374bfb2cb8fd280146bbc832d3e9a0e7997b7420",

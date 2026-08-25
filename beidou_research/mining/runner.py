@@ -26,11 +26,14 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, cast
+from pathlib import Path
+from typing import Any, Callable, Mapping, cast
 
 import numpy as np
 
@@ -1764,3 +1767,432 @@ def _correlation_p_value(correlation: float, sample_length: int) -> float:
 
 def _normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+# ================================================================
+# BD-AF-P2-T05: one-worker deterministic resume vertical slice
+# ================================================================
+
+
+class ResumeRunError(RuntimeError):
+    """A resume request cannot be proven safe and must fail closed."""
+
+
+class ResumeAlreadyFinalizedError(ResumeRunError):
+    """The requested run already has a durable COMPLETED checkpoint."""
+
+
+ResumeFaultInjector = Callable[[str, str, str | None], None]
+
+RESUME_DURABLE_BOUNDARIES: tuple[str, ...] = (
+    "before_event_write",
+    "after_event_write",
+    "before_checkpoint_write",
+    "after_checkpoint_write",
+)
+_RESUME_SCOPE = {"search": "TEMPLATE_GRID", "datasets": 1, "universes": 1, "timeframes": 1, "jobs": 1}
+_RESUME_MANIFEST_VERSION = "1.0"
+
+
+def _resume_hash(value: Any) -> str:
+    from beidou_research.experiments import canonical_json
+
+    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+
+
+def _atomic_canonical_json(path: Path, value: Mapping[str, Any]) -> None:
+    from beidou_research.experiments import canonical_json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(canonical_json(dict(value)) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class ResumableMiningRunner:
+    """Durable single-worker executor for an already-frozen candidate family.
+
+    T05 owns restart semantics, not candidate generation or scientific
+    acceptance. Every attempted candidate is appended to the T03 ledger before
+    a T04 checkpoint advances. If the process dies between those writes,
+    resume validates the immutable event and advances only the checkpoint; the
+    candidate is never evaluated as a new statistical draw.
+    """
+
+    manifest_name = "run-manifest.json"
+    ledger_name = "experiment-run.sqlite3"
+    checkpoints_name = "checkpoints"
+
+    def __init__(
+        self,
+        run_dir: str | Path,
+        manifest: Mapping[str, Any],
+        *,
+        ledger: Any,
+        checkpoint_store: Any,
+        fault_injector: ResumeFaultInjector | None = None,
+    ) -> None:
+        from .orchestrator import FrozenCandidateAttempt
+
+        self.run_dir = Path(run_dir)
+        self.manifest = dict(manifest)
+        self.identity = ledger.identity
+        self.ledger = ledger
+        self.checkpoint_store = checkpoint_store
+        self.fault_injector = fault_injector
+        self.candidates = tuple(FrozenCandidateAttempt.from_dict(value) for value in manifest["candidate_family"])
+        self.family_hash = str(manifest["family_hash"])
+
+    @classmethod
+    def start(
+        cls,
+        run_dir: str | Path,
+        *,
+        identity: Any,
+        candidate_family: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+        writer_id: str,
+        fencing_token: str,
+        fault_injector: ResumeFaultInjector | None = None,
+    ) -> dict[str, Any]:
+        """Create and execute a new resumable run from a frozen family."""
+        from beidou_research.experiments import CheckpointStore, ExperimentRunIdentity, ExperimentRunLedger
+
+        from .orchestrator import FrozenCandidateAttempt
+
+        if not isinstance(identity, ExperimentRunIdentity):
+            raise TypeError("EXPERIMENT_RUN_IDENTITY_REQUIRED")
+        candidates = tuple(FrozenCandidateAttempt.from_dict(value) for value in candidate_family)
+        if not candidates:
+            raise ValueError("EMPTY_CANDIDATE_FAMILY")
+        candidate_ids = [candidate.candidate_id for candidate in candidates]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("DUPLICATE_CANDIDATE_ID")
+        family_values = [candidate.as_dict() for candidate in candidates]
+        family_hash = _resume_hash(family_values)
+        core = {
+            "schema_version": _RESUME_MANIFEST_VERSION,
+            "identity": identity.as_dict(),
+            "identity_digest": identity.digest,
+            "writer_id": writer_id,
+            "fencing_token": fencing_token,
+            "candidate_family": family_values,
+            "family_hash": family_hash,
+            "multiple_testing_denominator": len(candidates),
+            "worker_count": 1,
+            "scope": dict(_RESUME_SCOPE),
+        }
+        manifest = {**core, "manifest_digest": _resume_hash(core)}
+        target = Path(run_dir)
+        if target.exists() and any(target.iterdir()):
+            raise ResumeRunError("RUN_DIRECTORY_NOT_EMPTY")
+        target.mkdir(parents=True, exist_ok=True)
+        _atomic_canonical_json(target / cls.manifest_name, manifest)
+        ledger = ExperimentRunLedger(target / cls.ledger_name, identity, writer_id, fencing_token)
+        checkpoint_store = CheckpointStore(target / cls.checkpoints_name, identity, writer_id, fencing_token)
+        runner = cls(
+            target,
+            manifest,
+            ledger=ledger,
+            checkpoint_store=checkpoint_store,
+            fault_injector=fault_injector,
+        )
+        created = ledger.append(
+            "CREATED",
+            {
+                "family_hash": family_hash,
+                "candidate_ids": candidate_ids,
+                "multiple_testing_denominator": len(candidates),
+                "worker_count": 1,
+                "scope": dict(_RESUME_SCOPE),
+            },
+            timestamp=runner._logical_timestamp(0),
+            idempotency_key="run-created",
+        )
+        runner.checkpoint_store.save(runner._checkpoint_for_events([created]), ledger=ledger)
+        return runner._execute()
+
+    @classmethod
+    def resume(
+        cls,
+        run_dir: str | Path,
+        *,
+        fault_injector: ResumeFaultInjector | None = None,
+    ) -> dict[str, Any]:
+        """Resume exactly one validated run directory without fresh fallback."""
+        runner, checkpoint_was_behind = cls._open_for_resume(run_dir, fault_injector=fault_injector)
+        events = runner.ledger.events()
+        if events[-1].stage == "COMPLETED":
+            if checkpoint_was_behind:
+                return runner.normalized_result()
+            raise ResumeAlreadyFinalizedError("RUN_ALREADY_FINALIZED")
+        return runner._execute()
+
+    @classmethod
+    def inspect_completed(cls, run_dir: str | Path) -> dict[str, Any]:
+        """Read a fully durable completed result; never schedules work."""
+        runner, checkpoint_was_behind = cls._open_for_resume(run_dir)
+        if checkpoint_was_behind or runner.ledger.events()[-1].stage != "COMPLETED":
+            raise ResumeRunError("RUN_NOT_DURABLY_COMPLETED")
+        return runner.normalized_result()
+
+    @classmethod
+    def _open_for_resume(
+        cls,
+        run_dir: str | Path,
+        *,
+        fault_injector: ResumeFaultInjector | None = None,
+    ) -> tuple["ResumableMiningRunner", bool]:
+        from beidou_research.experiments import (
+            CheckpointNotVerifiable,
+            CheckpointStore,
+            ExperimentRunIdentity,
+            ExperimentRunLedger,
+        )
+
+        from .orchestrator import FrozenCandidateAttempt
+
+        root = Path(run_dir)
+        manifest_path = root / cls.manifest_name
+        ledger_path = root / cls.ledger_name
+        checkpoint_root = root / cls.checkpoints_name
+        required = (
+            manifest_path,
+            ledger_path,
+            checkpoint_root,
+            checkpoint_root / "writer-fence.json",
+            checkpoint_root / "checkpoint.current",
+        )
+        if not all(path.exists() for path in required):
+            raise ResumeRunError("MISSING_RESUME_STATE")
+        try:
+            raw = manifest_path.read_bytes()
+            manifest = json.loads(raw)
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest is not an object")
+            core = dict(manifest)
+            manifest_digest = str(core.pop("manifest_digest"))
+            if set(core) != {
+                "schema_version",
+                "identity",
+                "identity_digest",
+                "writer_id",
+                "fencing_token",
+                "candidate_family",
+                "family_hash",
+                "multiple_testing_denominator",
+                "worker_count",
+                "scope",
+            }:
+                raise ValueError("manifest fields differ")
+            if manifest["schema_version"] != _RESUME_MANIFEST_VERSION or manifest_digest != _resume_hash(core):
+                raise ValueError("manifest digest/version mismatch")
+            identity = ExperimentRunIdentity.from_dict(manifest["identity"])
+            if identity.digest != manifest["identity_digest"]:
+                raise ValueError("identity digest mismatch")
+            candidates = tuple(FrozenCandidateAttempt.from_dict(value) for value in manifest["candidate_family"])
+            candidate_ids = [candidate.candidate_id for candidate in candidates]
+            if (
+                not candidates
+                or len(candidate_ids) != len(set(candidate_ids))
+                or _resume_hash([candidate.as_dict() for candidate in candidates]) != manifest["family_hash"]
+                or manifest["multiple_testing_denominator"] != len(candidates)
+                or manifest["worker_count"] != 1
+                or manifest["scope"] != _RESUME_SCOPE
+            ):
+                raise ValueError("candidate family mismatch")
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ResumeRunError(f"CORRUPT_OR_INCOMPATIBLE_RUN_MANIFEST:{exc}") from exc
+
+        writer_id = str(manifest["writer_id"])
+        fencing_token = str(manifest["fencing_token"])
+        try:
+            ledger = ExperimentRunLedger(ledger_path, identity, writer_id, fencing_token, register=False)
+            checkpoint_store = CheckpointStore(checkpoint_root, identity, writer_id, fencing_token, register=False)
+            runner = cls(
+                root,
+                manifest,
+                ledger=ledger,
+                checkpoint_store=checkpoint_store,
+                fault_injector=fault_injector,
+            )
+            ledger.replay()
+            events = ledger.events()
+            runner._validate_events(events)
+            checkpoint = checkpoint_store.load(expected_identity=identity)
+            if checkpoint.event_sequence > len(events) or checkpoint.event_sequence < len(events) - 1:
+                raise ResumeRunError("AMBIGUOUS_LEDGER_CHECKPOINT_DISTANCE")
+            expected_at_checkpoint = runner._checkpoint_for_events(events[: checkpoint.event_sequence])
+            if checkpoint.digest != expected_at_checkpoint.digest:
+                raise ResumeRunError("CHECKPOINT_STATE_DIVERGENCE")
+            checkpoint_was_behind = checkpoint.event_sequence == len(events) - 1
+            if checkpoint_was_behind:
+                checkpoint_store.save(runner._checkpoint_for_events(events), ledger=ledger)
+            else:
+                checkpoint_store.load(
+                    expected_identity=identity,
+                    expected_policy_digest=identity.policy_digest,
+                    expected_denominator=len(candidates),
+                    ledger=ledger,
+                )
+            return runner, checkpoint_was_behind
+        except ResumeRunError:
+            raise
+        except Exception as exc:
+            # Normalize all T03/T04 integrity, fencing, and compatibility
+            # failures at the public resume boundary. Never try a fresh run.
+            if isinstance(exc, CheckpointNotVerifiable):
+                raise ResumeRunError(f"CHECKPOINT_NOT_VERIFIABLE:{exc}") from exc
+            raise ResumeRunError(f"RESUME_NOT_VERIFIABLE:{type(exc).__name__}:{exc}") from exc
+
+    def _inject(self, boundary: str, transition: str, candidate_id: str | None = None) -> None:
+        if boundary not in RESUME_DURABLE_BOUNDARIES:
+            raise ValueError("UNKNOWN_DURABLE_BOUNDARY")
+        if self.fault_injector is not None:
+            self.fault_injector(boundary, transition, candidate_id)
+
+    @staticmethod
+    def _logical_timestamp(sequence: int) -> str:
+        return f"2000-01-01T00:00:{sequence:02d}Z"
+
+    def _execute(self) -> dict[str, Any]:
+        events = self.ledger.events()
+        self._validate_events(events)
+        attempts = self._attempts(events)
+        for index in range(len(attempts), len(self.candidates)):
+            candidate = self.candidates[index]
+            transition = f"candidate:{index}"
+            record = candidate.attempt_record(family_hash=self.family_hash, attempt_index=index)
+            self._inject("before_event_write", transition, candidate.candidate_id)
+            self.ledger.append(
+                "RUNNING",
+                {"kind": "CANDIDATE_ATTEMPT", **record},
+                timestamp=self._logical_timestamp(index + 1),
+                idempotency_key=f"candidate-attempt:{index}:{candidate.candidate_id}",
+            )
+            self._inject("after_event_write", transition, candidate.candidate_id)
+            events = self.ledger.events()
+            self._inject("before_checkpoint_write", transition, candidate.candidate_id)
+            self.checkpoint_store.save(self._checkpoint_for_events(events), ledger=self.ledger)
+            self._inject("after_checkpoint_write", transition, candidate.candidate_id)
+
+        transition = "finalize"
+        result = self.normalized_result(status="COMPLETED")
+        self._inject("before_event_write", transition)
+        self.ledger.append(
+            "COMPLETED",
+            {"kind": "FINAL_RESULT", "normalized_result_digest": _resume_hash(result)},
+            timestamp=self._logical_timestamp(len(self.candidates) + 1),
+            idempotency_key="run-completed",
+        )
+        self._inject("after_event_write", transition)
+        events = self.ledger.events()
+        self._inject("before_checkpoint_write", transition)
+        self.checkpoint_store.save(self._checkpoint_for_events(events), ledger=self.ledger)
+        self._inject("after_checkpoint_write", transition)
+        return self.normalized_result()
+
+    def _validate_events(self, events: list[Any]) -> None:
+        if not events or events[0].stage != "CREATED":
+            raise ResumeRunError("MISSING_CREATED_EVENT")
+        expected_created = {
+            "family_hash": self.family_hash,
+            "candidate_ids": [candidate.candidate_id for candidate in self.candidates],
+            "multiple_testing_denominator": len(self.candidates),
+            "worker_count": 1,
+            "scope": dict(_RESUME_SCOPE),
+        }
+        if json.loads(events[0].payload_json) != expected_created or events[0].idempotency_key != "run-created":
+            raise ResumeRunError("CREATED_EVENT_MISMATCH")
+        candidate_events = [event for event in events[1:] if event.stage == "RUNNING"]
+        if len(candidate_events) > len(self.candidates):
+            raise ResumeRunError("TOO_MANY_CANDIDATE_ATTEMPTS")
+        for index, event in enumerate(candidate_events):
+            candidate = self.candidates[index]
+            expected = {
+                "kind": "CANDIDATE_ATTEMPT",
+                **candidate.attempt_record(family_hash=self.family_hash, attempt_index=index),
+            }
+            if (
+                json.loads(event.payload_json) != expected
+                or event.idempotency_key != f"candidate-attempt:{index}:{candidate.candidate_id}"
+            ):
+                raise ResumeRunError("CANDIDATE_ATTEMPT_MISMATCH")
+        completed = [event for event in events if event.stage == "COMPLETED"]
+        if completed:
+            if len(completed) != 1 or len(candidate_events) != len(self.candidates) or events[-1] != completed[0]:
+                raise ResumeRunError("INVALID_COMPLETION_POSITION")
+            expected_result = self.normalized_result(events=events[:-1], status="COMPLETED")
+            expected_payload = {"kind": "FINAL_RESULT", "normalized_result_digest": _resume_hash(expected_result)}
+            if (
+                json.loads(completed[0].payload_json) != expected_payload
+                or completed[0].idempotency_key != "run-completed"
+            ):
+                raise ResumeRunError("FINAL_RESULT_MISMATCH")
+
+    @staticmethod
+    def _attempts(events: list[Any]) -> list[dict[str, Any]]:
+        return [json.loads(event.payload_json) for event in events if event.stage == "RUNNING"]
+
+    def _checkpoint_for_events(self, events: list[Any]) -> Any:
+        from beidou_research.experiments import Checkpoint
+
+        if not events:
+            raise ResumeRunError("CANNOT_CHECKPOINT_EMPTY_LEDGER")
+        attempts = self._attempts(events)
+        completed_ids = [str(attempt["candidate_id"]) for attempt in attempts]
+        return Checkpoint.build(
+            identity=self.identity,
+            event_sequence=events[-1].sequence,
+            previous_hash=events[-1].previous_hash,
+            event_hash=events[-1].event_hash,
+            rng_state={"algorithm": "NONE", "seed": self.identity.seed},
+            search_state={"attempts": attempts, "family_hash": self.family_hash},
+            optimizer_state={"status": "FROZEN"},
+            candidate_queue=[candidate.candidate_id for candidate in self.candidates[len(attempts) :]],
+            completed_candidate_ids=completed_ids,
+            multiple_testing_family=self.family_hash,
+            multiple_testing_denominator=len(self.candidates),
+            stage_cursor=events[-1].stage,
+            worker_count=1,
+            scope=dict(_RESUME_SCOPE),
+            idempotency_keys=[event.idempotency_key for event in events],
+            writer_id=self.ledger.writer_id,
+            fencing_token=self.ledger.fencing_token,
+        )
+
+    def normalized_result(
+        self,
+        *,
+        events: list[Any] | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        source = events if events is not None else self.ledger.events()
+        attempts = self._attempts(source)
+        resolved_status = status or ("COMPLETED" if source and source[-1].stage == "COMPLETED" else "RUNNING")
+        rejection_reasons = {
+            attempt["candidate_id"]: list(attempt["rejection_reasons"])
+            for attempt in attempts
+            if attempt["rejection_reasons"]
+        }
+        return {
+            "run_id": self.identity.run_id,
+            "identity_digest": self.identity.digest,
+            "status": resolved_status,
+            "family_hash": self.family_hash,
+            "multiple_testing_family": self.family_hash,
+            "multiple_testing_denominator": len(self.candidates),
+            "candidate_ids": [candidate.candidate_id for candidate in self.candidates],
+            "candidate_id_set": sorted(candidate.candidate_id for candidate in self.candidates),
+            "attempts": attempts,
+            "attempt_count": len(attempts),
+            "accepted_candidate_ids": [attempt["candidate_id"] for attempt in attempts if bool(attempt["accepted"])],
+            "rejection_reasons": rejection_reasons,
+            "evidence_hashes": [attempt["evidence_hash"] for attempt in attempts],
+        }
