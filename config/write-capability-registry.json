@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "d003aea6552fe4f03e06bd963c7274d376d7ec7cba61f417b8ef0aebd96fce3a",
+ "governance_digest": "a81117573705d3d3b4462b8b7becaf83034f5b5ed7f2eb9b389f42ca8e709196",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -987,6 +987,10 @@
   "beidou_research/data/backfill.py": "02b27b4174ac761c773bd803af7c8c34e4837de91ec3cbcecd6eb4ce183fab4b",
   "beidou_research/data/dataset_manifest.py": "96d02e9b332f520bfccf5ce6a553393f79ed5c3129dea781376a7b1d5759c1c7",
   "beidou_research/data/kline_store.py": "28f6256206395a0513d3453fe8525489ea7bc59c71708a0ff83ee368b64837b6",
+  "beidou_research/experiments/__init__.py": "89bc4aba3cd42b3d7330f500055eb8ce2584879efd2bd996be43947f1a25910a",
+  "beidou_research/experiments/contracts.py": "ac2746af93709b9c0e28fe0abc09e7e9d1068d20bbb4a62e969da69d6e193445",
+  "beidou_research/experiments/migrations.py": "a76789a308b000eaa12bb238401129150b13e2cb0a5b6bf0c2d2c69e8a2d76e1",
+  "beidou_research/experiments/store.py": "f6f92661a86e57e3b7b6408c0b89ccbf1bd917fce5502639b4f5fe5b32bc8b1f",
   "beidou_research/factors/__init__.py": "29a06e5b1fd1876c1427cdd24e7576afae84ae37b3ff756fb72209e17189e400",
   "beidou_research/factors/factor.py": "3e21f50ca55fb247ac264e5a04e6257ac11562a02d1d3c98b07039a665fc25f3",
   "beidou_research/factors/revalidation_engine.py": "72c5ca5de71733dab7f2c51fd736d85a79771b1cc5fd5027054355c33115b036",
