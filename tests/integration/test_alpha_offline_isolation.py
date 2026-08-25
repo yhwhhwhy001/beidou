@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -71,7 +72,12 @@ def _run_offline_subprocess() -> dict[str, object]:
     )
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     assert lines, f"offline subprocess emitted no transcript; stderr={completed.stderr!r}"
-    return json.loads(lines[-1])
+    transcript = json.loads(lines[-1])
+    evidence_dir = os.environ.get("BEIDOU_EVIDENCE_DIR", "").strip()
+    if evidence_dir:
+        path = Path(evidence_dir) / "offline-import-transcript.json"
+        path.write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return transcript
 
 
 def test_alpha_composition_processes_bound_local_data_offline() -> None:

@@ -9,6 +9,8 @@ an allow-list for a forbidden edge.
 from __future__ import annotations
 
 import ast
+import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,12 +138,29 @@ def scan_imports(
     return files, records
 
 
+def _write_evidence_artifact(name: str, payload: object) -> None:
+    evidence_dir = os.environ.get("BEIDOU_EVIDENCE_DIR", "").strip()
+    if not evidence_dir:
+        return
+    path = Path(evidence_dir) / name
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def test_alpha_inventory_is_non_vacuous_and_bound_to_expected_roots() -> None:
     """The Alpha slice and both composition/contract roots must be present."""
     missing = [str(path) for path in (*ALPHA_ROOTS, *CONTRACT_FILES) if not path.exists()]
     assert not missing, f"ALPHA_EXPECTED_PATH_MISSING:{missing}"
-    files, _ = scan_imports(ALPHA_ROOTS, contract_files=CONTRACT_FILES)
+    files, records = scan_imports(ALPHA_ROOTS, contract_files=CONTRACT_FILES)
     assert len(files) >= 4, f"ALPHA_IMPORT_INVENTORY_TOO_SMALL:{len(files)}"
+    _write_evidence_artifact(
+        "module-inventory.json",
+        {
+            "roots": [str(path.relative_to(ROOT)) for path in (*ALPHA_ROOTS, *CONTRACT_FILES)],
+            "files": [str(path.relative_to(ROOT)) for path in files],
+            "file_count": len(files),
+            "import_record_count": len(records),
+        },
+    )
 
 
 def test_alpha_import_graph_has_no_forbidden_or_unclassified_edges() -> None:
@@ -164,6 +183,21 @@ def test_forbidden_edge_mutation_is_rejected(tmp_path: Path) -> None:
     mutated.write_text("from beidou_safety.execution import OrderIntent\n", encoding="utf-8")
     _, records = scan_imports([mutated])
     assert any(record.classification == "forbidden" for record in records)
+    _write_evidence_artifact(
+        "forbidden-edge-mutations.json",
+        {
+            "mutation": "from beidou_safety.execution import OrderIntent",
+            "detected": [
+                {
+                    "imported": record.imported,
+                    "classification": record.classification,
+                    "line": record.line,
+                }
+                for record in records
+            ],
+            "status": "PASS",
+        },
+    )
 
 
 def test_empty_inventory_mutation_is_rejected(tmp_path: Path) -> None:
