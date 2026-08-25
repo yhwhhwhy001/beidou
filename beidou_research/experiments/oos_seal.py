@@ -83,6 +83,7 @@ class OOSSeal:
     boundary_commitment: str
     boundary_digest: str
     key_digest: str
+    audit_anchor_digest: str
     lineage_digest: str
     run_id: str
     experiment_identity_digest: str
@@ -103,6 +104,7 @@ class OOSSeal:
             "boundary_commitment": self.boundary_commitment,
             "boundary_digest": self.boundary_digest,
             "key_digest": self.key_digest,
+            "audit_anchor_digest": self.audit_anchor_digest,
             "lineage_digest": self.lineage_digest,
             "run_id": self.run_id,
             "experiment_identity_digest": self.experiment_identity_digest,
@@ -120,6 +122,7 @@ class OOSSeal:
             "boundary_commitment",
             "boundary_digest",
             "key_digest",
+            "audit_anchor_digest",
             "lineage_digest",
             "run_id",
             "experiment_identity_digest",
@@ -138,6 +141,7 @@ class OOSSeal:
             "boundary_commitment",
             "boundary_digest",
             "key_digest",
+            "audit_anchor_digest",
             "lineage_digest",
             "experiment_identity_digest",
             "checkpoint_digest",
@@ -160,6 +164,7 @@ class OOSSeal:
             boundary_commitment=str(value["boundary_commitment"]),
             boundary_digest=str(value["boundary_digest"]),
             key_digest=str(value["key_digest"]),
+            audit_anchor_digest=str(value["audit_anchor_digest"]),
             lineage_digest=str(value["lineage_digest"]),
             run_id=str(value["run_id"]),
             experiment_identity_digest=str(value["experiment_identity_digest"]),
@@ -176,6 +181,7 @@ class OOSAccessEvent:
     sequence: int
     previous_hash: str
     event_hash: str
+    audit_auth_tag: str
     seal_digest: str
     accessed_at: str
     run_id: str
@@ -184,6 +190,7 @@ class OOSAccessEvent:
     boundary_digest: str
     purpose: str
     candidate_evaluation_complete: bool
+    candidate_evaluation_digest: str
     decision: str
     reasons: tuple[str, ...]
     schema_version: str = OOS_SEAL_SCHEMA_VERSION
@@ -194,6 +201,7 @@ class OOSAccessEvent:
             "sequence": self.sequence,
             "previous_hash": self.previous_hash,
             "event_hash": self.event_hash,
+            "audit_auth_tag": self.audit_auth_tag,
             "seal_digest": self.seal_digest,
             "accessed_at": self.accessed_at,
             "run_id": self.run_id,
@@ -202,14 +210,33 @@ class OOSAccessEvent:
             "boundary_digest": self.boundary_digest,
             "purpose": self.purpose,
             "candidate_evaluation_complete": self.candidate_evaluation_complete,
+            "candidate_evaluation_digest": self.candidate_evaluation_digest,
             "decision": self.decision,
             "reasons": list(self.reasons),
         }
 
     @classmethod
-    def build(cls, **facts: Any) -> "OOSAccessEvent":
-        core = {"schema_version": OOS_SEAL_SCHEMA_VERSION, **facts}
-        return cls(event_hash=_digest(core), schema_version=OOS_SEAL_SCHEMA_VERSION, **facts)
+    def build(cls, *, audit_key: bytes, **facts: Any) -> "OOSAccessEvent":
+        authenticated = {"schema_version": OOS_SEAL_SCHEMA_VERSION, **facts}
+        auth_tag = hmac.new(audit_key, canonical_json(authenticated).encode("utf-8"), hashlib.sha256).hexdigest()
+        core = {**authenticated, "audit_auth_tag": auth_tag}
+        return cls(
+            event_hash=_digest(core),
+            audit_auth_tag=auth_tag,
+            schema_version=OOS_SEAL_SCHEMA_VERSION,
+            **facts,
+        )
+
+    def authenticated_by(self, audit_key: bytes) -> bool:
+        authenticated = self.as_dict()
+        authenticated.pop("event_hash")
+        authenticated.pop("audit_auth_tag")
+        expected = hmac.new(
+            audit_key,
+            canonical_json(authenticated).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, self.audit_auth_tag)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "OOSAccessEvent":
@@ -218,6 +245,7 @@ class OOSAccessEvent:
             "sequence",
             "previous_hash",
             "event_hash",
+            "audit_auth_tag",
             "seal_digest",
             "accessed_at",
             "run_id",
@@ -226,6 +254,7 @@ class OOSAccessEvent:
             "boundary_digest",
             "purpose",
             "candidate_evaluation_complete",
+            "candidate_evaluation_digest",
             "decision",
             "reasons",
         }
@@ -240,6 +269,7 @@ class OOSAccessEvent:
             sequence=int(value["sequence"]),
             previous_hash=str(value["previous_hash"]),
             event_hash=str(value["event_hash"]),
+            audit_auth_tag=str(value["audit_auth_tag"]),
             seal_digest=str(value["seal_digest"]),
             accessed_at=str(value["accessed_at"]),
             run_id=str(value["run_id"]),
@@ -248,6 +278,7 @@ class OOSAccessEvent:
             boundary_digest=str(value["boundary_digest"]),
             purpose=str(value["purpose"]),
             candidate_evaluation_complete=value["candidate_evaluation_complete"] is True,
+            candidate_evaluation_digest=str(value["candidate_evaluation_digest"]),
             decision=str(value["decision"]),
             reasons=tuple(str(reason) for reason in value["reasons"]),
             schema_version=str(value["schema_version"]),
@@ -282,6 +313,7 @@ class OOSSealStore:
         *,
         boundary: OOSBoundary,
         key: bytes,
+        audit_key: bytes,
         lineage_digest: str,
         run_id: str,
         experiment_identity_digest: str,
@@ -293,19 +325,25 @@ class OOSSealStore:
             raise OOSSealNotVerifiable("IMMUTABLE_OOS_SEAL_ALREADY_EXISTS")
         if len(key) < 32:
             raise ValueError("OOS_SEAL_KEY_TOO_SHORT")
+        if len(audit_key) < 32:
+            raise ValueError("OOS_AUDIT_KEY_TOO_SHORT")
         if _utc(sealed_at) >= _utc(evaluation_not_before):
             raise ValueError("SEAL_MUST_PRECEDE_CANDIDATE_EVALUATION")
         boundary_bytes = canonical_json(boundary.as_dict()).encode("utf-8")
         boundary_digest = hashlib.sha256(boundary_bytes).hexdigest()
         commitment = hmac.new(key, boundary_bytes, hashlib.sha256).hexdigest()
         key_digest = hashlib.sha256(key).hexdigest()
-        seal_id = hashlib.sha256(b"opaque-oos-seal-v1\0" + key + commitment.encode()).hexdigest()
+        audit_anchor_digest = hashlib.sha256(audit_key).hexdigest()
+        seal_id = hashlib.sha256(
+            b"opaque-oos-seal-v1\0" + key + audit_anchor_digest.encode() + commitment.encode()
+        ).hexdigest()
         core = {
             "schema_version": OOS_SEAL_SCHEMA_VERSION,
             "seal_id": seal_id,
             "boundary_commitment": commitment,
             "boundary_digest": boundary_digest,
             "key_digest": key_digest,
+            "audit_anchor_digest": audit_anchor_digest,
             "lineage_digest": lineage_digest,
             "run_id": run_id,
             "experiment_identity_digest": experiment_identity_digest,
@@ -379,11 +417,13 @@ class OOSSealStore:
         seal: OOSSeal,
         boundary: OOSBoundary,
         key: bytes,
+        audit_key: bytes,
         run_id: str,
         experiment_identity_digest: str,
         checkpoint_digest: str,
         accessed_at: str,
         candidate_evaluation_complete: bool,
+        candidate_evaluation_digest: str,
         purpose: str,
     ) -> OOSAccessReceipt:
         persisted = self.load_seal()
@@ -398,6 +438,8 @@ class OOSSealStore:
             reasons.append("INVALID_OOS_ACCESS_TIMESTAMP")
         if events:
             reasons.append("REPEATED_OOS_ACCESS")
+        if hashlib.sha256(audit_key).hexdigest() != seal.audit_anchor_digest:
+            reasons.append("UNBOUND_OOS_AUDIT_ANCHOR")
 
         boundary_bytes = canonical_json(boundary.as_dict()).encode("utf-8")
         boundary_digest = hashlib.sha256(boundary_bytes).hexdigest()
@@ -416,8 +458,11 @@ class OOSSealStore:
             reasons.append("UNBOUND_OOS_ACCESS")
         if not purpose.strip():
             reasons.append("MISSING_OOS_ACCESS_PURPOSE")
+        if _HEX64.fullmatch(candidate_evaluation_digest) is None:
+            reasons.append("INVALID_CANDIDATE_EVALUATION_DIGEST")
 
         event = OOSAccessEvent.build(
+            audit_key=audit_key,
             sequence=len(events) + 1,
             previous_hash=events[-1].event_hash if events else GENESIS_HASH,
             seal_digest=seal.digest,
@@ -428,6 +473,7 @@ class OOSSealStore:
             boundary_digest=boundary_digest,
             purpose=purpose,
             candidate_evaluation_complete=candidate_evaluation_complete,
+            candidate_evaluation_digest=candidate_evaluation_digest,
             decision="DENIED" if reasons else "ALLOWED_ONCE",
             reasons=tuple(reasons),
         )
@@ -436,7 +482,16 @@ class OOSSealStore:
             raise OOSAccessInvalidated(";".join(reasons))
         return OOSAccessReceipt(seal_digest=seal.digest, sequence=event.sequence, audit_head=event.event_hash)
 
-    def promotion_status(self, *, seal: OOSSeal, receipt: OOSAccessReceipt) -> OOSPromotionStatus:
+    def promotion_status(
+        self,
+        *,
+        seal: OOSSeal,
+        receipt: OOSAccessReceipt,
+        boundary: OOSBoundary,
+        key: bytes,
+        audit_key: bytes,
+        candidate_evaluation_digest: str,
+    ) -> OOSPromotionStatus:
         persisted = self.load_seal()
         events = self.audit_events()
         reasons: list[str] = []
@@ -448,6 +503,31 @@ class OOSSealStore:
             reasons.append("OOS_AUDIT_HEAD_MISMATCH")
         if any(event.decision != "ALLOWED_ONCE" or event.reasons for event in events):
             reasons.append("OOS_ACCESS_INVALIDATION_PRESENT")
+        boundary_bytes = canonical_json(boundary.as_dict()).encode("utf-8")
+        expected_boundary_digest = hashlib.sha256(boundary_bytes).hexdigest()
+        expected_commitment = hmac.new(key, boundary_bytes, hashlib.sha256).hexdigest()
+        if (
+            hashlib.sha256(key).hexdigest() != seal.key_digest
+            or expected_boundary_digest != seal.boundary_digest
+            or not hmac.compare_digest(expected_commitment, seal.boundary_commitment)
+        ):
+            reasons.append("MUTATED_OOS_BOUNDARY")
+        if hashlib.sha256(audit_key).hexdigest() != seal.audit_anchor_digest:
+            reasons.append("OOS_AUDIT_ANCHOR_MISMATCH")
+        for event in events:
+            if not event.authenticated_by(audit_key):
+                reasons.append("OOS_AUDIT_AUTHENTICATION_MISMATCH")
+            try:
+                if _utc(event.accessed_at) < _utc(seal.evaluation_not_before):
+                    reasons.append("EARLY_OOS_ACCESS")
+            except ValueError:
+                reasons.append("INVALID_OOS_ACCESS_TIMESTAMP")
+            if event.candidate_evaluation_complete is not True:
+                reasons.append("CANDIDATE_EVALUATION_NOT_COMPLETE")
+            if event.candidate_evaluation_digest != candidate_evaluation_digest:
+                reasons.append("CANDIDATE_EVALUATION_DIGEST_MISMATCH")
+            if event.boundary_digest != expected_boundary_digest:
+                reasons.append("MUTATED_OOS_BOUNDARY")
         if any(
             event.seal_digest != seal.digest
             or event.run_id != seal.run_id

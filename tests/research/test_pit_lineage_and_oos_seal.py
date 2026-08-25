@@ -23,13 +23,16 @@ from beidou_research.experiments import Checkpoint, ExperimentRunIdentity
 from beidou_research.experiments.contracts import canonical_json
 from beidou_research.experiments.oos_seal import (
     OOSAccessInvalidated,
+    OOSAccessReceipt,
     OOSAuditNotVerifiable,
     OOSBoundary,
     OOSSealStore,
 )
+from beidou_research.experiments.promotion import validate_promotable_experiment
 
 AS_OF = "2024-01-01T00:00:00Z"
 KEY = b"0123456789abcdef0123456789abcdef"
+AUDIT_KEY = b"abcdef0123456789abcdef0123456789"
 
 
 def _evidence_dir(tmp_path: Path) -> Path:
@@ -112,6 +115,14 @@ def _boundary() -> OOSBoundary:
     )
 
 
+def _runner_result(identity: ExperimentRunIdentity) -> dict[str, str]:
+    return {"run_id": identity.run_id, "identity_digest": identity.digest, "status": "COMPLETED"}
+
+
+def _evaluation_digest(identity: ExperimentRunIdentity) -> str:
+    return hashlib.sha256(canonical_json(_runner_result(identity)).encode()).hexdigest()
+
+
 def _seal_store(tmp_path: Path):
     manifest, _ = _lineage(tmp_path)
     identity, checkpoint = _identity_and_checkpoint(manifest)
@@ -119,6 +130,7 @@ def _seal_store(tmp_path: Path):
     seal = store.create(
         boundary=_boundary(),
         key=KEY,
+        audit_key=AUDIT_KEY,
         lineage_digest=manifest.digest,
         run_id=identity.run_id,
         experiment_identity_digest=identity.digest,
@@ -127,6 +139,21 @@ def _seal_store(tmp_path: Path):
         evaluation_not_before="2024-02-01T00:00:00Z",
     )
     return manifest, identity, checkpoint, store, seal
+
+
+def _promotion_status(store: OOSSealStore, seal, receipt):
+    return store.promotion_status(
+        seal=seal,
+        receipt=receipt,
+        boundary=_boundary(),
+        key=KEY,
+        audit_key=AUDIT_KEY,
+        candidate_evaluation_digest=hashlib.sha256(
+            canonical_json(
+                {"run_id": seal.run_id, "identity_digest": seal.experiment_identity_digest, "status": "COMPLETED"}
+            ).encode()
+        ).hexdigest(),
+    )
 
 
 def _rehash_artifact(payload: dict, role: str) -> None:
@@ -263,11 +290,13 @@ def test_early_oos_access_is_audited_and_invalidates(tmp_path: Path) -> None:
             seal=seal,
             boundary=_boundary(),
             key=KEY,
+            audit_key=AUDIT_KEY,
             run_id=identity.run_id,
             experiment_identity_digest=identity.digest,
             checkpoint_digest=checkpoint.digest,
             accessed_at="2024-01-15T00:00:00Z",
             candidate_evaluation_complete=False,
+            candidate_evaluation_digest=_evaluation_digest(identity),
             purpose="candidate-debug",
         )
     assert store.audit_events()[0].decision == "DENIED"
@@ -279,27 +308,31 @@ def test_repeated_oos_access_invalidates_promotion(tmp_path: Path) -> None:
         seal=seal,
         boundary=_boundary(),
         key=KEY,
+        audit_key=AUDIT_KEY,
         run_id=identity.run_id,
         experiment_identity_digest=identity.digest,
         checkpoint_digest=checkpoint.digest,
         accessed_at="2024-02-02T00:00:00Z",
         candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
         purpose="sealed-evaluation",
     )
-    assert store.promotion_status(seal=seal, receipt=first).status == "PROMOTABLE"
+    assert _promotion_status(store, seal, first).status == "PROMOTABLE"
     with pytest.raises(OOSAccessInvalidated, match="REPEATED_OOS_ACCESS"):
         store.access(
             seal=seal,
             boundary=_boundary(),
             key=KEY,
+            audit_key=AUDIT_KEY,
             run_id=identity.run_id,
             experiment_identity_digest=identity.digest,
             checkpoint_digest=checkpoint.digest,
             accessed_at="2024-02-03T00:00:00Z",
             candidate_evaluation_complete=True,
+            candidate_evaluation_digest=_evaluation_digest(identity),
             purpose="rerun-after-seeing-oos",
         )
-    assert store.promotion_status(seal=seal, receipt=first).status == "INVALIDATED"
+    assert _promotion_status(store, seal, first).status == "INVALIDATED"
 
 
 def test_mutated_oos_boundary_is_audited_and_invalidates(tmp_path: Path) -> None:
@@ -310,11 +343,13 @@ def test_mutated_oos_boundary_is_audited_and_invalidates(tmp_path: Path) -> None
             seal=seal,
             boundary=mutated,
             key=KEY,
+            audit_key=AUDIT_KEY,
             run_id=identity.run_id,
             experiment_identity_digest=identity.digest,
             checkpoint_digest=checkpoint.digest,
             accessed_at="2024-02-02T00:00:00Z",
             candidate_evaluation_complete=True,
+            candidate_evaluation_digest=_evaluation_digest(identity),
             purpose="mutated-split",
         )
     assert "MUTATED_OOS_BOUNDARY" in store.audit_events()[0].reasons
@@ -327,11 +362,13 @@ def test_unbound_oos_access_is_audited_and_invalidates(tmp_path: Path) -> None:
             seal=seal,
             boundary=_boundary(),
             key=KEY,
+            audit_key=AUDIT_KEY,
             run_id="other-run",
             experiment_identity_digest=identity.digest,
             checkpoint_digest=checkpoint.digest,
             accessed_at="2024-02-02T00:00:00Z",
             candidate_evaluation_complete=True,
+            candidate_evaluation_digest=_evaluation_digest(identity),
             purpose="unbound-run",
         )
     assert store.audit_events()[0].decision == "DENIED"
@@ -343,14 +380,16 @@ def test_valid_access_audit_and_seal_evidence_are_independently_recomputable(tmp
         seal=seal,
         boundary=_boundary(),
         key=KEY,
+        audit_key=AUDIT_KEY,
         run_id=identity.run_id,
         experiment_identity_digest=identity.digest,
         checkpoint_digest=checkpoint.digest,
         accessed_at="2024-02-02T00:00:00Z",
         candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
         purpose="sealed-evaluation",
     )
-    status = store.promotion_status(seal=seal, receipt=receipt)
+    status = _promotion_status(store, seal, receipt)
     assert status.status == "PROMOTABLE"
     assert status.synthetic_economic_evidence is False
     assert store.load_seal().digest == seal.digest
@@ -369,11 +408,13 @@ def test_audit_tamper_fails_closed(tmp_path: Path) -> None:
         seal=seal,
         boundary=_boundary(),
         key=KEY,
+        audit_key=AUDIT_KEY,
         run_id=identity.run_id,
         experiment_identity_digest=identity.digest,
         checkpoint_digest=checkpoint.digest,
         accessed_at="2024-02-02T00:00:00Z",
         candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
         purpose="sealed-evaluation",
     )
     payload = json.loads(store.audit_path.read_text().splitlines()[0])
@@ -383,17 +424,150 @@ def test_audit_tamper_fails_closed(tmp_path: Path) -> None:
         store.audit_events()
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("early", "EARLY_OOS_ACCESS"),
+        ("incomplete", "CANDIDATE_EVALUATION_NOT_COMPLETE"),
+        ("unbound", "OOS_AUDIT_BINDING_MISMATCH"),
+        ("mutated_boundary", "MUTATED_OOS_BOUNDARY"),
+    ],
+)
+def test_forged_audit_and_self_issued_receipt_cannot_promote(
+    tmp_path: Path, mutation: str, expected_reason: str
+) -> None:
+    _manifest, identity, checkpoint, store, seal = _seal_store(tmp_path)
+    store.access(
+        seal=seal,
+        boundary=_boundary(),
+        key=KEY,
+        audit_key=AUDIT_KEY,
+        run_id=identity.run_id,
+        experiment_identity_digest=identity.digest,
+        checkpoint_digest=checkpoint.digest,
+        accessed_at="2024-02-02T00:00:00Z",
+        candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
+        purpose="sealed-evaluation",
+    )
+    forged = json.loads(store.audit_path.read_text())
+    if mutation == "early":
+        forged["accessed_at"] = "2024-01-02T00:00:00Z"
+    elif mutation == "incomplete":
+        forged["candidate_evaluation_complete"] = False
+    elif mutation == "unbound":
+        forged["run_id"] = "forged-run"
+    else:
+        forged["boundary_digest"] = "0" * 64
+    forged["decision"] = "ALLOWED_ONCE"
+    forged["reasons"] = []
+    core = dict(forged)
+    core.pop("event_hash")
+    forged["event_hash"] = hashlib.sha256(canonical_json(core).encode()).hexdigest()
+    store.audit_path.write_text(canonical_json(forged) + "\n")
+    forged_receipt = OOSAccessReceipt(seal_digest=seal.digest, sequence=1, audit_head=forged["event_hash"])
+
+    status = _promotion_status(store, seal, forged_receipt)
+    assert status.status == "INVALIDATED"
+    assert expected_reason in status.reasons
+    assert "OOS_AUDIT_AUTHENTICATION_MISMATCH" in status.reasons
+
+
+def test_completed_research_runner_without_lineage_or_seal_is_non_promotable(tmp_path: Path) -> None:
+    from beidou_research.mining.runner import ResumableMiningRunner
+
+    result = ResumableMiningRunner.start(
+        tmp_path / "research-only",
+        identity=ExperimentRunIdentity(
+            run_id="research-only",
+            code_commit="a" * 40,
+            code_tree_digest="b" * 64,
+            policy_digest="c" * 64,
+            dataset_manifest_digest="d" * 64,
+            pit_manifest_digest="e" * 64,
+            universe="BTCUSDT",
+            timeframe="1h",
+            feature_digest="f" * 64,
+            label_digest="0" * 64,
+            cost_model="unbound-cost",
+            seed=7,
+        ),
+        candidate_family=[{"candidate_id": "candidate-1", "evidence": {"score": 0.1}}],
+        writer_id="writer-a",
+        fencing_token="fence-1",  # noqa: S106 - deterministic non-secret fixture token
+    )
+    assert result["status"] == "COMPLETED"
+    decision = validate_promotable_experiment(runner_result=result)
+    assert decision.status == "NOT_VERIFIABLE"
+    assert "MISSING_PIT_LINEAGE" in decision.reasons
+    assert "MISSING_OOS_SEAL" in decision.reasons
+
+
+def test_real_promotion_gate_requires_all_runner_checkpoint_lineage_and_seal_bindings(tmp_path: Path) -> None:
+    manifest, identity, checkpoint, store, seal = _seal_store(tmp_path)
+    receipt = store.access(
+        seal=seal,
+        boundary=_boundary(),
+        key=KEY,
+        audit_key=AUDIT_KEY,
+        run_id=identity.run_id,
+        experiment_identity_digest=identity.digest,
+        checkpoint_digest=checkpoint.digest,
+        accessed_at="2024-02-02T00:00:00Z",
+        candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
+        purpose="sealed-evaluation",
+    )
+    runner_result = _runner_result(identity)
+    decision = validate_promotable_experiment(
+        runner_result=runner_result,
+        lineage_manifest=manifest,
+        lineage_root=tmp_path,
+        identity=identity,
+        checkpoint=checkpoint,
+        oos_store=store,
+        oos_seal=seal,
+        oos_receipt=receipt,
+        oos_boundary=_boundary(),
+        boundary_key=KEY,
+        audit_key=AUDIT_KEY,
+    )
+    assert decision.status == "PROMOTABLE"
+    assert decision.promotable is True
+    assert decision.synthetic_economic_evidence is False
+
+    mismatch = validate_promotable_experiment(
+        runner_result={**runner_result, "identity_digest": "9" * 64},
+        lineage_manifest=manifest,
+        lineage_root=tmp_path,
+        identity=identity,
+        checkpoint=replace(checkpoint, checkpoint_digest="8" * 64),
+        oos_store=store,
+        oos_seal=seal,
+        oos_receipt=receipt,
+        oos_boundary=_boundary(),
+        boundary_key=KEY,
+        audit_key=AUDIT_KEY,
+    )
+    assert mismatch.status == "NOT_VERIFIABLE"
+    assert mismatch.promotable is False
+    assert "RUNNER_IDENTITY_BINDING_MISMATCH" in mismatch.reasons
+    assert "OOS_EXPERIMENT_BINDING_MISMATCH" in mismatch.reasons
+
+
 def test_rollback_preserves_seal_and_audit_but_is_non_promotable(tmp_path: Path) -> None:
     _manifest, identity, checkpoint, store, seal = _seal_store(tmp_path)
     receipt = store.access(
         seal=seal,
         boundary=_boundary(),
         key=KEY,
+        audit_key=AUDIT_KEY,
         run_id=identity.run_id,
         experiment_identity_digest=identity.digest,
         checkpoint_digest=checkpoint.digest,
         accessed_at="2024-02-02T00:00:00Z",
         candidate_evaluation_complete=True,
+        candidate_evaluation_digest=_evaluation_digest(identity),
         purpose="sealed-evaluation",
     )
     before_seal = store.seal_path.read_bytes()

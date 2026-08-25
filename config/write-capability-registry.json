@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "a16d0fecfb0961de44cc5811b425219adfb5a1cdb6b671e8ba263e8af40309be",
+ "governance_digest": "5f295b48cdd446d389339403cecb2e330546d5c2e80a1c59760b2db37bb7dbb4",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -989,11 +989,12 @@
   "beidou_research/data/dataset_manifest.py": "96d02e9b332f520bfccf5ce6a553393f79ed5c3129dea781376a7b1d5759c1c7",
   "beidou_research/data/kline_store.py": "28f6256206395a0513d3453fe8525489ea7bc59c71708a0ff83ee368b64837b6",
   "beidou_research/data/pit_lineage.py": "8c95ce954dae0eb1803bf8c29bfd5c8e61053f25819d46754f39ec2e302b9bc9",
-  "beidou_research/experiments/__init__.py": "e2056d68a2bfce39e903b05f3b5fd8aa96acc501a0a59a89525b7bb6d2d0ee8f",
+  "beidou_research/experiments/__init__.py": "aca599fcccc256f875ef3db8c9ddbf506ab70a2970178a4842cab1b55cb44f40",
   "beidou_research/experiments/checkpoint.py": "336eac98a5279f3b516ab34edbe4bca86292e2e96293170a3b4b10da373ef890",
   "beidou_research/experiments/contracts.py": "ac2746af93709b9c0e28fe0abc09e7e9d1068d20bbb4a62e969da69d6e193445",
   "beidou_research/experiments/migrations.py": "a76789a308b000eaa12bb238401129150b13e2cb0a5b6bf0c2d2c69e8a2d76e1",
-  "beidou_research/experiments/oos_seal.py": "16cb9e9478bb44cdf795613914f835b43a4aa3e72cb313cafe69d7e5d1cad3e5",
+  "beidou_research/experiments/oos_seal.py": "293c58acd2c14df69ae51dca75e797d846292344a62532e942be04bfda833c30",
+  "beidou_research/experiments/promotion.py": "22ab57edb34a1a503358a11622efea0090c322114c0aab767cc85acefc472f48",
   "beidou_research/experiments/store.py": "f6f92661a86e57e3b7b6408c0b89ccbf1bd917fce5502639b4f5fe5b32bc8b1f",
   "beidou_research/factors/__init__.py": "29a06e5b1fd1876c1427cdd24e7576afae84ae37b3ff756fb72209e17189e400",
   "beidou_research/factors/factor.py": "3e21f50ca55fb247ac264e5a04e6257ac11562a02d1d3c98b07039a665fc25f3",

@@ -31,6 +31,7 @@ from .oos_seal import (
     OOSSealNotVerifiableError,
     OOSSealStore,
 )
+from .promotion import PromotableExperimentDecision, validate_promotable_experiment
 from .store import (
     DuplicateEventConflict,
     ExperimentRunLedger,
@@ -70,6 +71,8 @@ __all__ = [
     "OOSSealNotVerifiable",
     "OOSSealNotVerifiableError",
     "OOSSealStore",
+    "PromotableExperimentDecision",
     "StaleWriterError",
     "canonical_json",
+    "validate_promotable_experiment",
 ]
