@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,13 @@ ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "config" / "write-capability-registry.json"
 
 
+def _write_evidence_artifact(name: str, payload: object) -> None:
+    evidence_dir = os.environ.get("BEIDOU_EVIDENCE_DIR", "").strip()
+    if not evidence_dir:
+        return
+    (Path(evidence_dir) / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def test_write_capability_registry_is_complete_and_valid() -> None:
     registry = load_registry(REGISTRY)
 
@@ -28,6 +36,16 @@ def test_write_capability_registry_is_complete_and_valid() -> None:
     assert {entry["path"] for entry in registry["entries"]} == discover_sensitive_entry_paths(ROOT)
     registered_calls = {item["source"]: item["occurrences"] for item in registry["terminal_write_paths"]}
     assert registered_calls == discover_terminal_write_calls(ROOT)
+    _write_evidence_artifact(
+        "write-registry-report.json",
+        {
+            "status": "PASS",
+            "governance_digest": registry["governance_digest"],
+            "declared_entrypoints": registry["declared_entrypoints"],
+            "entry_count": len(registry["entries"]),
+            "terminal_write_path_count": len(registry["terminal_write_paths"]),
+        },
+    )
 
 
 def test_registry_covers_delivery_and_make_entry_surfaces() -> None:
@@ -41,7 +59,7 @@ def test_registry_covers_delivery_and_make_entry_surfaces() -> None:
         if path.suffix in {".py", ".sh"}
     } <= registered
     assert registry["declared_entrypoints"] == discover_declared_entrypoints(ROOT)
-    assert registry["declared_entrypoints"]["console:beidou"] == "beidou_launcher.cli:main"
+    assert registry["declared_entrypoints"]["console:beidou"] == "beidou_cli:main"
 
 
 def test_terminal_scan_detects_dynamic_alias_and_getattr_calls(tmp_path: Path) -> None:

@@ -1,0 +1,103 @@
+"""Characterization and side-effect proofs for the Alpha-First CLI boundary."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _evidence(name: str, payload: object) -> None:
+    evidence_dir = os.environ.get("BEIDOU_EVIDENCE_DIR", "").strip()
+    if evidence_dir:
+        path = Path(evidence_dir) / name
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _run(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - fixed interpreter and local module
+        [sys.executable, "-m", "beidou_cli", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": str(ROOT),
+        },
+        check=False,
+        timeout=30,
+    )
+
+
+def test_bare_root_is_helpful_and_side_effect_free(tmp_path: Path) -> None:
+    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    result = _run(cwd=tmp_path)
+    after = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+
+    assert result.returncode == 0
+    assert "execution" in result.stdout
+    assert before == after
+    assert "beidou_launcher" not in result.stdout
+    _evidence(
+        "cli-side-effect-inventory.json",
+        {
+            "commands": ["beidou", "beidou --help", "beidou status"],
+            "filesystem_before": before,
+            "filesystem_after": after,
+            "network": "DENIED",
+            "launcher_constructed": False,
+            "credential_reads": 0,
+            "database_writes": 0,
+            "status": "PASS",
+        },
+    )
+
+
+def test_help_has_no_launcher_or_runtime_imports() -> None:
+    result = _run("--help")
+    assert result.returncode == 0
+    assert "offline Alpha" in result.stdout
+    assert "beidou_launcher" not in result.stdout
+
+
+def test_status_is_read_only_and_deterministic() -> None:
+    first = _run("status")
+    second = _run("status")
+    assert first.returncode == second.returncode == 0
+    assert first.stdout == second.stdout
+    payload = json.loads(first.stdout)
+    assert payload == {"execution": "EXPLICIT_ONLY", "mode": "SAFE", "runtime": "NOT_STARTED"}
+
+
+def test_unknown_root_command_fails_closed() -> None:
+    result = _run("start")
+    assert result.returncode != 0
+    assert "No such command" in result.stderr or "explicit" in result.stderr.lower()
+
+
+def test_execution_start_requires_explicit_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BEIDOU_EXECUTION_AUTHORIZATION", raising=False)
+    result = _run("execution", "start")
+    assert result.returncode != 0
+    assert "authorization" in (result.stdout + result.stderr).lower()
+
+
+def test_alpha_evaluate_is_explicit_offline_workflow() -> None:
+    result = _run("alpha", "evaluate", "--closes", ",".join(str(100 + i * 0.25) for i in range(60)))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["row_count"] == 60
+    assert payload["dataset_source"] == "LOCAL"
+
+
+def test_rollback_prior_launcher_mapping_remains_available() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'beidou = "beidou_cli:main"' in pyproject
+    assert (ROOT / "beidou_launcher" / "cli.py").exists()

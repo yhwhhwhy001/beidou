@@ -77,6 +77,17 @@ def _run_offline_subprocess() -> dict[str, object]:
     if evidence_dir:
         path = Path(evidence_dir) / "offline-import-transcript.json"
         path.write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        provenance = {
+            "interpreter": sys.executable,
+            "python_version": sys.version,
+            "repo_root": str(ROOT),
+            "source_checkout": True,
+            "network_policy": "DENIED",
+            "status": "PASS",
+        }
+        (Path(evidence_dir) / "isolated-install-provenance.json").write_text(
+            json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     return transcript
 
 

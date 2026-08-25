@@ -11,7 +11,7 @@
  "declared_entrypoint_records": {
   "console:bd": {
    "capability": "DELEGATE_TO_LAUNCHER",
-   "command": "beidou_launcher.cli:main",
+   "command": "beidou_cli:main",
    "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003abd]",
    "owner": "Runtime Owner",
@@ -19,7 +19,7 @@
   },
   "console:beidou": {
    "capability": "DELEGATE_TO_LAUNCHER",
-   "command": "beidou_launcher.cli:main",
+   "command": "beidou_cli:main",
    "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003abeidou]",
    "owner": "Runtime Owner",
@@ -27,7 +27,7 @@
   },
   "console:北斗": {
    "capability": "DELEGATE_TO_LAUNCHER",
-   "command": "beidou_launcher.cli:main",
+   "command": "beidou_cli:main",
    "expected_rejection": "EXPLICIT_MODE_AND_SYMBOLS_REQUIRED",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[consoleu003au5317u6597]",
    "owner": "Runtime Owner",
@@ -203,9 +203,9 @@
   }
  },
  "declared_entrypoints": {
-  "console:bd": "beidou_launcher.cli:main",
-  "console:beidou": "beidou_launcher.cli:main",
-  "console:北斗": "beidou_launcher.cli:main",
+  "console:bd": "beidou_cli:main",
+  "console:beidou": "beidou_cli:main",
+  "console:北斗": "beidou_cli:main",
   "make:build": "python -m build",
   "make:build-smoke": "python -m build && python -m venv /tmp/beidou-smoke-venv && /tmp/beidou-smoke-venv/bin/pip install dist/*.whl && /tmp/beidou-smoke-venv/bin/python -c \"import beidou_shared; import beidou_core; print('SMOKE TEST PASSED')\" && rm -rf /tmp/beidou-smoke-venv",
   "make:clean": "find . -type d -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \".pytest_cache\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \".mypy_cache\" -exec rm -rf {} + 2>/dev/null; true && find . -type d -name \"*.egg-info\" -exec rm -rf {} + 2>/dev/null; true && rm -rf build/ dist/ htmlcov/ .coverage",
@@ -338,6 +338,17 @@
    "owner": "Test Quality Owner",
    "path": "beidou_certification/g5_scenarios/protocol/rate_limit.py",
    "status": "HARD_HOLD"
+  },
+  {
+   "call_graph": "python -m beidou_cli -> beidou_cli.main",
+   "capability": "OFFLINE_RESEARCH",
+   "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+   "id": "ENTRY-__MAIN__",
+   "kind": "script",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-__MAIN__]",
+   "owner": "Engineering Owner",
+   "path": "beidou_cli/__main__.py",
+   "status": "OFFLINE_ONLY"
   },
   {
    "call_graph": "launcher supervisor -> AutonomousEngine -> Adapter",
@@ -780,16 +791,16 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "48ad92db6e1be11a0b1371d0076f6787e90905d90c9fa0627bcc465c2ed4427c",
+ "governance_digest": "ac37adaf63828aa257e785c638cc3a9b90b78d9549b616f236bc289abaf021f4",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
   "Makefile": "06f0e6f3ffb51e911a672585c163e589b61a1b40e6adecc553a11e92cff130c3",
+  "apps/alpha_app/__init__.py": "45558da1bd5e96390e761018e2c684a84940cb7c6a4214de4b1334bb7201b522",
+  "apps/alpha_app/composition.py": "b8eb56a7ce9f6fa08ca60c747f3176af4b327cef8a9a32e09283798d24abb95d",
   "apps/autopilot/__main__.py": "596cf0c6cb347b8a9c639a681b27e1906f2ca2a30e80e8fc49d5a3a34f95b5c6",
   "apps/factor_miner/__init__.py": "58456a7fa19c7f004bb9d04f854b184464c643268c9b019f414e88d0a978e8b7",
   "apps/factor_miner/__main__.py": "97e6ffd1c9ae3648ea3eb70712d6bd611bb23633acd2d42563e76b6891013dcd",
-  "apps/alpha_app/__init__.py": "45558da1bd5e96390e761018e2c684a84940cb7c6a4214de4b1334bb7201b522",
-  "apps/alpha_app/composition.py": "b8eb56a7ce9f6fa08ca60c747f3176af4b327cef8a9a32e09283798d24abb95d",
   "apps/research_lab/__main__.py": "1401183ca8fbebdabb0034f6d7b31615b512a5eaf16f3839708e64d52dee383b",
   "apps/safety_executor/__main__.py": "23962a78c82e5b5cf1a42f5eb7395750d641616aa6216447eaa9301b1b59b965",
   "apps/strategy_engine/__main__.py": "27fd1cdaa053a4544c3d5f7d95ccc7354a2129ecb71142a27130c6a2c106e2d6",
@@ -849,6 +860,8 @@
   "beidou_chaos/engine.py": "2502b2ff2d5d72fe485491eec995fb71aac616ee16f513f3e8376eb77db89206",
   "beidou_chaos/fault_injection.py": "23b4a1e5a4d4770a63c1b3035ed61e2c2842fd9c8dd11e17319abd883fe5c471",
   "beidou_chaos/process_fault_injector.py": "f78ae3079d2e91bc0e12a769876895de3ddd5b7def1b92c5856d550f597d1d4d",
+  "beidou_cli/__init__.py": "9232a57aceffb0a4950abb53a611089d7cd80ee5419d28383d9b7cd04c1efc64",
+  "beidou_cli/__main__.py": "0e9079d5524fae1ba03596804fbfa70d3b6548a80352b8949f6b4366b4e13181",
   "beidou_control/__init__.py": "5424f9a29f03b356967ff86bfec9fb49c2f822e8c148fc5b5abc4bd3e64f6acc",
   "beidou_control/api.py": "b367acd321f91c6d18236c4fd7def0560ff6776a769cca7417f4192587d4e29f",
   "beidou_control/plane.py": "ec50b2d2b4329fe206d4f98063a81d2c11171a6d235464bf2bccd6d26cec6c1d",
@@ -908,6 +921,7 @@
   "beidou_infra/store_adapter.py": "491a6d405eb0ef0943768fdd0518957a29481919de6b74a667b353b574506d12",
   "beidou_launcher/__init__.py": "ad853d030dec87fce400af17354e5d88b8660c83a11d7f8c842190d07c10ac98",
   "beidou_launcher/__main__.py": "3129adff95e0f38b87ab34cddfc27082c7892bcaec267ff5d40f160fdf55b44a",
+  "beidou_launcher/alpha_first_adapter.py": "a4ac2b61dbf90ce8cc6cbac458d9e979d909f85b047aa834dc47e4964504cf17",
   "beidou_launcher/checks.py": "feb00f8545aa0bcc0f8cbe8871a60d76d7297ceafb3e72d5748e4f944d77f821",
   "beidou_launcher/cli.py": "bea6aae4019a4217ebeaf3f3e13f694b419cfa5b4b155b0a6f19e5b88149b959",
   "beidou_launcher/g7_tracker.py": "9af18dff9be5f9b92ff6070a68221d1fc093c975f9a3fe2f0c8581a717c6d732",
@@ -1056,8 +1070,8 @@
   "beidou_security/identity.py": "48bc300c48f96f2c2adabab3ba1d3263efde35e39f119e3e8490bfa56209f30b",
   "beidou_shared/__init__.py": "65ac5ac6dbaf7558298c675b6db1c536e7baef53507b78cbf3a462aea7793b65",
   "beidou_shared/config/__init__.py": "0a3ef27f02f009ea40a66f6ab5b43339823f488de057cacda16e9af20a99a667",
-  "beidou_shared/contracts/alpha_execution.py": "3beff2e373c79bf4a8fe5bae3ff791d7eb5b5e6409df629ce72f37a8483f5b8d",
   "beidou_shared/contracts/__init__.py": "c3f31569b41c3740b47cadd12f58878d409b5714c972cd94a1ffb347a6213c42",
+  "beidou_shared/contracts/alpha_execution.py": "3beff2e373c79bf4a8fe5bae3ff791d7eb5b5e6409df629ce72f37a8483f5b8d",
   "beidou_shared/contracts/experiment.py": "2e2323d079f29ad8858042ac30fea275c83caddb08abd282382cb0f634dbf964",
   "beidou_shared/envelope/__init__.py": "7cef7a08629d4412695859fe728ab9ecc6d1fb055bbf0d6466483ed5d60670ef",
   "beidou_shared/environment_profile.py": "be6789c199e75b6244147288422c5f8725a40ed706e2f04fdf69ae2bbd93f4e9",
@@ -1155,7 +1169,7 @@
   "migrations/004_runtime_records.up.sql": "f7a295be49100cf9f6e759e9bce92c5680dbe462a4d75758c459c2060270f8db",
   "migrations/005_risk_approval_intent_hash.up.sql": "ea0276521b756c733cdf6a40055741cf247f17ec36bad3d13506c104c5cc8bd2",
   "migrations/006_execution_children.up.sql": "acaf0a5d74f7b06d5ff68436749b48702b4bcc0e3921067dc5c7bd4f0cf7b594",
-  "pyproject.toml": "59172dd12b85e0be7e043d8f0e54fcc6ba0b22c4dcdaa6500e581592d300dacc",
+  "pyproject.toml": "52a18e23b0dd70821226c144a68d2db8da834339a3552e020f10a2b6d8520707",
   "scripts/certification/evaluate_g7.py": "f012544ee5593cc7f52922cb65e75df6c255b203d395eced3625329eda879f80",
   "scripts/certification/start_g7.py": "d6cdcc416a2a02e5b5308815655e00949cadcf60af3a9ee4176108f2b0d9b6e5",
   "scripts/certify_72h.py": "0799a5b035eea8b8564aaf6c8d2a025bb90d8bfaf5e925bb9501d5710da53cb5",
