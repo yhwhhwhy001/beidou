@@ -65,6 +65,30 @@ _STABILITY_SAMPLE_FIELDS = {
     "price_quote",
     "order_notional_quote",
 }
+_GATE_MUTATION_DEPENDENCIES = {
+    "sample_sufficiency": frozenset({"wfo", "cpcv", "pbo", "stability"}),
+    "wfo": frozenset(),
+    "cpcv": frozenset({"pbo"}),
+    "pbo": frozenset(),
+    "fdr": frozenset({"holm"}),
+    "holm": frozenset(),
+    "dsr": frozenset(),
+    "cost_capacity": frozenset(),
+    "stability": frozenset(),
+    "uncertainty": frozenset(),
+}
+_MUTATION_RECORD_FIELDS = {
+    "mutation_id",
+    "target_gate",
+    "result_status",
+    "target_gate_value",
+    "baseline_raw_evidence_digest",
+    "mutated_raw_evidence_digest",
+    "baseline_hard_gates",
+    "mutated_hard_gates",
+    "allowed_dependent_gates",
+    "failed_gates",
+}
 
 
 def _unique(reasons: Iterable[str]) -> tuple[str, ...]:
@@ -590,10 +614,8 @@ def _cost_capacity_uncertainty(
         float(sample["market_volume_base"]) * float(sample["price_quote"]) * float(config["participation_rate_max"])
         for sample in samples
     )
-    capacity_ok = (
-        maximum_participation <= float(config["participation_rate_max"])
-        and all(float(sample["order_notional_quote"]) <= capacity_notional for sample in samples)
-        and all_positive
+    capacity_ok = maximum_participation <= float(config["participation_rate_max"]) and all(
+        float(sample["order_notional_quote"]) <= capacity_notional for sample in samples
     )
     return (
         {
@@ -841,36 +863,100 @@ def write_acceptance_artifacts(
 
     destination = Path(evidence_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    target_gates = set(recomputation.hard_gates)
+    baseline_hard_gates = dict(recomputation.hard_gates)
+    target_gates = set(baseline_hard_gates)
+    baseline_valid = (
+        recomputation.status == "PASS"
+        and bool(baseline_hard_gates)
+        and all(value is True for value in baseline_hard_gates.values())
+        and _looks_hex64(recomputation.raw_evidence_digest)
+    )
+    dependency_graph_valid = target_gates == set(_GATE_MUTATION_DEPENDENCIES)
     seen_mutation_ids: set[str] = set()
     seen_target_gates: set[str] = set()
+    seen_mutated_digests: set[str] = set()
     scored_outcomes: dict[str, dict[str, Any]] = {}
+    isolated_mutation_ids: list[str] = []
+    coupled_mutation_ids: list[str] = []
     killed = 0
     for outcome_key, supplied in mutation_outcomes.items():
         record = dict(supplied) if isinstance(supplied, Mapping) else {}
         mutation_id = record.get("mutation_id")
         target_gate = record.get("target_gate")
-        mutation_unique = isinstance(mutation_id, str) and bool(mutation_id) and mutation_id not in seen_mutation_ids
+        target_name = target_gate if isinstance(target_gate, str) else ""
+        mutated_digest = record.get("mutated_raw_evidence_digest")
+        mutation_unique = (
+            isinstance(mutation_id, str)
+            and bool(mutation_id)
+            and mutation_id == outcome_key
+            and mutation_id not in seen_mutation_ids
+        )
         target_unique = (
             isinstance(target_gate, str) and target_gate in target_gates and target_gate not in seen_target_gates
+        )
+        digest_unique = (
+            _looks_hex64(mutated_digest)
+            and mutated_digest != recomputation.raw_evidence_digest
+            and mutated_digest not in seen_mutated_digests
         )
         if isinstance(mutation_id, str):
             seen_mutation_ids.add(mutation_id)
         if isinstance(target_gate, str):
             seen_target_gates.add(target_gate)
-        hard_gates = record.get("hard_gates")
+        if isinstance(mutated_digest, str):
+            seen_mutated_digests.add(mutated_digest)
+        baseline_record = record.get("baseline_hard_gates")
+        mutated_record = record.get("mutated_hard_gates")
         result_status = record.get("result_status")
+        allowed_dependents = _GATE_MUTATION_DEPENDENCIES.get(target_name, frozenset())
+        declared_dependents = record.get("allowed_dependent_gates")
+        failed_gates = record.get("failed_gates")
+        mutated_gate_map_valid = (
+            isinstance(mutated_record, Mapping)
+            and set(mutated_record) == target_gates
+            and all(value is True or value is False for value in mutated_record.values())
+        )
+        actual_failed_gates = (
+            {gate for gate, passed in mutated_record.items() if passed is False} if mutated_gate_map_valid else set()
+        )
+        non_target_failures = actual_failed_gates - {target_name}
+        undeclared_failures = non_target_failures - allowed_dependents
+        dependencies_valid = (
+            isinstance(declared_dependents, list)
+            and declared_dependents == sorted(allowed_dependents)
+            and not undeclared_failures
+        )
         mutation_killed = (
-            mutation_unique
+            baseline_valid
+            and dependency_graph_valid
+            and set(record) == _MUTATION_RECORD_FIELDS
+            and mutation_unique
             and target_unique
+            and digest_unique
             and isinstance(result_status, str)
-            and result_status != "PASS"
+            and result_status in {"FAIL", "NOT_VERIFIABLE"}
+            and record.get("baseline_raw_evidence_digest") == recomputation.raw_evidence_digest
+            and isinstance(baseline_record, Mapping)
+            and dict(baseline_record) == baseline_hard_gates
+            and baseline_hard_gates.get(target_name) is True
+            and mutated_gate_map_valid
             and record.get("target_gate_value") is False
-            and isinstance(hard_gates, Mapping)
-            and hard_gates.get(target_gate) is False
+            and mutated_record.get(target_name) is False
+            and isinstance(failed_gates, list)
+            and failed_gates == sorted(actual_failed_gates)
+            and dependencies_valid
         )
         killed += int(mutation_killed)
         record["scored_as_killed"] = mutation_killed
+        record["undeclared_failed_gates"] = sorted(undeclared_failures)
+        if mutation_killed and non_target_failures:
+            record["kill_class"] = "COUPLED_ALLOWED_DEPENDENCY"
+            coupled_mutation_ids.append(str(mutation_id))
+        elif mutation_killed:
+            record["kill_class"] = "ISOLATED"
+            isolated_mutation_ids.append(str(mutation_id))
+        else:
+            record["kill_class"] = "REJECTED"
         scored_outcomes[str(outcome_key)] = record
     total = len(target_gates)
     score = killed / total if total else 0.0
@@ -891,7 +977,23 @@ def write_acceptance_artifacts(
             "killed": killed,
             "total": total,
             "score": score,
+            "score_semantics": "CAUSAL_KILLS_WITH_FIXED_DEPENDENCIES",
+            "isolated_score": len(isolated_mutation_ids) / total if total else 0.0,
+            "coupled_score": len(coupled_mutation_ids) / total if total else 0.0,
+            "baseline_status": recomputation.status,
+            "baseline_valid": baseline_valid,
+            "baseline_raw_evidence_digest": recomputation.raw_evidence_digest,
+            "baseline_hard_gates": baseline_hard_gates,
+            "dependency_graph_valid": dependency_graph_valid,
+            "dependency_graph": {
+                gate: sorted(dependencies) for gate, dependencies in sorted(_GATE_MUTATION_DEPENDENCIES.items())
+            },
             "target_gates": sorted(target_gates),
+            "exact_gate_coverage": exact_gate_coverage,
+            "isolated_kills": len(isolated_mutation_ids),
+            "coupled_kills": len(coupled_mutation_ids),
+            "isolated_mutation_ids": sorted(isolated_mutation_ids),
+            "coupled_mutation_ids": sorted(coupled_mutation_ids),
             "outcomes": scored_outcomes,
         },
     )

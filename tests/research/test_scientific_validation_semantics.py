@@ -46,6 +46,18 @@ T06_OOS_AUDIT_HEAD = "9d900f2261046950c43d3f72c95168bfc1dce11ff78cb8c2b2ce43e5d3
 T06_IDENTITY_DIGEST = "d983d00200875efa644124a042803b62d36eb7457f5473313b6346544c6b750c"
 T06_CHECKPOINT_DIGEST = "dafcf08a58dd7eb9465694894888ed9a709a77797aaa859590ec1e52157ff2b5"
 HEX = "0123456789abcdef"
+ALLOWED_GATE_DEPENDENCIES = {
+    "sample_sufficiency": {"wfo", "cpcv", "pbo", "stability"},
+    "wfo": set(),
+    "cpcv": {"pbo"},
+    "pbo": set(),
+    "fdr": {"holm"},
+    "holm": set(),
+    "dsr": set(),
+    "cost_capacity": set(),
+    "stability": set(),
+    "uncertainty": set(),
+}
 
 
 def _hex(seed: str) -> str:
@@ -295,18 +307,35 @@ def _exceed_capacity(evidence: dict[str, Any]) -> None:
 
 
 def _weaken_dsr(evidence: dict[str, Any]) -> None:
-    selected = evidence["family"]["selected_candidate_id"]
-    for index, sample in enumerate(evidence["samples"]):
-        prediction = abs(sample["candidate_predictions"][selected])
-        sample["candidate_predictions"][selected] = prediction if index % 100 < 59 else -prediction
+    evidence["samples"][0]["label_return"] = -0.02
 
 
-def _lower_all_returns(evidence: dict[str, Any]) -> None:
-    for sample in evidence["samples"]:
-        sample["label_return"] = 0.0009
+def _induce_pbo_overfit(evidence: dict[str, Any]) -> None:
+    candidate_ids = [candidate["candidate_id"] for candidate in evidence["family"]["candidates"]]
+    sample_count = len(evidence["samples"])
+    for candidate_index, candidate_id in enumerate(candidate_ids[1:]):
+        bad_group = candidate_index % 8
+        for sample_index, sample in enumerate(evidence["samples"]):
+            group = min(sample_index * 8 // sample_count, 7)
+            prediction = abs(sample["candidate_predictions"][candidate_id])
+            sample["candidate_predictions"][candidate_id] = -prediction if group == bad_group else prediction
+
+
+def _fail_holm_only(evidence: dict[str, Any]) -> None:
+    for candidate in evidence["family"]["candidates"]:
+        candidate["p_value"] = 0.01
+    evidence["family"]["family_registry_digest"] = canonical_digest(evidence["family"]["candidates"])
+
+
+def _fail_uncertainty_only(evidence: dict[str, Any]) -> None:
+    for sample in evidence["samples"][:60]:
+        sample["label_return"] = -0.01
+        for candidate_id, prediction in sample["candidate_predictions"].items():
+            sample["candidate_predictions"][candidate_id] = abs(prediction)
 
 
 def _gate_specific_outcomes(policy) -> dict[str, dict[str, Any]]:
+    baseline = validate_scientific_evidence(policy, _baseline_evidence())
     mutations = {
         "sample-sufficiency-low-count": (
             "sample_sufficiency",
@@ -314,21 +343,16 @@ def _gate_specific_outcomes(policy) -> dict[str, dict[str, Any]]:
         ),
         "wfo-membership": ("wfo", lambda value: value["recorded_wfo_folds"].pop()),
         "cpcv-path-count": ("cpcv", lambda value: value["recorded_cpcv_paths"].pop()),
-        "pbo-path-membership": (
-            "pbo",
-            lambda value: value["recorded_cpcv_paths"][0]["train_keys"].append(
-                value["recorded_cpcv_paths"][0]["test_keys"][0]
-            ),
-        ),
+        "pbo-overfit-by-group": ("pbo", _induce_pbo_overfit),
         "fdr-selected-pvalue-090": ("fdr", lambda value: _set_selected_pvalue(value, 0.9)),
-        "holm-selected-pvalue-080": ("holm", lambda value: _set_selected_pvalue(value, 0.8)),
-        "dsr-low-signal-to-noise": ("dsr", _weaken_dsr),
+        "holm-family-pvalues-001": ("holm", _fail_holm_only),
+        "dsr-single-return-outlier": ("dsr", _weaken_dsr),
         "cost-capacity-participation": ("cost_capacity", _exceed_capacity),
         "stability-missing-timeframe": (
             "stability",
             lambda value: value["stability"].pop("timeframe_1h_vs_1d"),
         ),
-        "uncertainty-nonpositive-stress-ci": ("uncertainty", _lower_all_returns),
+        "uncertainty-block-bootstrap-tail": ("uncertainty", _fail_uncertainty_only),
     }
     outcomes: dict[str, dict[str, Any]] = {}
     for mutation_id, (target_gate, mutate) in mutations.items():
@@ -338,7 +362,11 @@ def _gate_specific_outcomes(policy) -> dict[str, dict[str, Any]]:
             "target_gate": target_gate,
             "result_status": result.status,
             "target_gate_value": result.hard_gates.get(target_gate),
-            "hard_gates": result.hard_gates,
+            "baseline_raw_evidence_digest": baseline.raw_evidence_digest,
+            "mutated_raw_evidence_digest": result.raw_evidence_digest,
+            "baseline_hard_gates": dict(baseline.hard_gates),
+            "mutated_hard_gates": dict(result.hard_gates),
+            "allowed_dependent_gates": sorted(ALLOWED_GATE_DEPENDENCIES[target_gate]),
             "failed_gates": sorted(gate for gate, passed in result.hard_gates.items() if passed is False),
         }
     return outcomes
@@ -554,12 +582,13 @@ def test_stability_cost_and_source_mutations_are_not_verifiable(policy, mutation
 
 def test_uncertainty_gate_rejects_non_positive_stressed_lower_bound(policy) -> None:
     evidence = _baseline_evidence()
-    for sample in evidence["samples"]:
-        sample["label_return"] = 0.0009
+    _fail_uncertainty_only(evidence)
     _reseal(evidence)
     result = validate_scientific_evidence(policy, evidence)
     assert result.status != "PASS"
     assert result.hard_gates.get("uncertainty") is False
+    assert result.hard_gates.get("cost_capacity") is True
+    assert [gate for gate, passed in result.hard_gates.items() if passed is False] == ["uncertainty"]
 
 
 def test_every_hard_gate_mutation_changes_the_final_decision(policy) -> None:
@@ -567,9 +596,13 @@ def test_every_hard_gate_mutation_changes_the_final_decision(policy) -> None:
     assert len(outcomes) == len({record["mutation_id"] for record in outcomes.values()})
     assert len(outcomes) == len({record["target_gate"] for record in outcomes.values()})
     for record in outcomes.values():
+        target_gate = record["target_gate"]
         assert record["result_status"] != "PASS", record
         assert record["target_gate_value"] is False, record
-        assert record["hard_gates"][record["target_gate"]] is False, record
+        assert record["baseline_hard_gates"][target_gate] is True, record
+        assert record["mutated_hard_gates"][target_gate] is False, record
+        non_target_failures = set(record["failed_gates"]) - {target_gate}
+        assert non_target_failures <= ALLOWED_GATE_DEPENDENCIES[target_gate], record
 
 
 def test_rollback_preserves_bindings_and_never_restores_promotion(policy) -> None:
@@ -642,6 +675,67 @@ def test_acceptance_artifacts_are_deterministic_and_complete(policy, tmp_path: P
     score = json.loads((evidence_dir / "gate-mutation-score.json").read_text(encoding="utf-8"))
     assert score["score"] == 1.0
     assert score["status"] == "PASS"
+    assert score["score_semantics"] == "CAUSAL_KILLS_WITH_FIXED_DEPENDENCIES"
+    assert score["isolated_score"] == 0.7
+    assert score["coupled_score"] == 0.3
+    assert score["baseline_valid"] is True
+    assert score["dependency_graph_valid"] is True
+    assert score["exact_gate_coverage"] is True
+    assert score["isolated_kills"] == 7
+    assert score["coupled_kills"] == 3
+    assert set(score["coupled_mutation_ids"]) == {
+        "sample-sufficiency-low-count",
+        "cpcv-path-count",
+        "fdr-selected-pvalue-090",
+    }
+    assert score["dependency_graph"] == {
+        gate: sorted(dependencies) for gate, dependencies in ALLOWED_GATE_DEPENDENCIES.items()
+    }
+    assert all(record["scored_as_killed"] is True for record in score["outcomes"].values())
+
+
+@pytest.mark.parametrize("corruption", ["undeclared_dependency", "baseline_not_true", "missing_mutated_digest"])
+def test_acceptance_writer_rejects_non_causal_mutation_records(policy, tmp_path: Path, corruption: str) -> None:
+    recomputation = validate_scientific_evidence(policy, _baseline_evidence())
+    outcomes = _gate_specific_outcomes(policy)
+    record = outcomes["wfo-membership"]
+    if corruption == "undeclared_dependency":
+        record["mutated_hard_gates"]["stability"] = False
+        record["failed_gates"] = ["stability", "wfo"]
+        record["allowed_dependent_gates"] = ["stability"]
+    elif corruption == "baseline_not_true":
+        record["baseline_hard_gates"]["wfo"] = False
+    else:
+        record.pop("mutated_raw_evidence_digest")
+    evidence_dir = tmp_path / corruption
+    write_acceptance_artifacts(
+        evidence_dir,
+        policy=policy,
+        recomputation=recomputation,
+        negative_results=[],
+        mutation_outcomes=outcomes,
+    )
+    score = json.loads((evidence_dir / "gate-mutation-score.json").read_text(encoding="utf-8"))
+    assert score["status"] == "FAIL"
+    assert score["killed"] == 9
+    assert score["outcomes"]["wfo-membership"]["kill_class"] == "REJECTED"
+    if corruption == "undeclared_dependency":
+        assert score["outcomes"]["wfo-membership"]["undeclared_failed_gates"] == ["stability"]
+
+
+def test_acceptance_writer_rejects_nonpassing_baseline(policy, tmp_path: Path) -> None:
+    recomputation = _mutated_result(policy, _weaken_dsr)
+    write_acceptance_artifacts(
+        tmp_path,
+        policy=policy,
+        recomputation=recomputation,
+        negative_results=[],
+        mutation_outcomes=_gate_specific_outcomes(policy),
+    )
+    score = json.loads((tmp_path / "gate-mutation-score.json").read_text(encoding="utf-8"))
+    assert score["baseline_status"] != "PASS"
+    assert score["status"] == "FAIL"
+    assert score["killed"] == 0
 
 
 def test_fixture_digests_are_lowercase_sha256() -> None:
