@@ -38,6 +38,13 @@ POLICY_PATH = Path(
 )
 POLICY_SHA256 = "2b7f5bf287432b6051e9252f525023b0c23dfa17c2c26aa4e95ab18002e61f70"
 POLICY_DIGEST = "96dbcd31d32ffb53c532a24634c2c85082e4f7d045fd1da24d8521d9495d08b9"
+T06_RESULT_SHA256 = "cbd8de393f60794a0da2db32528a8b661a81732a068ebf03852e86bf7ab3679a"
+T06_DATASET_DIGEST = "7ea259e09cad1245d44f8491dcb087216a9183ce1544c13506a5237f2d312470"
+T06_LINEAGE_DIGEST = "43a6490ee5311fa1af510a16e66382320e2d2d5c1acff72b36a8900a0ee46572"
+T06_OOS_SEAL_DIGEST = "80a380ca3e29b15c8ef89676939320c2505057b07d17d285e282c1d52cf96697"
+T06_OOS_AUDIT_HEAD = "9d900f2261046950c43d3f72c95168bfc1dce11ff78cb8c2b2ce43e5d37a30ba"
+T06_IDENTITY_DIGEST = "d983d00200875efa644124a042803b62d36eb7457f5473313b6346544c6b750c"
+T06_CHECKPOINT_DIGEST = "dafcf08a58dd7eb9465694894888ed9a709a77797aaa859590ec1e52157ff2b5"
 HEX = "0123456789abcdef"
 
 
@@ -132,8 +139,8 @@ def _baseline_evidence() -> dict[str, Any]:
     family_basis = {
         "policy_id": "BD-AF-P3-T07-METRIC-OWNER-POLICY",
         "policy_version": "1.0.0",
-        "dataset_manifest_digest": _hex("dataset"),
-        "pit_manifest_digest": _hex("pit"),
+        "dataset_manifest_digest": T06_DATASET_DIGEST,
+        "pit_manifest_digest": T06_LINEAGE_DIGEST,
         "universe": "BTCUSDT",
         "primary_interval": "1h",
         "horizon_bars": 1,
@@ -202,15 +209,22 @@ def _baseline_evidence() -> dict[str, Any]:
         )
 
     daily_samples = []
+    daily_costs = {**costs, "funding": 3.0}
     for index in range(120):
         label_return = 0.012 + 0.002 * math.sin(index / 7.0)
         daily_samples.append(
             {
                 "key": f"BTCUSDT-1d-{index:04d}",
+                "venue": "BINANCE",
+                "symbol": "BTCUSDT",
+                "interval": "1d",
                 "prediction": label_return,
                 "label_return": label_return,
-                "cost_components_bps": dict(costs),
+                "cost_components_bps": dict(daily_costs),
                 "cost_source_digests": dict(component_sources),
+                "market_volume_base": 5_000_000.0,
+                "price_quote": 100.0,
+                "order_notional_quote": 10_000.0,
             }
         )
     perturbations = [
@@ -236,13 +250,14 @@ def _baseline_evidence() -> dict[str, Any]:
         "schema_version": "1.0.0",
         "bindings": {
             "policy_digest": POLICY_DIGEST,
+            "dependency_result_sha256": T06_RESULT_SHA256,
             "dataset_manifest_digest": family_basis["dataset_manifest_digest"],
             "pit_manifest_digest": family_basis["pit_manifest_digest"],
-            "lineage_manifest_digest": _hex("lineage"),
-            "oos_seal_digest": _hex("oos-seal"),
-            "oos_audit_head": _hex("oos-audit"),
-            "experiment_identity_digest": _hex("identity"),
-            "checkpoint_digest": _hex("checkpoint"),
+            "lineage_manifest_digest": T06_LINEAGE_DIGEST,
+            "oos_seal_digest": T06_OOS_SEAL_DIGEST,
+            "oos_audit_head": T06_OOS_AUDIT_HEAD,
+            "experiment_identity_digest": T06_IDENTITY_DIGEST,
+            "checkpoint_digest": T06_CHECKPOINT_DIGEST,
         },
         "family": family,
         "samples": samples,
@@ -277,6 +292,56 @@ def _set_selected_pvalue(evidence: dict[str, Any], p_value: float) -> None:
 def _exceed_capacity(evidence: dict[str, Any]) -> None:
     evidence["samples"][0]["order_notional_quote"] = 20_000_000.0
     evidence["samples"][0]["cost_components_bps"]["market_impact"] = 200.0
+
+
+def _weaken_dsr(evidence: dict[str, Any]) -> None:
+    selected = evidence["family"]["selected_candidate_id"]
+    for index, sample in enumerate(evidence["samples"]):
+        prediction = abs(sample["candidate_predictions"][selected])
+        sample["candidate_predictions"][selected] = prediction if index % 100 < 59 else -prediction
+
+
+def _lower_all_returns(evidence: dict[str, Any]) -> None:
+    for sample in evidence["samples"]:
+        sample["label_return"] = 0.0009
+
+
+def _gate_specific_outcomes(policy) -> dict[str, dict[str, Any]]:
+    mutations = {
+        "sample-sufficiency-low-count": (
+            "sample_sufficiency",
+            lambda value: value["samples"].__delitem__(slice(0, 940)),
+        ),
+        "wfo-membership": ("wfo", lambda value: value["recorded_wfo_folds"].pop()),
+        "cpcv-path-count": ("cpcv", lambda value: value["recorded_cpcv_paths"].pop()),
+        "pbo-path-membership": (
+            "pbo",
+            lambda value: value["recorded_cpcv_paths"][0]["train_keys"].append(
+                value["recorded_cpcv_paths"][0]["test_keys"][0]
+            ),
+        ),
+        "fdr-selected-pvalue-090": ("fdr", lambda value: _set_selected_pvalue(value, 0.9)),
+        "holm-selected-pvalue-080": ("holm", lambda value: _set_selected_pvalue(value, 0.8)),
+        "dsr-low-signal-to-noise": ("dsr", _weaken_dsr),
+        "cost-capacity-participation": ("cost_capacity", _exceed_capacity),
+        "stability-missing-timeframe": (
+            "stability",
+            lambda value: value["stability"].pop("timeframe_1h_vs_1d"),
+        ),
+        "uncertainty-nonpositive-stress-ci": ("uncertainty", _lower_all_returns),
+    }
+    outcomes: dict[str, dict[str, Any]] = {}
+    for mutation_id, (target_gate, mutate) in mutations.items():
+        result = _mutated_result(policy, mutate)
+        outcomes[mutation_id] = {
+            "mutation_id": mutation_id,
+            "target_gate": target_gate,
+            "result_status": result.status,
+            "target_gate_value": result.hard_gates.get(target_gate),
+            "hard_gates": result.hard_gates,
+            "failed_gates": sorted(gate for gate, passed in result.hard_gates.items() if passed is False),
+        }
+    return outcomes
 
 
 @pytest.fixture(scope="module")
@@ -434,6 +499,59 @@ def test_missing_lineage_or_oos_binding_is_not_verifiable(policy) -> None:
     assert "BINDINGS_INCOMPLETE" in result.reasons
 
 
+@pytest.mark.parametrize(
+    ("binding", "replacement"),
+    [
+        ("dependency_result_sha256", _hex("unaccepted-t06-result")),
+        ("oos_seal_digest", _hex("arbitrary-oos-seal")),
+        ("lineage_manifest_digest", _hex("arbitrary-lineage")),
+    ],
+)
+def test_arbitrary_t06_custody_binding_is_not_verifiable(policy, binding: str, replacement: str) -> None:
+    evidence = _baseline_evidence()
+    evidence["bindings"][binding] = replacement
+    _reseal(evidence)
+    result = validate_scientific_evidence(policy, evidence)
+    assert result.status == "NOT_VERIFIABLE"
+    assert "T06_CUSTODY_BINDING_MISMATCH" in result.reasons
+
+
+@pytest.mark.parametrize("surface", ["primary", "stability"])
+def test_ethusdt_identity_substitution_is_not_verifiable(policy, surface: str) -> None:
+    evidence = _baseline_evidence()
+    if surface == "primary":
+        evidence["samples"][0]["symbol"] = "ETHUSDT"
+    else:
+        evidence["stability"]["timeframe_1h_vs_1d"][0]["symbol"] = "ETHUSDT"
+    _reseal(evidence)
+    result = validate_scientific_evidence(policy, evidence)
+    assert result.status == "NOT_VERIFIABLE"
+    assert "UNIVERSE_IDENTITY_MISMATCH" in result.reasons
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        (lambda sample: sample["cost_components_bps"].__setitem__("maker_fee", 0.0), "COST_COMPONENT_UNKNOWN"),
+        (
+            lambda sample: sample["cost_source_digests"].__setitem__("maker_fee", "A" * 64),
+            "COST_SOURCE_BINDING_INVALID",
+        ),
+        (
+            lambda sample: sample["cost_components_bps"].__setitem__("funding", 0.125),
+            "COST_POLICY_BINDING_MISMATCH",
+        ),
+    ],
+)
+def test_stability_cost_and_source_mutations_are_not_verifiable(policy, mutation, expected_reason: str) -> None:
+    evidence = _baseline_evidence()
+    mutation(evidence["stability"]["timeframe_1h_vs_1d"][0])
+    _reseal(evidence)
+    result = validate_scientific_evidence(policy, evidence)
+    assert result.status == "NOT_VERIFIABLE"
+    assert expected_reason in result.reasons
+
+
 def test_uncertainty_gate_rejects_non_positive_stressed_lower_bound(policy) -> None:
     evidence = _baseline_evidence()
     for sample in evidence["samples"]:
@@ -445,27 +563,13 @@ def test_uncertainty_gate_rejects_non_positive_stressed_lower_bound(policy) -> N
 
 
 def test_every_hard_gate_mutation_changes_the_final_decision(policy) -> None:
-    baseline = _baseline_evidence()
-    mutations: dict[str, Any] = {
-        "sample_sufficiency": lambda value: value["samples"].__delitem__(slice(0, 850)),
-        "wfo": lambda value: value["recorded_wfo_folds"].pop(),
-        "cpcv": lambda value: value["recorded_cpcv_paths"].pop(),
-        "pbo": lambda value: value["recorded_cpcv_paths"].pop(),
-        "fdr": lambda value: _set_selected_pvalue(value, 0.9),
-        "holm": lambda value: _set_selected_pvalue(value, 0.9),
-        "dsr": lambda value: [sample.__setitem__("label_return", 0.0009) for sample in value["samples"]],
-        "cost_capacity": _exceed_capacity,
-        "stability": lambda value: value["stability"].pop("timeframe_1h_vs_1d"),
-        "uncertainty": lambda value: [sample.__setitem__("label_return", 0.0009) for sample in value["samples"]],
-    }
-    outcomes: dict[str, str] = {}
-    for gate, mutate in mutations.items():
-        evidence = copy.deepcopy(baseline)
-        mutate(evidence)
-        _reseal(evidence)
-        outcomes[gate] = validate_scientific_evidence(policy, evidence).status
-    assert outcomes
-    assert all(status != "PASS" for status in outcomes.values()), outcomes
+    outcomes = _gate_specific_outcomes(policy)
+    assert len(outcomes) == len({record["mutation_id"] for record in outcomes.values()})
+    assert len(outcomes) == len({record["target_gate"] for record in outcomes.values()})
+    for record in outcomes.values():
+        assert record["result_status"] != "PASS", record
+        assert record["target_gate_value"] is False, record
+        assert record["hard_gates"][record["target_gate"]] is False, record
 
 
 def test_rollback_preserves_bindings_and_never_restores_promotion(policy) -> None:
@@ -517,18 +621,7 @@ def test_acceptance_artifacts_are_deterministic_and_complete(policy, tmp_path: P
             lambda value: [sample.__setitem__("label_return", 0.0009) for sample in value["samples"]],
         ),
     ]
-    mutation_outcomes = {
-        "sample_sufficiency": negative_results[7].status,
-        "wfo": negative_results[2].status,
-        "cpcv": negative_results[8].status,
-        "pbo": negative_results[8].status,
-        "fdr": _mutated_result(policy, lambda value: _set_selected_pvalue(value, 0.9)).status,
-        "holm": _mutated_result(policy, lambda value: _set_selected_pvalue(value, 0.9)).status,
-        "dsr": negative_results[12].status,
-        "cost_capacity": _mutated_result(policy, _exceed_capacity).status,
-        "stability": negative_results[9].status,
-        "uncertainty": negative_results[12].status,
-    }
+    mutation_outcomes = _gate_specific_outcomes(policy)
     write_acceptance_artifacts(
         evidence_dir,
         policy=policy,
@@ -543,6 +636,9 @@ def test_acceptance_artifacts_are_deterministic_and_complete(policy, tmp_path: P
         "gate-mutation-score.json",
     }
     assert expected <= {path.name for path in evidence_dir.iterdir()}
+    policy_artifact = evidence_dir / "metric-owner-policy.json"
+    assert hashlib.sha256(policy_artifact.read_bytes()).hexdigest() == POLICY_SHA256
+    assert load_metric_owner_policy(policy_artifact).digest == POLICY_DIGEST
     score = json.loads((evidence_dir / "gate-mutation-score.json").read_text(encoding="utf-8"))
     assert score["score"] == 1.0
     assert score["status"] == "PASS"

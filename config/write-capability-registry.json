@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "648eccc55c780fdae30bf9cdd910b73a582f951d5e0d4fa8ab3c94efaa48893a",
+ "governance_digest": "fc83122ba5fc829e9ee5e3ac33d2f7f0f850a038a8cb1426b6e3dff4bd2349f3",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1041,8 +1041,8 @@
   "beidou_research/statistics/__init__.py": "066272f078396bd54c196ccee15fa709a7a587fddb285a13890a0844a86a7e3a",
   "beidou_research/statistics/validation.py": "440568c45f32fbbe4d71450b4b37debf3bd52b5e7c1827e6ea47db0638c03451",
   "beidou_research/validation/__init__.py": "baadae0120ec0d01d2d2f75434b038979046365a1a4f112b0dd9cefd203d52d7",
-  "beidou_research/validation/contracts.py": "d0601cc6152e97bd774685652caa8d3930ea74ad42e49604c3b3dd4ed35dd58b",
-  "beidou_research/validation/independent_oracle.py": "63468815cf94a9766cfac5b33598f1f5dac74efca7367a37e97130b8f076bbf1",
+  "beidou_research/validation/contracts.py": "7a9d844df6e1f192a0697f8a7ea92621fc71e1b4c6b14fc54070dfed9adc0205",
+  "beidou_research/validation/independent_oracle.py": "a472b7a57055acf062c9ba2ba1b9b04ff9d80e2b9cebf4f9736d0fff754d4388",
   "beidou_safety/__init__.py": "e42d848809f4689350b0591ddc2901ad7c40344e61905c768f1735930185d990",
   "beidou_safety/execution/__init__.py": "7c4d0987cdadedde47a1bdd8c61c901192304900982b8b0532f881b3f4168bd8",
   "beidou_safety/execution/algorithms.py": "46a712332e787424a2713aa79e88e52a1d419724f4eb7a5b86671d1640967d76",

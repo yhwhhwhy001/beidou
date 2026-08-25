@@ -19,6 +19,16 @@ APPROVED_POLICY_ID = "BD-AF-P3-T07-METRIC-OWNER-POLICY"
 APPROVED_POLICY_VERSION = "1.0.0"
 APPROVED_POLICY_SHA256 = "2b7f5bf287432b6051e9252f525023b0c23dfa17c2c26aa4e95ab18002e61f70"
 APPROVED_POLICY_DIGEST = "96dbcd31d32ffb53c532a24634c2c85082e4f7d045fd1da24d8521d9495d08b9"
+ACCEPTED_T06_RESULT_SHA256 = "cbd8de393f60794a0da2db32528a8b661a81732a068ebf03852e86bf7ab3679a"
+ACCEPTED_T06_BINDINGS = {
+    "dataset_manifest_digest": "7ea259e09cad1245d44f8491dcb087216a9183ce1544c13506a5237f2d312470",
+    "pit_manifest_digest": "43a6490ee5311fa1af510a16e66382320e2d2d5c1acff72b36a8900a0ee46572",
+    "lineage_manifest_digest": "43a6490ee5311fa1af510a16e66382320e2d2d5c1acff72b36a8900a0ee46572",
+    "oos_seal_digest": "80a380ca3e29b15c8ef89676939320c2505057b07d17d285e282c1d52cf96697",
+    "oos_audit_head": "9d900f2261046950c43d3f72c95168bfc1dce11ff78cb8c2b2ce43e5d37a30ba",
+    "experiment_identity_digest": "d983d00200875efa644124a042803b62d36eb7457f5473313b6346544c6b750c",
+    "checkpoint_digest": "dafcf08a58dd7eb9465694894888ed9a709a77797aaa859590ec1e52157ff2b5",
+}
 SCHEMA_VERSION = "1.0.0"
 _HEX64 = frozenset("0123456789abcdef")
 
@@ -87,6 +97,7 @@ class MetricOwnerPolicy:
     document: dict[str, Any]
     digest: str
     source_sha256: str
+    source_bytes: bytes
 
 
 @dataclass(frozen=True)
@@ -142,6 +153,7 @@ def load_metric_owner_policy(source: str | Path | Mapping[str, Any]) -> MetricOw
     elif isinstance(source, Mapping):
         document = copy.deepcopy(dict(source))
         source_sha256 = "MAPPING_INPUT"
+        source_bytes = b""
     else:
         raise ContractNotVerifiable("POLICY_SOURCE_INVALID")
 
@@ -160,7 +172,12 @@ def load_metric_owner_policy(source: str | Path | Mapping[str, Any]) -> MetricOw
         or document.get("status") != "FROZEN_OWNER_APPROVED"
     ):
         raise ContractNotVerifiable("POLICY_IDENTITY_MISMATCH")
-    return MetricOwnerPolicy(document=document, digest=actual_digest, source_sha256=source_sha256)
+    return MetricOwnerPolicy(
+        document=document,
+        digest=actual_digest,
+        source_sha256=source_sha256,
+        source_bytes=source_bytes,
+    )
 
 
 def validate_raw_evidence(policy: MetricOwnerPolicy, source: Mapping[str, Any]) -> dict[str, Any]:
@@ -193,6 +210,7 @@ def validate_raw_evidence(policy: MetricOwnerPolicy, source: Mapping[str, Any]) 
     bindings = evidence["bindings"]
     required_bindings = {
         "policy_digest",
+        "dependency_result_sha256",
         "dataset_manifest_digest",
         "pit_manifest_digest",
         "lineage_manifest_digest",
@@ -205,6 +223,10 @@ def validate_raw_evidence(policy: MetricOwnerPolicy, source: Mapping[str, Any]) 
         raise ContractNotVerifiable("BINDINGS_INCOMPLETE")
     if bindings["policy_digest"] != policy.digest or not all(_is_hex64(value) for value in bindings.values()):
         raise ContractNotVerifiable("BINDING_DIGEST_INVALID")
+    if bindings["dependency_result_sha256"] != ACCEPTED_T06_RESULT_SHA256 or any(
+        bindings[key] != value for key, value in ACCEPTED_T06_BINDINGS.items()
+    ):
+        raise ContractNotVerifiable("T06_CUSTODY_BINDING_MISMATCH")
 
     family = evidence["family"]
     required_family = {
@@ -296,6 +318,8 @@ def validate_raw_evidence(policy: MetricOwnerPolicy, source: Mapping[str, Any]) 
 
 
 __all__ = [
+    "ACCEPTED_T06_BINDINGS",
+    "ACCEPTED_T06_RESULT_SHA256",
     "APPROVED_POLICY_DIGEST",
     "APPROVED_POLICY_ID",
     "APPROVED_POLICY_SHA256",

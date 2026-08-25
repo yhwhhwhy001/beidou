@@ -18,6 +18,7 @@ from statistics import NormalDist
 from typing import Any, Iterable, Mapping, Sequence
 
 from .contracts import (
+    APPROVED_POLICY_SHA256,
     ContractNotVerifiable,
     MetricOwnerPolicy,
     ScientificValidationResult,
@@ -50,6 +51,19 @@ _SAMPLE_FIELDS = {
     "price_quote",
     "order_notional_quote",
     "regime",
+}
+_STABILITY_SAMPLE_FIELDS = {
+    "key",
+    "venue",
+    "symbol",
+    "interval",
+    "prediction",
+    "label_return",
+    "cost_components_bps",
+    "cost_source_digests",
+    "market_volume_base",
+    "price_quote",
+    "order_notional_quote",
 }
 
 
@@ -99,13 +113,74 @@ def _utc(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _interval_hours(interval: str) -> float:
+    if not isinstance(interval, str) or len(interval) < 2:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+    try:
+        quantity = float(interval[:-1])
+    except ValueError as exc:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH") from exc
+    unit_hours = {"h": 1.0, "d": 24.0}.get(interval[-1])
+    if unit_hours is None or not math.isfinite(quantity) or quantity <= 0.0:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+    return quantity * unit_hours
+
+
+def _validate_cost_inputs(policy: MetricOwnerPolicy, sample: Mapping[str, Any], *, interval: str) -> None:
+    components = sample.get("cost_components_bps")
+    sources = sample.get("cost_source_digests")
+    if not isinstance(components, dict) or set(components) != set(_COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_COMPONENTS_INCOMPLETE")
+    if not isinstance(sources, dict) or set(sources) != set(_COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_SOURCE_BINDINGS_INCOMPLETE")
+    if any(
+        isinstance(components[name], bool) or not isinstance(components[name], (int, float))
+        for name in _COST_COMPONENTS
+    ):
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN")
+    try:
+        component_values = {name: float(components[name]) for name in _COST_COMPONENTS}
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN") from exc
+    if any(not math.isfinite(value) or value <= 0.0 for value in component_values.values()):
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN")
+    if not all(_looks_hex64(sources[name]) for name in _COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_SOURCE_BINDING_INVALID")
+    capacity_values = (
+        sample.get("market_volume_base"),
+        sample.get("price_quote"),
+        sample.get("order_notional_quote"),
+    )
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in capacity_values):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    try:
+        volume, price, notional = (float(value) for value in capacity_values)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING") from exc
+    if any(not math.isfinite(value) or value <= 0.0 for value in (volume, price, notional)):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    configured = policy.document["cost_capacity"]["configured_values"]
+    expected_costs = {
+        "maker_fee": float(configured["maker_fee_bps"]),
+        "taker_fee": float(configured["taker_fee_bps"]),
+        "half_spread": float(configured["avg_spread_bps"]) / 2.0,
+        "slippage": float(configured["slippage_bps"]),
+        "funding": float(configured["funding_rate_8h_pct"]) * 100.0 * _interval_hours(interval) / 8.0,
+        "market_impact": float(configured["impact_bps_per_10k"]) * notional / 10_000.0,
+    }
+    if any(
+        not math.isclose(component_values[name], expected_costs[name], rel_tol=0.0, abs_tol=1e-12)
+        for name in _COST_COMPONENTS
+    ):
+        raise ContractNotVerifiable("COST_POLICY_BINDING_MISMATCH")
+
+
 def _validate_samples(policy: MetricOwnerPolicy, evidence: Mapping[str, Any]) -> None:
     family = evidence["family"]
     candidate_ids = [candidate["candidate_id"] for candidate in family["candidates"]]
     expected_candidates = set(candidate_ids)
     expected_interval = policy.document["sampling_clock"]["primary_interval"]
     horizon = timedelta(hours=int(policy.document["sampling_clock"]["horizon_bars"]))
-    configured_costs = policy.document["cost_capacity"]["configured_values"]
     prior_order: tuple[str, str, str, datetime, int, int] | None = None
     keys: set[str] = set()
     for sample in evidence["samples"]:
@@ -128,6 +203,8 @@ def _validate_samples(policy: MetricOwnerPolicy, evidence: Mapping[str, Any]) ->
             raise ContractNotVerifiable("SAMPLE_NOT_ELIGIBLE")
         if sample["interval"] != expected_interval:
             raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+        if sample["symbol"] != family["universe"]:
+            raise ContractNotVerifiable("UNIVERSE_IDENTITY_MISMATCH")
         order = (
             str(sample["venue"]),
             str(sample["symbol"]),
@@ -142,37 +219,7 @@ def _validate_samples(policy: MetricOwnerPolicy, evidence: Mapping[str, Any]) ->
         predictions = sample["candidate_predictions"]
         if not isinstance(predictions, dict) or set(predictions) != expected_candidates:
             raise ContractNotVerifiable("FAMILY_PREDICTIONS_INCOMPLETE")
-        components = sample["cost_components_bps"]
-        sources = sample["cost_source_digests"]
-        if not isinstance(components, dict) or set(components) != set(_COST_COMPONENTS):
-            raise ContractNotVerifiable("COST_COMPONENTS_INCOMPLETE")
-        if not isinstance(sources, dict) or set(sources) != set(_COST_COMPONENTS):
-            raise ContractNotVerifiable("COST_SOURCE_BINDINGS_INCOMPLETE")
-        if any(float(components[name]) <= 0.0 for name in _COST_COMPONENTS):
-            raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN")
-        if not all(_looks_hex64(sources[name]) for name in _COST_COMPONENTS):
-            raise ContractNotVerifiable("COST_SOURCE_BINDING_INVALID")
-        try:
-            volume = float(sample["market_volume_base"])
-            price = float(sample["price_quote"])
-            notional = float(sample["order_notional_quote"])
-        except (TypeError, ValueError) as exc:
-            raise ContractNotVerifiable("CAPACITY_INPUT_MISSING") from exc
-        if volume <= 0.0 or price <= 0.0 or notional <= 0.0:
-            raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
-        expected_costs = {
-            "maker_fee": float(configured_costs["maker_fee_bps"]),
-            "taker_fee": float(configured_costs["taker_fee_bps"]),
-            "half_spread": float(configured_costs["avg_spread_bps"]) / 2.0,
-            "slippage": float(configured_costs["slippage_bps"]),
-            "funding": float(configured_costs["funding_rate_8h_pct"]) * 100.0 * horizon.total_seconds() / (8 * 3600),
-            "market_impact": float(configured_costs["impact_bps_per_10k"]) * notional / 10_000.0,
-        }
-        if any(
-            not math.isclose(float(components[name]), expected_costs[name], rel_tol=0.0, abs_tol=1e-12)
-            for name in _COST_COMPONENTS
-        ):
-            raise ContractNotVerifiable("COST_POLICY_BINDING_MISMATCH")
+        _validate_cost_inputs(policy, sample, interval=expected_interval)
 
 
 def _split_indices(n: int, groups: int) -> list[range]:
@@ -561,20 +608,32 @@ def _cost_capacity_uncertainty(
     )
 
 
-def _net_return_from_stability_sample(sample: Mapping[str, Any], multiplier: float = 1.0) -> float:
-    required = {"key", "prediction", "label_return", "cost_components_bps", "cost_source_digests"}
-    if set(sample) != required:
+def _net_return_from_stability_sample(
+    policy: MetricOwnerPolicy,
+    sample: Mapping[str, Any],
+    *,
+    family: Mapping[str, Any],
+    expected_venue: str,
+    multiplier: float = 1.0,
+) -> float:
+    if not isinstance(sample, Mapping):
         raise ContractNotVerifiable("STABILITY_SAMPLE_FIELDS_INVALID")
-    components = sample["cost_components_bps"]
-    sources = sample["cost_source_digests"]
-    if not isinstance(components, dict) or set(components) != set(_COST_COMPONENTS):
-        raise ContractNotVerifiable("COST_COMPONENTS_INCOMPLETE")
-    if not isinstance(sources, dict) or set(sources) != set(_COST_COMPONENTS):
-        raise ContractNotVerifiable("COST_SOURCE_BINDINGS_INCOMPLETE")
+    if {"market_volume_base", "price_quote", "order_notional_quote"} - set(sample):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    if set(sample) != _STABILITY_SAMPLE_FIELDS:
+        raise ContractNotVerifiable("STABILITY_SAMPLE_FIELDS_INVALID")
+    stability_interval = policy.document["sampling_clock"]["stability_interval"]
+    if sample["interval"] != stability_interval:
+        raise ContractNotVerifiable("STABILITY_INTERVAL_MISMATCH")
+    if sample["venue"] != expected_venue:
+        raise ContractNotVerifiable("VENUE_IDENTITY_MISMATCH")
+    if sample["symbol"] != family["universe"]:
+        raise ContractNotVerifiable("UNIVERSE_IDENTITY_MISMATCH")
+    _validate_cost_inputs(policy, sample, interval=stability_interval)
     direction = 1.0 if float(sample["prediction"]) > 0 else -1.0 if float(sample["prediction"]) < 0 else 0.0
     return (
         direction * float(sample["label_return"])
-        - multiplier * sum(float(components[key]) for key in _COST_COMPONENTS) / 10_000.0
+        - multiplier * sum(float(sample["cost_components_bps"][key]) for key in _COST_COMPONENTS) / 10_000.0
     )
 
 
@@ -589,6 +648,11 @@ def _stability_recomputation(
     if set(supplied) != {"timeframe_1h_vs_1d", "parameter_perturbation"}:
         return {}, ["STABILITY_DIMENSION_MISSING"], False
     samples = evidence["samples"]
+    family = evidence["family"]
+    stability_interval = policy.document["sampling_clock"]["stability_interval"]
+    if stability_interval != "1d":
+        raise ContractNotVerifiable("STABILITY_INTERVAL_POLICY_MISMATCH")
+    expected_venue = str(samples[0]["venue"])
     baseline_returns = [_strategy_return(sample, candidate_id) for sample in samples]
     baseline = _mean(baseline_returns)
     epsilon = 1e-12
@@ -612,7 +676,17 @@ def _stability_recomputation(
         reasons.append("STABILITY_TIMEFRAME_SAMPLES_INSUFFICIENT")
         daily_metric = 0.0
     else:
-        daily_metric = _mean([_net_return_from_stability_sample(sample) for sample in daily])
+        daily_metric = _mean(
+            [
+                _net_return_from_stability_sample(
+                    policy,
+                    sample,
+                    family=family,
+                    expected_venue=expected_venue,
+                )
+                for sample in daily
+            ]
+        )
     timeframe_degradation = (baseline - daily_metric) / max(abs(baseline), epsilon)
     dimensions["timeframe_1h_vs_1d"] = timeframe_degradation
 
@@ -756,16 +830,52 @@ def write_acceptance_artifacts(
     policy: MetricOwnerPolicy,
     recomputation: ScientificValidationResult,
     negative_results: Sequence[ScientificValidationResult],
-    mutation_outcomes: Mapping[str, str],
+    mutation_outcomes: Mapping[str, Mapping[str, Any]],
 ) -> None:
     """Write the four deterministic artifacts required by T07 acceptance."""
 
+    if policy.source_sha256 != APPROVED_POLICY_SHA256:
+        raise ContractNotVerifiable("POLICY_SOURCE_SHA256_MISMATCH")
+    if hashlib.sha256(policy.source_bytes).hexdigest() != APPROVED_POLICY_SHA256:
+        raise ContractNotVerifiable("POLICY_SOURCE_BYTES_MISMATCH")
+
     destination = Path(evidence_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    killed = sum(status != "PASS" for status in mutation_outcomes.values())
-    total = len(mutation_outcomes)
+    target_gates = set(recomputation.hard_gates)
+    seen_mutation_ids: set[str] = set()
+    seen_target_gates: set[str] = set()
+    scored_outcomes: dict[str, dict[str, Any]] = {}
+    killed = 0
+    for outcome_key, supplied in mutation_outcomes.items():
+        record = dict(supplied) if isinstance(supplied, Mapping) else {}
+        mutation_id = record.get("mutation_id")
+        target_gate = record.get("target_gate")
+        mutation_unique = isinstance(mutation_id, str) and bool(mutation_id) and mutation_id not in seen_mutation_ids
+        target_unique = (
+            isinstance(target_gate, str) and target_gate in target_gates and target_gate not in seen_target_gates
+        )
+        if isinstance(mutation_id, str):
+            seen_mutation_ids.add(mutation_id)
+        if isinstance(target_gate, str):
+            seen_target_gates.add(target_gate)
+        hard_gates = record.get("hard_gates")
+        result_status = record.get("result_status")
+        mutation_killed = (
+            mutation_unique
+            and target_unique
+            and isinstance(result_status, str)
+            and result_status != "PASS"
+            and record.get("target_gate_value") is False
+            and isinstance(hard_gates, Mapping)
+            and hard_gates.get(target_gate) is False
+        )
+        killed += int(mutation_killed)
+        record["scored_as_killed"] = mutation_killed
+        scored_outcomes[str(outcome_key)] = record
+    total = len(target_gates)
     score = killed / total if total else 0.0
-    _write_json(destination / "metric-owner-policy.json", policy.document)
+    exact_gate_coverage = seen_target_gates == target_gates and len(mutation_outcomes) == total
+    (destination / "metric-owner-policy.json").write_bytes(policy.source_bytes)
     _write_json(destination / "independent-recomputation.json", recomputation.as_dict())
     _write_json(
         destination / "semantic-negative-fixtures.json",
@@ -777,11 +887,12 @@ def write_acceptance_artifacts(
     _write_json(
         destination / "gate-mutation-score.json",
         {
-            "status": "PASS" if total > 0 and killed == total else "FAIL",
+            "status": "PASS" if total > 0 and exact_gate_coverage and killed == total else "FAIL",
             "killed": killed,
             "total": total,
             "score": score,
-            "outcomes": dict(mutation_outcomes),
+            "target_gates": sorted(target_gates),
+            "outcomes": scored_outcomes,
         },
     )
 
