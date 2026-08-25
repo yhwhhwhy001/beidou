@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -261,6 +262,33 @@ def test_policy_and_denominator_drift_rejected(tmp_path: Path) -> None:
         store.load(expected_policy_digest="different", expected_denominator=100)
     with pytest.raises(CheckpointCompatibilityError):
         store.load(expected_policy_digest=identity().policy_digest, expected_denominator=101)
+
+
+def test_cross_identity_ledger_is_rejected_even_with_same_run_id(tmp_path: Path) -> None:
+    base = identity()
+    other = replace(base, policy_digest="9" * 64)
+    base_ledger = ExperimentRunLedger(tmp_path / "base.sqlite3", base, "writer-a", "fence-1")
+    other_ledger = ExperimentRunLedger(tmp_path / "other.sqlite3", other, "writer-a", "fence-1")
+    base_ledger.append("CREATED", {}, timestamp="2026-01-01T00:00:00Z", idempotency_key="event-1")
+    other_ledger.append("CREATED", {}, timestamp="2026-01-01T00:00:00Z", idempotency_key="event-1")
+    base_ledger.append("RUNNING", {}, timestamp="2026-01-01T00:00:01Z", idempotency_key="event-2")
+    other_ledger.append("RUNNING", {}, timestamp="2026-01-01T00:00:01Z", idempotency_key="event-2")
+    store = CheckpointStore(tmp_path / "checkpoints", base, "writer-a", "fence-1")
+    with pytest.raises(CheckpointCompatibilityError):
+        store.save(checkpoint(base_ledger), ledger=other_ledger)
+    store.save(checkpoint(base_ledger), ledger=base_ledger)
+    with pytest.raises(CheckpointCompatibilityError):
+        store.load(expected_identity=other, ledger=other_ledger)
+
+
+def test_stale_writer_is_rejected_on_load(tmp_path: Path) -> None:
+    l = ledger(tmp_path)
+    root = tmp_path / "checkpoints"
+    first = CheckpointStore(root, identity(), "writer-a", "fence-1")
+    first.save(checkpoint(l), ledger=l)
+    CheckpointStore(root, identity(), "writer-b", "fence-2")
+    with pytest.raises(CheckpointStaleWriterError):
+        first.load()
 
 
 def test_stale_writer_is_rejected(tmp_path: Path) -> None:

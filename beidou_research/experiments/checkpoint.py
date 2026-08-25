@@ -245,6 +245,27 @@ class Checkpoint:
     def digest(self) -> str:
         return self.checkpoint_digest
 
+    @property
+    def identity_digest(self) -> str:
+        """Digest of the ExperimentRun identity carried by this checkpoint."""
+
+        fields = (
+            "run_id",
+            "code_commit",
+            "code_tree_digest",
+            "policy_digest",
+            "dataset_manifest_digest",
+            "pit_manifest_digest",
+            "universe",
+            "timeframe",
+            "feature_digest",
+            "label_digest",
+            "cost_model",
+            "seed",
+            "schema_version",
+        )
+        return _hash({key: self.__dict__[key] for key in fields})
+
     def canonical_bytes(self) -> bytes:
         return (canonical_json(self.as_dict()) + "\n").encode("utf-8")
 
@@ -319,6 +340,8 @@ class CheckpointStore:
 
     def save(self, checkpoint: Checkpoint, *, ledger: ExperimentRunLedger | None = None) -> Checkpoint:
         self._check_fence()
+        if checkpoint.identity_digest != self.identity.digest:
+            raise CheckpointCompatibilityError("CHECKPOINT_IDENTITY_MISMATCH")
         if (
             checkpoint.run_id != self.identity.run_id
             or checkpoint.writer_id != self.writer_id
@@ -326,6 +349,8 @@ class CheckpointStore:
         ):
             raise CheckpointStaleWriterError("CHECKPOINT_WRITER_OR_RUN_MISMATCH")
         if ledger is not None:
+            if ledger.identity.digest != self.identity.digest:
+                raise CheckpointCompatibilityError("LEDGER_IDENTITY_MISMATCH")
             events = ledger.events()
             if (
                 not events
@@ -371,6 +396,7 @@ class CheckpointStore:
         expected_denominator: int | None = None,
         ledger: ExperimentRunLedger | None = None,
     ) -> Checkpoint:
+        self._check_fence()
         pointer = self._pointer()
         path = self.root / str(pointer["filename"])
         if not path.is_file():
@@ -388,7 +414,7 @@ class CheckpointStore:
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise CheckpointNotVerifiable("INVALID_CHECKPOINT_PAYLOAD") from exc
         expected = expected_identity or self.identity
-        if (
+        if checkpoint.identity_digest != expected.digest or (
             checkpoint.run_id != expected.run_id
             or checkpoint.code_commit != expected.code_commit
             or checkpoint.code_tree_digest != expected.code_tree_digest
@@ -408,6 +434,8 @@ class CheckpointStore:
         if expected_denominator is not None and checkpoint.multiple_testing_denominator != expected_denominator:
             raise CheckpointCompatibilityError("DENOMINATOR_DRIFT")
         if ledger is not None:
+            if ledger.identity.digest != expected.digest:
+                raise CheckpointCompatibilityError("LEDGER_IDENTITY_MISMATCH")
             events = ledger.events()
             if (
                 not events
