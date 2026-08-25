@@ -89,6 +89,20 @@ def test_execution_start_requires_explicit_authorization(monkeypatch: pytest.Mon
     assert "authorization" in (result.stdout + result.stderr).lower()
 
 
+def test_authorized_execution_forwards_explicit_legacy_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    from beidou_launcher import alpha_first_adapter
+
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def fake_legacy_main(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setenv("BEIDOU_EXECUTION_AUTHORIZATION", "EXPLICIT_LOCAL_APPROVAL")
+    monkeypatch.setattr("beidou_launcher.cli.main", fake_legacy_main)
+    assert alpha_first_adapter.start_authorized_execution(mode="paper", symbols=("BTCUSDT",)) == 0
+    assert calls == [((["start", "--mode", "paper", "--symbols", "BTCUSDT"],), {"standalone_mode": False})]
+
+
 def test_alpha_evaluate_is_explicit_offline_workflow() -> None:
     result = _run("alpha", "evaluate", "--closes", ",".join(str(100 + i * 0.25) for i in range(60)))
     assert result.returncode == 0, result.stderr

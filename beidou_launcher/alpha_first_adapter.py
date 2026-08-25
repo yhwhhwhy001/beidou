@@ -29,6 +29,8 @@ def start_authorized_execution(*, mode: str, symbols: Sequence[str]) -> int:
 
     # Keep runtime activation explicit and delegated to the characterized
     # canonical entrypoint; no implicit fallback is provided by this facade.
-    del mode, symbols
-    legacy_main()
+    legacy_main(
+        ["start", "--mode", mode, "--symbols", ",".join(symbols)],
+        standalone_mode=False,
+    )
     return 0

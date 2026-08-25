@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from beidou_launcher.write_registry import (
     discover_declared_entrypoints,
@@ -27,6 +29,117 @@ def _write_evidence_artifact(name: str, payload: object) -> None:
     if not evidence_dir:
         return
     (Path(evidence_dir) / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _build_local_wheel(destination: Path) -> Path:
+    """Build a dependency-free local wheel fixture without network or build backends."""
+    wheel = destination / "beidou-2.0.0-py3-none-any.whl"
+    package_files = [
+        path
+        for package in ("beidou_cli", "apps/alpha_app", "beidou_shared", "beidou_strategy")
+        for path in sorted((ROOT / package).rglob("*.py"))
+    ]
+    dist_info = "beidou-2.0.0.dist-info"
+    metadata = "Metadata-Version: 2.1\nName: beidou\nVersion: 2.0.0\n"
+    wheel_metadata = "Wheel-Version: 1.0\nGenerator: beidou-offline-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    entry_points = "[console_scripts]\nbeidou = beidou_cli:main\n"
+    archive_paths = [path.relative_to(ROOT).as_posix() for path in package_files]
+    archive_paths.extend(
+        [
+            f"{dist_info}/METADATA",
+            f"{dist_info}/WHEEL",
+            f"{dist_info}/entry_points.txt",
+            f"{dist_info}/RECORD",
+        ]
+    )
+    record = "\n".join(f"{path},," for path in archive_paths) + "\n"
+    with ZipFile(wheel, "w", compression=ZIP_DEFLATED) as archive:
+        for path in package_files:
+            archive.write(path, path.relative_to(ROOT).as_posix())
+        archive.writestr(f"{dist_info}/METADATA", metadata)
+        archive.writestr(f"{dist_info}/WHEEL", wheel_metadata)
+        archive.writestr(f"{dist_info}/entry_points.txt", entry_points)
+        archive.writestr(f"{dist_info}/RECORD", record)
+    return wheel
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def test_hash_bound_wheel_bootstrap_isolated(tmp_path: Path) -> None:
+    """Install a local wheel in a clean venv and prove imports do not use checkout paths."""
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir()
+    wheel = _build_local_wheel(wheel_dir)
+    venv_dir = tmp_path / "venv"
+    environment = {**os.environ, "PIP_NO_INDEX": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    environment.pop("PYTHONPATH", None)
+    created = subprocess.run(  # noqa: S603 - fixed local interpreter and test-built wheel
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert created.returncode == 0, created.stderr
+    venv_python = venv_dir / "bin" / "python"
+    installed = subprocess.run(  # noqa: S603 - fixed local venv interpreter and local wheel
+        [str(venv_python), "-m", "pip", "install", "--no-deps", str(wheel)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert installed.returncode == 0, installed.stderr
+    probe = subprocess.run(  # noqa: S603 - fixed local venv interpreter and inline probe
+        [
+            str(venv_python),
+            "-c",
+            "import apps.alpha_app, beidou_cli; print(beidou_cli.__file__); print(apps.alpha_app.__file__)",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert str(ROOT) not in probe.stdout
+    closes = ",".join(str(100 + index * 0.25) for index in range(60))
+    evaluated = subprocess.run(  # noqa: S603 - fixed local venv interpreter and local module
+        [str(venv_python), "-m", "beidou_cli", "alpha", "evaluate", "--closes", closes],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert evaluated.returncode == 0, evaluated.stderr
+    payload = json.loads(evaluated.stdout)
+    assert payload["row_count"] == 60
+    assert payload["dataset_source"] == "LOCAL"
+    _write_evidence_artifact(
+        "isolated-install-provenance.json",
+        {
+            "wheel_name": wheel.name,
+            "wheel_sha256": _sha256(wheel),
+            "installed_module_paths": probe.stdout.splitlines(),
+            "source_checkout": False,
+            "network_policy": "DENIED",
+            "status": "PASS",
+        },
+    )
 
 
 def test_write_capability_registry_is_complete_and_valid() -> None:

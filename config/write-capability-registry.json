@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "ac37adaf63828aa257e785c638cc3a9b90b78d9549b616f236bc289abaf021f4",
+ "governance_digest": "d003aea6552fe4f03e06bd963c7274d376d7ec7cba61f417b8ef0aebd96fce3a",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -921,7 +921,7 @@
   "beidou_infra/store_adapter.py": "491a6d405eb0ef0943768fdd0518957a29481919de6b74a667b353b574506d12",
   "beidou_launcher/__init__.py": "ad853d030dec87fce400af17354e5d88b8660c83a11d7f8c842190d07c10ac98",
   "beidou_launcher/__main__.py": "3129adff95e0f38b87ab34cddfc27082c7892bcaec267ff5d40f160fdf55b44a",
-  "beidou_launcher/alpha_first_adapter.py": "a4ac2b61dbf90ce8cc6cbac458d9e979d909f85b047aa834dc47e4964504cf17",
+  "beidou_launcher/alpha_first_adapter.py": "f46b8d9eb506a2781394579f0f4e001f0c4914bb2d7a695c719bf88106c1920c",
   "beidou_launcher/checks.py": "feb00f8545aa0bcc0f8cbe8871a60d76d7297ceafb3e72d5748e4f944d77f821",
   "beidou_launcher/cli.py": "bea6aae4019a4217ebeaf3f3e13f694b419cfa5b4b155b0a6f19e5b88149b959",
   "beidou_launcher/g7_tracker.py": "9af18dff9be5f9b92ff6070a68221d1fc093c975f9a3fe2f0c8581a717c6d732",
