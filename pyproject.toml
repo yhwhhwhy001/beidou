@@ -64,6 +64,7 @@ dev = [
     "hypothesis>=6.92",
     "ruff>=0.3",
     "mypy>=1.8",
+    "pandas-stubs>=2.1",
     "black>=24.0",
     "pre-commit>=3.6",
     "coverage>=7.4",
@@ -258,6 +259,17 @@ line_length = 120
 [[tool.mypy.overrides]]
 module = ["beidou_observability.monitoring.*"]
 ignore_errors = true
+
+# FastAPI/Redis are optional runtime integrations.  Keep their imports
+# fail-closed at runtime while allowing CI type checks to run without pulling
+# either service client into the minimal developer environment.
+[[tool.mypy.overrides]]
+module = ["fastapi", "fastapi.*", "redis"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["beidou_control.api"]
+disallow_untyped_decorators = false
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]

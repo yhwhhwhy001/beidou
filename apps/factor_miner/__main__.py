@@ -22,9 +22,10 @@ import click
 
 from apps.factor_miner.worker import run_symbol_worker as _run_symbol_worker
 from beidou_research.mining.persistence import JSONFileFactorStore
+from beidou_research.mining.runner import MiningResult
 
 
-def _echo_budget_hint(result) -> None:
+def _echo_budget_hint(result: MiningResult) -> None:
     """时间预算耗尽提示:优雅停止是预期路径,已落盘证据保留。"""
     if getattr(result, "stopped_by_time_budget", False):
         click.echo("  WARNING: 时间预算耗尽 — 已优雅停止,已保存的证据保留", err=True)
@@ -51,7 +52,7 @@ def _run_symbols(payloads: list[dict], jobs: int) -> list[dict]:
         return results
 
 
-def _echo_symbol_result(symbol: str, result, manifest_hash: str) -> None:
+def _echo_symbol_result(symbol: str, result: MiningResult, manifest_hash: str) -> None:
     """打印单品种结果;无数据集清单与预算耗尽需显式警告。"""
     if not manifest_hash:
         click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）", err=True)

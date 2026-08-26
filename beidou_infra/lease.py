@@ -117,7 +117,7 @@ class LeaseManager:
         否则回退到 BEIDOU_REDIS_HOST / BEIDOU_REDIS_PORT。
         """
         try:
-            import redis  # type: ignore[import-not-found]  # 可选依赖
+            import redis  # 可选依赖；缺失时由外层异常路径保守拒绝
 
             redis_url = os.environ.get("REDIS_URL", "")
             if redis_url:

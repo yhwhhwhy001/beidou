@@ -121,7 +121,9 @@ class StableClientOrderIdScenario(ScenarioBase):
             finally:
                 # 清理本场景挂单(finally 保护:open_orders 查询或第二次下单
                 # 抛异常时也不残留),避免残留订单影响后续场景/对账
-                cancel_ids = [first_id] + ([second_new_id] if second_new_id not in (None, first_id) else [])
+                cancel_ids: list[int] = [first_id]
+                if second_new_id is not None and second_new_id != first_id:
+                    cancel_ids.append(second_new_id)
                 for oid in dict.fromkeys(cancel_ids):
                     try:
                         logger.info("cancel_order %s %s %s (cleanup)", oid, qty, ctx.symbol)

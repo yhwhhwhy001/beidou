@@ -35,8 +35,7 @@ def _bare_engine(gap_detail: list[dict[str, str]]) -> AutonomousEngine:
             return []
 
         def get_delivery_health(self):
-            return {"critical_pending": 0, "dead_letter": 0, "unknown": 0,
-                    "pending": 0, "configured": False}
+            return {"critical_pending": 0, "dead_letter": 0, "unknown": 0, "pending": 0, "configured": False}
 
     engine._alerts = _Alerts()
     return engine

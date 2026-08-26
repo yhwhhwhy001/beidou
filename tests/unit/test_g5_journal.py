@@ -186,6 +186,7 @@ def _run_with_conn(conn: _FlowConn, ctx: ScenarioContext, monkeypatch: Any) -> A
 
 # ---- 纯函数:搁浅 journal → 原始基线 payload 往返 ----
 
+
 def test_stranded_journal_recovery_payload_roundtrip() -> None:
     original = {"balance_amount": "10730.29894895", "positions": {"BTCUSDT": "0.0008"}}
     journal = {"original_payload": original, "corrupted_at": "2026-08-24T03:00:00+00:00", "scenario_run_id": "r1"}
@@ -204,6 +205,7 @@ def test_recover_from_journal_missing_original_payload_raises() -> None:
 
 
 # ---- 纯函数:preflight _g5_journal_check ----
+
 
 def test_preflight_reports_journal_presence(tmp_path: Any) -> None:
     res = _g5_journal_check(journal_rows=[{"payload": {"corrupted_at": "x", "scenario_run_id": "r"}}])
@@ -224,6 +226,7 @@ def test_preflight_check_records_probe_error_as_pass_evidence() -> None:
 
 
 # ---- 场景全流程:污染前写 journal,还原成功后必删 ----
+
 
 def test_full_flow_writes_journal_before_corruption_and_deletes_after_restore() -> None:
     conn = _FlowConn(baseline=_ORIGINAL_PAYLOAD)
@@ -248,6 +251,7 @@ def test_full_flow_writes_journal_before_corruption_and_deletes_after_restore() 
 
 # ---- NOT_VERIFIABLE:finally 兜底还原基线后也删 journal(不残留假阻断) ----
 
+
 def test_not_verifiable_finally_restores_baseline_and_deletes_journal(tmp_path: Any, monkeypatch: Any) -> None:
     conn = _FlowConn(baseline=_ORIGINAL_PAYLOAD)
     conn._mismatch_sent = True  # 事件序列只有 MATCHED → MISMATCHED 轮询超时
@@ -262,9 +266,8 @@ def test_not_verifiable_finally_restores_baseline_and_deletes_journal(tmp_path: 
 
 # ---- 搁浅 journal 启动自愈:先还原,并以真基线作为本次 original_payload ----
 
-def test_stranded_journal_recovered_on_run_and_flow_uses_true_original(
-    tmp_path: Any, monkeypatch: Any
-) -> None:
+
+def test_stranded_journal_recovered_on_run_and_flow_uses_true_original(tmp_path: Any, monkeypatch: Any) -> None:
     corrupted = dict(_ORIGINAL_PAYLOAD)
     corrupted["balance_amount"] = "1"  # 上次运行污染窗口内被硬杀留下的哨兵值
     conn = _FlowConn(

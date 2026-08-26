@@ -519,9 +519,7 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
     assert "force_stop_existing" not in source
 
 
-def test_legacy_g5_fast_start_cannot_downgrade_preflight(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_legacy_g5_fast_start_cannot_downgrade_preflight(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A legacy fast-start environment variable must not bypass G5."""
     from beidou_launcher import supervisor as supervisor_module
     from beidou_launcher.supervisor import BeidouSupervisor

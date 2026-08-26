@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 from beidou_core.engine import AutonomousEngine
 
@@ -32,26 +33,38 @@ class _BareExposureStore:
 
 def test_stuck_marker_written_when_exposure_exceeds_threshold(tmp_path):
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._store = _ExposureStore([{
-        "symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "X",
-    }])
+    engine._store = _ExposureStore(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "unprotectable_since": 1000.0,
+                "last_reason": "X",
+            }
+        ]
+    )
     state_dir = str(tmp_path)
     ok = engine._update_stuck_marker(now=1000.0 + 1800.0, state_dir=state_dir)
     assert ok is True
     p = os.path.join(state_dir, "stuck")
     assert os.path.exists(p)
-    data = json.loads(open(p).read())
+    data = json.loads(Path(p).read_text(encoding="utf-8"))
     assert data["items"][0]["symbol"] == "BTCUSDT"
 
 
 def test_stuck_marker_removed_when_exposure_clears(tmp_path):
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._store = _ExposureStore([{
-        "symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "X",
-    }])
+    engine._store = _ExposureStore(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "unprotectable_since": 1000.0,
+                "last_reason": "X",
+            }
+        ]
+    )
     state_dir = str(tmp_path)
     p = os.path.join(state_dir, "stuck")
-    open(p, "w").write("{}")
+    Path(p).write_text("{}", encoding="utf-8")
     engine._store._rows = []
     engine._update_stuck_marker(now=1000.0, state_dir=state_dir)
     assert not os.path.exists(p)
@@ -61,18 +74,24 @@ def test_stuck_marker_writes_tombstone_on_clear(tmp_path):
     """R11: 引擎主动清除 (stuck 为空且此前存在 stuck 文件) → 写 stuck.cleared
     墓碑 {"cleared_at": ts} 并删除 stuck; watchdog 据此区分正常清除与冻结。"""
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._store = _ExposureStore([{
-        "symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "X",
-    }])
+    engine._store = _ExposureStore(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "unprotectable_since": 1000.0,
+                "last_reason": "X",
+            }
+        ]
+    )
     state_dir = str(tmp_path)
     p = os.path.join(state_dir, "stuck")
-    open(p, "w").write("{}")
+    Path(p).write_text("{}", encoding="utf-8")
     engine._store._rows = []
     engine._update_stuck_marker(now=1500.0, state_dir=state_dir)
     assert not os.path.exists(p)
     cleared = os.path.join(state_dir, "stuck.cleared")
     assert os.path.exists(cleared)
-    data = json.loads(open(cleared).read())
+    data = json.loads(Path(cleared).read_text(encoding="utf-8"))
     assert data["cleared_at"] == 1500.0
 
 
@@ -91,15 +110,17 @@ def test_stuck_marker_dirty_bare_row_skipped_healthy_row_written(tmp_path):
     不得让 float() 抛穿标记写出 (否则 mtime 过期 → watchdog 误判冻结删标记,
     两个 fail-open 边同链); 健康行仍须写出标记。"""
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._store = _BareExposureStore([
-        {"symbol": "DIRTY", "unprotectable_since": "not-a-number", "last_reason": "X"},
-        {"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "X"},
-    ])
+    engine._store = _BareExposureStore(
+        [
+            {"symbol": "DIRTY", "unprotectable_since": "not-a-number", "last_reason": "X"},
+            {"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "X"},
+        ]
+    )
     state_dir = str(tmp_path)
     ok = engine._update_stuck_marker(now=1000.0 + 1800.0, state_dir=state_dir)
     assert ok is True
     p = os.path.join(state_dir, "stuck")
     assert os.path.exists(p)
-    data = json.loads(open(p).read())
+    data = json.loads(Path(p).read_text(encoding="utf-8"))
     assert [i["symbol"] for i in data["items"]] == ["BTCUSDT"]
     assert data["items"][0]["age_s"] == 1800.0

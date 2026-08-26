@@ -169,7 +169,7 @@ class MarketDataFeed:
         if not isinstance(data, dict):
             return None
         raw = data.get("E")
-        if raw in (None, ""):
+        if not isinstance(raw, (int, float, str)) or raw == "":
             return None
         try:
             event_ms = float(raw)

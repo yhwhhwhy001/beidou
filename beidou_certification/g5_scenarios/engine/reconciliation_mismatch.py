@@ -292,11 +292,16 @@ class ReconciliationMismatchScenario(ScenarioBase):
         # 删除(见下文 restore_verify 之后),否则每次启动都会重复还原。
         t_corrupt = self._now()
         scenario_run_id = str(self._now())
-        _upsert_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID, {
-            "original_payload": dict(original_payload),
-            "corrupted_at": _iso_from(t_corrupt),
-            "scenario_run_id": scenario_run_id,
-        })
+        _upsert_record(
+            conn,
+            _JOURNAL_RECORD_TYPE,
+            _JOURNAL_RECORD_ID,
+            {
+                "original_payload": dict(original_payload),
+                "corrupted_at": _iso_from(t_corrupt),
+                "scenario_run_id": scenario_run_id,
+            },
+        )
         steps.append(
             {
                 "action": "journal_written",
@@ -499,9 +504,7 @@ class ReconciliationMismatchScenario(ScenarioBase):
                                 _delete_record(conn, _JOURNAL_RECORD_TYPE, _JOURNAL_RECORD_ID)
                                 steps.append({"action": "journal_deleted_finally", "ok": True})
                         except Exception as exc:
-                            steps.append(
-                                {"action": "journal_deleted_finally", "ok": False, "error": str(exc)[:200]}
-                            )
+                            steps.append({"action": "journal_deleted_finally", "ok": False, "error": str(exc)[:200]})
                 except Exception as exc:
                     steps.append({"action": "restore_baseline_finally", "ok": False, "error": str(exc)[:200]})
                 finally:

@@ -696,14 +696,10 @@ def collect_runtime_checks(
     # 列表并进入防抖;WARN 永远进不了 blockers, 分流机制会静默失效。
     # severity 保持 P1 (报告型证据; 资格门已由 protection 覆盖检查另行阻断)。
     _gap_detail = getattr(engine, "_last_protection_gap_detail", None) or []
-    _repairable = (
-        bool(_gap_detail)
-        and all(
-            str(g.get("reason", ""))
-            in {"STOP_LOSS_QUANTITY_UNCOVERED", "MISSING_SL", "MISSING_TP",
-                "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
-            for g in _gap_detail
-        )
+    _repairable = bool(_gap_detail) and all(
+        str(g.get("reason", ""))
+        in {"STOP_LOSS_QUANTITY_UNCOVERED", "MISSING_SL", "MISSING_TP", "ORPHAN_PROTECTION_WITHOUT_VENUE_POSITION"}
+        for g in _gap_detail
     )
     checks.append(
         CheckResult(
@@ -711,9 +707,7 @@ def collect_runtime_checks(
             name="保护缺口明细",
             status=CheckStatus.FAIL if _gap_detail else CheckStatus.PASS,
             severity=CheckSeverity.P1,
-            message=(
-                f"保护缺口: {_gap_detail}" if _gap_detail else "无保护缺口"
-            ),
+            message=(f"保护缺口: {_gap_detail}" if _gap_detail else "无保护缺口"),
             evidence={"gaps": _gap_detail, "repairable": _repairable},
         )
     )

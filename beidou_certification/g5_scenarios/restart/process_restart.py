@@ -80,7 +80,7 @@ def fetch_status_http() -> dict[str, Any]:
     database_restart/user_stream_reconnect 复用同一默认注入依赖。
     """
     try:
-        with urllib.request.urlopen(  # nosec B310 - fixed loopback status URL
+        with urllib.request.urlopen(  # noqa: S310 - fixed loopback status URL; no user-controlled scheme
             _STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS
         ) as resp:
             raw = resp.read()
@@ -469,9 +469,7 @@ class ProcessRestartScenario(ScenarioBase):
             self._sigkill(old_pid)
             steps.append({"action": "sigkill", "pid": old_pid})
             target = (
-                producer_launchd_target()
-                if os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1"
-                else _KICKSTART_TARGET
+                producer_launchd_target() if os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1" else _KICKSTART_TARGET
             )
             logger.info("process_restart: launchctl kickstart %s", target)
             self._kickstart()

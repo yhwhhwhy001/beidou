@@ -172,16 +172,29 @@ async def test_new_blocker_type_during_degraded_triggers_alert(tmp_path: Path) -
 def test_incidents_summary_prefers_critical_over_first_item() -> None:
     from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
     from beidou_launcher.supervisor import summarize_blockers
+
     blocker = CheckResult(
-        check_id="runtime.health.incidents", name="活动事故",
-        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        check_id="runtime.health.incidents",
+        name="活动事故",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P0,
         message="活动事故",
-        evidence={"incidents": [
-            {"incident_id": "inc-1-realtime", "severity": "WARNING",
-             "title": "Realtime tick error", "status": "DETECTED"},
-            {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
-             "title": "Reconciliation blocked", "status": "DETECTED"},
-        ]},
+        evidence={
+            "incidents": [
+                {
+                    "incident_id": "inc-1-realtime",
+                    "severity": "WARNING",
+                    "title": "Realtime tick error",
+                    "status": "DETECTED",
+                },
+                {
+                    "incident_id": "inc-2-reconciliation",
+                    "severity": "CRITICAL",
+                    "title": "Reconciliation blocked",
+                    "status": "DETECTED",
+                },
+            ]
+        },
     )
     text = summarize_blockers([blocker])
     assert "CRITICAL" in text
@@ -195,16 +208,22 @@ def test_incidents_summary_does_not_rewrite_blocker_message() -> None:
     (supervisor-state.json 与 LOCKED 快照依赖原始完整内容)。"""
     from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
     from beidou_launcher.supervisor import summarize_blockers
+
     incidents = [
-        {"incident_id": "inc-1-realtime", "severity": "WARNING",
-         "title": "Realtime tick error", "status": "DETECTED"},
-        {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
-         "title": "Reconciliation blocked", "status": "DETECTED"},
+        {"incident_id": "inc-1-realtime", "severity": "WARNING", "title": "Realtime tick error", "status": "DETECTED"},
+        {
+            "incident_id": "inc-2-reconciliation",
+            "severity": "CRITICAL",
+            "title": "Reconciliation blocked",
+            "status": "DETECTED",
+        },
     ]
     original_message = f"活动事故: {incidents}"
     blocker = CheckResult(
-        check_id="runtime.health.incidents", name="活动事故",
-        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        check_id="runtime.health.incidents",
+        name="活动事故",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P0,
         message=original_message,
         evidence={"incidents": incidents},
     )
@@ -213,7 +232,9 @@ def test_incidents_summary_does_not_rewrite_blocker_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_locked_snapshot_failure_does_not_interrupt_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_locked_snapshot_failure_does_not_interrupt_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """R7-Important1: 快照写入失败 (目录被文件占位 → OSError) 不得中断
     LOCKED 转移 —— 状态仍置 LOCKED, 终态告警仍发出。"""
     blocked_dir = tmp_path / "not-a-dir"
@@ -230,19 +251,23 @@ async def test_locked_snapshot_failure_does_not_interrupt_transition(tmp_path: P
 async def test_locked_snapshot_keeps_original_blocker_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """R7-Important2: LOCKED 快照保存原始完整 message (事故 repr), 而非截断合成摘要。"""
     monkeypatch.setenv("BEIDOU_LOCKED_SNAPSHOT_DIR", str(tmp_path))
-    supervisor, alerts, _control = _supervisor_with_fake_engine(tmp_path)
+    supervisor, _alerts, _control = _supervisor_with_fake_engine(tmp_path)
     incidents = [
-        {"incident_id": "inc-1-realtime", "severity": "WARNING",
-         "title": "Realtime tick error", "status": "DETECTED"},
-        {"incident_id": "inc-2-reconciliation", "severity": "CRITICAL",
-         "title": "Reconciliation blocked", "status": "DETECTED",
-         "description": "Balance mismatch: system=1 exchange=10736.5 "
-                        "diff=10735.5 tolerance=107.36"},
+        {"incident_id": "inc-1-realtime", "severity": "WARNING", "title": "Realtime tick error", "status": "DETECTED"},
+        {
+            "incident_id": "inc-2-reconciliation",
+            "severity": "CRITICAL",
+            "title": "Reconciliation blocked",
+            "status": "DETECTED",
+            "description": "Balance mismatch: system=1 exchange=10736.5 diff=10735.5 tolerance=107.36",
+        },
     ]
     original_message = f"活动事故: {incidents}"
     blocker = CheckResult(
-        check_id="runtime.health.incidents", name="活动事故",
-        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        check_id="runtime.health.incidents",
+        name="活动事故",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P0,
         message=original_message,
         evidence={"incidents": incidents},
     )

@@ -8,6 +8,7 @@ import os
 import signal
 import time
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -187,10 +188,9 @@ def _write_locked_snapshot(
     """LOCKED 时落未截断的完整阻断快照, 修复根因不可恢复问题。"""
     import json as _json
     import time as _time
+
     ts = now if now is not None else _time.time()
-    base = Path(base_dir) if base_dir is not None else (
-        Path(os.environ.get("BEIDOU_LOCKED_SNAPSHOT_DIR", "evidence"))
-    )
+    base = Path(base_dir) if base_dir is not None else (Path(os.environ.get("BEIDOU_LOCKED_SNAPSHOT_DIR", "evidence")))
     base.mkdir(parents=True, exist_ok=True)
     path = base / f"locked-{ts:.0f}.json"
     payload = {
@@ -459,10 +459,9 @@ class BeidouSupervisor:
         if reconciliation is None or not bool(getattr(reconciliation, "matched", False)):
             return False
         checked_at = getattr(reconciliation, "checked_at", None)
-        try:
-            age = time.time() - float(checked_at.timestamp())
-        except (AttributeError, TypeError, ValueError, OverflowError):
+        if not isinstance(checked_at, datetime):
             return False
+        age = time.time() - checked_at.timestamp()
         if not (0.0 <= age <= 90.0):
             return False
         stream_ready, _evidence = self.engine._user_stream_readiness()

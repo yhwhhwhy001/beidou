@@ -313,8 +313,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             and write_request is not None
             and write_request.kind is TerminalWriteKind.SESSION_CONTROL
         )
-        if write_request is not None and not producer_session_write and (
-            _hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN
+        if (
+            write_request is not None
+            and not producer_session_write
+            and (_hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN)
         ):
             reason = (
                 "UNCLASSIFIED_TERMINAL_WRITE"
