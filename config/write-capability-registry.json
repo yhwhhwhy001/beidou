@@ -791,7 +791,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "b54f4cadc667cd6f5b89bd0a4335f3d3b24d35f8426e7826e52b974630b9148e",
+ "governance_digest": "d8fecc74d7e536b98a2c401e407c2d9822690db6d2dd7bbac2c232aa94f6f850",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "b09d948d013ffb1588333a93518e3dc96bf7ce3a523edd6f3bcae69253501540",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -800,7 +800,7 @@
   "apps/alpha_app/composition.py": "b8eb56a7ce9f6fa08ca60c747f3176af4b327cef8a9a32e09283798d24abb95d",
   "apps/autopilot/__main__.py": "596cf0c6cb347b8a9c639a681b27e1906f2ca2a30e80e8fc49d5a3a34f95b5c6",
   "apps/factor_miner/__init__.py": "58456a7fa19c7f004bb9d04f854b184464c643268c9b019f414e88d0a978e8b7",
-  "apps/factor_miner/__main__.py": "dcfc947262da2f2105ad153253cb8ab1035c344a982808ec977134f8c5eca74c",
+  "apps/factor_miner/__main__.py": "6407fc28900abcf819bdcb125586d6c704a252f41ba88d174cf0509f6b399dfe",
   "apps/factor_miner/worker.py": "66d1862d9fb2b05e85fdcffcf15ab593ac5108cdb34d7d9614d90f02057d1e6c",
   "apps/research_lab/__main__.py": "1401183ca8fbebdabb0034f6d7b31615b512a5eaf16f3839708e64d52dee383b",
   "apps/safety_executor/__main__.py": "23962a78c82e5b5cf1a42f5eb7395750d641616aa6216447eaa9301b1b59b965",
@@ -1034,9 +1034,13 @@
   "beidou_research/mining/schema_pg.sql": "825fb9eb21009803249779dddd24f4fbd7f99881a38d1e21f6ab257b22f6fd30",
   "beidou_research/mining/selection/__init__.py": "5e81de0111ce44f950f584a4cfe7c851f9a21061a2605225ec9578e434eb274b",
   "beidou_research/mining/selection/ensemble.py": "96385c5d084367f186beab27374bfb2cb8fd280146bbc832d3e9a0e7997b7420",
-  "beidou_research/mining/selection/marginal_contribution.py": "d1c2285a070fd20427508fd30d839f8e92c580dd253734bebe9db3f9646d5227",
+  "beidou_research/mining/selection/marginal_contribution.py": "3d6e361b97c091fff73dc69ca18558e3922c51523f9a88f15d435f71033b5177",
   "beidou_research/mining/selection/pareto.py": "c48f20fb751b47b88f2b580a2147bc908ae02e1a65243b2e221718521198f52e",
   "beidou_research/mining/selection/redundancy.py": "bc32c7a1aa70d75b31a64c7a4547d20a69b1d092cd67065a58e55d0cc6143f70",
+  "beidou_research/portfolio/__init__.py": "4c26805d0d6b310d2037b41ad238589f1f1d34a9dcf8a46b11bbc65a08df88c1",
+  "beidou_research/portfolio/contracts.py": "df94184c7a06276c20d025deffc52ab32318d6f016a2ad8132cdf234e2ee6685",
+  "beidou_research/portfolio/decision.py": "edc8b4a232a1cdd0f8c176521267e35e9b2b36b26566a30159c73042abcd3f0a",
+  "beidou_research/portfolio/store.py": "8e64a43f38e78ea665bf221833625e85280ae53f8a62590751a8c4827ad112dc",
   "beidou_research/models/__init__.py": "05ed88fee4c50e90341159325d3ac696cd760adfeeda2e50c1e5d813597b09c6",
   "beidou_research/statistics/__init__.py": "066272f078396bd54c196ccee15fa709a7a587fddb285a13890a0844a86a7e3a",
   "beidou_research/statistics/validation.py": "440568c45f32fbbe4d71450b4b37debf3bd52b5e7c1827e6ea47db0638c03451",
