@@ -18,7 +18,9 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+from beidou_research.experiments import canonical_json
 
 
 class MiningRunStatus(str, Enum):
@@ -271,3 +273,58 @@ class MiningOrchestrator:
 
 def _generate_run_id() -> str:
     return f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:8]}"
+
+
+@dataclass(frozen=True)
+class FrozenCandidateAttempt:
+    """One immutable candidate attempt consumed by the resumable worker.
+
+    T05 resumes the already-bound statistical family; it does not generate a
+    replacement family.  ``evidence`` is the canonical output of the upstream
+    candidate evaluation seam and ``rejection_reasons`` retains rejected draws
+    in the multiple-testing denominator.
+    """
+
+    candidate_id: str
+    evidence: Mapping[str, Any]
+    rejection_reasons: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "FrozenCandidateAttempt":
+        candidate_id = str(value.get("candidate_id", "")).strip()
+        evidence = value.get("evidence")
+        reasons = value.get("rejection_reasons", [])
+        if not candidate_id:
+            raise ValueError("CANDIDATE_ID_REQUIRED")
+        if not isinstance(evidence, Mapping):
+            raise ValueError("CANDIDATE_EVIDENCE_REQUIRED")
+        if not isinstance(reasons, (list, tuple)) or any(not str(reason).strip() for reason in reasons):
+            raise ValueError("INVALID_REJECTION_REASONS")
+        # Canonical JSON rejects non-serializable or ambiguous evidence before
+        # any run state is created.
+        canonical_json(dict(evidence))
+        return cls(candidate_id, dict(evidence), tuple(str(reason) for reason in reasons))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "evidence": dict(self.evidence),
+            "rejection_reasons": list(self.rejection_reasons),
+        }
+
+    @property
+    def candidate_digest(self) -> str:
+        return hashlib.sha256(canonical_json(self.as_dict()).encode()).hexdigest()
+
+    def attempt_record(self, *, family_hash: str, attempt_index: int) -> dict[str, Any]:
+        evidence_hash = hashlib.sha256(canonical_json(dict(self.evidence)).encode()).hexdigest()
+        return {
+            "attempt_index": attempt_index,
+            "candidate_id": self.candidate_id,
+            "candidate_digest": self.candidate_digest,
+            "family_hash": family_hash,
+            "evidence": dict(self.evidence),
+            "evidence_hash": evidence_hash,
+            "rejection_reasons": list(self.rejection_reasons),
+            "accepted": not self.rejection_reasons,
+        }

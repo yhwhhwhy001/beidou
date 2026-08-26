@@ -1,0 +1,1006 @@
+"""Independent T07 scientific-validation reference oracle.
+
+This module deliberately reimplements the frozen Metric Owner formulas.  It
+does not call or import decision functions from ``beidou_research.mining``.
+Stored PASS/FAIL fields are compared only after independent recomputation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import json
+import math
+import random
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from statistics import NormalDist
+from typing import Any, Iterable, Mapping, Sequence, cast
+
+from .contracts import (
+    APPROVED_POLICY_SHA256,
+    ContractNotVerifiable,
+    MetricOwnerPolicy,
+    ScientificValidationResult,
+    validate_raw_evidence,
+)
+
+_COST_COMPONENTS = (
+    "maker_fee",
+    "taker_fee",
+    "half_spread",
+    "slippage",
+    "funding",
+    "market_impact",
+)
+_SAMPLE_FIELDS = {
+    "key",
+    "venue",
+    "symbol",
+    "interval",
+    "observation_time",
+    "label_end_time",
+    "available_as_of",
+    "is_closed",
+    "revision",
+    "label_return",
+    "candidate_predictions",
+    "cost_components_bps",
+    "cost_source_digests",
+    "market_volume_base",
+    "price_quote",
+    "order_notional_quote",
+    "regime",
+}
+_STABILITY_SAMPLE_FIELDS = {
+    "key",
+    "venue",
+    "symbol",
+    "interval",
+    "prediction",
+    "label_return",
+    "cost_components_bps",
+    "cost_source_digests",
+    "market_volume_base",
+    "price_quote",
+    "order_notional_quote",
+}
+_GATE_MUTATION_DEPENDENCIES = {
+    "sample_sufficiency": frozenset({"wfo", "cpcv", "pbo", "stability"}),
+    "wfo": frozenset(),
+    "cpcv": frozenset({"pbo"}),
+    "pbo": frozenset(),
+    "fdr": frozenset({"holm"}),
+    "holm": frozenset(),
+    "dsr": frozenset(),
+    "cost_capacity": frozenset(),
+    "stability": frozenset(),
+    "uncertainty": frozenset(),
+}
+_MUTATION_RECORD_FIELDS = {
+    "mutation_id",
+    "target_gate",
+    "result_status",
+    "target_gate_value",
+    "baseline_raw_evidence_digest",
+    "mutated_raw_evidence_digest",
+    "baseline_hard_gates",
+    "mutated_hard_gates",
+    "allowed_dependent_gates",
+    "failed_gates",
+}
+
+
+def _unique(reasons: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(reasons))
+
+
+def _looks_hex64(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _safe_result(
+    *,
+    status: str,
+    reasons: Iterable[str],
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any] | None,
+    hard_gates: dict[str, bool] | None = None,
+    recomputed: dict[str, Any] | None = None,
+    agreement: str = "NOT_COMPARABLE",
+) -> ScientificValidationResult:
+    family = evidence.get("family", {}) if isinstance(evidence, Mapping) else {}
+    raw_digest = evidence.get("raw_evidence_digest", "") if isinstance(evidence, Mapping) else ""
+    family_digest = family.get("family_registry_digest", "") if isinstance(family, Mapping) else ""
+    return ScientificValidationResult(
+        status=status,
+        reasons=_unique(reasons),
+        hard_gates=hard_gates or {},
+        recomputed=recomputed or {},
+        policy_digest=policy.digest,
+        family_digest=family_digest if _looks_hex64(family_digest) else "",
+        raw_evidence_digest=raw_digest if _looks_hex64(raw_digest) else "",
+        implementation_agreement=agreement,
+        promotable=False,
+    )
+
+
+def _utc(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ContractNotVerifiable("CLOCK_FIELD_INVALID")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ContractNotVerifiable("CLOCK_FIELD_INVALID") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ContractNotVerifiable("CLOCK_NOT_UTC")
+    return parsed.astimezone(timezone.utc)
+
+
+def _interval_hours(interval: str) -> float:
+    if not isinstance(interval, str) or len(interval) < 2:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+    try:
+        quantity = float(interval[:-1])
+    except ValueError as exc:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH") from exc
+    unit_hours = {"h": 1.0, "d": 24.0}.get(interval[-1])
+    if unit_hours is None or not math.isfinite(quantity) or quantity <= 0.0:
+        raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+    return quantity * unit_hours
+
+
+def _validate_cost_inputs(policy: MetricOwnerPolicy, sample: Mapping[str, Any], *, interval: str) -> None:
+    components = sample.get("cost_components_bps")
+    sources = sample.get("cost_source_digests")
+    if not isinstance(components, dict) or set(components) != set(_COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_COMPONENTS_INCOMPLETE")
+    if not isinstance(sources, dict) or set(sources) != set(_COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_SOURCE_BINDINGS_INCOMPLETE")
+    if any(
+        isinstance(components[name], bool) or not isinstance(components[name], (int, float))
+        for name in _COST_COMPONENTS
+    ):
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN")
+    try:
+        component_values = {name: float(components[name]) for name in _COST_COMPONENTS}
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN") from exc
+    if any(not math.isfinite(value) or value <= 0.0 for value in component_values.values()):
+        raise ContractNotVerifiable("COST_COMPONENT_UNKNOWN")
+    if not all(_looks_hex64(sources[name]) for name in _COST_COMPONENTS):
+        raise ContractNotVerifiable("COST_SOURCE_BINDING_INVALID")
+    capacity_values = (
+        sample.get("market_volume_base"),
+        sample.get("price_quote"),
+        sample.get("order_notional_quote"),
+    )
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in capacity_values):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    numeric_capacity_values = cast(tuple[int | float, int | float, int | float], capacity_values)
+    try:
+        volume, price, notional = (float(value) for value in numeric_capacity_values)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING") from exc
+    if any(not math.isfinite(value) or value <= 0.0 for value in (volume, price, notional)):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    configured = policy.document["cost_capacity"]["configured_values"]
+    expected_costs = {
+        "maker_fee": float(configured["maker_fee_bps"]),
+        "taker_fee": float(configured["taker_fee_bps"]),
+        "half_spread": float(configured["avg_spread_bps"]) / 2.0,
+        "slippage": float(configured["slippage_bps"]),
+        "funding": float(configured["funding_rate_8h_pct"]) * 100.0 * _interval_hours(interval) / 8.0,
+        "market_impact": float(configured["impact_bps_per_10k"]) * notional / 10_000.0,
+    }
+    if any(
+        not math.isclose(component_values[name], expected_costs[name], rel_tol=0.0, abs_tol=1e-12)
+        for name in _COST_COMPONENTS
+    ):
+        raise ContractNotVerifiable("COST_POLICY_BINDING_MISMATCH")
+
+
+def _validate_samples(policy: MetricOwnerPolicy, evidence: Mapping[str, Any]) -> None:
+    family = evidence["family"]
+    candidate_ids = [candidate["candidate_id"] for candidate in family["candidates"]]
+    expected_candidates = set(candidate_ids)
+    expected_interval = policy.document["sampling_clock"]["primary_interval"]
+    horizon = timedelta(hours=int(policy.document["sampling_clock"]["horizon_bars"]))
+    prior_order: tuple[str, str, str, datetime, int, int] | None = None
+    keys: set[str] = set()
+    for sample in evidence["samples"]:
+        if not isinstance(sample, dict):
+            raise ContractNotVerifiable("SAMPLE_FIELDS_INVALID")
+        if {"market_volume_base", "price_quote", "order_notional_quote"} - set(sample):
+            raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+        if set(sample) != _SAMPLE_FIELDS:
+            raise ContractNotVerifiable("SAMPLE_FIELDS_INVALID")
+        key = sample["key"]
+        if not isinstance(key, str) or not key or key in keys:
+            raise ContractNotVerifiable("SAMPLE_KEY_DUPLICATE")
+        keys.add(key)
+        observation = _utc(sample["observation_time"])
+        label_end = _utc(sample["label_end_time"])
+        available = _utc(sample["available_as_of"])
+        if label_end != observation + horizon:
+            raise ContractNotVerifiable("LABEL_WINDOW_MISMATCH")
+        if sample["is_closed"] is not True or observation > available:
+            raise ContractNotVerifiable("SAMPLE_NOT_ELIGIBLE")
+        if sample["interval"] != expected_interval:
+            raise ContractNotVerifiable("SAMPLE_INTERVAL_MISMATCH")
+        if sample["symbol"] != family["universe"]:
+            raise ContractNotVerifiable("UNIVERSE_IDENTITY_MISMATCH")
+        order = (
+            str(sample["venue"]),
+            str(sample["symbol"]),
+            str(sample["interval"]),
+            observation,
+            int(policy.document["sampling_clock"]["horizon_bars"]),
+            int(sample["revision"]),
+        )
+        if prior_order is not None and order <= prior_order:
+            raise ContractNotVerifiable("SAMPLE_CLOCK_NOT_STRICTLY_INCREASING")
+        prior_order = order
+        predictions = sample["candidate_predictions"]
+        if not isinstance(predictions, dict) or set(predictions) != expected_candidates:
+            raise ContractNotVerifiable("FAMILY_PREDICTIONS_INCOMPLETE")
+        _validate_cost_inputs(policy, sample, interval=expected_interval)
+
+
+def _split_indices(n: int, groups: int) -> list[range]:
+    base, remainder = divmod(n, groups)
+    result: list[range] = []
+    start = 0
+    for group in range(groups):
+        size = base + (1 if group < remainder else 0)
+        result.append(range(start, start + size))
+        start += size
+    return result
+
+
+def _cost_bps(sample: Mapping[str, Any], multiplier: float) -> float:
+    return multiplier * sum(float(sample["cost_components_bps"][component]) for component in _COST_COMPONENTS)
+
+
+def _strategy_return(sample: Mapping[str, Any], candidate_id: str, multiplier: float = 1.0) -> float:
+    prediction = float(sample["candidate_predictions"][candidate_id])
+    direction = 1.0 if prediction > 0.0 else -1.0 if prediction < 0.0 else 0.0
+    return direction * float(sample["label_return"]) - _cost_bps(sample, multiplier) / 10_000.0
+
+
+def _mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _sample_std(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = _mean(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
+
+
+def _pearson(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right) or len(left) < 2:
+        return 0.0
+    left_mean = _mean(left)
+    right_mean = _mean(right)
+    left_std = _sample_std(left)
+    right_std = _sample_std(right)
+    if left_std == 0.0 or right_std == 0.0:
+        return 0.0
+    covariance = sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=True)) / (len(left) - 1)
+    return covariance / (left_std * right_std)
+
+
+def _wfo_recomputation(
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any],
+    candidate_id: str,
+) -> tuple[dict[str, Any], list[str], bool]:
+    config = policy.document["wfo"]
+    samples = evidence["samples"]
+    n = len(samples)
+    n_folds = int(config["n_folds"])
+    fold_span = n // n_folds
+    test_span = math.floor(fold_span * (1.0 - float(config["train_fraction"])))
+    purge_span = max(math.ceil(float(config["purge_fraction"]) * fold_span), 1)
+    embargo_span = math.ceil(float(config["embargo_fraction"]) * fold_span)
+    expected: list[dict[str, Any]] = []
+    metrics: list[dict[str, Any]] = []
+    reasons: list[str] = []
+    prior_test_ranges: list[range] = []
+    for fold_id in range(n_folds):
+        test_start = math.floor(fold_span * fold_id + fold_span * float(config["train_fraction"]))
+        test_end = min(test_start + test_span, n)
+        test_indices = list(range(test_start, test_end))
+        embargoed = {
+            index
+            for previous in prior_test_ranges
+            for index in range(previous.stop, min(previous.stop + embargo_span, n))
+        }
+        test_clock = _utc(samples[test_start]["observation_time"]) if test_start < n else None
+        train_indices = [
+            index
+            for index in range(max(0, test_start - purge_span))
+            if index not in embargoed
+            and test_clock is not None
+            and _utc(samples[index]["label_end_time"]) <= test_clock
+        ]
+        expected.append(
+            {
+                "fold_id": fold_id,
+                "train_keys": [samples[index]["key"] for index in train_indices],
+                "test_keys": [samples[index]["key"] for index in test_indices],
+            }
+        )
+        if len(train_indices) < int(config["min_train_samples"]) or len(test_indices) < int(config["min_test_samples"]):
+            reasons.append(f"WFO_FOLD_SAMPLES_INSUFFICIENT:{fold_id}")
+        predictions = [float(samples[index]["candidate_predictions"][candidate_id]) for index in test_indices]
+        labels = [float(samples[index]["label_return"]) for index in test_indices]
+        net_returns = [_strategy_return(samples[index], candidate_id) for index in test_indices]
+        ic = _pearson(predictions, labels)
+        mean_net = _mean(net_returns)
+        std_net = _sample_std(net_returns)
+        metrics.append(
+            {
+                "fold_id": fold_id,
+                "train_samples": len(train_indices),
+                "test_samples": len(test_indices),
+                "ic_mean": ic,
+                "mean_net_return": mean_net,
+                "annualized_sharpe": (mean_net / std_net * math.sqrt(8760.0)) if std_net > 0 else 0.0,
+            }
+        )
+        prior_test_ranges.append(range(test_start, test_end))
+    if evidence["recorded_wfo_folds"] != expected:
+        reasons.append("WFO_FOLD_MEMBERSHIP_MISMATCH")
+    if len(expected) < int(config["min_folds_for_verdict"]):
+        reasons.append("WFO_FOLDS_INSUFFICIENT")
+    positive = sum(metric["mean_net_return"] > 0.0 and metric["ic_mean"] > 0.0 for metric in metrics)
+    consistency = positive / len(metrics) if metrics else 0.0
+    fold_ics = [metric["ic_mean"] for metric in metrics]
+    ic_std = _sample_std(fold_ics)
+    result = {
+        "fold_span": fold_span,
+        "test_span": test_span,
+        "purge_span": purge_span,
+        "embargo_span": embargo_span,
+        "fold_consistency": consistency,
+        "icir": (_mean(fold_ics) / ic_std) if ic_std > 0.0 else 0.0,
+        "folds": metrics,
+    }
+    gate = not reasons and consistency >= float(config["fold_consistency_threshold"])
+    return result, reasons, gate
+
+
+def _cpcv_recomputation(
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any],
+    selected_candidate_id: str,
+) -> tuple[dict[str, Any], list[str], bool, bool]:
+    config = policy.document["cpcv"]
+    samples = evidence["samples"]
+    candidates = [candidate["candidate_id"] for candidate in evidence["family"]["candidates"]]
+    groups = _split_indices(len(samples), int(config["n_groups"]))
+    expected: list[dict[str, Any]] = []
+    pbo_overfit = 0
+    consistent_paths = 0
+    path_metrics: list[dict[str, Any]] = []
+    for path_id, test_groups in enumerate(
+        itertools.combinations(range(int(config["n_groups"])), int(config["n_test_groups"]))
+    ):
+        test_indices = sorted(index for group in test_groups for index in groups[group])
+        excluded = set(test_indices)
+        purge_bars = int(config["purge_bars"])
+        for index in test_indices:
+            excluded.update(range(max(0, index - purge_bars), min(len(samples), index + purge_bars + 1)))
+        for group in test_groups:
+            stop = groups[group].stop
+            excluded.update(range(stop, min(len(samples), stop + int(config["embargo_bars"]))))
+        train_indices = [index for index in range(len(samples)) if index not in excluded]
+        expected.append(
+            {
+                "path_id": path_id,
+                "test_groups": list(test_groups),
+                "train_keys": [samples[index]["key"] for index in train_indices],
+                "test_keys": [samples[index]["key"] for index in test_indices],
+            }
+        )
+        train_scores = {
+            candidate: _mean([_strategy_return(samples[index], candidate) for index in train_indices])
+            for candidate in candidates
+        }
+        test_scores = {
+            candidate: _mean([_strategy_return(samples[index], candidate) for index in test_indices])
+            for candidate in candidates
+        }
+        selected_is = max(candidates, key=lambda candidate: (train_scores[candidate], candidate))
+        ordered_oos = sorted(candidates, key=lambda candidate: (test_scores[candidate], candidate))
+        selected_oos_rank = ordered_oos.index(selected_is) + 1
+        if selected_oos_rank <= math.floor(len(candidates) / 2):
+            pbo_overfit += 1
+        if test_scores[selected_candidate_id] > 0.0:
+            consistent_paths += 1
+        path_metrics.append(
+            {
+                "path_id": path_id,
+                "train_samples": len(train_indices),
+                "test_samples": len(test_indices),
+                "selected_is_candidate": selected_is,
+                "selected_oos_rank": selected_oos_rank,
+                "selected_oos_net_return": test_scores[selected_candidate_id],
+            }
+        )
+    reasons: list[str] = []
+    expected_count = math.comb(int(config["n_groups"]), int(config["n_test_groups"]))
+    if len(evidence["recorded_cpcv_paths"]) != expected_count:
+        reasons.append("CPCV_PATH_COUNT_MISMATCH")
+    elif evidence["recorded_cpcv_paths"] != expected:
+        reasons.append("CPCV_PATH_MEMBERSHIP_MISMATCH")
+    if any(
+        metric["train_samples"] < int(config["min_train_samples"])
+        or metric["test_samples"] < int(config["min_test_samples"])
+        for metric in path_metrics
+    ):
+        reasons.append("CPCV_PATH_SAMPLES_INSUFFICIENT")
+    if len(path_metrics) < int(config["min_paths_for_verdict"]):
+        reasons.append("CPCV_PATHS_INSUFFICIENT")
+    pbo = pbo_overfit / len(path_metrics) if path_metrics else 1.0
+    consistency = consistent_paths / len(path_metrics) if path_metrics else 0.0
+    result = {"path_count": len(path_metrics), "path_consistency": consistency, "pbo": pbo, "paths": path_metrics}
+    cpcv_gate = not reasons and consistency >= float(config["min_path_consistency"])
+    pbo_gate = not reasons and pbo <= float(policy.document["multiple_testing"]["pbo"]["threshold"])
+    return result, reasons, cpcv_gate, pbo_gate
+
+
+def _bh_adjusted(pvalues: Sequence[float]) -> list[float]:
+    n = len(pvalues)
+    indexed = sorted(enumerate(pvalues), key=lambda item: (item[1], item[0]))
+    adjusted = [1.0] * n
+    running = 1.0
+    for reverse_index in range(n - 1, -1, -1):
+        original_index, pvalue = indexed[reverse_index]
+        rank = reverse_index + 1
+        running = min(running, pvalue * n / rank, 1.0)
+        adjusted[original_index] = running
+    return adjusted
+
+
+def _holm_adjusted(pvalues: Sequence[float]) -> list[float]:
+    n = len(pvalues)
+    indexed = sorted(enumerate(pvalues), key=lambda item: (item[1], item[0]))
+    adjusted = [1.0] * n
+    running = 0.0
+    for rank, (original_index, pvalue) in enumerate(indexed, start=1):
+        running = max(running, (n - rank + 1) * pvalue)
+        adjusted[original_index] = min(1.0, running)
+    return adjusted
+
+
+def _moments(values: Sequence[float]) -> tuple[float, float, float, float]:
+    mean = _mean(values)
+    std = _sample_std(values)
+    if std == 0.0:
+        return mean, std, 0.0, 3.0
+    n = len(values)
+    skewness = sum(((value - mean) / std) ** 3 for value in values) / n
+    kurtosis = sum(((value - mean) / std) ** 4 for value in values) / n
+    return mean, std, skewness, kurtosis
+
+
+def _multiple_testing(
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any],
+    net_returns: Sequence[float],
+) -> tuple[dict[str, Any], dict[str, bool], list[str]]:
+    family = evidence["family"]
+    candidates = family["candidates"]
+    selected = family["selected_candidate_id"]
+    selected_index = next(index for index, candidate in enumerate(candidates) if candidate["candidate_id"] == selected)
+    pvalues = [float(candidate["p_value"]) for candidate in candidates]
+    bh = _bh_adjusted(pvalues)
+    holm = _holm_adjusted(pvalues)
+    mean, std, skewness, kurtosis = _moments(net_returns)
+    annualized_sharpe = mean / std * math.sqrt(8760.0) if std > 0.0 else 0.0
+    n = len(net_returns)
+    m_family = len(candidates)
+    reasons: list[str] = []
+    if m_family <= 1 or n < 2:
+        reasons.append("DSR_INPUTS_INSUFFICIENT")
+        probability = 0.0
+        one_sided = 1.0
+        se_sr = 0.0
+        expected_max = 0.0
+    else:
+        variance_term = 1.0 - skewness * annualized_sharpe + ((kurtosis - 1.0) / 4.0) * annualized_sharpe**2
+        if variance_term <= 0.0:
+            reasons.append("DSR_STANDARD_ERROR_INVALID")
+            probability = 0.0
+            one_sided = 1.0
+            se_sr = 0.0
+            expected_max = 0.0
+        else:
+            se_sr = math.sqrt(variance_term / n)
+            quantile = NormalDist().inv_cdf((m_family - 0.326) / (m_family + 0.348))
+            expected_max = se_sr * quantile
+            z_score = (annualized_sharpe - expected_max) / se_sr if se_sr > 0.0 else float("-inf")
+            probability = NormalDist().cdf(z_score)
+            one_sided = 1.0 - probability
+    alpha = float(policy.document["multiple_testing"]["fdr"]["alpha"])
+    gates = {
+        "fdr": bh[selected_index] <= alpha,
+        "holm": holm[selected_index] <= float(policy.document["multiple_testing"]["holm"]["alpha"]),
+        "dsr": probability >= 0.95 and one_sided <= 0.05,
+    }
+    return (
+        {
+            "m_family": m_family,
+            "selected_index": selected_index,
+            "selected_p_value": pvalues[selected_index],
+            "selected_q_value": bh[selected_index],
+            "selected_holm_adjusted_p": holm[selected_index],
+            "annualized_net_sharpe": annualized_sharpe,
+            "skewness": skewness,
+            "kurtosis": kurtosis,
+            "sharpe_standard_error": se_sr,
+            "expected_max_sharpe": expected_max,
+            "dsr_probability": probability,
+            "one_sided_p_value": one_sided,
+        },
+        gates,
+        reasons,
+    )
+
+
+def _bootstrap_lower_bound(values: Sequence[float], *, replicates: int, seed: int) -> tuple[float, float]:
+    n = len(values)
+    block_length = max(1, math.ceil(math.sqrt(n)))
+    n_blocks = math.ceil(n / block_length)
+    prefix = [0.0]
+    for value in values:
+        prefix.append(prefix[-1] + value)
+    rng = random.Random(seed)  # noqa: S311  # nosec B311 - deterministic statistical resampling
+    means: list[float] = []
+    for _ in range(replicates):
+        remaining = n
+        total = 0.0
+        for _ in range(n_blocks):
+            take = min(block_length, remaining)
+            start = rng.randrange(n - block_length + 1)
+            total += prefix[start + take] - prefix[start]
+            remaining -= take
+            if remaining <= 0:
+                break
+        means.append(total / n)
+    means.sort()
+    lower_index = max(0, math.floor(0.025 * (replicates - 1)))
+    upper_index = min(replicates - 1, math.ceil(0.975 * (replicates - 1)))
+    return means[lower_index], means[upper_index]
+
+
+def _cost_capacity_uncertainty(
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any],
+    candidate_id: str,
+) -> tuple[dict[str, Any], dict[str, bool]]:
+    samples = evidence["samples"]
+    config = policy.document["cost_capacity"]
+    multipliers = [float(value) for value in config["configured_values"]["stress_multipliers"]]
+    seed_material = f"{policy.digest}{evidence['family']['family_id']}{candidate_id}"
+    seed = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:16], 16)
+    stress: list[dict[str, Any]] = []
+    all_positive = True
+    for multiplier in multipliers:
+        returns = [_strategy_return(sample, candidate_id, multiplier) for sample in samples]
+        lower, upper = _bootstrap_lower_bound(
+            returns,
+            replicates=int(policy.document["uncertainty"]["replicates"]),
+            seed=seed,
+        )
+        all_positive = all_positive and lower > 0.0
+        stress.append(
+            {
+                "multiplier": multiplier,
+                "mean_net_return": _mean(returns),
+                "ci_lower_95": lower,
+                "ci_upper_95": upper,
+            }
+        )
+    participation_rates = [
+        float(sample["order_notional_quote"]) / (float(sample["market_volume_base"]) * float(sample["price_quote"]))
+        for sample in samples
+    ]
+    maximum_participation = max(participation_rates)
+    capacity_notional = min(
+        float(sample["market_volume_base"]) * float(sample["price_quote"]) * float(config["participation_rate_max"])
+        for sample in samples
+    )
+    capacity_ok = maximum_participation <= float(config["participation_rate_max"]) and all(
+        float(sample["order_notional_quote"]) <= capacity_notional for sample in samples
+    )
+    return (
+        {
+            "bootstrap_seed": seed,
+            "block_length": max(1, math.ceil(math.sqrt(len(samples)))),
+            "replicates": int(policy.document["uncertainty"]["replicates"]),
+            "stress": stress,
+            "maximum_participation": maximum_participation,
+            "capacity_notional": capacity_notional,
+        },
+        {"cost_capacity": capacity_ok, "uncertainty": all_positive},
+    )
+
+
+def _net_return_from_stability_sample(
+    policy: MetricOwnerPolicy,
+    sample: Mapping[str, Any],
+    *,
+    family: Mapping[str, Any],
+    expected_venue: str,
+    multiplier: float = 1.0,
+) -> float:
+    if not isinstance(sample, Mapping):
+        raise ContractNotVerifiable("STABILITY_SAMPLE_FIELDS_INVALID")
+    if {"market_volume_base", "price_quote", "order_notional_quote"} - set(sample):
+        raise ContractNotVerifiable("CAPACITY_INPUT_MISSING")
+    if set(sample) != _STABILITY_SAMPLE_FIELDS:
+        raise ContractNotVerifiable("STABILITY_SAMPLE_FIELDS_INVALID")
+    stability_interval = policy.document["sampling_clock"]["stability_interval"]
+    if sample["interval"] != stability_interval:
+        raise ContractNotVerifiable("STABILITY_INTERVAL_MISMATCH")
+    if sample["venue"] != expected_venue:
+        raise ContractNotVerifiable("VENUE_IDENTITY_MISMATCH")
+    if sample["symbol"] != family["universe"]:
+        raise ContractNotVerifiable("UNIVERSE_IDENTITY_MISMATCH")
+    _validate_cost_inputs(policy, sample, interval=stability_interval)
+    direction = 1.0 if float(sample["prediction"]) > 0 else -1.0 if float(sample["prediction"]) < 0 else 0.0
+    return (
+        direction * float(sample["label_return"])
+        - multiplier * sum(float(sample["cost_components_bps"][key]) for key in _COST_COMPONENTS) / 10_000.0
+    )
+
+
+def _stability_recomputation(
+    policy: MetricOwnerPolicy,
+    evidence: Mapping[str, Any],
+    candidate_id: str,
+) -> tuple[dict[str, Any], list[str], bool]:
+    config = policy.document["stability"]
+    required_dimensions = set(config["dimensions"])
+    supplied = evidence["stability"]
+    if set(supplied) != {"timeframe_1h_vs_1d", "parameter_perturbation"}:
+        return {}, ["STABILITY_DIMENSION_MISSING"], False
+    samples = evidence["samples"]
+    family = evidence["family"]
+    stability_interval = policy.document["sampling_clock"]["stability_interval"]
+    if stability_interval != "1d":
+        raise ContractNotVerifiable("STABILITY_INTERVAL_POLICY_MISMATCH")
+    expected_venue = str(samples[0]["venue"])
+    baseline_returns = [_strategy_return(sample, candidate_id) for sample in samples]
+    baseline = _mean(baseline_returns)
+    epsilon = 1e-12
+    threshold = float(config["degradation_threshold"])
+    min_regime = int(config["min_samples_per_regime"])
+    reasons: list[str] = []
+    dimensions: dict[str, Any] = {}
+
+    regimes: dict[str, list[float]] = {}
+    for sample, net_return in zip(samples, baseline_returns, strict=True):
+        regimes.setdefault(str(sample["regime"]), []).append(net_return)
+    if len(regimes) < 2 or any(len(values) < min_regime for values in regimes.values()):
+        reasons.append("STABILITY_REGIME_SAMPLES_INSUFFICIENT")
+    regime_degradations = {
+        regime: (baseline - _mean(values)) / max(abs(baseline), epsilon) for regime, values in regimes.items()
+    }
+    dimensions["regime"] = regime_degradations
+
+    daily = supplied["timeframe_1h_vs_1d"]
+    if not isinstance(daily, list) or len(daily) < min_regime:
+        reasons.append("STABILITY_TIMEFRAME_SAMPLES_INSUFFICIENT")
+        daily_metric = 0.0
+    else:
+        daily_metric = _mean(
+            [
+                _net_return_from_stability_sample(
+                    policy,
+                    sample,
+                    family=family,
+                    expected_venue=expected_venue,
+                )
+                for sample in daily
+            ]
+        )
+    timeframe_degradation = (baseline - daily_metric) / max(abs(baseline), epsilon)
+    dimensions["timeframe_1h_vs_1d"] = timeframe_degradation
+
+    perturbations = supplied["parameter_perturbation"]
+    if not isinstance(perturbations, list) or len(perturbations) != int(config["n_perturbations"]):
+        reasons.append("STABILITY_PERTURBATIONS_INSUFFICIENT")
+        perturbation_degradations: list[float] = []
+    else:
+        perturbation_degradations = []
+        for perturbation in perturbations:
+            if not isinstance(perturbation, dict) or set(perturbation) != {
+                "perturbation_id",
+                "parameter_delta_pct",
+                "predictions",
+            }:
+                raise ContractNotVerifiable("STABILITY_PERTURBATION_FIELDS_INVALID")
+            if not math.isclose(
+                abs(float(perturbation["parameter_delta_pct"])),
+                float(config["parameter_perturbation_pct"]),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ContractNotVerifiable("STABILITY_PERTURBATION_POLICY_MISMATCH")
+            predictions = perturbation["predictions"]
+            if not isinstance(predictions, list) or len(predictions) != len(samples):
+                raise ContractNotVerifiable("STABILITY_PERTURBATION_LENGTH_MISMATCH")
+            returns = []
+            for prediction, sample in zip(predictions, samples, strict=True):
+                direction = 1.0 if float(prediction) > 0 else -1.0 if float(prediction) < 0 else 0.0
+                returns.append(direction * float(sample["label_return"]) - _cost_bps(sample, 1.0) / 10_000.0)
+            metric = _mean(returns)
+            perturbation_degradations.append((baseline - metric) / max(abs(baseline), epsilon))
+    dimensions["parameter_perturbation"] = perturbation_degradations
+    if required_dimensions != {"regime", "timeframe_1h_vs_1d", "parameter_perturbation"}:
+        reasons.append("STABILITY_POLICY_DIMENSIONS_UNKNOWN")
+    all_degradations = [*regime_degradations.values(), timeframe_degradation, *perturbation_degradations]
+    gate = not reasons and bool(all_degradations) and all(value <= threshold for value in all_degradations)
+    return {"baseline_metric": baseline, "dimensions": dimensions}, reasons, gate
+
+
+def validate_scientific_evidence(
+    policy: MetricOwnerPolicy,
+    source: Mapping[str, Any],
+) -> ScientificValidationResult:
+    """Recompute every mandatory T07 gate from raw immutable evidence."""
+
+    try:
+        evidence = validate_raw_evidence(policy, source)
+        _validate_samples(policy, evidence)
+    except ContractNotVerifiable as exc:
+        return _safe_result(status="NOT_VERIFIABLE", reasons=[str(exc)], policy=policy, evidence=source)
+
+    family = evidence["family"]
+    candidate_id = family["selected_candidate_id"]
+    reasons: list[str] = []
+    hard_gates: dict[str, bool] = {}
+    recomputed: dict[str, Any] = {}
+
+    wfo, wfo_reasons, wfo_gate = _wfo_recomputation(policy, evidence, candidate_id)
+    recomputed["wfo"] = wfo
+    reasons.extend(wfo_reasons)
+    hard_gates["wfo"] = wfo_gate
+
+    cpcv, cpcv_reasons, cpcv_gate, pbo_gate = _cpcv_recomputation(policy, evidence, candidate_id)
+    recomputed["cpcv"] = cpcv
+    reasons.extend(cpcv_reasons)
+    hard_gates["cpcv"] = cpcv_gate
+    hard_gates["pbo"] = pbo_gate
+
+    net_returns = [_strategy_return(sample, candidate_id) for sample in evidence["samples"]]
+    multiple_testing, testing_gates, testing_reasons = _multiple_testing(policy, evidence, net_returns)
+    recomputed["multiple_testing"] = multiple_testing
+    hard_gates.update(testing_gates)
+    reasons.extend(testing_reasons)
+
+    cost_uncertainty, cost_gates = _cost_capacity_uncertainty(policy, evidence, candidate_id)
+    recomputed["cost_capacity_uncertainty"] = cost_uncertainty
+    hard_gates.update(cost_gates)
+
+    try:
+        stability, stability_reasons, stability_gate = _stability_recomputation(policy, evidence, candidate_id)
+    except ContractNotVerifiable as exc:
+        stability, stability_reasons, stability_gate = {}, [str(exc)], False
+    recomputed["stability"] = stability
+    reasons.extend(stability_reasons)
+    hard_gates["stability"] = stability_gate
+
+    sample_gate = (
+        len(evidence["samples"]) >= int(policy.document["minimum_samples"]["fast_screen"]["min_sample_count"])
+        and len(wfo["folds"]) >= int(policy.document["minimum_samples"]["wfo"]["min_folds"])
+        and cpcv["path_count"] >= int(policy.document["minimum_samples"]["cpcv"]["min_paths"])
+    )
+    hard_gates["sample_sufficiency"] = sample_gate
+    if not sample_gate:
+        reasons.append("SAMPLES_OR_FOLDS_INSUFFICIENT")
+
+    evidence_gap = bool(reasons)
+    recomputed_status = "NOT_VERIFIABLE" if evidence_gap else "PASS" if all(hard_gates.values()) else "FAIL"
+    claim = evidence["implementation_claim"]
+    claim_bound = claim["family_denominator"] == len(family["candidates"]) and claim["policy_digest"] == policy.digest
+    agreement = "AGREE" if claim_bound and claim["status"] == recomputed_status else "DISAGREE"
+    if agreement == "DISAGREE":
+        reasons.append("IMPLEMENTATION_RECOMPUTATION_DISAGREEMENT")
+        status = "NOT_VERIFIABLE"
+    else:
+        status = recomputed_status
+    return _safe_result(
+        status=status,
+        reasons=reasons,
+        policy=policy,
+        evidence=evidence,
+        hard_gates=hard_gates,
+        recomputed=recomputed,
+        agreement=agreement,
+    )
+
+
+def rollback_scientific_validation(result: ScientificValidationResult) -> dict[str, Any]:
+    """Freeze promotion while preserving immutable historical bindings."""
+
+    return {
+        "status": "NOT_VERIFIABLE",
+        "promotion_enabled": False,
+        "historical_status": result.status,
+        "preserved_policy_digest": result.policy_digest,
+        "preserved_family_digest": result.family_digest,
+        "preserved_raw_evidence_digest": result.raw_evidence_digest,
+        "diagnostic_fallback_only": True,
+    }
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+    )
+
+
+def write_acceptance_artifacts(
+    evidence_dir: str | Path,
+    *,
+    policy: MetricOwnerPolicy,
+    recomputation: ScientificValidationResult,
+    negative_results: Sequence[ScientificValidationResult],
+    mutation_outcomes: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Write the four deterministic artifacts required by T07 acceptance."""
+
+    if policy.source_sha256 != APPROVED_POLICY_SHA256:
+        raise ContractNotVerifiable("POLICY_SOURCE_SHA256_MISMATCH")
+    if hashlib.sha256(policy.source_bytes).hexdigest() != APPROVED_POLICY_SHA256:
+        raise ContractNotVerifiable("POLICY_SOURCE_BYTES_MISMATCH")
+
+    destination = Path(evidence_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    baseline_hard_gates = dict(recomputation.hard_gates)
+    target_gates = set(baseline_hard_gates)
+    baseline_valid = (
+        recomputation.status == "PASS"
+        and bool(baseline_hard_gates)
+        and all(value is True for value in baseline_hard_gates.values())
+        and _looks_hex64(recomputation.raw_evidence_digest)
+    )
+    dependency_graph_valid = target_gates == set(_GATE_MUTATION_DEPENDENCIES)
+    seen_mutation_ids: set[str] = set()
+    seen_target_gates: set[str] = set()
+    seen_mutated_digests: set[str] = set()
+    scored_outcomes: dict[str, dict[str, Any]] = {}
+    isolated_mutation_ids: list[str] = []
+    coupled_mutation_ids: list[str] = []
+    killed = 0
+    for outcome_key, supplied in mutation_outcomes.items():
+        record = dict(supplied) if isinstance(supplied, Mapping) else {}
+        mutation_id = record.get("mutation_id")
+        target_gate = record.get("target_gate")
+        target_name = target_gate if isinstance(target_gate, str) else ""
+        mutated_digest = record.get("mutated_raw_evidence_digest")
+        mutation_unique = (
+            isinstance(mutation_id, str)
+            and bool(mutation_id)
+            and mutation_id == outcome_key
+            and mutation_id not in seen_mutation_ids
+        )
+        target_unique = (
+            isinstance(target_gate, str) and target_gate in target_gates and target_gate not in seen_target_gates
+        )
+        digest_unique = (
+            _looks_hex64(mutated_digest)
+            and mutated_digest != recomputation.raw_evidence_digest
+            and mutated_digest not in seen_mutated_digests
+        )
+        if isinstance(mutation_id, str):
+            seen_mutation_ids.add(mutation_id)
+        if isinstance(target_gate, str):
+            seen_target_gates.add(target_gate)
+        if isinstance(mutated_digest, str):
+            seen_mutated_digests.add(mutated_digest)
+        baseline_record = record.get("baseline_hard_gates")
+        mutated_record = record.get("mutated_hard_gates")
+        result_status = record.get("result_status")
+        allowed_dependents = _GATE_MUTATION_DEPENDENCIES.get(target_name, frozenset())
+        declared_dependents = record.get("allowed_dependent_gates")
+        failed_gates = record.get("failed_gates")
+        mutated_gate_map = cast(Mapping[str, Any], mutated_record) if isinstance(mutated_record, Mapping) else {}
+        mutated_gate_map_valid = set(mutated_gate_map) == target_gates and all(
+            value is True or value is False for value in mutated_gate_map.values()
+        )
+        actual_failed_gates = (
+            {gate for gate, passed in mutated_gate_map.items() if passed is False} if mutated_gate_map_valid else set()
+        )
+        non_target_failures = actual_failed_gates - {target_name}
+        undeclared_failures = non_target_failures - allowed_dependents
+        dependencies_valid = (
+            isinstance(declared_dependents, list)
+            and declared_dependents == sorted(allowed_dependents)
+            and not undeclared_failures
+        )
+        mutation_killed = (
+            baseline_valid
+            and dependency_graph_valid
+            and set(record) == _MUTATION_RECORD_FIELDS
+            and mutation_unique
+            and target_unique
+            and digest_unique
+            and isinstance(result_status, str)
+            and result_status in {"FAIL", "NOT_VERIFIABLE"}
+            and record.get("baseline_raw_evidence_digest") == recomputation.raw_evidence_digest
+            and isinstance(baseline_record, Mapping)
+            and dict(baseline_record) == baseline_hard_gates
+            and baseline_hard_gates.get(target_name) is True
+            and mutated_gate_map_valid
+            and record.get("target_gate_value") is False
+            and mutated_gate_map.get(target_name) is False
+            and isinstance(failed_gates, list)
+            and failed_gates == sorted(actual_failed_gates)
+            and dependencies_valid
+        )
+        killed += int(mutation_killed)
+        record["scored_as_killed"] = mutation_killed
+        record["undeclared_failed_gates"] = sorted(undeclared_failures)
+        if mutation_killed and non_target_failures:
+            record["kill_class"] = "COUPLED_ALLOWED_DEPENDENCY"
+            coupled_mutation_ids.append(str(mutation_id))
+        elif mutation_killed:
+            record["kill_class"] = "ISOLATED"
+            isolated_mutation_ids.append(str(mutation_id))
+        else:
+            record["kill_class"] = "REJECTED"
+        scored_outcomes[str(outcome_key)] = record
+    total = len(target_gates)
+    score = killed / total if total else 0.0
+    exact_gate_coverage = seen_target_gates == target_gates and len(mutation_outcomes) == total
+    (destination / "metric-owner-policy.json").write_bytes(policy.source_bytes)
+    _write_json(destination / "independent-recomputation.json", recomputation.as_dict())
+    _write_json(
+        destination / "semantic-negative-fixtures.json",
+        {
+            "status": "PASS" if all(result.status != "PASS" for result in negative_results) else "FAIL",
+            "results": [result.as_dict() for result in negative_results],
+        },
+    )
+    _write_json(
+        destination / "gate-mutation-score.json",
+        {
+            "status": "PASS" if total > 0 and exact_gate_coverage and killed == total else "FAIL",
+            "killed": killed,
+            "total": total,
+            "score": score,
+            "score_semantics": "CAUSAL_KILLS_WITH_FIXED_DEPENDENCIES",
+            "isolated_score": len(isolated_mutation_ids) / total if total else 0.0,
+            "coupled_score": len(coupled_mutation_ids) / total if total else 0.0,
+            "baseline_status": recomputation.status,
+            "baseline_valid": baseline_valid,
+            "baseline_raw_evidence_digest": recomputation.raw_evidence_digest,
+            "baseline_hard_gates": baseline_hard_gates,
+            "dependency_graph_valid": dependency_graph_valid,
+            "dependency_graph": {
+                gate: sorted(dependencies) for gate, dependencies in sorted(_GATE_MUTATION_DEPENDENCIES.items())
+            },
+            "target_gates": sorted(target_gates),
+            "exact_gate_coverage": exact_gate_coverage,
+            "isolated_kills": len(isolated_mutation_ids),
+            "coupled_kills": len(coupled_mutation_ids),
+            "isolated_mutation_ids": sorted(isolated_mutation_ids),
+            "coupled_mutation_ids": sorted(coupled_mutation_ids),
+            "outcomes": scored_outcomes,
+        },
+    )
+
+
+__all__ = [
+    "rollback_scientific_validation",
+    "validate_scientific_evidence",
+    "write_acceptance_artifacts",
+]

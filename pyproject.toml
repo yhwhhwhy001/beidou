@@ -4,6 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [
+    "beidou_cli",
     "beidou_shared",
     "beidou_safety",
     "beidou_strategy",
@@ -25,6 +26,9 @@ packages = [
     "beidou_core",
     "beidou_launcher",
 ]
+
+[tool.hatch.build.targets.wheel.force-include]
+"apps/alpha_app" = "apps/alpha_app"
 
 [project]
 name = "beidou"
@@ -48,9 +52,9 @@ dependencies = [
 ]
 
 [project.scripts]
-beidou = "beidou_launcher.cli:main"
-"北斗" = "beidou_launcher.cli:main"
-bd = "beidou_launcher.cli:main"
+beidou = "beidou_cli:main"
+"北斗" = "beidou_cli:main"
+bd = "beidou_cli:main"
 
 [project.optional-dependencies]
 dev = [
