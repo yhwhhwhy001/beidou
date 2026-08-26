@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 
@@ -24,6 +25,52 @@ class IncrementalContribution:
     is_positive_contribution: bool
     sample_count: int
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MarginalContributionRecomputation:
+    """Strict same-key incremental return recomputation used by T08."""
+
+    sample_count: int
+    delta_returns: tuple[float, ...]
+    mean_delta_return: float
+    marginal_volatility: float
+    marginal_sharpe_per_bar: float
+    marginal_annualized_sharpe: float
+
+
+def recompute_marginal_contribution(
+    champion_net_returns: list[float],
+    combined_net_returns: list[float],
+    *,
+    annualization_bars: int = 8760,
+) -> MarginalContributionRecomputation:
+    """Recompute marginal metrics without truncation, defaults, or alignment repair."""
+
+    if len(champion_net_returns) != len(combined_net_returns):
+        raise ValueError("RETURN_ALIGNMENT_MISMATCH")
+    if len(champion_net_returns) < 2:
+        raise ValueError("RETURN_SAMPLES_INSUFFICIENT")
+    values = [*champion_net_returns, *combined_net_returns]
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+        raise ValueError("RETURN_VALUE_INVALID")
+    if any(not math.isfinite(float(value)) for value in values):
+        raise ValueError("RETURN_VALUE_NON_FINITE")
+    delta_returns = tuple(
+        float(combined) - float(champion)
+        for champion, combined in zip(champion_net_returns, combined_net_returns, strict=True)
+    )
+    mean_delta = _mean(list(delta_returns))
+    volatility = _std(list(delta_returns))
+    sharpe = mean_delta / volatility if volatility > 0.0 else 0.0
+    return MarginalContributionRecomputation(
+        sample_count=len(delta_returns),
+        delta_returns=delta_returns,
+        mean_delta_return=mean_delta,
+        marginal_volatility=volatility,
+        marginal_sharpe_per_bar=sharpe,
+        marginal_annualized_sharpe=sharpe * math.sqrt(float(annualization_bars)),
+    )
 
 
 def compute_incremental_contribution(
