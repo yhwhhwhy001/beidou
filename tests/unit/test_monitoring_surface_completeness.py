@@ -8,9 +8,6 @@ from beidou_observability.monitoring.contracts import (
     CheckSeverity,
     CheckStatus,
     FrequencyLevel,
-    Incident,
-    IncidentLink,
-    IncidentStatus,
     MonitoringCheckResult,
     RolloutMode,
     RolloutState,
@@ -99,7 +96,7 @@ def test_rate_limit_budget_fail_closed_policies_and_window_reset() -> None:
     assert not limits.is_execution_reserve_intact()
 
 
-def test_monitoring_repository_roundtrips_state_incidents_rollouts_and_evidence(tmp_path) -> None:
+def test_monitoring_repository_roundtrips_state_rollouts_and_evidence(tmp_path) -> None:
     repo = MonitoringRepository(str(tmp_path / "monitor.db"))
     state = repo.get_frequency_state()
     state.level = FrequencyLevel.STABLE
@@ -118,25 +115,6 @@ def test_monitoring_repository_roundtrips_state_incidents_rollouts_and_evidence(
     repo.write_check_evidence(check)
     assert repo.get_recent_evidence("check-1", limit=1)[0]["check_id"] == "check-1"
     assert repo.get_recent_evidence(limit=1)
-
-    incident = Incident(
-        incident_id="inc-1",
-        dedupe_key="same",
-        status=IncidentStatus.CONFIRMED,
-        severity=CheckSeverity.P0,
-        title="blocked",
-        detected_at=time.time(),
-        evidence_hashes=["hash"],
-        is_systemic=True,
-    )
-    repo.write_incident(incident)
-    assert repo.find_incident_by_dedupe_key("same") is not None
-    assert repo.get_active_incidents()[0].is_systemic
-    repo.write_incident_link(IncidentLink("inc-1", "inc-2", linked_at=time.time()))
-    repo.write_incident(
-        Incident("inc-1", "same", status=IncidentStatus.RESOLVED, severity=CheckSeverity.P0, detected_at=time.time())
-    )
-    assert repo.find_incident_by_dedupe_key("same") is None
 
     rollout = RolloutState("check-locked", mode=RolloutMode.OBSERVE, locked_safety_check=True)
     repo.upsert_rollout_state(rollout)

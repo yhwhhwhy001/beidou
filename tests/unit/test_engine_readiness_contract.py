@@ -1581,7 +1581,6 @@ def test_user_stream_runtime_starts_and_stops_without_rest_fallback(monkeypatch:
         get_status=lambda: ControlAction.NO_NEW_RISK,
         execute_action=lambda _action: None,
     )
-    engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     engine._record_execution_fact_failure = lambda _reason: None
     engine.ingest_user_order_update = lambda _update: True
     engine._user_stream_runtime = {"status": "NOT_STARTED", "listen_key_active": False}
@@ -1675,7 +1674,6 @@ def test_algo_update_informational_on_testnet(monkeypatch: pytest.MonkeyPatch) -
             get_status=lambda: ControlAction.NO_NEW_RISK,
             execute_action=lambda _action: None,
         )
-        engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
         engine._record_execution_fact_failure = lambda _reason: None
         engine._record_execution_fact_failure_env_guarded = lambda _reason: None
         engine.ingest_user_order_update = lambda _update: True

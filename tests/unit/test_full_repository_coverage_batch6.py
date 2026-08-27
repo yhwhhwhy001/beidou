@@ -43,11 +43,7 @@ from beidou_observability.monitoring.contracts import (
     AccountPositionMode,
     PositionKey,
 )
-from beidou_observability.monitoring.contracts import (
-    CheckSeverity as MonitorSeverity,
-)
 from beidou_observability.monitoring.fact_collector import FactCollector
-from beidou_observability.monitoring.incident_manager import IncidentManager
 from beidou_observability.monitoring.repository import MonitoringRepository
 from beidou_observability.monitoring.service import MonitoringService, create_monitoring_cli
 from beidou_research.backtest.replay import ReplayResult, ReplayValidator
@@ -297,7 +293,7 @@ def test_gate_evidence_and_monitoring_small_boundaries(tmp_path: Path) -> None:
     assert service.get_evidence() == []
     assert isinstance(service.get_rate_budget(), dict)
     cli = create_monitoring_cli(service)
-    assert set(cli) == {"status", "check--deep", "incidents", "evidence", "rate-budget", "mode-contract"}
+    assert set(cli) == {"status", "check--deep", "evidence", "rate-budget", "mode-contract"}
     repo.close()
 
 
@@ -578,7 +574,7 @@ def test_infra_observability_and_research_data_boundaries(tmp_path: Path, monkey
     assert switch.rolled_back
 
 
-def test_monitoring_fact_clock_incident_and_execution_contract_boundaries() -> None:
+def test_monitoring_fact_clock_and_execution_contract_boundaries() -> None:
     position_key = PositionKey.build(
         venue="BINANCE", account_id="acct", symbol="BTCUSDT", mode=AccountPositionMode.UNKNOWN
     )
@@ -593,11 +589,6 @@ def test_monitoring_fact_clock_incident_and_execution_contract_boundaries() -> N
     for index in range(22):
         clock.record_exchange_time((index + 1) * 1000)
     assert len(clock._samples) == 20
-
-    incidents = IncidentManager()
-    incident, created = incidents.create_or_dedupe("dedupe", severity=MonitorSeverity.P0)
-    assert created and incidents.get_active_p0_count() == 1
-    assert incidents.escalate_to_locked() == [incident]
 
     empty_plan = ExecutionPlan()
     assert not empty_plan.is_executable()

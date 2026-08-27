@@ -40,7 +40,7 @@
 | `beidou_research` | OFFLINE | 因子研究(IC/ICIR/VIF) / 模型注册(Champion-Challenger) / 反作弊回测 |
 | `beidou_policy` | — | Policy Registry / 签名验证 / 原子激活 / Fail-Closed |
 | `beidou_security` | — | 服务身份 / 权限矩阵 / 脱敏 / 密钥轮换 |
-| `beidou_observability` | — | TraceContext / Incident / 告警抑制(P0永不抑制) |
+| `beidou_observability` | — | TraceContext / 深度监控检查 / 本地证据持久化 |
 | `beidou_exchange` | REALTIME | ExchangeAdapter / CapabilityMatrix / 账户发现 / BinanceUSDM |
 | `beidou_lifecycle` | — | 10态模块FSM / 能力协商 / 健康探针 |
 | `beidou_autonomy` | — | MAPE-K / 故障指纹 / 自愈 / Checkpoint |
@@ -63,7 +63,6 @@
 - **订单幂等**: IntentOutbox 通过 SHA256 哈希 + idempotency_key 防止重复
 - **双主防护**: LeaseManager + FencingProtection 通过 generation 门控旧实例
 - **不可变账本**: ImmutableLedger 所有分录只追加不可修改
-- **P0永不抑制**: AlertSuppressor 对 CRITICAL/LOCKDOWN 级别告警不抑制
 - **重启≠恢复**: 模块重启后必须先 VALIDATING 才能 ACTIVE
 
 ## 止盈止损保护

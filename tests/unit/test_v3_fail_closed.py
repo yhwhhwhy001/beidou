@@ -661,13 +661,11 @@ def test_unknown_protection_config_freezes_new_risk_without_synthetic_defaults()
     from beidou_control.plane import ControlAction
 
     actions: list[ControlAction] = []
-    incidents: list[tuple[object, ...]] = []
     engine = object.__new__(AutonomousEngine)
     engine._control = SimpleNamespace(
         get_status=lambda: ControlAction.RESUME,
         execute_action=lambda action: actions.append(action),
     )
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: incidents.append(args))
     config = SimpleNamespace(metadata={"blocked": True, "reason": "KLINE_UNKNOWN"}, stop_pct=0.0)
 
     with pytest.raises(RuntimeError, match="PROTECTION_CONFIG_UNKNOWN:BTCUSDT"):
@@ -676,7 +674,6 @@ def test_unknown_protection_config_freezes_new_risk_without_synthetic_defaults()
     assert actions == [ControlAction.NO_NEW_RISK]
     assert engine._protection_config_unknown is True
     assert config.stop_pct == 0.0
-    assert incidents
 
 
 def test_protection_retry_cannot_widen_approved_trigger_at_runtime() -> None:

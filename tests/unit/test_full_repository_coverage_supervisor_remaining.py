@@ -91,29 +91,23 @@ def test_write_interlock_allows_registered_testnet_unknown_only_path(tmp_path: P
     assert len(supervisor.engine._supervisor_blocked_writes) == 3
 
 
-def test_control_incident_and_factor_callbacks_fail_closed_on_missing_or_broken_state(tmp_path: Path) -> None:
+def test_control_and_factor_callbacks_fail_closed_on_missing_or_broken_state(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path, mode="paper")
     assert supervisor._control_state() == "UNKNOWN"
-    assert supervisor._has_active_trading_incident() is False
 
     health = _Health()
 
     def broken_status():
         raise RuntimeError("control unavailable")
 
-    def broken_incidents():
-        raise RuntimeError("incident store unavailable")
-
     supervisor.engine = SimpleNamespace(
         _health=health,
         _control=SimpleNamespace(get_status=broken_status),
-        _alerts=SimpleNamespace(get_active_incidents=broken_incidents),
         _factor_registry=None,
         _lifecycle=SimpleNamespace(state=SimpleNamespace(value="ACTIVE")),
         _get_status_info=lambda: {},
     )
     assert supervisor._control_state() == "UNKNOWN"
-    assert supervisor._has_active_trading_incident() is True
     supervisor._install_health_callbacks()
     assert health.callbacks["set_factor_provider"]() == []
 
@@ -164,9 +158,7 @@ def test_g7_producer_noop_and_monitor_scheduler_exception_are_safe(tmp_path: Pat
     )
     supervisor._record_g7_certification_evidence([])
 
-    supervisor.engine = SimpleNamespace(
-        _alerts=SimpleNamespace(retry_pending=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("alerts")))
-    )
+    supervisor.engine = SimpleNamespace()
     supervisor.writer = SimpleNamespace(write_event=lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         type(supervisor._monitoring_scheduler),
@@ -206,7 +198,6 @@ def test_g7_producer_records_sli_batch_and_deduplicates_incidents(tmp_path: Path
         _check("runtime.execution.order_trace", message="DUPLICATE observed"),
         _check("runtime.safety.protection_coverage"),
         _check("runtime.safety.reconciliation"),
-        _check("runtime.health.incidents"),
         _check("runtime.safety.cost_and_pnl_reporting"),
         _blocker("runtime.g7.blocker"),
     ]
@@ -222,7 +213,7 @@ def test_g7_producer_records_sli_batch_and_deduplicates_incidents(tmp_path: Path
 
 def test_merge_monitoring_checks_converts_monitoring_exception_to_p0(tmp_path: Path, monkeypatch) -> None:
     supervisor = _supervisor(tmp_path)
-    supervisor.engine = SimpleNamespace(_alerts=SimpleNamespace())
+    supervisor.engine = SimpleNamespace()
     supervisor.writer = SimpleNamespace(write_event=lambda *_args, **_kwargs: None)
 
     def broken_checks(**_kwargs):
@@ -305,55 +296,44 @@ def test_wait_for_startup_handles_done_cancelled_and_probe_or_check_errors(tmp_p
     assert asyncio.run(active_case()) is True
 
 
-def test_alert_resolution_and_debounce_state_transitions_are_behavioral(tmp_path: Path) -> None:
+def test_shutdown_request_stops_degraded_engine_and_startup_wait_exits(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path)
-    sent: list[str] = []
     supervisor.engine = SimpleNamespace(
-        _alerts=SimpleNamespace(send_incident=lambda **kwargs: sent.append(kwargs["title"])),
+        _running=True,
+        _lifecycle=SimpleNamespace(state=SimpleNamespace(value="DEGRADED")),
+        _health=SimpleNamespace(_thread=SimpleNamespace(is_alive=lambda: True)),
     )
-    supervisor._send_supervisor_alert("DEGRADED", [_blocker()])
-    assert sent == ["Supervisor DEGRADED"]
-    supervisor.engine._alerts.send_incident = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("alert"))
-    supervisor._send_supervisor_alert("LOCKED", [_blocker()])
 
-    resolved: list[str] = []
-    supervisor.engine._alerts = SimpleNamespace(
-        _active_incidents={
-            "supervisor-1": SimpleNamespace(root_cause_category="supervisor"),
-            "other": SimpleNamespace(root_cause_category="execution"),
-        },
-        resolve_incident=lambda incident_id: resolved.append(incident_id),
-    )
-    supervisor._resolve_supervisor_incidents()
+    supervisor._request_shutdown()
 
-    class BrokenActiveIncidents:
-        @property
-        def _active_incidents(self):
-            raise RuntimeError("active incident read")
+    assert supervisor._shutdown_requested is True
+    assert supervisor.engine._running is False
 
-    supervisor.engine._alerts = BrokenActiveIncidents()
-    supervisor._resolve_supervisor_incidents()
-    assert resolved == ["supervisor-1"]
+    async def wait_for_shutdown() -> bool:
+        task = asyncio.create_task(asyncio.sleep(10))
+        supervisor._engine_task = task
+        supervisor.startup_timeout = 1.0
+        try:
+            return await supervisor._wait_for_startup()
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
-    supervisor.engine._alerts = SimpleNamespace(
-        _active_incidents={"supervisor-2": SimpleNamespace(root_cause_category="supervisor")},
-        resolve_incident=lambda _incident_id: (_ for _ in ()).throw(RuntimeError("resolve")),
-    )
-    supervisor._resolve_supervisor_incidents()
-    supervisor.engine._alerts = None
-    supervisor._resolve_supervisor_incidents()
-    supervisor.engine = None
-    supervisor._resolve_supervisor_incidents()
+    assert asyncio.run(wait_for_shutdown()) is False
+
+
+def test_debounce_state_transitions_are_behavioral(tmp_path: Path) -> None:
+    supervisor = _supervisor(tmp_path)
     supervisor.engine = SimpleNamespace(_control=SimpleNamespace(execute_action=lambda _action: None))
 
     failed_closed: list[tuple[str, bool]] = []
-    alerts: list[str] = []
+    actions: list[str] = []
 
     async def fail_closed(reason, fatal=False):
         failed_closed.append((reason, fatal))
 
     supervisor._fail_closed = fail_closed  # type: ignore[method-assign]
-    supervisor._send_supervisor_alert = lambda state, _blockers: alerts.append(state)  # type: ignore[method-assign]
     supervisor.report.supervisor_state = "RUNNING"
     asyncio.run(supervisor._apply_debounce_action("LOCKED", [_blocker()], True))
     assert supervisor.report.supervisor_state == "LOCKED"
@@ -365,13 +345,12 @@ def test_alert_resolution_and_debounce_state_transitions_are_behavioral(tmp_path
     supervisor._resume_authorized = False
     supervisor._control_state = lambda: "RESUME"  # type: ignore[method-assign]
     supervisor.engine._control = SimpleNamespace(
-        execute_action=lambda action: alerts.append(getattr(action, "value", str(action)))
+        execute_action=lambda action: actions.append(getattr(action, "value", str(action)))
     )
     asyncio.run(supervisor._apply_debounce_action("DEGRADED", [_blocker("two")], True))
-    assert "DEGRADED" in alerts
+    assert "NO_NEW_RISK" in actions
 
     supervisor._control_state = lambda: "NO_NEW_RISK"  # type: ignore[method-assign]
-    supervisor._resolve_supervisor_incidents = lambda: None  # type: ignore[method-assign]
     supervisor.mode = "paper"
     asyncio.run(supervisor._apply_debounce_action("RUNNING", [], False))
     assert supervisor.report.supervisor_state == "PAUSED"
@@ -380,43 +359,6 @@ def test_alert_resolution_and_debounce_state_transitions_are_behavioral(tmp_path
     assert supervisor.report.supervisor_state == "RUNNING"
     asyncio.run(supervisor._apply_debounce_action("UNCHANGED", [_blocker()], True))
     assert failed_closed[-1][1] is False
-
-
-def test_stale_supervisor_incident_is_cleared_before_debounce_when_it_is_the_only_blocker(
-    tmp_path: Path,
-) -> None:
-    """A recovered runtime must not self-lock on its own stale alert."""
-    supervisor = _supervisor(tmp_path)
-    resolved: list[str] = []
-    incident = SimpleNamespace(root_cause_category="supervisor", incident_id="supervisor-degraded")
-    supervisor.engine = SimpleNamespace(
-        _alerts=SimpleNamespace(
-            get_active_incidents=lambda: [
-                {
-                    "incident_id": incident.incident_id,
-                    "severity": "HIGH",
-                    "title": "Supervisor DEGRADED",
-                    "status": "DETECTED",
-                }
-            ],
-            _active_incidents={incident.incident_id: incident},
-            resolve_incident=lambda incident_id: resolved.append(incident_id),
-        )
-    )
-    supervisor.report.supervisor_state = "DEGRADED"
-
-    checks = [_blocker("runtime.health.incidents")]
-
-    assert supervisor._resolve_stale_supervisor_incidents_before_debounce(checks) is True
-    assert resolved == ["supervisor-degraded"]
-
-    real_incident = SimpleNamespace(root_cause_category="reconciliation", incident_id="reconciliation-blocked")
-    supervisor.engine._alerts.get_active_incidents = lambda: [real_incident]
-    supervisor.engine._alerts._active_incidents = {real_incident.incident_id: real_incident}
-    assert supervisor._resolve_stale_supervisor_incidents_before_debounce(checks) is False
-    assert resolved == ["supervisor-degraded"]
-
-
 def test_fail_closed_and_recovery_invalid_lifecycle_edges(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path)
     assert asyncio.run(supervisor._fail_closed("no engine", fatal=False)) is None
@@ -532,7 +474,6 @@ class _RunEngine:
         self._api = lambda *_args, **_kwargs: {}
         self._adapter = SimpleNamespace(request=lambda *_args, **_kwargs: asyncio.sleep(0, result=None))
         self._factor_registry = None
-        self._alerts = SimpleNamespace()
         self._lifecycle = SimpleNamespace(state=SimpleNamespace(value="ACTIVE"))
         self._running = True
 

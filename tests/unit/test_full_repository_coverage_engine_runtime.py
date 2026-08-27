@@ -416,7 +416,6 @@ async def test_engine_run_writable_permissions_stream_and_exchange_info_boundari
     permission_blocked._can_write = True
     permission_blocked._safe_no_new_risk = lambda *_args: None
     permission_blocked._record_execution_fact_failure_env_guarded = lambda *_args, **_kwargs: None
-    permission_blocked._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
 
     async def blocked_account_api(endpoint: object, **_kwargs: object) -> tuple[object, bool]:
         if endpoint == engine_module.Endpoint.SERVER_TIME:
@@ -473,7 +472,6 @@ async def test_engine_run_writable_permissions_stream_and_exchange_info_boundari
     owner_unknown._record_execution_fact_failure_env_guarded = lambda *_args, **_kwargs: None
     owner_unknown._store.restore_account_opening_projection = lambda *_args: object()
     owner_unknown._store.save_order_state = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("store"))
-    owner_unknown._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     owner_unknown._owned_order_ids = set()
     discovered = {
         "orderId": "7010",
@@ -882,7 +880,6 @@ async def test_engine_run_baseline_reconciliation_durable_and_task_boundaries(
     baseline._can_write = True
     baseline._safe_no_new_risk = lambda *_args: None
     baseline._record_execution_fact_failure_env_guarded = lambda *_args, **_kwargs: None
-    baseline._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     baseline_positions = [{"symbol": "BTCUSDT", "positionAmt": "1", "entryPrice": "100"}]
     baseline._api_async_safe = writable_safe_api(baseline_positions)
     baseline._store.restore_account_opening_projection = lambda *_args: None
@@ -896,7 +893,6 @@ async def test_engine_run_baseline_reconciliation_durable_and_task_boundaries(
     baseline_error._can_write = True
     baseline_error._safe_no_new_risk = lambda *_args: None
     baseline_error._record_execution_fact_failure_env_guarded = lambda *_args, **_kwargs: None
-    baseline_error._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     baseline_error._api_async_safe = writable_safe_api([])
     baseline_error._store.restore_account_opening_projection = lambda *_args: (_ for _ in ()).throw(OSError("baseline"))
     baseline_error._resolve_unknown_outbox_intents = lambda: no_sleep(0, result=0)
@@ -1012,7 +1008,6 @@ async def test_engine_shutdown_cancels_owned_orders_and_preserves_unowned_facts(
     engine._mapek = SimpleNamespace(save_checkpoint=lambda *_args, **_kwargs: setattr(engine, "checkpoint", True))
     engine._store = SimpleNamespace(close=lambda: setattr(engine, "store_closed", True))
     engine._health = SimpleNamespace(stop=lambda: setattr(engine, "health_stopped", True))
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     engine._tick_count = 4
     engine._order_count = 2
     engine._win_count = 1
@@ -1026,7 +1021,6 @@ async def test_engine_shutdown_cancels_owned_orders_and_preserves_unowned_facts(
     assert engine.checkpoint is True
     assert engine.store_closed is True
     assert engine.health_stopped is True
-    assert engine.incident[0][1] == "Shutdown left unowned active orders untouched"
 
     failure = AutonomousEngine.__new__(AutonomousEngine)
     failure._running = True
@@ -1058,8 +1052,6 @@ async def test_engine_shutdown_cancels_owned_orders_and_preserves_unowned_facts(
     failure._win_count = 0
     failure._loss_count = 0
     failure._record_execution_fact_failure_env_guarded = lambda *_args, **_kwargs: None
-    failure._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
-
     await failure._shutdown()
     assert failure.checkpoint and failure.store_closed and failure.health_stopped
 

@@ -768,31 +768,9 @@ def test_process_restart_helpers_and_unreachable_poll_boundaries(monkeypatch, tm
         asyncio.run(scenario.run(ctx))
 
 
-def test_incident_manager_storm_transitions_and_allowlist() -> None:
-    from beidou_observability.monitoring.contracts import CheckSeverity, IncidentStatus, check_invariant
-    from beidou_observability.monitoring.incident_manager import IncidentManager
-    from beidou_observability.monitoring.storm_detector import StormDetector
+def test_monitoring_invariant_contract() -> None:
+    from beidou_observability.monitoring.contracts import check_invariant
 
-    manager = IncidentManager(storm_detector=StormDetector(unique_dedupe_threshold=2))
-    first, created = manager.create_or_dedupe("same", check_id="check", severity=CheckSeverity.P0)
-    assert created is True
-    duplicate, created = manager.create_or_dedupe("same", check_id="check", severity=CheckSeverity.P0)
-    assert duplicate is first and created is False
-    second, created = manager.create_or_dedupe("other", check_id="check", severity=CheckSeverity.P1)
-    assert created is True
-    assert second.is_systemic is True and second.parent_incident_id
-    assert manager.links
-
-    assert manager.transition(first.incident_id, IncidentStatus.CONFIRMED) is not None
-    assert manager.transition(first.incident_id, IncidentStatus.MITIGATING) is not None
-    assert manager.transition(first.incident_id, IncidentStatus.VERIFYING) is not None
-    assert manager.transition(first.incident_id, IncidentStatus.RESOLVED) is not None
-    assert manager.transition("missing", IncidentStatus.CONFIRMED) is None
-    assert manager.transition(second.incident_id, IncidentStatus.LOCKED) is None
-    assert manager.is_remediation_allowed("FEED_RECONNECT") == (True, "AUTO")
-    assert manager.is_remediation_allowed("REINITIALIZE_NEARLINE_FROM_VALIDATED_CHECKPOINT") == (True, "CONDITIONAL")
-    assert manager.is_remediation_allowed("INCREASE_LEVERAGE") == (False, "NEVER_AUTO")
-    assert manager.is_remediation_allowed("unknown") == (False, "NOT_IN_ALLOWLIST")
     assert check_invariant("INV-001", True) == (True, "INV-001: OK")
     assert check_invariant("INV-001", False, "missing protection")[0] is False
 
@@ -1122,7 +1100,6 @@ async def test_runtime_probe_and_runtime_check_exception_boundaries(monkeypatch)
         _user_stream_readiness=lambda: (_ for _ in ()).throw(RuntimeError("stream")),
         _last_nearline=__import__("time").time(),
         _error_count=0,
-        _alerts=SimpleNamespace(get_active_incidents=lambda: []),
     )
     checks, _ = runtime.collect_runtime_checks(
         engine=base,

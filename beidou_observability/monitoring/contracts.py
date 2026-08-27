@@ -42,19 +42,9 @@ class HealthStatus(str, Enum):
 
 
 class FrequencyLevel(str, Enum):
-    ALERT = "ALERT"
+    FAST = "FAST"
     NORMAL = "NORMAL"
     STABLE = "STABLE"
-
-
-class IncidentStatus(str, Enum):
-    DETECTED = "DETECTED"
-    CONFIRMED = "CONFIRMED"
-    MITIGATING = "MITIGATING"
-    VERIFYING = "VERIFYING"
-    RESOLVED = "RESOLVED"
-    ESCALATED = "ESCALATED"
-    LOCKED = "LOCKED"
 
 
 class TraceStage(str, Enum):
@@ -161,7 +151,7 @@ class MonitoringCheckResult:
 
 @dataclass(slots=True)
 class FrequencyState:
-    level: FrequencyLevel = FrequencyLevel.ALERT
+    level: FrequencyLevel = FrequencyLevel.FAST
     interval_seconds: int = 600
     promotion_clean_streak: int = 0
     stable_since: float = 0.0
@@ -170,38 +160,6 @@ class FrequencyState:
     last_level_change_at: float = 0.0
     last_reason: str = ""
     policy_version: str = "1.1"
-
-
-@dataclass(slots=True)
-class Incident:
-    incident_id: str
-    dedupe_key: str
-    status: IncidentStatus = IncidentStatus.DETECTED
-    severity: CheckSeverity = CheckSeverity.P1
-    title: str = ""
-    description: str = ""
-    source_check_id: str = ""
-    entity_type: str = ""
-    entity_id: str = ""
-    root_cause_fingerprint: str = ""
-    detected_at: float = 0.0
-    confirmed_at: float | None = None
-    mitigated_at: float | None = None
-    verified_at: float | None = None
-    resolved_at: float | None = None
-    evidence_hashes: list = field(default_factory=list)
-    safe_action_taken: str = ""
-    remediation_result: str = ""
-    parent_incident_id: str | None = None
-    is_systemic: bool = False
-
-
-@dataclass(slots=True)
-class IncidentLink:
-    parent_incident_id: str
-    child_incident_id: str
-    linked_at: float = 0.0
-    root_cause_fingerprint: str = ""
 
 
 @dataclass(slots=True)

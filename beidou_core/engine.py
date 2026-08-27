@@ -27,7 +27,6 @@ import numpy as np
 from beidou_autonomy.mapek import MAPEKController, RecoveryAction
 from beidou_control.plane import ControlAction, ControlPlane
 from beidou_control.truth import TradingEligibility, TruthSnapshot, derive_eligibility
-from beidou_core.alerts import AlertDispatcher
 from beidou_core.feed import MarketDataFeed
 from beidou_core.health import HealthServer, HealthState
 from beidou_core.store import PersistentStore
@@ -37,8 +36,8 @@ from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
 from beidou_lifecycle.lifecycle import DegradationLevel, ModuleLifecycle, ModuleState
-from beidou_observability.telemetry import AlertSeverity
 from beidou_policy.loader import PolicyLoader
+from beidou_reporting.engine import ReportGenerator
 from beidou_research.contracts import StrategyAction, StrategySignal
 from beidou_research.factors.factor import (
     FactorDefinition,
@@ -1616,12 +1615,7 @@ class AutonomousEngine:
                 f"using {durable_db_path!r} for diagnostics; state backend is NOT READY"
             )
         self._feed = MarketDataFeed(client=self._adapter)  # 行情也经过同一 Adapter 传输边界
-        self._alerts = AlertDispatcher(
-            webhook_url=os.environ.get("BEIDOU_ALERTS_WEBHOOK_URL", ""),
-            alerts_file=self._settings.infrastructure.alerts_file,
-            webhook_timeout=self._settings.infrastructure.webhook_timeout,
-        )
-        self._alerts.set_portfolio_provider(self._portfolio_summary)
+        self._report_generator = ReportGenerator()
         self._health = HealthServer(
             port=self._settings.infrastructure.health_port,
             bind_host=self._settings.infrastructure.health_host,
@@ -2939,8 +2933,7 @@ class AutonomousEngine:
         outbox = getattr(self, "_outbox", None)
         if store is None or outbox is None:
             return False, "DURABLE_FACT_STORE_UNAVAILABLE", {}
-        # BD-FIX: 账本冻结状态必须暴露 —— freeze 后 incident 可能被
-        # auto-resolve 清除，唯一可见信号是 durable 检查本身。
+        # 账本冻结状态必须直接暴露为 durable 检查结果。
         ledger = getattr(self, "_ledger", None)
         if ledger is not None and getattr(ledger, "is_frozen", False):
             return False, "LEDGER_FROZEN", {}
@@ -3382,50 +3375,6 @@ class AutonomousEngine:
             return False, "TRADING_WRITE_DISABLED"
         return True, "READY"
 
-    def _portfolio_summary(self) -> str:
-        """生成持仓摘要（品种/数量/入场/现价/盈亏%/盈亏$），供告警 webhook。"""
-        lines = []
-        try:
-            positions = self._protection.all_positions()
-            if not positions:
-                return "📊 当前无持仓"
-            total_pnl = 0.0
-            total_notional = 0.0
-            for _pos_id, pp in sorted(positions.items()):
-                sym = str(pp.instrument_id)
-                qty = float(pp.quantity)
-                entry = float(pp.entry_price)
-                current = float(self._last_prices.get(sym, entry))
-                notional = qty * current
-                total_notional += notional
-                if current > 0 and entry > 0:
-                    pnl_pct = (current / entry - 1) * 100
-                    if pp.side.value == "SELL":
-                        pnl_pct = -pnl_pct
-                    pnl_usd = notional - (qty * entry)
-                    if pp.side.value == "SELL":
-                        pnl_usd = (qty * entry) - notional
-                    total_pnl += pnl_usd
-                    icon = "🟢" if pnl_pct > 0 else ("🔴" if pnl_pct < -0.01 else "⚪")
-                    lines.append(
-                        f"  {icon} **{sym}**  {qty:.4f}  "
-                        f"@{entry:.2f}→{current:.2f}  "
-                        f"**{pnl_pct:+.2f}%** (${pnl_usd:+.2f})"
-                    )
-                else:
-                    lines.append(f"  ⚪ **{sym}**  {qty:.4f}  @{entry:.2f}")
-
-            if lines:
-                lines.insert(0, "📊 持仓")
-                up = sum(1 for l in lines if "🟢" in l)
-                dn = sum(1 for l in lines if "🔴" in l)
-                lines.append(
-                    f"\n📈 总敞口 ${total_notional:,.0f}  |  浮动盈亏 **${total_pnl:+,.2f}**  |  🟢{up} 🔴{dn}"
-                )
-        except Exception as e:
-            return f"📊 持仓获取异常: {e}"
-        return "\n".join(lines)
-
     def _collect_metrics(self) -> dict:
         risk_state = self._strategy_risk.get_state(self._autopilot_strategy_id)
         return {
@@ -3458,7 +3407,6 @@ class AutonomousEngine:
             "realtime_age_seconds": round(self._realtime_age_seconds(), 3),
             "active_orders": len(self._active_order_ids),
             "positions": self._protection.position_count(),
-            "alerts": self._alerts.get_alert_stats(),
             "strategy_risk_level": risk_state.risk_level.value if risk_state else "N/A",
             "drawdown_pct": round(risk_state.current_drawdown_pct, 2) if risk_state else 0,
             "win_rate": round(self._win_count / max(1, self._win_count + self._loss_count), 3),
@@ -3509,7 +3457,6 @@ class AutonomousEngine:
             "user_stream_runtime": dict(getattr(self, "_user_stream_runtime", {})),
             "realtime_age_seconds": round(self._realtime_age_seconds(), 3),
             "protection_owner_unknown": self._protection_owner_unknown,
-            "active_incidents": self._alerts.get_active_incidents(),
             "strategy_risk": {
                 "level": risk_state.risk_level.value if risk_state else "N/A",
                 "drawdown_pct": round(risk_state.current_drawdown_pct, 2) if risk_state else 0,
@@ -3835,22 +3782,11 @@ class AutonomousEngine:
                 except asyncio.TimeoutError:
                     recon_ok = False
                 self._last_recon = time.time()
-                # 对账通过 → 检查持久事实并自动清除事故
+                # 对账通过 → 检查持久事实并恢复控制面资格
                 if recon_ok:
                     durable_ok, _, _ = self._durable_fact_status()
-                    # BD-FIX: incident 清理与 RESUME 动作解耦。旧逻辑把两者
-                    # 包在 `control != RESUME` 条件下 —— 控制面已 RESUME
-                    # （testnet 自动重新授权）时 incident 永不 resolve，
-                    # 残留 CRITICAL 事故永久展示且告警噪音不断（final14/21
-                    # 实测）。事实干净即 resolve；RESUME 仅幂等执行。
-                    if durable_ok:
-                        self._maybe_auto_resolve_incidents()
-                        # BD-FIX (root): 不再在此处直接复位 owner_unknown /
-                        # 重写 protection hash —— 那是与 _durable_fact_status、
-                        # _block_unowned_protection_orders 竞争的第二个写入方,
-                        # 曾造成 ACTIVE/UNKNOWN 抖动。放行唯一入口是
-                        # _update_protection_fact(nearline 补发循环在库存
-                        # 验证通过后调用)。
+                    # 不在此处直接复位 owner_unknown 或重写 protection hash；
+                    # 放行唯一入口是 _update_protection_fact。
                     if durable_ok and self._control.get_status() != ControlAction.RESUME:
                         # TESTNET-EXEMPT: EXEMPT-07（引擎侧自动 RESUME；
                         # 授权链挂接属 M19）
@@ -4033,15 +3969,9 @@ class AutonomousEngine:
 
         except Exception as e:
             self._error_count += 1
-            self._alerts.send_incident(
-                AlertSeverity.WARNING,
-                "Realtime tick error",
-                str(e)[:200],
-                category="realtime",
-            )
             # fail-closed 根因修复(诊断性): 原实现完全静默 —— PG 重启时
-            # 前段 PG 写失败只进 incident 内存/JSONL,日志无痕迹,后续
-            # stale 累积无法定位。落一条 warning(含堆栈)使同类问题可诊断。
+            # 前段 PG 写失败若日志无痕迹，后续 stale 累积无法定位。
+            # 落一条 warning(含堆栈)使同类问题可诊断。
             logger.warning(
                 "realtime tick error (isolated per-tick): %s: %s", type(e).__name__, str(e)[:200], exc_info=True
             )
@@ -4232,21 +4162,7 @@ class AutonomousEngine:
         # PKG02 (BDS-P0-001): 移除 testnet 保护所有权未知旁路 — 所有环境统一升级控制面
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
-        # gap reason 贯通: 事故携带当前缺口明细, 供 supervisor A/B 分流
-        # 区分"引擎可修复的覆盖缺口"与"真故障" (P5 分类器读
-        # ev["incidents"][i]["gap_reasons"])。
-        _gap_reasons = [
-            str(g.get("reason", ""))
-            for g in (getattr(self, "_last_protection_gap_detail", None) or [])
-            if g.get("reason")
-        ]
-        self._alerts.send_incident(
-            AlertSeverity.CRITICAL,
-            "Protection ownership unknown",
-            f"Conditional orders lack durable owner mapping: {sorted(order_ids)}",
-            category="protection",
-            gap_reasons=_gap_reasons,
-        )
+        logger.error("protection ownership unknown for order ids: %s", sorted(order_ids))
 
     def _update_protection_fact(
         self,
@@ -4340,7 +4256,7 @@ class AutonomousEngine:
             self._last_protection_gap_detail = list(_gap_detail)
             # R9: 纯卡死记录 —— 覆盖缺口即裸露, 每轮评估落 exposure 记录
             # (reason=gap reason, increment=False: attempts 不膨胀、since
-            # 保留原始裸露起点), 供 3c stuck 告警与 4-E3 慢引信消费。
+            # 保留原始裸露起点), 供本地卡滞检测与 4-E3 慢引信消费。
             # 显式拒绝仍由 E2 以 SL_UNPROTECTABLE 覆盖, 语义不冲突。
             # 不与该分支 60s 限频打印耦合 —— 持久化每轮评估都要做。
             for _g in _gap_detail:
@@ -4650,9 +4566,8 @@ class AutonomousEngine:
             algo_id = str(expected.get("exchange_order_id", "")).strip()
             actual = venue_by_id.get(algo_id)
             if actual is None:
-                # Presence is checked separately, but retain a semantic
-                # reason here so the persisted incident identifies the exact
-                # protection row that cannot be certified.
+                # Presence is checked separately; retain a semantic reason
+                # identifying the exact protection row that cannot be certified.
                 issues.append(f"PROTECTION_VENUE_ROW_MISSING:{algo_id}")
                 continue
             expected_symbol = str(expected.get("symbol", "")).strip().upper()
@@ -5243,15 +5158,7 @@ class AutonomousEngine:
                 with contextlib.suppress(Exception):
                     if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
                         control.execute_action(ControlAction.NO_NEW_RISK)
-            alerts = getattr(self, "_alerts", None)
-            if alerts is not None:
-                with contextlib.suppress(Exception):
-                    alerts.send_incident(
-                        AlertSeverity.CRITICAL,
-                        "Protection configuration UNKNOWN",
-                        f"{symbol}: {reason}",
-                        category="protection",
-                    )
+            logger.error("protection configuration UNKNOWN for %s: %s", symbol, reason)
             raise RuntimeError(f"PROTECTION_CONFIG_UNKNOWN:{symbol}:{reason}")
 
     def _restore_durable_ledger(self) -> None:
@@ -5319,15 +5226,14 @@ class AutonomousEngine:
         self,
         reason: str,
         *,
-        alert_title: str = "Execution fact persistence blocked",
-        alert_category: str = "execution_fact",
+        event_title: str = "Execution fact persistence blocked",
+        event_category: str = "execution_fact",
     ) -> None:
         """执行/用户流层失败的环境化处理（BD-FIX，覆盖 12+ 调用点）。
 
         ``_record_execution_fact_failure`` 会 freeze 账本（无解冻路径），
         demo 抖动（REST 超时/sqlite 锁/ws 断连/共享账户事件）即永久停机。
-        testnet 只降级控制面（NO_NEW_RISK，可恢复）并保留事故可见性
-        （incident 照发，不 freeze）；live/canary 保留 freeze 语义
+        testnet 只降级控制面（NO_NEW_RISK，可恢复）；live/canary 保留 freeze 语义
         （真实资金下执行真相丢失不可接受，账本必须冻结）。
 
         安全等价性：testnet 不 freeze 时，账本写失败意味着 durable 行
@@ -5335,25 +5241,17 @@ class AutonomousEngine:
         与 freeze 一样阻止继续交易，只是可恢复。
         """
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) in ("live", "canary"):
-            self._record_execution_fact_failure(reason, alert_title=alert_title, alert_category=alert_category)
+            self._record_execution_fact_failure(reason, event_title=event_title, event_category=event_category)
         else:
             self._safe_no_new_risk(reason)
-            _alerts = getattr(self, "_alerts", None)
-            if _alerts is not None:
-                with contextlib.suppress(Exception):
-                    _alerts.send_incident(
-                        AlertSeverity.CRITICAL,
-                        alert_title,
-                        str(reason)[:500],
-                        category=alert_category,
-                    )
+            logger.error("%s [%s]: %s", event_title, event_category, str(reason)[:500])
 
     def _record_execution_fact_failure(
         self,
         reason: str,
         *,
-        alert_title: str = "Execution fact persistence blocked",
-        alert_category: str = "execution_fact",
+        event_title: str = "Execution fact persistence blocked",
+        event_category: str = "execution_fact",
     ) -> None:
         """Freeze execution truth after a durable fact write cannot be proven."""
         with contextlib.suppress(Exception):
@@ -5363,15 +5261,7 @@ class AutonomousEngine:
             with contextlib.suppress(Exception):
                 if control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
                     control.execute_action(ControlAction.NO_NEW_RISK)
-        alerts = getattr(self, "_alerts", None)
-        if alerts is not None:
-            with contextlib.suppress(Exception):
-                alerts.send_incident(
-                    AlertSeverity.CRITICAL,
-                    alert_title,
-                    str(reason)[:500],
-                    category=alert_category,
-                )
+        logger.critical("%s [%s]: %s", event_title, event_category, str(reason)[:500])
 
     def _mark_order_unknown(self, order_id: str, symbol: str, reason: str) -> None:
         """Persist an ambiguous venue order as ``UNKNOWN`` and close risk.
@@ -7266,7 +7156,7 @@ class AutonomousEngine:
                         # BD-FIX: user stream 事件已把同一成交事实提交到
                         # 持久化 fill 日志(COMMITTED)时,无需再等待对账 ——
                         # 直接终态关闭 tracker,否则该订单永久 UNKNOWN 且
-                        # 事故持续触发 NO_NEW_RISK(实测 ETHUSDT 18:31)。
+                        # 故障持续触发 NO_NEW_RISK(实测 ETHUSDT 18:31)。
                         _delta_qty, _partial_price, _fill_id = self._consume_cumulative_fill(
                             order_id, order_sym or symbol, result, status=status
                         )
@@ -8406,12 +8296,6 @@ class AutonomousEngine:
         if self._control.get_status() not in (ControlAction.LOCK, ControlAction.EMERGENCY_FLATTEN):
             self._safe_no_new_risk("auto")
         description = "; ".join(result.differences) or str(getattr(result.status, "value", result.status))
-        self._alerts.send_incident(
-            AlertSeverity.CRITICAL,
-            "Reconciliation blocked",
-            description,
-            category="reconciliation",
-        )
         print(f"[recon] BLOCKED: {description}")
         return False
 
@@ -8636,7 +8520,7 @@ class AutonomousEngine:
         if symbol:
             getattr(self, "_leverage_cache", {}).pop(symbol, None)
         # BD-FIX: 信息性事件保持流健康。若判为失败,每次配置变更都会触发
-        # NO_NEW_RISK + CRITICAL 事故 + user_stream DEGRADED,形成自增强
+        # NO_NEW_RISK + user_stream DEGRADED 形成自增强
         # 故障循环导致下单永久阻断(a2967e0 修复、60eb91f 回归的同类故障)。
         return True
 
@@ -8666,20 +8550,13 @@ class AutonomousEngine:
         # BD-FIX: user stream 连接故障 ≠ 执行事实持久化失败。freeze 账本
         # 是无解冻路径的永久动作 —— demo ws 抖动（一次临时连接失败）即
         # 永久停机（final21 实测 04:20）。testnet 只降级控制面（NO_NEW_RISK，
-        # 可恢复）+ user_stream incident，不冻结账本；live/canary 保留
+        # 可恢复），不冻结账本；live/canary 保留
         # freeze 语义（真实资金下成交事件丢失不可接受，账本必须冻结）。
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) in ("live", "canary"):
             with contextlib.suppress(Exception):
                 self._record_execution_fact_failure(f"USER_STREAM_{status}:{reason}")
-        with contextlib.suppress(Exception):
-            self._alerts.send_incident(
-                AlertSeverity.CRITICAL,
-                "User data stream unavailable",
-                str(reason)[:500],
-                category="user_stream",
-            )
         # BD-FIX: 终端故障后限次自动重启（demo listenKey 周期性失效自愈）。
-        # 记录故障与 incident 之后调度；_restart_user_stream_after_fault 内部
+        # 记录故障后调度；_restart_user_stream_after_fault 内部
         # 再校验停止/在途/重试上限，双重保护避免重复 WS 与无限循环。
         # The isolated Testnet G5 producer keeps terminal order/protection
         # writes hard-held, but it still owns the authenticated session
@@ -9264,8 +9141,7 @@ class AutonomousEngine:
                     break
             # A durable naked-exposure marker is itself a local recovery
             # candidate even when mutable position/protection projections
-            # were already zeroed.  Otherwise it can keep the slow-fuse
-            # incident active without reaching fresh-inventory cleanup.
+            # were already zeroed. Otherwise cleanup can skip a stale marker.
             if not local_projection_candidate:
                 exposure_records = getattr(self._store, "_records", None)
                 if not callable(exposure_records):
@@ -9520,50 +9396,6 @@ class AutonomousEngine:
         if seeded:
             print(f"[pool] historical pre-filter seeded {seeded}/{len(configured_symbols)} candidates")
 
-    def _maybe_auto_resolve_incidents(self) -> None:
-        """持久事实干净后自动清除残留事故（BD-FIX）。
-
-        执行事实已恢复可验证（recon 通过 + durable_ok）时：
-        - execution_fact 事故在账本未冻结时 resolve（冻结是永久事故，
-          不得被清理掩盖 —— C2 审查：旧逻辑 resolve 后 freeze 无任何
-          可见信号）
-        - reconciliation 事故（对账已恢复）无条件 resolve
-        - user_stream 事故在 transport 恢复健康（CONNECTED/HEALTHY）后
-          resolve（连接恢复 + 事实干净 = 事故根因消除）
-        - protection 事故在所有权标志已复位后 resolve
-        testnet 自动重新授权（1cd1208）可能已恢复 RESUME —— 事故清理
-        不得依赖控制面状态（旧逻辑死角：control==RESUME 时永不 resolve，
-        CRITICAL 事故永久残留，final14/21 实测）。
-        """
-        _alerts = getattr(self, "_alerts", None)
-        if _alerts is None:
-            return
-        _runtime = getattr(self, "_user_stream_runtime", {})
-        _ustatus = str(_runtime.get("status", "")).upper() if isinstance(_runtime, dict) else ""
-        _ledger = getattr(self, "_ledger", None)
-        _ledger_frozen = bool(_ledger is not None and getattr(_ledger, "is_frozen", False))
-        _protection_ok = not bool(getattr(self, "_protection_owner_unknown", False))
-        try:
-            _active = getattr(_alerts, "_active_incidents", {})
-            for _iid, _inc in list(_active.items()):
-                _cat = str(getattr(_inc, "root_cause_category", ""))
-                if _cat == "execution_fact":
-                    if _ledger_frozen:
-                        continue  # 冻结未解，事故必须保留
-                    _alerts.resolve_incident(_iid)
-                    print("[realtime] Auto-resolved execution_fact incident")
-                elif _cat == "reconciliation":
-                    _alerts.resolve_incident(_iid)
-                    print("[realtime] Auto-resolved reconciliation incident")
-                elif _cat == "user_stream" and _ustatus in ("CONNECTED", "HEALTHY"):
-                    _alerts.resolve_incident(_iid)
-                    print("[realtime] Auto-resolved user_stream incident")
-                elif _cat == "protection" and _protection_ok:
-                    _alerts.resolve_incident(_iid)
-                    print("[realtime] Auto-resolved protection incident")
-        except Exception as exc:
-            logger.warning("incident auto-resolution failed: %s", type(exc).__name__)
-
     def _maybe_authorize_user_stream_baseline(
         self,
         exchange_facts: AccountFactSnapshot,
@@ -9583,8 +9415,8 @@ class AutonomousEngine:
         授权语义（与 1cd1208 环境区分一致）。
 
         幂等：sequencer 已 HEALTHY 时跳过。授权失败只 defer（事件流保持
-        fail-closed），不冻结账本、不发 incident —— 自动路径不得触发
-        execution_fact fail-closed。
+        fail-closed），不冻结账本 —— 自动路径不得触发 execution_fact
+        fail-closed。
 
         ``result`` 提供时先检查两方一致性：存在 system/exchange 差异（两方
         对拍冲突）则不授权 —— 独立验证不成立。event_stream 侧差异不构成
@@ -10149,7 +9981,7 @@ class AutonomousEngine:
     ) -> dict[str, Any]:
         """持久化"保护无法建立"裸露时钟 (重启不清除)。
 
-        与内存态连击计数不同, 该记录是 3c stuck 告警与 4-E3 慢引信的
+        与内存态连击计数不同, 该记录是本地卡滞检测与 4-E3 慢引信的
         唯一真相源。position_generation 变化时重新起算 —— 旧仓的账
         不得杀新仓。
 
@@ -10233,7 +10065,7 @@ class AutonomousEngine:
           ≥60s 门控; enqueue 成功 → 记录清除 → 自然停止; 失败 → 下轮重试。
         - testnet 默认开启; live/canary 默认关闭且不得被默认值绕过 (spec D-6)
         - 每品种独立判定, 绝不使用账户级 EMERGENCY_FLATTEN (spec D-7)
-        - 平仓前后各发一次告警 (send_incident category+title 去重)
+        - 平仓动作通过本地日志记录
         """
         import os as _os
         import time as _time
@@ -10267,15 +10099,7 @@ class AutonomousEngine:
             # R10(b): 不再按 last_reason 跳过 —— 显式拒绝 (SL_UNPROTECTABLE)
             # 行同样调用 E2 推进确认阶梯 (enqueue 由 E2 门控)。
             symbol = str(r.get("symbol", ""))
-            _alerts = getattr(self, "_alerts", None)
-            if _alerts is not None:
-                with contextlib.suppress(Exception):
-                    _alerts.send_incident(
-                        AlertSeverity.CRITICAL,
-                        "Naked position slow-fuse armed",
-                        f"{symbol} 裸露 {age:.0f}s, 即将自动平仓",
-                        category="protection",
-                    )
+            logger.warning("naked position slow-fuse armed: %s exposed for %.0fs", symbol, age)
             # _maybe_emergency_close_unprotectable 内部会读 pp.side 判方向、
             # pp.quantity 做回退 —— 传最小替身而非 None (投影优先, 替身只兜底):
             # pp.side 传**持仓方向** (引擎约定, E2 在 enqueue 处再翻转成
@@ -10301,14 +10125,7 @@ class AutonomousEngine:
                 ok = False
             if ok:
                 fired += 1
-                if _alerts is not None:
-                    with contextlib.suppress(Exception):
-                        _alerts.send_incident(
-                            AlertSeverity.CRITICAL,
-                            "Naked position auto-closed by slow fuse",
-                            f"{symbol} 裸露超过 7200s, 已发起逐品种平仓",
-                            category="protection",
-                        )
+                logger.warning("naked position auto-close requested by slow fuse: %s", symbol)
         return fired
 
     def _update_stuck_marker(
@@ -10319,7 +10136,7 @@ class AutonomousEngine:
     ) -> bool:
         """扫描 protection_exposure, ≥1800s 者写 watchdog stuck 标记。
 
-        这是 A 类永不 LOCKED 的配套告警 (spec 3c/D-4): 把"静默停机"
+        这是 A 类永不 LOCKED 的本地诊断标记 (spec 3c/D-4): 把"静默停机"
         换成"静默卡死"不可接受, 必须先叫醒人。
         """
         import json as _json
@@ -10361,10 +10178,8 @@ class AutonomousEngine:
         marker = _os.path.join(_dir, "stuck")
         if not stuck:
             if _os.path.exists(marker):
-                try:
+                with contextlib.suppress(OSError):
                     _os.remove(marker)
-                except OSError:
-                    pass
                 # R11 墓碑: 引擎主动清除 (卡死已消除) 留痕, watchdog 据此
                 # 区分"正常清除"与"引擎循环已死 (标记过期无人续写)"。
                 try:
@@ -11018,8 +10833,8 @@ class AutonomousEngine:
 
         A protection-exposure row can outlive the zero position projection it
         describes.  That marker is not itself a position and must not keep
-        the slow-fuse incident active after a fresh complete account readback
-        proves the venue is flat.  This seam is narrower than the position
+        the slow-fuse cleanup pending after a fresh complete account readback
+        proves the venue is flat. This seam is narrower than the position
         rebase above: it never changes a position projection or opening
         baseline, and it refuses to clear while any target protection, order,
         fill, or pending execution fact remains unresolved.
@@ -11225,7 +11040,7 @@ class AutonomousEngine:
     def _dedup_ghost_protection_positions(self) -> int:
         """BD-FIX (ghost-position deadlock): 同品种重复保护投影去重。
 
-        实测事故:BNBUSDT 同时存在 recovered 投影(SL 从未 ACK)与成交
+        实测故障:BNBUSDT 同时存在 recovered 投影(SL 从未 ACK)与成交
         路径投影(SL ACTIVE),导致 R8 保护覆盖恒为 20/21 —— 所有新入场
         在风险规则层被静默拒(1.5h 零成交)。S41 跳过按品种算法单计数,
         幽灵投影永远拿不到自己的 SL,无法自愈。
@@ -11239,7 +11054,7 @@ class AutonomousEngine:
         - ≥2 个 ACTIVE 且全部同方向同数量:确定性冗余(启动恢复的
           pos-recovered-* 与成交路径 pos-{orderId} 竞态,ONDO 19:51
           实测)——保留最高代数者(平代时成交路径 pid 优先),其余按
-          幽灵清理;方向/数量分歧仍只告警(fail-closed)。
+          幽灵清理;方向/数量分歧仍保持 fail-closed。
         """
         removed = 0
         try:
@@ -11368,7 +11183,7 @@ class AutonomousEngine:
             # BD-FIX (final82b): 空 inventory 不构成 MISSING 证据 —— testnet
             # API 抖动时 _get_open_algo_inventory 返回 []（见其 docstring），
             # 若据此判定全部 VENUE_ROW_MISSING 并清理本地行，会把仍然存在
-            # 的 55 条 ACTIVE 保护误清为 CANCELLED（final82b 实测事故，
+            # 的 55 条 ACTIVE 保护误清为 CANCELLED（final82b 实测故障，
             # 已手工恢复）。空 inventory 时本轮 defer，下一轮再评估。
             # BD-FIX (final83g): 空 inventory 仅在查询非成功(API 抖动)时 defer。
             # 查询成功且真空(venue 无任何 algo 单)意味着首建保护可以安全下发,
@@ -11663,7 +11478,7 @@ class AutonomousEngine:
                 genuine_inventory=bool(getattr(self, "_last_algo_inventory_genuine", False)),
             )
 
-            # Task 6 (3c/D-4): A 类永不 LOCKED 的配套告警 —— 每轮近线扫描
+            # A 类永不 LOCKED 的本地卡滞标记 —— 每轮近线扫描
             # 后刷新 stuck 标记 (文件 mtime 即"引擎还活着"的心跳), watchdog
             # 读到 age≥1800s 即弹窗。消除后自动删标记。
             self._update_stuck_marker()
@@ -12403,8 +12218,7 @@ class AutonomousEngine:
         _mark_order_unknown 在 venue 查询失败时把订单行落成 UNKNOWN 占位
         事实(side/quantity 未知)。这些行长期滞留 durable 存储 →
         _durable_fact_status 恒返回 DURABLE_ORDER_UNKNOWN → 启动门禁阻断
-        + 事故 auto-resolve 永不触发(实测 87 行残留、4 条 CRITICAL/HIGH
-        事故 DETECTED 数小时不收敛)。venue 订单按 orderId 可查:
+        + 本地 UNKNOWN 状态长期不收敛。venue 订单按 orderId 可查:
         - FILLED/CANCELED/EXPIRED/REJECTED → 落终态(采用 venue 事实)
         - NEW/PARTIALLY_FILLED → 仍是活跃单,保留 UNKNOWN 交监控路径
         - Order does not exist → venue 从未接受或已出查询窗口 → CANCELED
@@ -12648,8 +12462,7 @@ class AutonomousEngine:
 
         # BD-FIX (stale order rows): UNKNOWN 订单行按 venue 事实收敛(2 分钟
         # 节流)。残留 UNKNOWN 行会让 _durable_fact_status 恒
-        # DURABLE_ORDER_UNKNOWN → 启动门禁阻断 + 事故 auto-resolve 永不
-        # 触发(实测 87 行残留、4 条 CRITICAL/HIGH 事故 DETECTED 数小时)。
+        # DURABLE_ORDER_UNKNOWN → 启动门禁阻断，且本地 UNKNOWN 状态长期不收敛。
         _order_state_resolve_ago = time.monotonic() - getattr(self, "_last_order_state_resolve_mono", 0.0)
         if _order_state_resolve_ago >= 120.0:
             self._last_order_state_resolve_mono = time.monotonic()
@@ -13430,7 +13243,7 @@ class AutonomousEngine:
                 risk_results = dict(RiskRuleRegistry.evaluate_all(risk_context))
                 risk_approved = RiskRuleRegistry.is_approved(risk_results)
                 auxiliary_failed_rules: list[str] = []
-                # 快照风险校验是新增风险的第二道阻断门，不能降级为非阻塞告警。
+                # 快照风险校验是新增风险的第二道阻断门，不能降级为非阻塞记录。
                 if risk_approved:
                     try:
                         from beidou_safety.risk.engine import RiskSnapshot as _RiskSnapshot
@@ -13707,7 +13520,7 @@ class AutonomousEngine:
             print(f"[nearline] ERROR: {e}")
 
         # Task 7 (4-E3): 慢引信 —— 纯卡死(无显式拒绝)≥7200s 逐品种紧急平仓。
-        # 告警/执行失败均不阻断本轮近线周期 (fail-closed 到下一轮重试)。
+        # 诊断记录或执行失败均不阻断本轮近线周期 (fail-closed 到下一轮重试)。
         with contextlib.suppress(Exception):
             await self._run_slow_fuse()
 
@@ -13896,11 +13709,11 @@ class AutonomousEngine:
                     and icir < self._policy_float_audited("champion_degrade_icir", 0.05)
                 ):
                     self._factor_registry.degrade(fid, f"ICIR dropped to {icir:.3f} (n={min_n})")
-                    self._alerts.send_incident(
-                        AlertSeverity.WARNING,
-                        f"Factor degraded: {fid}",
-                        f"ICIR={icir:.3f} below threshold 0.05; scope={scope_label}",
-                        category="factor",
+                    logger.warning(
+                        "factor degraded: %s ICIR=%.3f below threshold 0.05; scope=%s",
+                        fid,
+                        icir,
+                        scope_label,
                     )
                     lifecycle_changed = True
                 elif record.lifecycle == FactorLifecycle.CHALLENGER and icir >= 0.3:
@@ -14060,12 +13873,6 @@ class AutonomousEngine:
                 else:
                     drift = self._drift_detector.detect({"sharpe": sharpe, "win_rate": win_rate})
                     if self._drift_detector.should_retire(drift):
-                        self._alerts.send_incident(
-                            AlertSeverity.HIGH,
-                            "Model drift detected",
-                            f"Drifted metrics: {list(drift.keys())}, live sharpe={sharpe:.3f} win_rate={win_rate:.2f}",
-                            category="model",
-                        )
                         print(f"[offline] ⚠️ Model drift: {drift}")
                     else:
                         print(f"[offline] DriftDetector: no drift (sharpe={sharpe:.3f} win_rate={win_rate:.2f})")
@@ -14106,23 +13913,15 @@ class AutonomousEngine:
                 if account_balance > 0:
                     result = self._strategy_risk.update_equity(self._autopilot_strategy_id, account_balance)
                     if result.get("action") == "DEGRADE":
-                        self._alerts.send_incident(
-                            AlertSeverity.HIGH,
-                            f"Strategy risk degraded: {result.get('new_level')}",
-                            result.get("reason", ""),
-                            category="strategy_risk",
-                        )
                         print(f"[offline] ⚠️ Strategy risk degraded: {result}")
 
             # === 4. Daily report ===
-            report_gen = self._alerts.get_report_generator()
-            report_gen.generate_daily_report(
+            self._report_generator.generate_daily_report(
                 date=now,
                 strategies=[StrategyId("autopilot")],
                 account_id=AccountId("default"),
                 venue_id=VenueId("BINANCE"),
-                risk_events_24h=self._alerts.get_alert_stats().get("total", 0),
-                active_incidents=[i["incident_id"] for i in self._alerts.get_active_incidents()],
+                risk_events_24h=0,
             )
 
             # === 5. MAPE-K Self-Healing Cycle ===
@@ -14246,12 +14045,6 @@ class AutonomousEngine:
                 health["remediation"] = "rotate_or_revoke_trading"
                 if self._can_trade:
                     self._can_trade = False  # 凭据失效 → 撤销交易能力 (R9)
-                self._alerts.send_incident(
-                    AlertSeverity.HIGH,
-                    f"Credential lifecycle: {cred.credential_id} expired/revoked",
-                    f"status={cred.status.value}, trading capability revoked (R9)",
-                    category="credential",
-                )
                 print(
                     f"[beidou-security] ❌ Credential {cred.credential_id} expired/revoked — trading capability revoked"
                 )
@@ -14266,12 +14059,6 @@ class AutonomousEngine:
                 except Exception as exc:
                     health["rotation_error"] = type(exc).__name__
                     logger.error("Credential rotation start failed: %s", type(exc).__name__)
-                self._alerts.send_incident(
-                    AlertSeverity.WARNING,
-                    f"Credential expiring in {days_left:.0f} days",
-                    f"credential_id={cred.credential_id}, days_to_expiry={days_left:.0f}",
-                    category="credential",
-                )
                 print(f"[beidou-security] ⚠️ Credential {cred.credential_id} expires in {days_left:.0f} days")
             elif cred.status == KeyRotationStatus.ROTATING:
                 health["level"] = "WARNING"
@@ -14289,7 +14076,7 @@ class AutonomousEngine:
                 health["level"] = "OK"
             # PKG02 (BDS-P0-001): R9 提款权限在所有环境统一检查。
             # BD-FIX: Testnet 模式下提款权限由交易所默认开启（测试资金），
-            # 不产生告警。非 testnet 环境保持 CRITICAL 阻断。
+            # 不升级为额外事件。非 testnet 环境保持 CRITICAL 阻断。
             if self._can_withdraw:
                 # TESTNET-EXEMPT: EXEMPT-15
                 _env_mode = getattr(self, "_env_mode", None)
@@ -14297,12 +14084,6 @@ class AutonomousEngine:
                 if not is_testnet:
                     health["level"] = "CRITICAL"
                     health["r9_violation"] = "WITHDRAW_ENABLED"
-                    self._alerts.send_incident(
-                        AlertSeverity.HIGH,
-                        "R9 violation: withdraw enabled on trading credential",
-                        f"credential_id={cred.credential_id}",
-                        category="credential",
-                    )
         except Exception as exc:
             health["level"] = "UNKNOWN"
             health["error"] = f"{type(exc).__name__}: {exc}"
@@ -14588,8 +14369,8 @@ class AutonomousEngine:
             self._safe_no_new_risk("auto")
             self._record_execution_fact_failure_env_guarded(
                 permission_reason,
-                alert_title="Venue account permission blocked",
-                alert_category="credential",
+                event_title="Venue account permission blocked",
+                event_category="credential",
             )
             print(f"[beidou-autopilot] FATAL: account permission gate: {permission_reason}")
             self._lifecycle.transition(ModuleState.FAILED)
@@ -14696,12 +14477,6 @@ class AutonomousEngine:
                     self._safe_no_new_risk("auto")
                     self._record_execution_fact_failure_env_guarded(
                         f"ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned)[:20])}"
-                    )
-                    self._alerts.send_incident(
-                        AlertSeverity.CRITICAL,
-                        "Active order ownership unknown",
-                        f"Startup discovered venue orders without current-worker ownership: {sorted(unowned)[:20]}",
-                        category="execution",
                     )
         except Exception as e:
             print(f"[beidou-autopilot] Warning: Could not restore open orders: {e}")
@@ -15381,12 +15156,6 @@ class AutonomousEngine:
                 self._record_execution_fact_failure_env_guarded(
                     f"SHUTDOWN_ACTIVE_ORDER_OWNER_UNKNOWN:{','.join(sorted(unowned_active_order_ids)[:20])}"
                 )
-                self._alerts.send_incident(
-                    AlertSeverity.CRITICAL,
-                    "Shutdown left unowned active orders untouched",
-                    f"Manual/other-worker order IDs require reconciliation: {sorted(unowned_active_order_ids)[:20]}",
-                    category="execution",
-                )
         print(
             f"[beidou-autopilot] 2. Cancelled {len(owned_active_order_ids)} owned pending orders; "
             f"left {len(unowned_active_order_ids)} unowned orders untouched"
@@ -15418,14 +15187,7 @@ class AutonomousEngine:
         )
         print("[beidou-autopilot] 3. Checkpoint saved")
 
-        # 4. Stop alert delivery worker.  Unflushed deliveries remain PENDING
-        # in the sidecar and are replayed by the next process generation.
-        try:
-            self._alerts.close(flush=False)
-        except Exception as exc:
-            logger.warning("alert worker shutdown failed: %s", type(exc).__name__)
-
-        # 5. Close store
+        # 4. Close store
         self._store.close()
         self._health.stop()
-        print("[beidou-autopilot] 5. Shutdown complete.")
+        print("[beidou-autopilot] 4. Shutdown complete.")

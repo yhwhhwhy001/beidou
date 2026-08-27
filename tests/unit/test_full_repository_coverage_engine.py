@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -57,7 +56,6 @@ def test_autonomous_engine_paper_initialization_is_wired_and_isolated(tmp_path, 
         infrastructure=InfrastructureConfig(
             health_host="127.0.0.1",
             health_port=0,
-            alerts_file=str(Path(tmp_path) / "alerts.jsonl"),
         ),
     )
     monkeypatch.setattr(
@@ -361,7 +359,6 @@ def test_engine_market_projection_operational_facts_and_factor_bar_pairing() -> 
             SimpleNamespace(factor_id="challenger", lifecycle=SimpleNamespace(value="CHALLENGER"))
         ],
     )
-    engine._alerts = SimpleNamespace(get_active_incidents=lambda: [], get_alert_stats=lambda: {})
     engine._health = SimpleNamespace(uptime_seconds=lambda: 1.0)
     engine._service_identity = SimpleNamespace(service_id="svc", roles=frozenset({"trader"}))
     engine._credential = SimpleNamespace(
@@ -657,29 +654,8 @@ async def test_engine_api_exception_and_leverage_readback_boundaries() -> None:
     assert await engine._ensure_leverage("ETHUSDT", 5) == -1
 
 
-def test_engine_portfolio_summary_and_operational_fact_fallbacks() -> None:
+def test_engine_operational_fact_fallbacks() -> None:
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._last_prices = {"BTCUSDT": 110.0, "ETHUSDT": 0.0}
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {
-            "long": SimpleNamespace(
-                instrument_id="BTCUSDT", quantity=1.0, entry_price=100.0, side=SimpleNamespace(value="BUY")
-            ),
-            "short": SimpleNamespace(
-                instrument_id="ETHUSDT", quantity=1.0, entry_price=50.0, side=SimpleNamespace(value="SELL")
-            ),
-            "bad": SimpleNamespace(
-                instrument_id="BAD", quantity=1.0, entry_price=0.0, side=SimpleNamespace(value="BUY")
-            ),
-        }
-    )
-    summary = engine._portfolio_summary()
-    assert "BTCUSDT" in summary and "ETHUSDT" in summary and "总敞口" in summary
-    engine._protection = SimpleNamespace(all_positions=lambda: {})
-    assert engine._portfolio_summary() == "📊 当前无持仓"
-    engine._protection = SimpleNamespace(all_positions=lambda: (_ for _ in ()).throw(RuntimeError("state")))
-    assert "持仓获取异常" in engine._portfolio_summary()
-
     facts = engine.collect_operational_facts()
     assert set(facts) == {"reconciliation", "control", "protection", "lifecycle", "risk"}
 
@@ -698,9 +674,7 @@ def test_engine_constructor_rejects_implicit_universe_and_initializes_zero_write
             environment=Environment.PAPER,
             database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'zero-write-state.db'}"),
             exchange=ExchangeConfig(rest_base_url="https://paper.invalid", ws_base_url="wss://paper.invalid"),
-            infrastructure=InfrastructureConfig(
-                health_host="127.0.0.1", health_port=0, alerts_file=str(tmp_path / "zero-write-alerts.jsonl")
-            ),
+            infrastructure=InfrastructureConfig(health_host="127.0.0.1", health_port=0),
         )
 
     monkeypatch.setattr(engine_module.ConfigProvider, "load", lambda _self, environment="": settings_for(environment))
@@ -724,9 +698,7 @@ def test_engine_constructor_writable_hold_and_postgres_diagnostic_paths(tmp_path
         environment=Environment.TESTNET,
         database=DatabaseConfig(url="postgresql://user:pass@invalid/db"),
         exchange=ExchangeConfig(rest_base_url="https://testnet.invalid", ws_base_url="wss://testnet.invalid"),
-        infrastructure=InfrastructureConfig(
-            health_host="127.0.0.1", health_port=0, alerts_file=str(tmp_path / "alerts.jsonl")
-        ),
+        infrastructure=InfrastructureConfig(health_host="127.0.0.1", health_port=0),
     )
     required = {
         "max_leverage": 3,
@@ -1021,25 +993,6 @@ def test_engine_user_stream_readiness_and_ready_gates() -> None:
     assert engine._check_trading_ready() == (False, "TRADING_WRITE_DISABLED")
 
 
-def test_engine_portfolio_summary_covers_short_zero_price_and_failure_paths() -> None:
-    engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._last_prices = {"BTCUSDT": 110.0, "ETHUSDT": 0.0}
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {
-            "long": SimpleNamespace(
-                instrument_id="BTCUSDT", quantity=1, entry_price=100, side=SimpleNamespace(value="BUY")
-            ),
-            "short": SimpleNamespace(
-                instrument_id="ETHUSDT", quantity=2, entry_price=50, side=SimpleNamespace(value="SELL")
-            ),
-        }
-    )
-    summary = engine._portfolio_summary()
-    assert "BTCUSDT" in summary and "ETHUSDT" in summary
-    engine._protection = SimpleNamespace(all_positions=lambda: (_ for _ in ()).throw(RuntimeError("summary")))
-    assert "持仓获取异常" in engine._portfolio_summary()
-
-
 @pytest.mark.asyncio
 async def test_engine_heartbeat_task_recovery_and_leverage_error_paths(monkeypatch) -> None:
     engine = _shell_engine()
@@ -1069,7 +1022,6 @@ async def test_engine_heartbeat_task_recovery_and_leverage_error_paths(monkeypat
         get_status=lambda: ControlAction.NO_NEW_RISK,
         execute_action=lambda _action: (_ for _ in ()).throw(RuntimeError("interlock")),
     )
-    engine._maybe_auto_resolve_incidents = lambda: None
     await engine._reconciliation_segment()
     assert engine._last_recon > 0
 
@@ -1171,21 +1123,6 @@ def test_engine_factor_bar_and_portfolio_short_paths() -> None:
     assert engine._factor_pending_by_scope[("BINANCE", "BTCUSDT", "5m", 1)] == {}
     engine._store_factor_predictions("BTCUSDT", "5m", now + timedelta(minutes=5), 100.0, {"f": 1.0})
 
-    engine._last_prices = {"BTCUSDT": 110.0, "ETHUSDT": 60.0}
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {
-            "long": SimpleNamespace(
-                instrument_id="BTCUSDT", quantity=1, entry_price=100, side=SimpleNamespace(value="BUY")
-            ),
-            "short": SimpleNamespace(
-                instrument_id="ETHUSDT", quantity=2, entry_price=50, side=SimpleNamespace(value="SELL")
-            ),
-        }
-    )
-    summary = engine._portfolio_summary()
-    assert "ETHUSDT" in summary and "$-20.00" in summary
-
-
 @pytest.mark.asyncio
 async def test_engine_user_stream_event_dispatch_and_restart_contracts(monkeypatch) -> None:
     import beidou_exchange.binance_usdm as binance_module
@@ -1229,7 +1166,6 @@ async def test_engine_user_stream_event_dispatch_and_restart_contracts(monkeypat
     engine._user_stream_restart_attempts = 0
     engine._user_stream_restarting = False
     engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)
-    engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     engine._recon = SimpleNamespace(update_event_facts=lambda _facts: None)
     engine._user_stream_projector = SimpleNamespace()
     engine._event_stream_facts = None
@@ -1310,7 +1246,6 @@ async def test_engine_user_stream_ingest_wrappers_config_fault_and_keepalive(mon
     engine._store = SimpleNamespace()
     engine._recon = SimpleNamespace(update_event_facts=lambda _facts: None)
     engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)
-    engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     engine._env_mode = SimpleNamespace(value="live")
     engine._can_write = False
     engine._user_stream_runtime = None
@@ -1649,7 +1584,6 @@ async def test_engine_small_durable_and_readiness_failure_matrix() -> None:
         get_status=lambda: ControlAction.RESUME,
         execute_action=lambda _action: None,
     )
-    engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     with pytest.raises(RuntimeError, match="PROTECTION_CONFIG_UNKNOWN"):
         engine._require_protection_config("BTCUSDT", SimpleNamespace(metadata={"blocked": True}, stop_pct=0))
     assert engine._protection_config_unknown is True
@@ -1769,9 +1703,7 @@ def test_engine_constructor_postgres_fallback_recovery_and_activation_branches(t
         environment=Environment.TESTNET,
         database=DatabaseConfig(url="postgresql://user:pass@invalid/beidou"),
         exchange=ExchangeConfig(rest_base_url="https://testnet.invalid", ws_base_url="wss://testnet.invalid"),
-        infrastructure=InfrastructureConfig(
-            health_host="127.0.0.1", health_port=0, alerts_file=str(tmp_path / "a.jsonl")
-        ),
+        infrastructure=InfrastructureConfig(health_host="127.0.0.1", health_port=0),
     )
 
     class Store:

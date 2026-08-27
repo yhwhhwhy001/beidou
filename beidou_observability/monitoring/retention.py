@@ -8,8 +8,6 @@ class RetentionTier(str, Enum):
     FAST_GUARD = "fast_guard"
     DEEP_AUDIT = "deep_audit"
     TRACE = "trace"
-    P2_INCIDENT = "p2_incident"
-    P0P1_INCIDENT = "p0p1_incident"
     CERTIFICATION = "certification"
 
 
@@ -17,8 +15,6 @@ RETENTION_DAYS = {
     RetentionTier.FAST_GUARD: 7,
     RetentionTier.DEEP_AUDIT: 30,
     RetentionTier.TRACE: 90,
-    RetentionTier.P2_INCIDENT: 90,
-    RetentionTier.P0P1_INCIDENT: 365,
     RetentionTier.CERTIFICATION: -1,
 }
 
@@ -33,9 +29,7 @@ class RetentionPolicy:
         days = self.tiers.get(tier, 30)
         return float("inf") if days < 0 else days * 86400.0
 
-    def should_retain(self, tier, record_age_seconds, *, has_open_incident=False, is_certification=False):
-        if has_open_incident:
-            return True
+    def should_retain(self, tier, record_age_seconds, *, is_certification=False):
         if is_certification and tier == RetentionTier.CERTIFICATION:
             return True
         return record_age_seconds < self.retention_seconds(tier)

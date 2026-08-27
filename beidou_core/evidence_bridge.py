@@ -107,7 +107,6 @@ class EvidenceBridge:
         filter_ids: set[str],
         exit_ids: set[str],
         evidence_dir: str = "evidence/factors",
-        alerts: Any = None,
     ) -> BridgeReport:
         report = BridgeReport()
         root = Path(evidence_dir)

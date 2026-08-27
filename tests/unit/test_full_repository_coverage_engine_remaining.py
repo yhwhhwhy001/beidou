@@ -82,7 +82,6 @@ def test_domain_ports_are_constructible_and_registry_enforces_one_authority() ->
     assert ProtectionPort.cancel_protection(None, "p") is None
     assert ProtectionPort.get_active_protections(None) is None
     assert MonitoringPort.report_health(None) is None
-    assert MonitoringPort.report_incident(None, "P1", "title", "detail") is None
     assert MonitoringPort.get_operational_facts(None) is None
 
     registry = DomainAuthorityRegistry()
@@ -151,7 +150,6 @@ def _realtime_shell(feed: _FeedProbe, *, simulate: bool = False) -> AutonomousEn
     engine._store = SimpleNamespace(save_market_snapshot=lambda *_args: setattr(feed, "saved", feed.saved + 1))
     engine._last_account = {}
     engine._error_count = 0
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     engine._protection = SimpleNamespace(
         all_positions=lambda: {
             "p": SimpleNamespace(
@@ -198,13 +196,13 @@ async def test_realtime_tick_covers_ws_rest_intent_status_and_isolated_failures(
     assert engine._last_realtime is not None
 
     # A per-symbol failure does not escape the tick; an outer failure is
-    # incidented and the independent reconciliation segment still runs.
+    # counted and the independent reconciliation segment still runs.
     failed = _realtime_shell(_FeedProbe(fail=True), simulate=False)
     await failed._realtime_tick()
     assert failed._market_data_failures["BTCUSDT"] == 1
     failed._trading_pool = SimpleNamespace(active_instruments=lambda: (_ for _ in ()).throw(RuntimeError("pool")))
     await failed._realtime_tick()
-    assert "pool" in failed.incident[0][2]
+    assert failed._error_count == 1
 
 
 @pytest.mark.asyncio
@@ -236,7 +234,6 @@ async def test_protection_order_cancel_and_fact_update_failure_matrix() -> None:
     engine._protection_owner_unknown = False
     engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)
     engine._safe_no_new_risk = lambda *_args: setattr(engine, "no_new_risk", True)
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     engine._block_unowned_protection_orders(["a", "b"])
     assert engine._protection_owner_unknown and engine._protection_issues == {"a", "b"}
 
@@ -827,14 +824,13 @@ async def test_realtime_tick_extra_modes_and_reconciliation_recovery() -> None:
     engine._outbox = SimpleNamespace()
     engine._reconcile = lambda: asyncio.sleep(0, result=setattr(engine, "recon_called", True) or True)
     engine._durable_fact_status = lambda: (True, "OK", {})
-    engine._maybe_auto_resolve_incidents = lambda: setattr(engine, "incidents_resolved", True)
     engine._control = SimpleNamespace(
         get_status=lambda: ControlAction.NO_NEW_RISK,
         execute_action=lambda action: setattr(engine, "resumed", action),
     )
     await AutonomousEngine._reconciliation_segment(engine)
     assert engine.__dict__.get("recon_called") is True
-    assert engine.incidents_resolved and engine.resumed is ControlAction.RESUME
+    assert engine.resumed is ControlAction.RESUME
 
     broken = _realtime_shell(_FeedProbe(), simulate=False)
     broken._last_unknown_resolve = time.time()  # type: ignore[name-defined]
@@ -850,7 +846,6 @@ def test_engine_protection_config_fact_failure_and_binding_helpers() -> None:
     engine._control = SimpleNamespace(
         get_status=lambda: ControlAction.RESUME, execute_action=lambda action: setattr(engine, "action", action)
     )
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     with pytest.raises(RuntimeError, match="PROTECTION_CONFIG_UNKNOWN:BTCUSDT"):
         engine._require_protection_config("BTCUSDT", SimpleNamespace(stop_pct=0, metadata={"reason": "no ATR"}))
     assert engine._protection_config_unknown and engine.action is ControlAction.NO_NEW_RISK
@@ -864,10 +859,8 @@ def test_engine_protection_config_fact_failure_and_binding_helpers() -> None:
     )
     engine._safe_no_new_risk("control-error")
     engine._env_mode = SimpleNamespace(value="testnet")
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     engine._safe_no_new_risk = lambda _reason="": None
     engine._record_execution_fact_failure_env_guarded("testnet-failure")
-    assert "testnet-failure" in engine.incident[0][2]
 
     class Ledger:
         def __init__(self) -> None:
@@ -1204,12 +1197,10 @@ def test_engine_unowned_protection_initializes_issue_set_and_fails_closed() -> N
         get_status=lambda: ControlAction.RESUME,
     )
     engine._safe_no_new_risk = lambda source: setattr(engine, "safe_source", source)
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", args))
     engine._block_unowned_protection_orders(["algo-1", "algo-2"])
     assert engine._protection_owner_unknown is True
     assert engine._protection_issues == {"algo-1", "algo-2"}
     assert engine.safe_source == "auto"
-    assert engine.incident
 
 
 @pytest.mark.asyncio

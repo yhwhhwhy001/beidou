@@ -35,8 +35,6 @@ def _engine(
     can_write: bool = False,
     stream_result: object | None = None,
     reconciliation: object | None = None,
-    incidents: object = (),
-    delivery: object | None = None,
     tick_count: int = 1,
     running: bool = True,
     error_count: int = 0,
@@ -59,10 +57,6 @@ def _engine(
             raise RuntimeError("control unavailable")
         return control_state
 
-    alerts = SimpleNamespace(get_active_incidents=lambda: incidents)
-    if delivery is not None:
-        alerts.get_delivery_health = lambda: delivery
-
     engine = SimpleNamespace(
         _lifecycle=SimpleNamespace(state=SimpleNamespace(value=lifecycle)),
         _control=SimpleNamespace(get_status=get_status),
@@ -77,50 +71,12 @@ def _engine(
         _can_write=can_write,
         _last_nearline=time.time() - nearline_age,
         _error_count=error_count,
-        _alerts=alerts,
     )
     if stream_result is not None:
         engine._user_stream_readiness = lambda: stream_result
     if not resume_authorized:
         engine._last_realtime_mono = time.monotonic() - 1
     return engine
-
-
-def test_incident_helpers_distinguish_resolved_p1_and_p0_facts() -> None:
-    assert runtime.active_incident_blocking_severity([]) is None
-    assert runtime.active_incident_blocking_severity([{"severity": "HIGH", "status": "DETECTED"}]) is CheckSeverity.P1
-    assert (
-        runtime.active_incident_blocking_severity([{"severity": "CRITICAL", "status": "DETECTED"}]) is CheckSeverity.P0
-    )
-    assert runtime.active_incident_blocking_severity([{"severity": "HIGH", "status": "RESOLVED"}]) is None
-    assert (
-        runtime.active_incident_blocking_severity(
-            [SimpleNamespace(severity=SimpleNamespace(value="P0"), status=SimpleNamespace(value="OPEN"))]
-        )
-        is CheckSeverity.P0
-    )
-
-    assert runtime.has_active_trading_incident(SimpleNamespace()) is False
-    assert (
-        runtime.has_active_trading_incident(SimpleNamespace(_alerts=SimpleNamespace(get_active_incidents=lambda: [])))
-        is False
-    )
-    assert (
-        runtime.has_active_trading_incident(
-            SimpleNamespace(_alerts=SimpleNamespace(get_active_incidents=lambda: [{"severity": "HIGH"}]))
-        )
-        is True
-    )
-
-    def raise_incident_query() -> list[object]:
-        raise RuntimeError("incident store unavailable")
-
-    assert (
-        runtime.has_active_trading_incident(
-            SimpleNamespace(_alerts=SimpleNamespace(get_active_incidents=raise_incident_query))
-        )
-        is True
-    )
 
 
 def test_position_mode_check_is_warn_fail_closed_or_pass() -> None:
@@ -155,10 +111,7 @@ def test_position_mode_check_is_warn_fail_closed_or_pass() -> None:
 
 def test_collect_runtime_checks_covers_zero_write_and_readiness_authority(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime, "inspect_engine_wiring", lambda _engine, _mode: [])
-    engine = _engine(
-        reconciliation=None,
-        delivery={"critical_pending": 0, "dead_letter": 0, "unknown": 0, "pending": 0, "configured": True},
-    )
+    engine = _engine(reconciliation=None)
     checks, last_errors = runtime.collect_runtime_checks(
         engine=engine,
         mode="paper",
@@ -176,7 +129,6 @@ def test_collect_runtime_checks_covers_zero_write_and_readiness_authority(monkey
     assert _check(checks, "runtime.safety.reconciliation_authority").status is CheckStatus.PASS
     assert _check(checks, "runtime.safety.user_stream").status is CheckStatus.PASS
     assert _check(checks, "runtime.health.market_data").status is CheckStatus.PASS
-    assert _check(checks, "runtime.health.alert_delivery").status is CheckStatus.PASS
     assert _check(checks, "runtime.health.engine_loop").status is CheckStatus.PASS
 
     degraded = _engine(
@@ -188,8 +140,6 @@ def test_collect_runtime_checks_covers_zero_write_and_readiness_authority(monkey
         error_count=9,
         heartbeat_age=120,
         nearline_age=1,
-        incidents=[{"severity": "HIGH", "status": "DETECTED"}],
-        delivery={"critical_pending": 0, "dead_letter": 2, "unknown": 0, "pending": 1, "configured": False},
     )
     degraded._last_realtime_mono = time.monotonic() - 120
     checks, _ = runtime.collect_runtime_checks(
@@ -205,8 +155,6 @@ def test_collect_runtime_checks_covers_zero_write_and_readiness_authority(monkey
     assert _check(checks, "runtime.health.market_data").status is CheckStatus.WARN
     assert _check(checks, "runtime.health.realtime_heartbeat").status is CheckStatus.WARN
     assert _check(checks, "runtime.health.nearline_heartbeat").status is CheckStatus.FAIL
-    assert _check(checks, "runtime.health.incidents").status is CheckStatus.FAIL
-    assert _check(checks, "runtime.health.alert_delivery").status is CheckStatus.WARN
 
 
 @pytest.mark.parametrize(
@@ -248,14 +196,11 @@ def test_collect_runtime_checks_never_converts_unknown_authority_to_pass(
     assert _check(checks, "runtime.safety.user_stream").status is CheckStatus.FAIL
 
 
-def test_collect_runtime_checks_covers_reconciliation_delivery_and_query_errors(
+def test_collect_runtime_checks_covers_reconciliation_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(runtime, "inspect_engine_wiring", lambda _engine, _mode: [])
-    matched = _engine(
-        reconciliation=_reconciliation(),
-        delivery={"critical_pending": 0, "dead_letter": 0, "unknown": 0, "pending": 0, "configured": True},
-    )
+    matched = _engine(reconciliation=_reconciliation())
     checks, _ = runtime.collect_runtime_checks(
         engine=matched,
         mode="testnet",
@@ -265,40 +210,6 @@ def test_collect_runtime_checks_covers_reconciliation_delivery_and_query_errors(
         last_error_count=0,
     )
     assert _check(checks, "runtime.safety.reconciliation_authority").status is CheckStatus.PASS
-
-    delivery_cases = [
-        {"critical_pending": 1, "dead_letter": 0, "unknown": 0, "pending": 0, "configured": True},
-        {"critical_pending": 0, "dead_letter": 0, "unknown": 1, "pending": 0, "configured": True},
-        {"critical_pending": 0, "dead_letter": 0, "unknown": 0, "pending": 0, "configured": False},
-    ]
-    for delivery in delivery_cases:
-        engine = _engine(reconciliation=_reconciliation(), delivery=delivery)
-        checks, _ = runtime.collect_runtime_checks(
-            engine=engine,
-            mode="testnet",
-            port=9090,
-            resume_authorized=True,
-            algorithm_probe={"ok": True},
-            last_error_count=0,
-        )
-        assert _check(checks, "runtime.health.alert_delivery").status in {CheckStatus.FAIL, CheckStatus.WARN}
-
-    broken_alerts = _engine(reconciliation=_reconciliation())
-    broken_alerts._alerts = SimpleNamespace(
-        get_active_incidents=lambda: (_ for _ in ()).throw(RuntimeError("incident query")),
-        get_delivery_health=lambda: (_ for _ in ()).throw(RuntimeError("delivery query")),
-    )
-    checks, _ = runtime.collect_runtime_checks(
-        engine=broken_alerts,
-        mode="testnet",
-        port=9090,
-        resume_authorized=True,
-        algorithm_probe={"ok": True},
-        last_error_count=0,
-    )
-    assert _check(checks, "runtime.health.incidents").status is CheckStatus.FAIL
-    assert _check(checks, "runtime.health.alert_delivery").status is CheckStatus.FAIL
-
 
 class _ProbeFeed:
     def __init__(self, *, kline: dict, live: dict) -> None:

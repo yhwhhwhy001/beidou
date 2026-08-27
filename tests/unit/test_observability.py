@@ -1,18 +1,11 @@
 """
 PKG-04: Observability 测试。
-覆盖 Trace 全链追踪、事故生命周期、告警抑制、自动动作。
+覆盖 Trace 全链追踪。
 """
 
 from __future__ import annotations
 
-from beidou_observability.telemetry import (
-    AlertSeverity,
-    AlertSuppressor,
-    AutoAction,
-    Incident,
-    IncidentStatus,
-    TraceContext,
-)
+from beidou_observability.telemetry import TraceContext
 from beidou_shared.types import CorrelationId
 
 
@@ -63,74 +56,3 @@ class TestTraceContext:
         ctx.end_span(s2.span_id)
         ctx.end_span(s1.span_id)
         assert len(ctx._span_stack) == 0
-
-
-class TestIncident:
-    """事故生命周期测试。"""
-
-    def test_incident_full_lifecycle(self) -> None:
-        incident = Incident(
-            incident_id="INC-001",
-            severity=AlertSeverity.HIGH,
-            title="Exchange connectivity lost",
-            description="Binance API unreachable for 30s",
-            auto_action=AutoAction.PAUSE_TRADING,
-        )
-        assert incident.status == IncidentStatus.DETECTED
-
-        incident.acknowledge()
-        assert incident.status == IncidentStatus.ACKNOWLEDGED
-        assert incident.acknowledged_at is not None
-
-        incident.resolve("Exchange connectivity restored, all systems normal")
-        assert incident.status == IncidentStatus.RESOLVED
-        assert incident.resolved_at is not None
-
-    def test_capture_evidence(self) -> None:
-        incident = Incident(
-            incident_id="INC-002",
-            severity=AlertSeverity.CRITICAL,
-            title="Risk engine failure",
-            description="Pre-Risk check not responding",
-        )
-        incident.capture_evidence({"checkpoint": "pre_risk_timeout", "duration_ms": 5000})
-        assert len(incident.evidence_snapshots) == 1
-        assert "captured_at" in incident.evidence_snapshots[0]
-
-    def test_incident_with_correlation_id(self) -> None:
-        incident = Incident(
-            incident_id="INC-003",
-            severity=AlertSeverity.WARNING,
-            title="Data quality degradation",
-            description="Market data gap detected",
-            correlation_id=CorrelationId("corr-123"),
-        )
-        assert incident.correlation_id == "corr-123"
-
-
-class TestAlertSuppressor:
-    """告警抑制测试。"""
-
-    def test_critical_never_suppressed(self) -> None:
-        suppressor = AlertSuppressor()
-        assert not suppressor.should_suppress(AlertSeverity.CRITICAL, "p0-alert")
-        assert not suppressor.should_suppress(AlertSeverity.LOCKDOWN, "lockdown-alert")
-
-    def test_info_suppressed_when_duplicate(self) -> None:
-        suppressor = AlertSuppressor(window_seconds=3600)
-        assert not suppressor.should_suppress(AlertSeverity.INFO, "info-1")
-        assert suppressor.should_suppress(AlertSeverity.INFO, "info-1")
-
-    def test_different_keys_not_suppressed(self) -> None:
-        suppressor = AlertSuppressor()
-        assert not suppressor.should_suppress(AlertSeverity.WARNING, "warn-1")
-        assert not suppressor.should_suppress(AlertSeverity.WARNING, "warn-2")
-
-
-class TestAlertControlBoundary:
-    """报警模块不隐式执行 severity 到控制动作的映射。"""
-
-    def test_telemetry_has_no_unwired_auto_action_mapping(self) -> None:
-        import beidou_observability.telemetry as telemetry
-
-        assert not hasattr(telemetry, "SEVERITY_AUTO_ACTIONS")

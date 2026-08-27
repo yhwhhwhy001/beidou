@@ -88,12 +88,12 @@ def test_classifier_accepts_repairable_gap_and_rejects_unknown() -> None:
     assert supervisor._classify_repairable([b_gap]) is False
 
     unknown = CheckResult(
-        check_id="runtime.health.incidents",
+        check_id="runtime.health.market_data",
         name="x",
         status=CheckStatus.FAIL,
         severity=CheckSeverity.P0,
         message="x",
-        evidence={"incidents": [{"incident_id": "i", "severity": "CRITICAL", "title": "t", "status": "DETECTED"}]},
+        evidence={"source": "exchange"},
     )
     assert supervisor._classify_repairable([unknown]) is False
 
@@ -120,98 +120,6 @@ def test_classifier_gap_reason_missing_is_b() -> None:
         },
     )
     assert supervisor._classify_repairable([gap_missing_reason]) is False
-
-
-def test_classifier_incidents_never_provide_a_evidence() -> None:
-    """R12: incidents 携带再多的 gap_reasons 也不提供 A 证据 → 整体 False。
-
-    事故的 gap_reasons 只在重发时更新, A 期创建的事故在 gap 清除后残留
-    stale reasons —— 若据此判 A, 真 B 类 owner-unknown 会永不 LOCKED
-    (I-2 fail-open)。incidents 的 gap_reasons 只作可观测性展示。
-    """
-    supervisor = _bind_classifier()
-    ok = CheckResult(
-        check_id="runtime.health.incidents",
-        name="活动事故",
-        status=CheckStatus.FAIL,
-        severity=CheckSeverity.P0,
-        message="x",
-        evidence={
-            "incidents": [
-                {
-                    "incident_id": "i1",
-                    "severity": "CRITICAL",
-                    "title": "protection",
-                    "status": "DETECTED",
-                    "gap_reasons": ["MISSING_TP", "MISSING_SL"],
-                },
-            ]
-        },
-    )
-    assert supervisor._classify_repairable([ok]) is False
-
-
-def test_classifier_gap_detail_plus_incidents_is_b() -> None:
-    """R12: gap_detail 提供 A 证据时, 与 incidents blocker 并存 → 整体按 B。"""
-    supervisor = _bind_classifier()
-    gap = CheckResult(
-        check_id="runtime.safety.protection_gap_detail",
-        name="x",
-        status=CheckStatus.FAIL,
-        severity=CheckSeverity.P1,
-        message="x",
-        evidence={"gaps": [{"symbol": "BTCUSDT", "reason": "MISSING_SL"}], "repairable": True},
-    )
-    inc = CheckResult(
-        check_id="runtime.health.incidents",
-        name="活动事故",
-        status=CheckStatus.FAIL,
-        severity=CheckSeverity.P0,
-        message="x",
-        evidence={
-            "incidents": [
-                {
-                    "incident_id": "i1",
-                    "severity": "CRITICAL",
-                    "title": "protection",
-                    "status": "DETECTED",
-                    "gap_reasons": ["MISSING_SL"],
-                },
-            ]
-        },
-    )
-    assert supervisor._classify_repairable([gap, inc]) is False
-
-
-def test_classifier_mixed_incidents_is_b() -> None:
-    """A+B 并存按 B: 非 protection 事故与缺口事故同列 → 整体按 B。"""
-    supervisor = _bind_classifier()
-    mixed = CheckResult(
-        check_id="runtime.health.incidents",
-        name="活动事故",
-        status=CheckStatus.FAIL,
-        severity=CheckSeverity.P0,
-        message="x",
-        evidence={
-            "incidents": [
-                {
-                    "incident_id": "i1",
-                    "severity": "CRITICAL",
-                    "title": "protection",
-                    "status": "DETECTED",
-                    "gap_reasons": ["MISSING_SL"],
-                },
-                {
-                    "incident_id": "i2",
-                    "severity": "HIGH",
-                    "title": "execution",
-                    "status": "DETECTED",
-                    "gap_reasons": [],
-                },
-            ]
-        },
-    )
-    assert supervisor._classify_repairable([mixed]) is False
 
 
 def _bind_classifier(engine: object | None = None) -> AutonomousEngine:

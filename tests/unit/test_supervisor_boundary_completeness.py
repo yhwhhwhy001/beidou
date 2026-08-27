@@ -171,10 +171,7 @@ def test_health_callbacks_expose_factors_metrics_and_g7_state(tmp_path: Path) ->
 
 def test_runtime_and_monitoring_checks_preserve_external_fact_failures(tmp_path: Path, monkeypatch) -> None:
     supervisor = _supervisor(tmp_path)
-    retry_calls: list[int] = []
-    supervisor.engine = SimpleNamespace(
-        _alerts=SimpleNamespace(retry_pending=lambda max_items: retry_calls.append(max_items))
-    )
+    supervisor.engine = SimpleNamespace()
     supervisor._algorithm_probe = {"ok": True}
     captured = {}
 
@@ -195,7 +192,6 @@ def test_runtime_and_monitoring_checks_preserve_external_fact_failures(tmp_path:
     monkeypatch.setattr(supervisor_module, "collect_monitoring_checks", lambda **_kwargs: [external])
     merged = supervisor._merge_monitoring_checks([duplicate, _check("runtime.other")])
     assert [item.check_id for item in merged] == ["runtime.other", "runtime.internal"]
-    assert retry_calls == [1]
     assert emitted and emitted[0][0] == "monitoring_check_fail"
 
 

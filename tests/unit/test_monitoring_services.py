@@ -34,7 +34,6 @@ from beidou_observability.monitoring.evidence import *
 from beidou_observability.monitoring.fact_collector import FactCollector, FactDomain
 from beidou_observability.monitoring.frequency_policy import *
 from beidou_observability.monitoring.health_aggregator import aggregate_health, health_summary
-from beidou_observability.monitoring.incident_manager import IncidentManager
 from beidou_observability.monitoring.instrumentation import InstrumentationRecorder, TraceEvent
 from beidou_observability.monitoring.rate_limit_budget import EndpointBudget
 from beidou_observability.monitoring.repository import MonitoringRepository
@@ -43,7 +42,6 @@ from beidou_observability.monitoring.rollout import RolloutManager
 from beidou_observability.monitoring.scheduler import DeepAuditScheduler
 from beidou_observability.monitoring.service import MonitoringService
 from beidou_observability.monitoring.snapshot_broker import SnapshotBroker, SnapshotSource
-from beidou_observability.monitoring.storm_detector import StormDetector
 from beidou_observability.monitoring.watchdog import COMPONENT_FAILURE_MATRIX, Watchdog
 
 
@@ -289,7 +287,7 @@ class TestFactors:
 # PKG-MON-08 Frequency
 class TestFrequency:
     def test_init_alert(self):
-        assert init_frequency_state().level == FrequencyLevel.ALERT
+        assert init_frequency_state().level == FrequencyLevel.FAST
 
     def test_promotion(self):
         s = init_frequency_state()
@@ -301,7 +299,7 @@ class TestFrequency:
         s = init_frequency_state()
         for _ in range(3):
             s = update_frequency(s, [(CheckStatus.PASS, CheckSeverity.P0)])
-        assert update_frequency(s, [(CheckStatus.FAIL, CheckSeverity.P0)]).level == FrequencyLevel.ALERT
+        assert update_frequency(s, [(CheckStatus.FAIL, CheckSeverity.P0)]).level == FrequencyLevel.FAST
 
     def test_inv007(self):
         assert not is_promotion_clean(
@@ -321,62 +319,7 @@ class TestClock:
 # PKG-MON-08 Scheduler
 class TestScheduler:
     def test_init_alert(self):
-        assert DeepAuditScheduler().level == FrequencyLevel.ALERT
-
-
-# PKG-MON-09 Storm
-class TestStorm:
-    def test_no_storm(self):
-        assert not StormDetector(unique_dedupe_threshold=5).is_storm_active()
-
-    def test_storm(self):
-        sd = StormDetector(unique_dedupe_threshold=3)
-        for i in range(5):
-            sd.record(f"key_{i}")
-        assert sd.is_storm_active()
-
-    def test_build(self):
-        sd = StormDetector(unique_dedupe_threshold=3)
-        for i in range(5):
-            sd.record(f"key_{i}")
-        info = sd.record("key_5")
-        assert info and info["is_storm"]
-        assert sd.build_storm_incident(info, "s1").is_systemic
-
-
-# PKG-MON-09 Incident
-class TestIncident:
-    def test_dedupe(self):
-        im = IncidentManager()
-        _i1, n1 = im.create_or_dedupe("k1")
-        assert n1
-        _i2, n2 = im.create_or_dedupe("k1")
-        assert not n2
-
-    def test_fsm_valid(self):
-        im = IncidentManager()
-        inc, _ = im.create_or_dedupe("k1")
-        assert im.transition(inc.incident_id, IncidentStatus.CONFIRMED) is not None
-
-    def test_fsm_invalid(self):
-        im = IncidentManager()
-        inc, _ = im.create_or_dedupe("k1")
-        assert im.transition(inc.incident_id, IncidentStatus.MITIGATING) is None
-
-    def test_remediation_auto(self):
-        im = IncidentManager()
-        ok, k = im.is_remediation_allowed("FEED_RECONNECT")
-        assert ok and k == "AUTO"
-
-    def test_remediation_never(self):
-        im = IncidentManager()
-        ok, _k = im.is_remediation_allowed("CHANGE_POSITION_MODE")
-        assert not ok
-
-    def test_escalate(self):
-        im = IncidentManager(storm_detector=StormDetector(unique_dedupe_threshold=100))
-        im.create_or_dedupe("p0", severity=CheckSeverity.P0)
-        assert len(im.escalate_to_locked()) >= 1
+        assert DeepAuditScheduler().level == FrequencyLevel.FAST
 
 
 # PKG-MON-10 Watchdog
@@ -392,7 +335,7 @@ class TestWatchdog:
         assert w.check().status == CheckStatus.FAIL
 
     def test_matrix(self):
-        assert len(COMPONENT_FAILURE_MATRIX) == 8
+        assert len(COMPONENT_FAILURE_MATRIX) == 7
 
 
 # PKG-MON-10 Health Aggregator
@@ -435,9 +378,6 @@ class TestRetention:
         p = RetentionPolicy()
         assert p.retention_seconds(RetentionTier.FAST_GUARD) == 7 * 86400
         assert p.retention_seconds(RetentionTier.CERTIFICATION) == float("inf")
-
-    def test_open_incident_pin(self):
-        assert RetentionPolicy().should_retain(RetentionTier.FAST_GUARD, 8 * 86400, has_open_incident=True)
 
     def test_expired(self):
         assert not RetentionPolicy().should_retain(RetentionTier.FAST_GUARD, 8 * 86400)
@@ -515,10 +455,10 @@ def repo():
 class TestRepo:
     def test_schema(self, repo):
         repo._init_schema()
-        assert repo.get_frequency_state().level == FrequencyLevel.ALERT
+        assert repo.get_frequency_state().level == FrequencyLevel.FAST
 
     def test_frequency(self, repo):
-        assert repo.get_frequency_state().level == FrequencyLevel.ALERT
+        assert repo.get_frequency_state().level == FrequencyLevel.FAST
 
     def test_evidence(self, repo):
         repo.write_check_evidence(
@@ -528,11 +468,6 @@ class TestRepo:
 
     def test_health(self, repo):
         assert repo.health_probe().healthy
-
-    def test_incident(self, repo):
-        repo.write_incident(Incident(incident_id="i1", dedupe_key="k1", detected_at=time.time()))
-        assert repo.find_incident_by_dedupe_key("k1") is not None
-
 
 # --- M18-F02: 因子 stale 检查 0 值语义 ---
 
@@ -593,13 +528,12 @@ def test_clock_integrity_warn_band() -> None:
     assert result.status.value in {"WARN", "FAIL"}
 
 
-def test_monitoring_service_check_deep_and_incidents() -> None:
+def test_monitoring_service_check_deep() -> None:
     from beidou_observability.monitoring.service import MonitoringService
 
     service = MonitoringService()
     assert service.status()["health"] in {"OK", "HEALTHY", "DEGRADED", "UNKNOWN", "GREEN"}
     assert service.check_deep() == []
-    assert service.get_incidents() == []
     assert service.to_json()
     assert service.get_mode_contract()["mode"] == "UNKNOWN"
 

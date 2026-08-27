@@ -1,17 +1,17 @@
-"""自适应频率策略 — MON01-07: restart→ALERT, INV-007: P0不被稀释。"""
+"""自适应频率策略 — MON01-07: restart→FAST, INV-007: P0不被稀释。"""
 
 import time
 
 from beidou_observability.monitoring.contracts import CheckSeverity, CheckStatus, FrequencyLevel, FrequencyState
 
-LEVEL_INTERVALS = {FrequencyLevel.ALERT: 600, FrequencyLevel.NORMAL: 1800, FrequencyLevel.STABLE: 3600}
+LEVEL_INTERVALS = {FrequencyLevel.FAST: 600, FrequencyLevel.NORMAL: 1800, FrequencyLevel.STABLE: 3600}
 PROMOTION_STREAK_REQUIRED = 3
 
 
 def init_frequency_state(reason="init"):
     now = time.monotonic()
     return FrequencyState(
-        level=FrequencyLevel.ALERT,
+        level=FrequencyLevel.FAST,
         interval_seconds=600,
         last_check_at=now,
         next_due_at=now + 600,
@@ -40,8 +40,8 @@ def update_frequency(
     *,
     self_heal_active=False,
     restart_detected=False,
-    open_p0_incident=False,
-    open_p1_incident=False,
+    p0_failed=False,
+    p1_failed=False,
     clock_reversal=False,
     allowlisted_p2_warns=None,
 ):
@@ -53,10 +53,10 @@ def update_frequency(
         reason = "clock_reversal"
     elif self_heal_active:
         reason = "self_heal"
-    elif open_p0_incident:
-        reason = "open_p0"
-    elif open_p1_incident:
-        reason = "open_p1"
+    elif p0_failed:
+        reason = "p0_failed"
+    elif p1_failed:
+        reason = "p1_failed"
     else:
         for s, sev in results:
             if sev in (CheckSeverity.P0, CheckSeverity.P1) and s in (CheckStatus.FAIL, CheckStatus.UNKNOWN):
@@ -64,7 +64,7 @@ def update_frequency(
                 break
     if reason:
         return FrequencyState(
-            level=FrequencyLevel.ALERT,
+            level=FrequencyLevel.FAST,
             interval_seconds=600,
             last_check_at=now,
             next_due_at=now + 600,
@@ -74,9 +74,9 @@ def update_frequency(
         )
     clean, cr = is_promotion_clean(results, allowlisted_p2_warns)
     if not clean:
-        changed = cur.level != FrequencyLevel.ALERT
+        changed = cur.level != FrequencyLevel.FAST
         return FrequencyState(
-            level=FrequencyLevel.ALERT,
+            level=FrequencyLevel.FAST,
             interval_seconds=600,
             last_check_at=now,
             next_due_at=now + 600,
@@ -85,7 +85,7 @@ def update_frequency(
             policy_version=cur.policy_version,
         )
     ns = cur.promotion_clean_streak + 1
-    if cur.level == FrequencyLevel.ALERT and ns >= PROMOTION_STREAK_REQUIRED:
+    if cur.level == FrequencyLevel.FAST and ns >= PROMOTION_STREAK_REQUIRED:
         return FrequencyState(
             level=FrequencyLevel.NORMAL,
             interval_seconds=1800,

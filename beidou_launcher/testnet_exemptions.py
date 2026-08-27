@@ -142,10 +142,10 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
     ),
     TestnetExemption(
         exemption_id="EXEMPT-15",
-        title="提款权限（R9）testnet 豁免：不告警、风险视角按 False 结算",
+        title="提款权限（R9）testnet 豁免：不升级、风险视角按 False 结算",
         rationale="testnet 测试资金由交易所默认开启提款权限；非 testnet 保持 CRITICAL 阻断（PKG02 R9 统一检查）。",
         reassessment_module="M10",
-        risk_note="提款权限在 testnet 完全退出风控告警面 —— live/canary 语义不变；M10 复核 R9。",
+        risk_note="提款权限在 testnet 完全退出风控阻断面 —— live/canary 语义不变；M10 复核 R9。",
     ),
     TestnetExemption(
         exemption_id="EXEMPT-16",
@@ -205,6 +205,6 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         "避免共享 demo 账户的畸形事件把控制面拉回 NO_NEW_RISK。live/canary 仍 fail-closed。",
         reassessment_module="M13",
         risk_note="解析失败的成交事实在该事件内丢失(靠 REST 订单监控兜底);"
-        "M13 复核是否需要按事件类型持久化失败计数并告警。",
+        "M13 复核是否需要按事件类型持久化失败计数。",
     ),
 )

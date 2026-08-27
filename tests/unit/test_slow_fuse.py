@@ -1,6 +1,8 @@
 """E3 慢引信: 纯卡死 ≥7200s 才平仓; testnet 默认开, live/canary 默认关。"""
 
-from beidou_core.engine import AutonomousEngine
+import asyncio
+
+from beidou_core.engine import AutonomousEngine, OrderSide
 
 
 class _ExposureStore:
@@ -162,9 +164,6 @@ def test_gap_refresh_does_not_rewrite_e2_owned_reason():
 def test_real_e2_handoff_position_side_and_ladder_enqueue_once():
     """R10 端到端 (真实 E2): pp.side 传持仓方向 (多头=BUY), E2 发射减仓方向
     (SELL); attempts=1 记录经 3 个 tick 后 enqueue 恰好调用一次 (E2 门控)。"""
-    import asyncio
-    from beidou_core.engine import AutonomousEngine, OrderSide
-
     engine = _engine([{
         "symbol": "BTCUSDT",
         "unprotectable_since": 1000.0,
@@ -203,9 +202,6 @@ def test_real_e2_handoff_position_side_and_ladder_enqueue_once():
 
 def test_slow_fuse_passes_position_side_for_short():
     """R10 Critical 1: 空头持仓 → pp.side=SELL (持仓方向), 由 E2 翻转为 BUY 减仓。"""
-    import asyncio
-    from beidou_core.engine import OrderSide
-
     engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}])
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     captured: dict = {}
@@ -220,28 +216,6 @@ def test_slow_fuse_passes_position_side_for_short():
     assert n == 1
     assert captured["side"] == OrderSide.SELL
     assert captured["quantity"] == 0.0008
-
-
-def test_slow_fuse_armed_incident_dedups_across_ticks(tmp_path):
-    """R10(c): armed/auto-closed incident 靠 send_incident category+title 去重
-    —— 多 tick 只产生一个 active incident, description 更新。"""
-    import asyncio
-    from beidou_core.alerts import AlertDispatcher
-
-    engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}])
-    engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
-    dispatcher = AlertDispatcher(alerts_file=str(tmp_path / "alerts.jsonl"))
-    engine._alerts = dispatcher
-
-    n1 = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
-    n2 = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7300.0))
-    assert n1 == 1 and n2 == 1  # R10(b) 纯 age 语义: 每 tick 仍触发
-    incidents = dispatcher.get_active_incidents()
-    armed = [i for i in incidents if i["title"] == "Naked position slow-fuse armed"]
-    assert len(armed) == 1  # 同 category+title 去重 → 仅一个 active incident
-    assert "7300" in armed[0]["description"]  # 第二次调用更新 description
-    closed = [i for i in incidents if i["title"] == "Naked position auto-closed by slow fuse"]
-    assert len(closed) == 1
 
 
 def test_slow_fuse_dirty_row_does_not_break_sweep():

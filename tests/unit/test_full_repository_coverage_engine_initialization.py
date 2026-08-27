@@ -79,7 +79,6 @@ def _settings(tmp_path: Path, *, environment: Environment, database_url: str) ->
         infrastructure=InfrastructureConfig(
             health_host="127.0.0.1",
             health_port=0,
-            alerts_file=str(tmp_path / "alerts.jsonl"),
         ),
     )
 

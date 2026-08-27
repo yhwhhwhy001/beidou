@@ -101,7 +101,6 @@ async def test_g5_producer_health_does_not_become_paused_under_no_new_risk(tmp_p
     supervisor.engine = SimpleNamespace(
         _control=control,
         _lifecycle=SimpleNamespace(state="ACTIVE"),
-        _alerts=SimpleNamespace(_active_incidents={}),
         _running=True,
     )
     supervisor.report.supervisor_state = "DEGRADED"

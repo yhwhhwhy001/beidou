@@ -3,38 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import datetime, timezone
 from typing import Any
 
 from beidou_shared.types import CorrelationId
-
-
-class AlertSeverity(str, Enum):
-    INFO = "INFO"
-    WARNING = "WARNING"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
-    LOCKDOWN = "LOCKDOWN"
-
-
-class IncidentStatus(str, Enum):
-    DETECTED = "DETECTED"
-    ACKNOWLEDGED = "ACKNOWLEDGED"
-    INVESTIGATING = "INVESTIGATING"
-    MITIGATING = "MITIGATING"
-    RESOLVED = "RESOLVED"
-    CLOSED = "CLOSED"
-
-
-class AutoAction(str, Enum):
-    NOOP = "NOOP"
-    ALERT = "ALERT"
-    DEGRADE = "DEGRADE"
-    PAUSE_TRADING = "PAUSE_TRADING"
-    EXIT_ONLY = "EXIT_ONLY"
-    EMERGENCY_FLATTEN = "EMERGENCY_FLATTEN"
-    LOCK = "LOCK"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,48 +20,6 @@ class Span:
     end_time: datetime | None = None
     status: str = "OK"
     attributes: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
-class Incident:
-    incident_id: str
-    severity: AlertSeverity
-    title: str
-    description: str
-    correlation_id: CorrelationId | None = None
-    root_cause_category: str | None = None
-    dedupe_key: str = ""
-    source_check_id: str = ""
-    entity_type: str = ""
-    entity_id: str = ""
-    evidence_hash: str = ""
-    status: IncidentStatus = IncidentStatus.DETECTED
-    auto_action: AutoAction = AutoAction.NOOP
-    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone(timedelta(hours=8))))
-    acknowledged_at: datetime | None = None
-    resolved_at: datetime | None = None
-    evidence_snapshots: list[dict[str, Any]] = field(default_factory=list)
-    related_incidents: list[str] = field(default_factory=list)
-    # 可观测性修复: 保护覆盖缺口 reason 明细, 供 supervisor A/B 分流消费
-    # (get_active_incidents 以 gap_reasons 字段暴露)。
-    gap_reasons: list[str] = field(default_factory=list)
-    resolution_reason: str = ""
-    # M21: 运行时字段 —— 去重更新时由 AlertManager 就地刷新
-    _last_updated: datetime | None = None
-
-    def acknowledge(self) -> None:
-        if self.status == IncidentStatus.DETECTED:
-            self.status = IncidentStatus.ACKNOWLEDGED
-            self.acknowledged_at = datetime.now(timezone.utc)
-
-    def resolve(self, resolution: str) -> None:
-        self.status = IncidentStatus.RESOLVED
-        self.resolved_at = datetime.now(timezone.utc)
-        self.resolution_reason = resolution
-
-    def capture_evidence(self, snapshot: dict[str, Any]) -> None:
-        snapshot["captured_at"] = datetime.now(timezone.utc).isoformat()
-        self.evidence_snapshots.append(snapshot)
 
 
 class TraceContext:
@@ -138,59 +68,3 @@ class TraceContext:
             }
             for s in self.spans
         ]
-
-
-class AlertSuppressor:
-    """告警抑制器 — 指纹去重+聚合相关告警，但不得隐藏 P0。
-
-    BD-FIX: 使用稳定指纹(fingerprint)代替精确字符串匹配，
-    同一根因的多次复发在窗口内聚合计数而非创建新 incident。
-    """
-
-    def __init__(self, window_seconds: float = 300.0) -> None:
-        self._window_seconds = window_seconds
-        self._recent_alerts: list[tuple[datetime, AlertSeverity, str]] = []
-        self._fingerprints: dict[str, list[datetime]] = {}  # fingerpint → occurrences
-
-    def _fingerprint(self, category: str, title: str) -> str:
-        """生成稳定指纹: 同category+同根因title(去除时间戳/ID等变化部分)。"""
-        import hashlib
-
-        # 去除标题中的动态部分 (orderId, 时间戳, 数字)
-        import re
-
-        stable = re.sub(r"\d+", "N", f"{category}:{title}")
-        return hashlib.sha256(stable.encode()).hexdigest()[:12]
-
-    def should_suppress(self, severity: AlertSeverity, alert_key: str, category: str = "", title: str = "") -> bool:
-        if severity in (AlertSeverity.CRITICAL, AlertSeverity.LOCKDOWN):
-            return False  # P0 永不抑制
-        now = datetime.now(timezone.utc)
-        # 指纹去重
-        fp = self._fingerprint(category, title)
-        if fp not in self._fingerprints:
-            self._fingerprints[fp] = []
-        self._fingerprints[fp] = [t for t in self._fingerprints[fp] if (now - t).total_seconds() < self._window_seconds]
-        count = len(self._fingerprints[fp])
-        self._fingerprints[fp].append(now)
-        # 窗口内超过3次 → 抑制（聚合而非重复告警）
-        if count >= 3:
-            return True
-        # 精确key去重(兼容旧逻辑)
-        self._recent_alerts = [
-            (t, s, k) for t, s, k in self._recent_alerts if (now - t).total_seconds() < self._window_seconds
-        ]
-        for _t, _s, k in self._recent_alerts:
-            if k == alert_key:
-                return True
-        self._recent_alerts.append((now, severity, alert_key))
-        return False
-
-    def get_fingerprint_count(self, category: str, title: str) -> int:
-        """返回指定指纹在窗口内的发生次数。"""
-        now = datetime.now(timezone.utc)
-        fp = self._fingerprint(category, title)
-        if fp not in self._fingerprints:
-            return 0
-        self._fingerprints[fp] = [t for t in self._fingerprints[fp] if (now - t).total_seconds() < self._window_seconds]
-        return len(self._fingerprints[fp])

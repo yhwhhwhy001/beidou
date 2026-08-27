@@ -191,6 +191,21 @@ def test_governed_source_digest_detects_hidden_behavior_and_new_sources(tmp_path
     assert "config/env.template.yaml" in governed
 
 
+def test_generated_delivery_packages_are_outside_runtime_governance(tmp_path: Path) -> None:
+    package = tmp_path / "delivery" / "packages" / "BD-AF-P0P3-V1"
+    package.mkdir(parents=True)
+    (package / "task.py").write_text(
+        "from beidou_core import AutonomousEngine\nAutonomousEngine()\n",
+        encoding="utf-8",
+    )
+    (package / "task.yaml").write_text("run: python task.py\n", encoding="utf-8")
+
+    assert discover_sensitive_entry_paths(tmp_path) == set()
+    assert discover_network_imports(tmp_path) == {}
+    assert discover_terminal_write_calls(tmp_path) == {}
+    assert discover_governed_source_digests(tmp_path) == {}
+
+
 def test_primary_governance_implementation_is_itself_hashed() -> None:
     governed = discover_governed_source_digests(ROOT)
 
@@ -408,7 +423,6 @@ def test_network_import_inventory_is_exact_and_policy_bound() -> None:
 
     assert registered == discover_network_imports(ROOT)
     assert {item["purpose"] for item in registry["network_imports"]} == {
-        "ALERT_DELIVERY",
         "EXCHANGE_WEBSOCKET",
         "EXCHANGE_TRANSPORT",
         "FAULT_INJECTION_READ",

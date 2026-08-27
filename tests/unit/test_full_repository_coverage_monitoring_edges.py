@@ -173,10 +173,10 @@ def test_monitor_self_health_and_aggregates() -> None:
 
 
 def test_frequency_policy_restart_promotion_and_blockers() -> None:
-    alert = init_frequency_state()
+    fast = init_frequency_state()
     assert restart_frequency_state().last_reason == "restart_or_recovery"
-    assert is_due(replace(alert, next_due_at=0.0))
-    assert not is_due(replace(alert, next_due_at=time.monotonic() + 1000), tolerance=1)
+    assert is_due(replace(fast, next_due_at=0.0))
+    assert not is_due(replace(fast, next_due_at=time.monotonic() + 1000), tolerance=1)
     assert is_promotion_clean([(_result(CheckStatus.FAIL, CheckSeverity.P1).status, CheckSeverity.P1)])[0] is False
     assert is_promotion_clean([(_result(CheckStatus.WARN, CheckSeverity.P2).status, CheckSeverity.P2)])[0] is False
     assert is_promotion_clean([(_result(CheckStatus.WARN, CheckSeverity.P2).status, CheckSeverity.P2)], {"P2_WARN"})[0]
@@ -186,18 +186,18 @@ def test_frequency_policy_restart_promotion_and_blockers() -> None:
         {"restart_detected": True},
         {"clock_reversal": True},
         {"self_heal_active": True},
-        {"open_p0_incident": True},
-        {"open_p1_incident": True},
+        {"p0_failed": True},
+        {"p1_failed": True},
     ):
-        assert update_frequency(alert, [], **kwargs).level is FrequencyLevel.ALERT
+        assert update_frequency(fast, [], **kwargs).level is FrequencyLevel.FAST
     assert (
-        update_frequency(alert, [(_result(CheckStatus.FAIL, CheckSeverity.P0).status, CheckSeverity.P0)]).level
-        is FrequencyLevel.ALERT
+        update_frequency(fast, [(_result(CheckStatus.FAIL, CheckSeverity.P0).status, CheckSeverity.P0)]).level
+        is FrequencyLevel.FAST
     )
-    blocked = update_frequency(alert, [(_result(CheckStatus.WARN, CheckSeverity.P2).status, CheckSeverity.P2)])
-    assert blocked.level is FrequencyLevel.ALERT
+    blocked = update_frequency(fast, [(_result(CheckStatus.WARN, CheckSeverity.P2).status, CheckSeverity.P2)])
+    assert blocked.level is FrequencyLevel.FAST
 
-    normal = alert
+    normal = fast
     for _ in range(3):
         normal = update_frequency(normal, [])
     assert normal.level is FrequencyLevel.NORMAL

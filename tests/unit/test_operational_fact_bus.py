@@ -117,8 +117,8 @@ class TestFactBus:
         def callback(fact):
             received.append(fact.payload)
 
-        bus.subscribe("alert", callback)
-        bus.publish(OperationalFact("alert", FactDomain.RISK, {"msg": "test"}))
+        bus.subscribe("risk_event", callback)
+        bus.publish(OperationalFact("risk_event", FactDomain.RISK, {"msg": "test"}))
         bus.publish(OperationalFact("other", FactDomain.RISK, {"msg": "nope"}))
 
         assert len(received) == 1

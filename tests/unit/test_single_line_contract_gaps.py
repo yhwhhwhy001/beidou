@@ -14,7 +14,6 @@ from beidou_infra.ha import FactSource, InfrastructureTopology
 from beidou_observability.monitoring.contracts import TraceStage
 from beidou_observability.monitoring.instrumentation import InstrumentationRecorder, TraceEvent
 from beidou_observability.monitoring.retention import RetentionPolicy, RetentionTier
-from beidou_observability.monitoring.storm_detector import StormDetector
 from beidou_research.mining.contracts import HorizonUnit, PredictionKey, PredictionRecord
 from beidou_research.mining.selection.ensemble import FactorEnsemble
 from beidou_safety.execution.command_aggregate import (
@@ -37,16 +36,6 @@ def test_instrumentation_reports_completed_stage() -> None:
     event = TraceEvent("trace", "corr", "strategy", "intent", "client", TraceStage.EXCHANGE_ACKED, 1.0)
     assert recorder.record(event)
     assert recorder.stage_completed("corr", TraceStage.EXCHANGE_ACKED)
-
-
-def test_storm_incident_child_link_preserves_root_cause() -> None:
-    detector = StormDetector()
-    parent = detector.build_storm_incident({"root_cause_fingerprint": "root", "unique_count": 5}, "parent")
-    child = detector.build_storm_incident({"root_cause_fingerprint": "child"}, "child")
-    link = detector.link_child(parent, child)
-    assert link.parent_incident_id == "parent"
-    assert link.child_incident_id == "child"
-    assert link.root_cause_fingerprint == "root"
 
 
 def test_certification_retention_is_indefinite() -> None:

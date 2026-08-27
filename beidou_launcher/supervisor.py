@@ -27,7 +27,6 @@ from .models import CheckResult, CheckSeverity, CheckStatus, StartupReport
 from .preflight import current_commit, run_g5_producer_preflight, run_preflight
 from .registry import inspect_engine_wiring
 from .runtime import (
-    active_incident_blocking_severity,
     collect_runtime_checks,
     run_read_only_algorithm_probe,
 )
@@ -140,34 +139,15 @@ def summarize_blockers(blockers: list) -> str:
     """聚合重复 blocker：同 (check_id, message) 合并为 check_id(×N)。
 
     M00-F03（P0-19）：保护覆盖类检查按持仓逐条产出相同条目（15 持仓
-    MISSING_SL = 15 条重复 P0），全部拼进 _fail_closed 理由与告警文本
-    造成日志/webhook 风暴。聚合后保留 entity_id 计数；完整明细仍在
+    MISSING_SL = 15 条重复 P0），全部拼进 _fail_closed 理由并造成日志
+    风暴。聚合后保留 entity_id 计数；完整明细仍在
     supervisor-state.json 的 blockers 字段（models.StartupReport）。
     """
     if not blockers:
         return "(none)"
-    # 可观测性修复: incidents 检查的 message 是事故列表的 repr,
-    # 旧逻辑取列表首项 —— 首项常是 WARNING 级非阻断事故, 导致
-    # 14/19 次 LOCKED 的真实致死原因被 message[:80] 截断吞掉。
-    # 改为优先展示 severity 最高的那条 (CRITICAL/HIGH 才是阻断源)。
-    # R7: 展示文本只在分组循环内局部计算 (作分组键), 绝不改写输入对象
-    # —— LOCKED 快照与 supervisor-state.json 的 message 保持原始完整内容。
-    priority = {"LOCKDOWN": 4, "CRITICAL": 3, "P0": 3, "HIGH": 2, "P1": 2, "WARNING": 1, "P2": 0}
     groups: dict[tuple[str, str], list] = {}
     for item in blockers:
         display = item.message
-        if str(getattr(item, "check_id", "")) == "runtime.health.incidents":
-            incs = (
-                ((item.evidence or {}).get("incidents") or [])
-                if isinstance(getattr(item, "evidence", None), dict)
-                else []
-            )
-            if incs:
-                inc = max(incs, key=lambda i: priority.get(str(i.get("severity", "")).upper(), 0))
-                display = (
-                    f"活动事故(首列最高级): [{inc.get('severity')}] {inc.get('title')} "
-                    f"{str(inc.get('description', ''))[:120]}"
-                )
         groups.setdefault((item.check_id, display), []).append(item)
     parts: list[str] = []
     for (check_id, message), items in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0][0])):
@@ -251,8 +231,7 @@ class BeidouSupervisor:
         self._recovery_timestamps: list[float] = []  # 时间窗口恢复追踪
         # 监控子系统 (MON08)：深度审计调度器与状态
         self._monitoring_scheduler = DeepAuditScheduler()
-        # M00-F03-R2: 最近一次告警的 blocker 聚合指纹（指纹变化即新告警，
-        # 防止 DEGRADED 期间新类型 P0 静默）
+        # 最近一次 blocker 聚合指纹，用于抑制重复日志并识别新类型 P0。
         self._last_blocker_fingerprint: str | None = None
         self._recovery_engine = RecoveryEngine()  # BD-T14: 恢复引擎接线
         self._monitoring_state: dict[str, Any] = {}
@@ -426,11 +405,23 @@ class BeidouSupervisor:
         except Exception:
             return "UNKNOWN"
 
+    def _request_shutdown(self) -> None:
+        """Request a graceful stop regardless of the current lifecycle state.
+
+        A fail-closed runtime may deliberately remain ``DEGRADED`` or
+        ``PAUSED`` while it keeps serving diagnostics.  Stop is an operator
+        action and must still reach the engine in those states; gating it on
+        ``ACTIVE`` can leave a degraded process running indefinitely after a
+        verified SIGTERM.
+        """
+        self._shutdown_requested = True
+        if self.engine is not None:
+            self.engine._running = False
+
     def _is_trading_ready(self) -> bool:
         return (
             self._resume_authorized
             and not self.report.blockers
-            and not self._has_active_trading_incident()
             and self._control_state() == "RESUME"
             # Readiness is a runtime certificate, not merely a control-plane
             # action.  A stale/partially-started report must not advertise
@@ -469,18 +460,6 @@ class BeidouSupervisor:
         if not stream_ready:
             return False
         return not any(item.is_blocking for item in self.report.blockers)
-
-    def _has_active_trading_incident(self) -> bool:
-        """Keep readiness fail-closed until open safety incidents resolve."""
-        if self.engine is None:
-            return False
-        getter = getattr(getattr(self.engine, "_alerts", None), "get_active_incidents", None)
-        if not callable(getter):
-            return False
-        try:
-            return active_incident_blocking_severity(list(getter())) is not None
-        except Exception:
-            return True
 
     def _install_health_callbacks(self) -> None:
         """让 HTTP readiness 与监督器证据保持一致。"""
@@ -827,7 +806,10 @@ class BeidouSupervisor:
             (SLICategory.PROTECTION_SLO, all_pass("runtime.safety.protection_coverage")),
             (SLICategory.RECONCILIATION, all_pass("runtime.safety.reconciliation")),
             (SLICategory.RECOVERY_BOUNDED, self._recovery_count <= self.max_restarts),
-            (SLICategory.INCIDENT_CLOSURE, all_pass("runtime.health.incidents")),
+            (
+                SLICategory.INCIDENT_CLOSURE,
+                not any(item.is_blocking and item.severity.value == "P0" for item in checks),
+            ),
             (SLICategory.COST_PNL_REPORTING, all_pass("runtime.safety.cost_and_pnl_reporting")),
         ]
         cycle = int(self._g7_tracker.summary().get("cycles", 0))
@@ -873,21 +855,12 @@ class BeidouSupervisor:
         """运行监控子系统深度检查并合并进监督器检查流。
 
         架构分工 (Phase 1 去重后):
-        - runtime.py: 仅引擎内部状态检查 (lifecycle/control_plane/heartbeat/market_data/errors/incidents)
+        - runtime.py: 仅引擎内部状态检查 (lifecycle/control_plane/heartbeat/market_data/errors)
         - monitoring/: 所有需要外部事实的深度检查 (account/reconciliation/protection/order_trace/module_progress)
         - 两个管道无 check_id 重叠，直接拼接即可。MON08 频率策略以监控结果驱动深度审计节奏。
         - 阻断检查以状态转变事件写入证据目录。
         """
         assert self.engine is not None
-        # Webhook delivery is a durable side effect, not a best-effort log.
-        # Retry at most one due item per monitoring cycle so a dead channel is
-        # visible in delivery health without starving safety checks.
-        try:
-            retry_pending = getattr(getattr(self.engine, "_alerts", None), "retry_pending", None)
-            if callable(retry_pending):
-                retry_pending(max_items=1)
-        except Exception as exc:
-            logger.warning("alert delivery retry failed: %s: %s", type(exc).__name__, str(exc)[:160])
         monitoring_checks: list[CheckResult] = []
         try:
             # PKG02 (BDS-P0-001): 所有环境使用真实探测结果。
@@ -933,18 +906,18 @@ class BeidouSupervisor:
             scheduler_results = [
                 (MonCheckStatus(item.status.value), MonCheckSeverity(item.severity.value)) for item in monitoring_checks
             ]
-            open_p0 = any(
+            p0_failed = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P0 for item in monitoring_checks
             )
-            open_p1 = any(
+            p1_failed = any(
                 item.status == CheckStatus.FAIL and item.severity == CheckSeverity.P1 for item in monitoring_checks
             )
             # M18-F01: 自愈活动信号真实传入(此前恒默认 False —— 频率
             # 策略对恢复/重启场景失明)
             self._monitoring_scheduler.tick(
                 scheduler_results,
-                open_p0=open_p0,
-                open_p1=open_p1,
+                p0_failed=p0_failed,
+                p1_failed=p1_failed,
                 self_heal=self._recovery_count > 0,
             )  # type: ignore[no-untyped-call]
         except Exception as exc:
@@ -1012,7 +985,7 @@ class BeidouSupervisor:
             lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
             lifecycle_value = str(getattr(lifecycle, "value", lifecycle))
             health_thread = getattr(getattr(self.engine, "_health", None), "_thread", None)
-            if lifecycle_value == "ACTIVE" and self._shutdown_requested:
+            if self._shutdown_requested:
                 self.engine._running = False
                 return False
             # BD-FIX（C5 审查残留）: 引擎启动期 lifecycle 可为 DEGRADED
@@ -1051,7 +1024,7 @@ class BeidouSupervisor:
                 # 只有关键启动检查全部清除才允许授权 RESUME。
                 # BD-FIX（C5 审查）: 旧条件 `not startup_blockers and not
                 # self.report.blockers` 要求零 blocker —— 任何瞬时
-                # P0/P1（user_stream/对账/alert_delivery/position_mode）
+                # P0/P1（user_stream/对账/position_mode）
                 # 即启动超时 exit 4，demo 抖动下必然循环。注释（741-742）
                 # 明说"行情、对账、心跳等运行时检查不应阻断启动"，
                 # 实现却相反。启动门禁只按关键集判定；运行时检查的
@@ -1079,111 +1052,17 @@ class BeidouSupervisor:
             await asyncio.sleep(1)
         return False
 
-    def _send_supervisor_alert(self, state: str, blockers: list) -> None:
-        """BD-FIX (O2): 监督器 DEGRADED/LOCKED 状态推送告警。
-
-        M00-F03: 告警文本使用聚合摘要（同 check_id 条目合并为 ×N），
-        不再把逐持仓条目全量拼进描述（P0-19 告警风暴治理）。
-        """
-        try:
-            if self.engine is not None:
-                from beidou_observability.telemetry import AlertSeverity
-
-                severity = AlertSeverity.CRITICAL if state == "LOCKED" else AlertSeverity.HIGH
-                blocker_summary = summarize_blockers(blockers)
-                self.engine._alerts.send_incident(
-                    severity=severity,
-                    title=f"Supervisor {state}",
-                    description=f"Blockers: {blocker_summary}",
-                    category="supervisor",
-                )
-                print(f"[supervisor] Alert sent: {severity.value} — Supervisor {state}: {blocker_summary}")
-        except Exception as e:
-            print(f"[supervisor] Alert send failed: {e}")
-
-    def _resolve_supervisor_incidents(self) -> None:
-        """清除监督器命名空间(supervisor)的活动事故。
-
-        BD-FIX: DEGRADED/LOCKED 时发出的 "Supervisor <state>" 事故没有
-        清理路径 —— 恢复 RUNNING 后仍以 DETECTED 状态残留,与事实背离
-        且持续误导运维。本方法仅在防抖器判定 RUNNING(控制面 RESUME 且
-        无 blocker)时调用,根因确已消除才清理;LOCKED 状态的事故不受影响。
-        """
-        try:
-            if self.engine is None:
-                return
-            _alerts = getattr(self.engine, "_alerts", None)
-            if _alerts is None:
-                return
-            _active = getattr(_alerts, "_active_incidents", {})
-            for _iid, _inc in list(_active.items()):
-                if str(getattr(_inc, "root_cause_category", "")) == "supervisor":
-                    with suppress(Exception):
-                        _alerts.resolve_incident(_iid)
-                        print(f"[supervisor] Auto-resolved stale supervisor incident {_iid}")
-        except Exception as e:
-            print(f"[supervisor] supervisor incident resolution failed: {e}")
-
-    def _resolve_stale_supervisor_incidents_before_debounce(self, checks: list[CheckResult]) -> bool:
-        """Resolve self-generated alerts before they can block clean recovery.
-
-        A supervisor alert is derived from an earlier blocker.  If it is the
-        only remaining active incident, leaving it in ``runtime.health.incidents``
-        prevents the debounce state from ever reaching ``RUNNING``; that in
-        turn prevents ``_resolve_supervisor_incidents`` from being called and
-        can escalate a recovered process to ``LOCKED``.  Only non-terminal
-        supervisor states and an incident set containing *only* supervisor
-        incidents qualify.  Any real safety incident or other blocking check
-        keeps the fail-closed path intact.
-        """
-        if self.report.supervisor_state in {"LOCKED", "FAILED", "STOPPED"} or self.engine is None:
-            return False
-        alerts = getattr(self.engine, "_alerts", None)
-        if alerts is None:
-            return False
-        # ``AlertDispatcher.get_active_incidents()`` intentionally exposes a
-        # JSON-safe summary and therefore omits ``root_cause_category``.  Use
-        # the in-memory incident objects for this internal classification; the
-        # public summary cannot distinguish a supervisor alert from a safety
-        # incident.  Keep the public getter as a fallback for test doubles or
-        # alternate alert implementations.
-        active = getattr(alerts, "_active_incidents", None)
-        if isinstance(active, dict):
-            incidents = list(active.values())
-        else:
-            getter = getattr(alerts, "get_active_incidents", None)
-            if not callable(getter):
-                return False
-            try:
-                incidents = list(getter())
-            except Exception:
-                return False
-        if not incidents:
-            return False
-
-        def category(incident: Any) -> str:
-            if isinstance(incident, dict):
-                return str(incident.get("root_cause_category", ""))
-            return str(getattr(incident, "root_cause_category", ""))
-
-        if any(category(incident) != "supervisor" for incident in incidents):
-            return False
-        if any(item.is_blocking and item.check_id != "runtime.health.incidents" for item in checks):
-            return False
-        self._resolve_supervisor_incidents()
-        return True
-
     async def _apply_debounce_action(
         self, debounce_action: str, persistent_blockers: list[CheckResult], has_persistent: bool
     ) -> None:
         """健康防抖器动作执行（M00-F03 抽出以便独立测试）。
 
-        降级/告警只在状态转移时执行一次；已在 DEGRADED 期间保留静默
+        降级只在状态转移时执行一次；已在 DEGRADED 期间保留静默
         fail-closed 背压（控制面被意外 RESUME 时拉回 NO_NEW_RISK）。
         """
         if debounce_action == "LOCKED":
             # 防抖器判定: 连续 lock_after 次持久阻断 → LOCKED（终态）。
-            # M00-F03: LOCKED 后不再重复 _fail_closed/告警（终态只需一次）。
+            # LOCKED 后不再重复 _fail_closed（终态只需一次）。
             if self.report.supervisor_state != "LOCKED":
                 await self._fail_closed(
                     "防抖器: 连续持久阻断 → LOCKED: " + summarize_blockers(persistent_blockers),
@@ -1192,12 +1071,11 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "LOCKED"
                 self._last_blocker_fingerprint = summarize_blockers(persistent_blockers)
                 # 快照写入非致命: OSError (磁盘满/目录只读) 不得中断 LOCKED
-                # 转移 —— 否则 _send_supervisor_alert 永不执行, 终态告警静默丢失。
+                # 转移。
                 try:
                     _write_locked_snapshot(persistent_blockers)  # 新增
                 except Exception as exc:
                     logger.warning("LOCKED 快照写入失败 (不阻断终态转移): %s", exc)
-                self._send_supervisor_alert("LOCKED", persistent_blockers)
         elif debounce_action == "DEGRADED":
             # PKG02 (BDS-P0-001): 所有环境统一降级行为。
             if self.report.supervisor_state != "DEGRADED":
@@ -1207,15 +1085,13 @@ class BeidouSupervisor:
                 )
                 self.report.supervisor_state = "DEGRADED"
                 self._last_blocker_fingerprint = summarize_blockers(persistent_blockers)
-                self._send_supervisor_alert("DEGRADED", persistent_blockers)
             else:
                 # M00-F03-R2（对抗审查反例 C）: 已在 DEGRADED —— 不重复
-                # 相同 blocker 的告警，但 blocker 指纹变化（新类型 P0 出现）
-                # 必须立即告警；否则新故障在 DEGRADED 期间永久静默。
+                # 相同 blocker 的日志，但 blocker 指纹变化（新类型 P0 出现）
+                # 必须立即更新指纹；否则新故障在 DEGRADED 期间无法区分。
                 fingerprint = summarize_blockers(persistent_blockers)
                 if fingerprint != self._last_blocker_fingerprint:
                     self._last_blocker_fingerprint = fingerprint
-                    self._send_supervisor_alert("DEGRADED", persistent_blockers)
                 # 静默 fail-closed 背压：授权已撤销时控制面不允许停留
                 # RESUME；若被意外 RESUME，立即拉回 NO_NEW_RISK。
                 # 条件含 not _resume_authorized：授权有效（启动窗口）时
@@ -1231,7 +1107,7 @@ class BeidouSupervisor:
             # G5 producer intentionally keeps the control plane at
             # NO_NEW_RISK. Its supervisor state reflects runtime health,
             # not trading authority; marking it PAUSED here makes the
-            # producer status contract fail after a transient probe incident
+            # producer status contract fail after a transient probe failure
             # even though all writes remain held by the producer interlock.
             if self.producer_only:
                 self.report.supervisor_state = "RUNNING"
@@ -1239,14 +1115,6 @@ class BeidouSupervisor:
                 self.report.supervisor_state = "PAUSED"
             else:
                 self.report.supervisor_state = "RUNNING"
-            # BD-FIX (stale supervisor incidents): DEGRADED/LOCKED 期间
-            # 发出的 "Supervisor <state>" 事故在恢复 RUNNING 后无人清理
-            # (实测 08:29 的 HIGH 事故在 RUNNING/0 blocker 后仍 DETECTED
-            # 数十分钟)。状态回到 RUNNING 且无 blocker 即事故根因消除,
-            # 由监督器清除自己命名空间(supervisor)的事故 —— 引擎侧
-            # auto-resolve 只负责 execution_fact/reconciliation/user_stream/
-            # protection 类别,不越权清理监督器事故。
-            self._resolve_supervisor_incidents()
             # BD-FIX: testnet 故障自愈后自动重新授权 RESUME；live/canary/
             # paper 保持“撤销后需人工/重启授权”语义（demo 故障频发，
             # 人工授权不现实）。helper 内部再次校验：授权已撤销、控制面
@@ -1262,8 +1130,6 @@ class BeidouSupervisor:
                     fatal=False,
                 )
                 self.report.supervisor_state = _state_after_persistent_block(previous_state, True)
-                if self.report.supervisor_state == "DEGRADED" and previous_state != "DEGRADED":
-                    self._send_supervisor_alert("DEGRADED", persistent_blockers)
 
     async def _fail_closed(self, reason: str, fatal: bool = False) -> None:
         if self.engine is None:
@@ -1291,7 +1157,7 @@ class BeidouSupervisor:
         print(f"[supervisor] FAIL-CLOSED: {reason}; fatal={fatal}")
 
     # V3 安全语义：运行时的每个 P0/P1 事实失败都是 authority blocker。
-    # “瞬时”只能影响诊断、告警和人工处置，绝不能绕过新风险写边界。
+    # “瞬时”只能影响诊断和人工处置，绝不能绕过新风险写边界。
     # 这里故意不维护可自动恢复的白名单：心跳、模块进度、对账、订单链、
     # 保护覆盖等任一事实失真时，必须撤销当前授权并重新走启动/恢复门禁。
     # 这条约束防止 supervisor 在 stale heartbeat 或卡死订单链期间继续声称
@@ -1318,13 +1184,8 @@ class BeidouSupervisor:
 
         R12 (2026-08-24): 分类只吃每 tick 新鲜事实 —— 仅
         ``runtime.safety.protection_gap_detail`` 的 evidence.gaps 提供 A
-        证据 (A-whitelist 校验); incident dict 的 ``gap_reasons`` 是重发时
-        的陈旧快照 (A 期创建的事故在 gap 清除后残留 stale reasons), 只作
-        可观测性展示 (P2 发送路径保留), 不再参与分类。其余任何 blocker
-        (含 ``runtime.health.incidents``) 一律不提供 A 证据, 有它在即整体
-        按 B —— 消除 I-2 (真 B 类 owner-unknown 永不 LOCKED 的 fail-open)
-        与 I-3 (E3 armed incident 无 gap_reasons 把 A 拖成 B, 引擎 LOCKED
-        退出, 与 A-never-LOCKED 矛盾)。
+        证据 (A-whitelist 校验)。其余任何 blocker 一律不提供 A 证据，
+        有它在即整体按 B，避免真实 B 类 owner-unknown 被误判为可修复。
 
         R2 (2026-08-24): ``runtime.safety.protection_coverage`` 阻断按
         message 的 issue token 分类 —— 全部 token ∈ {MISSING_SL, MISSING_TP}
@@ -1351,8 +1212,7 @@ class BeidouSupervisor:
                     return False
                 coverage_repairable = True
                 continue
-            # R12: 其余任何 blocker (含 runtime.health.incidents) 一律不
-            # 提供 A 证据, 有它在即整体按 B (fail-closed)。
+            # R12: 其余任何 blocker 一律不提供 A 证据，有它在即整体按 B。
             if b.check_id != "runtime.safety.protection_gap_detail":
                 return False
             gaps = ev.get("gaps")
@@ -1478,9 +1338,6 @@ class BeidouSupervisor:
         if not self.self_heal:
             print("[supervisor] testnet auto re-auth SKIPPED: self_heal disabled (--no-self-heal)")
             return False
-        if self._has_active_trading_incident():
-            print("[supervisor] testnet auto re-auth SKIPPED: active safety incident")
-            return False
         if self._resume_authorized or self._control_state() == "RESUME" or self.report.blockers:
             return False
         lifecycle = self.engine._lifecycle
@@ -1556,7 +1413,7 @@ class BeidouSupervisor:
             self._last_monitor_loop_ts = time.monotonic()
             # M18-F01: MON08 频率策略门控实际节奏 —— 深度审计(外部事实
             # monitoring checks + 交易所快照 gather)按调度器节奏执行
-            # (ALERT 600s / NORMAL 1800s / STABLE 3600s);runtime checks
+            # (FAST 600s / NORMAL 1800s / STABLE 3600s);runtime checks
             # (引擎内部状态)每轮执行,安全门禁不稀疏。非 RESUME 或存在
             # blocker 时保持每轮全查 —— P0 不被稀释,故障响应不退化。
             _deep_due = self._monitoring_scheduler.should_run_deep_audit()  # type: ignore[no-untyped-call]
@@ -1597,21 +1454,15 @@ class BeidouSupervisor:
                     )
                 )
 
-            if self._resolve_stale_supervisor_incidents_before_debounce(checks):
-                # Re-read the health surface after resolving the derived
-                # incident so debounce/recovery sees the fresh fact set.
-                checks = self._runtime_checks()
-                checks = self._merge_monitoring_checks(checks)
-
             if not any(item.is_blocking for item in checks) and await self._recover_if_validated(checks):
                 # 只有仍然有效的授权才可以执行已经授权的恢复路径；
                 # _fail_closed 后 _resume_authorized=False，不能由清洁窗口重置。
                 checks = self._runtime_checks()
                 checks = self._merge_monitoring_checks(checks)
 
-            # Task 6 (3c/D-4): A 类永不 LOCKED 的配套告警 —— 每轮监控循环
+            # A 类永不 LOCKED 的本地卡滞标记 —— 每轮监控循环
             # 刷新 stuck 标记 (文件 mtime 即"引擎还活着"的心跳)。getattr 防御
-            # 引擎替身 (测试替身无该方法), 异常静默: 标记是尽力而为的告警,
+            # 引擎替身 (测试替身无该方法), 异常静默: 标记是尽力而为的状态,
             # 不得反噬主循环。
             _update_stuck = getattr(self.engine, "_update_stuck_marker", None)
             if callable(_update_stuck):
@@ -1757,11 +1608,7 @@ class BeidouSupervisor:
             loop = asyncio.get_running_loop()
 
             def request_shutdown() -> None:
-                self._shutdown_requested = True
-                if self.engine is not None:
-                    lifecycle = getattr(getattr(self.engine, "_lifecycle", None), "state", None)
-                    if str(getattr(lifecycle, "value", lifecycle)) == "ACTIVE":
-                        self.engine._running = False
+                self._request_shutdown()
 
             for sig in (signal.SIGINT, signal.SIGTERM):
                 with suppress(NotImplementedError, RuntimeError):

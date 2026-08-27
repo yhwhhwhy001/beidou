@@ -160,11 +160,9 @@ def test_record_reconciliation_failure_persists_event_and_fail_closed() -> None:
     )
     engine._control = SimpleNamespace(get_status=lambda: "RESUME")
     engine._safe_no_new_risk = lambda reason: setattr(engine, "blocked", reason)
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     assert engine._record_reconciliation_failure(result, system_facts=_facts(), exchange_facts=_facts()) is False
     assert any(item[0] == "snapshot" and item[1][1] == "EVENT_STREAM" for item in saved[0:3])
     assert engine.blocked == "auto"
-    assert engine.incident[1]["category"] == "reconciliation"
 
     failing = SimpleNamespace(
         checked_at=datetime.now(timezone.utc),
@@ -352,7 +350,6 @@ def test_trading_eligibility_delegates_to_the_single_truth_authority(monkeypatch
 
 def test_credential_health_permissions_post_risk_and_signed_position() -> None:
     engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "alerts", (args, kwargs)))
     engine._can_trade = True
     engine._can_withdraw = False
     engine._key_rotator = KeyRotator()
@@ -427,11 +424,8 @@ def test_credential_health_permissions_post_risk_and_signed_position() -> None:
     assert health["level"] == "WARNING" and health["rotation_error"] == "RuntimeError"
 
     engine._credential = expired
-    engine._alerts = SimpleNamespace(
-        send_incident=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("alert")),
-    )
     health = engine._check_credential_health()
-    assert health["level"] == "UNKNOWN" and "RuntimeError" in health["error"]
+    assert health["level"] == "CRITICAL"
 
     engine._last_account = {"totalWalletBalance": "1000"}
     engine._last_reconciliation_result = SimpleNamespace(checked_at=datetime.now(timezone.utc))
@@ -514,7 +508,6 @@ def _factor_engine() -> AutonomousEngine:
     engine._autopilot_strategy_id = "autopilot"
     engine._policy_float_audited = lambda _key, default: default
     engine._active_champion_id = None
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "alert", (args, kwargs)))
     engine._model_registry = SimpleNamespace(
         models=[],
         list_models=lambda _sid: engine._model_registry.models,
@@ -563,7 +556,6 @@ def test_live_factor_pair_evaluation_covers_scope_and_lifecycle_gates(monkeypatc
         metrics={"icir": 0.0, "sample_count": 60.0, "scope": "BINANCE:BTCUSDT:1h:h1"},
     )
     assert degraded._evaluate_live_factor_pairs(now) is True
-    assert hasattr(degraded, "alert")
     assert hasattr(degraded, "demoted")
 
     # Short windows remain diagnostic while a second scope prevents a
@@ -736,12 +728,7 @@ async def test_offline_tick_runs_reporting_recovery_and_cleanup() -> None:
     engine._autopilot_strategy_id = "autopilot"
     engine._last_account = {"totalWalletBalance": "1000"}
     report = SimpleNamespace(generate_daily_report=lambda **kwargs: setattr(engine, "report", kwargs))
-    engine._alerts = SimpleNamespace(
-        get_report_generator=lambda: report,
-        get_alert_stats=lambda: {"total": 3},
-        get_active_incidents=lambda: [{"incident_id": "incident-1"}],
-        send_incident=lambda *args, **kwargs: setattr(engine, "alert", (args, kwargs)),
-    )
+    engine._report_generator = report
     engine._tick_count = 5
     engine._order_count = 2
     engine._error_count = 51
@@ -776,7 +763,7 @@ async def test_offline_tick_runs_reporting_recovery_and_cleanup() -> None:
 
     assert engine.graph_rebuilt is True
     assert engine.daily_reset is True
-    assert engine.report["risk_events_24h"] == 3
+    assert engine.report["risk_events_24h"] == 0
     assert engine.mapek_checkpoint[1]["invariants_valid"] is False
     assert engine.store_checkpoint[0].startswith("cp-")
     assert len(engine._intent_retry_count) == 100
@@ -1033,45 +1020,7 @@ def test_seed_pool_history_handles_import_quality_and_feature_failures(monkeypat
     assert len(engine._trading_pool.calls) == 1
 
 
-def test_incident_resolution_and_replay_authorization_are_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    resolved: list[str] = []
-    engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._user_stream_runtime = {"status": "HEALTHY"}
-    engine._protection_owner_unknown = False
-    engine._ledger = SimpleNamespace(is_frozen=False)
-    engine._alerts = SimpleNamespace(
-        _active_incidents={
-            "exec": SimpleNamespace(root_cause_category="execution_fact"),
-            "recon": SimpleNamespace(root_cause_category="reconciliation"),
-            "stream": SimpleNamespace(root_cause_category="user_stream"),
-            "protect": SimpleNamespace(root_cause_category="protection"),
-            "other": SimpleNamespace(root_cause_category="other"),
-        },
-        resolve_incident=lambda iid: resolved.append(iid),
-    )
-    engine._maybe_auto_resolve_incidents()
-    assert set(resolved) == {"exec", "recon", "stream", "protect"}
-
-    frozen = AutonomousEngine.__new__(AutonomousEngine)
-    frozen._user_stream_runtime = {}
-    frozen._protection_owner_unknown = True
-    frozen._ledger = SimpleNamespace(is_frozen=True)
-    frozen._alerts = SimpleNamespace(
-        _active_incidents={"exec": SimpleNamespace(root_cause_category="execution_fact")},
-        resolve_incident=lambda _iid: (_ for _ in ()).throw(AssertionError("frozen incident must remain")),
-    )
-    frozen._maybe_auto_resolve_incidents()
-
-    broken = AutonomousEngine.__new__(AutonomousEngine)
-    broken._user_stream_runtime = {}
-    broken._protection_owner_unknown = False
-    broken._ledger = SimpleNamespace(is_frozen=False)
-    broken._alerts = SimpleNamespace(
-        _active_incidents={"x": SimpleNamespace(root_cause_category="reconciliation")},
-        resolve_incident=lambda _iid: (_ for _ in ()).throw(RuntimeError("alert store")),
-    )
-    broken._maybe_auto_resolve_incidents()
-
+def test_replay_authorization_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     blocked = AutonomousEngine.__new__(AutonomousEngine)
     blocked._can_write = False
     blocked._env_mode = SimpleNamespace(value="testnet")
@@ -1646,13 +1595,6 @@ def test_reconcile_and_coverage_helpers_cover_fail_closed_edges() -> None:
     engine._last_account = {"positions": [{"symbol": "BTCUSDT", "positionAmt": "1"}]}
     engine._last_account_at = 0.0
     assert engine._venue_position_gone("BTCUSDT") is False
-
-
-def test_auto_resolve_incidents_no_alert_authority_is_a_noop() -> None:
-    engine = AutonomousEngine.__new__(AutonomousEngine)
-    engine._alerts = None
-    engine._maybe_auto_resolve_incidents()
-    assert engine._alerts is None
 
 
 class _ExposureStore:

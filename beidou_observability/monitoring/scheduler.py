@@ -11,15 +11,15 @@ class DeepAuditScheduler:
     state: FrequencyState = field(default_factory=FrequencyState)
     check_results: list = field(default_factory=list)
 
-    def tick(self, results, *, restart=False, self_heal=False, clock_reversal=False, open_p0=False, open_p1=False):
+    def tick(self, results, *, restart=False, self_heal=False, clock_reversal=False, p0_failed=False, p1_failed=False):
         self.state = update_frequency(
             self.state,
             results,
             restart_detected=restart,
             self_heal_active=self_heal,
             clock_reversal=clock_reversal,
-            open_p0_incident=open_p0,
-            open_p1_incident=open_p1,
+            p0_failed=p0_failed,
+            p1_failed=p1_failed,
         )
         return self.state
 

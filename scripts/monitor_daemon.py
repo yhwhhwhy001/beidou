@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""北斗运营监控守护进程 — V1.2 持久化 + 告警接线。
+"""北斗运营监控守护进程 — V1.2 本地检查持久化。
 
 替代 V1.1 版本：
 - 持久化检查结果到 MonitoringRepository (SQLite)
-- 异常时触发告警 (AlertDispatcher)
 - 交叉验证健康端点与监督器状态
 - 写入本地状态文件 (JSONL)
 
@@ -61,28 +60,6 @@ def persist_result(result: dict) -> None:
         logger.error("monitor result persistence failed: %s", type(exc).__name__)
 
 
-def send_alert_if_critical(result: dict) -> None:
-    """P0 故障时通过 AlertDispatcher 推送告警。"""
-    p0_fails = result.get("p0_fails", 0)
-    if p0_fails == 0:
-        return
-    try:
-        from beidou_core.alerts import AlertDispatcher
-        from beidou_observability.telemetry import AlertSeverity
-
-        dispatcher = AlertDispatcher()
-        severity = AlertSeverity.CRITICAL if p0_fails >= 3 else AlertSeverity.HIGH
-        failed_checks = [c["check_id"] for c in result.get("checks", []) if c["status"] == "FAIL"]
-        dispatcher.send_incident(
-            severity=severity,
-            title=f"Monitor Daemon: {p0_fails} P0 failures",
-            description=f"Failed checks: {failed_checks}",
-            category="monitor_daemon",
-        )
-    except Exception as exc:
-        logger.error("critical alert dispatch failed: %s", type(exc).__name__)
-
-
 def cross_validate_health(health_data: dict | None, state: dict | None) -> dict[str, str]:
     """交叉验证健康端点与监督器状态。"""
     issues: dict[str, str] = {}
@@ -103,7 +80,7 @@ def cross_validate_health(health_data: dict | None, state: dict | None) -> dict[
 
 
 def run_checks_v12() -> dict:
-    """使用 V1.2 MonitoringService 执行全维度检查 + 持久化 + 告警。"""
+    """使用 V1.2 MonitoringService 执行全维度检查并持久化。"""
     from beidou_observability.monitoring.contracts import (
         CheckSeverity,
         CheckStatus,
@@ -173,7 +150,6 @@ def run_checks_v12() -> dict:
         "total_checks": len(results),
         "frequency": freq.level.value,
         "interval_s": freq.interval_seconds,
-        "open_incidents": len(svc.get_incidents(active_only=True)),
         "cross_validation": cross_issues,
         "checks": [
             {"check_id": r.check_id, "status": r.status.value, "severity": r.severity.value, "message": r.message}
@@ -182,9 +158,8 @@ def run_checks_v12() -> dict:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
 
-    # V1.2 新增: 持久化 + 告警
+    # V1.2: 持久化本地监控事实。
     persist_result(result)
-    send_alert_if_critical(result)
 
     # 持久化到 MonitoringRepository
     with contextlib.suppress(Exception):
@@ -209,7 +184,7 @@ def signal_handler(signum, frame):
 
 
 def run_foreground() -> None:
-    """前台运行 — 每 30s 检查，持久化 + 告警。"""
+    """前台运行 — 每 30s 检查并持久化。"""
     write_pid()
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -222,8 +197,7 @@ def run_foreground() -> None:
             health = result["health"]
             print(
                 f"[monitor_daemon] {datetime.now(timezone.utc).strftime('%H:%M:%S')} "
-                f"health={health} p0_fails={p0} checks={result['total_checks']} "
-                f"incidents={result['open_incidents']}"
+                f"health={health} p0_fails={p0} checks={result['total_checks']}"
             )
             if result.get("cross_validation"):
                 print(f"[monitor_daemon] ⚠️ 交叉验证失败: {result['cross_validation']}")

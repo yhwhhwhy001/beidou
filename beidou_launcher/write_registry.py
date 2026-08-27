@@ -60,6 +60,7 @@ _SKIP_PARTS = {
     "docs",
     "tests",
 }
+_GENERATED_OUTPUT_PREFIXES = (("delivery", "packages"),)
 
 
 def _is_repository_local_only(relative: Path) -> bool:
@@ -79,6 +80,12 @@ def _is_repository_local_only(relative: Path) -> bool:
         and parts[1].endswith(".yaml")
         and parts[1] != "env.template.yaml"
     )
+
+
+def _is_generated_output(relative: Path) -> bool:
+    """Exclude generated delivery packages from runtime governance inventory."""
+
+    return any(relative.parts[: len(prefix)] == prefix for prefix in _GENERATED_OUTPUT_PREFIXES)
 
 
 _REQUIRED_ENTRY_FIELDS = {
@@ -220,7 +227,6 @@ _REQUIRED_NETWORK_IMPORT_FIELDS = {
     "expected_rejection",
 }
 _ALLOWED_NETWORK_PURPOSES = {
-    "ALERT_DELIVERY",
     "EXCHANGE_WEBSOCKET",
     "EXCHANGE_TRANSPORT",
     "FAULT_INJECTION_READ",
@@ -264,6 +270,7 @@ def _is_skipped(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     return (
         relative.as_posix() == "beidou_launcher/write_registry.py"
+        or _is_generated_output(relative)
         or any(part in _SKIP_PARTS for part in relative.parts)
         or _is_repository_local_only(relative)
     )
@@ -273,7 +280,11 @@ def _is_governed_source_skipped(path: Path, root: Path) -> bool:
     """Exclude non-source trees while retaining executable runtime artifacts."""
 
     relative = path.relative_to(root)
-    return any(part in _SKIP_PARTS for part in relative.parts) or _is_repository_local_only(relative)
+    return (
+        _is_generated_output(relative)
+        or any(part in _SKIP_PARTS for part in relative.parts)
+        or _is_repository_local_only(relative)
+    )
 
 
 def _yaml_execution_strings(payload: Any) -> list[str]:

@@ -13,7 +13,6 @@ from beidou_observability.monitoring.repository import MonitoringRepository
 class MonitoringService:
     repo: MonitoringRepository = field(default_factory=MonitoringRepository)
     results: list = field(default_factory=list)
-    incidents: list = field(default_factory=list)
     budget: RateLimitBudget = field(default_factory=RateLimitBudget)
     position_mode: AccountPositionMode = AccountPositionMode.UNKNOWN
 
@@ -28,20 +27,12 @@ class MonitoringService:
             "frequency": freq.level.value,
             "interval_s": freq.interval_seconds,
             "position_mode": self.position_mode.value,
-            "open_incidents": sum(1 for i in self.incidents if i.status.value not in ("RESOLVED",)),
         }
 
     def check_deep(self):
         return [
             {"check_id": r.check_id, "status": r.status.value, "severity": r.severity.value, "message": r.message}
             for r in self.results
-        ]
-
-    def get_incidents(self, active_only=True):
-        incs = [i for i in self.incidents if not active_only or i.status.value not in ("RESOLVED",)]
-        return [
-            {"id": i.incident_id, "severity": i.severity.value, "status": i.status.value, "title": i.title}
-            for i in incs
         ]
 
     def get_evidence(self, check_id=None, limit=50):
@@ -65,7 +56,6 @@ def create_monitoring_cli(service):
     return {
         "status": service.status,
         "check--deep": service.check_deep,
-        "incidents": service.get_incidents,
         "evidence": service.get_evidence,
         "rate-budget": service.get_rate_budget,
         "mode-contract": service.get_mode_contract,

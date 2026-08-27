@@ -201,9 +201,8 @@ class G7LiveTracker:
             now_mono=mono,
         )
 
-        # 6. incident_closure: 活动事故计数
-        incidents = check_map.get("runtime.health.incidents")
-        inc_ok = incidents is not None and incidents.status == CheckStatus.PASS
+        # 6. incident_closure: 直接取本周期 P0 阻断事实。
+        inc_ok = not any(check.is_blocking and check.severity.value == "P0" for check in checks)
         self._slis["incident_closure"].record(1.0 if inc_ok else 0.0, now_wall=wall, now_mono=mono)
 
         # 7. cost_and_pnl_reporting: this is deliberately independent from

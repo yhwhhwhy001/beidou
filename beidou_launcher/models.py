@@ -76,8 +76,8 @@ class StartupReport:
         """聚合当前 blockers：同 (check_id, message) 合并为一条摘要（M00-F03）。
 
         保护覆盖类检查按持仓逐条产出相同条目（如 15 持仓 MISSING_SL 即 15
-        条重复 P0）。明细保留在 ``blockers`` 字段；本字段供状态文件与告警
-        文本使用，避免日志/webhook 风暴（P0-19）。
+        条重复 P0）。明细保留在 ``blockers`` 字段；本字段供状态文件和
+        本地日志使用，避免重复输出风暴（P0-19）。
         """
         groups: dict[tuple[str, str], list[CheckResult]] = {}
         for item in self.blockers:

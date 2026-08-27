@@ -51,7 +51,6 @@ REQUIRED_ENGINE_ATTRIBUTES: tuple[str, ...] = (
     "_exchange",
     "_feed",
     "_store",
-    "_alerts",
     "_health",
     "_control",
     "_lifecycle",
@@ -219,7 +218,7 @@ def inspect_engine_wiring(engine: Any, mode: str) -> list[CheckResult]:
     degraded_expected = sorted(fid for fid in inactive_expected if lifecycle.get(fid) == "DEGRADED")
     not_ready_expected = sorted(fid for fid in inactive_expected if lifecycle.get(fid) != "DEGRADED")
     # 仅因子缺失为 P0 阻断；未进入可执行生命周期和 DEGRADED 均为 P2
-    # 观测告警，但必须区分语义，不能把 IDEA/PAPER 误报成 DEGRADED。
+    # 观测异常，但必须区分语义，不能把 IDEA/PAPER 误报成 DEGRADED。
     # 动态挖掘因子合法注册：extra_factors 不再 FAIL。
     truly_missing = bool(missing_factors)
     degraded_only = bool(not truly_missing and inactive_expected)

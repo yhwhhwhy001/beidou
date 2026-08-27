@@ -30,7 +30,6 @@ def _healthy_checks() -> list[CheckResult]:
         CheckResult("runtime.execution.order_trace", "orders", CheckStatus.PASS, CheckSeverity.P0, "ok"),
         CheckResult("runtime.safety.protection_coverage", "protection", CheckStatus.PASS, CheckSeverity.P0, "ok"),
         CheckResult("runtime.safety.reconciliation", "recon", CheckStatus.PASS, CheckSeverity.P0, "ok"),
-        CheckResult("runtime.health.incidents", "incidents", CheckStatus.PASS, CheckSeverity.P2, "ok"),
     ]
 
 

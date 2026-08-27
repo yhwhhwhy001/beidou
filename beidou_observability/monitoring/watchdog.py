@@ -52,16 +52,13 @@ COMPONENT_FAILURE_MATRIX = {
         recovery_gate="loop_progress_pass",
     ),
     "scheduler": ComponentHealth(
-        component="scheduler", healthy=False, safe_action="ALERT", recovery_gate="scheduler_progress"
+        component="scheduler", healthy=False, safe_action="NONE", recovery_gate="scheduler_progress"
     ),
     "fact_collector": ComponentHealth(
         component="fact_collector", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="fresh_authoritative_fact"
     ),
-    "incident_manager": ComponentHealth(
-        component="incident_manager", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="durable_incident_rw"
-    ),
     "evidence_writer": ComponentHealth(
-        component="evidence_writer", healthy=False, safe_action="ALERT", recovery_gate="durable_evidence_probe"
+        component="evidence_writer", healthy=False, safe_action="NONE", recovery_gate="durable_evidence_probe"
     ),
     "repository": ComponentHealth(
         component="repository", healthy=False, safe_action="NO_NEW_RISK", recovery_gate="transactional_rw_probe"

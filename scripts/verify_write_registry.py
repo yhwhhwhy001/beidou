@@ -40,6 +40,7 @@ SKIP_PARTS = {
     "docs",
     "tests",
 }
+GENERATED_OUTPUT_PREFIXES = (("delivery", "packages"),)
 
 
 def _is_repository_local_only(relative: Path) -> bool:
@@ -61,8 +62,18 @@ def _is_repository_local_only(relative: Path) -> bool:
     )
 
 
+def _is_generated_output(relative: Path) -> bool:
+    """Exclude generated delivery packages from independent source inventory."""
+
+    return any(relative.parts[: len(prefix)] == prefix for prefix in GENERATED_OUTPUT_PREFIXES)
+
+
 def _is_skipped(relative: Path) -> bool:
-    return any(part in SKIP_PARTS for part in relative.parts) or _is_repository_local_only(relative)
+    return (
+        _is_generated_output(relative)
+        or any(part in SKIP_PARTS for part in relative.parts)
+        or _is_repository_local_only(relative)
+    )
 
 
 @dataclass(frozen=True, slots=True)

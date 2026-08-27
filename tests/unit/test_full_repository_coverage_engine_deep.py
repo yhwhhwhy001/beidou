@@ -26,7 +26,6 @@ def _engine() -> AutonomousEngine:
     engine._control = SimpleNamespace(
         get_status=lambda: SimpleNamespace(value="NO_NEW_RISK"), execute_action=lambda *_args: None
     )
-    engine._alerts = SimpleNamespace(send_incident=lambda *_args, **_kwargs: None)
     return engine
 
 

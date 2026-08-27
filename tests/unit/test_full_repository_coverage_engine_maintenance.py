@@ -140,7 +140,6 @@ def test_engine_timestamp_and_small_authority_boundaries() -> None:
 
     engine._control = SimpleNamespace(get_status=lambda: ControlAction.RESUME)
     engine._safe_no_new_risk = lambda _reason: setattr(engine, "no_new_risk", True)
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: setattr(engine, "incident", (args, kwargs)))
     engine._protection_issues = set()
     engine._block_unowned_protection_orders(["p1"])
     assert engine._protection_owner_unknown is True

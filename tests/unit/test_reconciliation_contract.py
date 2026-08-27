@@ -219,7 +219,6 @@ def test_ledger_persistence_failure_freezes_and_closes_gate() -> None:
     control.get_status = lambda: control.action
     control.execute_action = lambda action: setattr(control, "action", action)
     engine._control = control
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: None)
 
     with pytest.raises(OSError, match="disk full"):
         engine._post_ledger_transaction(tx)
@@ -309,7 +308,6 @@ async def test_engine_reconciliation_failure_is_read_only_and_closes_gate(tmp_pa
     )
     engine._api_async_safe = api
     engine._control = control
-    engine._alerts = SimpleNamespace(send_incident=lambda *args, **kwargs: None)
     engine._last_account = {}
 
     ok = await engine._reconcile()
@@ -369,7 +367,6 @@ async def test_realtime_recon_timeout_is_fail_closed_and_does_not_block_loop() -
         execute_action=lambda action: actions.append(action.value),
     )
     engine._durable_fact_status = lambda: (True, None, None)
-    engine._alerts = SimpleNamespace(send_incident=lambda *a, **k: None)
     engine._error_count = 0
     engine._last_realtime = 0.0
     engine._last_realtime_mono = 0.0
@@ -433,8 +430,6 @@ async def test_realtime_tick_prefix_failure_does_not_block_reconciliation() -> N
         get_status=lambda: ControlAction.NO_NEW_RISK,
     )
     engine._durable_fact_status = lambda: (True, None, None)
-    engine._maybe_auto_resolve_incidents = lambda: None
-    engine._alerts = SimpleNamespace(send_incident=lambda *a, **k: None)
     engine._error_count = 0
     engine._last_realtime = 0.0
     engine._last_realtime_mono = 0.0

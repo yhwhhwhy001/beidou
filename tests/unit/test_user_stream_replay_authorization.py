@@ -236,20 +236,17 @@ def test_g5_producer_authorizes_replay_without_terminal_write_capability() -> No
     assert projector.ingest(_unsequenced_order_update()).status is UserProjectionStatus.ACCEPTED
 
 
-def test_authorization_failure_does_not_freeze_or_incident() -> None:
+def test_authorization_failure_does_not_freeze() -> None:
     """自动授权失败只是 defer（保持人工授权语义），绝不触发 fail-closed。"""
     projector = _projector_requiring_replay()
     engine = _engine(projector=projector)
     ledger = Mock()
-    alerts = Mock()
     engine._ledger = ledger
-    engine._alerts = alerts
 
     incomplete = _baseline_facts(complete=False)  # complete=False → BLOCKED
     assert engine._maybe_authorize_user_stream_baseline(incomplete, "recon-abc") is False
     assert projector.sequencer.status is UserStreamStatus.SEQUENCE_UNAVAILABLE
     ledger.freeze.assert_not_called()
-    alerts.send_incident.assert_not_called()
 
 
 def test_returns_false_without_projector() -> None:
@@ -503,18 +500,12 @@ def test_user_stream_fault_does_not_freeze_ledger_on_testnet() -> None:
     engine = _engine(env_mode="testnet")
     engine._user_stream_runtime = {}
     engine._ledger = Mock()
-    engine._alerts = Mock()
     engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
     engine._user_stream_restart_attempts = 99  # 超出上限，不调度重启任务
 
     engine._user_stream_fault("TEST_CONNECTION_FAILED", terminal=True)
 
     engine._ledger.freeze.assert_not_called()
-    # user_stream incident 仍发送（自身 category）
-    user_stream_calls = [
-        c for c in engine._alerts.send_incident.call_args_list if c.kwargs.get("category") == "user_stream"
-    ]
-    assert user_stream_calls, "user_stream incident must still be raised"
 
 
 def test_user_stream_fault_freezes_ledger_on_live() -> None:
@@ -522,7 +513,6 @@ def test_user_stream_fault_freezes_ledger_on_live() -> None:
     engine = _engine(env_mode="live")
     engine._user_stream_runtime = {}
     engine._ledger = Mock()
-    engine._alerts = Mock()
     engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
     engine._user_stream_restart_attempts = 99
 
@@ -535,13 +525,11 @@ def test_user_stream_fault_freezes_ledger_on_live() -> None:
 # --- 事件拒绝与账本冻结解耦（testnet 可恢复）---
 
 
-def _engine_with_reject_path(env_mode: str) -> tuple[AutonomousEngine, Mock, Mock]:
+def _engine_with_reject_path(env_mode: str) -> tuple[AutonomousEngine, Mock]:
     engine = _engine(env_mode=env_mode)
     ledger = Mock()
-    alerts = Mock()
     engine._ledger = ledger
-    engine._alerts = alerts
-    return engine, ledger, alerts
+    return engine, ledger
 
 
 def test_ingest_rejection_does_not_freeze_ledger_on_testnet() -> None:
@@ -551,7 +539,7 @@ def test_ingest_rejection_does_not_freeze_ledger_on_testnet() -> None:
     ingest 返回 False → 旧代码 _record_execution_fact_failure → 账本
     永久冻结。testnet 只降级控制面，不 freeze；live/canary 保留。
     """
-    engine, ledger, _alerts = _engine_with_reject_path("testnet")
+    engine, ledger = _engine_with_reject_path("testnet")
     engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
     engine._event_stream_facts = None
     engine._recon = Mock()
@@ -568,7 +556,7 @@ def test_ingest_rejection_does_not_freeze_ledger_on_testnet() -> None:
 
 
 def test_ingest_rejection_freezes_ledger_on_live() -> None:
-    engine, ledger, _alerts = _engine_with_reject_path("live")
+    engine, ledger = _engine_with_reject_path("live")
     engine._control = Mock(get_status=Mock(return_value="NO_NEW_RISK"))
     engine._event_stream_facts = None
     engine._recon = Mock()
@@ -577,48 +565,6 @@ def test_ingest_rejection_freezes_ledger_on_live() -> None:
     engine.ingest_user_order_update(_unsequenced_order_update())
     ledger.freeze.assert_called_once()
     assert ledger.freeze.call_count == 1
-
-
-# --- 事故自动清理（与 RESUME 动作解耦）---
-
-
-def _incident(category: str) -> Mock:
-    return Mock(root_cause_category=category)
-
-
-def test_auto_resolve_execution_fact_regardless_of_control_state() -> None:
-    """事实干净即 resolve —— 控制面已 RESUME 不再阻塞事故清理（旧死角）。"""
-    engine = _engine()
-    engine._user_stream_runtime = {"status": "CONNECTED"}
-    alerts = Mock()
-    alerts._active_incidents = {"i1": _incident("execution_fact"), "i2": _incident("execution_fact")}
-    engine._alerts = alerts
-
-    engine._maybe_auto_resolve_incidents()
-
-    assert alerts.resolve_incident.call_count == 2
-
-
-def test_auto_resolve_user_stream_requires_healthy_transport() -> None:
-    engine = _engine()
-    engine._user_stream_runtime = {"status": "CONNECTED"}
-    alerts = Mock()
-    alerts._active_incidents = {"i1": _incident("user_stream")}
-    engine._alerts = alerts
-
-    engine._maybe_auto_resolve_incidents()
-    alerts.resolve_incident.assert_called_once()
-    assert alerts.resolve_incident.call_count == 1
-
-    # transport 未恢复 → 不 resolve
-    engine2 = _engine()
-    engine2._user_stream_runtime = {"status": "FAILED"}
-    alerts2 = Mock()
-    alerts2._active_incidents = {"i1": _incident("user_stream")}
-    engine2._alerts = alerts2
-    engine2._maybe_auto_resolve_incidents()
-    alerts2.resolve_incident.assert_not_called()
-    assert alerts2.resolve_incident.call_count == 0
 
 
 # --- 两方一致性守卫（helper result 参数）---

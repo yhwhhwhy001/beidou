@@ -114,8 +114,6 @@ class InfrastructureConfig:
     redis_timeout: int = 2
     s3_bucket: str = "beidou-certificates"
     s3_endpoint: str = ""
-    alerts_file: str = "evidence/beidou_alerts.jsonl"
-    webhook_timeout: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,8 +222,6 @@ class ConfigProvider:
             "redis_timeout": 2,
             "s3_bucket": "beidou-certificates",
             "s3_endpoint": "",
-            "alerts_file": "evidence/beidou_alerts.jsonl",
-            "webhook_timeout": 5,
         },
         "production_ladder": {
             "current_level": "L0_PAPER",
@@ -405,7 +401,6 @@ class ConfigProvider:
         infra_control = infra_raw.get("control", {})
         infra_redis = infra_raw.get("redis", {})
         infra_s3 = infra_raw.get("s3", {})
-        infra_alerts = infra_raw.get("alerts", {})
         infrastructure = InfrastructureConfig(
             health_host=str(infra_health.get("host", "127.0.0.1")),
             health_port=int(infra_health.get("port", 9090)),
@@ -416,8 +411,6 @@ class ConfigProvider:
             redis_timeout=int(infra_redis.get("timeout_seconds", 2)),
             s3_bucket=str(infra_s3.get("bucket", "beidou-certificates")),
             s3_endpoint=str(infra_s3.get("endpoint", "")),
-            alerts_file=str(infra_alerts.get("file_path", "evidence/beidou_alerts.jsonl")),
-            webhook_timeout=int(infra_alerts.get("webhook_timeout", 5)),
         )
 
         # Parse capital ladder

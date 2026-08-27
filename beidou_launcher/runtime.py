@@ -10,53 +10,6 @@ from .models import CheckResult, CheckSeverity, CheckStatus
 from .registry import inspect_engine_wiring
 
 
-def active_incident_blocking_severity(incidents: list[Any]) -> CheckSeverity | None:
-    """Return the runtime check severity required by open safety incidents.
-
-    ``AlertDispatcher.get_active_incidents`` omits resolved incidents, but
-    callers may provide dictionaries or lightweight test doubles.  Treat an
-    incident as active unless its status explicitly says RESOLVED/CLOSED.
-    HIGH pauses trading; CRITICAL/LOCKDOWN are P0 authority blockers.
-    """
-
-    p1_severities = {"HIGH", "P1"}
-    p0_severities = {"CRITICAL", "LOCKDOWN", "P0"}
-    p1_found = False
-    for incident in incidents:
-        if isinstance(incident, dict):
-            raw_status = incident.get("status", "")
-            raw_severity = incident.get("severity", "")
-        else:
-            raw_status = getattr(incident, "status", "")
-            raw_severity = getattr(incident, "severity", "")
-        status = str(getattr(raw_status, "value", raw_status)).upper()
-        severity = str(getattr(raw_severity, "value", raw_severity)).upper()
-        if status in {"RESOLVED", "CLOSED"}:
-            continue
-        if severity in p0_severities:
-            return CheckSeverity.P0
-        if severity in p1_severities:
-            p1_found = True
-    return CheckSeverity.P1 if p1_found else None
-
-
-def has_active_trading_incident(engine: Any) -> bool:
-    """Return whether active incident state must revoke new-risk authority.
-
-    A missing incident boundary is tolerated only for minimal test doubles;
-    once the production boundary exists, query errors fail closed.
-    """
-
-    getter = getattr(getattr(engine, "_alerts", None), "get_active_incidents", None)
-    if not callable(getter):
-        return False
-    try:
-        incidents = list(getter())
-    except Exception:
-        return True
-    return active_incident_blocking_severity(incidents) is not None
-
-
 def build_decision_trace(probe: dict[str, Any]) -> dict[str, Any]:
     """Build a read-only market-to-kernel trace for later PnL joining."""
     from beidou_reporting.pnl_attribution import DecisionTrace
@@ -664,32 +617,6 @@ def collect_runtime_checks(
     # 由 collect_monitoring_checks() 统一执行深度检查，
     # 避免 runtime.py 与 monitoring/ 双重维护同一逻辑。
 
-    incident_query_failed = False
-    try:
-        incidents = list(engine._alerts.get_active_incidents())
-    except Exception:
-        incidents = ["INCIDENT_QUERY_FAILED"]
-        incident_query_failed = True
-    incident_severity = CheckSeverity.P0 if incident_query_failed else active_incident_blocking_severity(incidents)
-    incident_ok = not incidents
-    incident_blocking = incident_severity is not None
-    # HIGH/CRITICAL/LOCKDOWN incidents represent unresolved safety authority
-    # loss, even when the originating check has not yet been re-collected in
-    # this monitoring cycle.  Keeping these as P2 warnings allowed testnet
-    # auto-recovery to RESUME while reconciliation incidents were still open.
-    checks.append(
-        CheckResult(
-            check_id="runtime.health.incidents",
-            name="活动事故",
-            status=CheckStatus.FAIL
-            if incident_blocking
-            else (CheckStatus.WARN if not incident_ok else CheckStatus.PASS),
-            severity=incident_severity or CheckSeverity.P2,
-            message="无活动事故" if incident_ok else f"活动事故: {incidents}",
-            evidence={"incidents": incidents},
-        )
-    )
-
     # gap reason 贯通 (可观测性修复): 保护缺口明细单独成检查, 供 supervisor
     # A/B 分流区分"引擎可修复的覆盖缺口"与"真故障"。有缺口时必须是 FAIL
     # 而非 WARN —— supervisor 只把 FAIL/UNKNOWN 的 P0/P1 检查收进 blockers
@@ -718,63 +645,4 @@ def collect_runtime_checks(
         )
     )
 
-    # Webhook delivery is part of the unattended safety certificate when the
-    # dispatcher exposes durable delivery state.  Older test doubles without
-    # this method are left untouched; the production dispatcher must not hide
-    # CRITICAL/LOCKDOWN delivery UNKNOWN or dead-letter states.
-    delivery_getter = getattr(getattr(engine, "_alerts", None), "get_delivery_health", None)
-    if callable(delivery_getter):
-        try:
-            delivery = delivery_getter()
-            critical_pending = int(delivery.get("critical_pending", 0))
-            dead_letter = int(delivery.get("dead_letter", 0))
-            unknown = int(delivery.get("unknown", 0))
-            pending = int(delivery.get("pending", 0))
-            configured = bool(delivery.get("configured", False))
-            # BD-FIX: dead_letter 不再 P0 阻断 —— 死信现在可重试
-            # （retry_pending 重置预算后重投，幂等键在），重试间隙
-            # 的残留计数不应触发 LOCKED（C4 审查：旧逻辑死信永久
-            # P0 → LOCKED → 跨重启崩溃循环）。critical_pending/unknown
-            # 仍保持 P0（交付确实不可证明）。
-            if critical_pending or unknown:
-                # PKG02: 所有环境统一交付状态检查标准。
-                delivery_status = CheckStatus.FAIL
-                delivery_severity = CheckSeverity.P0
-                delivery_message = (
-                    f"告警送达不可证明: critical_pending={critical_pending}, "
-                    f"dead_letter={dead_letter}, unknown={unknown}"
-                )
-            elif pending or dead_letter:
-                delivery_status = CheckStatus.WARN
-                delivery_severity = CheckSeverity.P1
-                delivery_message = f"告警仍在重试队列: pending={pending}, dead_letter={dead_letter}（死信可重试）"
-            elif not configured:
-                delivery_status = CheckStatus.WARN
-                delivery_severity = CheckSeverity.P1
-                delivery_message = "未配置外部 webhook；仅本地告警文件可用"
-            else:
-                delivery_status = CheckStatus.PASS
-                delivery_severity = CheckSeverity.P1
-                delivery_message = "告警 webhook 当前无待投递事实"
-            checks.append(
-                CheckResult(
-                    check_id="runtime.health.alert_delivery",
-                    name="告警送达状态",
-                    status=delivery_status,
-                    severity=delivery_severity,
-                    message=delivery_message,
-                    evidence=delivery,
-                )
-            )
-        except Exception as exc:
-            checks.append(
-                CheckResult(
-                    check_id="runtime.health.alert_delivery",
-                    name="告警送达状态",
-                    status=CheckStatus.FAIL,
-                    severity=CheckSeverity.P0,
-                    message=f"告警送达状态查询失败: {type(exc).__name__}",
-                    evidence={"error": type(exc).__name__},
-                )
-            )
     return checks, error_count

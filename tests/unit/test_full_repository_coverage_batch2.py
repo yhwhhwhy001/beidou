@@ -199,7 +199,7 @@ def test_monitoring_repository_singleton_context_and_empty_state(
         assert context is not None
     repository._get_conn().execute("DELETE FROM monitor_frequency_state")
     repository._get_conn().commit()
-    assert repository.get_frequency_state().level.value == "ALERT"
+    assert repository.get_frequency_state().level.value == "FAST"
     assert repository.can_disable_check("missing-check", "testnet") == (True, "")
     repository.close()
 
