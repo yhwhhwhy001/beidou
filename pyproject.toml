@@ -43,7 +43,7 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "structlog>=24.0",
     "prometheus-client>=0.19",
-    "cryptography>=41.0",
+    "cryptography>=50.0.0",
     "pyjwt>=2.8",
     "httpx>=0.25",
     "tenacity>=8.2",
@@ -58,8 +58,8 @@ bd = "beidou_cli:main"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=4.1",
     "hypothesis>=6.92",
     "ruff>=0.3",
@@ -68,6 +68,8 @@ dev = [
     "black>=24.0",
     "pre-commit>=3.6",
     "coverage>=7.4",
+    "bandit>=1.9.4",
+    "pip-audit>=2.10.1",
 ]
 research = [
     "numpy>=1.26",

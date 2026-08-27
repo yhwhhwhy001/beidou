@@ -23,8 +23,8 @@ typecheck:
 
 # 安全扫描
 security-scan:
-	bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml
-	pip-audit
+	python -m bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml
+	python -m pip_audit
 
 # 死代码检测
 dead-code:

@@ -79,7 +79,7 @@ def _bootstrap(
 ) -> dict[str, Any]:
     n = len(champion)
     block_length = max(1, math.ceil(math.sqrt(n)))
-    rng = random.Random(seed)  # noqa: S311 - deterministic statistical resampling
+    rng = random.Random(seed)  # nosec B311 - deterministic statistical resampling, not security randomness  # noqa: S311
     metrics: dict[str, list[float]] = {
         "delta_R_mean": [],
         "incremental_annualized_sharpe": [],

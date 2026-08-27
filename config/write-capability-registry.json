@@ -131,7 +131,7 @@
   },
   "make:security-scan": {
    "capability": "SOURCE_READ_ONLY",
-   "command": "bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml && pip-audit",
+   "command": "python -m bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml && python -m pip_audit",
    "expected_rejection": "OFFLINE_ONLY_NO_RUNTIME_AUTHORITY",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_declaration_record_is_behaviorally_bound[makeu003asecurity-scan]",
    "owner": "Engineering Owner",
@@ -218,7 +218,7 @@
   "make:run-safety": "@echo \"apps.safety_executor is retired (M00-F06); use: beidou start --mode testnet\" && @exit 2",
   "make:run-strategy": "@echo \"apps.strategy_engine is retired (M00-F06); use: beidou start --mode paper\" && @exit 2",
   "make:sbom": "@echo \"=== SBOM Generation ===\" && pip freeze > requirements.lock && sha256sum requirements.lock > requirements.lock.sha256 && @echo \"Lockfile hash: $$(cat requirements.lock.sha256)\" && @echo \"SBOM written to requirements.lock\"",
-  "make:security-scan": "bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml && pip-audit",
+  "make:security-scan": "python -m bandit -r $(BEIDOU_PACKAGES) -c pyproject.toml && python -m pip_audit",
   "make:test-all": "pytest $(TEST_DIR) -v",
   "make:test-architecture": "pytest $(TEST_DIR)/architecture -v",
   "make:test-coverage": "pytest $(TEST_DIR) -v --cov --cov-report=html --cov-report=term-missing --cov-report=xml",
@@ -824,11 +824,11 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "23b774567d94e9317b5494fcf6fd63fb144cda0da15033c51ef0ea07449f8980",
+ "governance_digest": "ee104d82e02b0644b22e67efc7abc992e3d6080095f998fe9489281fae758e44",
  "governed_source_digests": {
-  ".github/workflows/ci.yml": "9c56cbb2a20e014640d7e23ec63389f93c7e6f0ee17284ea96f01c08426d237b",
+  ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
-  "Makefile": "123acfc6c282f2e01f56552c1def553e818cfaf293a43f0a096701ed2062ebfa",
+  "Makefile": "9f99f568dd9f2fad8a04ade2a90a994157005ea78d1876badb9137ce96524bbd",
   "apps/alpha_app/__init__.py": "45558da1bd5e96390e761018e2c684a84940cb7c6a4214de4b1334bb7201b522",
   "apps/alpha_app/composition.py": "b8eb56a7ce9f6fa08ca60c747f3176af4b327cef8a9a32e09283798d24abb95d",
   "apps/autopilot/__main__.py": "596cf0c6cb347b8a9c639a681b27e1906f2ca2a30e80e8fc49d5a3a34f95b5c6",
@@ -883,7 +883,7 @@
   "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py": "8b9ce2a7a788b6ae6a22dd18730662cd9584ad5ad579cdfbaeddf49b6dd0fc67",
   "beidou_certification/g5_scenarios/restart/__init__.py": "05d868704edba365fbb414b960999fdb3849db22cfd3f0f11e64e261ff473232",
   "beidou_certification/g5_scenarios/restart/database_restart.py": "4624df3862590d62fd9abc62721758579b5200c261203d83357940a6ce121ee1",
-  "beidou_certification/g5_scenarios/restart/process_restart.py": "00e17bd239611cd862b5d173a2d926780795288ef76893e713cb1a77ad7d6cf5",
+  "beidou_certification/g5_scenarios/restart/process_restart.py": "3db62981d97d7616a98b09aeef637996365c2f5547c0b1c2a55067150c26e3af",
   "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py": "41ae5e491052eb939a7df28a4831f66ec12eb4b476197ba3abc2e75a5b9de46b",
   "beidou_certification/g5_scenarios/runner.py": "7733b4596c2f3b4f6e6490d995a1fc9b7247e84c532422486d8a7ed465223c60",
   "beidou_certification/gate_verifier.py": "c60d147fa9494ab9eba5db946a6e9031f0522d6cd299552514dd97b193a12b14",
@@ -1071,7 +1071,7 @@
   "beidou_research/models/__init__.py": "05ed88fee4c50e90341159325d3ac696cd760adfeeda2e50c1e5d813597b09c6",
   "beidou_research/portfolio/__init__.py": "4c26805d0d6b310d2037b41ad238589f1f1d34a9dcf8a46b11bbc65a08df88c1",
   "beidou_research/portfolio/contracts.py": "df94184c7a06276c20d025deffc52ab32318d6f016a2ad8132cdf234e2ee6685",
-  "beidou_research/portfolio/decision.py": "a26a13dcff8998fa773c4f02e6478b9a311099a36929f0fd3a2e72c740b55fe5",
+  "beidou_research/portfolio/decision.py": "f91be29ed91de57c45a910ae8962f2a01bee5a1a981b24a4790beb3f29501416",
   "beidou_research/portfolio/store.py": "8e64a43f38e78ea665bf221833625e85280ae53f8a62590751a8c4827ad112dc",
   "beidou_research/statistics/__init__.py": "066272f078396bd54c196ccee15fa709a7a587fddb285a13890a0844a86a7e3a",
   "beidou_research/statistics/validation.py": "dac018fd2636403cf39df1d9270224328e9a92f5435524ac49a3d7aca993d697",
@@ -1219,7 +1219,7 @@
   "migrations/004_runtime_records.up.sql": "f7a295be49100cf9f6e759e9bce92c5680dbe462a4d75758c459c2060270f8db",
   "migrations/005_risk_approval_intent_hash.up.sql": "ea0276521b756c733cdf6a40055741cf247f17ec36bad3d13506c104c5cc8bd2",
   "migrations/006_execution_children.up.sql": "acaf0a5d74f7b06d5ff68436749b48702b4bcc0e3921067dc5c7bd4f0cf7b594",
-  "pyproject.toml": "bb8c731851669047b18eb886fd4354c5236c1cd9406dc573e01608f4dfaa3df4",
+  "pyproject.toml": "3919959941e33a0abb87708b24c2138109d2ad4cc1bb2c1ce903a93490241ac9",
   "scripts/certification/evaluate_g7.py": "f012544ee5593cc7f52922cb65e75df6c255b203d395eced3625329eda879f80",
   "scripts/certification/start_g7.py": "d6cdcc416a2a02e5b5308815655e00949cadcf60af3a9ee4176108f2b0d9b6e5",
   "scripts/certify_72h.py": "0799a5b035eea8b8564aaf6c8d2a025bb90d8bfaf5e925bb9501d5710da53cb5",
@@ -1267,7 +1267,14 @@
   },
   {
    "governance_id": "ENTRY-GITHUB-CI",
-   "identity": ".github/workflows/ci.yml:127:YAML_PACKAGE_NETWORK:pip",
+   "identity": ".github/workflows/ci.yml:128:YAML_PACKAGE_NETWORK:pip",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-GITHUB-CI]",
+   "owner": "Test Quality Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "ENTRY-GITHUB-CI",
+   "identity": ".github/workflows/ci.yml:129:YAML_PACKAGE_NETWORK:pip",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-GITHUB-CI]",
    "owner": "Test Quality Owner",
    "status": "HARD_HOLD"
