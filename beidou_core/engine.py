@@ -170,15 +170,35 @@ def _apply_testnet_event_stream_exemption(
     # TESTNET-EXEMPT: EXEMPT-01
     if not result.matched and environment == "testnet" and event_facts is not None:
         differences = [str(difference) for difference in result.differences or []]
-        two_way_differences = [
-            difference for difference in differences if difference.startswith("system/exchange")
-        ]
+        two_way_differences = [difference for difference in differences if difference.startswith("system/exchange")]
         if not two_way_differences and differences:
             print("[recon] testnet: event-stream drift (reference only) — treated as matched")
             result.matched = True
             result.differences = []
             result.status = ReconciliationStatus.MATCHED
     return result
+
+
+def _payload_rows(raw: Any) -> list[dict[str, Any]]:
+    """Normalize runtime-store records before applying safety projections.
+
+    Persistent stores return a list of mapping rows, but these helpers are
+    also exercised with lightweight test doubles.  Keeping the boundary
+    explicit prevents ``None``/malformed payloads from leaking into ``dict``
+    construction while retaining the existing fail-closed behavior.
+    """
+
+    if not isinstance(raw, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for record in raw:
+        if not isinstance(record, dict):
+            continue
+        payload = record.get("payload", record)
+        if isinstance(payload, dict):
+            rows.append({str(key): value for key, value in payload.items()})
+    return rows
+
 
 # BD-FIX (O1): 基本结构化日志 — 写入文件并添加时间戳/级别/correlation_id
 _log_format = logging.Formatter(
@@ -2895,7 +2915,9 @@ class AutonomousEngine:
             self, "_running", False
         ):
             return HealthState.UNHEALTHY
-        if (getattr(self, "_can_write", False) or getattr(self, "_producer_only", False)) and not self._user_stream_readiness()[0]:
+        if (
+            getattr(self, "_can_write", False) or getattr(self, "_producer_only", False)
+        ) and not self._user_stream_readiness()[0]:
             return HealthState.UNHEALTHY
         if self._running and self._realtime_age_seconds() > 15.0:
             return HealthState.UNHEALTHY
@@ -4730,8 +4752,10 @@ class AutonomousEngine:
             # Do not raise OPEN_ALGO_ORDERS_EMPTY here, otherwise the later
             # read-only reconciliation can never clear the stale local row.
             account_amounts = self._validated_account_position_amounts(account)
-            if bool(getattr(self, "_last_algo_inventory_genuine", False)) and account_amounts is not None and all(
-                abs(amount) <= Decimal("1e-12") for amount in account_amounts.values()
+            if (
+                bool(getattr(self, "_last_algo_inventory_genuine", False))
+                and account_amounts is not None
+                and all(abs(amount) <= Decimal("1e-12") for amount in account_amounts.values())
             ):
                 print(
                     "[startup] Conditional-order inventory is genuinely empty and the venue account is flat; "
@@ -4955,9 +4979,7 @@ class AutonomousEngine:
                     and any(str(a.get("algoId", "")) == exchange_order_id for a in inventory)
                 ):
                     if read_only:
-                        self._block_unowned_protection_orders(
-                            [f"PROTECTION_PENDING_REQUIRES_ADOPTION:{protection_id}"]
-                        )
+                        self._block_unowned_protection_orders([f"PROTECTION_PENDING_REQUIRES_ADOPTION:{protection_id}"])
                         return False
                     # BD-FIX: 已拿到 venue ACK 但持久化中断停留在 PENDING 的行
                     # (实测 XRP TP:venue 存在 algoId,durable 行未推进 ACTIVE
@@ -8562,10 +8584,7 @@ class AutonomousEngine:
         # writes hard-held, but it still owns the authenticated session
         # lifecycle needed to exercise recovery.  Do not let that producer
         # remain FAILED merely because normal terminal writes are disabled.
-        if terminal and (
-            bool(getattr(self, "_can_write", False))
-            or bool(getattr(self, "_producer_only", False))
-        ):
+        if terminal and (bool(getattr(self, "_can_write", False)) or bool(getattr(self, "_producer_only", False))):
             with contextlib.suppress(RuntimeError):
                 if getattr(self, "_user_stream_restart_attempts", 0) < self._USER_STREAM_RESTART_MAX_ATTEMPTS:
                     self._user_stream_restart_task = asyncio.create_task(self._restart_user_stream_after_fault(reason))
@@ -9133,10 +9152,9 @@ class AutonomousEngine:
                     local_projection_candidate = True
             local_projection_candidate = local_projection_candidate or bool(self._protection.all_positions())
             for row in self._store.restore_protections():
-                if (
-                    str(row.get("owner_id", "")) == str(getattr(self, "_protection_owner_id", ""))
-                    and str(row.get("status", "")).strip().upper() in {"ACTIVE", "PENDING"}
-                ):
+                if str(row.get("owner_id", "")) == str(getattr(self, "_protection_owner_id", "")) and str(
+                    row.get("status", "")
+                ).strip().upper() in {"ACTIVE", "PENDING"}:
                     local_projection_candidate = True
                     break
             # A durable naked-exposure marker is itself a local recovery
@@ -9426,10 +9444,7 @@ class AutonomousEngine:
             differences = [str(d) for d in getattr(result, "differences", []) or []]
             if any(str(d).startswith("system/exchange") for d in differences):
                 return False
-        if not (
-            bool(getattr(self, "_can_write", False))
-            or bool(getattr(self, "_producer_only", False))
-        ):
+        if not (bool(getattr(self, "_can_write", False)) or bool(getattr(self, "_producer_only", False))):
             # TESTNET-EXEMPT: EXEMPT-13
             return False
         if str(getattr(self._env_mode, "value", "")) != "testnet":
@@ -9991,6 +10006,7 @@ class AutonomousEngine:
         E2 路径 (increment=True) 行为不变: 每次调用累计一次确认。
         """
         import time as _time
+
         # M-6: now 接受 float 时间戳 (与 _run_slow_fuse/_update_stuck_marker
         # 一致), 不再默默忽略非 callable —— 传 float 直接当时间戳用。
         if now is None:
@@ -10069,6 +10085,7 @@ class AutonomousEngine:
         """
         import os as _os
         import time as _time
+
         _ts = now if now is not None else _time.time()
         _env = env if env is not None else _os.environ
         _mode = str(getattr(getattr(self, "_env_mode", None), "value", "") or "")
@@ -10084,8 +10101,7 @@ class AutonomousEngine:
         if _store is None or not callable(_records):
             return 0
         try:
-            raw = _records("protection_exposure")
-            rows = [dict(r.get("payload") if isinstance(r, dict) and "payload" in r else r) for r in raw]
+            rows = _payload_rows(_records("protection_exposure"))
         except Exception:
             return 0
         fired = 0
@@ -10118,7 +10134,9 @@ class AutonomousEngine:
             )
             try:
                 ok = await self._maybe_emergency_close_unprotectable(
-                    f"slow-fuse-{symbol}", symbol, _pp,
+                    f"slow-fuse-{symbol}",
+                    symbol,
+                    _pp,
                     now=lambda: _ts,
                 )
             except Exception:
@@ -10142,14 +10160,14 @@ class AutonomousEngine:
         import json as _json
         import os as _os
         import time as _time
+
         _ts = now if now is not None else _time.time()
         _store = getattr(self, "_store", None)
         rows: list[dict] = []
         _records = getattr(_store, "_records", None)
         if _store is not None and callable(_records):
             try:
-                raw = _records("protection_exposure")
-                rows = [dict(r.get("payload") if isinstance(r, dict) and "payload" in r else r) for r in raw]
+                rows = _payload_rows(_records("protection_exposure"))
             except Exception:
                 rows = []
         # R11: float 转换逐行 try/except —— 生产 PG 返回裸 payload 行, 一条
@@ -10172,9 +10190,7 @@ class AutonomousEngine:
                         "age_s": _age,
                     }
                 )
-        _dir = state_dir or _os.path.expanduser(
-            "~/Library/Application Support/beidou-watchdog"
-        )
+        _dir = state_dir or _os.path.expanduser("~/Library/Application Support/beidou-watchdog")
         marker = _os.path.join(_dir, "stuck")
         if not stuck:
             if _os.path.exists(marker):
@@ -10193,7 +10209,8 @@ class AutonomousEngine:
             with open(marker, "w") as fh:
                 _json.dump(
                     {"stuck": True, "items": stuck, "updated_at": _ts},
-                    fh, ensure_ascii=False,
+                    fh,
+                    ensure_ascii=False,
                 )
         except OSError:
             pass
@@ -10209,6 +10226,7 @@ class AutonomousEngine:
         意图，执行仍走唯一 fenced executor 写路径）。
         """
         import time as _time
+
         now = now if callable(now) else _time.time
         rec = self._persist_protection_exposure(symbol, "SL_UNPROTECTABLE", now=now)
         streak = int(rec.get("attempts", 0) or 0)
@@ -10599,8 +10617,7 @@ class AutonomousEngine:
         state_counts = stats["state_counts"]
         try:
             unresolved_execution = any(
-                int(state_counts.get(state, 0) or 0) > 0
-                for state in ("PENDING", "SENDING", "UNKNOWN", "DEAD_LETTER")
+                int(state_counts.get(state, 0) or 0) > 0 for state in ("PENDING", "SENDING", "UNKNOWN", "DEAD_LETTER")
             )
         except (TypeError, ValueError, OverflowError):
             return False
@@ -10649,8 +10666,7 @@ class AutonomousEngine:
                 (str(row.get("orderId")), str(row.get("symbol", "")).strip().upper()) for row in open_orders
             ),
             "algo_orders": sorted(
-                (str(row.get("algoId")), str(row.get("symbol", "")).strip().upper())
-                for row in algo_inventory
+                (str(row.get("algoId")), str(row.get("symbol", "")).strip().upper()) for row in algo_inventory
             ),
             "fact_version": str(account.get("updateTime", "")),
         }
@@ -10670,9 +10686,7 @@ class AutonomousEngine:
         ).hexdigest()
         baseline_captured_at = datetime.now(timezone.utc).isoformat()
         baseline_positions = {
-            symbol: str(amount)
-            for symbol, amount in venue_amounts.items()
-            if abs(amount) > Decimal("1e-12")
+            symbol: str(amount) for symbol, amount in venue_amounts.items() if abs(amount) > Decimal("1e-12")
         }
 
         def _mark_flat_cleanup_incomplete() -> None:
@@ -10784,7 +10798,9 @@ class AutonomousEngine:
                         exchange_order_id=row.get("exchange_order_id"),
                     )
                 except Exception:
-                    logger.warning("flat venue pending protection cancellation failed for %s", position_id, exc_info=True)
+                    logger.warning(
+                        "flat venue pending protection cancellation failed for %s", position_id, exc_info=True
+                    )
                     _mark_flat_cleanup_incomplete()
                     return False
 
@@ -10800,10 +10816,7 @@ class AutonomousEngine:
             if isinstance(position_entry_times, dict):
                 position_entry_times.pop(position_id, None)
         for row in durable_rows:
-            if (
-                str(row.get("symbol", "")).strip().upper() in local_symbols
-                and isinstance(venue_missing_streaks, dict)
-            ):
+            if str(row.get("symbol", "")).strip().upper() in local_symbols and isinstance(venue_missing_streaks, dict):
                 venue_missing_streaks.pop(str(row.get("exchange_order_id", "")).strip(), None)
 
         for symbol in local_symbols:
@@ -10881,9 +10894,7 @@ class AutonomousEngine:
             return set()
 
         candidates = {
-            symbol
-            for symbol in exposures
-            if abs(venue_amounts.get(symbol, Decimal("0"))) <= Decimal("1e-12")
+            symbol for symbol in exposures if abs(venue_amounts.get(symbol, Decimal("0"))) <= Decimal("1e-12")
         }
         if not candidates:
             return set()
@@ -12713,11 +12724,14 @@ class AutonomousEngine:
                         # valid closed-bar forecast before the no-action
                         # branch; otherwise quiet markets never accumulate
                         # point-in-time samples for IC/ICIR validation.
-                        predictions = context.get("_predictions", {})
+                        predictions: dict[str, Any] = {}
+                        raw_predictions = context.get("_predictions", {})
+                        if isinstance(raw_predictions, dict):
+                            predictions = {str(key): value for key, value in raw_predictions.items()}
                         self._store_factor_predictions(
                             symbol,
                             tf,
-                            features.get("bar_open_time"),
+                            bar_open_time,
                             close,
                             predictions,
                         )
@@ -13127,7 +13141,7 @@ class AutonomousEngine:
                             break
                         try:
                             raw_liquidation = account_position.get("liquidationPrice")
-                            if raw_liquidation not in (None, ""):
+                            if isinstance(raw_liquidation, (int, float, str)) and raw_liquidation != "":
                                 liquidation_candidate = float(raw_liquidation)
                                 if math.isfinite(liquidation_candidate) and liquidation_candidate > 0:
                                     liquidation_price = liquidation_candidate
@@ -14969,7 +14983,9 @@ class AutonomousEngine:
                     timeout=30.0,
                 )
                 if startup_order_resolved:
-                    print(f"[beidou-autopilot] Resolved {startup_order_resolved} stale order state(s) before reconciliation")
+                    print(
+                        f"[beidou-autopilot] Resolved {startup_order_resolved} stale order state(s) before reconciliation"
+                    )
             except asyncio.TimeoutError:
                 print("[beidou-autopilot] Startup order-state adjudication timed out — keeping risk gate closed")
 

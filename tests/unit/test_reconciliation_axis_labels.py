@@ -28,8 +28,10 @@ def _facts(balance: str, source: str) -> AccountFactSnapshot:
 def test_compare_uses_custom_labels_in_balance_mismatch() -> None:
     engine = ReconciliationEngine(balance_rel_tolerance=Decimal("0.01"))
     result = engine.compare(
-        _facts("100", "A"), _facts("500", "B"),
-        left_label="exchange", right_label="event_stream",
+        _facts("100", "A"),
+        _facts("500", "B"),
+        left_label="exchange",
+        right_label="event_stream",
     )
     assert result.status is ReconciliationStatus.MISMATCHED
     line = next(d for d in result.differences if d.startswith("Balance mismatch"))

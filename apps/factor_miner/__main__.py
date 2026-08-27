@@ -16,14 +16,16 @@ import json
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import click
 
 from apps.factor_miner.worker import run_symbol_worker as _run_symbol_worker
 from beidou_research.mining.persistence import JSONFileFactorStore
+from beidou_research.mining.runner import MiningResult
 
 
-def _echo_budget_hint(result) -> None:
+def _echo_budget_hint(result: MiningResult) -> None:
     """时间预算耗尽提示:优雅停止是预期路径,已落盘证据保留。"""
     if getattr(result, "stopped_by_time_budget", False):
         click.echo("  WARNING: 时间预算耗尽 — 已优雅停止,已保存的证据保留", err=True)
@@ -50,7 +52,7 @@ def _run_symbols(payloads: list[dict], jobs: int) -> list[dict]:
         return results
 
 
-def _echo_symbol_result(symbol: str, result, manifest_hash: str) -> None:
+def _echo_symbol_result(symbol: str, result: MiningResult, manifest_hash: str) -> None:
     """打印单品种结果;无数据集清单与预算耗尽需显式警告。"""
     if not manifest_hash:
         click.echo("  WARNING: 无数据集清单 — 证据将 FAIL（dataset_manifest_unbound）", err=True)
@@ -250,11 +252,22 @@ def backfill(
 
 @cli.command()
 @click.option("--run-id", required=True, help="运行 ID")
-def resume(run_id: str) -> None:
-    """从检查点恢复挖掘运行。"""
-    # M00-F06: 占位实现退役 —— 恢复逻辑从未实现，不得假装成功。
-    click.echo(f"[factor_miner] resume 尚未实现 (NOT_IMPLEMENTED): {run_id}")
-    sys.exit(2)
+@click.option(
+    "--state-root",
+    default=".beidou/factor-miner-runs",
+    show_default=True,
+    help="只读解析现有运行的状态根目录",
+)
+def resume(run_id: str, state_root: str) -> None:
+    """从唯一、兼容且未完成的检查点恢复挖掘运行。"""
+    from apps.factor_miner.worker import resume_run
+    from beidou_research.mining.runner import ResumeRunError
+
+    try:
+        result = resume_run(run_id, state_root=state_root)
+    except ResumeRunError as exc:
+        raise click.ClickException(f"RESUME_REJECTED:{exc}") from exc
+    click.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
 
 
 @cli.command()
@@ -310,11 +323,30 @@ def validate_factor(factor_version: str) -> None:
 @cli.command()
 @click.option("--candidate", required=True, help="候选因子 ID")
 @click.option("--champion", required=True, help="冠军因子 ID")
-def compare(candidate: str, champion: str) -> None:
-    """比较候选因子与冠军因子的增量贡献。"""
-    # M00-F06: 占位实现退役 —— 比较逻辑从未实现，不得假装输出分析。
-    click.echo(f"[factor_miner] compare 尚未实现 (NOT_IMPLEMENTED): {candidate} vs {champion}")
-    sys.exit(2)
+@click.option("--evidence", type=click.Path(exists=True, dir_okay=False, path_type=str), required=True)
+@click.option("--policy", type=click.Path(exists=True, dir_okay=False, path_type=str), required=True)
+@click.option("--store", type=click.Path(dir_okay=False, path_type=str), required=True)
+@click.option("--artifacts-dir", type=click.Path(file_okay=False, path_type=str), required=True)
+def compare(candidate: str, champion: str, evidence: str, policy: str, store: str, artifacts_dir: str) -> None:
+    """离线重算并持久化不可变 Candidate-vs-Champion 决策。"""
+    from beidou_research.portfolio import (
+        AppendOnlyDecisionStore,
+        decide_candidate_vs_champion,
+        load_portfolio_owner_policy,
+        write_decision_artifacts,
+    )
+
+    try:
+        source = json.loads(Path(evidence).read_text(encoding="utf-8"))
+        owner_policy = load_portfolio_owner_policy(policy)
+        decision = decide_candidate_vs_champion(owner_policy, source)
+        if decision.candidate_id != candidate or decision.champion_id != champion:
+            raise click.ClickException("CLI_IDENTITY_MISMATCH")
+        AppendOnlyDecisionStore(store).append(decision)
+        write_decision_artifacts(artifacts_dir, policy=owner_policy, decision=decision, counterexamples=[])
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(decision.as_dict(), ensure_ascii=False, sort_keys=True, allow_nan=False))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 .PHONY: install lint typecheck test test-unit test-integration test-architecture test-all clean build verify
 
-BEIDOU_PACKAGES := beidou_shared beidou_safety beidou_strategy beidou_research beidou_policy beidou_security beidou_observability beidou_exchange beidou_lifecycle beidou_delivery beidou_autonomy beidou_infra beidou_data beidou_control beidou_chaos beidou_production beidou_reporting beidou_certification beidou_core
+BEIDOU_PACKAGES := beidou_shared beidou_safety beidou_strategy beidou_research beidou_policy beidou_security beidou_observability beidou_exchange beidou_lifecycle beidou_delivery beidou_autonomy beidou_infra beidou_data beidou_control beidou_chaos beidou_production beidou_reporting beidou_certification beidou_core beidou_launcher
 TEST_DIR := tests
 APPS_DIR := apps
 

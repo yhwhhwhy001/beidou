@@ -1,4 +1,35 @@
 """研究数据层：历史 K 线存储与数据集清单。"""
 
-from .dataset_manifest import DatasetManifest  # noqa: F401
-from .kline_store import KlineStore  # noqa: F401
+from .dataset_manifest import DatasetManifest
+from .kline_store import KlineStore
+from .pit_lineage import (
+    PIT_LINEAGE_SCHEMA_VERSION,
+    REQUIRED_LINEAGE_ROLES,
+    LineageArtifact,
+    LineageNotVerifiable,
+    LineageNotVerifiableError,
+    LineageVerification,
+    PITLineageManifest,
+    build_lineage_artifact,
+    build_pit_manifest,
+    inspect_lineage,
+    load_pit_manifest,
+    require_experiment_binding,
+)
+
+__all__ = [
+    "PIT_LINEAGE_SCHEMA_VERSION",
+    "REQUIRED_LINEAGE_ROLES",
+    "DatasetManifest",
+    "KlineStore",
+    "LineageArtifact",
+    "LineageNotVerifiable",
+    "LineageNotVerifiableError",
+    "LineageVerification",
+    "PITLineageManifest",
+    "build_lineage_artifact",
+    "build_pit_manifest",
+    "inspect_lineage",
+    "load_pit_manifest",
+    "require_experiment_binding",
+]

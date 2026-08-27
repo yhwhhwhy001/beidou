@@ -144,16 +144,20 @@ def test_gap_refresh_without_increment_keeps_attempts_and_since() -> None:
     since = first["unprotectable_since"]
     # 30s 后同 reason 刷新: attempts 仍 1, since 不重置
     later = engine._persist_protection_exposure(
-        "BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED",
-        now=lambda: time.time() + 30, increment=False,
+        "BTCUSDT",
+        "STOP_LOSS_QUANTITY_UNCOVERED",
+        now=lambda: time.time() + 30,
+        increment=False,
     )
     assert later["attempts"] == 1
     assert later["unprotectable_since"] == since
     assert later["last_reason"] == "STOP_LOSS_QUANTITY_UNCOVERED"
     # reason 变化 → 更新 last_reason, 但 attempts/since 仍不动
     changed = engine._persist_protection_exposure(
-        "BTCUSDT", "VENUE_POSITION_QUANTITY_UNKNOWN",
-        now=lambda: time.time() + 60, increment=False,
+        "BTCUSDT",
+        "VENUE_POSITION_QUANTITY_UNKNOWN",
+        now=lambda: time.time() + 60,
+        increment=False,
     )
     assert changed["attempts"] == 1
     assert changed["unprotectable_since"] == since
@@ -164,9 +168,7 @@ def test_e2_increment_true_unchanged_after_gap_records() -> None:
     """R9: E2 路径 increment=True 行为不变 — gap 记录之上继续累计连击确认,
     并以 SL_UNPROTECTABLE 覆盖 reason (E3 随即交接 E2, 语义闭环)。"""
     engine = _engine()
-    engine._persist_protection_exposure(
-        "BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED", now=time.time, increment=False
-    )
+    engine._persist_protection_exposure("BTCUSDT", "STOP_LOSS_QUANTITY_UNCOVERED", now=time.time, increment=False)
     rec = engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=time.time)
     assert rec["attempts"] == 2
     assert rec["last_reason"] == "SL_UNPROTECTABLE"

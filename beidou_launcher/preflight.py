@@ -51,6 +51,7 @@ def _g5_certificate_probe(project_root: Path, commit: str) -> tuple[bool, str, d
             or not isinstance(expected_scenarios, list)
             or not expected_scenarios
             or max_notional in (None, "")
+            or not isinstance(max_notional, (int, float, str))
         ):
             return False, "G5 certificate or scenario plan is malformed", evidence
         from beidou_certification.gate_verifier import verify_g5_certificate
@@ -193,17 +194,23 @@ def _g5_journal_check(
         evidence["probe_error"] = probe_error
     if not journal_rows:
         return _result(
-            "startup.safety.g5_baseline_journal", "G5 基线 journal",
-            True, CheckSeverity.P1, "无搁浅的 G5 基线污染", "",
+            "startup.safety.g5_baseline_journal",
+            "G5 基线 journal",
+            True,
+            CheckSeverity.P1,
+            "无搁浅的 G5 基线污染",
+            "",
             evidence=evidence,
         )
     return _result(
-        "startup.safety.g5_baseline_journal", "G5 基线 journal",
-        False, CheckSeverity.P0,
+        "startup.safety.g5_baseline_journal",
+        "G5 基线 journal",
+        False,
+        CheckSeverity.P0,
         "无搁浅的 G5 基线污染",
         "检测到搁浅的 G5 基线污染 (record_type='g5_journal', record_id="
         "'reconciliation_mismatch:baseline')。上次认证运行在污染窗口内被"
-        "硬杀, 基线 balance_amount 可能仍是哨兵值 \"1\"。修复: 重新运行 "
+        '硬杀, 基线 balance_amount 可能仍是哨兵值 "1"。修复: 重新运行 '
         "g5 reconciliation_mismatch 场景 (启动时自动还原), 或人工将 "
         "account_opening_projection/default:BINANCE 还原为 journal 内 "
         "original_payload 后删除 g5_journal 行。",
@@ -632,8 +639,7 @@ def _run_preflight(
 
                     with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn:
                         cur = conn.execute(
-                            "SELECT payload::text FROM v3_runtime_records "
-                            "WHERE record_type=%s AND record_id=%s",
+                            "SELECT payload::text FROM v3_runtime_records WHERE record_type=%s AND record_id=%s",
                             (_G5_JOURNAL_RECORD_TYPE, _G5_JOURNAL_RECORD_ID),
                         )
                         journal_rows = [{"payload": json.loads(str(r[0]))} for r in cur.fetchall()]

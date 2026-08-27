@@ -153,7 +153,10 @@ class ExecutionChildCommand:
         if not parent_intent_id or not symbol or not client_order_id:
             raise ValueError("parent, symbol and client order identity are required")
         quantity_value = _positive_decimal(quantity, field="quantity")
-        price_value = None if limit_price in (None, "") else _positive_decimal(limit_price, field="limit_price")
+        if limit_price is None or limit_price == "":
+            price_value = None
+        else:
+            price_value = _positive_decimal(limit_price, field="limit_price")
         economic: dict[str, Any] = {
             "parent_intent_id": str(parent_intent_id),
             "sequence": int(sequence),

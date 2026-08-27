@@ -297,49 +297,49 @@ class ControlPlaneAPI:
 def create_app(api: ControlPlaneAPI) -> Any | None:
     """创建 FastAPI 应用。"""
     try:
-        from fastapi import (  # type: ignore[import-not-found]  # 未接线参考实现,venv 未安装
+        from fastapi import (
             FastAPI,
             HTTPException,
             Request,
         )
-        from fastapi.middleware.cors import CORSMiddleware  # type: ignore[import-not-found]
+        from fastapi.middleware.cors import CORSMiddleware
     except ImportError:
         return None
 
     app = FastAPI(title="北斗 V2.0 Control Plane", version="2.0.0")
 
-    @app.get("/health")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.get("/health")
     async def health_endpoint() -> dict:
         return api.health().__dict__
 
-    @app.get("/ready")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.get("/ready")
     async def ready_endpoint() -> dict:
         r = api.readiness()
         if not r.ready:
             raise HTTPException(status_code=503, detail="Not ready")
         return r.__dict__
 
-    @app.get("/trading-eligibility")  # type: ignore[untyped-decorator]  # FastAPI 装饰器
+    @app.get("/trading-eligibility")
     async def eligibility_endpoint() -> dict:
         return api.trading_eligibility().__dict__
 
-    @app.get("/facts")  # type: ignore[untyped-decorator]  # FastAPI 装饰器
+    @app.get("/facts")
     async def facts_endpoint() -> dict:
         return {"status": "NOT_VERIFIABLE", "message": "Use dedicated facts endpoint"}
 
-    @app.get("/factors")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.get("/factors")
     async def factors_list_endpoint() -> list[dict]:
         return api.list_factors()
 
-    @app.post("/factors/promote-all")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.post("/factors/promote-all")
     async def factors_promote_all_endpoint() -> dict:
         return api.promote_all_to_active()
 
-    @app.post("/factors/promote/{factor_id}")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.post("/factors/promote/{factor_id}")
     async def factors_promote_endpoint(factor_id: str, target: str = "ACTIVE") -> dict:
         return api.promote_factor(factor_id, target)
 
-    @app.post("/emergency/{action}")  # type: ignore[untyped-decorator]  # FastAPI 装饰器(未接线参考实现)
+    @app.post("/emergency/{action}")
     async def emergency_endpoint(action: str, request: Request) -> dict:
         ea = api.emergency(action, "api-user", "api-call")
         if not ea.success:

@@ -1539,9 +1539,7 @@ def test_authoritative_flat_snapshot_converges_stale_local_position() -> None:
     assert converged is True
     assert engine._position_projection["XRPUSDT"]["signed_quantity"] == "0"
     assert engine._position_projection["XRPUSDT"]["entry_price"] == "0"
-    assert engine._position_projection["XRPUSDT"]["source_event_id"].startswith(
-        "venue-flat-reconciliation:"
-    )
+    assert engine._position_projection["XRPUSDT"]["source_event_id"].startswith("venue-flat-reconciliation:")
     assert engine._store.projections["XRPUSDT"]["signed_quantity"] == "0"
     assert engine._protection.all_positions() == {}
     assert engine._store.restore_protections() == []
@@ -1604,11 +1602,14 @@ def test_flat_snapshot_retries_after_mutable_projection_was_already_zeroed() -> 
     engine._protection._projections.clear()
     engine._position_projection["XRPUSDT"]["signed_quantity"] = "0"
 
-    assert engine._converge_flat_local_positions(
-        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
-        [],
-        [],
-    ) is True
+    assert (
+        engine._converge_flat_local_positions(
+            {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+            [],
+            [],
+        )
+        is True
+    )
     assert engine._store.opening["source"] == "TESTNET_VENUE_FLAT_RECONCILIATION"
 
 
@@ -1624,17 +1625,20 @@ def test_flat_snapshot_clears_stale_protection_exposure_marker() -> None:
         }
     }
 
-    assert engine._converge_flat_local_positions(
-        {
-            "totalWalletBalance": "1000",
-            "positions": [
-                {"symbol": "XRPUSDT", "positionAmt": "0"},
-                {"symbol": "TIAUSDT", "positionAmt": "0"},
-            ],
-        },
-        [],
-        [],
-    ) is True
+    assert (
+        engine._converge_flat_local_positions(
+            {
+                "totalWalletBalance": "1000",
+                "positions": [
+                    {"symbol": "XRPUSDT", "positionAmt": "0"},
+                    {"symbol": "TIAUSDT", "positionAmt": "0"},
+                ],
+            },
+            [],
+            [],
+        )
+        is True
+    )
     assert engine._store.projections["TIAUSDT"]["signed_quantity"] == "0"
     assert engine._store.exposures == {}
 
@@ -1706,11 +1710,14 @@ def test_flat_snapshot_does_not_converge_when_algo_inventory_is_not_genuine() ->
     engine._last_algo_inventory_genuine = False
     before = dict(engine._position_projection["XRPUSDT"])
 
-    assert engine._converge_flat_local_positions(
-        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
-        [],
-        [],
-    ) is False
+    assert (
+        engine._converge_flat_local_positions(
+            {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+            [],
+            [],
+        )
+        is False
+    )
     assert engine._position_projection["XRPUSDT"] == before
     assert engine._protection.all_positions()
 
@@ -1723,11 +1730,14 @@ def test_flat_snapshot_does_not_converge_with_unresolved_execution() -> None:
     )
     before = dict(engine._position_projection["XRPUSDT"])
 
-    assert engine._converge_flat_local_positions(
-        {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
-        [],
-        [],
-    ) is False
+    assert (
+        engine._converge_flat_local_positions(
+            {"totalWalletBalance": "1000", "positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+            [],
+            [],
+        )
+        is False
+    )
     assert engine._position_projection["XRPUSDT"] == before
     assert engine._protection.all_positions()
 
@@ -1735,10 +1745,13 @@ def test_flat_snapshot_does_not_converge_with_unresolved_execution() -> None:
 def test_startup_defers_genuine_empty_algo_inventory_to_reconciliation() -> None:
     engine = _flat_reconciliation_engine()
 
-    assert engine._restore_durable_protection_projection(
-        {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
-        [],
-    ) is True
+    assert (
+        engine._restore_durable_protection_projection(
+            {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+            [],
+        )
+        is True
+    )
     assert engine._store.restore_protections()
 
 
@@ -1748,10 +1761,13 @@ def test_startup_keeps_non_genuine_empty_algo_inventory_blocked() -> None:
     blocked: list[str] = []
     engine._block_unowned_protection_orders = lambda reasons: blocked.extend(reasons)
 
-    assert engine._restore_durable_protection_projection(
-        {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
-        [],
-    ) is False
+    assert (
+        engine._restore_durable_protection_projection(
+            {"positions": [{"symbol": "XRPUSDT", "positionAmt": "0"}]},
+            [],
+        )
+        is False
+    )
     assert blocked == ["OPEN_ALGO_ORDERS_EMPTY"]
 
 

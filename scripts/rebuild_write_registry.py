@@ -573,9 +573,7 @@ def main() -> int:
                 "owner": "Runtime Owner",
                 "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
             }
-        network_id = str(
-            decision.get("id") or f"NETWORK-{source.split('::')[-1].upper().replace('.', '-')[:44]}"
-        )
+        network_id = str(decision.get("id") or f"NETWORK-{source.split('::')[-1].upper().replace('.', '-')[:44]}")
         new_network.append(
             {
                 "expected_rejection": decision["expected_rejection"],

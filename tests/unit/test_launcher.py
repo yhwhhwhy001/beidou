@@ -66,9 +66,9 @@ def test_instance_lock_removes_stale_pid(tmp_path: Path) -> None:
 def test_console_script_aliases() -> None:
     scripts = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["scripts"]
     assert scripts == {
-        "beidou": "beidou_launcher.cli:main",
-        "北斗": "beidou_launcher.cli:main",
-        "bd": "beidou_launcher.cli:main",
+        "beidou": "beidou_cli:main",
+        "北斗": "beidou_cli:main",
+        "bd": "beidou_cli:main",
     }
 
 
@@ -461,9 +461,7 @@ def test_start_entrypoint_does_not_force_kill_an_existing_instance() -> None:
     assert "force_stop_existing" not in source
 
 
-def test_legacy_g5_fast_start_cannot_downgrade_preflight(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_legacy_g5_fast_start_cannot_downgrade_preflight(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A legacy fast-start environment variable must not bypass G5."""
     from beidou_launcher import supervisor as supervisor_module
     from beidou_launcher.supervisor import BeidouSupervisor
