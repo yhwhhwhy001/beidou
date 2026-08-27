@@ -211,6 +211,7 @@ def test_collect_runtime_checks_covers_reconciliation_authority(
     )
     assert _check(checks, "runtime.safety.reconciliation_authority").status is CheckStatus.PASS
 
+
 class _ProbeFeed:
     def __init__(self, *, kline: dict, live: dict) -> None:
         self.kline = kline

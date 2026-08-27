@@ -50,9 +50,11 @@ def _engine(rows, mode="testnet") -> AutonomousEngine:
     engine._policy_signature = "s"
     engine._sl_unprotectable_streak = {}
     engine._slow_fuse_fired = []
+
     async def _fake_close(pos_id, symbol, pp, **kw):
         engine._slow_fuse_fired.append(symbol)
         return True
+
     engine._maybe_emergency_close_unprotectable = _fake_close
     return engine
 
@@ -60,6 +62,7 @@ def _engine(rows, mode="testnet") -> AutonomousEngine:
 def test_slow_fuse_does_not_fire_before_7200s():
     engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}])
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7199.0))
     assert n == 0 and not engine._slow_fuse_fired
 
@@ -68,6 +71,7 @@ def test_slow_fuse_fires_after_7200s_on_testnet():
     engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}])
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 1 and engine._slow_fuse_fired == ["BTCUSDT"]
 
@@ -76,6 +80,7 @@ def test_slow_fuse_off_by_default_in_live():
     engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}], mode="live")
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 0
 
@@ -83,6 +88,7 @@ def test_slow_fuse_off_by_default_in_live():
 def test_slow_fuse_skips_when_projection_missing():
     engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""}])
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 0  # 方向不可知 → 不动作 (fail-closed)
 
@@ -90,10 +96,10 @@ def test_slow_fuse_skips_when_projection_missing():
 def test_slow_fuse_fires_on_explicit_rejection_row_advancing_e2_ladder():
     # R10(b): E3 纯按 age≥7200 触发, 忽略 last_reason —— SL_UNPROTECTABLE
     # 行同样触发, 把 E2 的 attempts 确认阶梯向前推进 (enqueue 由 E2 门控)。
-    engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0,
-                       "last_reason": "SL_UNPROTECTABLE"}])
+    engine = _engine([{"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": "SL_UNPROTECTABLE"}])
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 1 and engine._slow_fuse_fired == ["BTCUSDT"]
 
@@ -109,28 +115,23 @@ def test_gap_persist_end_to_end_slow_fuse_fires_on_gap_reason():
 
     engine = _engine([])
     engine._last_account = {}
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {"pos-1": SimpleNamespace(instrument_id="BTCUSDT")}
-    )
+    engine._protection = SimpleNamespace(all_positions=lambda: {"pos-1": SimpleNamespace(instrument_id="BTCUSDT")})
     # 第一轮覆盖评估: 本地持仓无 venue 事实 → gap → 落记录
-    engine._update_protection_fact(
-        hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True
-    )
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
     rec = engine._store._get_record("protection_exposure", "exposure:BTCUSDT")
     assert rec is not None
     assert rec["last_reason"] == "LOCAL_POSITION_WITHOUT_VENUE_FACT"
     assert rec["attempts"] == 1
     since = rec["unprotectable_since"]
     # 第二轮评估: attempts 不膨胀、since 不重置 (保留原始裸露起点)
-    engine._update_protection_fact(
-        hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True
-    )
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
     rec2 = engine._store._get_record("protection_exposure", "exposure:BTCUSDT")
     assert rec2["attempts"] == 1
     assert rec2["unprotectable_since"] == since
 
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=since + 7200.0))
     assert n == 1 and engine._slow_fuse_fired == ["BTCUSDT"]
 
@@ -142,20 +143,14 @@ def test_gap_refresh_does_not_rewrite_e2_owned_reason():
 
     engine = _engine([])
     engine._last_account = {}
-    engine._protection = SimpleNamespace(
-        all_positions=lambda: {"pos-1": SimpleNamespace(instrument_id="BTCUSDT")}
-    )
-    engine._update_protection_fact(
-        hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True
-    )
+    engine._protection = SimpleNamespace(all_positions=lambda: {"pos-1": SimpleNamespace(instrument_id="BTCUSDT")})
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
     rec = engine._store._get_record("protection_exposure", "exposure:BTCUSDT")
     assert rec["last_reason"] == "LOCAL_POSITION_WITHOUT_VENUE_FACT"
     # E2 接管: 首触翻 reason 为 SL_UNPROTECTABLE (attempts 1→2)
     engine._persist_protection_exposure("BTCUSDT", "SL_UNPROTECTABLE", now=lambda: 2000.0)
     # 下一轮 gap 刷新: 不得回写 gap reason
-    engine._update_protection_fact(
-        hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True
-    )
+    engine._update_protection_fact(hard_issues=[], venue_missing=[], unowned_ids=[], genuine_inventory=True)
     rec2 = engine._store._get_record("protection_exposure", "exposure:BTCUSDT")
     assert rec2["last_reason"] == "SL_UNPROTECTABLE"
     assert rec2["attempts"] == 2
@@ -164,18 +159,23 @@ def test_gap_refresh_does_not_rewrite_e2_owned_reason():
 def test_real_e2_handoff_position_side_and_ladder_enqueue_once():
     """R10 端到端 (真实 E2): pp.side 传持仓方向 (多头=BUY), E2 发射减仓方向
     (SELL); attempts=1 记录经 3 个 tick 后 enqueue 恰好调用一次 (E2 门控)。"""
-    engine = _engine([{
-        "symbol": "BTCUSDT",
-        "unprotectable_since": 1000.0,
-        "last_reason": "STOP_LOSS_QUANTITY_UNCOVERED",
-        "attempts": 1,
-    }])
+    engine = _engine(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "unprotectable_since": 1000.0,
+                "last_reason": "STOP_LOSS_QUANTITY_UNCOVERED",
+                "attempts": 1,
+            }
+        ]
+    )
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "0.0008"}}
     enqueue_calls: list[dict] = []
 
     async def _fake_enqueue(**kw):
         enqueue_calls.append(dict(kw))
         return True
+
     engine.enqueue_reduce_only_market = _fake_enqueue
 
     captured: dict = {}
@@ -185,6 +185,7 @@ def test_real_e2_handoff_position_side_and_ladder_enqueue_once():
         captured["side"] = pp.side
         captured["quantity"] = pp.quantity
         return await _real_e2(engine, pos_id, symbol, pp, **kw)
+
     engine._maybe_emergency_close_unprotectable = _spy_e2
 
     n1 = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
@@ -210,6 +211,7 @@ def test_slow_fuse_passes_position_side_for_short():
         captured["side"] = pp.side
         captured["quantity"] = pp.quantity
         return True
+
     engine._maybe_emergency_close_unprotectable = _capture_close
 
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
@@ -220,12 +222,15 @@ def test_slow_fuse_passes_position_side_for_short():
 
 def test_slow_fuse_dirty_row_does_not_break_sweep():
     """R10 minor 4: unprotectable_since 脏行 (非数值) 跳过, 不炸整个 sweep。"""
-    engine = _engine([
-        {"symbol": "DIRTY", "unprotectable_since": "not-a-number", "last_reason": ""},
-        {"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""},
-    ])
+    engine = _engine(
+        [
+            {"symbol": "DIRTY", "unprotectable_since": "not-a-number", "last_reason": ""},
+            {"symbol": "BTCUSDT", "unprotectable_since": 1000.0, "last_reason": ""},
+        ]
+    )
     engine._position_projection = {"BTCUSDT": {"signed_quantity": "-0.0008"}}
     import asyncio
+
     n = asyncio.run(engine._run_slow_fuse(now=1000.0 + 7200.0))
     assert n == 1 and engine._slow_fuse_fired == ["BTCUSDT"]
 

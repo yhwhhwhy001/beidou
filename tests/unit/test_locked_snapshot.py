@@ -8,10 +8,13 @@ from beidou_launcher.models import CheckResult, CheckSeverity, CheckStatus
 
 def test_locked_snapshot_written_with_full_blockers(tmp_path):
     from beidou_launcher.supervisor import _write_locked_snapshot
+
     blockers = [
         CheckResult(
-            check_id="runtime.safety.reconciliation", name="深度对账",
-            status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+            check_id="runtime.safety.reconciliation",
+            name="深度对账",
+            status=CheckStatus.FAIL,
+            severity=CheckSeverity.P0,
             message="Balance mismatch: system=1 exchange=10736.5 diff=10735.5 tolerance=107.36",
         )
     ]

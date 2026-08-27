@@ -173,8 +173,10 @@ async def test_locked_snapshot_keeps_original_blocker_message(tmp_path: Path, mo
     supervisor, _control = _supervisor_with_engine(tmp_path)
     original_message = "Balance mismatch: system=1 exchange=10736.5 diff=10735.5 tolerance=107.36"
     blocker = CheckResult(
-        check_id="runtime.safety.reconciliation", name="深度对账",
-        status=CheckStatus.FAIL, severity=CheckSeverity.P0,
+        check_id="runtime.safety.reconciliation",
+        name="深度对账",
+        status=CheckStatus.FAIL,
+        severity=CheckSeverity.P0,
         message=original_message,
     )
     await supervisor._apply_debounce_action("LOCKED", [blocker], has_persistent=True)

@@ -1123,6 +1123,7 @@ def test_engine_factor_bar_and_portfolio_short_paths() -> None:
     assert engine._factor_pending_by_scope[("BINANCE", "BTCUSDT", "5m", 1)] == {}
     engine._store_factor_predictions("BTCUSDT", "5m", now + timedelta(minutes=5), 100.0, {"f": 1.0})
 
+
 @pytest.mark.asyncio
 async def test_engine_user_stream_event_dispatch_and_restart_contracts(monkeypatch) -> None:
     import beidou_exchange.binance_usdm as binance_module

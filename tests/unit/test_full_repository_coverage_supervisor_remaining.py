@@ -359,6 +359,8 @@ def test_debounce_state_transitions_are_behavioral(tmp_path: Path) -> None:
     assert supervisor.report.supervisor_state == "RUNNING"
     asyncio.run(supervisor._apply_debounce_action("UNCHANGED", [_blocker()], True))
     assert failed_closed[-1][1] is False
+
+
 def test_fail_closed_and_recovery_invalid_lifecycle_edges(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path)
     assert asyncio.run(supervisor._fail_closed("no engine", fatal=False)) is None

@@ -506,6 +506,7 @@ def test_user_stream_fault_does_not_freeze_ledger_on_testnet() -> None:
     engine._user_stream_fault("TEST_CONNECTION_FAILED", terminal=True)
 
     engine._ledger.freeze.assert_not_called()
+    assert engine._ledger.freeze.call_count == 0
 
 
 def test_user_stream_fault_freezes_ledger_on_live() -> None:

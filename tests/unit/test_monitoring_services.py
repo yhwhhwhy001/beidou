@@ -469,6 +469,7 @@ class TestRepo:
     def test_health(self, repo):
         assert repo.health_probe().healthy
 
+
 # --- M18-F02: 因子 stale 检查 0 值语义 ---
 
 

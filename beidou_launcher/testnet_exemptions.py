@@ -204,7 +204,6 @@ TESTNET_EXEMPTIONS: tuple[TestnetExemption, ...] = (
         "无序号事件被投影器暂缓时,testnet 保持流健康等待下一条事件,"
         "避免共享 demo 账户的畸形事件把控制面拉回 NO_NEW_RISK。live/canary 仍 fail-closed。",
         reassessment_module="M13",
-        risk_note="解析失败的成交事实在该事件内丢失(靠 REST 订单监控兜底);"
-        "M13 复核是否需要按事件类型持久化失败计数。",
+        risk_note="解析失败的成交事实在该事件内丢失(靠 REST 订单监控兜底);M13 复核是否需要按事件类型持久化失败计数。",
     ),
 )
