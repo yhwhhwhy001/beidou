@@ -80,9 +80,7 @@ def fetch_status_http() -> dict[str, Any]:
     database_restart/user_stream_reconnect 复用同一默认注入依赖。
     """
     try:
-        with urllib.request.urlopen(  # noqa: S310 - fixed loopback status URL; no user-controlled scheme
-            _STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS
-        ) as resp:
+        with urllib.request.urlopen(_STATUS_URL, timeout=_HTTP_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
     except OSError as exc:
         raise StatusUnreachableError(f"status unreachable: {exc}") from exc

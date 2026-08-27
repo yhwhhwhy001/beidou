@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,34 @@ ENTRY_RECORDS = {item["id"]: item for item in REGISTRY["entries"]}
 TERMINAL_RECORDS = {item["id"]: item for item in REGISTRY["terminal_write_paths"]}
 NETWORK_RECORDS = {item["id"]: item for item in REGISTRY["network_imports"]}
 DECLARATION_RECORDS = REGISTRY["declared_entrypoint_records"]
+
+
+@lru_cache(maxsize=1)
+def _discovered_entry_paths() -> set[str]:
+    """Avoid rescanning the repository once per parameterized entry record."""
+
+    return discover_sensitive_entry_paths(ROOT)
+
+
+@lru_cache(maxsize=1)
+def _discovered_terminal_calls() -> dict[str, int]:
+    """Share the terminal-call inventory across the negative-test gate."""
+
+    return discover_terminal_write_calls(ROOT)
+
+
+@lru_cache(maxsize=1)
+def _discovered_network_imports() -> dict[str, int]:
+    """Share the network-import inventory across the negative-test gate."""
+
+    return discover_network_imports(ROOT)
+
+
+@lru_cache(maxsize=1)
+def _discovered_entrypoints() -> dict[str, str]:
+    """Share the declared-entrypoint inventory across the negative-test gate."""
+
+    return discover_declared_entrypoints(ROOT)
 
 
 def _pytest_identity(identity: str) -> str:
@@ -50,7 +79,7 @@ def _expected_entry_rejection(status: str, capability: str) -> str:
 def test_entry_record_is_behaviorally_bound(record_id: str) -> None:
     assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = ENTRY_RECORDS[record_id]
-    assert record["path"] in discover_sensitive_entry_paths(ROOT)
+    assert record["path"] in _discovered_entry_paths()
     assert record["expected_rejection"] == _expected_entry_rejection(record["status"], record["capability"])
     if record["status"] in {"READ_ONLY", "OFFLINE_ONLY"}:
         matching = [
@@ -65,7 +94,7 @@ def test_entry_record_is_behaviorally_bound(record_id: str) -> None:
 def test_terminal_record_is_behaviorally_bound(record_id: str) -> None:
     assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = TERMINAL_RECORDS[record_id]
-    discovered = discover_terminal_write_calls(ROOT)
+    discovered = _discovered_terminal_calls()
     assert discovered[record["source"]] == record["occurrences"]
     assert record["status"] in {"HARD_HOLD", "READ_ONLY"}
     expected = "EXTERNAL_WRITE_NOT_AUTHORIZED"
@@ -86,7 +115,7 @@ def test_terminal_record_is_behaviorally_bound(record_id: str) -> None:
 def test_network_record_is_behaviorally_bound(record_id: str) -> None:
     assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = NETWORK_RECORDS[record_id]
-    assert discover_network_imports(ROOT)[record["source"]] == record["occurrences"]
+    assert _discovered_network_imports()[record["source"]] == record["occurrences"]
     path, module = record["source"].split("::", 1)
     source = (ROOT / path).read_text(encoding="utf-8")
     assert module.split(".", 1)[0] in source
@@ -104,5 +133,5 @@ def test_network_record_is_behaviorally_bound(record_id: str) -> None:
 def test_declaration_record_is_behaviorally_bound(declaration: str) -> None:
     assert REGISTRY["governance_digest"] == compute_governance_digest(REGISTRY)
     record = DECLARATION_RECORDS[declaration]
-    assert discover_declared_entrypoints(ROOT)[declaration] == record["command"]
+    assert _discovered_entrypoints()[declaration] == record["command"]
     assert record["expected_rejection"] not in {"", "NONE", "PASS"}
