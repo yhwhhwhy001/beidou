@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "package_id": "BD-AF-P0P3-V1",
+  "package_fingerprint": "SHA256_OF_CHECKSUMS_MANIFEST_REQUIRED",
+  "signature_namespace": "beidou-alpha-first-task-approval-v1",
+  "task_id": "REQUIRED",
+  "baseline_commit": "REQUIRED_40_HEX",
+  "approved_worktree": "REQUIRED_ABSOLUTE_PATH",
+  "protected_source_worktree": "/Users/maguannan/beidou",
+  "scope": "LOCAL_IMPLEMENTATION_ONLY",
+  "approval_ids": ["H1_TASK_START_PER_TASK"],
+  "owner_bindings": {},
+  "dependency_result_sha256": {},
+  "expires_at": "REQUIRED_RFC3339",
+  "approver": "REQUIRED_ALLOWED_SIGNERS_IDENTITY"
+}

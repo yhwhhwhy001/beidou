@@ -1,0 +1,25 @@
+{
+  "$schema": "../../schemas/acceptance.schema.json",
+  "schema_version": "1.0.0",
+  "task_id": "BD-AF-P1-T01",
+  "dependencies": ["BD-AF-P0-T00"],
+  "preflight": {"worktree": "CLEAN_APPROVED_BASELINE", "dependency_status": "ACCEPTED", "approval_ids": ["H1_TASK_START_PER_TASK"], "network_policy": "DENIED"},
+  "criteria": [
+    {
+      "id": "AC-BD-AF-P1-T01-01", "requirement_ids": ["AF-REQ-002", "AF-REQ-017"], "mandatory": true,
+      "statement": "A non-vacuous architecture oracle proves zero concrete cross-domain imports and kills forbidden-edge and empty-inventory mutations.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/architecture/test_alpha_first_import_boundaries.py", "-q", "--junitxml={evidence_dir}/BD-AF-P1-T01-architecture.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 180, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P1-T01-architecture.xml", "minimum_collected": 4, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "MUTATION", "artifacts": ["BD-AF-P1-T01-architecture.xml", "module-inventory.json", "forbidden-edge-mutations.json"]},
+      "failure_action": "Reject the boundary; remove no violation from the inventory and do not add an allowlist exception."
+    },
+    {
+      "id": "AC-BD-AF-P1-T01-02", "requirement_ids": ["AF-REQ-004"], "mandatory": true,
+      "statement": "The Alpha slice imports and processes bound local data when network and launcher, safety, execution, and exchange imports are denied.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/integration/test_alpha_offline_isolation.py", "-q", "--junitxml={evidence_dir}/BD-AF-P1-T01-offline.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 180, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P1-T01-offline.xml", "minimum_collected": 3, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "JUNIT", "artifacts": ["BD-AF-P1-T01-offline.xml", "offline-import-transcript.json"]},
+      "failure_action": "Keep Alpha composition disabled and report the concrete dependency path; do not mock away the import or socket."
+    }
+  ],
+  "completion": {"required_status": "PASS", "independent_review": true, "zero_open_p0_p1": true, "evidence_manifest_required": true},
+  "rollback_rehearsal": {"required": true, "command": ["python", "-m", "pytest", "tests/architecture/test_alpha_first_import_boundaries.py", "tests/integration/test_alpha_offline_isolation.py", "-q", "-k", "rollback", "--junitxml={evidence_dir}/RB-BD-AF-P1-T01.xml"], "timeout_seconds": 180, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/RB-BD-AF-P1-T01.xml", "minimum_collected": 1, "maximum_skipped": 0, "maximum_xfailed": 0}, "evidence": {"kind": "REHEARSAL", "artifacts": ["RB-BD-AF-P1-T01.xml"]}, "success_oracle": "Disabling the new Alpha composition restores characterized behavior without changing runtime defaults or external state.", "failure_action": "Block acceptance until the composition selection and recovery path are explicit and reproducible."}
+}

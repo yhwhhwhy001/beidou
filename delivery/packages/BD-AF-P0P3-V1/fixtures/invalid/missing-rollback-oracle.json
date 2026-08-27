@@ -1,0 +1,5 @@
+{
+  "fixture_id": "NEG-008-MISSING-ROLLBACK-ORACLE",
+  "kind": "missing_rollback_oracle",
+  "expected_error": "missing required property 'evidence'"
+}

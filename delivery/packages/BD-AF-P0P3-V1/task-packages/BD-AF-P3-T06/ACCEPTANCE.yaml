@@ -1,0 +1,25 @@
+{
+  "$schema": "../../schemas/acceptance.schema.json",
+  "schema_version": "1.0.0",
+  "task_id": "BD-AF-P3-T06",
+  "dependencies": ["BD-AF-P2-T05"],
+  "preflight": {"worktree": "CLEAN_APPROVED_BASELINE", "dependency_status": "ACCEPTED", "approval_ids": ["H1_TASK_START_PER_TASK"], "network_policy": "DENIED"},
+  "criteria": [
+    {
+      "id": "AC-BD-AF-P3-T06-01", "requirement_ids": ["AF-REQ-007", "AF-REQ-017"], "mandatory": true,
+      "statement": "All promotable inputs have content-addressed point-in-time lineage for data, universe, revisions, actions, calendars, clocks, features, labels, and costs.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/research/test_pit_lineage_and_oos_seal.py", "-q", "--junitxml={evidence_dir}/BD-AF-P3-T06-lineage.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 360, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P3-T06-lineage.xml", "minimum_collected": 12, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "MUTATION", "artifacts": ["BD-AF-P3-T06-lineage.xml", "pit-lineage-manifest.json", "lineage-tamper-report.json"]},
+      "failure_action": "Return NOT_VERIFIABLE for affected evidence and block validation; do not substitute latest or default provenance."
+    },
+    {
+      "id": "AC-BD-AF-P3-T06-02", "requirement_ids": ["AF-REQ-007"], "mandatory": true,
+      "statement": "OOS boundaries are sealed before evaluation, every access is audited, and early, repeated, mutated, or unbound access invalidates promotion evidence.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/research/test_pit_lineage_and_oos_seal.py", "-q", "--junitxml={evidence_dir}/BD-AF-P3-T06-oos.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 360, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P3-T06-oos.xml", "minimum_collected": 12, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "MANIFEST", "artifacts": ["BD-AF-P3-T06-oos.xml", "oos-seal.json", "oos-access-audit.json"]},
+      "failure_action": "Invalidate the evidence bundle, freeze promotion decisions, and preserve the complete access trail for review."
+    }
+  ],
+  "completion": {"required_status": "PASS", "independent_review": true, "zero_open_p0_p1": true, "evidence_manifest_required": true},
+  "rollback_rehearsal": {"required": true, "command": ["python", "-m", "pytest", "tests/research/test_pit_lineage_and_oos_seal.py", "-q", "-k", "rollback", "--junitxml={evidence_dir}/RB-BD-AF-P3-T06.xml"], "timeout_seconds": 360, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/RB-BD-AF-P3-T06.xml", "minimum_collected": 1, "maximum_skipped": 0, "maximum_xfailed": 0}, "evidence": {"kind": "REHEARSAL", "artifacts": ["RB-BD-AF-P3-T06.xml"]}, "success_oracle": "Disabling promotable lineage leaves only explicitly non-promotable research access and preserves every seal and audit event.", "failure_action": "Block acceptance if old code can promote unbound results or any access evidence is lost."}
+}

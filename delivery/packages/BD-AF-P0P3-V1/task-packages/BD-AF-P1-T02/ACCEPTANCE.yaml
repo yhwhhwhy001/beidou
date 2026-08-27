@@ -1,0 +1,25 @@
+{
+  "$schema": "../../schemas/acceptance.schema.json",
+  "schema_version": "1.0.0",
+  "task_id": "BD-AF-P1-T02",
+  "dependencies": ["BD-AF-P1-T01"],
+  "preflight": {"worktree": "CLEAN_APPROVED_BASELINE", "dependency_status": "ACCEPTED", "approval_ids": ["H1_TASK_START_PER_TASK"], "network_policy": "DENIED"},
+  "criteria": [
+    {
+      "id": "AC-BD-AF-P1-T02-01", "requirement_ids": ["AF-REQ-003", "AF-REQ-018"], "mandatory": true,
+      "statement": "Bare and help CLI invocations have zero launcher, network, credential, filesystem, database, or execution-write side effects.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/cli/test_safe_root_cli.py", "-q", "--junitxml={evidence_dir}/BD-AF-P1-T02-cli.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 180, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P1-T02-cli.xml", "minimum_collected": 5, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "JUNIT", "artifacts": ["BD-AF-P1-T02-cli.xml", "cli-side-effect-inventory.json"]},
+      "failure_action": "Keep the new root entrypoint disabled; treat missing instrumentation as NOT_VERIFIABLE rather than zero effects."
+    },
+    {
+      "id": "AC-BD-AF-P1-T02-02", "requirement_ids": ["AF-REQ-004"], "mandatory": true,
+      "statement": "An isolated installed CLI completes the offline Alpha workflow with sockets and forbidden concrete packages denied.",
+      "oracle": {"phase": "POST_IMPLEMENTATION", "argv": ["python", "-m", "pytest", "tests/integration/test_alpha_offline_isolation.py", "tests/architecture/test_write_capability_registry.py", "-q", "--junitxml={evidence_dir}/BD-AF-P1-T02-isolation.xml"], "cwd": "REPO_ROOT", "timeout_seconds": 300, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/BD-AF-P1-T02-isolation.xml", "minimum_collected": 4, "maximum_skipped": 0, "maximum_xfailed": 0}},
+      "evidence": {"kind": "JUNIT", "artifacts": ["BD-AF-P1-T02-isolation.xml", "isolated-install-provenance.json", "write-registry-report.json"]},
+      "failure_action": "Fail the CLI boundary and preserve the exact import, write, or network attempt; do not add a compatibility fallback."
+    }
+  ],
+  "completion": {"required_status": "PASS", "independent_review": true, "zero_open_p0_p1": true, "evidence_manifest_required": true},
+  "rollback_rehearsal": {"required": true, "command": ["python", "-m", "pytest", "tests/cli/test_safe_root_cli.py", "-q", "-k", "rollback", "--junitxml={evidence_dir}/RB-BD-AF-P1-T02.xml"], "timeout_seconds": 180, "network_policy": "DENIED", "expected_exit_codes": [0], "test_expectation": {"junit_path": "{evidence_dir}/RB-BD-AF-P1-T02.xml", "minimum_collected": 1, "maximum_skipped": 0, "maximum_xfailed": 0}, "evidence": {"kind": "REHEARSAL", "artifacts": ["RB-BD-AF-P1-T02.xml"]}, "success_oracle": "A hash-bound prior artifact can be installed in isolation without importing the source checkout or changing runtime state.", "failure_action": "Block acceptance and cutover; no unverified wheel or unsafe default may be restored."}
+}
