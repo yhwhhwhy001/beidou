@@ -824,7 +824,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "62e0d0bc9f17624362e85a3c5280eeb41bd071053a9f1b1249883b2d5b1c47a9",
+ "governance_digest": "23b774567d94e9317b5494fcf6fd63fb144cda0da15033c51ef0ea07449f8980",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "9c56cbb2a20e014640d7e23ec63389f93c7e6f0ee17284ea96f01c08426d237b",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -883,7 +883,7 @@
   "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py": "8b9ce2a7a788b6ae6a22dd18730662cd9584ad5ad579cdfbaeddf49b6dd0fc67",
   "beidou_certification/g5_scenarios/restart/__init__.py": "05d868704edba365fbb414b960999fdb3849db22cfd3f0f11e64e261ff473232",
   "beidou_certification/g5_scenarios/restart/database_restart.py": "4624df3862590d62fd9abc62721758579b5200c261203d83357940a6ce121ee1",
-  "beidou_certification/g5_scenarios/restart/process_restart.py": "b8d443b200fe2d2409cb34ce47458d7af04dacef0fb963a10c577936245ef055",
+  "beidou_certification/g5_scenarios/restart/process_restart.py": "00e17bd239611cd862b5d173a2d926780795288ef76893e713cb1a77ad7d6cf5",
   "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py": "41ae5e491052eb939a7df28a4831f66ec12eb4b476197ba3abc2e75a5b9de46b",
   "beidou_certification/g5_scenarios/runner.py": "7733b4596c2f3b4f6e6490d995a1fc9b7247e84c532422486d8a7ed465223c60",
   "beidou_certification/gate_verifier.py": "c60d147fa9494ab9eba5db946a6e9031f0522d6cd299552514dd97b193a12b14",
