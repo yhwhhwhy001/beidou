@@ -29,12 +29,16 @@ class _FakeStore:
     def __init__(self, *, fill_rows: dict | None = None, protections: list | None = None) -> None:
         self.fill_rows = dict(fill_rows or {})
         self._protections = list(protections or [])
+        self.order_state_writes: list[tuple] = []
 
     def get_fill_event(self, event_id: str):
         return self.fill_rows.get(event_id)
 
     def restore_protections(self):
         return list(self._protections)
+
+    def save_order_state(self, order_id: str, *args: object, **kwargs: object) -> None:
+        self.order_state_writes.append((order_id, args, kwargs))
 
 
 def _engine() -> AutonomousEngine:
@@ -74,6 +78,13 @@ async def test_process_fill_already_committed_creates_protection(monkeypatch) ->
     assert kwargs["entry_price"] == 6.31
     assert "516462877" not in engine._order_trackers
     assert "516462877" not in engine._active_order_ids
+    # 2026-08-29 回归: 已提交分支必须落 order_state FILLED 终态,
+    # 否则 NEW 残留行制造 system 侧挂单 → 对账 MISMATCHED 锁盘。
+    assert engine._store.order_state_writes
+    _order_id, _args, kwargs = engine._store.order_state_writes[-1]
+    assert _order_id == "516462877"
+    assert _args[5] == "FILLED"  # status 是第 6 个位置参数
+    assert _args[6] == "1.0"  # filled_qty 采用 venue 累计成交事实
 
 
 @pytest.mark.asyncio

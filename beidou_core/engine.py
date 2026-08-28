@@ -7869,6 +7869,26 @@ class AutonomousEngine:
                             order_id,
                             type(exc).__name__,
                         )
+            # BD-FIX (2026-08-29): 该分支此前只清理 tracker 不落 order_state
+            # 终态 —— TRADE_LITE 已把成交事实入账(MARKET 单 demo 即时成交的
+            # 常态)后,监控轮询 FILLED 走零增量分支,order_state 停留 NEW →
+            # 对账 system 侧恒多一条挂单 → MISMATCHED 锁盘(NO_NEW_RISK)。
+            # venue 终态事实必须同步写入订单状态索引,与 CANCELED 分支(7217)
+            # 同语义;写入失败向上抛由监控路径 _mark_order_unknown fail-closed。
+            self._store.save_order_state(
+                order_id,
+                symbol,
+                result.get("side", ""),
+                result.get("type", ""),
+                result.get("origQty", "0"),
+                result.get("price"),
+                "FILLED",
+                str(raw_executed_qty),
+                str(raw_avg_price),
+                # M16-R2: 终态写入补防线字段(与 _commit_fill_facts 同语义)
+                reduce_only=str(result.get("reduceOnly", "")),
+                stop_price=str(result.get("stopPrice", "")),
+            )
             tracker.apply(OrderEvent.FILLED)
             self._active_order_ids.discard(order_id)
             self._order_trackers.pop(order_id, None)
