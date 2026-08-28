@@ -824,7 +824,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "ee104d82e02b0644b22e67efc7abc992e3d6080095f998fe9489281fae758e44",
+ "governance_digest": "59f43af199b126bf883ff7eef3cc21df7e80e01bdddc12458712337f38bd7b1e",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -934,13 +934,14 @@
   "beidou_exchange/binance_usdm/adapter.py": "b8083fe89d1f333c2c9ab479e88bf887e445cbac903d03a0caa2a234e8d187ad",
   "beidou_exchange/binance_usdm/endpoints.py": "373630abb9b9e5a35583ca26479b5a035a641f36725addacf6a821591293062a",
   "beidou_exchange/binance_usdm/rest_client.py": "2cd3d2d511ddcbd3817a4355f05c1b9c1efedbc6aa82c1539d6d86ef7b4abbc4",
-  "beidou_exchange/binance_usdm/write_guard.py": "fb5ee2245cb47f78e45c18d6c1a39a56330b0e7c2f1831b885168e3375b981e8",
+  "beidou_exchange/binance_usdm/write_guard.py": "b6ea7e865c3d1f7874e726ae60c52a42925283040ff3776586b0f2bb61066e9d",
   "beidou_exchange/binance_usdm/ws_client.py": "a78cca7f5009ce0239bb1bccbdcab1beeeca7621758ca3041cea77dfd06e302f",
   "beidou_exchange/core/error_taxonomy.py": "f88373a255f9879bc8fcf953bc8c85ed03110eb0c020c31768bdf7de1efadf31",
   "beidou_exchange/core/protocol.py": "9af55599a9de03bc3a11efb260f7534f32014c8ea7e4e9c8ac62efe53223a2d4",
   "beidou_exchange/core/rule_snapshot.py": "1c9b19a05615093f2de30caa56d33bd937e710d57a1ddcc25bdf5e6e18486994",
+  "beidou_exchange/core/signed_capability.py": "4d55216ed4f1f90377ff8549860bb46af3399dc84fb2e8ecc370f8944da0de5a",
   "beidou_exchange/core/user_stream.py": "6add102de7e9c498cedc2ef8ce56f5174fc43e9db72746b95043c1d285b9bede",
-  "beidou_exchange/core/write_authority.py": "d11c8b5c525e96f495f0104254e69c0cf081f66ccde6c5ddcff82e7a28944c38",
+  "beidou_exchange/core/write_authority.py": "6d977c879660b69a04555ba1f47fc216228a36e1200039d783b5002940366f38",
   "beidou_exchange/router/__init__.py": "c6ebcac64153cd66b6383fd735326cf807e5fae6b26d16366d2b3abdaba292c9",
   "beidou_exchange/router/router.py": "056392e682d3a6d8d06a86f471f7f51764dde2e4e10d54c6de43ad747986bf15",
   "beidou_infra/__init__.py": "8b8de3e36a5fd155510fefb6ffd48b99cf9be0750682cc273fcdd19cd7646eba",

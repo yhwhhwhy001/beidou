@@ -8,9 +8,11 @@ invalid, or failing authorities deny the write without touching the transport.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Protocol
 
@@ -41,6 +43,28 @@ class TerminalWriteContext:
     position_id: str = ""
     quantity: str = ""
     dedicated_account: bool = False
+    # The following fields are non-secret venue/environment facts.  They are
+    # deliberately carried on the typed request instead of being inferred
+    # from the HTTP URL or a boolean such as ``reduceOnly``.
+    account_id: str = ""
+    venue_id: str = ""
+    environment: str = ""
+    rest_base_url: str = ""
+    notional: str = ""
+    leverage: str = ""
+    side: str = ""
+    order_type: str = ""
+    reduce_only: bool = False
+    close_position: bool = False
+    pool_id: str = ""
+    pool_version: str = ""
+    pool_hash: str = ""
+    pool_symbols: tuple[str, ...] = ()
+    command_hash: str = ""
+    final_request_hash: str = ""
+    adaptive_leverage: str = ""
+    adaptive_quantity: str = ""
+    adaptive_notional: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +90,25 @@ class TerminalWriteRequest:
     intent_id: str = ""
     position_id: str = ""
     dedicated_account: bool = False
+    signed: bool = False
+    venue_id: str = ""
+    environment: str = ""
+    rest_base_url: str = ""
+    side: str = ""
+    order_type: str = ""
+    reduce_only: bool = False
+    close_position: bool = False
+    notional: str = ""
+    leverage: str = ""
+    pool_id: str = ""
+    pool_version: str = ""
+    pool_hash: str = ""
+    pool_symbols: tuple[str, ...] = ()
+    command_hash: str = ""
+    final_request_hash: str = ""
+    adaptive_leverage: str = ""
+    adaptive_quantity: str = ""
+    adaptive_notional: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +123,56 @@ class TerminalWriteAuthority(Protocol):
     """Authority implementations must make a deterministic, side-effect-free decision."""
 
     def authorize(self, request: TerminalWriteRequest) -> TerminalWriteDecision: ...
+
+
+def canonical_final_request_hash(
+    method: str,
+    path: str,
+    params: dict[str, object] | None,
+    *,
+    account_id: str,
+    command_hash: str = "",
+    pool_id: str = "",
+    pool_version: str = "",
+    pool_hash: str = "",
+    adaptive_leverage: str = "",
+    adaptive_quantity: str = "",
+    adaptive_notional: str = "",
+) -> str:
+    """Hash the exact pre-signature venue request material.
+
+    Binance's HMAC authenticates the HTTP request to Binance, but it does not
+    prove that the request was the one approved by Beidou.  This digest is
+    deliberately calculated before ``timestamp``, ``recvWindow`` and
+    ``signature`` are added.  The command/pool/adaptive fields are included
+    explicitly because they are authorization facts rather than Binance
+    transport parameters.
+    """
+
+    material = {
+        "method": str(method).upper(),
+        "path": str(path),
+        "account_id": str(account_id),
+        "params": {str(key): value for key, value in sorted((params or {}).items(), key=lambda item: str(item[0]))},
+        "command_hash": str(command_hash),
+        "pool_id": str(pool_id),
+        "pool_version": str(pool_version),
+        "pool_hash": str(pool_hash),
+        "adaptive_leverage": str(adaptive_leverage),
+        "adaptive_quantity": str(adaptive_quantity),
+        "adaptive_notional": str(adaptive_notional),
+    }
+    encoded = json.dumps(material, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def terminal_write_request_hash(request: TerminalWriteRequest) -> str:
+    """Return the deterministic audit digest for a typed write request."""
+
+    data = asdict(request)
+    data["kind"] = request.kind.value
+    encoded = json.dumps(data, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def evaluate_terminal_write(
@@ -108,11 +201,18 @@ def evaluate_terminal_write(
         return TerminalWriteDecision(False, "WRITE_SCOPE_INVALID_EXPIRY")
     if request.expires_at <= time.time():
         return TerminalWriteDecision(False, "WRITE_SCOPE_EXPIRED")
-    if request.kind in {
-        TerminalWriteKind.INCREASE,
-        TerminalWriteKind.REDUCE_OWNED,
-        TerminalWriteKind.EMERGENCY,
-    } and (not request.intent_id or not request.quantity):
+    if (
+        request.kind
+        in {
+            TerminalWriteKind.INCREASE,
+            TerminalWriteKind.REDUCE_OWNED,
+            TerminalWriteKind.EMERGENCY,
+        }
+        and request.path != "/fapi/v1/leverage"
+        and (not request.intent_id or not request.quantity)
+    ):
+        return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
+    if request.path == "/fapi/v1/leverage" and (not request.intent_id or not request.leverage):
         return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
     if request.kind is TerminalWriteKind.REDUCE_OWNED and not request.position_id:
         return TerminalWriteDecision(False, "WRITE_OBJECT_SCOPE_INCOMPLETE")
@@ -135,3 +235,15 @@ def evaluate_terminal_write(
     ):
         return TerminalWriteDecision(False, "WRITE_AUTHORITY_INVALID_DECISION")
     return decision
+
+
+__all__ = [
+    "TerminalWriteAuthority",
+    "TerminalWriteContext",
+    "TerminalWriteDecision",
+    "TerminalWriteKind",
+    "TerminalWriteRequest",
+    "canonical_final_request_hash",
+    "evaluate_terminal_write",
+    "terminal_write_request_hash",
+]
