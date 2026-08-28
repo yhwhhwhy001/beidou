@@ -1,0 +1,1370 @@
+"""Closed-bar Testnet verification runtime.
+
+This module is the only composition root for the V4 Testnet path.  It uses
+the existing Binance adapter as its sole writer and keeps every order-linked
+fact in :class:`DecisionTraceStore`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+import itertools
+import json
+import math
+import os
+import sys
+from dataclasses import asdict, dataclass, fields, is_dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, cast
+
+from beidou_data.trading_pool_lifecycle import (
+    PoolStatus,
+    TradingPool,
+    TradingPoolSnapshot,
+    discover_startup_candidates,
+)
+from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
+from beidou_exchange.core.protocol import OrderRequest
+from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
+from beidou_exchange.core.write_authority import TerminalWriteContext
+from beidou_exchange.testnet_guard import TestnetEnvironmentGuard
+from beidou_shared.decision_trace import DecisionTrace, DecisionTraceStore, TraceStatus
+from beidou_shared.types import (
+    AccountId,
+    AccountRef,
+    CorrelationId,
+    InstrumentId,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    Quantity,
+    SchemaVersion,
+    StrategyId,
+    VenueId,
+    VenueInstrument,
+)
+from beidou_strategy.alpha.contracts import EntryProposal, FilterDecision, FilterResult
+from beidou_strategy.alpha.typed_graph import EntryNode, FeatureNode, FilterNode, FusionNode, TypedAlphaGraph
+from beidou_strategy.kernel_parity import StrategyKernel
+from beidou_strategy.risk.adaptive_sizing_engine import SizingInput, compute_adaptive_sizing
+
+from .config import VerifierConfig
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    if hasattr(value, "value") and not isinstance(value, dict):
+        return _jsonable(value.value)
+    if is_dataclass(value):
+        return {item.name: _jsonable(getattr(value, item.name)) for item in fields(value)}
+    if hasattr(value, "model_dump") and callable(value.model_dump):
+        return _jsonable(value.model_dump())
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(item) for item in value]
+    return str(value)
+
+
+def _stable_hash(value: Any) -> str:
+    payload = json.dumps(_jsonable(value), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _git_revision() -> str:
+    """Read the current repository revision without invoking a shell."""
+
+    configured = os.getenv("BEIDOU_GIT_COMMIT", "").strip()
+    if configured:
+        return configured
+    root = Path(__file__).resolve().parents[2]
+    git_path = root / ".git"
+    try:
+        if git_path.is_file():
+            pointer = git_path.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir:"):
+                git_path = (root / pointer.split(":", 1)[1].strip()).resolve()
+        head = (git_path / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            ref_path = git_path / ref
+            if ref_path.exists():
+                return ref_path.read_text(encoding="utf-8").strip()
+            packed_refs = git_path / "packed-refs"
+            if packed_refs.exists():
+                for line in packed_refs.read_text(encoding="utf-8").splitlines():
+                    if line and not line.startswith("#") and not line.startswith("^"):
+                        revision, separator, packed_ref = line.partition(" ")
+                        if separator and packed_ref == ref:
+                            return revision
+        elif head:
+            return head
+    except (OSError, UnicodeError):
+        pass
+    return "UNKNOWN"
+
+
+def _result_error(result: Any, fallback: str) -> dict[str, Any]:
+    error = getattr(result, "error", None)
+    raw = getattr(error, "raw", None)
+    raw_mapping = raw if isinstance(raw, dict) else {}
+    return {
+        "message": str(getattr(error, "message", fallback))[:300],
+        "category": str(getattr(getattr(error, "category", None), "value", "UNKNOWN")),
+        "retryable": bool(getattr(error, "retryable", False)),
+        "code": raw_mapping.get("code", -1),
+    }
+
+
+class _PoolStateFile:
+    """Persist the latest lifecycle event without introducing a new service."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._states: dict[str, dict[str, Any]] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(payload, list):
+            for state in payload:
+                if isinstance(state, dict) and state.get("instrument_id"):
+                    self._states[str(state["instrument_id"])] = dict(state)
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        instrument_id = str(event.get("instrument_id") or "").strip().upper()
+        if not instrument_id:
+            return
+        self._states[instrument_id] = copy.deepcopy(event)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        encoded = json.dumps(list(self._states.values()), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(self.path)
+
+    @property
+    def initial_state(self) -> list[dict[str, Any]]:
+        return [copy.deepcopy(value) for value in self._states.values()]
+
+
+@dataclass(slots=True)
+class MarketObservation:
+    symbol: str
+    ticker: dict[str, Any]
+    depth: dict[str, Any]
+    bars: list[dict[str, Any]]
+    funding: list[dict[str, Any]]
+    features: dict[str, float]
+    source_hashes: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class VerificationSummary:
+    run_id: str
+    status: str
+    startup: dict[str, Any]
+    episodes: list[dict[str, Any]]
+    trace_ids: list[str]
+    manifest_path: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "startup": _jsonable(self.startup),
+            "episodes": _jsonable(self.episodes),
+            "trace_ids": list(self.trace_ids),
+            "manifest_path": self.manifest_path,
+        }
+
+
+_FEATURE_NAMES = [
+    "close",
+    "fast_return",
+    "slow_return",
+    "realized_volatility",
+    "spread_bps",
+    "depth_notional",
+    "quote_volume",
+    "liquidity_score",
+    "capacity_score",
+    "funding_rate",
+    "signal_score",
+    "signal_confidence",
+    "regime_confidence",
+    "stop_distance_pct",
+]
+
+
+async def _entry_signal(context: dict[str, Any]) -> EntryProposal:
+    features = cast(dict[str, Any], context["features"])
+    score = float(features["signal_score"])
+    confidence = max(0.0, min(1.0, float(features["signal_confidence"])))
+    # This non-zero band is part of the strategy contract: no signal remains
+    # NO_ACTION and is never turned into a hand-made order.
+    signal_band = 0.0005
+    side: OrderSide | None
+    if score > signal_band:
+        side = OrderSide.BUY
+    elif score < -signal_band:
+        side = OrderSide.SELL
+    else:
+        side = None
+    strength = min(1.0, abs(score) / max(float(features["realized_volatility"]), 1e-12)) if side else 0.0
+    return EntryProposal(
+        strategy_id=StrategyId("testnet-verification-strategy-v1"),
+        instrument_id=InstrumentId(str(context["instrument_id"])),
+        venue_id=VenueId("BINANCE"),
+        side=side,
+        strength=max(0.0, strength),
+        confidence=confidence,
+        model_version=SchemaVersion("testnet-momentum-v1"),  # model identity, not a credential
+        metadata={"signal_band": signal_band, "factor_hash": str(context.get("factor_hash", ""))},
+    )
+
+
+async def _pool_filter(context: dict[str, Any], _entry: EntryProposal | None) -> FilterResult:
+    if str(context.get("pool_status", "")).upper() != PoolStatus.ACTIVE.value:
+        return FilterResult(
+            decision=FilterDecision.VETO,
+            reason_codes=["POOL_SYMBOL_NOT_ACTIVE"],
+            component_id="pool-admissibility-v1",
+        )
+    return FilterResult(decision=FilterDecision.ACCEPT, component_id="pool-admissibility-v1")
+
+
+async def _quality_filter(context: dict[str, Any], _entry: EntryProposal | None) -> FilterResult:
+    features = cast(dict[str, Any], context["features"])
+    if features["liquidity_score"] <= 0 or features["capacity_score"] <= 0:
+        return FilterResult(
+            decision=FilterDecision.VETO,
+            reason_codes=["MARKET_LIQUIDITY_UNKNOWN"],
+            component_id="market-quality-v1",
+        )
+    if features["signal_confidence"] < 0.15:
+        return FilterResult(
+            decision=FilterDecision.DEGRADE,
+            confidence_multiplier=0.5,
+            size_multiplier=0.5,
+            reason_codes=["LOW_SIGNAL_CONFIDENCE"],
+            component_id="market-quality-v1",
+        )
+    return FilterResult(decision=FilterDecision.ACCEPT, component_id="market-quality-v1")
+
+
+def _build_kernel() -> StrategyKernel:
+    graph = TypedAlphaGraph(StrategyId("testnet-verification-strategy-v1"))
+    features = FeatureNode("market-features-v1", _FEATURE_NAMES)
+    entry = EntryNode(
+        "momentum-entry-v1", _entry_signal, factor_version="market-factors-v1", model_version="momentum-v1"
+    )
+    pool_filter = FilterNode("pool-admissibility-v1", _pool_filter, is_mandatory=True)
+    quality_filter = FilterNode("market-quality-v1", _quality_filter, is_mandatory=True)
+    fusion = FusionNode("strategy-fusion-v1")
+    for node in (features, entry, pool_filter, quality_filter, fusion):
+        graph.add_node(node)
+    graph.connect(features.node_id, entry.node_id)
+    graph.connect(features.node_id, fusion.node_id)
+    graph.connect(entry.node_id, pool_filter.node_id)
+    graph.connect(entry.node_id, quality_filter.node_id)
+    graph.connect(entry.node_id, fusion.node_id)
+    graph.connect(pool_filter.node_id, fusion.node_id)
+    graph.connect(quality_filter.node_id, fusion.node_id)
+    kernel = StrategyKernel(mode="TESTNET")
+    kernel.set_typed_graph(graph)
+    return kernel
+
+
+class VerificationRuntime:
+    """Bounded closed-bar verifier with dependency injection for offline tests."""
+
+    def __init__(
+        self,
+        config: VerifierConfig,
+        *,
+        adapter: Any | None = None,
+        pool: TradingPool | None = None,
+        trace_store: DecisionTraceStore | None = None,
+        kernel: StrategyKernel | None = None,
+    ) -> None:
+        config.validate()
+        self.config = config
+        self.guard = TestnetEnvironmentGuard(
+            config.rest_url,
+            max_notional=config.max_notional,
+            max_leverage=config.max_leverage,
+            account_id=config.account_id,
+            writes_enabled=config.confirm_testnet,
+        )
+        self._pool_state = _PoolStateFile(config.pool_state_path)
+        self.pool = pool or TradingPool(
+            max_instruments=config.max_instruments,
+            event_sink=self._pool_state,
+            initial_state=self._pool_state.initial_state,
+            policy_version="testnet-pool-policy-v1",
+            pool_id="testnet-adaptive-pool",
+        )
+        self.trace_store = trace_store or DecisionTraceStore(config.trace_path)
+        self.kernel = kernel or _build_kernel()
+        self._adapter_is_injected = adapter is not None
+        if adapter is None:
+            transport = BinanceRESTClient(
+                self.guard.rest_base_url,
+                api_key=config.api_key,
+                api_secret=config.api_secret,
+                account_id=config.account_id,
+                testnet_guard=self.guard,
+            )
+            adapter = BinanceUsdmAdapter(
+                venue_id=VenueId("BINANCE"),
+                account_id=AccountId(config.account_id),
+                rest_client=transport,
+                testnet_guard=self.guard,
+            )
+        self.adapter = adapter
+        self._observations: dict[str, MarketObservation] = {}
+        self._startup_errors: list[dict[str, Any]] = []
+        self._startup_facts: dict[str, Any] = {}
+
+    async def startup(self) -> dict[str, Any]:
+        """Read minimum venue facts and construct a dynamic pool."""
+
+        exchange_result = await self.adapter.fetch_exchange_info()
+        server_result = await self.adapter.get_server_time()
+        mode_result = await self.adapter.get_position_mode()
+        account_result = await self.adapter.get_account_snapshot()
+        exchange_raw = exchange_result.data if exchange_result.is_success() else None
+        if exchange_raw is not None:
+            self.pool.record_source_hash(_stable_hash(exchange_raw))
+        candidates = discover_startup_candidates(
+            exchange_raw,
+            max_instruments=self.config.max_instruments,
+            preserve_exchange_order=True,
+        )
+        for symbol in candidates:
+            self.pool.add(symbol)
+
+        for symbol in candidates:
+            await self._observe_symbol(symbol)
+
+        snapshot = self.pool.snapshot()
+        self._startup_facts = {
+            "exchange_info": {
+                "status": "SUCCESS" if exchange_result.is_success() else "UNKNOWN",
+                "source_hash": _stable_hash(exchange_raw) if exchange_raw is not None else "",
+                "candidate_count": len(candidates),
+            },
+            "server_time": {
+                "status": "SUCCESS" if server_result.is_success() else "UNKNOWN",
+                "source_hash": _stable_hash(server_result.data) if server_result.is_success() else "",
+            },
+            "position_mode": {
+                "status": "SUCCESS" if mode_result.is_success() else "UNKNOWN",
+                "value": _jsonable(mode_result.data) if mode_result.is_success() else {},
+            },
+            "account": {
+                "status": "SUCCESS" if account_result.is_success() else "UNKNOWN",
+                "can_trade": bool(
+                    account_result.is_success()
+                    and isinstance(account_result.data, dict)
+                    and account_result.data.get("canTrade") is True
+                ),
+                "can_withdraw": (
+                    account_result.data.get("canWithdraw")
+                    if account_result.is_success() and isinstance(account_result.data, dict)
+                    else None
+                ),
+                "source_hash": _stable_hash(account_result.data) if account_result.is_success() else "",
+            },
+            "pool": _jsonable(snapshot),
+            "errors": list(self._startup_errors),
+        }
+        return copy.deepcopy(self._startup_facts)
+
+    async def _observe_symbol(self, symbol: str) -> None:
+        ticker_result = await self.adapter.get_ticker(symbol)
+        depth_result = await self.adapter.get_depth(symbol, limit=20)
+        bars_result = await self.adapter.get_closed_klines(symbol, self.config.interval, self.config.kline_limit)
+        funding_result = await self.adapter.get_funding_rate(symbol, limit=1)
+        if not all(result.is_success() for result in (ticker_result, depth_result, bars_result, funding_result)):
+            self._startup_errors.append(
+                {
+                    "symbol": symbol,
+                    "reason": "MARKET_FACT_UNKNOWN",
+                    "ticker": _result_error(ticker_result, "ticker unavailable"),
+                    "depth": _result_error(depth_result, "depth unavailable"),
+                    "bars": _result_error(bars_result, "closed bars unavailable"),
+                    "funding": _result_error(funding_result, "funding unavailable"),
+                }
+            )
+            return
+        ticker = cast(dict[str, Any], ticker_result.data)
+        depth = cast(dict[str, Any], depth_result.data)
+        bars = cast(list[dict[str, Any]], bars_result.data)
+        funding = cast(list[dict[str, Any]], funding_result.data)
+        try:
+            features = self._features_from_observation(symbol, ticker, depth, bars, funding)
+        except ValueError as exc:
+            self._startup_errors.append({"symbol": symbol, "reason": str(exc)})
+            return
+        source_hashes = (
+            _stable_hash(ticker),
+            _stable_hash(depth),
+            _stable_hash(bars),
+            _stable_hash(funding),
+        )
+        self.pool.record_source_hashes(source_hashes)
+        self._observations[symbol] = MarketObservation(
+            symbol=symbol,
+            ticker=ticker,
+            depth=depth,
+            bars=bars,
+            funding=funding,
+            features=features,
+            source_hashes=source_hashes,
+        )
+        rule = self.adapter.get_rule_snapshot(symbol)
+        stability_score = 1.0 if rule.is_known and not rule.is_stale else 0.0
+        score = self.pool.update_market_score(
+            symbol,
+            spread_bps=features["spread_bps"],
+            depth_score=min(1.0, features["depth_notional"] / max(self.config.max_notional * 10.0, 1.0)),
+            volume_score=min(1.0, features["quote_volume"] / max(self.config.max_notional * 1000.0, 1.0)),
+            stability_score=stability_score,
+            capacity_score=features["capacity_score"],
+            source_hashes=source_hashes,
+        )
+        interval_hours = self._interval_hours(self.config.interval)
+        self.pool.seed_historical_observation(
+            symbol,
+            score.overall,
+            evidence={
+                "days": len(bars) * interval_hours / 24.0,
+                "bar_count": len(bars),
+                "source_hashes": list(source_hashes),
+            },
+        )
+        if self.pool.try_promote(symbol):
+            self.pool.activate(symbol)
+
+    @staticmethod
+    def _interval_hours(interval: str) -> float:
+        if interval.endswith("m"):
+            return float(int(interval[:-1])) / 60.0
+        if interval.endswith("h"):
+            return float(int(interval[:-1]))
+        if interval.endswith("d"):
+            return float(int(interval[:-1])) * 24.0
+        raise ValueError(f"unsupported interval: {interval}")
+
+    @staticmethod
+    def _features_from_observation(
+        symbol: str,
+        ticker: dict[str, Any],
+        depth: dict[str, Any],
+        bars: list[dict[str, Any]],
+        funding: list[dict[str, Any]],
+    ) -> dict[str, float]:
+        if any(
+            not isinstance(row, dict)
+            or row.get("is_closed") is not True
+            or _finite_float(row.get("close_time")) is None
+            for row in bars
+        ):
+            raise ValueError("CLOSED_BAR_FACT_UNKNOWN")
+        close_times = [int(row["close_time"]) for row in bars]
+        if any(current <= previous for previous, current in itertools.pairwise(close_times)):
+            raise ValueError("CLOSED_BAR_ORDER_INVALID")
+        closes = [_finite_float(row.get("close")) for row in bars]
+        if len(closes) < 21 or any(value is None or value <= 0 for value in closes):
+            raise ValueError("NOT_ENOUGH_CLOSED_BARS")
+        close_values = cast(list[float], closes)
+        returns = [close_values[index] / close_values[index - 1] - 1.0 for index in range(1, len(close_values))]
+        volatility = math.sqrt(sum((value - sum(returns) / len(returns)) ** 2 for value in returns) / len(returns))
+        fast_return = close_values[-1] / close_values[-6] - 1.0
+        slow_return = close_values[-1] / close_values[-21] - 1.0
+        signal_score = 0.7 * fast_return + 0.3 * slow_return
+        signal_confidence = min(1.0, abs(signal_score) / max(volatility * math.sqrt(20.0), 1e-12))
+        regime_confidence = max(0.25, min(1.0, 1.0 - volatility * 10.0))
+
+        bid = _finite_float(ticker.get("bidPrice"))
+        ask = _finite_float(ticker.get("askPrice"))
+        last_price = _finite_float(ticker.get("lastPrice"))
+        if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+            raise ValueError(f"INVALID_TICKER:{symbol}")
+        price = last_price if last_price is not None and last_price > 0 else (bid + ask) / 2.0
+        spread_bps = (ask - bid) / ask * 10000.0
+        bids = depth.get("bids")
+        asks = depth.get("asks")
+        if not isinstance(bids, list) or not isinstance(asks, list) or not bids or not asks:
+            raise ValueError("INVALID_DEPTH")
+        depth_notional = 0.0
+        for row in [*bids[:5], *asks[:5]]:
+            if not isinstance(row, list) or len(row) < 2:
+                raise ValueError("INVALID_DEPTH_ROW")
+            row_price = _finite_float(row[0])
+            row_quantity = _finite_float(row[1])
+            if row_price is None or row_quantity is None or row_price <= 0 or row_quantity < 0:
+                raise ValueError("INVALID_DEPTH_VALUE")
+            depth_notional += row_price * row_quantity
+        quote_volume = _finite_float(ticker.get("quoteVolume"))
+        if quote_volume is None or quote_volume < 0:
+            base_volume = _finite_float(ticker.get("volume"))
+            quote_volume = base_volume * price if base_volume is not None and base_volume >= 0 else None
+        if quote_volume is None:
+            raise ValueError("INVALID_24H_VOLUME")
+        funding_rate = (
+            _finite_float(funding[-1].get("fundingRate")) if funding and isinstance(funding[-1], dict) else None
+        )
+        if funding_rate is None:
+            raise ValueError("INVALID_FUNDING_RATE")
+        spread_quality = max(0.0, min(1.0, 1.0 - spread_bps / 100.0))
+        depth_quality = max(0.0, min(1.0, depth_notional / max(price, 1.0) / 10.0))
+        liquidity_score = max(0.0, min(1.0, 0.5 * spread_quality + 0.5 * depth_quality))
+        capacity_score = max(0.0, min(1.0, depth_notional / max(price, 1.0) / 20.0))
+        return {
+            "close": price,
+            "fast_return": fast_return,
+            "slow_return": slow_return,
+            "realized_volatility": max(volatility, 1e-12),
+            "spread_bps": spread_bps,
+            "depth_notional": depth_notional,
+            "quote_volume": quote_volume,
+            "liquidity_score": liquidity_score,
+            "capacity_score": capacity_score,
+            "funding_rate": funding_rate,
+            "signal_score": signal_score,
+            "signal_confidence": signal_confidence,
+            "regime_confidence": regime_confidence,
+            "stop_distance_pct": max(0.005, min(0.50, volatility * 2.0)),
+        }
+
+    def _episode_ids(self, symbol: str, snapshot: TradingPoolSnapshot) -> tuple[str, str, str]:
+        observation = self._observations.get(symbol)
+        bar_key = observation.bars[-1].get("close_time") if observation and observation.bars else "unknown"
+        # The intent identity belongs to one closed-bar decision episode.  Do
+        # not include the mutable pool version/hash here: scoring persists a
+        # new lifecycle version on every observation, and including it would
+        # turn a process restart into a fresh clientOrderId for the same bar.
+        # The exact pool version/hash is still persisted in DecisionTrace and
+        # remains part of the authorization/evidence record.
+        del snapshot
+        seed = _stable_hash({"symbol": symbol, "bar": bar_key})[:20]
+        return f"tn-{seed}", f"intent-{seed}", f"bd-{seed}"
+
+    def _base_trace(
+        self,
+        *,
+        trace_id: str,
+        intent_id: str,
+        client_order_id: str,
+        snapshot: TradingPoolSnapshot,
+        symbol: str,
+        strategy: dict[str, Any] | None = None,
+        portfolio: dict[str, Any] | None = None,
+        sizing: dict[str, Any] | None = None,
+        rule: InstrumentRuleSnapshot | None = None,
+        factor_outputs: list[dict[str, Any]] | None = None,
+    ) -> DecisionTrace:
+        observation = self._observations.get(symbol)
+        feature_hash = _stable_hash(observation.features) if observation else ""
+        return DecisionTrace(
+            trace_id=trace_id,
+            intent_id=intent_id,
+            client_order_id=client_order_id,
+            pool={
+                "id": snapshot.pool_id,
+                "version": snapshot.version,
+                "hash": snapshot.snapshot_hash,
+                "symbol": symbol,
+                "score": snapshot.score_by_symbol.get(symbol, 0.0),
+                "active_symbols": list(snapshot.active_symbols),
+                "source_hashes": list(snapshot.source_hashes),
+            },
+            market_data_hash=feature_hash,
+            factor_outputs=factor_outputs or [],
+            strategy=strategy or {},
+            portfolio=portfolio or {},
+            sizing=sizing or {},
+            exchange_rules_hash=rule.compute_hash() if rule is not None else "",
+            metadata={"runtime": "apps.testnet_verify", "config_hash": self.config.config_hash()},
+        )
+
+    def _record_no_action(
+        self,
+        trace: DecisionTrace,
+        reason: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        existing = self.trace_store.get(trace.trace_id)
+        if existing is None:
+            existing = self.trace_store.prepare(trace)
+        if existing.status is TraceStatus.PREPARED:
+            existing = self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.FAILED,
+                error={"reason": reason, **(details or {})},
+                metadata={**existing.metadata, **trace.metadata, "decision": "NO_ACTION"},
+            )
+        return {"trace_id": existing.trace_id, "status": existing.status.value, "reason": reason}
+
+    def _durable_episode_result(self, trace: DecisionTrace, reason: str) -> dict[str, Any]:
+        """Return all durable trace identities belonging to one episode.
+
+        A close order is a separate trace, but it is part of the same
+        closed-bar episode.  Replaying a terminal primary trace must expose
+        that already-persisted child as well, otherwise a restart would
+        produce a different summary even though no venue write occurred.
+        """
+
+        result: dict[str, Any] = {
+            "trace_id": trace.trace_id,
+            "status": trace.status.value,
+            "reason": reason,
+        }
+        close_trace = self.trace_store.get(f"{trace.trace_id}-c")
+        if close_trace is not None:
+            result["trace_ids"] = [trace.trace_id, close_trace.trace_id]
+        return result
+
+    async def _account_facts(self) -> tuple[float, float, dict[str, Any]] | None:
+        result = await self.adapter.get_account_snapshot()
+        if not result.is_success() or not isinstance(result.data, dict):
+            return None
+        account = result.data
+        equity = _finite_float(account.get("totalWalletBalance"))
+        available = _finite_float(account.get("availableBalance"))
+        if equity is None or available is None:
+            assets = account.get("assets")
+            if isinstance(assets, list):
+                usdt = [row for row in assets if isinstance(row, dict) and str(row.get("asset", "")).upper() == "USDT"]
+                if len(usdt) == 1:
+                    equity = equity if equity is not None else _finite_float(usdt[0].get("walletBalance"))
+                    available = available if available is not None else _finite_float(usdt[0].get("availableBalance"))
+        if equity is None or available is None or equity <= 0 or available < 0:
+            return None
+        if account.get("canTrade") is not True or account.get("canWithdraw") is not False:
+            return None
+        return equity, available, account
+
+    async def _position_facts(self, symbol: str) -> dict[str, Any] | None:
+        result = await self.adapter.get_position_risk(symbol)
+        if not result.is_success() or not isinstance(result.data, list):
+            return None
+        rows = [row for row in result.data if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol]
+        if not rows:
+            return None
+        quantity = 0.0
+        for row in rows:
+            amount = _finite_float(row.get("positionAmt"))
+            if amount is None:
+                return None
+            quantity += amount
+        return {
+            "symbol": symbol,
+            "quantity": quantity,
+            "entry_price": _finite_float(rows[0].get("entryPrice")),
+            "unrealized_pnl": _finite_float(rows[0].get("unRealizedProfit")),
+            "leverage": int(rows[0]["leverage"]) if str(rows[0].get("leverage", "")).isdigit() else None,
+            "rows": _jsonable(rows),
+        }
+
+    @staticmethod
+    def _is_ambiguous(result: Any) -> bool:
+        category = getattr(getattr(result, "error", None), "category", "UNKNOWN")
+        category_value = getattr(category, "value", category)
+        return str(category_value).upper() in {"UNKNOWN", "NETWORK", "TIMEOUT", "EXCHANGE_UNAVAILABLE"}
+
+    async def _query_recover_order(
+        self,
+        trace: DecisionTrace,
+        request: OrderRequest,
+        context: TerminalWriteContext,
+        *,
+        allow_same_id_resubmit: bool,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        query = await self.adapter.query_order_by_client_id(
+            str(request.venue_instrument.instrument_id),
+            str(request.client_order_id or ""),
+        )
+        if query.is_success() and isinstance(query.data, dict):
+            raw = cast(dict[str, Any], query.data)
+            valid, reason = self.adapter.validate_order_ack(request, raw)
+            if not valid:
+                return None, {"reason": f"RECOVERY_ACK_{reason}"}
+            return raw, None
+        error = _result_error(query, "order query is UNKNOWN")
+        code = error.get("code")
+        if allow_same_id_resubmit and str(code) in {"-2013", "-2011"}:
+            # Deterministic absence is the only condition permitting a retry,
+            # and the exact same client id is reused.  A transport failure
+            # never reaches this branch.
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.SUBMITTED,
+                metadata={**trace.metadata, "recovery": "QUERY_CONFIRMED_ABSENT_SAME_ID_RETRY"},
+            )
+            response = await self.adapter.create_order(request, write_context=context)
+            if response.status is OrderStatus.REJECTED and not response.order_id:
+                self.trace_store.update(
+                    trace.trace_id,
+                    TraceStatus.FAILED,
+                    error={"reason": "RECOVERY_SECOND_ATTEMPT_REJECTED", "response": _jsonable(response.raw_response)},
+                )
+                return None, {"reason": "RECOVERY_SECOND_ATTEMPT_REJECTED", "query": error}
+            if response.status is not OrderStatus.UNKNOWN and response.order_id:
+                raw = response.raw_response if isinstance(response.raw_response, dict) else {}
+                valid, reason = self.adapter.validate_order_ack(request, raw)
+                if valid:
+                    return raw, None
+                self.trace_store.update(
+                    trace.trace_id,
+                    TraceStatus.UNKNOWN,
+                    error={"reason": f"RECOVERY_ACK_{reason}"},
+                )
+                return None, {"reason": f"RECOVERY_ACK_{reason}"}
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.UNKNOWN,
+                error={"reason": "RECOVERY_SECOND_ATTEMPT_UNKNOWN", "response": _jsonable(response.raw_response)},
+            )
+            return None, {"reason": "RECOVERY_SECOND_ATTEMPT_UNKNOWN", "query": error}
+        return None, {"reason": "RECOVERY_QUERY_UNKNOWN", "query": error}
+
+    async def _submit_order(
+        self,
+        trace: DecisionTrace,
+        request: OrderRequest,
+        context: TerminalWriteContext,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        response = await self.adapter.create_order(request, write_context=context)
+        if response.status is OrderStatus.REJECTED and not response.order_id:
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.FAILED,
+                order_status=response.status.value,
+                error={"reason": "ORDER_SUBMIT_REJECTED", "response": _jsonable(response.raw_response)},
+            )
+            return None, {"reason": "ORDER_REJECTED"}
+        if response.status is OrderStatus.UNKNOWN or not response.order_id:
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.UNKNOWN,
+                order_status=response.status.value,
+                error={"reason": "ORDER_SUBMIT_UNKNOWN", "response": _jsonable(response.raw_response)},
+            )
+            return await self._query_recover_order(
+                trace,
+                request,
+                context,
+                allow_same_id_resubmit=True,
+            )
+        raw = response.raw_response if isinstance(response.raw_response, dict) else {}
+        valid, reason = self.adapter.validate_order_ack(request, raw)
+        if not valid:
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.UNKNOWN,
+                error={"reason": f"ACK_{reason}"},
+            )
+            return None, {"reason": f"ACK_{reason}"}
+        return raw, None
+
+    async def _run_symbol(self, symbol: str, snapshot: TradingPoolSnapshot) -> dict[str, Any]:
+        observation = self._observations.get(symbol)
+        trace_id, intent_id, client_order_id = self._episode_ids(symbol, snapshot)
+        if observation is None:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+            )
+            return self._record_no_action(trace, "MARKET_OBSERVATION_UNKNOWN")
+
+        factor_outputs = [
+            {
+                "component_id": component_id,
+                "version": "market-factors-v1",
+                "input_hash": _stable_hash(observation.features),
+                "output": observation.features[name],
+                "output_hash": _stable_hash({component_id: observation.features[name]}),
+            }
+            for component_id, name in (
+                ("momentum-5-v1", "fast_return"),
+                ("momentum-20-v1", "slow_return"),
+                ("volatility-v1", "realized_volatility"),
+                ("liquidity-v1", "liquidity_score"),
+            )
+        ]
+        context = {
+            "instrument_id": InstrumentId(symbol),
+            "venue_id": VenueId("BINANCE"),
+            "features": observation.features,
+            "pool_status": PoolStatus.ACTIVE.value,
+            "pool_hash": snapshot.snapshot_hash,
+            "factor_hash": _stable_hash(factor_outputs),
+            "active_components": [item["component_id"] for item in factor_outputs],
+        }
+        evaluation = await self.kernel.evaluate(context)
+        proposal = evaluation.get("proposal") if isinstance(evaluation, dict) else None
+        proposal_hash = self.kernel.proposal_hash(proposal)
+        strategy_data = {
+            "kernel": evaluation.get("kernel", "") if isinstance(evaluation, dict) else "",
+            "mode": evaluation.get("mode", "") if isinstance(evaluation, dict) else "",
+            "graph_hash": evaluation.get("graph_hash", "") if isinstance(evaluation, dict) else "",
+            "context_hash": evaluation.get("context_hash", "") if isinstance(evaluation, dict) else "",
+            "proposal_hash": proposal_hash,
+            "proposal": _jsonable(proposal),
+            "component_outputs": _jsonable(evaluation.get("component_outputs", {}))
+            if isinstance(evaluation, dict)
+            else {},
+        }
+        if proposal is None or getattr(proposal, "side", None) is None:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy={**strategy_data, "decision": "NO_ACTION"},
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "STRATEGY_NO_ACTION")
+        if not self.pool.is_tradable(symbol):
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy=strategy_data,
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "POOL_SYMBOL_NOT_TRADABLE")
+
+        rule = self.adapter.get_rule_snapshot(symbol)
+        if not rule.is_known or rule.is_stale:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy=strategy_data,
+                rule=rule,
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "EXCHANGE_RULE_UNKNOWN")
+        account_facts = await self._account_facts()
+        if account_facts is None:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy=strategy_data,
+                rule=rule,
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "ACCOUNT_FACTS_UNKNOWN")
+        equity, available_margin, _account = account_facts
+        entry = self.pool.get_entry(symbol)
+        capacity_utilization = min(1.0, max(0.0, 1.0 - entry.capacity_used_pct / 100.0)) if entry else 1.0
+        sizing_input = SizingInput(
+            equity=equity,
+            available_margin=available_margin,
+            symbol_price=observation.features["close"],
+            step_size=rule.step_size,
+            min_qty=rule.min_qty,
+            min_notional=rule.min_notional,
+            max_notional=self.config.max_notional,
+            max_leverage=self.config.max_leverage,
+            volatility=observation.features["realized_volatility"],
+            capacity_utilization=capacity_utilization,
+            liquidity_score=observation.features["liquidity_score"],
+            regime_confidence=observation.features["regime_confidence"],
+            signal_confidence=float(getattr(proposal, "confidence", observation.features["signal_confidence"])),
+            funding_rate=observation.features["funding_rate"],
+            drawdown_pct=0.0,
+            liquidation_distance_pct=0.50,
+            stop_distance_pct=observation.features["stop_distance_pct"],
+        )
+        sizing = compute_adaptive_sizing(sizing_input)
+        sizing_data = {
+            "input": _jsonable(asdict(sizing_input)),
+            "input_hash": sizing.input_hash,
+            "output_hash": sizing.output_hash,
+            "leverage": sizing.leverage,
+            "raw_quantity": sizing.raw_quantity,
+            "final_quantity": sizing.final_quantity,
+            "notional": sizing.notional,
+            "reason_vector": list(sizing.reason_vector),
+        }
+        if not sizing.is_safe or not sizing.final_quantity or sizing.final_quantity == "0" or sizing.leverage < 1:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy=strategy_data,
+                portfolio={"target_weight": float(proposal.strength) * float(proposal.confidence)},
+                sizing=sizing_data,
+                rule=rule,
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "SIZING_BLOCKED")
+
+        side = cast(OrderSide, proposal.side)
+        order_request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol)),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId(self.config.account_id)),
+            side=side,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount=sizing.final_quantity),
+            client_order_id=client_order_id,
+            correlation_id=CorrelationId(trace_id),
+        )
+        portfolio_data = {
+            "target_side": side.value,
+            "target_weight": float(proposal.strength) * float(proposal.confidence),
+            "target_quantity": sizing.final_quantity,
+            "target_hash": _stable_hash({"side": side.value, "quantity": sizing.final_quantity}),
+        }
+        trace = self._base_trace(
+            trace_id=trace_id,
+            intent_id=intent_id,
+            client_order_id=client_order_id,
+            snapshot=snapshot,
+            symbol=symbol,
+            strategy=strategy_data,
+            portfolio=portfolio_data,
+            sizing=sizing_data,
+            rule=rule,
+            factor_outputs=factor_outputs,
+        )
+        trace.order_request = {
+            "symbol": symbol,
+            "side": side.value,
+            "type": OrderType.MARKET.value,
+            "quantity": sizing.final_quantity,
+            "clientOrderId": client_order_id,
+            "reduceOnly": False,
+        }
+        trace.order_request_hash = _stable_hash(trace.order_request)
+        trace.leverage_request = int(sizing.leverage)
+        stored_trace = self.trace_store.prepare(trace)
+        if stored_trace.status in {TraceStatus.CLOSED, TraceStatus.FAILED}:
+            # A repeated cycle for the same closed bar must be idempotent.  A
+            # terminal durable fact is never turned back into a new order just
+            # because the process restarted or the pool was rescored.
+            return self._durable_episode_result(stored_trace, "DURABLE_TRACE_TERMINAL")
+        if stored_trace.status in {TraceStatus.ACKED, TraceStatus.FILLED}:
+            # The exchange order already has a durable identity.  Reusing the
+            # stored acknowledgement is safer than submitting another order;
+            # a later, explicitly authorized close cycle can handle any open
+            # position separately.
+            return self._durable_episode_result(stored_trace, "DURABLE_TRACE_ALREADY_ACKED")
+        resume_existing = stored_trace.status in {TraceStatus.UNKNOWN, TraceStatus.SUBMITTED}
+
+        if not self.config.confirm_testnet:
+            return self._record_no_action(trace, "CONFIRM_TESTNET_REQUIRED")
+        if not self.config.api_key or not self.config.api_secret:
+            return self._record_no_action(trace, "TESTNET_CREDENTIALS_UNAVAILABLE")
+        position_before = await self._position_facts(symbol)
+        if position_before is None:
+            return self._record_no_action(trace, "POSITION_BEFORE_UNKNOWN")
+
+        leverage_params = {"symbol": symbol, "leverage": int(sizing.leverage)}
+        leverage_context = self.guard.build_write_context(
+            intent_id=intent_id,
+            trace_id=trace_id,
+            symbol=symbol,
+            side=side.value,
+            order_type="LEVERAGE",
+            quantity=sizing.final_quantity,
+            notional=sizing.notional,
+            leverage=str(int(sizing.leverage)),
+            position_id=f"position-{symbol}",
+            command_hash=_stable_hash(leverage_params),
+            final_request_hash=_stable_hash(leverage_params),
+            pool_id=snapshot.pool_id,
+            pool_version=str(snapshot.version),
+            pool_hash=snapshot.snapshot_hash,
+            pool_symbols=snapshot.active_symbols,
+        )
+        leverage_result = await self.adapter.set_leverage(
+            symbol,
+            int(sizing.leverage),
+            account_ref=order_request.account_ref,
+            write_context=leverage_context,
+        )
+        if not leverage_result.is_success():
+            status = TraceStatus.UNKNOWN if self._is_ambiguous(leverage_result) else TraceStatus.FAILED
+            self.trace_store.update(
+                trace_id,
+                status,
+                error={"reason": "LEVERAGE_SET_FAILED", **_result_error(leverage_result, "leverage set failed")},
+            )
+            return {"trace_id": trace_id, "status": status.value, "reason": "LEVERAGE_SET_FAILED"}
+        leverage_readback = await self.adapter.read_leverage(symbol)
+        if not leverage_readback.is_success() or not isinstance(leverage_readback.data, dict):
+            self.trace_store.update(trace_id, TraceStatus.UNKNOWN, error={"reason": "LEVERAGE_READBACK_UNKNOWN"})
+            return {"trace_id": trace_id, "status": TraceStatus.UNKNOWN.value, "reason": "LEVERAGE_READBACK_UNKNOWN"}
+        actual_leverage = int(leverage_readback.data.get("leverage", 0))
+        if actual_leverage != int(sizing.leverage):
+            self.trace_store.update(
+                trace_id,
+                TraceStatus.FAILED,
+                leverage_readback=actual_leverage,
+                error={
+                    "reason": "LEVERAGE_READBACK_MISMATCH",
+                    "requested": int(sizing.leverage),
+                    "actual": actual_leverage,
+                },
+            )
+            return {"trace_id": trace_id, "status": TraceStatus.FAILED.value, "reason": "LEVERAGE_READBACK_MISMATCH"}
+        self.trace_store.update(
+            trace_id,
+            stored_trace.status if resume_existing else TraceStatus.PREPARED,
+            leverage_request=int(sizing.leverage),
+            leverage_readback=actual_leverage,
+        )
+
+        order_context = self.guard.build_write_context(
+            intent_id=intent_id,
+            trace_id=trace_id,
+            symbol=symbol,
+            side=side.value,
+            order_type=OrderType.MARKET.value,
+            quantity=sizing.final_quantity,
+            notional=sizing.notional,
+            leverage=str(int(sizing.leverage)),
+            position_id=f"position-{symbol}",
+            command_hash=trace.order_request_hash,
+            final_request_hash=trace.order_request_hash,
+            pool_id=snapshot.pool_id,
+            pool_version=str(snapshot.version),
+            pool_hash=snapshot.snapshot_hash,
+            pool_symbols=snapshot.active_symbols,
+        )
+        if resume_existing:
+            # A prior POST may have reached the venue even when its response
+            # was lost.  Query the exact durable client id first; only a
+            # deterministic venue absence permits the helper to resubmit the
+            # same id.  Transport UNKNOWN never reaches create_order.
+            raw_ack, failure = await self._query_recover_order(
+                trace,
+                order_request,
+                order_context,
+                allow_same_id_resubmit=True,
+            )
+        else:
+            self.trace_store.update(
+                trace_id, TraceStatus.SUBMITTED, metadata={**trace.metadata, "write": "ORDER_POST_PENDING"}
+            )
+            raw_ack, failure = await self._submit_order(trace, order_request, order_context)
+        if raw_ack is None:
+            current = self.trace_store.get(trace_id)
+            current_status = current.status.value if current is not None else TraceStatus.UNKNOWN.value
+            return {
+                "trace_id": trace_id,
+                "status": current_status,
+                "reason": (failure or {}).get("reason", "ORDER_UNKNOWN"),
+            }
+        exchange_order_id = str(raw_ack.get("orderId", ""))
+        order_status = str(raw_ack.get("status", "UNKNOWN"))
+        executed_qty = str(raw_ack.get("executedQty", "0"))
+        self.trace_store.update(
+            trace_id,
+            TraceStatus.ACKED,
+            exchange_order_id=exchange_order_id,
+            order_ack=_jsonable(raw_ack),
+            order_status=order_status,
+            executed_qty=executed_qty,
+        )
+        if order_status == OrderStatus.FILLED.value:
+            self.trace_store.update(trace_id, TraceStatus.FILLED, exchange_order_id=exchange_order_id)
+        position_after = await self._position_facts(symbol)
+        if position_after is None:
+            self.trace_store.update(trace_id, TraceStatus.UNKNOWN, error={"reason": "POSITION_AFTER_UNKNOWN"})
+            return {"trace_id": trace_id, "status": TraceStatus.UNKNOWN.value, "reason": "POSITION_AFTER_UNKNOWN"}
+        before_quantity = float(position_before["quantity"])
+        executed_value = _finite_float(executed_qty)
+        executed_value = executed_value if executed_value is not None else 0.0
+        expected_quantity = before_quantity + (executed_value if side is OrderSide.BUY else -executed_value)
+        actual_quantity = float(position_after["quantity"])
+        tolerance = max(float(rule.step_size) / 2.0, 1e-12)
+        matched = abs(actual_quantity - expected_quantity) <= tolerance
+        reconciliation = {
+            "status": "MATCHED" if matched else "MISMATCHED",
+            "expected_quantity": str(expected_quantity),
+            "actual_quantity": str(actual_quantity),
+            "tolerance": str(tolerance),
+            "unresolved": [] if matched else ["POSITION_QUANTITY"],
+        }
+        average_price = _finite_float(raw_ack.get("avgPrice"))
+        reference_price = observation.features["close"]
+        slippage = {
+            "status": "KNOWN" if average_price is not None and average_price > 0 else "UNKNOWN",
+            "bps": ((average_price - reference_price) / reference_price * 10000.0) if average_price else None,
+        }
+        funding_rate = observation.features["funding_rate"]
+        fees = {"status": "KNOWN", "commission": raw_ack.get("commission", "UNKNOWN")}
+        if not matched:
+            self.trace_store.update(
+                trace_id, TraceStatus.UNKNOWN, position_after=position_after, reconciliation=reconciliation
+            )
+            return {
+                "trace_id": trace_id,
+                "status": TraceStatus.UNKNOWN.value,
+                "reason": "POSITION_RECONCILIATION_MISMATCH",
+            }
+        final_status = TraceStatus.FILLED if order_status == OrderStatus.FILLED.value else TraceStatus.ACKED
+        self.trace_store.update(
+            trace_id,
+            final_status,
+            position_after=position_after,
+            reconciliation=reconciliation,
+            fees=fees,
+            funding={"rate": funding_rate, "status": "OBSERVED"},
+            slippage=slippage,
+            pnl={"unrealized": position_after.get("unrealized_pnl"), "status": "OBSERVED"},
+        )
+        result: dict[str, Any] = {
+            "trace_id": trace_id,
+            "status": final_status.value,
+            "order_id": exchange_order_id,
+            "executed_qty": executed_qty,
+        }
+        if self.config.close_after_verify and actual_quantity != 0:
+            close_result = await self._close_position(trace, snapshot, rule, position_after, int(sizing.leverage))
+            result["close"] = close_result
+            if close_result.get("trace_id"):
+                result["trace_ids"] = [trace_id, str(close_result["trace_id"])]
+        return result
+
+    async def _close_position(
+        self,
+        base_trace: DecisionTrace,
+        snapshot: TradingPoolSnapshot,
+        rule: InstrumentRuleSnapshot,
+        position: dict[str, Any],
+        leverage: int,
+    ) -> dict[str, Any]:
+        symbol = str(position["symbol"])
+        amount = float(position["quantity"])
+        close_side = OrderSide.SELL if amount > 0 else OrderSide.BUY
+        try:
+            quantity = rule.quantize_quantity(str(abs(amount)))
+        except ValueError:
+            return {"status": TraceStatus.FAILED.value, "reason": "CLOSE_QUANTITY_INVALID"}
+        close_key = _stable_hash({"source": base_trace.trace_id, "quantity": quantity})[:18]
+        trace_id = f"{base_trace.trace_id}-c"
+        intent_id = f"{base_trace.intent_id}-close"
+        client_order_id = f"{base_trace.client_order_id}-c"
+        notional = str(float(quantity) * float(self._observations[symbol].features["close"]))
+        trace = DecisionTrace(
+            trace_id=trace_id,
+            intent_id=intent_id,
+            client_order_id=client_order_id,
+            pool=copy.deepcopy(base_trace.pool),
+            market_data_hash=base_trace.market_data_hash,
+            factor_outputs=copy.deepcopy(base_trace.factor_outputs),
+            strategy={"source_trace_id": base_trace.trace_id, "decision": "REDUCE_ONLY_CLOSE"},
+            portfolio={"source_trace_id": base_trace.trace_id, "target_quantity": quantity},
+            sizing={"source_trace_id": base_trace.trace_id, "final_quantity": quantity, "leverage": leverage},
+            exchange_rules_hash=rule.compute_hash(),
+            leverage_request=leverage,
+            leverage_readback=leverage,
+            metadata={**base_trace.metadata, "close_key": close_key},
+        )
+        order_request = OrderRequest(
+            venue_instrument=VenueInstrument(venue_id=VenueId("BINANCE"), instrument_id=InstrumentId(symbol)),
+            account_ref=AccountRef(venue_id=VenueId("BINANCE"), account_id=AccountId(self.config.account_id)),
+            side=close_side,
+            order_type=OrderType.MARKET,
+            quantity=Quantity(amount=quantity),
+            client_order_id=client_order_id,
+            correlation_id=CorrelationId(trace_id),
+            reduce_only=True,
+        )
+        trace.order_request = {
+            "symbol": symbol,
+            "side": close_side.value,
+            "type": OrderType.MARKET.value,
+            "quantity": quantity,
+            "clientOrderId": client_order_id,
+            "reduceOnly": True,
+        }
+        trace.order_request_hash = _stable_hash(trace.order_request)
+        self.trace_store.prepare(trace)
+        context = self.guard.build_write_context(
+            intent_id=intent_id,
+            trace_id=trace_id,
+            symbol=symbol,
+            side=close_side.value,
+            order_type=OrderType.MARKET.value,
+            quantity=quantity,
+            notional=notional,
+            leverage=str(leverage),
+            position_id=base_trace.intent_id,
+            reduce_only=True,
+            command_hash=trace.order_request_hash,
+            final_request_hash=trace.order_request_hash,
+            pool_id=snapshot.pool_id,
+            pool_version=str(snapshot.version),
+            pool_hash=snapshot.snapshot_hash,
+            pool_symbols=snapshot.active_symbols,
+        )
+        self.trace_store.update(
+            trace_id, TraceStatus.SUBMITTED, metadata={**trace.metadata, "write": "CLOSE_POST_PENDING"}
+        )
+        raw_ack, failure = await self._submit_order(trace, order_request, context)
+        if raw_ack is None:
+            return {
+                "trace_id": trace_id,
+                "status": TraceStatus.UNKNOWN.value,
+                "reason": (failure or {}).get("reason", "CLOSE_UNKNOWN"),
+            }
+        order_status = str(raw_ack.get("status", "UNKNOWN"))
+        self.trace_store.update(
+            trace_id,
+            TraceStatus.ACKED,
+            exchange_order_id=str(raw_ack.get("orderId", "")),
+            order_ack=_jsonable(raw_ack),
+            order_status=order_status,
+            executed_qty=str(raw_ack.get("executedQty", "0")),
+        )
+        if order_status != OrderStatus.FILLED.value:
+            return {"trace_id": trace_id, "status": TraceStatus.ACKED.value}
+        after = await self._position_facts(symbol)
+        if after is None:
+            self.trace_store.update(trace_id, TraceStatus.UNKNOWN, error={"reason": "CLOSE_POSITION_UNKNOWN"})
+            return {"trace_id": trace_id, "status": TraceStatus.UNKNOWN.value}
+        zero = abs(float(after["quantity"])) <= max(float(rule.step_size) / 2.0, 1e-12)
+        reconciliation = {
+            "status": "MATCHED" if zero else "MISMATCHED",
+            "actual_quantity": str(after["quantity"]),
+            "unresolved": [] if zero else ["CLOSE_REMAINDER"],
+        }
+        final_status = TraceStatus.CLOSED if zero else TraceStatus.FILLED
+        self.trace_store.update(trace_id, final_status, position_after=after, reconciliation=reconciliation)
+        return {"trace_id": trace_id, "status": final_status.value, "position_after": after["quantity"]}
+
+    async def run_once(self) -> VerificationSummary:
+        startup = await self.startup()
+        snapshot = self.pool.snapshot()
+        episodes: list[dict[str, Any]] = []
+        for symbol in snapshot.active_symbols:
+            episodes.append(await self._run_symbol(symbol, snapshot))
+        trace_ids: list[str] = []
+        for item in episodes:
+            if item.get("trace_ids"):
+                trace_ids.extend(str(value) for value in item["trace_ids"])
+            elif item.get("trace_id"):
+                trace_ids.append(str(item["trace_id"]))
+        if not snapshot.active_symbols:
+            status = "NOT_VERIFIABLE"
+        elif any(
+            item.get("status") in {TraceStatus.FILLED.value, TraceStatus.CLOSED.value}
+            or (isinstance(item.get("close"), dict) and item["close"].get("status") == TraceStatus.CLOSED.value)
+            for item in episodes
+        ):
+            status = "EPISODE_COMPLETED"
+        else:
+            status = "NOT_VERIFIABLE"
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + self.config.config_hash()[:12]
+        summary = VerificationSummary(
+            run_id=run_id,
+            status=status,
+            startup=startup,
+            episodes=episodes,
+            trace_ids=trace_ids,
+        )
+        summary.manifest_path = str(self.config.evidence_dir / summary.run_id / "manifest.json")
+        manifest_path = self._write_manifest(summary)
+        if str(manifest_path) != summary.manifest_path:
+            summary.manifest_path = str(manifest_path)
+        return summary
+
+    def _write_manifest(self, summary: VerificationSummary) -> Path:
+        destination = self.config.evidence_dir / summary.run_id
+        destination.mkdir(parents=True, exist_ok=True)
+        traces = self.trace_store.all()
+        actual_write = bool(
+            not self._adapter_is_injected and any(trace.exchange_order_id and trace.order_ack for trace in traces)
+        )
+        revision = _git_revision()
+        manifest = {
+            **summary.to_dict(),
+            "config": self.config.redacted_dict(),
+            "config_hash": self.config.config_hash(),
+            "commit": revision,
+            "repository_commit": revision,
+            "commands": list(sys.argv),
+            "real_testnet_write": actual_write,
+            "testnet_write_enabled": bool(
+                self.config.confirm_testnet and self.config.api_key and self.config.api_secret
+            ),
+            "economic_truth": "NOT_EVALUATED",
+            "trace_store": str(self.config.trace_path),
+            "results": {
+                "status": summary.status,
+                "episode_count": len(summary.episodes),
+                "unresolved_trace_count": self.trace_store.unresolved_count,
+            },
+        }
+        path = destination / "manifest.json"
+        temporary = destination / "manifest.json.tmp"
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+        return path
+
+
+def build_runtime(config: VerifierConfig) -> VerificationRuntime:
+    return VerificationRuntime(config)
+
+
+async def run(config: VerifierConfig) -> VerificationSummary:
+    runtime = build_runtime(config)
+    if config.once:
+        return await runtime.run_once()
+    while True:
+        summary = await runtime.run_once()
+        if summary.status == "NOT_VERIFIABLE" and (
+            not config.confirm_testnet or not config.api_key or not config.api_secret
+        ):
+            return summary
+        await asyncio.sleep(max(60.0, runtime._interval_hours(config.interval) * 3600.0))

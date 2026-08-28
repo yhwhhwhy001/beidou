@@ -29,6 +29,7 @@ packages = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "apps/alpha_app" = "apps/alpha_app"
+"apps/testnet_verify" = "apps/testnet_verify"
 
 [project]
 name = "beidou"

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 from io import BytesIO
 from typing import ClassVar
 from urllib.error import HTTPError
+from urllib.parse import parse_qsl, urlencode
 from urllib.request import Request
 
 import pytest
@@ -176,6 +179,47 @@ def test_signed_success_adds_timestamp_signature_and_auth_header(monkeypatch: py
     assert "timestamp=" in signed_request.full_url
     assert "recvWindow=" in signed_request.full_url
     assert "signature=" in signed_request.full_url
+
+
+def test_signed_order_hmac_covers_the_exact_encoded_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rest_module, "classify_terminal_write", lambda *_args, **_kwargs: None)
+    client = BinanceRESTClient(
+        "https://demo.example",
+        api_key="api-key",
+        api_secret="secret",  # noqa: S106 - deterministic test key
+        max_retries=1,
+    )
+    captured: list[Request] = []
+
+    def fake_urlopen(request, timeout, _session=None):
+        del timeout, _session
+        captured.append(request)
+        return b'{"ok":true}', {}
+
+    monkeypatch.setattr(rest_module, "_sync_urlopen", fake_urlopen)
+    result = asyncio.run(
+        client.create_order(
+            "BTCUSDT",
+            "BUY",
+            "MARKET",
+            "0.001",
+            client_order_id="client id/1",
+        )
+    )
+
+    assert result.is_success() is True
+    encoded_query = captured[0].data.decode("ascii")
+    pairs = parse_qsl(encoded_query, keep_blank_values=True)
+    signed_pairs = [(key, value) for key, value in pairs if key != "signature"]
+    signature = dict(pairs)["signature"]
+    expected = hmac.new(
+        b"secret",
+        urlencode(sorted(signed_pairs), doseq=True).encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    assert dict(pairs)["newClientOrderId"] == "client id/1"
+    assert signature == expected
 
 
 def test_binance_business_error_is_classified_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:

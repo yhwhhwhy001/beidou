@@ -43,6 +43,22 @@ REGISTRY_PATH = ROOT / "config" / "write-capability-registry.json"
 # authored. Each decision is deliberate: capability + status + owner +
 # call_graph, following the semantics of the closest existing family.
 _NEW_ENTRY_DECISIONS: dict[str, dict[str, str]] = {
+    "apps/testnet_verify/__main__.py": {
+        "kind": "script",
+        "capability": "TERMINAL_WRITE_INTERLOCK",
+        "status": "HARD_HOLD",
+        "owner": "Runtime Owner",
+        "call_graph": "operator -> canonical Testnet verifier -> bounded runtime guard",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+    },
+    "apps/testnet_verify/runtime.py": {
+        "kind": "module",
+        "capability": "TERMINAL_WRITE_INTERLOCK",
+        "status": "HARD_HOLD",
+        "owner": "Runtime Owner",
+        "call_graph": "canonical verifier -> adaptive execution episode -> bounded Binance adapter",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+    },
     # M00-F07: launchd 实装由 wrapper 托管执行，委托 canonical launcher。
     "deploy/beidou_launchd_wrapper.sh": {
         "kind": "shell",
@@ -155,6 +171,43 @@ _NEW_NETWORK_DECISIONS: dict[str, dict[str, str]] = {
 # New terminal write call sites introduced by M19-F01 (authorized resume
 # relocation) and audited dynamic boundaries.
 _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
+    # The canonical Testnet verifier is held in the registry until the
+    # bounded runtime guard is explicitly confirmed for a local campaign.
+    "apps/testnet_verify/runtime.py::VerificationRuntime._query_recover_order::create_order": {
+        "capability": "UNOWNED_RECOVERY_FORBIDDEN",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "verifier recovery -> query existing clientOrderId -> bounded Testnet create_order",
+    },
+    "apps/testnet_verify/runtime.py::VerificationRuntime._submit_order::create_order": {
+        "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "verifier -> persisted intent -> Testnet guard -> adapter create_order",
+    },
+    "apps/testnet_verify/runtime.py::_jsonable::getattr[DYNAMIC]": {
+        "capability": "DYNAMIC_READ_BOUNDARY",
+        "status": "READ_ONLY",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+        "owner": "Runtime Owner",
+        "call_graph": "verifier evidence serialization -> dynamic field read -> local manifest",
+    },
+    "beidou_exchange/binance_usdm/adapter.py::BinanceUsdmAdapter.set_leverage::request[POST]": {
+        "capability": "ACCOUNT_RISK_SETTING_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Risk Owner",
+        "call_graph": "adaptive sizing -> leverage set/readback -> guarded Binance REST POST",
+    },
+    "beidou_shared/decision_trace.py::DecisionTrace.__post_init__::getattr[DYNAMIC]": {
+        "capability": "DYNAMIC_READ_BOUNDARY",
+        "status": "READ_ONLY",
+        "expected_rejection": "EXTERNAL_WRITE_NOT_AUTHORIZED",
+        "owner": "Storage Owner",
+        "call_graph": "DecisionTrace normalization -> dynamic field read -> append-only evidence",
+    },
     "beidou_control/plane.py::ControlPlane.execute_authorized_resume::execute_action[RESUME]": {
         "capability": "CONTROL_RESUME_AUTHORITY_REQUIRED",
         "status": "HARD_HOLD",
@@ -466,6 +519,9 @@ _STALE_TERMINAL_SOURCES = {
 
 def _entry_id(path: str) -> str:
     stem = Path(path).stem.upper().replace("-", "_").replace(".", "_")
+    if stem == "__MAIN__":
+        digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:8].upper()
+        return f"ENTRY-__MAIN__-{digest}"
     return f"ENTRY-{stem[:40]}"
 
 

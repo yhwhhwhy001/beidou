@@ -2,9 +2,9 @@
 
 **加密合约量化交易系统 — PIVOT 重构阶段**
 
-三层决策时钟架构。支持 Binance USDⓈ-M 合约交易，全链路风控，策略驱动自动化交易，止盈止损保护。
+三层决策时钟架构。Testnet 验证阶段通过独立的 closed-bar verifier 复用策略、交易池、自适应 sizing 和 Binance Adapter。
 
-**当前状态: PIVOT — Paper HOLD / Testnet HOLD / Mainnet PROHIBITED**
+**当前状态: PIVOT — Testnet HOLD / Alpha VERIFIED NOT_EVALUATED / Mainnet PROHIBITED**
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-Proprietary-red)]()
@@ -86,31 +86,45 @@ pip install -e ".[dev]"
 pytest tests/ -q
 ```
 
-### Binance Demo 连接测试
+### Binance Testnet Verification
+
+默认流程只读，不会发送风险增加请求。先运行本地验证：
 
 ```bash
-# 配置 API 凭据
-cp config/env.template.yaml config/env.testnet.yaml
-# 编辑 env.testnet.yaml 填入 demo-fapi.binance.com 的 API Key/Secret
-
-# 运行真实策略下单测试
-python tools/strategy_live_trade.py
+python -m apps.testnet_verify --help
+pytest tests/unit/test_testnet_binance_contracts.py tests/integration/test_testnet_verification_runtime.py -q
 ```
+
+只有在使用专用 Testnet/Demo 账户、确认凭据由外部安全环境注入，并获得本地 Testnet 写入授权后，才可显式开启有界验证单：
+
+```bash
+export BEIDOU_TESTNET_REST_URL=https://demo-fapi.binance.com
+export BEIDOU_TESTNET_API_KEY='<provided-out-of-band>'
+export BEIDOU_TESTNET_API_SECRET='<provided-out-of-band>'
+export BEIDOU_TESTNET_ACCOUNT_ID='<dedicated-testnet-account>'
+python -m apps.testnet_verify --once --confirm-testnet --close-after-verify \
+  --max-notional 25 --max-leverage 3
+```
+
+`apps.testnet_verify` 是本阶段唯一 Testnet 验证入口。它强制 HTTPS/host allowlist、Mainnet hard deny、绝对 notional/leverage 上限、stable clientOrderId、query-before-retry、ACK/持仓对账和可恢复 DecisionTrace。不要把凭据写入仓库、命令历史或聊天；`--confirm-testnet` 只代表本地 Testnet 写入确认，不代表生产授权。
+
+Testnet VERIFIED 只证明决策与执行事实链闭合；它不证明策略盈利，也不等于 E0–E6 Economic Truth 或 `ALPHA VERIFIED`。真实 Testnet 证据缺失时状态必须保持 HOLD/NOT_VERIFIABLE。
 
 ## 测试
 
 ```bash
-pytest tests/ -q          # 单元+架构测试
-python tools/e2e_real_demo.py   # 全流程端到端 (真实API)
-python tools/strategy_live_trade.py  # 策略驱动 + 止盈止损 + 真实成交
+pytest tests/ -q
+python -m apps.testnet_verify --help
 ```
+
+仓库中的旧 safety/certification/production 模块与历史工具保留用于审计和显式的未来流程，但不属于本阶段 Testnet verifier 快速开始路径。
 
 ## 项目结构
 
 ```
 beidou/
 ├── beidou_*/              # 18 个业务包 (81 个 .py 文件)
-├── apps/                  # 3 个入口 (safety / strategy / research)
+├── apps/                  # 包含唯一 Testnet 验证入口 apps.testnet_verify
 ├── tests/                 # 26 个测试文件
 │   ├── architecture/      # 架构约束测试 (跨层依赖禁止)
 │   └── unit/              # 单元测试

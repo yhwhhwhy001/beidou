@@ -40,6 +40,10 @@ ALLOWED_NETWORK = (
     # G5 restart certification reads the local health endpoint only; the
     # terminal DELETE/POST paths remain governed by the exchange adapter.
     "beidou_certification/g5_scenarios/restart/process_restart.py",
+    # The retained legacy G5 orchestrator uses its direct URL only for the
+    # fixed loopback producer health endpoint; exchange requests remain on
+    # the governed Binance adapter path.
+    "scripts/testnet/run_g5.py",
 )
 SELF_SCAN_FILES = {
     "delivery/scripts/check_forbidden_patterns.py",

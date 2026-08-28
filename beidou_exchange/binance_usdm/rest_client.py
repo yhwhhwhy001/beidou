@@ -20,6 +20,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any, cast
+from urllib.parse import urlencode
 
 from beidou_exchange.binance_usdm.endpoints import (
     CIRCUIT_BREAKER_COOLDOWN,
@@ -38,7 +39,7 @@ from beidou_exchange.core.error_taxonomy import (
     Result,
     classify_http_error,
 )
-from beidou_exchange.core.write_authority import TerminalWriteKind
+from beidou_exchange.core.write_authority import TerminalWriteContext, TerminalWriteKind, evaluate_terminal_write
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class BinanceRESTClient:
         recv_window: int = DEFAULT_RECV_WINDOW_MS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         account_id: str = "UNKNOWN",
+        testnet_guard: Any = None,
     ):
         self._rest_url = rest_url.rstrip("/")
         self._api_key = api_key
@@ -84,6 +86,9 @@ class BinanceRESTClient:
         self._recv_window = recv_window
         self._max_retries = max_retries
         self._account_id = str(account_id or "UNKNOWN")
+        # Optional bounded authority used only by apps.testnet_verify.  A
+        # missing guard intentionally preserves the legacy hard hold.
+        self._testnet_guard = testnet_guard
         self._rate_state = RateLimitState()
         self._clock_offset_ms: int = 0  # 时钟偏差（服务端时间 - 本地时间）
         self._session: Any = None  # P1-019: 持久 httpx.Client
@@ -234,6 +239,7 @@ class BinanceRESTClient:
         reduce_only: str | None = None,
         client_order_id: str | None = None,
         iceberg_qty: str | None = None,
+        write_context: TerminalWriteContext | None = None,
     ) -> Result[dict]:
         """创建订单。
 
@@ -256,19 +262,18 @@ class BinanceRESTClient:
             params["newClientOrderId"] = client_order_id
         if iceberg_qty:
             params["icebergQty"] = iceberg_qty
-        return await self._request("POST", Endpoint.ORDER, signed=True, params=params)
+        if write_context is None:
+            return await self._request("POST", Endpoint.ORDER, signed=True, params=params)
+        return await self._request("POST", Endpoint.ORDER, signed=True, params=params, write_context=write_context)
 
-    async def cancel_order(self, symbol: str, order_id: int) -> Result[dict]:
+    async def cancel_order(
+        self, symbol: str, order_id: int, write_context: TerminalWriteContext | None = None
+    ) -> Result[dict]:
         """取消订单。"""
-        return await self._request(
-            "DELETE",
-            Endpoint.ORDER,
-            signed=True,
-            params={
-                "symbol": symbol,
-                "orderId": order_id,
-            },
-        )
+        params = {"symbol": symbol, "orderId": order_id}
+        if write_context is None:
+            return await self._request("DELETE", Endpoint.ORDER, signed=True, params=params)
+        return await self._request("DELETE", Endpoint.ORDER, signed=True, params=params, write_context=write_context)
 
     async def get_open_algo_orders(self, symbol: str | None = None) -> Result[list]:
         """查询当前条件单；返回非 list 时由 Adapter 判为 UNKNOWN。"""
@@ -276,28 +281,40 @@ class BinanceRESTClient:
         params = {"symbol": symbol} if symbol else {}
         return await self._request("GET", Endpoint.OPEN_ALGO_ORDERS, signed=True, params=params)
 
-    async def create_algo_order(self, params: dict[str, Any]) -> Result[dict]:
+    async def create_algo_order(
+        self, params: dict[str, Any], write_context: TerminalWriteContext | None = None
+    ) -> Result[dict]:
         """创建 Algo 单；调用者必须提供已校验的完整参数。"""
 
-        return await self._request("POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params))
+        if write_context is None:
+            return await self._request("POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params))
+        return await self._request(
+            "POST", Endpoint.ALGO_ORDER, signed=True, params=dict(params), write_context=write_context
+        )
 
-    async def cancel_algo_order(self, symbol: str, algo_id: int) -> Result[dict]:
+    async def cancel_algo_order(
+        self, symbol: str, algo_id: int, write_context: TerminalWriteContext | None = None
+    ) -> Result[dict]:
         """撤销单个 Algo 单，不使用 cancel-all 旁路。"""
 
+        params = {"symbol": symbol, "algoId": algo_id}
+        if write_context is None:
+            return await self._request("DELETE", Endpoint.ALGO_ORDER, signed=True, params=params)
         return await self._request(
-            "DELETE",
-            Endpoint.ALGO_ORDER,
-            signed=True,
-            params={"symbol": symbol, "algoId": algo_id},
+            "DELETE", Endpoint.ALGO_ORDER, signed=True, params=params, write_context=write_context
         )
 
     # === 用户数据流 ===
 
-    async def create_listen_key(self) -> Result[dict]:
+    async def create_listen_key(self, write_context: TerminalWriteContext | None = None) -> Result[dict]:
         """创建用户数据流 listenKey。"""
-        return await self._request("POST", Endpoint.LISTEN_KEY, signed=True)
+        if write_context is None:
+            return await self._request("POST", Endpoint.LISTEN_KEY, signed=True)
+        return await self._request("POST", Endpoint.LISTEN_KEY, signed=True, write_context=write_context)
 
-    async def keepalive_listen_key(self, listen_key: str | None = None) -> Result[dict]:
+    async def keepalive_listen_key(
+        self, listen_key: str | None = None, write_context: TerminalWriteContext | None = None
+    ) -> Result[dict]:
         """续期 listenKey；缺少 key 时显式 UNKNOWN，不发送无效请求。"""
 
         if not str(listen_key or "").strip():
@@ -306,21 +323,28 @@ class BinanceRESTClient:
                 category=ErrorCategory.UNKNOWN,
                 source="binance_user_stream",
             )
-        return await self._request(
-            "PUT",
-            Endpoint.LISTEN_KEY,
-            signed=True,
-            params={"listenKey": str(listen_key)},
-        )
+        params = {"listenKey": str(listen_key)}
+        if write_context is None:
+            return await self._request("PUT", Endpoint.LISTEN_KEY, signed=True, params=params)
+        return await self._request("PUT", Endpoint.LISTEN_KEY, signed=True, params=params, write_context=write_context)
 
     # === 通用请求（兼容遗留 _api 调用） ===
 
-    async def request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
+    async def request(
+        self,
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict | None = None,
+        write_context: TerminalWriteContext | None = None,
+    ) -> Result:
         """通用异步请求 — 替代 engine._api() 的直连 urllib。
 
         所有 Binance API 端点统一通过此方法访问，确保错误分类、限频和时钟偏差一致。
         """
-        return await self._request(method, path, signed, params)
+        if write_context is None:
+            return await self._request(method, path, signed, params)
+        return await self._request(method, path, signed, params, write_context=write_context)
 
     # === 账户能力检查 ===
 
@@ -434,7 +458,15 @@ class BinanceRESTClient:
                     ratio * 100,
                 )
 
-    async def _request(self, method: str, path: str, signed: bool = False, params: dict | None = None) -> Result:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        signed: bool = False,
+        params: dict | None = None,
+        *,
+        write_context: TerminalWriteContext | None = None,
+    ) -> Result:
         """发送 HTTP 请求并返回 Result[T]。HTTP 调用在线程池中执行，不阻塞事件循环。"""
         base_params = dict(params or {})
         method = str(method).upper()
@@ -453,7 +485,34 @@ class BinanceRESTClient:
             path,
             base_params,
             account_id=self._account_id,
+            context=write_context,
+            signed=signed,
+            rest_base_url=self._rest_url,
         )
+        if write_request is not None and write_context is not None:
+            if self._testnet_guard is None:
+                return Result.failure(
+                    "A bounded Testnet write guard is required",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": "WRITE_AUTHORITY_MISSING", "kind": write_request.kind.value},
+                    source="binance_rest_write_guard",
+                )
+            context_check = self._testnet_guard.validate_context(write_context)
+            if not context_check.allowed:
+                return Result.failure(
+                    "Testnet write context denied",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": context_check.reason_code, "kind": write_request.kind.value},
+                    source="binance_rest_write_guard",
+                )
+            decision = evaluate_terminal_write(self._testnet_guard, write_request)
+            if not decision.allowed:
+                return Result.failure(
+                    "Testnet write denied",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": decision.reason_code, "kind": write_request.kind.value},
+                    source="binance_rest_write_guard",
+                )
         # 合并语义(codex/full-system-optimization + main testnet 实装):
         # - 默认 HARD_HOLD(opt 安全语义):所有 terminal write 在 transport
         #   层拦截,等待 write authority 接线(registry baseline_policy)
@@ -468,6 +527,7 @@ class BinanceRESTClient:
         )
         if (
             write_request is not None
+            and write_context is None
             and not producer_session_write
             and (_hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN)
         ):
@@ -512,13 +572,13 @@ class BinanceRESTClient:
                 if signed:
                     request_params["timestamp"] = int(time.time() * 1000) + self._clock_offset_ms
                     request_params["recvWindow"] = self._recv_window
-                    signing_qs = "&".join(f"{k}={v}" for k, v in sorted(request_params.items()))
+                    signing_qs = urlencode(sorted(request_params.items()), doseq=True)
                     request_params["signature"] = hmac.new(
                         self._api_secret.encode(),
                         signing_qs.encode(),
                         hashlib.sha256,
                     ).hexdigest()
-                qs = "&".join(f"{k}={v}" for k, v in sorted(request_params.items()))
+                qs = urlencode(sorted(request_params.items()), doseq=True)
 
                 if method in {"POST", "PUT"}:
                     req = urllib.request.Request(url, data=qs.encode(), method=method)

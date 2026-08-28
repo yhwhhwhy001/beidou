@@ -30,7 +30,7 @@ from beidou_exchange.core.protocol import (
     UserStreamEvent,
 )
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
-from beidou_exchange.core.write_authority import TerminalWriteKind
+from beidou_exchange.core.write_authority import TerminalWriteContext, TerminalWriteKind, evaluate_terminal_write
 from beidou_shared.errors import ErrorCategory
 from beidou_shared.types import (
     AccountId,
@@ -151,8 +151,11 @@ class BinanceReferenceData:
     def get_min_notional(self, instrument_id: InstrumentId) -> str | None:
         inst = self.instruments.get(instrument_id, {})
         for f in inst.get("filters", []):
-            if f.get("filterType") == "MIN_NOTIONAL":
-                return cast(str | None, f.get("notional"))
+            if f.get("filterType") in {"MIN_NOTIONAL", "NOTIONAL"}:
+                value = f.get("notional")
+                if value in (None, ""):
+                    value = f.get("minNotional")
+                return cast(str | None, value)
         return None
 
     def detect_rule_changes(self, old: BinanceReferenceData) -> list[TradingRuleChange]:
@@ -236,10 +239,14 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         venue_id: VenueId = VenueId("BINANCE"),
         account_id: AccountId = AccountId("default"),
         rest_client: Any = None,  # BD-T18: BinanceRESTClient 注入
+        testnet_guard: Any = None,
     ) -> None:
         self._venue_id = venue_id
         self._account_id = account_id
         self._rest_client = rest_client  # BD-T18: 真实传输层
+        # Optional bounded authority for the new Testnet verifier.  The
+        # legacy adapter remains hard-held when this is absent.
+        self._testnet_guard = testnet_guard
         self._health_monitor = BinanceHealthMonitor(venue_id)
         self._reference_data = BinanceReferenceData(venue_id=venue_id)
         # BD-CV10: InstrumentRuleSnapshot 缓存 — adapter 是唯一规则来源
@@ -279,6 +286,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         signed: bool = False,
         params: dict[str, Any] | None = None,
         write_account_id: str | None = None,
+        write_context: TerminalWriteContext | None = None,
     ) -> Result[Any]:
         """唯一的底层传输边界。
 
@@ -300,7 +308,36 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             path,
             params,
             account_id=write_account_id or str(self._account_id),
+            context=write_context,
+            signed=signed,
+            rest_base_url=str(
+                getattr(self._rest_client, "_rest_url", "") or getattr(self._testnet_guard, "rest_base_url", "")
+            ),
         )
+        if write_request is not None and write_context is not None:
+            if self._testnet_guard is None:
+                return Result.failure(
+                    "A bounded Testnet write guard is required",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": "WRITE_AUTHORITY_MISSING", "kind": write_request.kind.value},
+                    source="binance_adapter_write_guard",
+                )
+            context_check = self._testnet_guard.validate_context(write_context)
+            if not context_check.allowed:
+                return Result.failure(
+                    "Testnet write context denied",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": context_check.reason_code, "kind": write_request.kind.value},
+                    source="binance_adapter_write_guard",
+                )
+            decision = evaluate_terminal_write(self._testnet_guard, write_request)
+            if not decision.allowed:
+                return Result.failure(
+                    "Testnet write denied",
+                    category=ErrorCategory.PERMISSION_DENIED,
+                    raw={"reason": decision.reason_code, "kind": write_request.kind.value},
+                    source="binance_adapter_write_guard",
+                )
         # 与 rest_client 层保持同一 hold 语义(M22-F03):
         # - 默认 hard: 所有 terminal write 在 transport 层拦截,
         #   等待 write authority 接线
@@ -315,6 +352,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
         )
         if (
             write_request is not None
+            and write_context is None
             and not producer_session_write
             and (_hold_mode == "hard" or write_request.kind is TerminalWriteKind.UNKNOWN)
         ):
@@ -355,7 +393,12 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 category=ErrorCategory.EXCHANGE_UNAVAILABLE,
                 source="binance_usdm_adapter",
             )
-        result = await self._rest_client.request(method, path, signed=signed, params=params)
+        if write_context is None:
+            result = await self._rest_client.request(method, path, signed=signed, params=params)
+        else:
+            result = await self._rest_client.request(
+                method, path, signed=signed, params=params, write_context=write_context
+            )
         # P2 修复 (venue 健康只升不降): 此前只有 SERVER_TIME 成功才置 HEALTHY,
         # 启动时钟同步失败 → 恒 UNKNOWN → 所有加仓单被健康门永久拒绝。
         # 改为: 任一真实请求成功即 HEALTHY;连续传输失败(网络/交易所不可用)
@@ -380,7 +423,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return False
         return cast(bool, self._rest_client.is_circuit_breaker_open())
 
-    async def create_user_listen_key(self) -> Result[dict[str, Any]]:
+    async def create_user_listen_key(self, write_context: TerminalWriteContext | None = None) -> Result[dict[str, Any]]:
         """Create a user-data listen key through the adapter-owned transport.
 
         Listen-key lifecycle is a control-plane operation rather than an
@@ -394,7 +437,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 category=ErrorCategory.UNKNOWN,
                 source="binance_user_stream_adapter",
             )
-        result = await self._rest_client.create_listen_key()
+        if write_context is None:
+            result = await self._rest_client.create_listen_key()
+        else:
+            result = await self._rest_client.create_listen_key(write_context=write_context)
         if not result.is_success() or not isinstance(result.data, dict) or not str(result.data.get("listenKey") or ""):
             return Result.failure(
                 "User listenKey creation is UNKNOWN",
@@ -404,7 +450,9 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             )
         return Result.success(dict(result.data), source="binance_user_stream_adapter")
 
-    async def keepalive_user_listen_key(self, listen_key: str) -> Result[dict[str, Any]]:
+    async def keepalive_user_listen_key(
+        self, listen_key: str, write_context: TerminalWriteContext | None = None
+    ) -> Result[dict[str, Any]]:
         """Renew one exact listen key; missing identity fails closed."""
 
         if self._rest_client is None or not str(listen_key or "").strip():
@@ -413,7 +461,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 category=ErrorCategory.UNKNOWN,
                 source="binance_user_stream_adapter",
             )
-        result = await self._rest_client.keepalive_listen_key(str(listen_key))
+        if write_context is None:
+            result = await self._rest_client.keepalive_listen_key(str(listen_key))
+        else:
+            result = await self._rest_client.keepalive_listen_key(str(listen_key), write_context=write_context)
         if not result.is_success() or not isinstance(result.data, dict):
             return Result.failure(
                 "User listenKey keepalive is UNKNOWN",
@@ -431,6 +482,298 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             rate_limits=self._reference_data.rate_limits,
             supported_instruments=frozenset(self._reference_data.instruments.keys()),
         )
+
+    async def fetch_exchange_info(self, symbol: str | None = None) -> Result[dict[str, Any]]:
+        """Fetch and cache the venue's authoritative exchangeInfo snapshot."""
+
+        params = {"symbol": symbol} if symbol else None
+        result = await self.request("GET", Endpoint.EXCHANGE_INFO, params=params)
+        if not result.is_success() or not isinstance(result.data, dict):
+            return Result.failure(
+                "exchangeInfo is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_reference_data",
+            )
+        raw = result.data
+        rows = raw.get("symbols")
+        if not isinstance(rows, list):
+            return Result.failure(
+                "exchangeInfo symbols are incomplete",
+                category=ErrorCategory.UNKNOWN,
+                raw=raw,
+                source="binance_reference_data",
+            )
+        instruments: dict[InstrumentId, dict[str, Any]] = {}
+        trading_rules: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("symbol") or "").strip():
+                return Result.failure(
+                    "exchangeInfo contains an incomplete symbol row",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=row,
+                    source="binance_reference_data",
+                )
+            instrument_id = InstrumentId(str(row["symbol"]).strip().upper())
+            instruments[instrument_id] = dict(row)
+            trading_rules[str(instrument_id)] = {
+                str(item.get("filterType")): dict(item)
+                for item in row.get("filters", [])
+                if isinstance(item, dict) and item.get("filterType")
+            }
+        self._reference_data.exchange_info_raw = dict(raw)
+        self._reference_data.instruments = instruments
+        self._reference_data.trading_rules = trading_rules
+        raw_limits = raw.get("rateLimits")
+        self._reference_data.rate_limits = (
+            {
+                str(item.get("rateLimitType")): int(item.get("limit", 0))
+                for item in raw_limits
+                if isinstance(item, dict) and item.get("rateLimitType") and str(item.get("limit", "")).isdigit()
+            }
+            if isinstance(raw_limits, list)
+            else {}
+        )
+        self._reference_data.last_synced = datetime.now(timezone.utc)
+        self.sync_rule_snapshots()
+        return Result.success(dict(raw), source="binance_reference_data")
+
+    async def get_server_time(self) -> Result[dict[str, Any]]:
+        """Read server time through the Adapter-owned transport."""
+
+        return await self.request("GET", Endpoint.SERVER_TIME)
+
+    async def get_position_mode(self) -> Result[dict[str, Any]]:
+        """Read the account's one-way/hedge position mode."""
+
+        return await self.request("GET", Endpoint.POSITION_SIDE_DUAL, signed=True)
+
+    async def get_account_snapshot(self) -> Result[dict[str, Any]]:
+        """Read the complete signed account snapshot without local inference."""
+
+        result = await self.request("GET", Endpoint.ACCOUNT, signed=True)
+        if not result.is_success() or not isinstance(result.data, dict):
+            return Result.failure(
+                "account snapshot is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_account_readback",
+            )
+        return Result.success(dict(result.data), source="binance_account_readback")
+
+    async def get_ticker(self, symbol: str) -> Result[dict[str, Any]]:
+        return await self.request("GET", Endpoint.TICKER_24HR, params={"symbol": str(symbol).upper()})
+
+    async def get_depth(self, symbol: str, limit: int = 20) -> Result[dict[str, Any]]:
+        if limit <= 0 or limit > 1000:
+            return Result.failure(
+                "depth limit is outside the bounded range",
+                category=ErrorCategory.ORDER_REJECTED,
+                source="binance_market_data",
+            )
+        return await self.request("GET", Endpoint.DEPTH, params={"symbol": str(symbol).upper(), "limit": int(limit)})
+
+    async def get_closed_klines(
+        self, symbol: str, interval: str = "1m", limit: int = 100
+    ) -> Result[list[dict[str, Any]]]:
+        """Read only closed REST candles for point-in-time decisions."""
+
+        if limit <= 0 or limit > 1500:
+            return Result.failure(
+                "kline limit is outside the bounded range",
+                category=ErrorCategory.ORDER_REJECTED,
+                source="binance_market_data",
+            )
+        result = await self.request(
+            "GET",
+            Endpoint.KLINES,
+            params={"symbol": str(symbol).upper(), "interval": str(interval), "limit": int(limit)},
+        )
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "closed kline query is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_market_data",
+            )
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        bars: list[dict[str, Any]] = []
+        for row in result.data:
+            if not isinstance(row, list) or len(row) < 7:
+                return Result.failure(
+                    "kline row is incomplete",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=row,
+                    source="binance_market_data",
+                )
+            try:
+                close_time = int(row[6])
+            except (TypeError, ValueError):
+                return Result.failure(
+                    "kline close time is invalid",
+                    category=ErrorCategory.UNKNOWN,
+                    raw=row,
+                    source="binance_market_data",
+                )
+            if close_time >= now_ms:
+                continue
+            bars.append(
+                {
+                    "open_time": int(row[0]),
+                    "close_time": close_time,
+                    "open": str(row[1]),
+                    "high": str(row[2]),
+                    "low": str(row[3]),
+                    "close": str(row[4]),
+                    "volume": str(row[5]),
+                    "quote_volume": str(row[7]) if len(row) > 7 else "0",
+                    "trade_count": int(row[8]) if len(row) > 8 else 0,
+                    "taker_buy_volume": str(row[9]) if len(row) > 9 else "0",
+                    "is_closed": True,
+                }
+            )
+        if not bars:
+            return Result.failure(
+                "no closed kline is available",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_market_data",
+            )
+        return Result.success(bars, source="binance_market_data")
+
+    async def get_funding_rate(self, symbol: str, limit: int = 1) -> Result[list[dict[str, Any]]]:
+        result = await self.request(
+            "GET",
+            Endpoint.FUNDING_RATE,
+            params={"symbol": str(symbol).upper(), "limit": int(limit)},
+        )
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "funding-rate query is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_market_data",
+            )
+        return Result.success(list(result.data), source="binance_market_data")
+
+    async def get_open_interest(self, symbol: str) -> Result[dict[str, Any]]:
+        return await self.request("GET", Endpoint.OPEN_INTEREST, params={"symbol": str(symbol).upper()})
+
+    async def set_leverage(
+        self,
+        symbol: str,
+        leverage: int | str | float,
+        *,
+        account_ref: AccountRef,
+        write_context: TerminalWriteContext,
+    ) -> Result[dict[str, Any]]:
+        """Set leverage and require the venue's exact symbol/value ACK."""
+
+        try:
+            parsed = Decimal(str(leverage))
+        except (InvalidOperation, TypeError, ValueError):
+            return Result.failure(
+                "leverage must be an integer",
+                category=ErrorCategory.ORDER_REJECTED,
+                source="binance_leverage",
+            )
+        if not parsed.is_finite() or parsed < 1 or parsed != parsed.to_integral_value():
+            return Result.failure(
+                "leverage must be a positive integer",
+                category=ErrorCategory.ORDER_REJECTED,
+                source="binance_leverage",
+            )
+        params = {"symbol": str(symbol).upper(), "leverage": int(parsed)}
+        result = await self.request(
+            "POST",
+            Endpoint.LEVERAGE,
+            signed=True,
+            params=params,
+            write_account_id=str(account_ref.account_id),
+            write_context=write_context,
+        )
+        if not result.is_success() or not isinstance(result.data, dict):
+            return Result.failure(
+                "leverage acknowledgement is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_leverage",
+            )
+        response = result.data
+        try:
+            actual_symbol = str(response["symbol"]).upper()
+            actual_leverage = int(response["leverage"])
+        except (KeyError, TypeError, ValueError):
+            return Result.failure(
+                "leverage acknowledgement is incomplete",
+                category=ErrorCategory.UNKNOWN,
+                raw=response,
+                source="binance_leverage",
+            )
+        if actual_symbol != str(symbol).upper() or actual_leverage != int(parsed):
+            return Result.failure(
+                "leverage acknowledgement does not match request",
+                category=ErrorCategory.UNKNOWN,
+                raw=response,
+                source="binance_leverage",
+            )
+        return Result.success(dict(response), source="binance_leverage")
+
+    async def read_leverage(self, symbol: str) -> Result[dict[str, Any]]:
+        """Read actual leverage from positionRisk and reject ambiguity."""
+
+        result = await self.request("GET", Endpoint.POSITION_RISK, signed=True, params={"symbol": str(symbol).upper()})
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "leverage readback is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_leverage",
+            )
+        rows = [
+            row
+            for row in result.data
+            if isinstance(row, dict) and str(row.get("symbol", "")).upper() == str(symbol).upper()
+        ]
+        if not rows or any(row.get("leverage") in (None, "") for row in rows):
+            return Result.failure(
+                "leverage readback is incomplete",
+                category=ErrorCategory.UNKNOWN,
+                raw=rows,
+                source="binance_leverage",
+            )
+        try:
+            leverages = {int(row["leverage"]) for row in rows}
+        except (TypeError, ValueError):
+            return Result.failure(
+                "leverage readback is invalid",
+                category=ErrorCategory.UNKNOWN,
+                raw=rows,
+                source="binance_leverage",
+            )
+        if len(leverages) != 1:
+            return Result.failure(
+                "leverage readback is ambiguous",
+                category=ErrorCategory.UNKNOWN,
+                raw=rows,
+                source="binance_leverage",
+            )
+        return Result.success(
+            {"symbol": str(symbol).upper(), "leverage": next(iter(leverages)), "rows": rows},
+            source="binance_leverage",
+        )
+
+    async def get_position_risk(self, symbol: str | None = None) -> Result[list[dict[str, Any]]]:
+        params = {"symbol": str(symbol).upper()} if symbol else None
+        result = await self.request("GET", Endpoint.POSITION_RISK, signed=True, params=params)
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "positionRisk is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_position_readback",
+            )
+        return Result.success(list(result.data), source="binance_position_readback")
 
     # --- BD-CV10: InstrumentRuleSnapshot — 唯一规则来源 ---
 
@@ -641,7 +984,15 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 return False, "ACK_REDUCE_ONLY_UNPROVEN"
         return True, "OK"
 
-    async def create_order(self, request: OrderRequest) -> OrderResponse:
+    @classmethod
+    def validate_order_ack(cls, request: OrderRequest, response: Any) -> tuple[bool, str]:
+        """Public recovery seam for validating a query response identically."""
+
+        return cls._validate_order_ack(request, response)
+
+    async def create_order(
+        self, request: OrderRequest, write_context: TerminalWriteContext | None = None
+    ) -> OrderResponse:
         # BD-T03 修复: 不构造 NEW/FILLED — 无真实传输时返回 UNKNOWN
         if not self._health_monitor.is_safe_for_new_risk() and not request.reduce_only:
             return OrderResponse(
@@ -693,13 +1044,23 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     # Binance ONE_WAY safety invariant: reduce-only must be
                     # sent to the venue, not merely kept in local intent data.
                     order_params["reduceOnly"] = "true"
-                transport_result = await self.request(
-                    "POST",
-                    Endpoint.ORDER,
-                    signed=True,
-                    params=order_params,
-                    write_account_id=str(request.account_ref.account_id),
-                )
+                if write_context is None:
+                    transport_result = await self.request(
+                        "POST",
+                        Endpoint.ORDER,
+                        signed=True,
+                        params=order_params,
+                        write_account_id=str(request.account_ref.account_id),
+                    )
+                else:
+                    transport_result = await self.request(
+                        "POST",
+                        Endpoint.ORDER,
+                        signed=True,
+                        params=order_params,
+                        write_account_id=str(request.account_ref.account_id),
+                        write_context=write_context,
+                    )
                 if not transport_result.is_success():
                     _err = transport_result.error
                     failure = _sanitized_adapter_error(_err, fallback="Order acknowledgement is UNKNOWN")

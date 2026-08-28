@@ -134,12 +134,17 @@ class InstrumentRuleSnapshot:
         filters: list[dict[str, Any]] = raw.get("filters", [])
         price_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "PRICE_FILTER"), {})
         lot_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "LOT_SIZE"), {})
-        notional_filter: dict[str, Any] = next((f for f in filters if f.get("filterType") == "MIN_NOTIONAL"), {})
+        notional_filter: dict[str, Any] = next(
+            (f for f in filters if f.get("filterType") in {"MIN_NOTIONAL", "NOTIONAL"}), {}
+        )
 
         tick_size = str(price_filter.get("tickSize", ""))
         step_size = str(lot_filter.get("stepSize", ""))
         min_qty = str(lot_filter.get("minQty", ""))
-        min_notional = str(notional_filter.get("notional", ""))
+        min_notional_value = notional_filter.get("notional")
+        if min_notional_value in (None, ""):
+            min_notional_value = notional_filter.get("minNotional", "")
+        min_notional = str(min_notional_value)
 
         try:
             price_precision = cls._precision(tick_size)

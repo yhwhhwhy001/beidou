@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -32,7 +35,12 @@ _DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
 }
 
 
-def discover_startup_candidates(exchange_info: object, *, max_instruments: int) -> list[str]:
+def discover_startup_candidates(
+    exchange_info: object,
+    *,
+    max_instruments: int,
+    preserve_exchange_order: bool = False,
+) -> list[str]:
     """Select bounded perpetual-USDT candidates for an empty startup request.
 
     The launcher may be invoked without ``--symbols``.  In that case the
@@ -48,7 +56,8 @@ def discover_startup_candidates(exchange_info: object, *, max_instruments: int) 
     if not isinstance(raw_symbols, list):
         return []
 
-    candidates: set[str] = set()
+    candidates: list[str] = []
+    seen: set[str] = set()
     for raw in raw_symbols:
         if not isinstance(raw, dict):
             continue
@@ -63,9 +72,18 @@ def discover_startup_candidates(exchange_info: object, *, max_instruments: int) 
             continue
         if symbol in {"ALL", "DEFAULT"}:
             continue
-        candidates.add(symbol)
+        if symbol not in seen:
+            seen.add(symbol)
+            candidates.append(symbol)
 
-    return sorted(candidates)[:max_instruments]
+    # Existing offline callers retain a stable lexical order.  The verifier
+    # opts into the venue's authoritative exchangeInfo order: Binance puts its
+    # broadly supported perpetuals first, while newly listed/limited symbols
+    # can otherwise win merely because their names sort first.  This is still
+    # fully dynamic (the snapshot is the only source of symbols) and the
+    # consumed order is covered by the exchangeInfo source hash in evidence.
+    ordered = candidates if preserve_exchange_order else sorted(candidates)
+    return ordered[:max_instruments]
 
 
 @dataclass
@@ -92,6 +110,37 @@ class InstrumentScore:
             + self.capacity_score * w.get("capacity", 0.15)
         )
         return self.overall
+
+
+@dataclass(frozen=True)
+class TradingPoolSnapshot:
+    """Point-in-time pool membership and score evidence."""
+
+    pool_id: str
+    version: int
+    evaluated_at: datetime
+    candidates: tuple[str, ...]
+    active_symbols: tuple[str, ...]
+    quarantined_symbols: tuple[str, ...]
+    score_by_symbol: dict[str, float]
+    score_components: dict[str, dict[str, float]]
+    source_hashes: tuple[str, ...] = ()
+    snapshot_hash: str = ""
+
+    def compute_hash(self) -> str:
+        payload = {
+            "pool_id": self.pool_id,
+            "version": self.version,
+            "candidates": self.candidates,
+            "active_symbols": self.active_symbols,
+            "quarantined_symbols": self.quarantined_symbols,
+            "score_by_symbol": self.score_by_symbol,
+            "score_components": self.score_components,
+            "source_hashes": self.source_hashes,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
 
 
 def _default_observation_hours() -> float:
@@ -164,12 +213,16 @@ class TradingPool:
         initial_state: list[dict[str, Any]] | None = None,
         policy_version: str = "UNKNOWN",
         source: str = "MARKET_QUALITY_OBSERVATION",
+        pool_id: str = "testnet-adaptive-pool",
     ):
         self._pool: dict[str, PoolEntry] = {}
         self._max_instruments = max_instruments
         self._event_sink = event_sink
         self._policy_version = policy_version
         self._source = source
+        self._pool_id = str(pool_id or "testnet-adaptive-pool")
+        self._version = 0
+        self._source_hashes: set[str] = set()
         # M02-F05: 评分权重可被签名策略覆盖（None = 默认权重）
         self._score_weights: dict[str, float] | None = None
         # Restore persisted state on startup
@@ -223,11 +276,28 @@ class TradingPool:
                         entry.scores = restored_scores
                 self._pool[inst_id] = entry
 
+    def _resolve_key(self, instrument_id: str) -> str:
+        """Resolve a symbol without breaking legacy case-preserving callers."""
+
+        candidate = str(instrument_id).strip()
+        if candidate in self._pool:
+            return candidate
+        folded = candidate.upper()
+        return next((key for key in self._pool if key.upper() == folded), candidate)
+
     def add(self, instrument_id: str) -> PoolEntry:
-        if instrument_id not in self._pool:
-            entry = PoolEntry(instrument_id=instrument_id)
-            self._pool[instrument_id] = entry
-        return self._pool[instrument_id]
+        # Keep the historical case-preserving behavior for non-symbol test and
+        # research callers.  Startup discovery already supplies exchange
+        # symbols in canonical uppercase, while all lookups below are
+        # case-insensitive for mixed callers.
+        key = str(instrument_id).strip()
+        resolved = self._resolve_key(key)
+        if resolved not in self._pool:
+            entry = PoolEntry(instrument_id=key)
+            self._pool[key] = entry
+            self._version += 1
+            return entry
+        return self._pool[resolved]
 
     def _persist(self, entry: PoolEntry) -> None:
         """BD-FIX: 持久化标的生命周期状态（含观察期起点与最近评分）。
@@ -236,6 +306,7 @@ class TradingPool:
         每次重启所有标的回到 OBSERVING 且观察期重置，宇宙无法晋级。
         持久化失败只记录告警，不得阻断评分流程本身。
         """
+        self._version += 1
         if self._event_sink is None:
             return
         try:
@@ -277,7 +348,7 @@ class TradingPool:
         不是 OBSERVING 时不动作（实时观察期照常）。
         晋级权仍在评分规则（PROMOTE_THRESHOLD），历史证据只加速观察期。
         """
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         if not entry or entry.status != PoolStatus.OBSERVING:
             return False
         # 默认与晋级阈值一致；调用方可显式放宽（历史预筛选是加速器，
@@ -337,8 +408,97 @@ class TradingPool:
             return
         self._score_weights = parsed
 
+    def record_source_hash(self, source_hash: str) -> None:
+        """Bind a public market/history artifact to subsequent snapshots."""
+
+        clean = str(source_hash or "").strip()
+        if clean:
+            self._source_hashes.add(clean)
+
+    def snapshot(self, *, source_hashes: tuple[str, ...] | None = None) -> TradingPoolSnapshot:
+        """Return the exact membership consumed by a decision cycle."""
+
+        candidates = tuple(sorted(self._pool))
+        score_by_symbol: dict[str, float] = {}
+        score_components: dict[str, dict[str, float]] = {}
+        for symbol, entry in sorted(self._pool.items()):
+            if not entry.scores:
+                continue
+            latest = entry.scores[-1]
+            score_by_symbol[symbol] = float(latest.overall)
+            score_components[symbol] = {
+                "spread": float(latest.spread_score),
+                "depth": float(latest.depth_score),
+                "volume": float(latest.volume_score),
+                "stability": float(latest.stability_score),
+                "capacity": float(latest.capacity_score),
+            }
+        snapshot = TradingPoolSnapshot(
+            pool_id=self._pool_id,
+            version=self._version,
+            evaluated_at=datetime.now(timezone.utc),
+            candidates=candidates,
+            active_symbols=tuple(sorted(self.active_instruments())),
+            quarantined_symbols=tuple(
+                sorted(symbol for symbol, entry in self._pool.items() if entry.status == PoolStatus.QUARANTINED)
+            ),
+            score_by_symbol=score_by_symbol,
+            score_components=score_components,
+            source_hashes=tuple(sorted(set(source_hashes or ()) | self._source_hashes)),
+        )
+        return TradingPoolSnapshot(
+            pool_id=snapshot.pool_id,
+            version=snapshot.version,
+            evaluated_at=snapshot.evaluated_at,
+            candidates=snapshot.candidates,
+            active_symbols=snapshot.active_symbols,
+            quarantined_symbols=snapshot.quarantined_symbols,
+            score_by_symbol=snapshot.score_by_symbol,
+            score_components=snapshot.score_components,
+            source_hashes=snapshot.source_hashes,
+            snapshot_hash=snapshot.compute_hash(),
+        )
+
+    def update_market_score(
+        self,
+        instrument_id: str,
+        *,
+        spread_bps: float,
+        depth_score: float,
+        volume_score: float,
+        stability_score: float,
+        capacity_score: float,
+        source_hashes: tuple[str, ...] = (),
+    ) -> InstrumentScore:
+        """Score one candidate from observed public market-quality inputs."""
+
+        values = (spread_bps, depth_score, volume_score, stability_score, capacity_score)
+        if any(not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in values):
+            raise ValueError("market quality score inputs must be finite numbers")
+        if any(float(value) < 0 or float(value) > 1 for value in values[1:]):
+            raise ValueError("market quality component scores must be within [0, 1]")
+        # Spread is converted to a bounded quality score: zero spread is best,
+        # while >=100 bps contributes no quality.  The raw spread remains in
+        # the source artifact/trace.
+        spread_score = max(0.0, min(1.0, 1.0 - float(spread_bps) / 100.0))
+        score = InstrumentScore(
+            instrument_id=str(instrument_id).upper(),
+            spread_score=spread_score,
+            depth_score=float(depth_score),
+            volume_score=float(volume_score),
+            stability_score=float(stability_score),
+            capacity_score=float(capacity_score),
+        )
+        self.record_source_hashes(source_hashes)
+        self.score(str(instrument_id), score)
+        return score
+
+    def record_source_hashes(self, source_hashes: tuple[str, ...]) -> None:
+        for source_hash in source_hashes:
+            self.record_source_hash(source_hash)
+
     def score(self, instrument_id: str, score: InstrumentScore) -> None:
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         if not entry:
             return
         score.compute_overall(self._score_weights)
@@ -363,7 +523,7 @@ class TradingPool:
         """
         import math as _math
 
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         # BD-FIX（M3 审查）: QUARANTINED 允许回归 —— 连续 N 次评分恢复
         # 到晋级阈值即回到 OBSERVING（随后正常观察期晋级流程）。
         if not entry:
@@ -417,7 +577,7 @@ class TradingPool:
         return True
 
     def activate(self, instrument_id: str) -> bool:
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         if not entry or entry.status != PoolStatus.PROMOTED:
             return False
         if self.active_count() >= self._max_instruments:
@@ -436,11 +596,19 @@ class TradingPool:
     def active_instruments(self) -> list[str]:
         return [iid for iid, e in self._pool.items() if e.status == PoolStatus.ACTIVE]
 
+    def get_entry(self, instrument_id: str) -> PoolEntry | None:
+        """Return a defensive copy of one lifecycle entry."""
+
+        import copy
+
+        entry = self._pool.get(self._resolve_key(instrument_id))
+        return copy.deepcopy(entry) if entry is not None else None
+
     def active_count(self) -> int:
         return len(self.active_instruments())
 
     def is_tradable(self, instrument_id: str) -> bool:
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         if entry is None or entry.status != PoolStatus.ACTIVE:
             return False
         # BD-FIX: 容量门禁 — capacity_used_pct >= 100% 不可交易
@@ -448,7 +616,7 @@ class TradingPool:
 
     def update_capacity(self, instrument_id: str, notional: float) -> None:
         """BD-FIX: 更新容量使用率。下单时增加，平仓后减少。"""
-        entry = self._pool.get(instrument_id)
+        entry = self._pool.get(self._resolve_key(instrument_id))
         if entry is not None and entry.max_position_notional > 0:
             entry.capacity_used_pct = min(100.0, max(0.0, (notional / entry.max_position_notional) * 100.0))
 

@@ -54,6 +54,11 @@ class TestTradingPool:
 
         assert discover_startup_candidates(exchange_info, max_instruments=1) == ["BTCUSDT"]
         assert discover_startup_candidates(exchange_info, max_instruments=10) == ["BTCUSDT", "ETHUSDT"]
+        assert discover_startup_candidates(
+            exchange_info,
+            max_instruments=10,
+            preserve_exchange_order=True,
+        ) == ["ETHUSDT", "BTCUSDT"]
 
     def test_lifecycle(self):
         mgr = TradingPoolManager()
