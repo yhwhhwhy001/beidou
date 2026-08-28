@@ -56,6 +56,10 @@ def test_cli_help_is_side_effect_free(tmp_path: Path) -> None:
 def test_cli_passes_bounded_flags_to_runtime(monkeypatch, tmp_path: Path) -> None:
     captured: list[VerifierConfig] = []
 
+    monkeypatch.setenv("BEIDOU_TESTNET_API_KEY", "fixture-key")
+    monkeypatch.setenv("BEIDOU_TESTNET_API_SECRET", "fixture-secret")
+    monkeypatch.setenv("BEIDOU_TESTNET_ACCOUNT_ID", "dedicated-testnet-account")
+
     async def fake_run(config: VerifierConfig) -> VerificationSummary:
         captured.append(config)
         return VerificationSummary(
@@ -92,6 +96,20 @@ def test_cli_passes_bounded_flags_to_runtime(monkeypatch, tmp_path: Path) -> Non
     assert captured[0].close_after_verify is True
     assert captured[0].trace_path == tmp_path / "trace.jsonl"
     assert "api_secret" not in result.output
+
+
+def test_cli_rejects_write_confirmation_without_explicit_credentials_and_account(monkeypatch) -> None:
+    for name in (
+        "BEIDOU_TESTNET_API_KEY",
+        "BEIDOU_TESTNET_API_SECRET",
+        "BEIDOU_TESTNET_ACCOUNT_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    result = CliRunner().invoke(main, ["--once", "--confirm-testnet"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert "explicit Testnet credentials and dedicated account_id are required" in result.output
 
 
 def test_cli_marks_not_verifiable_with_nonzero_exit(monkeypatch) -> None:

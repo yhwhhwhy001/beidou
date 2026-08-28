@@ -10,13 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+DEFAULT_TESTNET_ACCOUNT_ID = "testnet-verification-account"
+
 
 @dataclass(frozen=True, slots=True)
 class VerifierConfig:
     rest_url: str = "https://demo-fapi.binance.com"
     api_key: str = field(default="", repr=False)
     api_secret: str = field(default="", repr=False)
-    account_id: str = "testnet-verification-account"
+    account_id: str = DEFAULT_TESTNET_ACCOUNT_ID
     max_notional: float = 25.0
     max_leverage: float = 3.0
     max_instruments: int = 5
@@ -105,6 +107,10 @@ class VerifierConfig:
             raise ValueError("order_poll_interval_seconds must be within 0..30")
         if not str(self.account_id).strip() or str(self.account_id).upper() in {"UNKNOWN", "DEFAULT"}:
             raise ValueError("a non-default account_id is required")
+        if self.confirm_testnet and (
+            not self.api_key or not self.api_secret or self.account_id == DEFAULT_TESTNET_ACCOUNT_ID
+        ):
+            raise ValueError("explicit Testnet credentials and dedicated account_id are required")
 
     def redacted_dict(self) -> dict[str, object]:
         """Return configuration facts safe for an evidence manifest."""
