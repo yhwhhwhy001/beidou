@@ -322,7 +322,7 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                     raw={"reason": "WRITE_AUTHORITY_MISSING", "kind": write_request.kind.value},
                     source="binance_adapter_write_guard",
                 )
-            context_check = self._testnet_guard.validate_context(write_context)
+            context_check = self._testnet_guard.validate_context(write_context, write_request)
             if not context_check.allowed:
                 return Result.failure(
                     "Testnet write context denied",
@@ -1175,18 +1175,25 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             },
         )
 
-    async def cancel_order(self, order_id: str, venue_instrument: VenueInstrument) -> OrderResponse:
+    async def cancel_order(
+        self,
+        order_id: str,
+        venue_instrument: VenueInstrument,
+        *,
+        write_context: TerminalWriteContext | None = None,
+    ) -> OrderResponse:
         if self._rest_client is not None:
             try:
-                transport_result = await self.request(
-                    "DELETE",
-                    Endpoint.ORDER,
-                    signed=True,
-                    params={
+                request_args: dict[str, Any] = {
+                    "signed": True,
+                    "params": {
                         "symbol": str(venue_instrument.instrument_id),
                         "orderId": int(order_id),
                     },
-                )
+                }
+                if write_context is not None:
+                    request_args["write_context"] = write_context
+                transport_result = await self.request("DELETE", Endpoint.ORDER, **request_args)
                 if not transport_result.is_success():
                     return OrderResponse(
                         venue_instrument=venue_instrument,
@@ -1297,8 +1304,10 @@ class BinanceUsdmAdapter(ExchangeAdapter):
             return False, "CANCEL_ACK_QUANTITY_INVALID"
         if executed > original:
             return False, "CANCEL_ACK_EXECUTED_QTY_INVALID"
-        if status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and executed > 0:
-            return False, "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
+        # A canceled/expired remainder may legitimately retain a filled
+        # prefix.  The runtime reconciles that executed quantity and closes
+        # the resulting position; treating this ACK as UNKNOWN would discard
+        # the venue's authoritative terminal fact.
         try:
             OrderSide(str(response["side"]))
             OrderType(str(response["type"]))
@@ -1414,6 +1423,76 @@ class BinanceUsdmAdapter(ExchangeAdapter):
                 source="binance_order_recovery",
             )
         return Result.success(dict(raw), source="binance_order_recovery")
+
+    async def get_account_trades(self, symbol: str, order_id: str) -> Result[list[dict[str, Any]]]:
+        """Read actual fills, commissions, and realized PnL for one order."""
+
+        try:
+            parsed_order_id = int(str(order_id))
+        except ValueError:
+            return Result.failure(
+                "order_id is invalid for trade attribution",
+                category=ErrorCategory.UNKNOWN,
+                source="binance_execution_attribution",
+            )
+        result = await self.request(
+            "GET",
+            Endpoint.USER_TRADES,
+            signed=True,
+            params={"symbol": str(symbol).upper(), "orderId": parsed_order_id},
+        )
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "Account-trade attribution is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_execution_attribution",
+            )
+        rows = [dict(row) for row in result.data if isinstance(row, dict)]
+        if len(rows) != len(result.data):
+            return Result.failure(
+                "Account-trade attribution contains invalid rows",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_execution_attribution",
+            )
+        return Result.success(rows, source="binance_execution_attribution")
+
+    async def get_income_history(
+        self,
+        symbol: str,
+        *,
+        income_type: str,
+        start_time: int,
+    ) -> Result[list[dict[str, Any]]]:
+        """Read actual funding/account-income rows for attribution."""
+
+        result = await self.request(
+            "GET",
+            Endpoint.INCOME,
+            signed=True,
+            params={
+                "symbol": str(symbol).upper(),
+                "incomeType": str(income_type),
+                "startTime": int(start_time),
+            },
+        )
+        if not result.is_success() or not isinstance(result.data, list):
+            return Result.failure(
+                "Income attribution is UNKNOWN",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_execution_attribution",
+            )
+        rows = [dict(row) for row in result.data if isinstance(row, dict)]
+        if len(rows) != len(result.data):
+            return Result.failure(
+                "Income attribution contains invalid rows",
+                category=ErrorCategory.UNKNOWN,
+                raw=result.data,
+                source="binance_execution_attribution",
+            )
+        return Result.success(rows, source="binance_execution_attribution")
 
     @staticmethod
     def parse_algo_order_snapshot(raw: Any, account_ref: AccountRef) -> Result[AlgoOrderSnapshot]:

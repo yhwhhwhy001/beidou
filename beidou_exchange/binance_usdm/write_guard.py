@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
-from beidou_exchange.core.write_authority import TerminalWriteContext, TerminalWriteKind, TerminalWriteRequest
+from beidou_exchange.core.write_authority import (
+    TerminalWriteContext,
+    TerminalWriteKind,
+    TerminalWriteRequest,
+    canonical_final_request_hash,
+)
 
 
 def _enabled(value: Any) -> bool:
@@ -71,10 +76,22 @@ def classify_terminal_write(
 
     values = dict(params or {})
     command_hash = str(values.get("_command_hash") or context.command_hash or "")
-    final_request_hash = str(values.get("_final_request_hash") or context.final_request_hash or "")
     adaptive_leverage = str(values.get("_adaptive_leverage") or context.adaptive_leverage or "")
     adaptive_quantity = str(values.get("_adaptive_quantity") or context.adaptive_quantity or "")
     adaptive_notional = str(values.get("_adaptive_notional") or context.adaptive_notional or "")
+    final_request_hash = canonical_final_request_hash(
+        method_upper,
+        str(path),
+        {key: value for key, value in values.items() if not str(key).startswith("_")},
+        account_id=str(account_id or "UNKNOWN"),
+        command_hash=command_hash,
+        pool_id=context.pool_id,
+        pool_version=context.pool_version,
+        pool_hash=context.pool_hash,
+        adaptive_leverage=adaptive_leverage,
+        adaptive_quantity=adaptive_quantity,
+        adaptive_notional=adaptive_notional,
+    )
     if path in {Endpoint.ORDER, Endpoint.ALGO_ORDER}:
         if method_upper == "DELETE":
             kind = TerminalWriteKind.CANCEL_OWNED
@@ -126,4 +143,6 @@ def classify_terminal_write(
         adaptive_leverage=adaptive_leverage,
         adaptive_quantity=adaptive_quantity,
         adaptive_notional=adaptive_notional,
+        account_exposure=context.account_exposure,
+        projected_account_exposure=context.projected_account_exposure,
     )

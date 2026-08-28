@@ -10,7 +10,10 @@
 | P1 | `beidou_exchange/core/rule_snapshot.py`, `beidou_exchange/binance_usdm/adapter.py` | A `NOTIONAL` filter using `minNotional` was not accepted by the rule source. | Parameterized adapter contract covers both `MIN_NOTIONAL` and `NOTIONAL`. | Preserve both field forms and fail closed for missing rules. | FIXED |
 | P1 | `beidou_strategy/risk/adaptive_sizing_engine.py` | Partially supplied venue rules could fall through to legacy non-executable sizing. | New incomplete-rule test requires `VENUE_RULE_INPUT_INVALID`. | Keep legacy behavior only when no venue fields are supplied; reject partial executable inputs. | FIXED |
 | P0 | Testnet E2E | No live venue evidence is present in this local review. | No authorized write campaign was run. | Do not advance Testnet admission or claim `Testnet Ready`. | OPEN / BLOCKING |
-| P1 | Repository release gates | Full coverage is 98.10% against the configured 100% gate. | Fresh current-HEAD gate runs. | Preserve the failure; do not lower coverage or treat the legacy runner as the V4 verifier. | OPEN / BLOCKING |
+| P1 | Repository release gates | Full coverage is 98.04% against the configured 100% gate. | Fresh current-HEAD gate runs. | Preserve the failure; do not lower coverage or treat the legacy runner as the V4 verifier. | OPEN / BLOCKING |
+| P0 | `apps/testnet_verify/runtime.py` | A partial fill could remain nonterminal without owned remainder cancellation, and execution attribution used observational placeholders. | Poll/cancel/close fault fixtures and signed venue-attribution contracts. | Preserve terminal filled-prefix reconciliation and fail UNKNOWN when attribution is absent. | FIXED |
+| P0 | `beidou_exchange/testnet_guard.py` | Request context was not bound to every final request field; account aggregate exposure and durable kill-switch race were not enforced at the final authority boundary. | Context mutation, exposure cap and durable switch tests. | Keep exact final-request hash/identity binding and authority-boundary switch check. | FIXED |
+| P1 | Testnet trace parity | The runtime reported `MATCH` by comparing its Testnet proposal with itself. | Runtime test now requires `NOT_RUN` and `BACKTEST_AND_PAPER_REQUIRED`. | Supply independent frozen-input Backtest/Paper evidence before parity can pass. | FIXED / EVIDENCE OPEN |
 
 ## Decision
 

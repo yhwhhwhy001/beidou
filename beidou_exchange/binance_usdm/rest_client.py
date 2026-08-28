@@ -497,7 +497,7 @@ class BinanceRESTClient:
                     raw={"reason": "WRITE_AUTHORITY_MISSING", "kind": write_request.kind.value},
                     source="binance_rest_write_guard",
                 )
-            context_check = self._testnet_guard.validate_context(write_context)
+            context_check = self._testnet_guard.validate_context(write_context, write_request)
             if not context_check.allowed:
                 return Result.failure(
                     "Testnet write context denied",

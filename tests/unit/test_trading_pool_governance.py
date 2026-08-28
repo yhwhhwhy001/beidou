@@ -115,6 +115,41 @@ def test_historical_seed_persisted_and_restored() -> None:
     assert entry.historical_seed["observation_backdate_hours"] == 2400.0
 
 
+def test_pool_version_and_membership_diff_survive_restart() -> None:
+    events: list[dict] = []
+    pool = TradingPool(event_sink=events.append)
+    entry = pool.add("BTCUSDT")
+    entry.min_observation_hours = 1.0
+    assert pool.seed_historical_observation("BTCUSDT", 0.9, evidence={"days": 2})
+    good = InstrumentScore(
+        instrument_id="BTCUSDT",
+        spread_score=1.0,
+        depth_score=1.0,
+        volume_score=1.0,
+        stability_score=1.0,
+        capacity_score=1.0,
+    )
+    pool.score("BTCUSDT", good)
+    assert pool.try_promote("BTCUSDT")
+    assert pool.activate("BTCUSDT")
+    active = pool.snapshot()
+    assert active.membership_diff["active_added"] == ["BTCUSDT"]
+    version_before = active.version
+    assert events[-1]["pool_version"] == version_before
+
+    restored = TradingPool(initial_state=[events[-1]])
+    assert restored.snapshot().version >= version_before
+    restored.quarantine("BTCUSDT", "test")
+    quarantined = restored.snapshot()
+    assert quarantined.version > version_before
+    assert quarantined.membership_diff == {
+        "active_added": [],
+        "active_removed": ["BTCUSDT"],
+        "quarantined_added": ["BTCUSDT"],
+        "quarantined_removed": [],
+    }
+
+
 def test_quarantine_regression_clears_historical_seed() -> None:
     """M02-R2 (CE-5): QUARANTINED 回归后重新计时,历史种子证据清除。"""
     pool = TradingPool()

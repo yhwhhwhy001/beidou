@@ -187,6 +187,13 @@ _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
         "owner": "Execution Owner",
         "call_graph": "verifier -> persisted intent -> Testnet guard -> adapter create_order",
     },
+    "apps/testnet_verify/runtime.py::VerificationRuntime._settle_order_lifecycle::cancel_order": {
+        "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",
+        "status": "HARD_HOLD",
+        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
+        "owner": "Execution Owner",
+        "call_graph": "verifier lifecycle -> bound order identity -> Testnet guard -> cancel owned remainder",
+    },
     "apps/testnet_verify/runtime.py::_jsonable::getattr[DYNAMIC]": {
         "capability": "DYNAMIC_READ_BOUNDARY",
         "status": "READ_ONLY",

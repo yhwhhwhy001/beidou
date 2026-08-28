@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -125,6 +126,7 @@ class TradingPoolSnapshot:
     score_by_symbol: dict[str, float]
     score_components: dict[str, dict[str, float]]
     source_hashes: tuple[str, ...] = ()
+    membership_diff: dict[str, list[str]] = field(default_factory=dict)
     snapshot_hash: str = ""
 
     def compute_hash(self) -> str:
@@ -137,6 +139,7 @@ class TradingPoolSnapshot:
             "score_by_symbol": self.score_by_symbol,
             "score_components": self.score_components,
             "source_hashes": self.source_hashes,
+            "membership_diff": self.membership_diff,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -222,6 +225,8 @@ class TradingPool:
         self._source = source
         self._pool_id = str(pool_id or "testnet-adaptive-pool")
         self._version = 0
+        self._last_active_symbols: set[str] = set()
+        self._last_quarantined_symbols: set[str] = set()
         self._source_hashes: set[str] = set()
         # M02-F05: 评分权重可被签名策略覆盖（None = 默认权重）
         self._score_weights: dict[str, float] | None = None
@@ -275,6 +280,12 @@ class TradingPool:
                                 continue
                         entry.scores = restored_scores
                 self._pool[inst_id] = entry
+                with contextlib.suppress(TypeError, ValueError):
+                    self._version = max(self._version, int(state.get("pool_version", 0)))
+                if entry.status is PoolStatus.ACTIVE:
+                    self._last_active_symbols.add(inst_id)
+                elif entry.status is PoolStatus.QUARANTINED:
+                    self._last_quarantined_symbols.add(inst_id)
 
     def _resolve_key(self, instrument_id: str) -> str:
         """Resolve a symbol without breaking legacy case-preserving callers."""
@@ -325,6 +336,8 @@ class TradingPool:
                     "status": entry.status.value,
                     "score": float(entry.scores[-1].overall) if entry.scores else 0.0,
                     "score_detail": detail,
+                    "pool_id": self._pool_id,
+                    "pool_version": self._version,
                 }
             )
         except Exception as exc:
@@ -433,19 +446,28 @@ class TradingPool:
                 "stability": float(latest.stability_score),
                 "capacity": float(latest.capacity_score),
             }
+        active_symbols = set(self.active_instruments())
+        quarantined_symbols = {symbol for symbol, entry in self._pool.items() if entry.status == PoolStatus.QUARANTINED}
+        membership_diff = {
+            "active_added": sorted(active_symbols - self._last_active_symbols),
+            "active_removed": sorted(self._last_active_symbols - active_symbols),
+            "quarantined_added": sorted(quarantined_symbols - self._last_quarantined_symbols),
+            "quarantined_removed": sorted(self._last_quarantined_symbols - quarantined_symbols),
+        }
         snapshot = TradingPoolSnapshot(
             pool_id=self._pool_id,
             version=self._version,
             evaluated_at=datetime.now(timezone.utc),
             candidates=candidates,
-            active_symbols=tuple(sorted(self.active_instruments())),
-            quarantined_symbols=tuple(
-                sorted(symbol for symbol, entry in self._pool.items() if entry.status == PoolStatus.QUARANTINED)
-            ),
+            active_symbols=tuple(sorted(active_symbols)),
+            quarantined_symbols=tuple(sorted(quarantined_symbols)),
             score_by_symbol=score_by_symbol,
             score_components=score_components,
             source_hashes=tuple(sorted(set(source_hashes or ()) | self._source_hashes)),
+            membership_diff=membership_diff,
         )
+        self._last_active_symbols = active_symbols
+        self._last_quarantined_symbols = quarantined_symbols
         return TradingPoolSnapshot(
             pool_id=snapshot.pool_id,
             version=snapshot.version,
@@ -456,6 +478,7 @@ class TradingPool:
             score_by_symbol=snapshot.score_by_symbol,
             score_components=snapshot.score_components,
             source_hashes=snapshot.source_hashes,
+            membership_diff=snapshot.membership_diff,
             snapshot_hash=snapshot.compute_hash(),
         )
 

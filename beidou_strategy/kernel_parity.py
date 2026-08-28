@@ -168,6 +168,32 @@ class StrategyKernel:
     def set_typed_graph(self, graph: Any) -> None:
         self._typed_graph = graph
 
+    def active_component_manifest(self) -> list[dict[str, str]]:
+        """Return the executable typed-graph registry consumed by this kernel."""
+
+        if self._typed_graph is None:
+            return []
+        order = self._typed_graph.topological_order()
+        nodes = getattr(self._typed_graph, "_nodes", {})
+        graph_hash_fn = getattr(self._typed_graph, "compute_graph_hash", None)
+        graph_hash = str(graph_hash_fn()) if callable(graph_hash_fn) else ""
+        manifest: list[dict[str, str]] = []
+        for node_id in order:
+            node = nodes.get(node_id)
+            if node is None:
+                continue
+            node_type = getattr(getattr(node, "node_type", None), "value", getattr(node, "node_type", "UNKNOWN"))
+            version = str(getattr(node, "factor_version", "") or getattr(node, "model_version", "") or graph_hash)
+            manifest.append(
+                {
+                    "component_id": str(node_id),
+                    "component_type": str(node_type),
+                    "version": version,
+                    "graph_hash": graph_hash,
+                }
+            )
+        return manifest
+
     async def evaluate(self, context: dict) -> dict | None:
         """执行策略评估。
 

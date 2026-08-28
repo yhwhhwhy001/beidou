@@ -69,12 +69,16 @@ def _write_context(guard: TestnetEnvironmentGuard):
         intent_id="intent-contract-1",
         trace_id="trace-contract-1",
         symbol="BTCUSDT",
-        side="BUY",
-        order_type="MARKET",
+        side="",
+        order_type="LEVERAGE",
         quantity="0.001",
         notional="20",
         leverage="2",
         position_id="position-BTCUSDT",
+        pool_id="pool-1",
+        pool_version="1",
+        pool_hash="a" * 64,
+        pool_symbols=("BTCUSDT",),
     )
 
 

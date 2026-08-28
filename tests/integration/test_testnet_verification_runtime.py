@@ -11,7 +11,7 @@ import pytest
 
 from apps.testnet_verify.config import VerifierConfig
 from apps.testnet_verify.runtime import VerificationRuntime
-from beidou_data.trading_pool_lifecycle import TradingPool
+from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
 from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_exchange.core.protocol import OrderRequest, OrderResponse
@@ -44,9 +44,11 @@ class FakeTestnetAdapter:
         self.read_leverage_calls = 0
         self.create_order_calls: list[str] = []
         self.query_calls: list[str] = []
+        self.cancel_calls: list[str] = []
         self._order_counter = 100
         self._unknown_returned = False
         self._pending_request: OrderRequest | None = None
+        self._partial_recorded = False
 
     async def fetch_exchange_info(self) -> Result[dict[str, Any]]:
         return Result.success(
@@ -76,6 +78,7 @@ class FakeTestnetAdapter:
                 "availableBalance": "1000",
                 "canTrade": True,
                 "canWithdraw": False,
+                "positions": [],
             },
             source="fake-account",
         )
@@ -190,6 +193,21 @@ class FakeTestnetAdapter:
         del write_context
         client_id = str(request.client_order_id)
         self.create_order_calls.append(client_id)
+        if self.recovery == "close_unknown" and request.reduce_only:
+            self._pending_request = request
+            return replace(
+                self._order_response(request, "", executed="0"),
+                order_id="",
+                status=OrderStatus.UNKNOWN,
+                raw_response={"reason": "simulated-close-timeout"},
+            )
+        if self.recovery == "partial" and not request.reduce_only:
+            self._pending_request = request
+            self._order_counter += 1
+            response = self._order_response(request, str(self._order_counter), executed="0")
+            raw = dict(response.raw_response or {})
+            raw["status"] = "NEW"
+            return replace(response, status=OrderStatus.NEW, raw_response=raw)
         if self.recovery == "reject" and not request.reduce_only:
             return replace(
                 self._order_response(request, "", executed="0"),
@@ -243,6 +261,17 @@ class FakeTestnetAdapter:
     async def query_order_by_client_id(self, symbol: str, client_id: str) -> Result[dict[str, Any]]:
         del symbol
         self.query_calls.append(client_id)
+        if self.recovery == "partial" and self._pending_request is not None:
+            request = self._pending_request
+            executed = f"{float(str(request.quantity.amount)) / 2.0:.3f}"
+            if not self._partial_recorded:
+                amount = float(executed)
+                self.position += amount if request.side is OrderSide.BUY else -amount
+                self._partial_recorded = True
+            response = self._order_response(request, str(self._order_counter), executed=executed)
+            raw = dict(response.raw_response or {})
+            raw["status"] = "PARTIALLY_FILLED"
+            return Result.success(raw, source="fake-partial-order")
         if self.recovery == "found" and self._pending_request is not None:
             request = self._pending_request
             executed = str(request.quantity.amount)
@@ -265,6 +294,41 @@ class FakeTestnetAdapter:
             source="fake-order-recovery",
         )
 
+    async def cancel_order(self, order_id: str, venue_instrument: Any, *, write_context: Any) -> OrderResponse:
+        del venue_instrument, write_context
+        self.cancel_calls.append(order_id)
+        assert self._pending_request is not None
+        request = self._pending_request
+        executed = f"{float(str(request.quantity.amount)) / 2.0:.3f}"
+        response = self._order_response(request, order_id, executed=executed)
+        raw = dict(response.raw_response or {})
+        raw["status"] = "CANCELED"
+        return replace(response, status=OrderStatus.CANCELED, raw_response=raw)
+
+    async def get_account_trades(self, symbol: str, order_id: str) -> Result[list[dict[str, Any]]]:
+        return Result.success(
+            [
+                {
+                    "symbol": symbol,
+                    "orderId": order_id,
+                    "commission": "0.01",
+                    "commissionAsset": "USDT",
+                    "realizedPnl": "0.25" if str(order_id).endswith("2") else "0",
+                }
+            ],
+            source="fake-user-trades",
+        )
+
+    async def get_income_history(
+        self, symbol: str, *, income_type: str, start_time: int
+    ) -> Result[list[dict[str, Any]]]:
+        del start_time
+        assert income_type == "FUNDING_FEE"
+        return Result.success(
+            [{"symbol": symbol, "incomeType": income_type, "income": "-0.001", "asset": "USDT"}],
+            source="fake-income",
+        )
+
 
 def _config(tmp_path: Path, *, close_after_verify: bool = True) -> VerifierConfig:
     return VerifierConfig(
@@ -279,6 +343,8 @@ def _config(tmp_path: Path, *, close_after_verify: bool = True) -> VerifierConfi
         confirm_testnet=True,
         once=True,
         close_after_verify=close_after_verify,
+        order_poll_attempts=1,
+        order_poll_interval_seconds=0.0,
         trace_path=tmp_path / "trace.jsonl",
         pool_state_path=tmp_path / "pool.json",
         evidence_dir=tmp_path / "evidence",
@@ -304,14 +370,26 @@ async def test_runtime_closes_filled_episode_after_unknown_same_id_recovery(tmp_
     assert adapter.create_order_calls[2].endswith("-c")
     assert adapter.position == pytest.approx(0.0)
     traces = runtime.trace_store.all()
-    assert {trace.status.value for trace in traces} == {"FILLED", "CLOSED"}
+    assert {trace.status.value for trace in traces} == {"CLOSED"}
+    assert runtime.trace_store.unresolved_count == 0
     primary = next(trace for trace in traces if not trace.trace_id.endswith("-c"))
     assert primary.sizing["final_quantity"] == primary.order_request["quantity"]
     assert primary.order_ack["clientOrderId"] == primary.client_order_id
     assert primary.reconciliation["unresolved"] == []
     assert primary.strategy["proposal_hash"]
+    assert primary.strategy["parity"]["status"] == "NOT_RUN"
+    assert primary.strategy["parity"]["discrepancies"] == ["BACKTEST_AND_PAPER_REQUIRED"]
+    assert primary.strategy["active_component_count"] == len(primary.factor_outputs)
+    assert all(
+        {"component_id", "version", "input_hash", "output", "confidence", "decision", "latency_ms"} <= set(component)
+        for component in primary.factor_outputs
+    )
+    assert {component["component_id"] for component in primary.factor_outputs} == set(
+        primary.strategy["active_components"]
+    )
     assert primary.pool["hash"]
     assert Path(summary.manifest_path).exists()
+    assert (tmp_path / "pool-membership-diff.jsonl").exists()
 
 
 @pytest.mark.asyncio
@@ -403,3 +481,76 @@ async def test_same_closed_bar_reuses_identity_and_does_not_duplicate_after_rest
     assert second_adapter.create_order_calls == []
     assert second.trace_ids == first.trace_ids
     assert first_client_ids[0] == first_client_ids[1]
+
+
+@pytest.mark.asyncio
+async def test_runtime_polls_partial_fill_cancels_remainder_and_closes_exposure(tmp_path: Path) -> None:
+    adapter = FakeTestnetAdapter(recovery="partial")
+    pool = TradingPool(max_instruments=1)
+    pool.add("BTCUSDT").min_observation_hours = 1.0
+    runtime = VerificationRuntime(_config(tmp_path), adapter=adapter, pool=pool)
+
+    summary = await runtime.run_once()
+
+    assert summary.status == "EPISODE_COMPLETED"
+    assert adapter.cancel_calls == ["101"]
+    assert adapter.position == pytest.approx(0.0)
+    primary = next(trace for trace in runtime.trace_store.all() if not trace.trace_id.endswith("-c"))
+    assert primary.order_status == "CANCELED"
+    assert float(primary.executed_qty) > 0
+    assert primary.metadata["order_lifecycle"]["remainder_action"] == "CANCELED"
+    assert primary.fees["status"] == "VENUE_TRADES"
+    assert primary.funding["status"] == "VENUE_INCOME"
+    assert primary.pnl["status"] == "VENUE_TRADES"
+
+
+@pytest.mark.asyncio
+async def test_filled_primary_with_unknown_close_is_not_completed(tmp_path: Path) -> None:
+    adapter = FakeTestnetAdapter(recovery="close_unknown")
+    pool = TradingPool(max_instruments=1)
+    pool.add("BTCUSDT").min_observation_hours = 1.0
+    runtime = VerificationRuntime(_config(tmp_path), adapter=adapter, pool=pool)
+
+    summary = await runtime.run_once()
+
+    assert summary.status == "NOT_VERIFIABLE"
+    assert summary.episodes[0]["status"] == "FILLED"
+    assert summary.episodes[0]["close"]["status"] == "UNKNOWN"
+    assert adapter.position != 0
+
+
+@pytest.mark.asyncio
+async def test_quarantined_symbol_uses_reduce_only_exit_without_new_risk(tmp_path: Path) -> None:
+    adapter = FakeTestnetAdapter(recovery="direct")
+    adapter.position = 0.01
+    pool = TradingPool(max_instruments=1)
+    entry = pool.add("BTCUSDT")
+    entry.status = PoolStatus.QUARANTINED
+    entry.quarantine_reason = "liquidity degraded"
+    runtime = VerificationRuntime(_config(tmp_path), adapter=adapter, pool=pool)
+
+    summary = await runtime.run_once()
+
+    assert summary.status == "EPISODE_COMPLETED"
+    assert adapter.set_leverage_calls == 0
+    assert len(adapter.create_order_calls) == 1
+    assert adapter.create_order_calls[0].endswith("-c")
+    assert adapter.position == pytest.approx(0.0)
+    assert summary.episodes[0]["reason"] == "QUARANTINED_REDUCE_ONLY_EXIT"
+
+
+@pytest.mark.asyncio
+async def test_durable_kill_switch_file_blocks_new_risk_before_leverage_write(tmp_path: Path) -> None:
+    adapter = FakeTestnetAdapter(recovery="direct")
+    pool = TradingPool(max_instruments=1)
+    pool.add("BTCUSDT").min_observation_hours = 1.0
+    config = replace(_config(tmp_path), kill_switch_path=tmp_path / "KILL_SWITCH")
+    config.kill_switch_path.write_text("engaged\n", encoding="utf-8")
+    runtime = VerificationRuntime(config, adapter=adapter, pool=pool)
+
+    summary = await runtime.run_once()
+
+    assert summary.status == "NOT_VERIFIABLE"
+    assert adapter.set_leverage_calls == 0
+    assert adapter.create_order_calls == []
+    assert summary.episodes[0]["reason"] == "TESTNET_KILL_SWITCH_ACTIVE"

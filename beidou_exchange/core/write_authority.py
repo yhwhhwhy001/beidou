@@ -65,6 +65,13 @@ class TerminalWriteContext:
     adaptive_leverage: str = ""
     adaptive_quantity: str = ""
     adaptive_notional: str = ""
+    symbol: str = ""
+    client_order_id: str = ""
+    expected_method: str = ""
+    expected_path: str = ""
+    account_exposure: str = ""
+    projected_account_exposure: str = ""
+    order_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +116,8 @@ class TerminalWriteRequest:
     adaptive_leverage: str = ""
     adaptive_quantity: str = ""
     adaptive_notional: str = ""
+    account_exposure: str = ""
+    projected_account_exposure: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,6 +24,7 @@ def test_config_from_env_uses_dataclass_defaults(monkeypatch) -> None:
         "BEIDOU_TESTNET_KLINE_LIMIT",
         "BEIDOU_TESTNET_TRACE_PATH",
         "BEIDOU_TESTNET_POOL_STATE_PATH",
+        "BEIDOU_TESTNET_KILL_SWITCH_PATH",
         "BEIDOU_TESTNET_EVIDENCE_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -35,6 +36,7 @@ def test_config_from_env_uses_dataclass_defaults(monkeypatch) -> None:
     assert config.max_leverage == 3.0
     assert config.max_instruments == 5
     assert config.interval == "1m"
+    assert config.kline_limit == 1500
 
 
 def test_cli_help_is_side_effect_free(tmp_path: Path) -> None:
@@ -45,6 +47,8 @@ def test_cli_help_is_side_effect_free(tmp_path: Path) -> None:
     assert "--max-notional" in result.output
     assert "--max-leverage" in result.output
     assert "--close-after-verify" in result.output
+    assert "--engage-kill-switch" in result.output
+    assert "--kill-switch-file" in result.output
     assert not (tmp_path / ".beidou").exists()
     assert not (tmp_path / "evidence").exists()
 
@@ -105,3 +109,24 @@ def test_cli_marks_not_verifiable_with_nonzero_exit(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert '"status": "NOT_VERIFIABLE"' in result.output
+
+
+def test_cli_can_engage_durable_kill_switch_without_starting_runtime(monkeypatch, tmp_path: Path) -> None:
+    called = False
+
+    async def fake_run(_config: VerifierConfig) -> VerificationSummary:
+        nonlocal called
+        called = True
+        raise AssertionError("runtime must not start while engaging the kill switch")
+
+    monkeypatch.setattr("apps.testnet_verify.cli.run", fake_run)
+    switch = tmp_path / "KILL_SWITCH"
+    result = CliRunner().invoke(
+        main,
+        ["--engage-kill-switch", "--kill-switch-file", str(switch)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert switch.exists()
+    assert called is False
