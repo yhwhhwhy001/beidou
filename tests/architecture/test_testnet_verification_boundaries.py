@@ -83,3 +83,15 @@ def test_frozen_modules_remain_importable(module: str) -> None:
 def test_legacy_entrypoint_is_not_cut_over_implicitly() -> None:
     source = (ROOT / "beidou_launcher" / "cli.py").read_text(encoding="utf-8")
     assert "apps.testnet_verify" not in source
+
+
+def test_verifier_does_not_reference_deprecated_sizing_helpers() -> None:
+    """PKG-05-M07: 旧 adaptive_leverage/adaptive_position_pct 仅属冻结
+    Engine 路径;唯一 sizing authority 是 compute_adaptive_sizing。"""
+    violations: list[str] = []
+    for path in _python_files():
+        source = path.read_text(encoding="utf-8")
+        for helper in ("adaptive_leverage", "adaptive_position_pct"):
+            if helper in source:
+                violations.append(f"{path.relative_to(ROOT)}:references:{helper}")
+    assert not violations, "TESTNET_VERIFIER_DEPRECATED_SIZING:\n" + "\n".join(violations)

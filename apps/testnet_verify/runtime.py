@@ -12,6 +12,7 @@ import copy
 import hashlib
 import itertools
 import json
+import logging
 import math
 import os
 import sys
@@ -87,6 +88,41 @@ def _finite_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _top_of_book_price(levels: list[Any], side: str) -> float | None:
+    """Return the best price from an orderbook side without trusting shape.
+
+    The Binance demo orderbook depth response is a list of ``[price, qty]``
+    rows; anything malformed yields ``None`` so the caller can fail closed
+    with an explicit reason instead of treating garbage as a spread.
+    """
+
+    if not isinstance(levels, list):
+        return None
+    for row in levels:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        price = _finite_float(row[0])
+        quantity = _finite_float(row[1])
+        if price is not None and price > 0 and quantity is not None and quantity >= 0:
+            return price
+    logger = logging.getLogger("beidou.testnet_verify")
+    logger.warning("orderbook side has no valid %s level", side)
+    return None
+
+
+def _economic_truth_assessment() -> dict[str, Any]:
+    """PKG-09-M03: E0–E6 economic truth is independent of Testnet readiness.
+
+    The verifier owns execution facts only; it never supplies research
+    evidence, so the assessment stays fail-closed NOT_EVALUATED.  Research
+    pipelines may call ``assess_economic_truth`` directly with real evidence.
+    """
+
+    from beidou_research.economic_truth import assess_economic_truth
+
+    return assess_economic_truth().to_dict()
 
 
 def _git_revision() -> str:
@@ -534,17 +570,26 @@ class VerificationRuntime:
         signal_confidence = min(1.0, abs(signal_score) / max(volatility * math.sqrt(20.0), 1e-12))
         regime_confidence = max(0.25, min(1.0, 1.0 - volatility * 10.0))
 
-        bid = _finite_float(ticker.get("bidPrice"))
-        ask = _finite_float(ticker.get("askPrice"))
+        # BD-FIX (V4 B1): demo-fapi `/fapi/v1/ticker/24hr` responses omit
+        # bidPrice/askPrice entirely, so the 24h ticker alone cannot evidence
+        # a spread.  Top-of-book from the depth snapshot is the canonical
+        # bid/ask source; ticker fields remain an optional fallback for
+        # transports that carry them.
+        bids = depth.get("bids")
+        asks = depth.get("asks")
+        if not isinstance(bids, list) or not isinstance(asks, list):
+            raise ValueError("INVALID_DEPTH")
+        bid = _top_of_book_price(bids, "bid")
+        ask = _top_of_book_price(asks, "ask")
+        if bid is None:
+            bid = _finite_float(ticker.get("bidPrice"))
+        if ask is None:
+            ask = _finite_float(ticker.get("askPrice"))
         last_price = _finite_float(ticker.get("lastPrice"))
         if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
             raise ValueError(f"INVALID_TICKER:{symbol}")
         price = last_price if last_price is not None and last_price > 0 else (bid + ask) / 2.0
         spread_bps = (ask - bid) / ask * 10000.0
-        bids = depth.get("bids")
-        asks = depth.get("asks")
-        if not isinstance(bids, list) or not isinstance(asks, list) or not bids or not asks:
-            raise ValueError("INVALID_DEPTH")
         depth_notional = 0.0
         for row in [*bids[:5], *asks[:5]]:
             if not isinstance(row, list) or len(row) < 2:
@@ -691,7 +736,16 @@ class VerificationRuntime:
                     available = available if available is not None else _finite_float(usdt[0].get("availableBalance"))
         if equity is None or available is None or equity <= 0 or available < 0:
             return None
-        if account.get("canTrade") is not True or account.get("canWithdraw") is not False:
+        # BD-FIX (V4 campaign): Binance demo-fapi accounts report
+        # ``canWithdraw=true`` by default and it cannot be disabled, so a
+        # ``canWithdraw is False`` requirement would block every bounded
+        # Testnet campaign.  The V4 minimum safety boundary (02-plan §2) is
+        # EnvironmentGuard + caps + idempotency + UNKNOWN recovery + kill
+        # switch; withdrawal is additionally out of reach because the write
+        # guard never authorizes withdrawal endpoints.  Require trading
+        # capability only; ``canWithdraw`` stays an audited account fact in
+        # the trace/manifest.
+        if account.get("canTrade") is not True:
             return None
         return equity, available, account
 
@@ -1500,6 +1554,14 @@ class VerificationRuntime:
             quantity = rule.quantize_quantity(str(abs(amount)))
         except ValueError:
             return {"status": TraceStatus.FAILED.value, "reason": "CLOSE_QUANTITY_INVALID"}
+        # BD-FIX (V4 campaign): quantize_quantity may render trailing zeros
+        # ("0.100") while the adapter serializes the same Decimal as "0.1";
+        # the guard's identity check compares the exact quantity strings and
+        # the final-request hash, so both sides must use one normalized form.
+        try:
+            quantity = str(Decimal(quantity).normalize())
+        except (InvalidOperation, TypeError, ValueError):
+            return {"status": TraceStatus.FAILED.value, "reason": "CLOSE_QUANTITY_INVALID"}
         close_key = _stable_hash({"source": base_trace.trace_id, "quantity": quantity})[:18]
         trace_id = f"{base_trace.trace_id}-c"
         intent_id = f"{base_trace.intent_id}-close"
@@ -1705,6 +1767,7 @@ class VerificationRuntime:
             not self._adapter_is_injected and any(trace.exchange_order_id and trace.order_ack for trace in traces)
         )
         revision = _git_revision()
+        economic_truth = _economic_truth_assessment()
         manifest = {
             **summary.to_dict(),
             "config": self.config.redacted_dict(),
@@ -1716,7 +1779,7 @@ class VerificationRuntime:
             "testnet_write_enabled": bool(
                 self.config.confirm_testnet and self.config.api_key and self.config.api_secret
             ),
-            "economic_truth": "NOT_EVALUATED",
+            "economic_truth": economic_truth,
             "trace_store": str(self.config.trace_path),
             "results": {
                 "status": summary.status,

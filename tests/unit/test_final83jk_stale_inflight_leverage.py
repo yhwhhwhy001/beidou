@@ -313,9 +313,9 @@ async def test_sync_venue_leverage_env_gated_and_cached(monkeypatch) -> None:
     api = AsyncMock(return_value={"leverage": 3})
     monkeypatch.setattr(engine, "_api_async", api)
 
-    # 默认关闭:不调用
+    # 默认关闭:三态 None=特性未启用(BD-FIX V4 B2)
     monkeypatch.delenv("BEIDOU_SYNC_VENUE_LEVERAGE", raising=False)
-    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is False
+    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is None
     api.assert_not_awaited()
 
     # 开启:同步一次并缓存
@@ -323,12 +323,26 @@ async def test_sync_venue_leverage_env_gated_and_cached(monkeypatch) -> None:
     assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is True
     assert api.await_count == 1
     assert engine._venue_leverage["XRPUSDT"] == 3
-    # 同值不再重复同步
-    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is False
+    # 同值不再重复同步(已缓存=已生效)
+    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is True
     assert api.await_count == 1
     # 档位变化 → 再次同步;0.5 档钳制为 1
+    api.return_value = {"leverage": 1}
     assert await engine._sync_venue_leverage("XRPUSDT", 0.5) is True
     assert engine._venue_leverage["XRPUSDT"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_venue_leverage_readback_mismatch_is_failure(monkeypatch) -> None:
+    """BD-FIX (V4 B2): venue readback 不等于请求值必须返回 False 阻断订单。"""
+
+    engine = AutonomousEngine.__new__(AutonomousEngine)
+    engine._env_mode = SimpleNamespace(value="testnet")
+    api = AsyncMock(return_value={"leverage": 7})
+    monkeypatch.setattr(engine, "_api_async", api)
+    monkeypatch.setenv("BEIDOU_SYNC_VENUE_LEVERAGE", "1")
+    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is False
+    assert not engine._venue_leverage.get("XRPUSDT")
 
 
 @pytest.mark.asyncio
@@ -338,7 +352,7 @@ async def test_sync_venue_leverage_never_in_live(monkeypatch) -> None:
     api = AsyncMock()
     monkeypatch.setattr(engine, "_api_async", api)
     monkeypatch.setenv("BEIDOU_SYNC_VENUE_LEVERAGE", "1")
-    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is False
+    assert await engine._sync_venue_leverage("XRPUSDT", 3.0) is None
     api.assert_not_awaited()
 
 

@@ -4,7 +4,10 @@
 
 三层决策时钟架构。Testnet 验证阶段通过独立的 closed-bar verifier 复用策略、交易池、自适应 sizing 和 Binance Adapter。
 
-**当前状态: PIVOT — Testnet HOLD / Alpha VERIFIED NOT_EVALUATED / Mainnet PROHIBITED**
+**当前状态: PIVOT — Testnet 执行链 CONDITIONAL PASS（真实 demo 证据 100 个决策 episode） / Alpha NOT_EVALUATED（E0–E6 门禁已实现未评估） / Mainnet PROHIBITED**
+
+> 完整证据见 `docs/execution/beidou-testnet-alpha-first-v4/12-acceptance-report.md`。
+> Testnet 执行链真实、可复现；「Testnet READY / Completed / Alpha VERIFIED」仍未被声明。
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-Proprietary-red)]()

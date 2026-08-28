@@ -559,6 +559,11 @@ def _blocked_signal(
 # ================================================================
 # 自适应杠杆 — 基于波动率分级
 # ================================================================
+# DEPRECATED (PKG-05-M07 / V4.0): 这两个 helper 是旧 Engine 内的
+# sizing 实现。V4 唯一 sizing authority 是
+# ``beidou_strategy.risk.adaptive_sizing_engine.compute_adaptive_sizing``;
+# 新 Testnet 验证入口(apps.testnet_verify)不得调用它们(架构测试强制)。
+# 仅旧 Engine 冻结路径保留使用,后续迁移后删除。
 
 
 def adaptive_leverage(
@@ -567,7 +572,7 @@ def adaptive_leverage(
     levels: tuple[float, float, float, float] = (3.0, 2.0, 1.0, 0.5),
     thresholds: tuple[float, float, float] = (0.2, 0.4, 0.6),
 ) -> float:
-    """波动率越高杠杆越低，控制风险暴露。
+    """波动率越高杠杆越低，控制风险暴露。(DEPRECATED — 见 PKG-05-M07)
 
     M09-F01: 档位与阈值参数化 —— 默认值=旧硬编码行为,调用方经签名
     策略覆盖(_policy_float_audited)。
@@ -593,8 +598,10 @@ def adaptive_position_pct(
     spread_penalty_floor: float = 0.3,
     spread_scale_bps: float = 50.0,
 ) -> float:
-    """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。
+    """自适应仓位比例：信号强度 × 波动率惩罚 × 点差惩罚。(DEPRECATED)
 
+    PKG-05-M07 (V4.0): 旧 Engine 冻结路径的 sizing helper;唯一 sizing
+    authority 为 ``compute_adaptive_sizing``。新验证入口不得调用。
     M09-F02: 基数与惩罚参数化 —— 默认值=旧行为;base_pct 仍可用
     BEIDOU_ADAPTIVE_BASE_PCT 环境覆盖(EXEMPT-20),调用方经签名策略
     覆盖优先。
@@ -12422,7 +12429,7 @@ class AutonomousEngine:
             print(f"[nearline] 🧹 Resolved {resolved} stale UNKNOWN order state(s) against venue facts")
         return resolved
 
-    async def _sync_venue_leverage(self, symbol: str, dyn_leverage: float) -> bool:
+    async def _sync_venue_leverage(self, symbol: str, dyn_leverage: float) -> bool | None:
         """BD-FIX (final83k): 自适应杠杆同步到交易所(默认关闭)。
 
         Binance 每标的杠杆默认 20x;引擎风险模型(最大仓位/保证金/强平价)
@@ -12430,12 +12437,17 @@ class AutonomousEngine:
         下单前把标的杠杆同步为自适应档位(整数钳制 1..125)。
         TESTNET-EXEMPT: EXEMPT-21 — 仅 BEIDOU_SYNC_VENUE_LEVERAGE=1 且
         testnet 环境生效;live/canary 永不自动修改交易所杠杆。
+
+        BD-FIX (V4 B2): 返回值升级为三态 —— ``None``=特性未启用(跳过),
+        ``True``=已同步且 readback 严格相等, ``False``=同步失败或 venue
+        回读与请求不一致。调用方在 ``False`` 时必须阻断风险增加订单,
+        不允许 WARNING 后继续(AC-TN-009 / INV-06)。
         """
         if os.environ.get("BEIDOU_SYNC_VENUE_LEVERAGE", "") != "1":
-            return False
+            return None
         # TESTNET-EXEMPT: EXEMPT-21
         if str(getattr(getattr(self, "_env_mode", None), "value", "")) != "testnet":
-            return False
+            return None
         try:
             adaptive_target = float(dyn_leverage)
         except (TypeError, ValueError):
@@ -12454,7 +12466,7 @@ class AutonomousEngine:
             cache = {}
             self._venue_leverage = cache
         if cache.get(symbol) == lev_int:
-            return False
+            return True
         try:
             result = await self._api_async(
                 Endpoint.LEVERAGE,
@@ -12466,6 +12478,20 @@ class AutonomousEngine:
             logger.warning("venue leverage sync failed for %s: %s", symbol, type(exc).__name__)
             return False
         if isinstance(result, dict) and "leverage" in result:
+            # BD-FIX (V4 B2): readback 必须严格等于请求值;不相等即 FAIL,
+            # 阻断该标的风险增加订单(AC-TN-009: requested == venue)。
+            try:
+                readback = int(Decimal(str(result["leverage"])))
+            except (InvalidOperation, TypeError, ValueError):
+                readback = -1
+            if readback != lev_int:
+                logger.warning(
+                    "venue leverage readback mismatch for %s: requested=%s readback=%s",
+                    symbol,
+                    lev_int,
+                    result["leverage"],
+                )
+                return False
             cache[symbol] = lev_int
             clamp_note = "; venue_min=1x" if adaptive_target < 1.0 else ""
             print(
@@ -12971,10 +12997,19 @@ class AutonomousEngine:
                     continue
 
                 # BD-FIX (final83k): 自适应杠杆同步到交易所(env 门控)
+                # BD-FIX (V4 B2): False=同步失败或 readback 不一致 → 阻断
+                # 该标的风险增加订单(AC-TN-009/INV-06);None=特性未启用。
                 try:
-                    await self._sync_venue_leverage(symbol, dyn_leverage)
+                    lev_sync = await self._sync_venue_leverage(symbol, dyn_leverage)
                 except Exception as _lev_exc:
                     logger.warning("venue leverage sync error for %s: %s", symbol, type(_lev_exc).__name__)
+                    lev_sync = False
+                if lev_sync is False:
+                    print(
+                        f"[nearline] {symbol}: SKIP (venue leverage sync failed or readback mismatch — "
+                        "risk-increasing order blocked)"
+                    )
+                    continue
 
                 # === 5.7 仓位提案收集 → PortfolioOptimizer 冲突仲裁（循环结束后统一执行）===
                 proposals.append(

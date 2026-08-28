@@ -13,8 +13,29 @@ import json
 import math
 import time
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Protocol
+
+
+def normalize_quantity_string(value: object) -> str:
+    """Render a quantity string in canonical Decimal form.
+
+    ``quantize_quantity`` can produce trailing zeros (``"0.100"``) while the
+    transport serializes the same Decimal as ``"0.1"``.  Both the context-side
+    and request-side request hashes must see one canonical form, otherwise the
+    write identity check denies a semantically identical order
+    (BD-FIX V4 campaign).
+    """
+
+    raw = str(value)
+    try:
+        parsed = Decimal(raw)
+    except (InvalidOperation, TypeError, ValueError):
+        return raw
+    if not parsed.is_finite():
+        return raw
+    return format(parsed.normalize(), "f")
 
 
 class TerminalWriteKind(str, Enum):
@@ -162,13 +183,16 @@ def canonical_final_request_hash(
         "method": str(method).upper(),
         "path": str(path),
         "account_id": str(account_id),
-        "params": {str(key): value for key, value in sorted((params or {}).items(), key=lambda item: str(item[0]))},
+        "params": {
+            str(key): (normalize_quantity_string(value) if str(key) == "quantity" else value)
+            for key, value in sorted((params or {}).items(), key=lambda item: str(item[0]))
+        },
         "command_hash": str(command_hash),
         "pool_id": str(pool_id),
         "pool_version": str(pool_version),
         "pool_hash": str(pool_hash),
         "adaptive_leverage": str(adaptive_leverage),
-        "adaptive_quantity": str(adaptive_quantity),
+        "adaptive_quantity": normalize_quantity_string(adaptive_quantity),
         "adaptive_notional": str(adaptive_notional),
     }
     encoded = json.dumps(material, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)

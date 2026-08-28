@@ -71,6 +71,30 @@ def test_parity_compares_testnet_when_supplied() -> None:
     assert "Testnet" in result.discrepancies[0]
 
 
+def test_parity_matches_when_backtest_and_paper_agree() -> None:
+    """AC-STR-004: 同一 StrategyKernel 合同下 backtest/paper 一致 → MATCH。"""
+
+    passed, result = parity_check(
+        backtest_proposal=_proposal(OrderSide.BUY),
+        paper_proposal=_proposal(OrderSide.BUY),
+    )
+    assert passed is True
+    assert result.status is ParityStatus.MATCH
+    assert result.discrepancies == []
+
+
+def test_frozen_input_proposal_hash_is_reproducible() -> None:
+    """AC-STR-005: 同一冻结输入的 proposal hash 可复现。"""
+
+    kernel = StrategyKernel(mode="PAPER")
+    proposal = _proposal(OrderSide.BUY, confidence=0.8)
+    first = kernel.proposal_hash(proposal)
+    second = kernel.proposal_hash(_proposal(OrderSide.BUY, confidence=0.8))
+    assert first == second
+    assert len(first) >= 16  # canonical truncated sha256 hex digest
+    assert kernel.proposal_hash(_proposal(OrderSide.BUY, confidence=0.9)) != first
+
+
 def test_legacy_object_hash_is_not_only_direction_strength_confidence() -> None:
     base = SimpleNamespace(
         direction="LONG",

@@ -9,7 +9,7 @@ import pytest
 
 from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.write_guard import classify_terminal_write
-from beidou_exchange.core.write_authority import evaluate_terminal_write
+from beidou_exchange.core.write_authority import TerminalWriteKind, evaluate_terminal_write
 from beidou_exchange.testnet_guard import TestnetEnvironmentGuard, TestnetGuardError
 
 
@@ -447,3 +447,48 @@ def test_context_expiry_is_checked_by_shared_authority() -> None:
     )
     assert request is not None
     assert evaluate_terminal_write(guard, request).reason_code == "WRITE_SCOPE_EXPIRED"
+
+
+def test_context_quantity_identity_is_numeric_trailing_zero_tolerant() -> None:
+    """BD-FIX (V4 campaign): "0.100" (quantized) and "0.1" (transport) are the
+    same size; the write identity check must not deny the close."""
+
+    guard = _guard()
+    context = guard.build_write_context(
+        intent_id="intent-close",
+        trace_id="trace-close",
+        symbol="BCHUSDT",
+        side="SELL",
+        order_type="MARKET",
+        quantity="0.100",  # quantize_quantity trailing-zero rendering
+        notional="24.8",
+        leverage="1",
+        position_id="position-BCHUSDT",
+        reduce_only=True,
+        client_order_id="bd-close-client",
+        command_hash="cmd",
+        pool_id="pool-1",
+        pool_version="7",
+        pool_hash="a" * 64,
+        pool_symbols=("BCHUSDT",),
+    )
+    request = classify_terminal_write(
+        "POST",
+        Endpoint.ORDER,
+        {
+            "symbol": "BCHUSDT",
+            "side": "SELL",
+            "type": "MARKET",
+            "quantity": "0.1",  # transport-normalized Decimal rendering
+            "newClientOrderId": "bd-close-client",
+            "reduceOnly": "true",
+        },
+        account_id=guard.account_id,
+        context=context,
+        signed=True,
+        rest_base_url=guard.rest_base_url,
+    )
+    assert request is not None
+    assert request.kind is TerminalWriteKind.REDUCE_OWNED
+    assert guard.validate_context(context, request).allowed
+    assert evaluate_terminal_write(guard, request).allowed

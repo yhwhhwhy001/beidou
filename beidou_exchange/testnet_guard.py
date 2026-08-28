@@ -90,6 +90,24 @@ def _normalize_host(url: str) -> str:
     return host
 
 
+def _quantities_equal(left: object, right: object) -> bool:
+    """Compare quantities numerically; "0.100" and "0.1" are the same size.
+
+    BD-FIX (V4 campaign): quantize_quantity renders trailing zeros while the
+    transport serializes the normalized Decimal; a string comparison would
+    deny a semantically identical reduce-only close.
+    """
+
+    try:
+        left_decimal = Decimal(str(left))
+        right_decimal = Decimal(str(right))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if not left_decimal.is_finite() or not right_decimal.is_finite():
+        return False
+    return left_decimal == right_decimal
+
+
 @dataclass(frozen=True, slots=True)
 class TestnetCap:
     """Absolute local limits applied to one verifier process."""
@@ -351,12 +369,16 @@ class TestnetEnvironmentGuard:
                 (str(context.pool_version), str(request.pool_version), "TESTNET_CONTEXT_POOL_VERSION_MISMATCH"),
                 (str(context.pool_hash), str(request.pool_hash), "TESTNET_CONTEXT_POOL_HASH_MISMATCH"),
             ]
+            # BD-FIX (V4 campaign): quantities are compared numerically —
+            # "0.100" and "0.1" are the same order size; a string comparison
+            # would deny a semantically identical reduce-only close.
+            if not _quantities_equal(context.quantity, request.quantity):
+                return TerminalWriteDecision(False, "TESTNET_CONTEXT_QUANTITY_MISMATCH")
             if request.path != "/fapi/v1/leverage":
                 if request.kind is TerminalWriteKind.CANCEL_OWNED:
                     identity_checks.extend(
                         [
                             (str(context.order_id), str(request.order_id), "TESTNET_CONTEXT_ORDER_ID_MISMATCH"),
-                            (str(context.quantity), str(request.quantity), "TESTNET_CONTEXT_QUANTITY_MISMATCH"),
                         ]
                     )
                 else:
@@ -368,7 +390,6 @@ class TestnetEnvironmentGuard:
                                 str(request.order_type).upper(),
                                 "TESTNET_CONTEXT_ORDER_TYPE_MISMATCH",
                             ),
-                            (str(context.quantity), str(request.quantity), "TESTNET_CONTEXT_QUANTITY_MISMATCH"),
                             (
                                 str(context.client_order_id),
                                 str(request.client_order_id),

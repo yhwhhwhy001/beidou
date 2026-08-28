@@ -1914,6 +1914,7 @@ async def test_engine_process_fill_recovery_exception_and_cumulative_race_paths(
         100.0,
         "order:entry-order:cum:1:avg:100",
     )
+    _lite_saved_states: list[tuple] = []
     lite_committed._store = SimpleNamespace(
         get_fill_event=lambda _event_id: None,
         restore_fill_events=lambda: [
@@ -1924,6 +1925,7 @@ async def test_engine_process_fill_recovery_exception_and_cumulative_race_paths(
                 "processing_state": "COMMITTED",
             }
         ],
+        save_order_state=lambda *args, **kwargs: _lite_saved_states.append((args, kwargs)),
     )
     reasons = []
     lite_committed._mark_order_unknown = lambda *args: reasons.append(args)
@@ -1933,6 +1935,7 @@ async def test_engine_process_fill_recovery_exception_and_cumulative_race_paths(
         {"executedQty": "1", "avgPrice": "100", "side": "BUY"},
     )
     assert reasons == []
+    assert _lite_saved_states and _lite_saved_states[0][0][6] == "FILLED"
     assert lite_committed._ensure_calls and "entry-order" not in lite_committed._active_order_ids
 
     insufficient = _process_engine()

@@ -1,5 +1,12 @@
 """External, bounded authorization for Binance terminal writes.
 
+STATUS: FUTURE_MAINNET / FROZEN for the default Testnet verification path
+(PKG-00-M05, PKG-08-M02, V4.0).  The bounded Testnet verifier
+(``apps.testnet_verify``) must not import this module; the architecture test
+``tests/architecture/test_testnet_verification_boundaries.py`` enforces the
+boundary.  This module is retained for historical audit and the future
+multi-operator / real-money production path only.
+
 The Binance API signature authenticates a request to Binance.  It does not
 authorize the Beidou process to create economic risk.  This module verifies a
 separate Ed25519-signed capability issued by an external operator and consumes
@@ -34,6 +41,8 @@ from beidou_exchange.core.write_authority import (
 )
 
 logger = logging.getLogger(__name__)
+
+MODULE_DEPLOYMENT_STATUS = "FUTURE_MAINNET"  # PKG-00-M05 / PKG-08-M02 frozen marker
 
 _DEFAULT_STATE_DB = ".beidou/write-authority.sqlite3"
 _CAPABILITY_PATH_ENV_VARS = (

@@ -2,9 +2,10 @@
 
 This historical script used to own a second HTTP/order path and could submit
 orders outside the governed intent/outbox/adapter chain.  It is intentionally
-non-executable now.  Use ``scripts/testnet/run_g5.py`` for an authorized,
-fail-closed Testnet protocol run; that runner never treats a partial probe as
-an approval certificate.
+non-executable now.  The sole Testnet verification entry is
+``python -m apps.testnet_verify`` (V4.0, PKG-10); ``scripts/testnet/run_g5.py``
+remains the authorized legacy G5 certification runner and is not a
+verification entry.
 """
 
 from __future__ import annotations
