@@ -15,7 +15,7 @@
 
 ## Executed local commands
 
-- Full regression: `python -m pytest tests/ -q` -> `4236 passed, 2090 warnings`.
+- Full regression under coverage: `4251 passed, 126 warnings`.
 - V4 target/architecture contracts: `35 passed, 91 warnings`.
 - Full compile: `python -m compileall -q beidou_* apps scripts tools delivery/scripts` -> `PASS`.
 - Ruff format: `650 files already formatted` -> `PASS`.
@@ -26,7 +26,7 @@
 - Write-capability registry rebuild plus independent oracle -> `{"issues": [], "status": "PASS"}`.
 - Wheel/sdist build and installed-wheel CLI smoke -> `PASS`.
 - Alpha V3 line/branch coverage gate -> `4236 passed`, `100.00%` -> `PASS`.
-- Full repository coverage gate -> `4236 passed`, `98.10%`, required `100%` -> `FAIL`.
+- Full repository coverage gate -> `4251 passed`, `98.04%`, required `100%` -> `FAIL`.
 - Forbidden-pattern scan -> `PASS` after a precise allowlist entry for the retained legacy G5 runner's fixed loopback health read; its exchange requests remain adapter-governed.
 - Bandit in an isolated security venv -> `0` issues -> `PASS`.
 - Clean wheel runtime dependency audit -> `No known vulnerabilities found` -> `PASS`; the already-populated host audit found 26 vulnerabilities in unrelated installed packages and is not treated as project-clean evidence.
@@ -36,7 +36,8 @@
 The local suite does not prove venue behavior, credentials, order matching,
 network timeout semantics at Binance, or economic alpha. No Testnet write was
 performed because the user request was handled as local development authority
-only and no `--confirm-testnet` campaign was authorized. Testnet admission,
+only. A bounded campaign is now authorized, but its API key, API secret and
+dedicated account identifier are absent from the process environment. Testnet admission,
 30-episode stability, CI status, and E0-E6 Economic Truth remain
 `NOT_VERIFIABLE`/`NOT_EVALUATED` until their required evidence exists. The
 full repository 100% coverage is not green, and no GitHub CI run was

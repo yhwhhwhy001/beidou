@@ -18,6 +18,7 @@ import math
 import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from threading import Event
 from typing import Any
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ from beidou_exchange.core.write_authority import (
     TerminalWriteDecision,
     TerminalWriteKind,
     TerminalWriteRequest,
+    canonical_final_request_hash,
 )
 
 TESTNET_HOSTS = frozenset({"demo-fapi.binance.com", "testnet.binancefuture.com"})
@@ -94,12 +96,15 @@ class TestnetCap:
 
     max_notional: Decimal
     max_leverage: Decimal
+    max_account_exposure: Decimal
 
     def __post_init__(self) -> None:
         if not self.max_notional.is_finite() or self.max_notional <= 0:
             raise TestnetGuardError("max_notional must be finite and > 0")
         if not self.max_leverage.is_finite() or self.max_leverage <= 0:
             raise TestnetGuardError("max_leverage must be finite and > 0")
+        if not self.max_account_exposure.is_finite() or self.max_account_exposure <= 0:
+            raise TestnetGuardError("max_account_exposure must be finite and > 0")
 
 
 class TestnetEnvironmentGuard:
@@ -121,9 +126,11 @@ class TestnetEnvironmentGuard:
         *,
         max_notional: float | str | Decimal,
         max_leverage: float | str | Decimal,
+        max_account_exposure: float | str | Decimal | None = None,
         account_id: str,
         owner_id: str = "testnet-verifier",
         writes_enabled: bool = False,
+        kill_switch_path: str | Path | None = None,
         context_ttl_seconds: float = 300.0,
         clock: Any = time.time,
     ) -> None:
@@ -132,6 +139,10 @@ class TestnetEnvironmentGuard:
         self.cap = TestnetCap(
             max_notional=_positive_decimal(max_notional, field_name="max_notional"),
             max_leverage=_positive_decimal(max_leverage, field_name="max_leverage"),
+            max_account_exposure=_positive_decimal(
+                max_notional if max_account_exposure is None else max_account_exposure,
+                field_name="max_account_exposure",
+            ),
         )
         self.account_id = str(account_id or "").strip()
         if not self.account_id or self.account_id.upper() in {"UNKNOWN", "DEFAULT"}:
@@ -142,6 +153,7 @@ class TestnetEnvironmentGuard:
         if type(writes_enabled) is not bool:
             raise TestnetGuardError("writes_enabled must be a boolean")
         self.writes_enabled = writes_enabled
+        self._kill_switch_path = Path(kill_switch_path) if kill_switch_path is not None else None
         self.context_ttl_seconds = _positive_decimal(context_ttl_seconds, field_name="context_ttl_seconds")
         ttl_float = float(self.context_ttl_seconds)
         if not math.isfinite(ttl_float) or ttl_float > 86_400:
@@ -207,6 +219,13 @@ class TestnetEnvironmentGuard:
         pool_symbols: tuple[str, ...] = (),
         command_hash: str = "",
         final_request_hash: str = "",
+        client_order_id: str = "",
+        account_exposure: str = "",
+        projected_account_exposure: str = "",
+        method: str = "",
+        path: str = "",
+        request_params: dict[str, object] | None = None,
+        order_id: str = "",
         now: float | None = None,
     ) -> TerminalWriteContext:
         """Create one bounded, identity-bound context for adapter calls."""
@@ -222,6 +241,46 @@ class TestnetEnvironmentGuard:
         timestamp = float(self._clock() if now is None else now)
         if not math.isfinite(timestamp):
             raise TestnetGuardError("context clock is not finite")
+        clean_symbol = str(symbol or "").strip().upper()
+        clean_order_type = str(order_type or "").strip().upper()
+        expected_method = str(method or "POST").strip().upper()
+        expected_path = str(path or ("/fapi/v1/leverage" if clean_order_type == "LEVERAGE" else "/fapi/v1/order"))
+        clean_client_order_id = str(client_order_id or ("" if expected_method == "DELETE" else clean_intent)).strip()
+        if request_params is None:
+            if expected_path == "/fapi/v1/leverage":
+                request_params = {
+                    "symbol": clean_symbol,
+                    "leverage": int(_positive_decimal(leverage, field_name="leverage")),
+                }
+            elif expected_method == "DELETE":
+                request_params = {"symbol": clean_symbol, "orderId": int(str(order_id))}
+            else:
+                request_params = {
+                    "symbol": clean_symbol,
+                    "side": str(side or "").strip().upper(),
+                    "type": clean_order_type,
+                    "quantity": str(quantity or ""),
+                    "newClientOrderId": clean_client_order_id,
+                }
+                if reduce_only:
+                    request_params["reduceOnly"] = "true"
+                if close_position:
+                    request_params["closePosition"] = "true"
+        computed_request_hash = canonical_final_request_hash(
+            expected_method,
+            expected_path,
+            request_params,
+            account_id=self.account_id,
+            command_hash=str(command_hash or ""),
+            pool_id=str(pool_id or ""),
+            pool_version=str(pool_version or ""),
+            pool_hash=str(pool_hash or ""),
+            adaptive_leverage=str(leverage or ""),
+            adaptive_quantity=str(quantity or ""),
+            adaptive_notional=str(notional or ""),
+        )
+        if final_request_hash and str(final_request_hash) != computed_request_hash:
+            raise TestnetGuardError("final_request_hash does not bind the supplied request")
         nonce_material = f"{self.account_id}|{clean_intent}|{clean_trace}|{self.owner_id}"
         nonce = hashlib.sha256(nonce_material.encode("utf-8")).hexdigest()[:32]
         return TerminalWriteContext(
@@ -251,13 +310,24 @@ class TestnetEnvironmentGuard:
             pool_hash=str(pool_hash or ""),
             pool_symbols=tuple(str(item) for item in pool_symbols),
             command_hash=str(command_hash or ""),
-            final_request_hash=str(final_request_hash or ""),
+            final_request_hash=computed_request_hash,
             adaptive_leverage=str(leverage or ""),
             adaptive_quantity=str(quantity or ""),
             adaptive_notional=str(notional or ""),
+            symbol=clean_symbol,
+            client_order_id=clean_client_order_id,
+            expected_method=expected_method,
+            expected_path=expected_path,
+            account_exposure=str(account_exposure or ""),
+            projected_account_exposure=str(projected_account_exposure or ""),
+            order_id=str(order_id or ""),
         )
 
-    def validate_context(self, context: TerminalWriteContext) -> TerminalWriteDecision:
+    def validate_context(
+        self,
+        context: TerminalWriteContext,
+        request: TerminalWriteRequest | None = None,
+    ) -> TerminalWriteDecision:
         """Validate context-level facts before request classification."""
 
         if str(context.task_id).strip() != "testnet-verification":
@@ -272,12 +342,70 @@ class TestnetEnvironmentGuard:
             return TerminalWriteDecision(False, "TESTNET_URL_MISMATCH")
         if context.account_id != self.account_id:
             return TerminalWriteDecision(False, "TESTNET_ACCOUNT_MISMATCH")
+        if request is not None:
+            identity_checks = [
+                (str(context.expected_method).upper(), str(request.method).upper(), "TESTNET_CONTEXT_METHOD_MISMATCH"),
+                (str(context.expected_path), str(request.path), "TESTNET_CONTEXT_PATH_MISMATCH"),
+                (str(context.symbol).upper(), str(request.symbol).upper(), "TESTNET_CONTEXT_SYMBOL_MISMATCH"),
+                (str(context.pool_id), str(request.pool_id), "TESTNET_CONTEXT_POOL_ID_MISMATCH"),
+                (str(context.pool_version), str(request.pool_version), "TESTNET_CONTEXT_POOL_VERSION_MISMATCH"),
+                (str(context.pool_hash), str(request.pool_hash), "TESTNET_CONTEXT_POOL_HASH_MISMATCH"),
+            ]
+            if request.path != "/fapi/v1/leverage":
+                if request.kind is TerminalWriteKind.CANCEL_OWNED:
+                    identity_checks.extend(
+                        [
+                            (str(context.order_id), str(request.order_id), "TESTNET_CONTEXT_ORDER_ID_MISMATCH"),
+                            (str(context.quantity), str(request.quantity), "TESTNET_CONTEXT_QUANTITY_MISMATCH"),
+                        ]
+                    )
+                else:
+                    identity_checks.extend(
+                        [
+                            (str(context.side).upper(), str(request.side).upper(), "TESTNET_CONTEXT_SIDE_MISMATCH"),
+                            (
+                                str(context.order_type).upper(),
+                                str(request.order_type).upper(),
+                                "TESTNET_CONTEXT_ORDER_TYPE_MISMATCH",
+                            ),
+                            (str(context.quantity), str(request.quantity), "TESTNET_CONTEXT_QUANTITY_MISMATCH"),
+                            (
+                                str(context.client_order_id),
+                                str(request.client_order_id),
+                                "TESTNET_CONTEXT_CLIENT_ORDER_ID_MISMATCH",
+                            ),
+                        ]
+                    )
+            identity_checks.append(
+                (
+                    str(context.final_request_hash),
+                    str(request.final_request_hash),
+                    "TESTNET_CONTEXT_REQUEST_HASH_MISMATCH",
+                )
+            )
+            for expected, actual, reason in identity_checks:
+                if expected != actual:
+                    return TerminalWriteDecision(False, reason)
+            if request.kind is TerminalWriteKind.INCREASE and request.path != "/fapi/v1/leverage":
+                if not context.pool_id or not context.pool_version or not context.pool_hash:
+                    return TerminalWriteDecision(False, "TESTNET_CONTEXT_POOL_SCOPE_INCOMPLETE")
+                if request.symbol not in context.pool_symbols:
+                    return TerminalWriteDecision(False, "TESTNET_CONTEXT_SYMBOL_NOT_ACTIVE")
         return TerminalWriteDecision(True, "CONTEXT_VALID")
 
     def _cap_decision(self, request: TerminalWriteRequest) -> TerminalWriteDecision:
         risk_increasing = request.kind is TerminalWriteKind.INCREASE
         if risk_increasing and self.kill_switch_active:
             return TerminalWriteDecision(False, "TESTNET_KILL_SWITCH_ACTIVE")
+        if risk_increasing and self._kill_switch_path is not None:
+            try:
+                self._kill_switch_path.stat()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return TerminalWriteDecision(False, "TESTNET_KILL_SWITCH_STATE_UNKNOWN")
+            else:
+                return TerminalWriteDecision(False, "TESTNET_KILL_SWITCH_ACTIVE")
         if risk_increasing and not self.writes_enabled:
             return TerminalWriteDecision(False, "TESTNET_CONFIRMATION_REQUIRED")
 
@@ -304,6 +432,19 @@ class TestnetEnvironmentGuard:
                 return TerminalWriteDecision(False, "TESTNET_MAX_LEVERAGE_EXCEEDED")
             if notional > self.cap.max_notional:
                 return TerminalWriteDecision(False, "TESTNET_MAX_NOTIONAL_EXCEEDED")
+            if request.path != "/fapi/v1/leverage":
+                try:
+                    current_exposure = _decimal(request.account_exposure, field_name="account_exposure")
+                    projected_exposure = _positive_decimal(
+                        request.projected_account_exposure,
+                        field_name="projected_account_exposure",
+                    )
+                except TestnetGuardError as exc:
+                    return TerminalWriteDecision(False, str(exc).upper().replace(" ", "_"))
+                if projected_exposure != current_exposure + notional:
+                    return TerminalWriteDecision(False, "TESTNET_PROJECTED_ACCOUNT_EXPOSURE_MISMATCH")
+                if projected_exposure > self.cap.max_account_exposure:
+                    return TerminalWriteDecision(False, "TESTNET_MAX_ACCOUNT_EXPOSURE_EXCEEDED")
 
         return TerminalWriteDecision(True, "TESTNET_WRITE_ALLOWED")
 

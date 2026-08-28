@@ -8,11 +8,11 @@ injection evidence, including restart idempotency, HMAC request signing,
 exchange-rule variants, closed-bar filtering, adaptive sizing, and
 deterministic-rejection versus UNKNOWN semantics.
 
-The result is `PARTIAL / PASS_WITH_CONDITIONS` for local code scope. Full
-regression passed (`4236 passed`), the Alpha V3 100% line/branch gate passed,
-and the V4 target contracts passed (`35 passed`). It is not Testnet admission
-completion: no live Testnet write or real venue fill was performed in this
-turn.
+The result remains `PARTIAL / PASS_WITH_CONDITIONS` for local code scope. Full
+regression passed (`4251 passed`), configured mypy/static/security/governance
+gates passed, and the V4 target contracts passed. It is not Testnet admission
+completion: the full-repository 100% coverage gate remains red at 98.04%, and
+no live Testnet write or real venue fill was performed.
 
 ## Requirement and gate decisions
 
@@ -21,16 +21,18 @@ turn.
 - Registry independent oracle: `PASS` after regeneration.
 - Ruff format/lint, mypy, compileall, package validation, test-quality scan,
   hardcoded scan, Bandit, and installed-wheel smoke: `PASS`.
-- Full repository coverage: `FAIL` at `98.10%` against the configured `100%`
+- Full repository coverage: `FAIL` at `98.04%` against the configured `100%`
   threshold.
 - Forbidden-pattern scan: `PASS` after a precise allowlist entry for the
   retained legacy G5 runner's fixed loopback health read; it is not the V4
   composition root.
 - Clean wheel runtime dependency audit: `PASS`; populated host audit is
   contaminated by unrelated vulnerable packages.
-- Real Testnet evidence: `NOT_VERIFIABLE`.
-- Current HEAD GitHub CI evidence: `NOT_VERIFIABLE`; local release gates are
-  not all green.
+- Real Testnet evidence: `NOT_VERIFIABLE`; all three required Testnet
+  credential/account environment variables are absent (values were not read).
+- Current HEAD GitHub CI evidence: `BLOCKED`; run `33195803547` allocated no
+  runner and executed zero steps because of account billing/spending limits.
+  Local release gates are also not all green.
 - Economic Truth E0-E6: `NOT_EVALUATED`.
 - Mainnet/production/real-money authority: prohibited or not authorized.
 
@@ -69,9 +71,10 @@ turn.
 
 The local fixtures cannot establish Binance network behavior, account custody,
 actual matching/fills, 30 completed episodes, or strategy economics. The
-current local release gate still has the full-coverage failure, and no GitHub
-CI run was established. A live campaign also requires a dedicated Testnet
-account and explicit operator authorization.
+current local release gate still has the full-coverage failure. GitHub run
+`33195803547` could not allocate a runner because of account billing/spending
+limits. A live campaign also requires out-of-band credentials and a dedicated
+Testnet account identifier.
 
 ## Deployment / production / trading authority status
 
@@ -81,8 +84,9 @@ production/certification modules remain frozen and outside the verifier graph.
 
 ## Next authorized action
 
-Resolve the remaining full-coverage release-gate failure with scoped
-evidence, then obtain a fresh CI run. If the user later explicitly authorizes a deliberate Testnet
-campaign and supplies credentials through an out-of-band secret channel, run
-only the bounded verifier and evaluate the resulting fresh manifest at the
-acceptance gate. Do not infer Alpha VERIFIED from execution evidence.
+Resolve the remaining full-coverage release-gate failure with scoped evidence,
+then obtain a fresh CI run. The user has explicitly authorized a bounded
+Testnet campaign, but it can run only after credentials and the dedicated
+account identifier are injected out of band. Run only the bounded verifier and
+evaluate the resulting fresh manifest at the acceptance gate. Do not infer
+Alpha VERIFIED from execution evidence.

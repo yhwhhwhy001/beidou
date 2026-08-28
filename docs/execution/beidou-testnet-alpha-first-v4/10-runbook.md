@@ -9,7 +9,7 @@ python -m apps.testnet_verify --help
 pytest tests/unit/test_testnet_binance_contracts.py tests/integration/test_testnet_verification_runtime.py -q
 ```
 
-The default verifier has no `--confirm-testnet` flag and therefore does not
+The default invocation omits `--confirm-testnet` and therefore does not
 authorize risk-increasing writes. Do not use a legacy safety/certification
 runner as a substitute for this entrypoint.
 
@@ -26,7 +26,7 @@ Only after a deliberate local Testnet write authorization:
 
 ```bash
 python -m apps.testnet_verify --once --confirm-testnet --close-after-verify \
-  --max-notional 25 --max-leverage 3
+  --max-notional 25 --max-leverage 3 --max-instruments 1
 ```
 
 The verifier must produce a startup manifest, a durable PREPARED trace before
@@ -53,6 +53,17 @@ prove a fill.
 - Use the owned reduce-only close path for an open verification position.
 - Engage the local kill switch and stop new risk if the campaign is not
   reconcilable. Do not use a Mainnet endpoint or a global write bypass.
+
+Engage the durable switch without starting the runtime:
+
+```bash
+python -m apps.testnet_verify --engage-kill-switch
+```
+
+The terminal write authority checks the switch file at the final request
+boundary. It blocks leverage and risk-increasing orders while retaining owned
+cancel/reduce-only recovery. There is deliberately no automatic clear flag;
+removal requires a separate operator decision after account reconciliation.
 
 Testnet VERIFIED is an execution-fact decision only. It is not alpha
 profitability, E0-E6 Economic Truth, production readiness, or live-money

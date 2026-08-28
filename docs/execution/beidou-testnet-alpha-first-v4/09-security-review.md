@@ -15,7 +15,7 @@
 | Severity | Risk | Evidence | Mitigation | Status |
 |---|---|---|---|---|
 | Critical | Mainnet, HTTP, credential-in-URL, or host-confusion write | Guard allowlist/negative tests | Exact HTTPS host normalization and hard Mainnet deny | PASS locally |
-| Critical | Unbounded risk-increasing write | Guard cap/kill-switch tests | Explicit confirmation, dedicated account, notional/leverage caps, kill switch | PASS locally |
+| Critical | Unbounded risk-increasing write | Guard cap/kill-switch tests | Explicit confirmation, dedicated account, per-order notional/leverage plus account-total exposure caps, durable kill switch checked at the final authority boundary | PASS locally |
 | High | Duplicate exposure after lost POST response | Runtime fault-injection tests | Durable identity and query-before-retry with the same client id; transport UNKNOWN never retries blindly | PASS locally |
 | High | False execution truth from malformed ACK or position query | Adapter/runtime contract tests | Identity-bound ACK validation and UNKNOWN fail-closed reconciliation | PASS locally |
 | High | Secret leakage into traces/logs/evidence | Redaction code and redacted manifest fields | Secrets are not written to DecisionTrace; tests and docs use placeholders only | PASS locally; live log audit pending |
@@ -35,6 +35,7 @@ authentication, not an internal approval bypass.
 
 ## Decision
 
-`PASS_WITH_CONDITIONS` for local code/security controls. Real Testnet custody,
-network, dependency, and operational evidence are absent, so Testnet admission
-remains `HOLD` and Mainnet remains prohibited.
+`PASS_WITH_CONDITIONS` for local code/security controls. Real Testnet
+credentials and account identity are absent from the current execution
+environment. Custody and operational evidence are therefore absent, so
+Testnet admission remains `HOLD` and Mainnet remains prohibited.

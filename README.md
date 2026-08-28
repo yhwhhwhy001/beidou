@@ -103,10 +103,18 @@ export BEIDOU_TESTNET_API_KEY='<provided-out-of-band>'
 export BEIDOU_TESTNET_API_SECRET='<provided-out-of-band>'
 export BEIDOU_TESTNET_ACCOUNT_ID='<dedicated-testnet-account>'
 python -m apps.testnet_verify --once --confirm-testnet --close-after-verify \
-  --max-notional 25 --max-leverage 3
+  --max-notional 25 --max-leverage 3 --max-instruments 1
 ```
 
-`apps.testnet_verify` 是本阶段唯一 Testnet 验证入口。它强制 HTTPS/host allowlist、Mainnet hard deny、绝对 notional/leverage 上限、stable clientOrderId、query-before-retry、ACK/持仓对账和可恢复 DecisionTrace。不要把凭据写入仓库、命令历史或聊天；`--confirm-testnet` 只代表本地 Testnet 写入确认，不代表生产授权。
+`apps.testnet_verify` 是本阶段唯一 Testnet 验证入口。它强制 HTTPS/host allowlist、Mainnet hard deny、绝对 notional/leverage/账户总暴露上限、stable clientOrderId、query-before-retry、ACK/持仓对账和可恢复 DecisionTrace。不要把凭据写入仓库、命令历史或聊天；`--confirm-testnet` 只代表本地 Testnet 写入确认，不代表生产授权。
+
+需要停止新增风险时，可在不启动 runtime 的情况下持久化 kill switch；该文件由最终写权限边界实时检查，reduce-only 收敛路径仍可使用：
+
+```bash
+python -m apps.testnet_verify --engage-kill-switch
+```
+
+只有在明确排除 UNKNOWN、确认专用 Testnet 账户已平仓并完成独立授权后，才可人工删除配置的 kill-switch 文件。CLI 不提供自动解除命令。
 
 Testnet VERIFIED 只证明决策与执行事实链闭合；它不证明策略盈利，也不等于 E0–E6 Economic Truth 或 `ALPHA VERIFIED`。真实 Testnet 证据缺失时状态必须保持 HOLD/NOT_VERIFIABLE。
 

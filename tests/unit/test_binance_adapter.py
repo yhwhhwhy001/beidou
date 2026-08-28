@@ -471,9 +471,11 @@ class TestBinanceAdapter:
             "executedQty": "0.005",
         }
         response = await adapter.cancel_order("18", venue_instrument)
-        assert response.status.value == "UNKNOWN"
+        # A terminal cancel can legitimately carry a filled prefix. Preserve
+        # that venue fact so the runtime can reconcile and close the exposure.
+        assert response.status.value == "CANCELED"
         assert response.raw_response is not None
-        assert response.raw_response["reason"] == "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"
+        assert str(response.executed_quantity.amount) == "0.005"
 
     @pytest.mark.asyncio
     async def test_client_order_recovery_query_requires_bound_identity(self):

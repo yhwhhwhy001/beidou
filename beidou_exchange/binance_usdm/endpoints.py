@@ -34,6 +34,8 @@ class Endpoint:
     ORDER: str = "/fapi/v1/order"
     ALL_ORDERS: str = "/fapi/v1/allOrders"
     OPEN_ORDERS: str = "/fapi/v1/openOrders"
+    USER_TRADES: str = "/fapi/v1/userTrades"
+    INCOME: str = "/fapi/v1/income"
     ALGO_ORDER: str = "/fapi/v1/algoOrder"
     OPEN_ALGO_ORDERS: str = "/fapi/v1/openAlgoOrders"
 

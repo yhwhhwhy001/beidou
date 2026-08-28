@@ -23,6 +23,7 @@ def _optional_overrides(
     kline_limit: int | None,
     trace_path: str | None,
     pool_state_path: str | None,
+    kill_switch_file: str | None,
     evidence_dir: str | None,
 ) -> dict[str, object]:
     values: dict[str, object] = {}
@@ -36,6 +37,7 @@ def _optional_overrides(
         ("kline_limit", kline_limit),
         ("trace_path", Path(trace_path) if trace_path else None),
         ("pool_state_path", Path(pool_state_path) if pool_state_path else None),
+        ("kill_switch_path", Path(kill_switch_file) if kill_switch_file else None),
         ("evidence_dir", Path(evidence_dir) if evidence_dir else None),
     ):
         if value is not None:
@@ -69,6 +71,12 @@ def _optional_overrides(
 )
 @click.option("--trace-path", default=None, help="Durable DecisionTrace JSONL path.")
 @click.option("--pool-state-path", default=None, help="Durable adaptive-pool state path.")
+@click.option("--kill-switch-file", default=None, help="Durable Testnet kill-switch file.")
+@click.option(
+    "--engage-kill-switch",
+    is_flag=True,
+    help="Engage the durable Testnet kill switch and exit without starting the runtime.",
+)
 @click.option("--evidence-dir", default=None, help="Evidence manifest output directory.")
 def main(
     rest_url: str | None,
@@ -83,6 +91,8 @@ def main(
     close_after_verify: bool,
     trace_path: str | None,
     pool_state_path: str | None,
+    kill_switch_file: str | None,
+    engage_kill_switch: bool,
     evidence_dir: str | None,
 ) -> None:
     """Run the sole Beidou Testnet Verification composition root."""
@@ -99,6 +109,7 @@ def main(
                 kline_limit=kline_limit,
                 trace_path=trace_path,
                 pool_state_path=pool_state_path,
+                kill_switch_file=kill_switch_file,
                 evidence_dir=evidence_dir,
             ),
             confirm_testnet=confirm_testnet,
@@ -107,6 +118,15 @@ def main(
         )
     except (TypeError, ValueError) as exc:
         raise click.ClickException(f"invalid Testnet verifier configuration: {exc}") from exc
+
+    if engage_kill_switch:
+        try:
+            config.kill_switch_path.parent.mkdir(parents=True, exist_ok=True)
+            config.kill_switch_path.write_text("engaged\n", encoding="utf-8")
+        except OSError as exc:
+            raise click.ClickException(f"could not engage Testnet kill switch: {exc}") from exc
+        click.echo(f"[testnet_verify] durable kill switch engaged: {config.kill_switch_path}")
+        return
 
     click.echo(
         "[testnet_verify] starting "

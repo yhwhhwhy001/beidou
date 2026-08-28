@@ -15,8 +15,10 @@ import json
 import math
 import os
 import sys
+import time
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,6 +29,7 @@ from beidou_data.trading_pool_lifecycle import (
     discover_startup_candidates,
 )
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
+from beidou_exchange.binance_usdm.endpoints import Endpoint
 from beidou_exchange.binance_usdm.rest_client import BinanceRESTClient
 from beidou_exchange.core.protocol import OrderRequest
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
@@ -49,7 +52,7 @@ from beidou_shared.types import (
 )
 from beidou_strategy.alpha.contracts import EntryProposal, FilterDecision, FilterResult
 from beidou_strategy.alpha.typed_graph import EntryNode, FeatureNode, FilterNode, FusionNode, TypedAlphaGraph
-from beidou_strategy.kernel_parity import StrategyKernel
+from beidou_strategy.kernel_parity import StrategyKernel, StrategyKernelContract
 from beidou_strategy.risk.adaptive_sizing_engine import SizingInput, compute_adaptive_sizing
 
 from .config import VerifierConfig
@@ -136,6 +139,7 @@ class _PoolStateFile:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.diff_path = path.with_name(f"{path.stem}-membership-diff.jsonl")
         self._states: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -168,6 +172,24 @@ class _PoolStateFile:
     @property
     def initial_state(self) -> list[dict[str, Any]]:
         return [copy.deepcopy(value) for value in self._states.values()]
+
+    def record_snapshot(self, snapshot: TradingPoolSnapshot) -> None:
+        """Append a durable membership diff artifact for every changed snapshot."""
+
+        if not any(snapshot.membership_diff.values()):
+            return
+        self.diff_path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "pool_id": snapshot.pool_id,
+            "pool_version": snapshot.version,
+            "evaluated_at": snapshot.evaluated_at.isoformat(),
+            "snapshot_hash": snapshot.snapshot_hash,
+            "membership_diff": snapshot.membership_diff,
+        }
+        with self.diff_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
 
 @dataclass(slots=True)
@@ -318,6 +340,7 @@ class VerificationRuntime:
             max_leverage=config.max_leverage,
             account_id=config.account_id,
             writes_enabled=config.confirm_testnet,
+            kill_switch_path=config.kill_switch_path,
         )
         self._pool_state = _PoolStateFile(config.pool_state_path)
         self.pool = pool or TradingPool(
@@ -371,6 +394,7 @@ class VerificationRuntime:
             await self._observe_symbol(symbol)
 
         snapshot = self.pool.snapshot()
+        self._pool_state.record_snapshot(snapshot)
         self._startup_facts = {
             "exchange_info": {
                 "status": "SUCCESS" if exchange_result.is_success() else "UNKNOWN",
@@ -671,6 +695,31 @@ class VerificationRuntime:
             return None
         return equity, available, account
 
+    @staticmethod
+    def _gross_account_exposure(account: dict[str, Any]) -> float | None:
+        """Return fail-closed gross position exposure from the signed account snapshot."""
+
+        rows = account.get("positions")
+        if not isinstance(rows, list):
+            return None
+        total = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            amount = _finite_float(row.get("positionAmt"))
+            if amount is None:
+                return None
+            if amount == 0:
+                continue
+            notional = _finite_float(row.get("notional"))
+            if notional is None:
+                mark_price = _finite_float(row.get("markPrice"))
+                if mark_price is None or mark_price <= 0:
+                    return None
+                notional = amount * mark_price
+            total += abs(notional)
+        return total
+
     async def _position_facts(self, symbol: str) -> dict[str, Any] | None:
         result = await self.adapter.get_position_risk(symbol)
         if not result.is_success() or not isinstance(result.data, list):
@@ -794,6 +843,169 @@ class VerificationRuntime:
             return None, {"reason": f"ACK_{reason}"}
         return raw, None
 
+    async def _settle_order_lifecycle(
+        self,
+        trace: DecisionTrace,
+        request: OrderRequest,
+        context: TerminalWriteContext,
+        raw_ack: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Poll an ACK to terminal state and cancel any unfilled remainder."""
+
+        terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        current = dict(raw_ack)
+        events: list[dict[str, Any]] = []
+        for attempt in range(self.config.order_poll_attempts):
+            status = str(current.get("status", "UNKNOWN")).upper()
+            events.append(
+                {
+                    "attempt": attempt,
+                    "status": status,
+                    "executed_qty": str(current.get("executedQty", "0")),
+                }
+            )
+            if status in terminal:
+                self.trace_store.update(
+                    trace.trace_id,
+                    self.trace_store.get(trace.trace_id).status,  # type: ignore[union-attr]
+                    metadata={**trace.metadata, "order_lifecycle": {"events": events, "remainder_action": "NONE"}},
+                )
+                return current, None
+            if self.config.order_poll_interval_seconds:
+                await asyncio.sleep(self.config.order_poll_interval_seconds)
+            query = await self.adapter.query_order_by_client_id(
+                str(request.venue_instrument.instrument_id),
+                str(request.client_order_id or ""),
+            )
+            if not query.is_success() or not isinstance(query.data, dict):
+                self.trace_store.update(
+                    trace.trace_id,
+                    TraceStatus.UNKNOWN,
+                    metadata={**trace.metadata, "order_lifecycle": {"events": events, "remainder_action": "UNKNOWN"}},
+                    error={"reason": "ORDER_POLL_UNKNOWN", "query": _result_error(query, "order poll unknown")},
+                )
+                return None, {"reason": "ORDER_POLL_UNKNOWN"}
+            valid, reason = self.adapter.validate_order_ack(request, query.data)
+            if not valid:
+                self.trace_store.update(
+                    trace.trace_id,
+                    TraceStatus.UNKNOWN,
+                    error={"reason": f"ORDER_POLL_ACK_{reason}"},
+                )
+                return None, {"reason": f"ORDER_POLL_ACK_{reason}"}
+            current = dict(query.data)
+
+        status = str(current.get("status", "UNKNOWN")).upper()
+        if status in terminal:
+            return current, None
+        order_id = str(current.get("orderId", ""))
+        if not order_id:
+            self.trace_store.update(trace.trace_id, TraceStatus.UNKNOWN, error={"reason": "ORDER_CANCEL_ID_UNKNOWN"})
+            return None, {"reason": "ORDER_CANCEL_ID_UNKNOWN"}
+        cancel_params = {
+            "symbol": str(request.venue_instrument.instrument_id),
+            "orderId": int(order_id),
+        }
+        cancel_context = self.guard.build_write_context(
+            intent_id=context.intent_id,
+            trace_id=trace.trace_id,
+            symbol=str(request.venue_instrument.instrument_id),
+            quantity=str(request.quantity.amount),
+            notional=context.notional,
+            leverage=context.leverage,
+            position_id=context.position_id,
+            pool_id=context.pool_id,
+            pool_version=context.pool_version,
+            pool_hash=context.pool_hash,
+            pool_symbols=context.pool_symbols,
+            command_hash=_stable_hash(cancel_params),
+            method="DELETE",
+            path=Endpoint.ORDER,
+            request_params=cancel_params,
+            order_id=order_id,
+        )
+        canceled = await self.adapter.cancel_order(
+            order_id,
+            request.venue_instrument,
+            write_context=cancel_context,
+        )
+        canceled_raw = canceled.raw_response if isinstance(canceled.raw_response, dict) else {}
+        canceled_status = str(canceled_raw.get("status", canceled.status.value)).upper()
+        if canceled.status is OrderStatus.UNKNOWN or canceled_status not in terminal:
+            self.trace_store.update(
+                trace.trace_id,
+                TraceStatus.UNKNOWN,
+                metadata={**trace.metadata, "order_lifecycle": {"events": events, "remainder_action": "UNKNOWN"}},
+                error={"reason": "ORDER_CANCEL_UNKNOWN", "response": _jsonable(canceled_raw)},
+            )
+            return None, {"reason": "ORDER_CANCEL_UNKNOWN"}
+        events.append(
+            {
+                "attempt": self.config.order_poll_attempts,
+                "status": canceled_status,
+                "executed_qty": str(canceled_raw.get("executedQty", "0")),
+            }
+        )
+        current_trace = self.trace_store.get(trace.trace_id)
+        assert current_trace is not None
+        self.trace_store.update(
+            trace.trace_id,
+            current_trace.status,
+            metadata={**current_trace.metadata, "order_lifecycle": {"events": events, "remainder_action": "CANCELED"}},
+        )
+        return dict(canceled_raw), None
+
+    async def _execution_attribution(
+        self,
+        symbol: str,
+        order_ids: list[str],
+        *,
+        start_time_ms: int,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+        """Build fee/funding/PnL only from signed venue account facts."""
+
+        trade_rows: list[dict[str, Any]] = []
+        for order_id in order_ids:
+            trades = await self.adapter.get_account_trades(symbol, order_id)
+            if not trades.is_success() or not isinstance(trades.data, list):
+                return None
+            trade_rows.extend(dict(row) for row in trades.data if isinstance(row, dict))
+        income = await self.adapter.get_income_history(
+            symbol,
+            income_type="FUNDING_FEE",
+            start_time=start_time_ms,
+        )
+        if not income.is_success() or not isinstance(income.data, list):
+            return None
+
+        def decimal_sum(rows: list[dict[str, Any]], field: str) -> Decimal | None:
+            total = Decimal("0")
+            try:
+                for row in rows:
+                    value = Decimal(str(row[field]))
+                    if not value.is_finite():
+                        return None
+                    total += value
+            except (InvalidOperation, KeyError, TypeError, ValueError):
+                return None
+            return total
+
+        commission = decimal_sum(trade_rows, "commission")
+        realized = decimal_sum(trade_rows, "realizedPnl")
+        income_rows = [dict(row) for row in income.data if isinstance(row, dict)]
+        funding = decimal_sum(income_rows, "income")
+        if commission is None or realized is None or funding is None:
+            return None
+        return (
+            {"status": "VENUE_TRADES", "commission": str(commission), "rows": _jsonable(trade_rows)},
+            {"status": "VENUE_INCOME", "amount": str(funding), "rows": _jsonable(income_rows)},
+            {
+                "status": "VENUE_TRADES",
+                "realized": str(realized),
+                "net_after_fee_funding": str(realized - commission + funding),
+            },
+        )
+
     async def _run_symbol(self, symbol: str, snapshot: TradingPoolSnapshot) -> dict[str, Any]:
         observation = self._observations.get(symbol)
         trace_id, intent_id, client_order_id = self._episode_ids(symbol, snapshot)
@@ -807,33 +1019,57 @@ class VerificationRuntime:
             )
             return self._record_no_action(trace, "MARKET_OBSERVATION_UNKNOWN")
 
-        factor_outputs = [
-            {
-                "component_id": component_id,
-                "version": "market-factors-v1",
-                "input_hash": _stable_hash(observation.features),
-                "output": observation.features[name],
-                "output_hash": _stable_hash({component_id: observation.features[name]}),
-            }
-            for component_id, name in (
-                ("momentum-5-v1", "fast_return"),
-                ("momentum-20-v1", "slow_return"),
-                ("volatility-v1", "realized_volatility"),
-                ("liquidity-v1", "liquidity_score"),
-            )
-        ]
+        component_manifest = self.kernel.active_component_manifest()
+        component_ids = [item["component_id"] for item in component_manifest]
         context = {
             "instrument_id": InstrumentId(symbol),
             "venue_id": VenueId("BINANCE"),
             "features": observation.features,
             "pool_status": PoolStatus.ACTIVE.value,
             "pool_hash": snapshot.snapshot_hash,
-            "factor_hash": _stable_hash(factor_outputs),
-            "active_components": [item["component_id"] for item in factor_outputs],
+            "factor_hash": _stable_hash(component_manifest),
+            "active_components": component_ids,
         }
+        evaluation_started = time.perf_counter()
         evaluation = await self.kernel.evaluate(context)
+        evaluation_latency_ms = max(0.0, (time.perf_counter() - evaluation_started) * 1000.0)
         proposal = evaluation.get("proposal") if isinstance(evaluation, dict) else None
         proposal_hash = self.kernel.proposal_hash(proposal)
+        raw_component_outputs = evaluation.get("component_outputs", {}) if isinstance(evaluation, dict) else {}
+        raw_component_outputs = raw_component_outputs if isinstance(raw_component_outputs, dict) else {}
+        factor_outputs: list[dict[str, Any]] = []
+        for component in component_manifest:
+            component_id = component["component_id"]
+            output = raw_component_outputs.get(component_id)
+            decision = "UNKNOWN"
+            confidence: float | None = None
+            if isinstance(output, FilterResult):
+                decision = output.decision.value
+                confidence = float(output.confidence_multiplier)
+            elif output is not None:
+                output_side = getattr(output, "side", None)
+                decision = "ACTION" if output_side is not None else "OUTPUT"
+                raw_confidence = _finite_float(getattr(output, "confidence", None))
+                confidence = raw_confidence
+            elif proposal is None:
+                decision = "VETO_OR_NOT_REACHED" if evaluation else "UNKNOWN"
+            factor_outputs.append(
+                {
+                    **component,
+                    "input_hash": _stable_hash(observation.features),
+                    "output": _jsonable(output),
+                    "output_hash": _stable_hash({component_id: _jsonable(output)}),
+                    "confidence": confidence,
+                    "decision": decision,
+                    "latency_ms": evaluation_latency_ms,
+                    "latency_scope": "kernel_total",
+                }
+            )
+        # A live Testnet cycle has no authority to manufacture Backtest/Paper
+        # evidence by comparing the Testnet proposal with itself.  Keep the
+        # parity gate explicitly NOT_RUN until frozen cross-mode inputs are
+        # supplied by an independent validation run.
+        parity = StrategyKernelContract.verify_parity(None, None, proposal)
         strategy_data = {
             "kernel": evaluation.get("kernel", "") if isinstance(evaluation, dict) else "",
             "mode": evaluation.get("mode", "") if isinstance(evaluation, dict) else "",
@@ -841,9 +1077,18 @@ class VerificationRuntime:
             "context_hash": evaluation.get("context_hash", "") if isinstance(evaluation, dict) else "",
             "proposal_hash": proposal_hash,
             "proposal": _jsonable(proposal),
-            "component_outputs": _jsonable(evaluation.get("component_outputs", {}))
-            if isinstance(evaluation, dict)
-            else {},
+            "component_outputs": _jsonable(raw_component_outputs),
+            "active_components": component_ids,
+            "active_component_count": len(component_ids),
+            "component_registry_hash": _stable_hash(component_manifest),
+            "parity": {
+                "status": parity.status.value,
+                "backtest_hash": parity.backtest_hash,
+                "paper_hash": parity.paper_hash,
+                "testnet_hash": parity.testnet_hash,
+                "input_hash": _stable_hash(context),
+                "discrepancies": list(parity.discrepancies),
+            },
         }
         if proposal is None or getattr(proposal, "side", None) is None:
             trace = self._base_trace(
@@ -894,7 +1139,20 @@ class VerificationRuntime:
                 factor_outputs=factor_outputs,
             )
             return self._record_no_action(trace, "ACCOUNT_FACTS_UNKNOWN")
-        equity, available_margin, _account = account_facts
+        equity, available_margin, account = account_facts
+        account_exposure = self._gross_account_exposure(account)
+        if account_exposure is None:
+            trace = self._base_trace(
+                trace_id=trace_id,
+                intent_id=intent_id,
+                client_order_id=client_order_id,
+                snapshot=snapshot,
+                symbol=symbol,
+                strategy=strategy_data,
+                rule=rule,
+                factor_outputs=factor_outputs,
+            )
+            return self._record_no_action(trace, "ACCOUNT_EXPOSURE_UNKNOWN")
         entry = self.pool.get_entry(symbol)
         capacity_utilization = min(1.0, max(0.0, 1.0 - entry.capacity_used_pct / 100.0)) if entry else 1.0
         sizing_input = SizingInput(
@@ -998,6 +1256,8 @@ class VerificationRuntime:
             return self._record_no_action(trace, "CONFIRM_TESTNET_REQUIRED")
         if not self.config.api_key or not self.config.api_secret:
             return self._record_no_action(trace, "TESTNET_CREDENTIALS_UNAVAILABLE")
+        if self.config.kill_switch_path.exists():
+            return self._record_no_action(trace, "TESTNET_KILL_SWITCH_ACTIVE")
         position_before = await self._position_facts(symbol)
         if position_before is None:
             return self._record_no_action(trace, "POSITION_BEFORE_UNKNOWN")
@@ -1014,7 +1274,6 @@ class VerificationRuntime:
             leverage=str(int(sizing.leverage)),
             position_id=f"position-{symbol}",
             command_hash=_stable_hash(leverage_params),
-            final_request_hash=_stable_hash(leverage_params),
             pool_id=snapshot.pool_id,
             pool_version=str(snapshot.version),
             pool_hash=snapshot.snapshot_hash,
@@ -1068,8 +1327,10 @@ class VerificationRuntime:
             notional=sizing.notional,
             leverage=str(int(sizing.leverage)),
             position_id=f"position-{symbol}",
+            client_order_id=client_order_id,
+            account_exposure=str(account_exposure),
+            projected_account_exposure=str(account_exposure + float(sizing.notional)),
             command_hash=trace.order_request_hash,
-            final_request_hash=trace.order_request_hash,
             pool_id=snapshot.pool_id,
             pool_version=str(snapshot.version),
             pool_hash=snapshot.snapshot_hash,
@@ -1098,6 +1359,18 @@ class VerificationRuntime:
                 "trace_id": trace_id,
                 "status": current_status,
                 "reason": (failure or {}).get("reason", "ORDER_UNKNOWN"),
+            }
+        raw_ack, lifecycle_failure = await self._settle_order_lifecycle(
+            trace,
+            order_request,
+            order_context,
+            raw_ack,
+        )
+        if raw_ack is None:
+            return {
+                "trace_id": trace_id,
+                "status": TraceStatus.UNKNOWN.value,
+                "reason": (lifecycle_failure or {}).get("reason", "ORDER_LIFECYCLE_UNKNOWN"),
             }
         exchange_order_id = str(raw_ack.get("orderId", ""))
         order_status = str(raw_ack.get("status", "UNKNOWN"))
@@ -1137,7 +1410,6 @@ class VerificationRuntime:
             "bps": ((average_price - reference_price) / reference_price * 10000.0) if average_price else None,
         }
         funding_rate = observation.features["funding_rate"]
-        fees = {"status": "KNOWN", "commission": raw_ack.get("commission", "UNKNOWN")}
         if not matched:
             self.trace_store.update(
                 trace_id, TraceStatus.UNKNOWN, position_after=position_after, reconciliation=reconciliation
@@ -1147,16 +1419,27 @@ class VerificationRuntime:
                 "status": TraceStatus.UNKNOWN.value,
                 "reason": "POSITION_RECONCILIATION_MISMATCH",
             }
-        final_status = TraceStatus.FILLED if order_status == OrderStatus.FILLED.value else TraceStatus.ACKED
+        if executed_value <= 0:
+            self.trace_store.update(
+                trace_id,
+                TraceStatus.FAILED,
+                position_after=position_after,
+                reconciliation=reconciliation,
+                error={"reason": "ORDER_TERMINAL_WITHOUT_FILL", "order_status": order_status},
+            )
+            return {"trace_id": trace_id, "status": TraceStatus.FAILED.value, "reason": "ORDER_NOT_FILLED"}
+        final_status = TraceStatus.FILLED
+        current_trace = self.trace_store.get(trace_id)
         self.trace_store.update(
             trace_id,
             final_status,
             position_after=position_after,
             reconciliation=reconciliation,
-            fees=fees,
-            funding={"rate": funding_rate, "status": "OBSERVED"},
             slippage=slippage,
-            pnl={"unrealized": position_after.get("unrealized_pnl"), "status": "OBSERVED"},
+            metadata={
+                **(current_trace.metadata if current_trace is not None else trace.metadata),
+                "public_funding_rate_at_decision": funding_rate,
+            },
         )
         result: dict[str, Any] = {
             "trace_id": trace_id,
@@ -1169,6 +1452,37 @@ class VerificationRuntime:
             result["close"] = close_result
             if close_result.get("trace_id"):
                 result["trace_ids"] = [trace_id, str(close_result["trace_id"])]
+        order_ids = [exchange_order_id]
+        if isinstance(result.get("close"), dict) and result["close"].get("order_id"):
+            order_ids.append(str(result["close"]["order_id"]))
+        attribution = await self._execution_attribution(
+            symbol,
+            order_ids,
+            start_time_ms=int(trace.timestamp.timestamp() * 1000),
+        )
+        if attribution is None:
+            self.trace_store.update(trace_id, TraceStatus.UNKNOWN, error={"reason": "EXECUTION_ATTRIBUTION_UNKNOWN"})
+            result["status"] = TraceStatus.UNKNOWN.value
+            result["reason"] = "EXECUTION_ATTRIBUTION_UNKNOWN"
+            return result
+        fees, funding, pnl = attribution
+        current = self.trace_store.get(trace_id)
+        assert current is not None
+        episode_closed = (
+            self.config.close_after_verify
+            and isinstance(result.get("close"), dict)
+            and result["close"].get("status") == TraceStatus.CLOSED.value
+        )
+        attributed_status = TraceStatus.CLOSED if episode_closed else current.status
+        self.trace_store.update(
+            trace_id,
+            attributed_status,
+            fees=fees,
+            funding=funding,
+            pnl=pnl,
+            metadata={**current.metadata, "attributed_order_ids": order_ids},
+        )
+        result["status"] = attributed_status.value
         return result
 
     async def _close_position(
@@ -1237,8 +1551,8 @@ class VerificationRuntime:
             leverage=str(leverage),
             position_id=base_trace.intent_id,
             reduce_only=True,
+            client_order_id=client_order_id,
             command_hash=trace.order_request_hash,
-            final_request_hash=trace.order_request_hash,
             pool_id=snapshot.pool_id,
             pool_version=str(snapshot.version),
             pool_hash=snapshot.snapshot_hash,
@@ -1253,6 +1567,13 @@ class VerificationRuntime:
                 "trace_id": trace_id,
                 "status": TraceStatus.UNKNOWN.value,
                 "reason": (failure or {}).get("reason", "CLOSE_UNKNOWN"),
+            }
+        raw_ack, lifecycle_failure = await self._settle_order_lifecycle(trace, order_request, context, raw_ack)
+        if raw_ack is None:
+            return {
+                "trace_id": trace_id,
+                "status": TraceStatus.UNKNOWN.value,
+                "reason": (lifecycle_failure or {}).get("reason", "CLOSE_LIFECYCLE_UNKNOWN"),
             }
         order_status = str(raw_ack.get("status", "UNKNOWN"))
         self.trace_store.update(
@@ -1277,12 +1598,72 @@ class VerificationRuntime:
         }
         final_status = TraceStatus.CLOSED if zero else TraceStatus.FILLED
         self.trace_store.update(trace_id, final_status, position_after=after, reconciliation=reconciliation)
-        return {"trace_id": trace_id, "status": final_status.value, "position_after": after["quantity"]}
+        return {
+            "trace_id": trace_id,
+            "status": final_status.value,
+            "position_after": after["quantity"],
+            "order_id": str(raw_ack.get("orderId", "")),
+        }
+
+    async def _run_quarantined_exit(
+        self,
+        symbol: str,
+        snapshot: TradingPoolSnapshot,
+    ) -> dict[str, Any]:
+        """Close dedicated-account exposure even when a symbol is quarantined."""
+
+        if not self.config.confirm_testnet or not self.config.api_key or not self.config.api_secret:
+            return {"status": TraceStatus.UNKNOWN.value, "reason": "QUARANTINED_EXIT_NOT_AUTHORIZED"}
+        position = await self._position_facts(symbol)
+        if position is None:
+            return {"status": TraceStatus.UNKNOWN.value, "reason": "QUARANTINED_POSITION_UNKNOWN"}
+        if float(position["quantity"]) == 0:
+            return {"status": TraceStatus.CLOSED.value, "reason": "QUARANTINED_ALREADY_FLAT"}
+        observation = self._observations.get(symbol)
+        rule = self.adapter.get_rule_snapshot(symbol)
+        if observation is None or not rule.is_known or rule.is_stale:
+            return {"status": TraceStatus.UNKNOWN.value, "reason": "QUARANTINED_EXIT_FACTS_UNKNOWN"}
+        trace_id, intent_id, client_order_id = self._episode_ids(symbol, snapshot)
+        base_trace = self._base_trace(
+            trace_id=f"{trace_id}-q",
+            intent_id=f"{intent_id}-q",
+            client_order_id=f"{client_order_id}-q",
+            snapshot=snapshot,
+            symbol=symbol,
+            strategy={"decision": "QUARANTINED_REDUCE_ONLY_EXIT"},
+            portfolio={"target_quantity": "0"},
+            rule=rule,
+        )
+        leverage = int(position.get("leverage") or 1)
+        close = await self._close_position(base_trace, snapshot, rule, position, leverage)
+        result = {**close, "reason": "QUARANTINED_REDUCE_ONLY_EXIT"}
+        if close.get("status") != TraceStatus.CLOSED.value or not close.get("order_id"):
+            return result
+        attribution = await self._execution_attribution(
+            symbol,
+            [str(close["order_id"])],
+            start_time_ms=int(base_trace.timestamp.timestamp() * 1000),
+        )
+        close_trace_id = str(close.get("trace_id", ""))
+        close_trace = self.trace_store.get(close_trace_id)
+        if attribution is None or close_trace is None:
+            if close_trace is not None:
+                self.trace_store.update(
+                    close_trace_id,
+                    TraceStatus.CLOSED,
+                    error={"reason": "QUARANTINED_EXIT_ATTRIBUTION_UNKNOWN"},
+                )
+            return {**result, "status": TraceStatus.UNKNOWN.value, "reason": "QUARANTINED_EXIT_ATTRIBUTION_UNKNOWN"}
+        fees, funding, pnl = attribution
+        self.trace_store.update(close_trace_id, TraceStatus.CLOSED, fees=fees, funding=funding, pnl=pnl)
+        return result
 
     async def run_once(self) -> VerificationSummary:
         startup = await self.startup()
         snapshot = self.pool.snapshot()
         episodes: list[dict[str, Any]] = []
+        for symbol in snapshot.quarantined_symbols:
+            episodes.append(await self._run_quarantined_exit(symbol, snapshot))
         for symbol in snapshot.active_symbols:
             episodes.append(await self._run_symbol(symbol, snapshot))
         trace_ids: list[str] = []
@@ -1291,11 +1672,12 @@ class VerificationRuntime:
                 trace_ids.extend(str(value) for value in item["trace_ids"])
             elif item.get("trace_id"):
                 trace_ids.append(str(item["trace_id"]))
-        if not snapshot.active_symbols:
-            status = "NOT_VERIFIABLE"
-        elif any(
-            item.get("status") in {TraceStatus.FILLED.value, TraceStatus.CLOSED.value}
-            or (isinstance(item.get("close"), dict) and item["close"].get("status") == TraceStatus.CLOSED.value)
+        if any(
+            (
+                item.get("status") == TraceStatus.CLOSED.value
+                if self.config.close_after_verify
+                else item.get("status") == TraceStatus.FILLED.value
+            )
             for item in episodes
         ):
             status = "EPISODE_COMPLETED"

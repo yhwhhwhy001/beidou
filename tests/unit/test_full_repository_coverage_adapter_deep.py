@@ -161,11 +161,12 @@ def test_adapter_order_and_cancel_ack_validation_matrix() -> None:
         ({**cancel_valid, "status": "BAD"}, "CANCEL_ACK_STATUS_UNKNOWN"),
         ({**cancel_valid, "origQty": "bad"}, "CANCEL_ACK_QUANTITY_INVALID"),
         ({**cancel_valid, "executedQty": "2"}, "CANCEL_ACK_EXECUTED_QTY_INVALID"),
-        ({**cancel_valid, "executedQty": "0.2"}, "CANCEL_ACK_PARTIAL_FILL_RECONCILIATION_REQUIRED"),
         ({**cancel_valid, "side": "BAD"}, "CANCEL_ACK_ORDER_SEMANTICS_UNKNOWN"),
     ]
     for response, reason in cancel_cases:
         assert BinanceUsdmAdapter._validate_cancel_ack("1", _instrument(), response) == (False, reason)
+    partially_filled_cancel = {**cancel_valid, "executedQty": "0.2"}
+    assert BinanceUsdmAdapter._validate_cancel_ack("1", _instrument(), partially_filled_cancel) == (True, "OK")
 
 
 @pytest.mark.asyncio
