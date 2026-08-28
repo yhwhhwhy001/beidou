@@ -14,7 +14,7 @@
 | AC-TN-012/013 | UNKNOWN uses same-id query and ACK identity checks | Fault fixtures distinguish query-found, deterministic reject, UNKNOWN, partial-fill polling and owned remainder cancellation | local fixture | runtime/adapter tests | PASS |
 | AC-TN-014/015 | Position reconciliation and reduce-only close converge | Simulated fill/partial-fill/close paths reach zero unresolved facts; UNKNOWN close is not completed | local fixture | runtime integration tests | PASS_WITH_CONDITIONS; live fill absent |
 | AC-TN-016 | Trace covers pool through execution truth | Trace stores pool, factor, strategy, portfolio, sizing, rule, ACK, position, and reconciliation fields | local fixture | runtime/trace tests | PASS_WITH_CONDITIONS; live trace absent |
-| AC-TN-017 | Current HEAD CI is green | `4251` tests, mypy, compile, scans, package validation, Bandit and write-registry oracle pass; full repository coverage is `98.04% < 100%`, and no candidate GitHub CI run exists yet | local/CI unavailable | fresh 2026-08-29 local gate outputs | BLOCKED |
+| AC-TN-017 | Current HEAD CI is green | `4251` tests, mypy, compile, scans, package validation, Bandit and write-registry oracle pass; full repository coverage is `98.04% < 100%`; GitHub run `33195803547` started zero steps because account billing/spending limits blocked runner allocation | local + GitHub | fresh 2026-08-29 local gates and GitHub check annotations | BLOCKED |
 | AC-TN-018 | README/CLI point to one verifier and distinguish alpha | README/CLI/help, installed-wheel smoke, and offline manifest agree on `apps.testnet_verify` | local | `README.md`, `python -m apps.testnet_verify --help`, `evidence/testnet-verification/20260828T122130Z-9b558584273c/manifest.json` | PASS |
 
 ## Independent verifier
@@ -40,6 +40,6 @@ criterion has not been met with fresh evidence.
 
 Local implementation contracts are `PASS_WITH_CONDITIONS`, but the Testnet
 admission decision is `BLOCKED` by missing real Testnet credentials/evidence,
-the failed 100% coverage release gate, absent candidate GitHub CI evidence,
-and independent acceptance. No `Testnet Ready`, `Completed`, or `Alpha
-VERIFIED` claim is authorized.
+the failed 100% coverage release gate, GitHub Actions billing preventing all
+required jobs from starting, and independent acceptance. No `Testnet Ready`,
+`Completed`, or `Alpha VERIFIED` claim is authorized.

@@ -30,8 +30,9 @@ no live Testnet write or real venue fill was performed.
   contaminated by unrelated vulnerable packages.
 - Real Testnet evidence: `NOT_VERIFIABLE`; all three required Testnet
   credential/account environment variables are absent (values were not read).
-- Current HEAD GitHub CI evidence: `NOT_VERIFIABLE`; local release gates are
-  not all green.
+- Current HEAD GitHub CI evidence: `BLOCKED`; run `33195803547` allocated no
+  runner and executed zero steps because of account billing/spending limits.
+  Local release gates are also not all green.
 - Economic Truth E0-E6: `NOT_EVALUATED`.
 - Mainnet/production/real-money authority: prohibited or not authorized.
 
@@ -70,9 +71,10 @@ no live Testnet write or real venue fill was performed.
 
 The local fixtures cannot establish Binance network behavior, account custody,
 actual matching/fills, 30 completed episodes, or strategy economics. The
-current local release gate still has the full-coverage failure, and no GitHub
-CI run was established. A live campaign also requires a dedicated Testnet
-account and explicit operator authorization.
+current local release gate still has the full-coverage failure. GitHub run
+`33195803547` could not allocate a runner because of account billing/spending
+limits. A live campaign also requires out-of-band credentials and a dedicated
+Testnet account identifier.
 
 ## Deployment / production / trading authority status
 

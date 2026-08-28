@@ -13,7 +13,10 @@ Fresh local evidence on 2026-08-29:
 - Configured full-repository coverage: `98.04%`; required `100%`: `FAIL`.
 - Real Binance Testnet campaign: `BLOCKED`; API key, API secret, and dedicated
   account identifier are absent from the execution environment.
-- GitHub required jobs for the candidate commit: not yet available.
+- GitHub run `33195803547` for candidate `429eaf5`: both required jobs failed
+  before step 1 with `runner_id=0`. Check annotations report account payment or
+  Actions spending-limit failure; this is an external infrastructure blocker,
+  not a test result.
 - Rollback: do not merge or enable campaign writes while required jobs or
   account reconciliation are UNKNOWN; use the durable kill switch to deny new
   risk and retain only owned cancel/reduce-only recovery.
