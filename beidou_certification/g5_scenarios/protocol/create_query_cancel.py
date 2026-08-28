@@ -10,6 +10,7 @@ CANCELED。dry_run 记账 0 且不发送任何请求。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from decimal import Decimal
@@ -37,6 +38,27 @@ def _require_ok(result: Result[T], action: str) -> T:
         raise RuntimeError(f"{action} failed: {result.error}")
     assert result.data is not None
     return result.data
+
+
+async def _get_order_with_retry(
+    client: Any, symbol: str, order_id: int, *, attempts: int = 3
+) -> tuple[Result[dict], int]:
+    """有界重试的订单查询 —— demo-fapi 撮合引擎最终一致性。
+
+    实测 (2026-08-29): POST /order 成功后立刻 GET /order 可能瞬态返回
+    -2013 "Order does not exist"(订单实际存在 —— 同 orderId 撤单仍成功,
+    数百毫秒内传播完成)。读查询允许有界重试;写请求绝不重试
+    (query-before-retry 语义)。
+    """
+    last: Result[dict] | None = None
+    for attempt in range(1, attempts + 1):
+        last = await client.get_order(symbol, order_id)
+        if last.is_ok and last.data is not None:
+            return last, attempt
+        if attempt < attempts:
+            await asyncio.sleep(0.5)
+    assert last is not None
+    return last, attempts
 
 
 def min_order_quantity(symbol: str, exchange_info: dict[str, Any]) -> tuple[float, str]:
@@ -106,14 +128,18 @@ class CreateQueryCancelScenario(ScenarioBase):
             cancelled = False
             final: dict[str, Any] = {}
             try:
-                queried = _require_ok(await ctx.client.get_order(ctx.symbol, order_id), "get_order")
-                steps.append({"action": "query", "status": queried.get("status")})
+                queried_res, query_attempts = await _get_order_with_retry(ctx.client, ctx.symbol, order_id)
+                queried = _require_ok(queried_res, "get_order")
+                steps.append({"action": "query", "status": queried.get("status"), "attempts": query_attempts})
                 logger.info("cancel_order %s %s %s", order_id, qty, ctx.symbol)
                 cancelled_res = _require_ok(await ctx.client.cancel_order(ctx.symbol, order_id), "cancel_order")
                 cancelled = True
                 steps.append({"action": "cancel", "status": cancelled_res.get("status")})
-                final = _require_ok(await ctx.client.get_order(ctx.symbol, order_id), "get_order_after_cancel")
-                steps.append({"action": "query_after_cancel", "status": final.get("status")})
+                final_res, final_attempts = await _get_order_with_retry(ctx.client, ctx.symbol, order_id)
+                final = _require_ok(final_res, "get_order_after_cancel")
+                steps.append(
+                    {"action": "query_after_cancel", "status": final.get("status"), "attempts": final_attempts}
+                )
             finally:
                 if not cancelled:  # 任一步异常也撤销挂单,不残留(设计规格§4:写操作→finally 恢复)
                     try:

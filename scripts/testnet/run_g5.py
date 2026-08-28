@@ -34,6 +34,16 @@ from typing import TYPE_CHECKING, Callable
 
 import yaml
 
+# Database-backed G5 scenarios bind their DSN at module import time
+# (e.g. ``ack_loss.PG_DSN = os.environ.get("BEIDOU_G5_PG_DSN", ...)``).
+# The mapping below must therefore run at module load, BEFORE the
+# ``beidou_certification.g5_scenarios`` subpackages are imported below;
+# the legacy in-main() mapping ran after those imports had already bound
+# the missing sentinel, so every PG-backed scenario failed with
+# ``missing "=" after "__MISSING_BEIDOU_G5_PG_DSN__"`` (BD-FIX 2026-08-29).
+if not os.environ.get("BEIDOU_G5_PG_DSN") and os.environ.get("DATABASE_URL"):
+    os.environ["BEIDOU_G5_PG_DSN"] = os.environ["DATABASE_URL"]
+
 from beidou_certification.g5_scenarios.base import (
     EvidenceWriteError,
     NotionalLedger,
@@ -325,9 +335,10 @@ def main() -> int:
     os.chdir(project_root)
 
     # Database-backed G5 scenarios bind their DSN at module import time.  The
-    # local Testnet environment exposes the same isolated database as
-    # DATABASE_URL; map it before any scenario module can be imported without
-    # ever printing or persisting the credential-bearing value.
+    # module-level mapping above already applied it before any scenario module
+    # could be imported; this in-main() branch remains as defense-in-depth for
+    # callers that set DATABASE_URL only after import (e.g. some tests).  The
+    # value is never printed or persisted.
     if not os.environ.get("BEIDOU_G5_PG_DSN") and os.environ.get("DATABASE_URL"):
         os.environ["BEIDOU_G5_PG_DSN"] = os.environ["DATABASE_URL"]
 
