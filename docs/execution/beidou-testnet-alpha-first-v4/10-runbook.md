@@ -29,6 +29,21 @@ python -m apps.testnet_verify --once --confirm-testnet --close-after-verify \
   --max-notional 25 --max-leverage 3 --max-instruments 1
 ```
 
+## 3b. Continuous supervised operation (launchd)
+
+The continuous loop survives session/terminal termination when supervised by
+launchd (KeepAlive + ThrottleInterval 30). Secrets stay in the gitignored
+`.env`; neither the wrapper nor the plist carries credentials:
+
+```bash
+cp deploy/com.beidou.testnet-verify.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.beidou.testnet-verify.plist
+launchctl list | grep com.beidou.testnet-verify
+```
+
+Stop: `launchctl bootout gui/501/com.beidou.testnet-verify`.
+Logs: `~/Library/Application Support/beidou-testnet-verify/stdout.log`.
+
 The verifier must produce a startup manifest, a durable PREPARED trace before
 the first write, leverage set/readback, ACK or UNKNOWN recovery, position
 readback, reconciliation, and (when filled) a reduce-only close. Inspect only
