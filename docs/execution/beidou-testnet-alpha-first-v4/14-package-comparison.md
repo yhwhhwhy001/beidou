@@ -21,11 +21,14 @@ Comparison source: uploaded
 
 ## Remaining non-pass items
 
-- `AC-TN-017`: local tests pass, but the configured 100% repository coverage
-  job remains red at 98.04%; no current candidate GitHub run exists yet.
-- Real AC-TN-004/009/010/014/015/016 evidence remains `NOT_VERIFIABLE` until a
-  dedicated-account Testnet campaign runs and reconciles to zero unresolved
-  facts.
+- `AC-TN-017`: the clean detached candidate passes the configured 100%
+  repository coverage gate (`45891/45891`) and all local quality/security
+  checks, but no successful required GitHub run or independent acceptance
+  exists for the remediation PR HEAD.
+- Historical real AC-TN-004/009/010/014/015/016 facts remain preserved, and a
+  fresh signed read-only reconciliation reports zero account risk/unresolved
+  facts. They cannot be promoted to a new bounded-campaign claim because the
+  historical KeepAlive loop exceeded authorization.
 - AC-STR-004 and Economic Truth E0-E6 are `NOT_RUN`/`NOT_EVALUATED`; they must
   not be inferred from Testnet execution.
 - The V4 stability claim still requires at least 30 completed decision
@@ -44,5 +47,6 @@ disclosure, synthetic promotion, or bypassing UNKNOWN.
 | PKG-08 freeze/isolation | Legacy G5 gate was disabled rather than merely bypassed by the verifier | Legacy G5 gate restored; verifier remains separate |
 | AC-TN-017 | GitHub runner still cannot start because of billing/spending limits | Remains BLOCKED; local results cannot substitute |
 
-The prior `CONDITIONAL PASS` is withdrawn until the remediation candidate has
-fresh clean full verification and required CI.
+The prior `CONDITIONAL PASS` remains withdrawn. Local G7 is now green at
+`490ee9f697a791520a74a801331ad78f7ff81e24`; required CI and independent
+acceptance remain blocking.

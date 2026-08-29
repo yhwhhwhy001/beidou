@@ -15,7 +15,7 @@
 | Severity | Risk | Evidence | Mitigation | Status |
 |---|---|---|---|---|
 | Critical | Mainnet, HTTP, credential-in-URL, or host-confusion write | Guard allowlist/negative tests | Exact HTTPS host normalization and hard Mainnet deny | PASS locally |
-| Critical | Unbounded risk-increasing write | KeepAlive incident plus guard/config tests | Confirmed writes require `--once`; verifier daemon launchers removed/prohibited; dedicated account caps and durable kill switch remain terminal controls | FIXED IN CANDIDATE / REVALIDATION REQUIRED |
+| Critical | Unbounded risk-increasing write | KeepAlive incident plus guard/config tests | Confirmed writes require `--once`; verifier daemon launchers removed/prohibited; dedicated account caps and durable kill switch remain terminal controls | FIXED / LOCALLY VERIFIED |
 | High | Duplicate exposure after lost POST response | Runtime fault-injection tests | Durable identity and query-before-retry with the same client id; transport UNKNOWN never retries blindly | PASS locally |
 | High | False execution truth from malformed ACK or position query | Adapter/runtime contract tests | Identity-bound ACK validation and UNKNOWN fail-closed reconciliation | PASS locally |
 | High | Secret leakage into traces/logs/evidence | Redaction code and redacted manifest fields | Secrets are not written to DecisionTrace; tests and docs use placeholders only | PASS locally; live log audit pending |
@@ -24,12 +24,12 @@
 | High | Legacy governance weakening | Default legacy preflight no longer required G5 | Restore historical G5 gate; V4 verifier remains isolated | FIXED |
 | Medium | Local JSONL/evidence files are filesystem-local | Local path configuration and `0600` trace creation | Restrict paths/permissions and retain artifacts only in the intended workspace | CONDITIONAL |
 
-Fresh tool evidence: Bandit reported `0` issues in an isolated venv. A clean
-wheel environment reported `No known vulnerabilities found` for its installed
-runtime dependencies. The populated development host's `pip-audit` instead
-reported 26 vulnerabilities across unrelated installed packages (including
-old `pytest`, `gitpython`, and `aiohttp`), so the repository CI dependency
-audit is not claimed green from this host.
+Clean detached candidate evidence at
+`490ee9f697a791520a74a801331ad78f7ff81e24`: Bandit passed with no findings.
+The dependency audit reported no known vulnerabilities in auditable
+third-party dependencies; the local editable `beidou` distribution cannot be
+resolved from PyPI and is explicitly not claimed audited. Required GitHub CI
+is still absent.
 
 No API key or secret value was printed. Existing `.env` variables were loaded
 only inside signed GET processes for account reconciliation; output was
@@ -38,6 +38,7 @@ HMAC is exchange authentication, not an internal approval bypass.
 
 ## Decision
 
-`BLOCKED` for release/new campaign until clean full verification, independent
-review, and GitHub CI pass. Testnet account risk is currently flat and
-reconciled; the kill switch remains engaged. Mainnet remains prohibited.
+Local security verification: `PASS_WITH_CONDITIONS`. Release/new campaign is
+`BLOCKED` until independent review and required GitHub CI pass. Testnet account
+risk is currently flat and reconciled; the kill switch remains engaged.
+Mainnet remains prohibited.

@@ -3,6 +3,7 @@
 Decision: `BLOCKED`
 
 Candidate branch: `codex/v4-incident-remediation`
+Validated code SHA: `490ee9f697a791520a74a801331ad78f7ff81e24`
 Incident baseline: `db2debcfed1a969e627b8a34b4e6bb89d8815184`
 Mainnet: `PROHIBITED`
 
@@ -15,19 +16,18 @@ Mainnet: `PROHIBITED`
 - DecisionTrace recovery: the sole FILLED trace linked to a later
   quantity/direction-matched CLOSED reduce-only trace; unresolved=`0`.
 - Focused incident regressions: green.
-- Clean full regression, 100% repository coverage, current registry oracle,
-  Ruff, mypy, compile, packaging, and governance scans: pending on this
-  candidate.
+- Clean detached G7: `4612 passed`; `45891/45891` statements and `100.00%`
+  coverage; registry oracle, Ruff, mypy, compileall, package validator,
+  governance scans, Bandit and dependency audit passed.
 - GitHub Actions: runner allocation remains blocked by account
   billing/spending limits; this is not a passing CI result.
 
 ## Release blockers
 
 1. AC-TN-017 requires current required GitHub jobs to complete successfully.
-2. All clean candidate gates must be rerun after the final remediation diff.
-3. Independent review must confirm that current-run manifest semantics,
+2. Independent review must confirm that current-run manifest semantics,
    restart recovery, write authority, and legacy G5 isolation are correct.
-4. The historical episode count cannot be described as one bounded campaign
+3. The historical episode count cannot be described as one bounded campaign
    because launchd KeepAlive exceeded the authorized scope.
 
 ## Rollback and safety state
@@ -36,4 +36,5 @@ Do not clear the kill switch or start another campaign. Keep the disabled
 LaunchAgent installed only as inert local incident evidence until the user
 chooses to remove it. Mainnet and production remain unauthorized.
 
-This document is not `GREEN_LIGHT_TO_SHIP`.
+Binary G9 decision: `BLOCKED`. This document is not
+`GREEN_LIGHT_TO_SHIP`.

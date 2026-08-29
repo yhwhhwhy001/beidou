@@ -44,13 +44,14 @@ manifests are preserved and not staged.
 
 | Risk | Next check |
 |---|---|
-| Full candidate regression unknown | clean detached worktree test/coverage |
-| Registry digest drift | rebuild and independent oracle |
+| Full candidate regression | clean detached `490ee9f697a791520a74a801331ad78f7ff81e24`: `4612 passed`, `45891/45891`, `100.00%` |
+| Registry digest drift | rebuilt registry and independent oracle both pass |
 | GitHub required jobs unavailable | rerun after billing/spending limit recovery |
 | Independent review pending | review final diff and raw package criteria |
 
 ## Next actions
 
-1. Run clean full tests, coverage and static/governance checks.
-2. Review and fix any failures; update final candidate evidence.
-3. Commit/push remediation and merge only if release gates permit.
+1. Commit and push the documentation convergence; open a PR so required CI
+   runs on the remediation head.
+2. Obtain independent acceptance/release review.
+3. Merge only after all required checks pass.

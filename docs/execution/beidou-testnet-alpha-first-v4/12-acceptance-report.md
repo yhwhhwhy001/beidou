@@ -1,6 +1,7 @@
 # Acceptance report (incident-remediation candidate)
 
 Candidate branch: `codex/v4-incident-remediation`
+Validated code SHA: `490ee9f697a791520a74a801331ad78f7ff81e24`
 Mainnet: `PROHIBITED`
 Overall decision: `BLOCKED`
 
@@ -17,7 +18,7 @@ Overall decision: `BLOCKED`
 | AC-TN-012/013 | Same-client-id query-before-retry and ACK identity contracts remain tested. | PASS locally |
 | AC-TN-014/015 | Fresh signed GET showed no nonzero positions/open orders/algo orders. Startup linked the sole FILLED trace to a later quantity-matched CLOSED reduce-only trace; unresolved=`0`. | PASS for current account risk |
 | AC-TN-016 | Historical trace chain exists; manifest current-run write semantics and restart close linkage were corrected in this candidate. | PASS_WITH_INCIDENT_CAVEAT |
-| AC-TN-017 | GitHub Actions runner allocation is blocked by billing/spending limits. Fresh full candidate verification is still required before merge. | BLOCKED |
+| AC-TN-017 | Clean detached G7 passed: `4612 passed`, `45891/45891` statements (`100.00%`), Ruff, mypy, compileall, registry oracle, governance scans, package validator, Bandit and dependency audit. Required GitHub Actions and independent acceptance have not passed. | BLOCKED |
 | AC-TN-018 | README, CLI, and runbook point to the verifier; confirmed writes require `--once`; daemon/KeepAlive verifier launchers are prohibited by architecture test. | PASS locally |
 
 ## Incident findings and remediation
@@ -47,8 +48,8 @@ do not establish profitability, OOS robustness, or `ALPHA VERIFIED`.
 
 ## Admission decision
 
-The dedicated Testnet account is currently reconciled to zero risk, but this
-candidate is not admitted until clean full regression, 100% repository
-coverage, static/governance checks, independent review, and required GitHub CI
-are current and green. No new campaign may start while the kill switch is
-engaged or any gate is unknown.
+The dedicated Testnet account is currently reconciled to zero risk and local
+G7 is green for the exact validated code SHA. This candidate is not admitted
+until independent acceptance and required GitHub CI are current and green. No
+new campaign may start while the kill switch is engaged or any gate is
+unknown/blocked.

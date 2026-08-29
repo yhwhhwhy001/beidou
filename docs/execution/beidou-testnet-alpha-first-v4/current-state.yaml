@@ -3,6 +3,7 @@ run_id: "2026-08-29-v4-incident-remediation"
 project:
   path: "/Users/maguannan/beidou"
   version: "codex/v4-incident-remediation"
+  validated_code_sha: "490ee9f697a791520a74a801331ad78f7ff81e24"
   environment: "local-and-binance-demo-read-only"
 authority:
   code_changes: true
@@ -38,15 +39,16 @@ gates:
   G3: {progress: COMPLETE, decision: READY, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
   G4: {progress: COMPLETE, decision: PASS, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
   G5: {progress: COMPLETE, decision: RESOLVED, evidence: ["07-debugging-log.md"], reason: null, updated_at: "2026-08-29"}
-  G6: {progress: IN_PROGRESS, decision: null, evidence: ["08-code-review.md"], reason: "final diff review pending", updated_at: "2026-08-29"}
-  G7: {progress: IN_PROGRESS, decision: null, evidence: [], reason: "clean full verification pending", updated_at: "2026-08-29"}
-  G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "G7 and GitHub CI incomplete", updated_at: "2026-08-29"}
-  G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 blocked", updated_at: "2026-08-29"}
+  G6: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: ["08-code-review.md"], reason: "self-review complete; independent reviewer decision remains a G8 condition", updated_at: "2026-08-29"}
+  G7: {progress: COMPLETE, decision: PASS, evidence: ["05-test-strategy.md", "09-security-review.md"], reason: "clean detached verification passed for validated_code_sha", updated_at: "2026-08-29"}
+  G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "required GitHub CI and independent acceptance are incomplete", updated_at: "2026-08-29"}
+  G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 and independent release gate remain blocked", updated_at: "2026-08-29"}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "Mainnet and production prohibited", updated_at: "2026-08-29"}
 blockers:
   - "GitHub Actions runner allocation blocked by billing/spending limits"
-  - "Clean full candidate verification not yet complete"
+  - "Required GitHub CI has not passed for the remediation PR HEAD"
+  - "Independent acceptance/release review has not passed"
 residual_risks:
   - "Historical episode count was produced partly by an unauthorized KeepAlive loop"
   - "Economic Truth E0-E6 remains NOT_EVALUATED"
-next_authorized_action: "Finish clean verification, independent review, then push remediation; do not start a new campaign."
+next_authorized_action: "Commit and push the documentation convergence, open a PR, and evaluate required CI; do not merge or start a new campaign while G8/G9 are blocked."

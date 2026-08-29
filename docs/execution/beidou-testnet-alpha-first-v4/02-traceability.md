@@ -11,8 +11,8 @@
 | PKG-06 kernel/components | component output/VETO/proposal traces | kernel/runtime integration | PASS_WITH_INCIDENT_CAVEAT |
 | PKG-07 lifecycle/reconciliation | same-id recovery; later close linkage; signed flat account readback | runtime integration + fresh signed GET | PASS for current account risk |
 | PKG-08 freeze/isolation | verifier bypasses frozen modules; legacy G5 gate restored | architecture + legacy preflight tests | PASS locally |
-| PKG-09 CI/economic truth | E0-E6 remains separate; GitHub runner cannot allocate | economic truth tests; CI run evidence | BLOCKED |
-| PKG-10 docs/default entry | README/runbook/acceptance/release reports incident-aware | doc/CLI/architecture tests | IN_PROGRESS until final candidate SHA/results |
+| PKG-09 CI/economic truth | E0-E6 remains separate; clean local G7 passed at `490ee9f697a791520a74a801331ad78f7ff81e24`; required GitHub CI and independent acceptance are absent | economic truth tests; detached full-suite/coverage/static evidence; pending PR CI | BLOCKED |
+| PKG-10 docs/default entry | README/runbook/acceptance/release reports are incident-aware and identify the validated code SHA | doc/CLI/architecture tests; package validator | PASS locally / G8 dependent |
 
 All AC-TN requirement-level decisions are recorded in
 `12-acceptance-report.md`. Historical Testnet facts are not promoted to a
