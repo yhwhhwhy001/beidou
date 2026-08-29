@@ -44,7 +44,7 @@ GATE_ORDER: tuple[TruthGate, ...] = (
 
 
 class GateStatus(str, Enum):
-    PASS = "PASS"  # noqa: S105 - gate status value, not a credential
+    PASS = "PASS"  # noqa: S105  # nosec B105 - gate status value, not a credential
     FAIL = "FAIL"
     NOT_EVALUATED = "NOT_EVALUATED"
 

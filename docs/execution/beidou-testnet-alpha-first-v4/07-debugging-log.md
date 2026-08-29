@@ -13,6 +13,7 @@
 | First detached coverage run collected 0% | invoking another worktree's `pytest` executable resolved editable imports there | coverage paths pointed at `/Users/maguannan/beidou` | invoke the environment as `python -m pytest` from the detached candidate |
 | Clean candidate reached 99.98% instead of required 100% | coverage had implicitly depended on ignored local config/storage facts | detached XML identified 11 uncovered statements across config, preflight, and feed | make tests construct environment config, migration/journal failures, and valid clock offset explicitly |
 | Next clean candidate reached 99.99% | the accelerated EvidenceBridge stub returned an empty report and nearline lacked an unclosed-bar case | coverage report identified three engine statements | return deterministic applied/rejected stub facts and exercise the unclosed-bar guard |
+| CI Bandit command returned one low false positive | the `PASS` gate-status enum had a Ruff suppression but no Bandit-specific annotation | B105 at `economic_truth.py:47` | add scoped `nosec B105` with credential-boundary rationale |
 
 Unknowns remain fail-closed. No new campaign was used to diagnose or repair
 these defects.

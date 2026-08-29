@@ -846,7 +846,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "8b4785b3d052ee17db0e55310fd24228097d8772c994c9938e7b0d2b957941ea",
+ "governance_digest": "0e1fdd789cec0a2d7e317fb16571962f664c96e7c18d135b46749b236aa84470",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1049,7 +1049,7 @@
   "beidou_research/data/dataset_manifest.py": "96d02e9b332f520bfccf5ce6a553393f79ed5c3129dea781376a7b1d5759c1c7",
   "beidou_research/data/kline_store.py": "28f6256206395a0513d3453fe8525489ea7bc59c71708a0ff83ee368b64837b6",
   "beidou_research/data/pit_lineage.py": "8c95ce954dae0eb1803bf8c29bfd5c8e61053f25819d46754f39ec2e302b9bc9",
-  "beidou_research/economic_truth.py": "20e6d3432d685078e77af98a153bce45c79d232046e95580cdb56dda17bee34b",
+  "beidou_research/economic_truth.py": "e603a4737f929384d728f8b704401668da515f27dffe51de13ae9ca7198e20cf",
   "beidou_research/experiments/__init__.py": "aca599fcccc256f875ef3db8c9ddbf506ab70a2970178a4842cab1b55cb44f40",
   "beidou_research/experiments/checkpoint.py": "336eac98a5279f3b516ab34edbe4bca86292e2e96293170a3b4b10da373ef890",
   "beidou_research/experiments/contracts.py": "ba34e42db40bc8deb6214a45aa0c51c63499ed27ca88f9c8e2578c30291d8f50",
