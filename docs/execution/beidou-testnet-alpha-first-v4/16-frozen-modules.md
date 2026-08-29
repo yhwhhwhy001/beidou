@@ -14,7 +14,7 @@ architecture boundary is machine-enforced by
 | Module / asset | Status | Reason |
 |---|---|---|
 | `beidou_exchange/core/signed_capability.py` | `FUTURE_MAINNET` (code marker `MODULE_DEPLOYMENT_STATUS`) | External Ed25519 per-order capability issuance is production-governance complexity, not required for local single-operator Testnet verification |
-| `beidou_certification` | FROZEN | G5–G8 certification remains available as an explicitly invoked legacy path; it is no longer a gate for Testnet strategy experiments |
+| `beidou_certification` | FROZEN（2026-08-29 起不再作为启动门禁） | G5–G8 certification remains available as an explicitly invoked legacy path; `run_preflight` no longer requires an existing G5 certificate (PKG-08-M03) — the gate only runs when `_run_preflight(..., require_g5_certificate=True)` is called explicitly |
 | `beidou_production` | FROZEN | Production release/promotion chain is out of Testnet scope |
 | `beidou_chaos` | FROZEN (fault-injection pieces reusable) | Chaos engineering belongs to the future production stage |
 | `beidou_launcher` G5/G7 producer + supervisor | DEPRECATED IN TESTNET DEFAULT | Legacy runtime remains the certification runner; the verifier is the sole Testnet verification entry |

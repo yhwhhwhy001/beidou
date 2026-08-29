@@ -3,7 +3,7 @@
 | Requirement ID | Expected | Actual | Environment | Evidence | Result |
 |---|---|---|---|---|---|
 | AC-TN-001 | Mainnet/unsafe destination is hard denied | Guard rejects Mainnet, HTTP, credentials-in-URL, host confusion | local + live | `tests/unit/test_testnet_guard.py`, `beidou_exchange/testnet_guard.py` | PASS |
-| AC-TN-002 | Verifier does not require Ed25519/G5 certificate | CLI/runtime dependency boundary has no frozen certification imports; real campaign ran with API key/secret + local confirm only | local + live | `tests/architecture/test_testnet_verification_boundaries.py`, campaign manifests | PASS |
+| AC-TN-002 | Verifier does not require Ed25519/G5 certificate | CLI/runtime dependency boundary has no frozen certification imports; real campaign ran with API key/secret + local confirm only. Since 2026-08-29 the legacy engine start (`run_preflight`) also no longer requires an existing G5 certificate (PKG-08-M03; the gate is frozen and opt-in only) | local + live | `tests/architecture/test_testnet_verification_boundaries.py`, `tests/unit/test_preflight_g5_fail_closed.py`, campaign manifests | PASS |
 | AC-TN-003 | Signed REST retains Binance HMAC | Exact encoded query signature contract passes | local | `tests/unit/test_binance_rest_client.py` | PASS |
 | AC-TN-004 | Pool comes from exchangeInfo/market facts with source hashes | Live pool built from demo-fapi exchangeInfo with 5 ACTIVE symbols and per-source hashes (BCH/BTC/ETH/LTC/XRP) | live | `evidence/testnet-verification/20260828T20*Z-*/manifest.json` | PASS |
 | AC-TN-005 | Only ACTIVE pool symbols can increase risk | Runtime pool gate + live orders only from ACTIVE symbols | local + live | pool/runtime tests + live traces | PASS |

@@ -727,9 +727,15 @@ def _run_preflight(
 
 
 def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
-    """Run launcher preflight; writable Testnet always requires an existing G5 certificate."""
+    """Run launcher preflight.
 
-    return _run_preflight(project_root, mode, port, require_g5_certificate=True)
+    BD-FIX (V4 PKG-08-M03): 现有 G5 证书不再是 Testnet 启动门禁 —— 认证
+    框架与证书验证代码冻结留存(beidou_certification / _g5_certificate_probe),
+    仅当显式认证路径调用 ``_run_preflight(..., require_g5_certificate=True)``
+    时才执行证书门禁。默认 Testnet 策略实验启动不再要求 G5。
+    """
+
+    return _run_preflight(project_root, mode, port, require_g5_certificate=False)
 
 
 def run_g5_producer_preflight(project_root: Path, port: int) -> tuple[list[CheckResult], Any | None]:
