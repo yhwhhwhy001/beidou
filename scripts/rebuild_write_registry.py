@@ -174,7 +174,7 @@ _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
     # The canonical Testnet verifier is held in the registry until the
     # bounded runtime guard is explicitly confirmed for a local campaign.
     "apps/testnet_verify/runtime.py::VerificationRuntime._create_order::create_order": {
-        "capability": "BOUNDED_TESTNET_VERIFIER_WRITE",
+        "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
         "status": "HARD_HOLD",
         "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
         "owner": "Execution Owner",

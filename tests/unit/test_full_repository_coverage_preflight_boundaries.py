@@ -133,8 +133,17 @@ def test_launchd_drift_detects_missing_proxy_argument(tmp_path: Path) -> None:
     assert evidence["installed"] is True
 
 
-def test_run_preflight_covers_clean_storage_policy_guard_and_config_failures(monkeypatch) -> None:
-    root = Path(__file__).resolve().parents[2]
+def test_run_preflight_covers_clean_storage_policy_guard_and_config_failures(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    for directory in (
+        root / "config" / "policies",
+        root / "beidou_core",
+        root / "apps" / "autopilot",
+        root / ".beidou",
+        root / "evidence" / "bootstrap",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    (root / "pyproject.toml").touch()
     monkeypatch.setattr(preflight, "current_commit", lambda _root: "a" * 40)
     monkeypatch.setattr(preflight, "_git_worktree_state", lambda _root: (True, [], ""))
     monkeypatch.setattr(preflight, "_port_available", lambda _port: (True, "available"))

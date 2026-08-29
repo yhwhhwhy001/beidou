@@ -846,7 +846,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "0d9e7643c92ea2f90e90067dfbd1f8a156800e400d4fbb44fa0ee94cde266631",
+ "governance_digest": "8b4785b3d052ee17db0e55310fd24228097d8772c994c9938e7b0d2b957941ea",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1260,7 +1260,7 @@
   "scripts/migrate_config_v2.py": "15115de7350d967d011912a39a869363a29be4b062bda0c284ae5022d8187762",
   "scripts/mining_cron.sh": "e7fcf34ae1a8caa8df7162b8088b41717916080c027f30b0585e1b84d7540e94",
   "scripts/monitor_daemon.py": "552e9d3917812f68ecae1eb1b39fd1463e0e3294beea0423eb41bccd43ff2593",
-  "scripts/rebuild_write_registry.py": "a5f026c3227ccf368e71c5a9a146da76d56890f110d052e89ac258836a0e3eb1",
+  "scripts/rebuild_write_registry.py": "5aea8160764f0d286b31ac98e5d8c3fb163950d0a42e6e5f96c99ee824989d76",
   "scripts/recalibrate_r_m03_1.py": "469af191fae5bd65c625aa81aa7556a7e28ecef63901b0a8924b3c3ddabccb6b",
   "scripts/run_migrations.py": "2a7838ce336c3743f0483053822675776bf7a73cbeb28bad93de57565c50aca0",
   "scripts/run_replay_fixture.py": "f22f22e4cef87f9c4d3d1658fac0e5dd5891034077c4764ffd55cd83d917c716",
@@ -2643,7 +2643,7 @@
   },
   {
    "call_graph": "run_once -> durable PREPARED -> bound Testnet guard -> sole adapter create_order",
-   "capability": "BOUNDED_TESTNET_VERIFIER_WRITE",
+   "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
    "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
    "id": "WRITE-APPS-CREATE-ORDER-6AA7B8A5",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-6AA7B8A5]",
