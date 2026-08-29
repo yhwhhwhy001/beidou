@@ -40,6 +40,10 @@ def test_preflight_g5_journal_probe_success_path(monkeypatch) -> None:
     monkeypatch.setenv("BEIDOU_BINANCE_API_KEY", "testnet-api-key")
     monkeypatch.setenv("BEIDOU_BINANCE_API_SECRET", "testnet-api-secret")
     monkeypatch.setenv("BEIDOU_SIGNING_KEY", "testnet-signing-key")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://beidou_app@localhost:5432/beidou_testnet",
+    )
     monkeypatch.setattr(
         PolicyLoader,
         "load",

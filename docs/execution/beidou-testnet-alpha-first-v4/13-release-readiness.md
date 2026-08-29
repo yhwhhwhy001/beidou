@@ -2,25 +2,38 @@
 
 Decision: `BLOCKED`
 
-Candidate branch: `codex/v4-audit-remediation-campaign`.
-Mainnet remains `PROHIBITED`.
+Candidate branch: `codex/v4-incident-remediation`
+Incident baseline: `db2debcfed1a969e627b8a34b4e6bb89d8815184`
+Mainnet: `PROHIBITED`
 
-Fresh local evidence on 2026-08-29:
+## Current evidence
 
-- Compile, Ruff lint, full configured mypy, package validation, repository
-  governance scans, independent write-registry oracle, and Bandit: `PASS`.
-- Full regression under coverage: `4251 passed`.
-- Configured full-repository coverage: `98.04%`; required `100%`: `FAIL`.
-- Real Binance Testnet campaign: `BLOCKED`; API key, API secret, and dedicated
-  account identifier are absent from the execution environment.
-- GitHub run `33195803547` for candidate `429eaf5`: both required jobs failed
-  before step 1 with `runner_id=0`. Check annotations report account payment or
-  Actions spending-limit failure; this is an external infrastructure blocker,
-  not a test result.
-- Rollback: do not merge or enable campaign writes while required jobs or
-  account reconciliation are UNKNOWN; use the durable kill switch to deny new
-  risk and retain only owned cancel/reduce-only recovery.
+- Testnet verifier launchd job: booted out and disabled.
+- Durable kill switch: engaged.
+- Fresh signed GET reconciliation: account readable, one-way mode, no nonzero
+  positions, no open orders, no open algo orders.
+- DecisionTrace recovery: the sole FILLED trace linked to a later
+  quantity/direction-matched CLOSED reduce-only trace; unresolved=`0`.
+- Focused incident regressions: green.
+- Clean full regression, 100% repository coverage, current registry oracle,
+  Ruff, mypy, compile, packaging, and governance scans: pending on this
+  candidate.
+- GitHub Actions: runner allocation remains blocked by account
+  billing/spending limits; this is not a passing CI result.
 
-This is not `GREEN_LIGHT_TO_SHIP`. A real Testnet episode cannot repair a
-failed code gate, and a green code gate cannot substitute for account custody,
-venue ACK/fill/position evidence, or zero unresolved reconciliation.
+## Release blockers
+
+1. AC-TN-017 requires current required GitHub jobs to complete successfully.
+2. All clean candidate gates must be rerun after the final remediation diff.
+3. Independent review must confirm that current-run manifest semantics,
+   restart recovery, write authority, and legacy G5 isolation are correct.
+4. The historical episode count cannot be described as one bounded campaign
+   because launchd KeepAlive exceeded the authorized scope.
+
+## Rollback and safety state
+
+Do not clear the kill switch or start another campaign. Keep the disabled
+LaunchAgent installed only as inert local incident evidence until the user
+chooses to remove it. Mainnet and production remain unauthorized.
+
+This document is not `GREEN_LIGHT_TO_SHIP`.

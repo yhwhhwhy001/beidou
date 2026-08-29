@@ -111,6 +111,8 @@ class VerifierConfig:
             not self.api_key or not self.api_secret or self.account_id == DEFAULT_TESTNET_ACCOUNT_ID
         ):
             raise ValueError("explicit Testnet credentials and dedicated account_id are required")
+        if self.confirm_testnet and not self.once:
+            raise ValueError("confirmed Testnet writes require --once")
 
     def redacted_dict(self) -> dict[str, object]:
         """Return configuration facts safe for an evidence manifest."""

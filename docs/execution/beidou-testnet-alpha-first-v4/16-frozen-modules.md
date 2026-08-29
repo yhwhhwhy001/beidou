@@ -17,7 +17,7 @@ architecture boundary is machine-enforced by
 | `beidou_certification` | FROZEN（2026-08-29 起不再作为启动门禁） | G5–G8 certification remains available as an explicitly invoked legacy path; `run_preflight` no longer requires an existing G5 certificate (PKG-08-M03) — the gate only runs when `_run_preflight(..., require_g5_certificate=True)` is called explicitly |
 | `beidou_production` | FROZEN | Production release/promotion chain is out of Testnet scope |
 | `beidou_chaos` | FROZEN (fault-injection pieces reusable) | Chaos engineering belongs to the future production stage |
-| `beidou_launcher` G5/G7 producer + supervisor | DEPRECATED IN TESTNET DEFAULT | Legacy runtime remains the certification runner; the verifier is the sole Testnet verification entry |
+| `beidou_launcher` G5/G7 producer + supervisor | FROZEN / LEGACY CERTIFICATION | The verifier is the sole V4 Testnet verification entry; legacy `run_preflight` retains its historical G5 certificate gate and is not silently weakened |
 | `beidou_core.engine` adaptive sizing helpers (`adaptive_leverage`, `adaptive_position_pct`) | DEPRECATED (PKG-05-M07) | Single sizing authority is `beidou_strategy.risk.adaptive_sizing_engine.compute_adaptive_sizing` |
 | HA / leader election / distributed fencing | NOT BUILT | Explicitly out of scope for single-machine Testnet |
 | multi-operator approval | NOT BUILT | Out of scope (local single operator) |

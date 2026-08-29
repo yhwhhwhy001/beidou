@@ -112,6 +112,26 @@ def test_cli_rejects_write_confirmation_without_explicit_credentials_and_account
     assert "explicit Testnet credentials and dedicated account_id are required" in result.output
 
 
+def test_cli_rejects_unbounded_confirmed_write_loop(monkeypatch) -> None:
+    called = False
+
+    async def fake_run(_config: VerifierConfig) -> VerificationSummary:
+        nonlocal called
+        called = True
+        raise AssertionError("unbounded confirmed runtime must not start")
+
+    monkeypatch.setenv("BEIDOU_TESTNET_API_KEY", "fixture-key")
+    monkeypatch.setenv("BEIDOU_TESTNET_API_SECRET", "fixture-secret")
+    monkeypatch.setenv("BEIDOU_TESTNET_ACCOUNT_ID", "dedicated-testnet-account")
+    monkeypatch.setattr("apps.testnet_verify.cli.run", fake_run)
+
+    result = CliRunner().invoke(main, ["--confirm-testnet"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert "confirmed Testnet writes require --once" in result.output
+    assert called is False
+
+
 def test_cli_marks_not_verifiable_with_nonzero_exit(monkeypatch) -> None:
     async def fake_run(_config: VerifierConfig) -> VerificationSummary:
         return VerificationSummary(

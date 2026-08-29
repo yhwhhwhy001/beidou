@@ -1,43 +1,54 @@
-# Acceptance report (updated 2026-08-29 after V4 gap-fix campaign)
+# Acceptance report (incident-remediation candidate)
 
-| Requirement ID | Expected | Actual | Environment | Evidence | Result |
-|---|---|---|---|---|---|
-| AC-TN-001 | Mainnet/unsafe destination is hard denied | Guard rejects Mainnet, HTTP, credentials-in-URL, host confusion | local + live | `tests/unit/test_testnet_guard.py`, `beidou_exchange/testnet_guard.py` | PASS |
-| AC-TN-002 | Verifier does not require Ed25519/G5 certificate | CLI/runtime dependency boundary has no frozen certification imports; real campaign ran with API key/secret + local confirm only. Since 2026-08-29 the legacy engine start (`run_preflight`) also no longer requires an existing G5 certificate (PKG-08-M03; the gate is frozen and opt-in only) | local + live | `tests/architecture/test_testnet_verification_boundaries.py`, `tests/unit/test_preflight_g5_fail_closed.py`, campaign manifests | PASS |
-| AC-TN-003 | Signed REST retains Binance HMAC | Exact encoded query signature contract passes | local | `tests/unit/test_binance_rest_client.py` | PASS |
-| AC-TN-004 | Pool comes from exchangeInfo/market facts with source hashes | Live pool built from demo-fapi exchangeInfo with 5 ACTIVE symbols and per-source hashes (BCH/BTC/ETH/LTC/XRP) | live | `evidence/testnet-verification/20260828T20*Z-*/manifest.json` | PASS |
-| AC-TN-005 | Only ACTIVE pool symbols can increase risk | Runtime pool gate + live orders only from ACTIVE symbols | local + live | pool/runtime tests + live traces | PASS |
-| AC-TN-006/007 | StrategyKernel and active components affect proposal/trace | Kernel evaluated every closed-bar cycle; component input/output hashes and proposal hashes persisted in DecisionTrace | live | trace store `decision-trace.jsonl` | PASS |
-| AC-TN-008 | One sizing authority | Verifier calls canonical `compute_adaptive_sizing`; architecture test forbids deprecated helpers; helpers marked DEPRECATED | local | `tests/architecture/*`, `beidou_core/engine.py` markers | PASS |
-| AC-TN-009/010 | Venue leverage and final quantity are bound and ACKed | Live leverage set/readback equality enforced (mismatch blocks); quantity identity numeric + ACK equality | live | live traces (`leverage_request/readback`), `test_testnet_guard.py` | PASS |
-| AC-TN-011 | PREPARED is durable before write | Append/fsync store and runtime ordering tests pass | local | `tests/unit/test_decision_trace.py`, runtime tests | PASS |
-| AC-TN-012/013 | UNKNOWN uses same-id query and ACK identity checks | Live recovery used same clientOrderId query-before-retry; 11 stale UNKNOWN traces adjudicated against venue facts (all confirmed absent → FAILED) | live | trace store `adjudicated` metadata | PASS |
-| AC-TN-014/015 | Position reconciliation and reduce-only close converge | Live fills reconciled against position readback; reduce-only closes executed (8 fill→close chains) | live | trace store CLOSED traces | PASS |
-| AC-TN-016 | Trace covers pool through execution truth | Live traces store pool/market/factor/strategy/sizing/rule hashes, ACK, position, reconciliation | live | trace store | PASS |
-| AC-TN-017 | Current HEAD CI is green | Local gates: full suite passes, coverage 100% (see 15-final-summary). GitHub Actions runner allocation remains blocked by account billing limits (external) | local + GitHub | local gate logs, GitHub run `33195803547` | PARTIAL (external blocker) |
-| AC-TN-018 | README/CLI point to one verifier and distinguish alpha | README/CLI/runbook point to `apps.testnet_verify`; retired probe docstring updated | local | `README.md`, `tools/strategy_live_trade.py`, runbook | PASS |
+Candidate branch: `codex/v4-incident-remediation`
+Mainnet: `PROHIBITED`
+Overall decision: `BLOCKED`
 
-## Campaign evidence (2026-08-29)
+| Requirement | Current evidence | Result |
+|---|---|---|
+| AC-TN-001 | Mainnet/HTTP/credential-in-URL/host-confusion negatives remain covered by guard contracts. | PASS locally |
+| AC-TN-002 | `apps.testnet_verify` has no G5/Ed25519 dependency. The frozen legacy launcher retains its historical G5 gate. | PASS locally |
+| AC-TN-003 | Signed REST exact-query HMAC contract remains covered. | PASS locally |
+| AC-TN-004/005 | Historical demo pool evidence and local pool/runtime contracts exist; risk increase remains ACTIVE-only. | PASS_WITH_INCIDENT_CAVEAT |
+| AC-TN-006/007 | Historical traces contain kernel/component outputs; integration contracts cover VETO/NO_ACTION/output identity. | PASS_WITH_INCIDENT_CAVEAT |
+| AC-TN-008 | Canonical adaptive sizing remains the verifier's sole sizing authority; architecture test forbids deprecated helpers. | PASS locally |
+| AC-TN-009/010 | Historical leverage/quantity ACK facts exist and final-request identity is tested. No new write campaign was run after remediation. | PASS_WITH_INCIDENT_CAVEAT |
+| AC-TN-011 | PREPARED-before-write remains append/fsync backed and tested. | PASS locally |
+| AC-TN-012/013 | Same-client-id query-before-retry and ACK identity contracts remain tested. | PASS locally |
+| AC-TN-014/015 | Fresh signed GET showed no nonzero positions/open orders/algo orders. Startup linked the sole FILLED trace to a later quantity-matched CLOSED reduce-only trace; unresolved=`0`. | PASS for current account risk |
+| AC-TN-016 | Historical trace chain exists; manifest current-run write semantics and restart close linkage were corrected in this candidate. | PASS_WITH_INCIDENT_CAVEAT |
+| AC-TN-017 | GitHub Actions runner allocation is blocked by billing/spending limits. Fresh full candidate verification is still required before merge. | BLOCKED |
+| AC-TN-018 | README, CLI, and runbook point to the verifier; confirmed writes require `--once`; daemon/KeepAlive verifier launchers are prohibited by architecture test. | PASS locally |
 
-- 100 completed decision episodes (terminal traces), including 8 real fill→close
-  chains on the live Binance demo venue (BCHUSDT, LTCUSDT).
-- 0 unresolved UNKNOWN traces; 11 stale UNKNOWNs adjudicated against venue
-  facts (venue confirmed absent).
-- 2 defects found and fixed during the campaign: demo-fapi 24hr ticker lacks
-  bid/ask (depth top-of-book fallback) and Decimal quantity trailing-zero
-  identity mismatch in the write guard (numeric identity + canonical hash).
+## Incident findings and remediation
+
+1. `db2debcf` installed `apps.testnet_verify` with launchd `KeepAlive=true`
+   and omitted `--once`, producing repeated episodes beyond the authorized
+   bounded campaign. The job was booted out and disabled; the durable kill
+   switch remains engaged.
+2. Confirmed Testnet writes now fail configuration validation without
+   `--once`. The launchd wrapper/plist were removed and a repository
+   architecture test prevents their return.
+3. Manifests previously derived `real_testnet_write` from every historical
+   trace in the shared store. Current-run write attempted/ACK/UNKNOWN facts are
+   now tracked directly, and an engaged kill switch reports write authority as
+   disabled.
+4. A later reduce-only close could leave the original opening trace at
+   `FILLED`. Startup now closes that durable gap only when signed account facts
+   show one-way flat position and a later direction/quantity-matched CLOSED
+   reduce-only trace exists.
+5. The legacy launcher G5 gate was unintentionally disabled. It is restored;
+   only the separate V4 verifier bypasses frozen certification.
 
 ## Economic Truth separation
 
-E0–E6 gate machinery implemented (`beidou_research/economic_truth.py`,
-fail-closed, prerequisite-chained) and surfaced in every verifier manifest.
-All gates remain `NOT_EVALUATED`: no research evidence was supplied, and no
-Testnet execution fact is promoted to profitability or alpha certification.
+E0-E6 machinery remains `NOT_EVALUATED`. Historical Testnet execution facts
+do not establish profitability, OOS robustness, or `ALPHA VERIFIED`.
 
-## Decision: CONDITIONAL PASS (Testnet execution)
+## Admission decision
 
-The bounded Testnet verification chain is real, evidenced, and reproducible.
-Full admission remains conditional on GitHub Actions runner availability
-(account billing) and an independent human review of this report.
-`Testnet READY` / `Completed` / `Alpha VERIFIED` are still NOT claimed.
-Mainnet remains PROHIBITED.
+The dedicated Testnet account is currently reconciled to zero risk, but this
+candidate is not admitted until clean full regression, 100% repository
+coverage, static/governance checks, independent review, and required GitHub CI
+are current and green. No new campaign may start while the kill switch is
+engaged or any gate is unknown.

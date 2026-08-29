@@ -173,19 +173,12 @@ _NEW_NETWORK_DECISIONS: dict[str, dict[str, str]] = {
 _NEW_TERMINAL_DECISIONS: dict[str, dict[str, str]] = {
     # The canonical Testnet verifier is held in the registry until the
     # bounded runtime guard is explicitly confirmed for a local campaign.
-    "apps/testnet_verify/runtime.py::VerificationRuntime._query_recover_order::create_order": {
-        "capability": "UNOWNED_RECOVERY_FORBIDDEN",
+    "apps/testnet_verify/runtime.py::VerificationRuntime._create_order::create_order": {
+        "capability": "BOUNDED_TESTNET_VERIFIER_WRITE",
         "status": "HARD_HOLD",
         "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
         "owner": "Execution Owner",
-        "call_graph": "verifier recovery -> query existing clientOrderId -> bounded Testnet create_order",
-    },
-    "apps/testnet_verify/runtime.py::VerificationRuntime._submit_order::create_order": {
-        "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
-        "status": "HARD_HOLD",
-        "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
-        "owner": "Execution Owner",
-        "call_graph": "verifier -> persisted intent -> Testnet guard -> adapter create_order",
+        "call_graph": "run_once -> durable PREPARED -> bound Testnet guard -> sole adapter create_order",
     },
     "apps/testnet_verify/runtime.py::VerificationRuntime._settle_order_lifecycle::cancel_order": {
         "capability": "TERMINAL_CANCEL_SCOPE_REQUIRED",

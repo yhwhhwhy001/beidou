@@ -389,6 +389,9 @@ class VerificationRuntime:
         self.trace_store = trace_store or DecisionTraceStore(config.trace_path)
         self.kernel = kernel or _build_kernel()
         self._adapter_is_injected = adapter is not None
+        self._real_order_write_attempted = False
+        self._real_order_acknowledged = False
+        self._real_order_outcome_unknown = False
         if adapter is None:
             transport = BinanceRESTClient(
                 self.guard.rest_base_url,
@@ -408,6 +411,151 @@ class VerificationRuntime:
         self._startup_errors: list[dict[str, Any]] = []
         self._startup_facts: dict[str, Any] = {}
 
+    async def _create_order(
+        self,
+        request: OrderRequest,
+        context: TerminalWriteContext,
+    ) -> Any:
+        """Submit through the sole adapter and record current-run write facts."""
+
+        if not self._adapter_is_injected:
+            self._real_order_write_attempted = True
+        response = await self.adapter.create_order(request, write_context=context)
+        if not self._adapter_is_injected:
+            if response.status is OrderStatus.UNKNOWN or not response.order_id:
+                self._real_order_outcome_unknown = True
+            else:
+                self._real_order_acknowledged = True
+        return response
+
+    def _reconcile_flat_filled_traces(self, account_result: Any, mode_result: Any) -> dict[str, Any]:
+        """Link durable FILLED traces to later owned closes when venue is flat.
+
+        A restart can leave the opening trace at FILLED even though a later
+        reduce-only trace flattened the net position.  Only a successful
+        signed account snapshot, one-way position mode, and a quantity-matched
+        CLOSED reduce-only trace may close that durable gap.
+        """
+
+        report: dict[str, Any] = {"closed_trace_ids": [], "unresolved_trace_ids": []}
+        if (
+            not account_result.is_success()
+            or not isinstance(account_result.data, dict)
+            or not mode_result.is_success()
+            or not isinstance(mode_result.data, dict)
+            or mode_result.data.get("dualSidePosition") is not False
+            or not isinstance(account_result.data.get("positions"), list)
+        ):
+            report["unresolved_trace_ids"] = [
+                trace.trace_id for trace in self.trace_store.recovery_candidates() if trace.status is TraceStatus.FILLED
+            ]
+            return report
+
+        position_totals: dict[str, Decimal] = {}
+        for row in account_result.data["positions"]:
+            if not isinstance(row, dict) or not str(row.get("symbol", "")).strip():
+                report["unresolved_trace_ids"] = [
+                    trace.trace_id
+                    for trace in self.trace_store.recovery_candidates()
+                    if trace.status is TraceStatus.FILLED
+                ]
+                return report
+            try:
+                amount = Decimal(str(row.get("positionAmt", "")))
+            except InvalidOperation:
+                report["unresolved_trace_ids"] = [
+                    trace.trace_id
+                    for trace in self.trace_store.recovery_candidates()
+                    if trace.status is TraceStatus.FILLED
+                ]
+                return report
+            if not amount.is_finite():
+                report["unresolved_trace_ids"] = [
+                    trace.trace_id
+                    for trace in self.trace_store.recovery_candidates()
+                    if trace.status is TraceStatus.FILLED
+                ]
+                return report
+            symbol = str(row["symbol"]).strip().upper()
+            position_totals[symbol] = position_totals.get(symbol, Decimal("0")) + amount
+
+        filled_traces = sorted(
+            (trace for trace in self.trace_store.recovery_candidates() if trace.status is TraceStatus.FILLED),
+            key=lambda trace: trace.timestamp,
+        )
+        closed_traces = sorted(
+            (trace for trace in self.trace_store.all() if trace.status is TraceStatus.CLOSED),
+            key=lambda trace: trace.timestamp,
+        )
+        used_close_ids: set[str] = set()
+        for filled in filled_traces:
+            symbol = str(filled.order_request.get("symbol", "")).strip().upper()
+            side = str(filled.order_request.get("side", "")).strip().upper()
+            try:
+                filled_quantity = Decimal(str(filled.executed_qty))
+            except InvalidOperation:
+                report["unresolved_trace_ids"].append(filled.trace_id)
+                continue
+            if (
+                not symbol
+                or side not in {"BUY", "SELL"}
+                or not filled_quantity.is_finite()
+                or filled_quantity <= 0
+                or position_totals.get(symbol, Decimal("0")) != 0
+            ):
+                report["unresolved_trace_ids"].append(filled.trace_id)
+                continue
+
+            expected_close_side = "SELL" if side == "BUY" else "BUY"
+            matching_close: DecisionTrace | None = None
+            for close in closed_traces:
+                try:
+                    close_quantity = Decimal(str(close.executed_qty))
+                    close_position_quantity = Decimal(str(close.position_after.get("quantity", "")))
+                except InvalidOperation:
+                    continue
+                if (
+                    close.trace_id not in used_close_ids
+                    and close.timestamp >= filled.timestamp
+                    and str(close.order_request.get("symbol", "")).strip().upper() == symbol
+                    and str(close.order_request.get("side", "")).strip().upper() == expected_close_side
+                    and close.order_request.get("reduceOnly") is True
+                    and close_quantity == filled_quantity
+                    and close_position_quantity == 0
+                    and close.reconciliation.get("status") == "MATCHED"
+                    and close.reconciliation.get("unresolved") == []
+                    and close.exchange_order_id
+                ):
+                    matching_close = close
+                    break
+            if matching_close is None:
+                report["unresolved_trace_ids"].append(filled.trace_id)
+                continue
+
+            used_close_ids.add(matching_close.trace_id)
+            recovery_metadata = {
+                **filled.metadata,
+                "recovery": "STARTUP_MATCHED_LATER_REDUCE_ONLY_CLOSE",
+                "close_trace_id": matching_close.trace_id,
+                "close_order_id": matching_close.exchange_order_id,
+            }
+            self.trace_store.update(
+                filled.trace_id,
+                TraceStatus.CLOSED,
+                position_after={"symbol": symbol, "quantity": 0.0, "source": "SIGNED_ACCOUNT_SNAPSHOT"},
+                reconciliation={
+                    "status": "MATCHED",
+                    "actual_quantity": "0",
+                    "unresolved": [],
+                    "source": "SIGNED_ACCOUNT_SNAPSHOT",
+                    "close_trace_id": matching_close.trace_id,
+                    "close_order_id": matching_close.exchange_order_id,
+                },
+                metadata=recovery_metadata,
+            )
+            report["closed_trace_ids"].append(filled.trace_id)
+        return report
+
     async def startup(self) -> dict[str, Any]:
         """Read minimum venue facts and construct a dynamic pool."""
 
@@ -415,6 +563,7 @@ class VerificationRuntime:
         server_result = await self.adapter.get_server_time()
         mode_result = await self.adapter.get_position_mode()
         account_result = await self.adapter.get_account_snapshot()
+        recovery_report = self._reconcile_flat_filled_traces(account_result, mode_result)
         exchange_raw = exchange_result.data if exchange_result.is_success() else None
         if exchange_raw is not None:
             self.pool.record_source_hash(_stable_hash(exchange_raw))
@@ -460,6 +609,7 @@ class VerificationRuntime:
                 "source_hash": _stable_hash(account_result.data) if account_result.is_success() else "",
             },
             "pool": _jsonable(snapshot),
+            "recovery": recovery_report,
             "errors": list(self._startup_errors),
         }
         return copy.deepcopy(self._startup_facts)
@@ -831,7 +981,7 @@ class VerificationRuntime:
                 TraceStatus.SUBMITTED,
                 metadata={**trace.metadata, "recovery": "QUERY_CONFIRMED_ABSENT_SAME_ID_RETRY"},
             )
-            response = await self.adapter.create_order(request, write_context=context)
+            response = await self._create_order(request, context)
             if response.status is OrderStatus.REJECTED and not response.order_id:
                 self.trace_store.update(
                     trace.trace_id,
@@ -864,7 +1014,7 @@ class VerificationRuntime:
         request: OrderRequest,
         context: TerminalWriteContext,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        response = await self.adapter.create_order(request, write_context=context)
+        response = await self._create_order(request, context)
         if response.status is OrderStatus.REJECTED and not response.order_id:
             self.trace_store.update(
                 trace.trace_id,
@@ -1762,12 +1912,10 @@ class VerificationRuntime:
     def _write_manifest(self, summary: VerificationSummary) -> Path:
         destination = self.config.evidence_dir / summary.run_id
         destination.mkdir(parents=True, exist_ok=True)
-        traces = self.trace_store.all()
-        actual_write = bool(
-            not self._adapter_is_injected and any(trace.exchange_order_id and trace.order_ack for trace in traces)
-        )
         revision = _git_revision()
         economic_truth = _economic_truth_assessment()
+        write_configured = bool(self.config.confirm_testnet and self.config.api_key and self.config.api_secret)
+        write_enabled = write_configured and not self.config.kill_switch_path.exists()
         manifest = {
             **summary.to_dict(),
             "config": self.config.redacted_dict(),
@@ -1775,10 +1923,11 @@ class VerificationRuntime:
             "commit": revision,
             "repository_commit": revision,
             "commands": list(sys.argv),
-            "real_testnet_write": actual_write,
-            "testnet_write_enabled": bool(
-                self.config.confirm_testnet and self.config.api_key and self.config.api_secret
-            ),
+            "real_testnet_write": self._real_order_acknowledged,
+            "real_testnet_write_attempted": self._real_order_write_attempted,
+            "real_testnet_write_outcome_unknown": self._real_order_outcome_unknown,
+            "testnet_write_configured": write_configured,
+            "testnet_write_enabled": write_enabled,
             "economic_truth": economic_truth,
             "trace_store": str(self.config.trace_path),
             "results": {

@@ -846,7 +846,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "a47beb508d83013bf4f1babb7d4097d83146c4cf86b1ef1f84f93b4c68ed5641",
+ "governance_digest": "0d9e7643c92ea2f90e90067dfbd1f8a156800e400d4fbb44fa0ee94cde266631",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -863,8 +863,8 @@
   "apps/testnet_verify/__init__.py": "96f9fa0fa689cd488dc53b17a465c6cc8aa5984948a31db8b8b1c0bc4b367fde",
   "apps/testnet_verify/__main__.py": "fdc068b209357cff81804363cf2847dd9f020a56dca46d4f7baa6751272525db",
   "apps/testnet_verify/cli.py": "805273890f3d452e0c5310720b97dfb9a81def42b35c993ecd08e172468add58",
-  "apps/testnet_verify/config.py": "a08b7587c1a38157841e46a42ba9a9998cab61c62dd87730f334be677b10c3f4",
-  "apps/testnet_verify/runtime.py": "d3e0dc0f15e2f6a06869aa9d7590c758e70b5d1b81d4efb1c0a9e873284e2f1c",
+  "apps/testnet_verify/config.py": "231c9e75a4b182c8090b4bde41feebca4192d44bdcc354819e9c0ede4ee93722",
+  "apps/testnet_verify/runtime.py": "42e93c20c455fa9562802a114f540d36655b6e6341db30492c855fe6e594135d",
   "artifacts/coverage-p2-final.json": "4b4842430416b26ba10343b06b3baef5802ba7bdca2a04a59e531dc9318da41c",
   "artifacts/coverage-p3-current.json": "e0d43895345474411042d801c3d712f8c8afc7b9353ee78a50d9d79879e9f3cc",
   "artifacts/coverage-p3-tranche1.json": "7cc0c91e576635f00dc939f60543318873663b1b9849c5ebd1e529032a9b94fe",
@@ -990,7 +990,7 @@
   "beidou_launcher/g7_tracker.py": "deae7832a36ee765c808e48cb0fe1ed71eafecdfc5417550d8a488f070c84eb3",
   "beidou_launcher/manifest.py": "d49cdc5ee7346e5e22f685b1df87ea4b79c0984e4648966b488981bf4d968806",
   "beidou_launcher/models.py": "68a53963cea764bbb41b0d1216b4be2acbbdb5681bef106042a11d301a3e4055",
-  "beidou_launcher/preflight.py": "1f4a8593a54ab771f3e2e0889cb41f5debddc89a7fc0921ba3af15b81392ca74",
+  "beidou_launcher/preflight.py": "766e9a8206fd3c743fca7442c823ed43faad397b189dc5dc8e9f71a703842918",
   "beidou_launcher/readiness_gate.py": "98df84ce4c11cb34c312a3cafbd47bb022d36f19e3d5fe36aaf6e4792a13afe2",
   "beidou_launcher/registry.py": "8254459f68622409054c5262f08f994542f3d825e213f3b57fc0c6e4cc704cf0",
   "beidou_launcher/runtime.py": "198739a2521d55dd8c47e2b117d0d5e13a6201288c3f3ce0f9d8e411479bf3d2",
@@ -1260,7 +1260,7 @@
   "scripts/migrate_config_v2.py": "15115de7350d967d011912a39a869363a29be4b062bda0c284ae5022d8187762",
   "scripts/mining_cron.sh": "e7fcf34ae1a8caa8df7162b8088b41717916080c027f30b0585e1b84d7540e94",
   "scripts/monitor_daemon.py": "552e9d3917812f68ecae1eb1b39fd1463e0e3294beea0423eb41bccd43ff2593",
-  "scripts/rebuild_write_registry.py": "0efd6669317f51415f505b307381ced466f28fbd2ba3dfd89043eceb8740ea71",
+  "scripts/rebuild_write_registry.py": "a5f026c3227ccf368e71c5a9a146da76d56890f110d052e89ac258836a0e3eb1",
   "scripts/recalibrate_r_m03_1.py": "469af191fae5bd65c625aa81aa7556a7e28ecef63901b0a8924b3c3ddabccb6b",
   "scripts/run_migrations.py": "2a7838ce336c3743f0483053822675776bf7a73cbeb28bad93de57565c50aca0",
   "scripts/run_replay_fixture.py": "f22f22e4cef87f9c4d3d1658fac0e5dd5891034077c4764ffd55cd83d917c716",
@@ -1339,37 +1339,30 @@
    "status": "HARD_HOLD"
   },
   {
-   "governance_id": "ENTRY-RUNTIME",
-   "identity": "apps/testnet_verify/runtime.py:393:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-RUNTIME]",
-   "owner": "Runtime Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "ENTRY-RUNTIME",
-   "identity": "apps/testnet_verify/runtime.py:400:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-RUNTIME]",
-   "owner": "Runtime Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "WRITE-APPS-CREATE-ORDER-B968BC1C",
-   "identity": "apps/testnet_verify/runtime.py:834:TERMINAL_CALL:create_order",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-B968BC1C]",
-   "owner": "Execution Owner",
-   "status": "HARD_HOLD"
-  },
-  {
-   "governance_id": "WRITE-APPS-CREATE-ORDER-29840643",
-   "identity": "apps/testnet_verify/runtime.py:867:TERMINAL_CALL:create_order",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-29840643]",
-   "owner": "Execution Owner",
-   "status": "HARD_HOLD"
-  },
-  {
    "governance_id": "WRITE-APPS-CANCEL-ORDER-2E8D6B16",
-   "identity": "apps/testnet_verify/runtime.py:981:TERMINAL_CALL:cancel_order",
+   "identity": "apps/testnet_verify/runtime.py:1131:TERMINAL_CALL:cancel_order",
    "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CANCEL-ORDER-2E8D6B16]",
+   "owner": "Execution Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "ENTRY-RUNTIME",
+   "identity": "apps/testnet_verify/runtime.py:396:RUNTIME_CONSTRUCTOR:BinanceRESTClient",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-RUNTIME]",
+   "owner": "Runtime Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "ENTRY-RUNTIME",
+   "identity": "apps/testnet_verify/runtime.py:403:RUNTIME_CONSTRUCTOR:BinanceUsdmAdapter",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_entry_record_is_behaviorally_bound[ENTRY-RUNTIME]",
+   "owner": "Runtime Owner",
+   "status": "HARD_HOLD"
+  },
+  {
+   "governance_id": "WRITE-APPS-CREATE-ORDER-6AA7B8A5",
+   "identity": "apps/testnet_verify/runtime.py:423:TERMINAL_CALL:create_order",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-6AA7B8A5]",
    "owner": "Execution Owner",
    "status": "HARD_HOLD"
   },
@@ -2649,14 +2642,14 @@
    "status": "HARD_HOLD"
   },
   {
-   "call_graph": "verifier recovery -> query existing clientOrderId -> bounded Testnet create_order",
-   "capability": "UNOWNED_RECOVERY_FORBIDDEN",
+   "call_graph": "run_once -> durable PREPARED -> bound Testnet guard -> sole adapter create_order",
+   "capability": "BOUNDED_TESTNET_VERIFIER_WRITE",
    "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
-   "id": "WRITE-APPS-CREATE-ORDER-B968BC1C",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-B968BC1C]",
+   "id": "WRITE-APPS-CREATE-ORDER-6AA7B8A5",
+   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-6AA7B8A5]",
    "occurrences": 1,
    "owner": "Execution Owner",
-   "source": "apps/testnet_verify/runtime.py::VerificationRuntime._query_recover_order::create_order",
+   "source": "apps/testnet_verify/runtime.py::VerificationRuntime._create_order::create_order",
    "status": "HARD_HOLD"
   },
   {
@@ -2668,17 +2661,6 @@
    "occurrences": 1,
    "owner": "Execution Owner",
    "source": "apps/testnet_verify/runtime.py::VerificationRuntime._settle_order_lifecycle::cancel_order",
-   "status": "HARD_HOLD"
-  },
-  {
-   "call_graph": "verifier -> persisted intent -> Testnet guard -> adapter create_order",
-   "capability": "TERMINAL_CREATE_SCOPE_REQUIRED",
-   "expected_rejection": "WRITE_CAPABILITY_REGISTRY_INCOMPLETE",
-   "id": "WRITE-APPS-CREATE-ORDER-29840643",
-   "negative_test": "tests/architecture/test_registry_record_contracts.py::test_terminal_record_is_behaviorally_bound[WRITE-APPS-CREATE-ORDER-29840643]",
-   "occurrences": 1,
-   "owner": "Execution Owner",
-   "source": "apps/testnet_verify/runtime.py::VerificationRuntime._submit_order::create_order",
    "status": "HARD_HOLD"
   },
   {

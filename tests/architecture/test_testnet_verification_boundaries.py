@@ -95,3 +95,18 @@ def test_verifier_does_not_reference_deprecated_sizing_helpers() -> None:
             if helper in source:
                 violations.append(f"{path.relative_to(ROOT)}:references:{helper}")
     assert not violations, "TESTNET_VERIFIER_DEPRECATED_SIZING:\n" + "\n".join(violations)
+
+
+def test_testnet_campaign_cannot_be_installed_as_a_keepalive_loop() -> None:
+    """The V4 campaign is a single bounded episode, never a daemon."""
+    forbidden_launchers = (
+        ROOT / "deploy" / "beidou_testnet_verify.sh",
+        ROOT / "deploy" / "com.beidou.testnet-verify.plist",
+    )
+    present = [str(path.relative_to(ROOT)) for path in forbidden_launchers if path.exists()]
+    assert not present, "TESTNET_VERIFIER_UNBOUNDED_LAUNCHERS:\n" + "\n".join(present)
+
+    runbook = (ROOT / "docs" / "execution" / "beidou-testnet-alpha-first-v4" / "10-runbook.md").read_text(
+        encoding="utf-8"
+    )
+    assert "--once --confirm-testnet" in runbook

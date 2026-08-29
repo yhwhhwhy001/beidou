@@ -16,6 +16,7 @@ import pytest
 
 import beidou_core.engine as engine_module
 from beidou_core.engine import AutonomousEngine
+from beidou_core.evidence_bridge import BridgeReport, EvidenceBridge
 from beidou_exchange.core.protocol import OrderResponse
 from beidou_safety.execution import OrderIntent
 from beidou_shared.types import (
@@ -228,11 +229,22 @@ async def test_engine_plan_algorithm_and_slice_invariant_matrix(monkeypatch: pyt
 
 
 def _runtime_engine(monkeypatch: pytest.MonkeyPatch, *, account_ok: bool = True) -> AutonomousEngine:
+    # Runtime lifecycle tests do not exercise the research-evidence importer.
+    # Avoid rescanning the repository's full evidence tree for every engine
+    # instance; dedicated evidence-bridge tests cover that boundary directly.
+    monkeypatch.setattr(
+        EvidenceBridge,
+        "load_and_apply",
+        staticmethod(lambda **_kwargs: BridgeReport()),
+    )
     engine = AutonomousEngine(["BTCUSDT"], mode="paper")
     engine._health.start = lambda: None
     engine._health.stop = lambda: None
     engine._feed.start_ws = lambda *_args, **_kwargs: asyncio.sleep(0, result=True)
     engine._feed.is_healthy = lambda: True
+    # Make the first realtime loop iteration deterministic. Tests that need a
+    # different clock age override this explicitly.
+    engine._realtime_age_seconds = lambda: float("inf")
     engine._start_user_stream = lambda: asyncio.sleep(0, result=False)
     engine._get_open_algo_inventory = lambda: asyncio.sleep(0, result=[])
     engine._ensure_exchange_position_protections = lambda: asyncio.sleep(0)
@@ -853,6 +865,7 @@ async def test_engine_run_baseline_reconciliation_durable_and_task_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(engine_module.PersistentStore, "_instance", None)
+    real_sleep = asyncio.sleep
 
     async def no_sleep(_seconds: float, result: object = None) -> object:
         return result
@@ -973,6 +986,7 @@ async def test_engine_run_baseline_reconciliation_durable_and_task_boundaries(
     async def raise_realtime_sleep(seconds: float, result: object = None) -> object:
         if seconds == 1:
             raise RuntimeError("loop-task")
+        await real_sleep(0)
         return result
 
     monkeypatch.setattr(engine_module.asyncio, "sleep", raise_realtime_sleep)

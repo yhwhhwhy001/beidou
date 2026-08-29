@@ -1,0 +1,52 @@
+schema_version: "1.0"
+run_id: "2026-08-29-v4-incident-remediation"
+project:
+  path: "/Users/maguannan/beidou"
+  version: "codex/v4-incident-remediation"
+  environment: "local-and-binance-demo-read-only"
+authority:
+  code_changes: true
+  git_remote: true
+  deployment: false
+  production_mutation: false
+  trading_actions: false
+  external_messages: false
+active_phase: G7
+requirements:
+  - AC-TN-001
+  - AC-TN-002
+  - AC-TN-003
+  - AC-TN-004
+  - AC-TN-005
+  - AC-TN-006
+  - AC-TN-007
+  - AC-TN-008
+  - AC-TN-009
+  - AC-TN-010
+  - AC-TN-011
+  - AC-TN-012
+  - AC-TN-013
+  - AC-TN-014
+  - AC-TN-015
+  - AC-TN-016
+  - AC-TN-017
+  - AC-TN-018
+gates:
+  G0: {progress: COMPLETE, decision: READY, evidence: ["00-context.md"], reason: null, updated_at: "2026-08-29"}
+  G1: {progress: COMPLETE, decision: APPROVED, evidence: ["02-traceability.md"], reason: null, updated_at: "2026-08-29"}
+  G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS, evidence: ["08-code-review.md", "09-security-review.md"], reason: "independent review pending", updated_at: "2026-08-29"}
+  G3: {progress: COMPLETE, decision: READY, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
+  G4: {progress: COMPLETE, decision: PASS, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
+  G5: {progress: COMPLETE, decision: RESOLVED, evidence: ["07-debugging-log.md"], reason: null, updated_at: "2026-08-29"}
+  G6: {progress: IN_PROGRESS, decision: null, evidence: ["08-code-review.md"], reason: "final diff review pending", updated_at: "2026-08-29"}
+  G7: {progress: IN_PROGRESS, decision: null, evidence: [], reason: "clean full verification pending", updated_at: "2026-08-29"}
+  G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "G7 and GitHub CI incomplete", updated_at: "2026-08-29"}
+  G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 blocked", updated_at: "2026-08-29"}
+  G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "Mainnet and production prohibited", updated_at: "2026-08-29"}
+blockers:
+  - "GitHub Actions runner allocation blocked by billing/spending limits"
+  - "Clean full candidate verification not yet complete"
+residual_risks:
+  - "Historical episode count was produced partly by an unauthorized KeepAlive loop"
+  - "Economic Truth E0-E6 remains NOT_EVALUATED"
+next_authorized_action: "Finish clean verification, independent review, then push remediation; do not start a new campaign."

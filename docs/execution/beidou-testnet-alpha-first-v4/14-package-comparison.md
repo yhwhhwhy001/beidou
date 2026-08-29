@@ -33,3 +33,16 @@ Comparison source: uploaded
 
 No package requirement authorizes Mainnet, production deployment, secret
 disclosure, synthetic promotion, or bypassing UNKNOWN.
+
+## 2026-08-29 incident comparison addendum
+
+| V4 contract | Incident divergence | Candidate remediation |
+|---|---|---|
+| PKG-02-M06 / bounded campaign | Launchd ran confirmed writes without `--once` and restarted indefinitely | Confirmed writes require `--once`; daemon wrapper/plist removed and prohibited by architecture test |
+| PKG-03-M04/M05, AC-TN-016 | Historical ACKs were counted as a write by unrelated later manifests | Current-run attempted/ACK/UNKNOWN facts are tracked directly |
+| PKG-07-M05, AC-TN-014/015 | Opening trace remained FILLED after another owned reduce-only trace flattened the position | Signed one-way flat account fact plus matching CLOSED close trace closes the durable gap |
+| PKG-08 freeze/isolation | Legacy G5 gate was disabled rather than merely bypassed by the verifier | Legacy G5 gate restored; verifier remains separate |
+| AC-TN-017 | GitHub runner still cannot start because of billing/spending limits | Remains BLOCKED; local results cannot substitute |
+
+The prior `CONDITIONAL PASS` is withdrawn until the remediation candidate has
+fresh clean full verification and required CI.

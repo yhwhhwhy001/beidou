@@ -10,10 +10,10 @@
 | Adaptive sizing monotonicity, caps, step/minimum rules | unit/property | deterministic inputs | local | blocking | `tests/unit/test_testnet_adaptive_sizing.py`, `tests/unit/test_testnet_binance_contracts.py` |
 | PREPARED-before-write, restart, stable client id, UNKNOWN recovery | unit + integration fault injection | controlled adapter fake | local | blocking | `tests/unit/test_decision_trace.py`, `tests/integration/test_testnet_verification_runtime.py` |
 | ACK identity, fill/position reconciliation, reduce-only close | integration contract | controlled adapter fake | local | blocking | `tests/integration/test_testnet_verification_runtime.py`, `tests/unit/test_testnet_binance_contracts.py` |
-| Real Binance Testnet order/fill/close evidence | authorized E2E | real Binance Testnet/Demo | not run in this turn | admission blocker | no evidence; status `NOT_VERIFIABLE` |
+| Real Binance Testnet order/fill/close evidence | authorized E2E | real Binance Testnet/Demo | historical campaign + fresh read-only reconciliation | admission evidence with incident caveat | historical manifests/DecisionTrace; current account flat, no open orders, `0` unresolved |
 | Current HEAD CI and full quality gates | system verification | repository toolchain | local/CI | release blocker | fresh local results below; full CI remains blocked |
 
-## Executed local commands
+## Historical local commands (not current-HEAD completion evidence)
 
 - Full regression under coverage: `4251 passed, 126 warnings`.
 - V4 target/architecture contracts: `35 passed, 91 warnings`.
@@ -31,14 +31,28 @@
 - Bandit in an isolated security venv -> `0` issues -> `PASS`.
 - Clean wheel runtime dependency audit -> `No known vulnerabilities found` -> `PASS`; the already-populated host audit found 26 vulnerabilities in unrelated installed packages and is not treated as project-clean evidence.
 
+## Incident-remediation evidence (2026-08-29)
+
+- Disabled and booted out `com.beidou.testnet-verify`; observed no verifier
+  process for more than 70 seconds; durable kill switch remains present.
+- Added a config gate requiring `--once` whenever `--confirm-testnet` is used.
+- Removed the launchd verifier wrapper/plist and added an architecture
+  regression test prohibiting their return.
+- Fixed clean-checkout preflight test isolation and reduced the engine runtime
+  coverage test from 65 seconds to about 5 seconds by eliminating event-loop
+  busy waits.
+- Fresh targeted regression: `67 passed`; legacy G5 gate regression:
+  `17 passed`.
+- Fresh signed GET reconciliation: account query success, one-way mode,
+  no nonzero positions, no open orders, no open algo orders. The sole FILLED
+  trace was linked to a later quantity-matched reduce-only CLOSED trace;
+  unresolved count is `0`.
+
 ## Omissions and residual risk
 
-The local suite does not prove venue behavior, credentials, order matching,
-network timeout semantics at Binance, or economic alpha. No Testnet write was
-performed because the user request was handled as local development authority
-only. A bounded campaign is now authorized, but its API key, API secret and
-dedicated account identifier are absent from the process environment. Testnet admission,
-30-episode stability, CI status, and E0-E6 Economic Truth remain
-`NOT_VERIFIABLE`/`NOT_EVALUATED` until their required evidence exists. The
-full repository 100% coverage is not green, and no GitHub CI run was
-established in this turn.
+Historical venue evidence exists, but the post-campaign KeepAlive incident
+invalidates any claim that the 100 episodes were one deliberately bounded
+campaign. Current full regression/100% coverage and clean governance checks
+must be rerun after remediation. GitHub Actions remains unavailable because of
+account billing/spending limits. E0-E6 remains `NOT_EVALUATED`; no Testnet fact
+is profitability evidence.

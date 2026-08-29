@@ -727,15 +727,14 @@ def _run_preflight(
 
 
 def run_preflight(project_root: Path, mode: str, port: int) -> tuple[list[CheckResult], Any | None]:
-    """Run launcher preflight.
+    """Run legacy launcher preflight with its historical G5 certificate gate.
 
-    BD-FIX (V4 PKG-08-M03): 现有 G5 证书不再是 Testnet 启动门禁 —— 认证
-    框架与证书验证代码冻结留存(beidou_certification / _g5_certificate_probe),
-    仅当显式认证路径调用 ``_run_preflight(..., require_g5_certificate=True)``
-    时才执行证书门禁。默认 Testnet 策略实验启动不再要求 G5。
+    The V4 verifier bypasses this frozen launcher entirely; preserving the
+    legacy gate prevents an unrelated entrypoint from being weakened while
+    ``apps.testnet_verify`` remains the sole Testnet verification runtime.
     """
 
-    return _run_preflight(project_root, mode, port, require_g5_certificate=False)
+    return _run_preflight(project_root, mode, port, require_g5_certificate=True)
 
 
 def run_g5_producer_preflight(project_root: Path, port: int) -> tuple[list[CheckResult], Any | None]:

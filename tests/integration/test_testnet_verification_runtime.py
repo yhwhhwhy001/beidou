@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,12 +11,13 @@ from typing import Any
 import pytest
 
 from apps.testnet_verify.config import VerifierConfig
-from apps.testnet_verify.runtime import VerificationRuntime
+from apps.testnet_verify.runtime import VerificationRuntime, VerificationSummary
 from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
 from beidou_exchange.binance_usdm.adapter import BinanceUsdmAdapter
 from beidou_exchange.core.error_taxonomy import ErrorCategory, Result
 from beidou_exchange.core.protocol import OrderRequest, OrderResponse
 from beidou_exchange.core.rule_snapshot import InstrumentRuleSnapshot
+from beidou_shared.decision_trace import DecisionTrace, TraceStatus
 from beidou_shared.types import AccountRef, OrderSide, OrderStatus, Quantity
 
 
@@ -347,8 +349,133 @@ def _config(tmp_path: Path, *, close_after_verify: bool = True) -> VerifierConfi
         order_poll_interval_seconds=0.0,
         trace_path=tmp_path / "trace.jsonl",
         pool_state_path=tmp_path / "pool.json",
+        kill_switch_path=tmp_path / "KILL_SWITCH",
         evidence_dir=tmp_path / "evidence",
     )
+
+
+def test_manifest_real_write_is_scoped_to_the_current_run(tmp_path: Path) -> None:
+    runtime = VerificationRuntime(_config(tmp_path), adapter=FakeTestnetAdapter())
+    runtime._adapter_is_injected = False
+    historical = DecisionTrace(
+        trace_id="historical-trace",
+        intent_id="historical-intent",
+        client_order_id="historical-client",
+    )
+    runtime.trace_store.prepare(historical)
+    runtime.trace_store.update("historical-trace", TraceStatus.SUBMITTED)
+    runtime.trace_store.update(
+        "historical-trace",
+        TraceStatus.ACKED,
+        exchange_order_id="123",
+        order_ack={"orderId": "123"},
+    )
+    summary = VerificationSummary(
+        run_id="current-run",
+        status="NOT_VERIFIABLE",
+        startup={},
+        episodes=[],
+        trace_ids=["historical-trace"],
+    )
+
+    manifest = json.loads(runtime._write_manifest(summary).read_text(encoding="utf-8"))
+
+    assert manifest["real_testnet_write"] is False
+
+
+def test_manifest_reports_kill_switch_as_write_authority_disabled(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.kill_switch_path.write_text("engaged\n", encoding="utf-8")
+    runtime = VerificationRuntime(config, adapter=FakeTestnetAdapter())
+    summary = VerificationSummary(
+        run_id="kill-switch-run",
+        status="NOT_VERIFIABLE",
+        startup={},
+        episodes=[],
+        trace_ids=[],
+    )
+
+    manifest = json.loads(runtime._write_manifest(summary).read_text(encoding="utf-8"))
+
+    assert manifest["testnet_write_configured"] is True
+    assert manifest["testnet_write_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_manifest_tracks_current_run_ack_and_ambiguous_attempt(tmp_path: Path) -> None:
+    adapter = FakeTestnetAdapter(recovery="query")
+    pool = TradingPool(max_instruments=1)
+    pool.add("BTCUSDT").min_observation_hours = 1.0
+    runtime = VerificationRuntime(_config(tmp_path), adapter=adapter, pool=pool)
+    # Exercise the bookkeeping branch used by the non-injected real adapter;
+    # venue behavior remains represented by the deterministic test double.
+    runtime._adapter_is_injected = False
+
+    summary = await runtime.run_once()
+    manifest = json.loads(Path(summary.manifest_path).read_text(encoding="utf-8"))
+
+    assert manifest["real_testnet_write_attempted"] is True
+    assert manifest["real_testnet_write"] is True
+    assert manifest["real_testnet_write_outcome_unknown"] is True
+
+
+@pytest.mark.asyncio
+async def test_startup_links_a_later_reduce_only_close_to_a_flat_filled_trace(tmp_path: Path) -> None:
+    runtime = VerificationRuntime(_config(tmp_path), adapter=FakeTestnetAdapter())
+    filled = DecisionTrace(
+        trace_id="filled-trace",
+        intent_id="filled-intent",
+        client_order_id="filled-client",
+        order_request={
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "quantity": "0.1",
+            "reduceOnly": False,
+        },
+    )
+    runtime.trace_store.prepare(filled)
+    runtime.trace_store.update("filled-trace", TraceStatus.SUBMITTED)
+    runtime.trace_store.update(
+        "filled-trace",
+        TraceStatus.ACKED,
+        exchange_order_id="100",
+        order_ack={"orderId": "100"},
+    )
+    runtime.trace_store.update("filled-trace", TraceStatus.FILLED, executed_qty="0.1")
+
+    close = DecisionTrace(
+        trace_id="later-close",
+        intent_id="later-close-intent",
+        client_order_id="later-close-client",
+        order_request={
+            "symbol": "BTCUSDT",
+            "side": "SELL",
+            "quantity": "0.1",
+            "reduceOnly": True,
+        },
+    )
+    runtime.trace_store.prepare(close)
+    runtime.trace_store.update("later-close", TraceStatus.SUBMITTED)
+    runtime.trace_store.update(
+        "later-close",
+        TraceStatus.ACKED,
+        exchange_order_id="101",
+        order_ack={"orderId": "101"},
+    )
+    runtime.trace_store.update(
+        "later-close",
+        TraceStatus.CLOSED,
+        executed_qty="0.1",
+        position_after={"symbol": "BTCUSDT", "quantity": 0.0},
+        reconciliation={"status": "MATCHED", "actual_quantity": "0", "unresolved": []},
+    )
+
+    startup = await runtime.startup()
+
+    recovered = runtime.trace_store.get("filled-trace")
+    assert recovered is not None and recovered.status is TraceStatus.CLOSED
+    assert recovered.reconciliation["close_trace_id"] == "later-close"
+    assert startup["recovery"]["closed_trace_ids"] == ["filled-trace"]
 
 
 @pytest.mark.asyncio
