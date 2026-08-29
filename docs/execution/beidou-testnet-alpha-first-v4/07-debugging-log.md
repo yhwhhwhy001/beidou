@@ -11,6 +11,7 @@
 | Clean full candidate found invalid registry capability | a descriptive new value was not part of the validator's closed capability enum | two architecture failures | use existing `TERMINAL_CREATE_SCOPE_REQUIRED` with a bounded call graph |
 | Clean preflight coverage fixture returned runtime storage `UNKNOWN` | test depended on untracked workspace directories | detached candidate failure | build the required storage/layout under `tmp_path` |
 | First detached coverage run collected 0% | invoking another worktree's `pytest` executable resolved editable imports there | coverage paths pointed at `/Users/maguannan/beidou` | invoke the environment as `python -m pytest` from the detached candidate |
+| Clean candidate reached 99.98% instead of required 100% | coverage had implicitly depended on ignored local config/storage facts | detached XML identified 11 uncovered statements across config, preflight, and feed | make tests construct environment config, migration/journal failures, and valid clock offset explicitly |
 
 Unknowns remain fail-closed. No new campaign was used to diagnose or repair
 these defects.

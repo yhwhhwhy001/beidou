@@ -218,6 +218,7 @@ async def test_feed_websocket_event_time_fallback_and_async_generator_failures()
 async def test_feed_async_kline_merge_fallback_dq_and_insufficient_boundaries() -> None:
     now = datetime.now(timezone.utc)
     feed = MarketDataFeed(client=_Client())
+    feed._client._rest_client = SimpleNamespace(_clock_offset_ms=10)
     latest = _generated_bar(now, closed=True)
     feed.get_generated_klines = lambda symbol, interval="1h": [latest]  # type: ignore[method-assign]
     feed._last_ticker["BTCUSDT"] = dict(feed._client.ticker)

@@ -87,6 +87,13 @@ def test_preflight_authority_rejects_unsupported_and_incomplete_migration(monkey
     assert ok is False and message == "PostgreSQL DSN is not configured"
     assert evidence["backend"] == "unsupported"
 
+    ok, message, evidence = preflight._postgres_authority_probe(
+        tmp_path,
+        "postgresql://user:secret@db/beidou",
+    )
+    assert ok is False and message == "Required PostgreSQL migration files are missing"
+    assert evidence["missing_migration_files"]
+
     monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *_a, **_k: _ProbeConnection()))
     ok, message, evidence = preflight._postgres_authority_probe(
         Path(__file__).resolve().parents[2], "postgresql://user:secret@db/beidou"
@@ -164,9 +171,17 @@ def test_run_preflight_covers_clean_storage_policy_guard_and_config_failures(mon
     monkeypatch.setenv("BEIDOU_BINANCE_API_KEY", "testnet-api-key")
     monkeypatch.setenv("BEIDOU_BINANCE_API_SECRET", "testnet-api-secret")
     monkeypatch.setenv("BEIDOU_SIGNING_KEY", "testnet-signing-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://beidou_app@localhost:5432/beidou_testnet")
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable"))),
+    )
     checks, _ = preflight._run_preflight(root, "testnet", 19102, require_g5_certificate=False)
     policy = next(item for item in checks if item.check_id == "preflight.signed_policy")
     assert policy.status.value == "FAIL"
+    journal = next(item for item in checks if item.check_id == "startup.safety.g5_baseline_journal")
+    assert journal.evidence["probe_error"] == "RuntimeError"
 
     monkeypatch.setattr(
         "beidou_shared.config.ConfigProvider.load",

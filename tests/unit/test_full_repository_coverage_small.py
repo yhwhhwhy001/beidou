@@ -116,8 +116,25 @@ def test_config_provider_redaction_and_load_fallbacks(tmp_path: Path, monkeypatc
 
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
+    actual = config_dir / "env.paper.yaml"
+    actual.write_text(
+        """environment: paper
+production_ladder:
+  levels:
+    - name: L0_PAPER
+      gate: G0
+      max_capital: 0
+      max_leverage: 0
+      min_unattended_hours: 0
+""",
+        encoding="utf-8",
+    )
     (config_dir / "env.paper.yaml.example").write_text("environment: paper\n", encoding="utf-8")
     provider = ConfigProvider(str(config_dir))
+    configured = provider.load(environment="paper")
+    assert configured.source == "env-file:paper"
+    assert configured.capital_ladder.levels[0].name == "L0_PAPER"
+    actual.unlink()
     template = provider.load(environment="paper")
     assert template.source == "template:paper"
     assert template.environment is Environment.PAPER
