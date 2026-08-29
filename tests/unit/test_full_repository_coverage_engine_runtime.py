@@ -235,7 +235,12 @@ def _runtime_engine(monkeypatch: pytest.MonkeyPatch, *, account_ok: bool = True)
     monkeypatch.setattr(
         EvidenceBridge,
         "load_and_apply",
-        staticmethod(lambda **_kwargs: BridgeReport()),
+        staticmethod(
+            lambda **_kwargs: BridgeReport(
+                applied=["fixture-factor"],
+                rejected=[("fixture-evidence.json", "fixture rejection")],
+            )
+        ),
     )
     engine = AutonomousEngine(["BTCUSDT"], mode="paper")
     engine._health.start = lambda: None

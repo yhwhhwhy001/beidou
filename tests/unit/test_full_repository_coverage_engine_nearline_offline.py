@@ -299,6 +299,9 @@ async def test_nearline_timeframe_and_kernel_boundaries(monkeypatch) -> None:
     low_candles = _nearline_engine(features={**valid, "n_candles": 9})
     await AutonomousEngine._nearline_tick(low_candles)
 
+    unclosed = _nearline_engine(features={**valid, "bar_is_closed": False})
+    await AutonomousEngine._nearline_tick(unclosed)
+
     non_dict = _nearline_engine(features=valid, kernel_result=[])
     await AutonomousEngine._nearline_tick(non_dict)
 
