@@ -38,14 +38,19 @@
 
 ## Clean detached candidate evidence
 
-Validated code SHA:
+Validated implementation SHA:
 `490ee9f697a791520a74a801331ad78f7ff81e24`.
-Environment: detached worktree `/tmp/beidou-remediation-490ee9f`, using the
-repository development environment through `python -m` so imports resolve to
-the detached candidate.
+Validated PR head:
+`a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`.
+The latter adds evidence documentation only. It was checked from detached
+worktree `/tmp/beidou-pr12-a55881e`, using the repository development
+environment through `python -m` so imports resolve to that exact checkout.
 
-- Full repository suite under coverage: `4612 passed`; coverage report
-  `45891/45891` statements, `0` missed, `100.00%` -> `PASS`.
+- Full repository suite under coverage on the PR head: `4612 passed`,
+  `146 warnings`, `152.81s`; coverage report `45891/45891` statements,
+  `0` missed, `100.00%` -> `PASS`.
+- Alpha V3 line/branch gate on the PR head: `4612 passed`, `146 warnings`,
+  `139.52s`; `3497/3497` statements and `1070/1070` branches -> `PASS`.
 - Ruff format: `673 files already formatted` -> `PASS`.
 - Ruff lint -> `PASS`.
 - Configured package mypy command -> `PASS`.
@@ -56,18 +61,27 @@ the detached candidate.
 - Test-quality, hardcoded-value and forbidden-pattern scans -> `PASS`.
 - Package validator -> `PASS`.
 - Bandit with project configuration -> `PASS`, no findings.
-- Runtime dependency audit -> no known third-party vulnerabilities; the local
-  editable `beidou` distribution is not a PyPI package and is reported as
-  unauditable rather than vulnerability-free.
-- Alpha V3 gate on parent candidate `3a8dbc7c`: `3497` statements plus `1070`
-  branches at `100%`. The only subsequent code change is a precise Bandit
-  suppression comment in Economic Truth; no Alpha module changed.
+- `pip_audit -r requirements.lock` -> no known vulnerabilities, exit `0`;
+  the editable `beidou` distribution is not a PyPI package and is explicitly
+  reported as unauditable rather than vulnerability-free.
+
+## GitHub and independent-verification evidence
+
+- Draft PR: `https://github.com/yhwhhwhy001/beidou/pull/12`, reviewed head
+  `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`.
+- Actions run `33252017084`: `verify (3.12)` and `security` both ended in
+  `FAILURE` after about two seconds with zero steps and no runner. Both check
+  annotations state that recent account payments failed or the spending limit
+  must be increased. This is not a test failure and is not a CI pass.
+- A no-context independent reviewer was requested, but the reviewer service
+  stopped at its usage limit before producing findings or a decision. No
+  independent acceptance status is inferred.
 
 ## Omissions and residual risk
 
 Historical venue evidence exists, but the post-campaign KeepAlive incident
 invalidates any claim that the 100 episodes were one deliberately bounded
-campaign. Local G7 is green for the exact code SHA above; GitHub Actions and
-independent acceptance are still absent and therefore cannot be inferred from
-local evidence. E0-E6 remains `NOT_EVALUATED`; no Testnet fact is profitability
-evidence.
+campaign. Local G7 is green for the exact PR head above; required GitHub jobs
+and independent acceptance are still absent and therefore cannot be inferred
+from local evidence. E0-E6 remains `NOT_EVALUATED`; no Testnet fact is
+profitability evidence.

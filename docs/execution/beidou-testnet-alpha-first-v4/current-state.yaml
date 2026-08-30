@@ -4,6 +4,7 @@ project:
   path: "/Users/maguannan/beidou"
   version: "codex/v4-incident-remediation"
   validated_code_sha: "490ee9f697a791520a74a801331ad78f7ff81e24"
+  validated_pr_head_sha: "a55881efe87c3ac44ab7ed2c5d644d6e2caed02a"
   environment: "local-and-binance-demo-read-only"
 authority:
   code_changes: true
@@ -11,8 +12,10 @@ authority:
   deployment: false
   production_mutation: false
   trading_actions: false
+  requested_testnet_campaign: true
+  testnet_campaign_gate_state: BLOCKED
   external_messages: false
-active_phase: G7
+active_phase: G8
 requirements:
   - AC-TN-001
   - AC-TN-002
@@ -40,15 +43,20 @@ gates:
   G4: {progress: COMPLETE, decision: PASS, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
   G5: {progress: COMPLETE, decision: RESOLVED, evidence: ["07-debugging-log.md"], reason: null, updated_at: "2026-08-29"}
   G6: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: ["08-code-review.md"], reason: "self-review complete; independent reviewer decision remains a G8 condition", updated_at: "2026-08-29"}
-  G7: {progress: COMPLETE, decision: PASS, evidence: ["05-test-strategy.md", "09-security-review.md"], reason: "clean detached verification passed for validated_code_sha", updated_at: "2026-08-29"}
-  G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "required GitHub CI and independent acceptance are incomplete", updated_at: "2026-08-29"}
-  G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 and independent release gate remain blocked", updated_at: "2026-08-29"}
+  G7: {progress: COMPLETE, decision: PASS, evidence: ["05-test-strategy.md", "09-security-review.md"], reason: "clean detached verification passed for validated_pr_head_sha", updated_at: "2026-08-30"}
+  G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "required GitHub CI failed to allocate runners and independent reviewer produced no decision", updated_at: "2026-08-30"}
+  G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 and independent release gate remain blocked", updated_at: "2026-08-30"}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "Mainnet and production prohibited", updated_at: "2026-08-29"}
 blockers:
   - "GitHub Actions runner allocation blocked by billing/spending limits"
   - "Required GitHub CI has not passed for the remediation PR HEAD"
   - "Independent acceptance/release review has not passed"
+  - "Independent Codex reviewer attempt ended at service usage limit without a review decision"
 residual_risks:
   - "Historical episode count was produced partly by an unauthorized KeepAlive loop"
   - "Economic Truth E0-E6 remains NOT_EVALUATED"
-next_authorized_action: "Commit and push the documentation convergence, open a PR, and evaluate required CI; do not merge or start a new campaign while G8/G9 are blocked."
+github:
+  pull_request: "https://github.com/yhwhhwhy001/beidou/pull/12"
+  actions_run: "https://github.com/yhwhhwhy001/beidou/actions/runs/33252017084"
+  actions_result: "FAILURE_BEFORE_STEPS_BILLING_OR_SPENDING_LIMIT"
+next_authorized_action: "Restore GitHub Actions runner eligibility and obtain an independent review, then rerun required PR jobs; do not merge, clear the kill switch, or start a campaign while G8/G9 are blocked."

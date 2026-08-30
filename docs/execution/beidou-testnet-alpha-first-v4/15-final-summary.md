@@ -1,4 +1,4 @@
-# Final local-verification summary (2026-08-29 incident remediation)
+# Final local-verification summary (refreshed 2026-08-30)
 
 ## Outcome so far
 
@@ -27,6 +27,19 @@ Completed remediation:
   test-quality/hardcoded/forbidden-pattern scans, package validator, Bandit
   and third-party dependency audit.
 
+2026-08-30 refresh:
+
+- validated PR head `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`
+  passed full-repository coverage (`4612 passed`, `45891/45891`, `100%`) and
+  Alpha line/branch coverage (`3497` statements, `1070` branches, `100%`);
+- signed GET-only reconciliation returned one-way mode, zero nonzero
+  positions, zero regular/algo open orders, durable unresolved `0`, with the
+  kill switch still present;
+- PR #12 run `33252017084` did not execute any CI step because GitHub refused
+  runner allocation under the account billing/spending state;
+- an independent reviewer produced no result because its service usage limit
+  was reached; no independent acceptance is claimed.
+
 ## Historical evidence boundary
 
 Historical ACK/fill/leverage/close traces remain useful execution evidence.
@@ -36,15 +49,15 @@ bounded campaign, and they do not prove alpha or profitability.
 ## Remaining external gates
 
 - obtain independent acceptance/release review;
-- obtain successful required GitHub Actions after the billing/spending-limit
-  blocker is removed;
+- restore GitHub Actions runner eligibility and obtain successful required
+  jobs;
 - merge to `main` only after those gates are green;
 - only then consider a separately bounded, explicitly authorized Testnet
   campaign. Keep the kill switch engaged until that decision point.
 
 ## Decision
 
-Local G7: `PASS` for the exact validated code SHA.
+Local G7: `PASS` for the validated PR head.
 G8/G9: `BLOCKED` for release, merge and any new Testnet campaign.
 `NOT_EVALUATED` for E0-E6 / alpha.
 `PROHIBITED` for Mainnet and production.

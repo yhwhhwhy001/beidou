@@ -4,6 +4,7 @@ Decision: `BLOCKED`
 
 Candidate branch: `codex/v4-incident-remediation`
 Validated code SHA: `490ee9f697a791520a74a801331ad78f7ff81e24`
+Validated PR head: `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`
 Incident baseline: `db2debcfed1a969e627b8a34b4e6bb89d8815184`
 Mainnet: `PROHIBITED`
 
@@ -11,16 +12,20 @@ Mainnet: `PROHIBITED`
 
 - Testnet verifier launchd job: booted out and disabled.
 - Durable kill switch: engaged.
-- Fresh signed GET reconciliation: account readable, one-way mode, no nonzero
-  positions, no open orders, no open algo orders.
+- 2026-08-30 signed GET reconciliation: account readable, one-way mode, no
+  nonzero positions, no regular/algo open orders, durable unresolved=`0`.
 - DecisionTrace recovery: the sole FILLED trace linked to a later
   quantity/direction-matched CLOSED reduce-only trace; unresolved=`0`.
 - Focused incident regressions: green.
-- Clean detached G7: `4612 passed`; `45891/45891` statements and `100.00%`
-  coverage; registry oracle, Ruff, mypy, compileall, package validator,
+- Clean detached G7 on validated PR head: full repository `4612 passed`,
+  `45891/45891` statements; Alpha gate `3497` statements and `1070` branches;
+  both `100%`. Registry oracle, Ruff, mypy, compileall, package validator,
   governance scans, Bandit and dependency audit passed.
-- GitHub Actions: runner allocation remains blocked by account
-  billing/spending limits; this is not a passing CI result.
+- GitHub PR #12 Actions run `33252017084`: both required jobs failed before
+  any step, with annotations requiring payment/spending-limit remediation.
+  This is not a passing CI result.
+- Independent reviewer attempt: no findings or decision were produced because
+  the reviewer service reached its usage limit.
 
 ## Release blockers
 

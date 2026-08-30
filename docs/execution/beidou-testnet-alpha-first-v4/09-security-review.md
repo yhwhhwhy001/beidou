@@ -24,8 +24,8 @@
 | High | Legacy governance weakening | Default legacy preflight no longer required G5 | Restore historical G5 gate; V4 verifier remains isolated | FIXED |
 | Medium | Local JSONL/evidence files are filesystem-local | Local path configuration and `0600` trace creation | Restrict paths/permissions and retain artifacts only in the intended workspace | CONDITIONAL |
 
-Clean detached candidate evidence at
-`490ee9f697a791520a74a801331ad78f7ff81e24`: Bandit passed with no findings.
+Clean detached PR-head evidence at
+`a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`: Bandit passed with no findings.
 The dependency audit reported no known vulnerabilities in auditable
 third-party dependencies; the local editable `beidou` distribution cannot be
 resolved from PyPI and is explicitly not claimed audited. Required GitHub CI
@@ -33,8 +33,10 @@ is still absent.
 
 No API key or secret value was printed. Existing `.env` variables were loaded
 only inside signed GET processes for account reconciliation; output was
-restricted to permissions, positions, orders, and trace identities. Binance
-HMAC is exchange authentication, not an internal approval bypass.
+restricted to aggregate status and counts. The 2026-08-30 refresh returned
+one-way mode, no nonzero positions, no regular/algo open orders, unresolved
+`0`, and confirmed the kill switch remained present. Binance HMAC is exchange
+authentication, not an internal approval bypass.
 
 ## Decision
 

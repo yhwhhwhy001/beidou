@@ -12,8 +12,9 @@ or another Testnet campaign while HOLD is active.
 
 ## Status
 
-In progress at clean system verification. Testnet account risk is reconciled
-to zero; release remains blocked.
+Local clean system verification is complete on validated candidate head
+`a55881e`. Testnet account risk is reconciled to zero; release remains blocked
+at G8/G9.
 
 ## Decisions
 
@@ -44,14 +45,15 @@ manifests are preserved and not staged.
 
 | Risk | Next check |
 |---|---|
-| Full candidate regression | clean detached `490ee9f697a791520a74a801331ad78f7ff81e24`: `4612 passed`, `45891/45891`, `100.00%` |
+| Full candidate regression | clean detached candidate `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`: full repository and Alpha line/branch gates both `100%` |
 | Registry digest drift | rebuilt registry and independent oracle both pass |
-| GitHub required jobs unavailable | rerun after billing/spending limit recovery |
-| Independent review pending | review final diff and raw package criteria |
+| GitHub required jobs unavailable | PR #12 run `33252017084` failed before steps; restore billing/spending runner eligibility |
+| Independent review pending | no-context reviewer reached usage limit without a result; obtain a completed review |
 
 ## Next actions
 
-1. Commit and push the documentation convergence; open a PR so required CI
-   runs on the remediation head.
+1. Restore GitHub Actions runner eligibility and rerun required PR jobs.
 2. Obtain independent acceptance/release review.
-3. Merge only after all required checks pass.
+3. Merge only after all required checks pass; then perform a separate
+   readiness decision before removing the kill switch or starting the
+   requested bounded Testnet campaign.

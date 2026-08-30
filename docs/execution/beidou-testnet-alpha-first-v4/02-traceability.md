@@ -9,9 +9,9 @@
 | PKG-04 pool | live historical pool facts and active-only gate | pool/runtime integration | PASS_WITH_INCIDENT_CAVEAT |
 | PKG-05 sizing/leverage | canonical sizing, request identity, leverage readback | sizing/guard/adapter contracts | PASS_WITH_INCIDENT_CAVEAT |
 | PKG-06 kernel/components | component output/VETO/proposal traces | kernel/runtime integration | PASS_WITH_INCIDENT_CAVEAT |
-| PKG-07 lifecycle/reconciliation | same-id recovery; later close linkage; signed flat account readback | runtime integration + fresh signed GET | PASS for current account risk |
+| PKG-07 lifecycle/reconciliation | same-id recovery; later close linkage; 2026-08-30 signed flat account readback | runtime integration + signed GET: one-way, flat, no regular/algo orders, unresolved `0` | PASS for current account risk |
 | PKG-08 freeze/isolation | verifier bypasses frozen modules; legacy G5 gate restored | architecture + legacy preflight tests | PASS locally |
-| PKG-09 CI/economic truth | E0-E6 remains separate; clean local G7 passed at `490ee9f697a791520a74a801331ad78f7ff81e24`; required GitHub CI and independent acceptance are absent | economic truth tests; detached full-suite/coverage/static evidence; pending PR CI | BLOCKED |
+| PKG-09 CI/economic truth | E0-E6 remains separate; clean local G7 passed at PR head `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`; PR #12 run `33252017084` failed before all steps because no runner was allocated; independent reviewer produced no decision | two detached full-suite coverage runs; static/security evidence; GitHub annotations | BLOCKED |
 | PKG-10 docs/default entry | README/runbook/acceptance/release reports are incident-aware and identify the validated code SHA | doc/CLI/architecture tests; package validator | PASS locally / G8 dependent |
 
 All AC-TN requirement-level decisions are recorded in

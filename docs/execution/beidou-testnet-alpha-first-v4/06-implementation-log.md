@@ -33,6 +33,13 @@
   test-quality/hardcoded/forbidden-pattern scans, package validator, Bandit and
   dependency audit; all project-controlled checks passed with the local
   `beidou` distribution excluded from PyPI vulnerability lookup as expected.
+- Pushed the remediation and documentation commits, opened draft PR #12, and
+  re-ran every local CI-equivalent gate on exact PR head
+  `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`. Full repository and Alpha V3
+  line/branch gates both passed at `100%`.
+- Repeated signed read-only account reconciliation on 2026-08-30: one-way
+  mode, zero nonzero positions, zero regular/algo open orders, and durable
+  unresolved count `0`.
 
 No Testnet write, kill-switch removal, deployment or Mainnet action was part
 of this verification.

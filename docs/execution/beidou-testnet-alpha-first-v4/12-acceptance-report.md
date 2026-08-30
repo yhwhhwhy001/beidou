@@ -2,6 +2,7 @@
 
 Candidate branch: `codex/v4-incident-remediation`
 Validated code SHA: `490ee9f697a791520a74a801331ad78f7ff81e24`
+Validated PR head: `a55881efe87c3ac44ab7ed2c5d644d6e2caed02a`
 Mainnet: `PROHIBITED`
 Overall decision: `BLOCKED`
 
@@ -16,9 +17,9 @@ Overall decision: `BLOCKED`
 | AC-TN-009/010 | Historical leverage/quantity ACK facts exist and final-request identity is tested. No new write campaign was run after remediation. | PASS_WITH_INCIDENT_CAVEAT |
 | AC-TN-011 | PREPARED-before-write remains append/fsync backed and tested. | PASS locally |
 | AC-TN-012/013 | Same-client-id query-before-retry and ACK identity contracts remain tested. | PASS locally |
-| AC-TN-014/015 | Fresh signed GET showed no nonzero positions/open orders/algo orders. Startup linked the sole FILLED trace to a later quantity-matched CLOSED reduce-only trace; unresolved=`0`. | PASS for current account risk |
+| AC-TN-014/015 | 2026-08-30 signed GET showed one-way mode, no nonzero positions, no regular/algo open orders, and durable unresolved=`0`. Startup recovery links the sole FILLED trace only to a later quantity-matched CLOSED reduce-only trace. | PASS for current account risk |
 | AC-TN-016 | Historical trace chain exists; manifest current-run write semantics and restart close linkage were corrected in this candidate. | PASS_WITH_INCIDENT_CAVEAT |
-| AC-TN-017 | Clean detached G7 passed: `4612 passed`, `45891/45891` statements (`100.00%`), Ruff, mypy, compileall, registry oracle, governance scans, package validator, Bandit and dependency audit. Required GitHub Actions and independent acceptance have not passed. | BLOCKED |
+| AC-TN-017 | Validated PR head passed clean detached full coverage (`4612 passed`, `45891/45891`) and Alpha line/branch coverage (`3497` statements + `1070` branches), both `100%`; all static/governance/security checks passed. PR #12 Actions run `33252017084` failed before any step because GitHub did not allocate runners under the account billing/spending state. | BLOCKED |
 | AC-TN-018 | README, CLI, and runbook point to the verifier; confirmed writes require `--once`; daemon/KeepAlive verifier launchers are prohibited by architecture test. | PASS locally |
 
 ## Incident findings and remediation
@@ -46,10 +47,18 @@ Overall decision: `BLOCKED`
 E0-E6 machinery remains `NOT_EVALUATED`. Historical Testnet execution facts
 do not establish profitability, OOS robustness, or `ALPHA VERIFIED`.
 
+## Independent acceptance attempt
+
+A no-context reviewer was assigned the uploaded package, incident baseline,
+and exact PR-head diff. The reviewer service reached its usage limit before
+returning any finding or decision. This is missing evidence, not a pass and
+not a review failure. G8 remains blocked until a genuinely independent review
+is completed.
+
 ## Admission decision
 
 The dedicated Testnet account is currently reconciled to zero risk and local
-G7 is green for the exact validated code SHA. This candidate is not admitted
-until independent acceptance and required GitHub CI are current and green. No
-new campaign may start while the kill switch is engaged or any gate is
-unknown/blocked.
+G7 is green for the exact validated PR head. This candidate is not admitted
+until independent acceptance and required GitHub CI are current and green.
+The user's requested Testnet campaign is recorded but is not executable while
+the kill switch is engaged or any gate is unknown/blocked.
