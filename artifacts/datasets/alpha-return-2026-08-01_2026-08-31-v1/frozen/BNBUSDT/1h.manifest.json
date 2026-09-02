@@ -1,0 +1,28 @@
+{
+  "content_hash_algorithm": "SHA256_OHLCV_FLOATHEX_V1",
+  "content_sha256": "bde90e1e77aef19dcdfaaf255b213dd38b70c2f61e1902167e73c44b5cc6aa69",
+  "cross_source_validation": {
+    "checked_at": "2026-09-01T03:08:59.685625Z",
+    "evidence_sha256": "917acd183fd71ed39d068e1e116941c34d20a0cae413013b7657aefc1fc94f97",
+    "max_close_deviation_bps": 0.0,
+    "reference_endpoint": "https://data.binance.vision/data/futures/um/daily/klines/BNBUSDT/1h/BNBUSDT-1h-2026-08-01.zip",
+    "reference_source_class": "OFFICIAL_PUBLIC_ARCHIVE",
+    "sample_count": 720,
+    "sample_scope": "EXTREMA_AND_RANDOM",
+    "status": "PASS"
+  },
+  "first_open_time": 1785542400000,
+  "interval": "1h",
+  "last_open_time": 1788130800000,
+  "provenance": {
+    "endpoint": "https://fapi.binance.com/fapi/v1/klines",
+    "environment": "PUBLIC_READ_ONLY",
+    "intended_use": "ECONOMIC_RESEARCH",
+    "retrieved_at": "2026-09-01T03:08:50.442872Z",
+    "source_class": "EXCHANGE_PUBLIC_API",
+    "venue": "BINANCE_USDM"
+  },
+  "rows": 720,
+  "schema_version": "2.0",
+  "symbol": "BNBUSDT"
+}

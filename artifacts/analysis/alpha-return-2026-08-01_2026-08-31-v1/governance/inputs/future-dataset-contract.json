@@ -1,0 +1,22 @@
+{
+  "candidate_search": false,
+  "content_hashes": "UNAVAILABLE_BY_DESIGN_UNTIL_AUTHORIZED_FIRST_READ",
+  "end_exclusive": "2026-11-01T00:00:00Z",
+  "expected_rows_per_symbol": 744,
+  "interval": "1h",
+  "manifest_kind": "PROSPECTIVE_DATASET_ACQUISITION_CONTRACT",
+  "oos_data_accessed": false,
+  "prospective_dataset_contract_digest": "22df1300f5cd7c7f826fc490b4e7a0354fe22cf01f537fa617890c11f4836a82",
+  "schema_version": "1.0",
+  "source_contract_digest": "de677367be1b2c60bbb2ec41aafb119566c8fe862342180ac26661e94a2670a2",
+  "start_inclusive": "2026-10-01T00:00:00Z",
+  "status": "SEALED_FUTURE_CONTRACT_NO_DATA_ACCESSED",
+  "symbols": [
+    "BNBUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "timezone": "UTC",
+  "venue": "BINANCE_USDM"
+}

@@ -1,0 +1,9 @@
+{
+  "decision_rule": "decision_at_next_bar_open",
+  "feature_available_after_decision_allowed": false,
+  "feature_rule": "closed_bar_t_available_at_t_plus_1h",
+  "kind": "SIGNAL_LABEL_TIMESTAMP_SEMANTICS",
+  "label_available_at_or_before_decision_allowed": false,
+  "label_rule": "next_bar_open_to_close_available_at_bar_end",
+  "schema_version": "1.0"
+}

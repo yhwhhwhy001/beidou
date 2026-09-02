@@ -1,0 +1,65 @@
+{
+  "applicability": {
+    "current_candidate_authorization": "NOT_GRANTED",
+    "metric_semantics_for_this_run": "VERIFIED_FROZEN_POLICY",
+    "reason": "The signed envelope is authoritative for the frozen Metric Owner policy and its original task only; its baseline/worktree scope is not relabelled as current-run candidate, deployment, or trading authorization.",
+    "trading_or_runtime_authorization": "NOT_GRANTED"
+  },
+  "approval": {
+    "approved_worktree": "/Users/maguannan/beidou-isolated/BD-AF-P0P3-impl-v3-b9",
+    "baseline_commit": "1f5b87c33141c7422c3a8ca9aa13a495d659de68",
+    "expires_at": "2026-09-25T23:59:59+08:00",
+    "package_id": "BD-AF-P0P3-V5",
+    "protected_source_worktree": "/Users/maguannan/beidou",
+    "scope": "LOCAL_IMPLEMENTATION_ONLY",
+    "signature": {
+      "exit_code": 0,
+      "identity": "yhwhhwhy001@gmail.com",
+      "message_path": "/Users/maguannan/beidou-authorization/BD-AF-P3-T07/BD-AF-P3-T07.approval.json",
+      "message_sha256": "baf0b1b8f847c919b9eb38b9257e2dde82c88e6643e27eff5e9c5ac085778026",
+      "namespace": "beidou-alpha-first-task-approval-v1",
+      "signature_path": "/Users/maguannan/beidou-authorization/BD-AF-P3-T07/BD-AF-P3-T07.approval.json.sig",
+      "signature_sha256": "e027af0463fac6930a90f4ab6088d74fe83c6b5214dc06d434a4668f33d7aa73",
+      "status": "VERIFIED",
+      "tool_observation": "Good \"beidou-alpha-first-task-approval-v1\" signature for yhwhhwhy001@gmail.com with ED25519 key SHA256:l2fe96Mv2K8iVBPt6+wwNVSE1X1c+SWivXOlTXVmjiI",
+      "trust_root_path": "/Users/maguannan/beidou-authorization/BD-AF-P0P3-V2/approval-trust-root.allowed_signers",
+      "trust_root_sha256": "9b38ce274603493d94fbe29fdcf3636ca4a2808d0e6c13168cdd965dd48a31c0"
+    },
+    "task_id": "BD-AF-P3-T07"
+  },
+  "independent_review": {
+    "decision": "ACCEPTED",
+    "reviewed_at": "2026-08-25T15:25:42Z",
+    "signature": {
+      "exit_code": 0,
+      "identity": "yhwhhwhy001@gmail.com",
+      "message_path": "/Users/maguannan/beidou-authorization/BD-AF-P3-T07/BD-AF-P3-T07.reviewer-record.json",
+      "message_sha256": "3453fee22bbccd696c4988903963dd92e56a8d59b83cdc6ea7ab02f4a819a80c",
+      "namespace": "beidou-alpha-first-task-review-v1",
+      "signature_path": "/Users/maguannan/beidou-authorization/BD-AF-P3-T07/BD-AF-P3-T07.reviewer-record.json.sig",
+      "signature_sha256": "41449588d5e5153eb06a54c96dc32885eae355072eebe2fc692f5b0093b14ade",
+      "status": "VERIFIED",
+      "tool_observation": "Good \"beidou-alpha-first-task-review-v1\" signature for yhwhhwhy001@gmail.com with ED25519 key SHA256:l2fe96Mv2K8iVBPt6+wwNVSE1X1c+SWivXOlTXVmjiI",
+      "trust_root_path": "/Users/maguannan/beidou-authorization/BD-AF-P0P3-V2/approval-trust-root.allowed_signers",
+      "trust_root_sha256": "9b38ce274603493d94fbe29fdcf3636ca4a2808d0e6c13168cdd965dd48a31c0"
+    }
+  },
+  "owner": {
+    "approval_id": "H2_METRIC_OWNER_BEFORE_BD_AF_P3_T07",
+    "confirmed_at": "2026-08-25T13:25:38Z",
+    "identity": "yhwhhwhy001@gmail.com",
+    "role": "METRIC_OWNER"
+  },
+  "policy": {
+    "path": "/Users/maguannan/beidou-authorization/BD-AF-P3-T07/metric-owner-policy.json",
+    "policy_id": "BD-AF-P3-T07-METRIC-OWNER-POLICY",
+    "policy_status": "FROZEN_OWNER_APPROVED",
+    "policy_version": "1.0.0",
+    "semantic_digest": "96dbcd31d32ffb53c532a24634c2c85082e4f7d045fd1da24d8521d9495d08b9",
+    "source_sha256": "2b7f5bf287432b6051e9252f525023b0c23dfa17c2c26aa4e95ab18002e61f70"
+  },
+  "reasons": [],
+  "schema_version": "1.0",
+  "status": "PASS_WITH_SCOPE_LIMIT",
+  "verified_at": "2026-09-02T04:16:09.065063Z"
+}

@@ -1,0 +1,48 @@
+{
+  "artifact_hashes": {
+    "roles/calendar.json": "228ef8626d27fc28451ad68a7a8330e6a097c608e61a56d9dbbb65c318017d52",
+    "roles/corporate_actions.json": "4569c41793597b60d93448cf71a3112d837a68853b90492516463bacd3b3e41e",
+    "roles/costs.json": "78dab13202833e82ddadd01d404ca67e89a2e55a2c12a9d704016cc3d891a89a",
+    "roles/dataset.json": "44520aa16f70386403dfe952230eca827cb94cfa0be3279b9c4546eacbf8a6fe",
+    "roles/features.json": "59047ccfb00a8ae8e96b333e39965e6a5acd741dfb213686b4694c7433a9e480",
+    "roles/labels.json": "c94fc498d2f922bdd5f9e11b2b95fe38a3447b19c8d90cd90218244981e03c58",
+    "roles/revisions.json": "3fa6192c7a0ce03961b786c3ff7f7f2b0baffb42e1294bc96733ebd6c835b690",
+    "roles/timestamps.json": "0e555e9ca4f5bab5abc39f3b19f3cf31b031cd3b6876a0c51f605fc7088a5e58",
+    "roles/timezone.json": "7455f773dd9547acd141462dbdd85f8f6f40c18220e58032fe6b1a42a16953b8",
+    "roles/universe_membership.json": "9caecee232b801b2ea3b6ff24e5edf48c6b6eb342cb4ca3cfac17825ace81ba6"
+  },
+  "candidate_search": false,
+  "candidate_selection": false,
+  "contract_verification": "VERIFIABLE",
+  "coverage_percent": 100,
+  "covered_roles": [
+    "calendar",
+    "corporate_actions",
+    "costs",
+    "dataset",
+    "features",
+    "labels",
+    "revisions",
+    "timestamps",
+    "timezone",
+    "universe_membership"
+  ],
+  "created_at": "2026-09-02T04:32:08.899722Z",
+  "feature_available_after_decision": 0,
+  "feature_records": 2676,
+  "label_available_at_or_before_decision": 0,
+  "label_records": 2676,
+  "limitations": [
+    "Record-level feature and label timestamps are causal and content-bound.",
+    "The exact market-data bytes were retrieved after the historical decisions, so this is a retrospective reconstruction rather than proof of a contemporaneously frozen source vintage.",
+    "The universe is the four-symbol user-authorized scope; broader survivorship and symbol lifecycle were not evaluated.",
+    "No candidate search, selection, promotion, account/order access, or trading action occurred."
+  ],
+  "manifest_digest": "6f7033b86aa715eedc4ed5c8bbd3cd3e94cec1270ce2cb3e5f07c621ca1ad60e",
+  "manifest_sha256": "38b40062d6109db58000e083dbed23131f0ef1e5e90bb98b557cd5dc0ecf1fd9",
+  "promotion_use": "NOT_VERIFIABLE",
+  "report_id": "ARO-07-AUGUST-PIT-FEATURE-LINEAGE",
+  "schema_version": "1.0",
+  "source_vintage_at_decision": "NOT_VERIFIABLE_RETROSPECTIVE_RECONSTRUCTION",
+  "status": "PASS_WITH_CONDITIONS"
+}

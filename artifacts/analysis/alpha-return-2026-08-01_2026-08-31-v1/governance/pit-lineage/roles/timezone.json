@@ -1,0 +1,7 @@
+{
+  "daylight_saving_adjustment": "NOT_APPLICABLE",
+  "display_timezone": "UTC",
+  "event_timezone": "UTC",
+  "kind": "TIMEZONE_CONTRACT",
+  "schema_version": "1.0"
+}

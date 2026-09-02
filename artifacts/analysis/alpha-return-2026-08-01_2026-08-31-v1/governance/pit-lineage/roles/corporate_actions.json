@@ -1,0 +1,8 @@
+{
+  "contract_or_symbol_migrations_observed": [],
+  "equity_corporate_actions": "NOT_APPLICABLE",
+  "instrument_class": "BINANCE_USDM_PERPETUAL",
+  "kind": "INSTRUMENT_ACTION_SCOPE",
+  "limitation": "BROADER_SYMBOL_LIFECYCLE_NOT_EVALUATED",
+  "schema_version": "1.0"
+}

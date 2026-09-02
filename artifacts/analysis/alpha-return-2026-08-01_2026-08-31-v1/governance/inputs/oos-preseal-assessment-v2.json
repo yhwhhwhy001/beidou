@@ -1,0 +1,14 @@
+{
+  "assessment_digest": "61858a4298c928a55d9106759b73271069ed15aa63c26c1f33e97fd46a6c2ae7",
+  "candidate_freeze_digest": null,
+  "candidate_search_started": false,
+  "eligible_for_v2_seal": false,
+  "governed_v2_seal_created": false,
+  "oos_data_accessed": false,
+  "reasons": [
+    "MISSING_CANDIDATE_FREEZE"
+  ],
+  "schema_version": "2.0",
+  "status": "DRAFT_BLOCKED",
+  "window_custody_digest": "fd01d3eee9e05c1e864cd7937d9c989ed51b1784d3c92555a458cc2100ab66ff"
+}

@@ -1,0 +1,84 @@
+{
+  "archive_api_raw_field_mismatches": 0,
+  "kind": "RETROSPECTIVE_REVISION_AND_CODE_BINDING",
+  "limitation": "The exact bytes were acquired after the decision timestamps; archive/API agreement does not prove an immutable source snapshot existed at every historical decision.",
+  "schema_version": "1.0",
+  "source_files": [
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/dataset-index.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "811affae3e2cc2ee5d24a617f4278f8bcf97ed7b208bb92b2b22a83cab572d28"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/BNBUSDT/1h.manifest.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "1303a96c57c20a4b8fdf53b428dc87ba5f04b1cad1a0167b952db0c7b93ec0f2"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/BNBUSDT/1h.parquet",
+      "path_scope": "REPOSITORY",
+      "sha256": "59447a27b60ff93439e65c34a2f0b0c1e530e6ac7cd0a2cc796183772bdc8710"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/reconciliation/BNBUSDT-1h.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "917acd183fd71ed39d068e1e116941c34d20a0cae413013b7657aefc1fc94f97"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/BTCUSDT/1h.manifest.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "6aeca19063bb8b1ef927bc58e25c13cde41958e83040d5118adf2072413e9490"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/BTCUSDT/1h.parquet",
+      "path_scope": "REPOSITORY",
+      "sha256": "24b6f73243d22ccad5855ede554e08f75b2bb46dc160899e2550107b12b78ab8"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/reconciliation/BTCUSDT-1h.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "8759363e927ffd28292c97a6c030b9a6841c967387c287287aba3b2d7054b4db"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/ETHUSDT/1h.manifest.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "e5d55f90dd15cd5153a1f810df6ec8adfb7f56d044dc8bfc2291a7b3642c811d"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/ETHUSDT/1h.parquet",
+      "path_scope": "REPOSITORY",
+      "sha256": "c9bb9d199eb1f57b1f2a18041ae6288d31c0c7abf53d60b8f12d7b59a487ab62"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/reconciliation/ETHUSDT-1h.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "d115fea5cacf967484138bb19802225d131eea15c2d43654573d1a23327a64e7"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/SOLUSDT/1h.manifest.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "a12b03b375f20b92f5e92223f0beb84a16a0ba997fd483cc565b70c3424af462"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/frozen/SOLUSDT/1h.parquet",
+      "path_scope": "REPOSITORY",
+      "sha256": "c93231f69c5230d6332107fc27a879195c322251ee1d5e70dfc7bf935d6f7303"
+    },
+    {
+      "path": "artifacts/datasets/alpha-return-2026-08-01_2026-08-31-v1/reconciliation/SOLUSDT-1h.json",
+      "path_scope": "REPOSITORY",
+      "sha256": "2188470d2d5c58df6173b16e9f8306a48a13e51af855305af869b8ec58896af1"
+    },
+    {
+      "path": "apps/alpha_app/composition.py",
+      "path_scope": "REPOSITORY",
+      "sha256": "10f192fc4fe72fdec40f1b59939b098622007b6cfcef432a6488b9cb4996f998"
+    },
+    {
+      "path": "beidou_strategy/alpha/trend.py",
+      "path_scope": "REPOSITORY",
+      "sha256": "865d689e5f6da23c99306dde5767ff6561e3d83e8a66f601bc70ed4baf2a3dea"
+    }
+  ],
+  "source_vintage_at_decision": "NOT_VERIFIABLE_RETROSPECTIVE_RECONSTRUCTION"
+}

@@ -1,0 +1,32 @@
+{
+  "boundary": {
+    "oos_end": "2026-10-31T23:00:00Z",
+    "oos_start": "2026-10-01T00:00:00Z",
+    "timezone": "UTC",
+    "train_end": "2026-09-30T23:59:59Z"
+  },
+  "custodian_authority_source": "USER_AUTHORIZED_CURRENT_TASK",
+  "custodian_id": "codex-task-01a0546f-f56c-75c0-9392-90fd3d492377",
+  "custodian_kind": "LOCAL_CODEX_TASK_PROCESS",
+  "custody_sealed_at": "2026-09-02T04:16:09.065305Z",
+  "dataset_manifest_digest": "22df1300f5cd7c7f826fc490b4e7a0354fe22cf01f537fa617890c11f4836a82",
+  "first_read_not_before": "2026-11-02T00:00:00.000000Z",
+  "governed_v2_seal_created": false,
+  "human_custodian_signature": "ABSENT_NOT_CLAIMED",
+  "institutional_custody": "NOT_VERIFIABLE",
+  "interval": "1h",
+  "oos_data_accessed": false,
+  "pit_manifest_digest": "5c65bf2a57d27b979699d97e56587a6c1a9082e45940b7eec4fb81f3a49cd0aa",
+  "schema_version": "2.0",
+  "source_class": "OFFICIAL_PUBLIC_ARCHIVE",
+  "source_contract_digest": "de677367be1b2c60bbb2ec41aafb119566c8fe862342180ac26661e94a2670a2",
+  "source_endpoint": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2026-10.zip",
+  "symbols": [
+    "BNBUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "venue": "BINANCE_USDM",
+  "window_custody_digest": "fd01d3eee9e05c1e864cd7937d9c989ed51b1784d3c92555a458cc2100ab66ff"
+}
