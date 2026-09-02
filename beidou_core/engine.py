@@ -102,6 +102,7 @@ from beidou_security.identity import (
     ServiceIdentity,
 )
 from beidou_shared.config import ConfigProvider, TypedSettings
+from beidou_shared.evidence_archive import EvidenceArchiveRotatingFileHandler
 from beidou_shared.types import (
     AccountId,
     AccountRef,
@@ -215,6 +216,7 @@ _log_format = logging.Formatter(
 # 设置, 迟早遗漏。现改为显式装配 —— 导入不再有写文件副作用, 只有确实要
 # 运行引擎的进程调用 attach_engine_file_log()。
 _ENGINE_LOG_DEFAULT = "evidence/beidou_engine.log"
+_ENGINE_LOG_MAX_BYTES = 10 * 1024 * 1024
 _log_handler: logging.Handler | None = None
 
 logger.setLevel(logging.INFO)
@@ -222,7 +224,9 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
-def attach_engine_file_log(path: str | None = None) -> logging.Handler | None:
+def attach_engine_file_log(
+    path: str | None = None, *, max_bytes: int = _ENGINE_LOG_MAX_BYTES
+) -> logging.Handler | None:
     """为引擎进程装配文件日志 handler (幂等)。
 
     仅应由真正运行引擎的入口调用 (beidou_launcher.cli 的 start 路径)。
@@ -237,8 +241,8 @@ def attach_engine_file_log(path: str | None = None) -> logging.Handler | None:
         parent = os.path.dirname(target)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        handler = logging.FileHandler(target)
-    except OSError:
+        handler = EvidenceArchiveRotatingFileHandler(target, max_bytes=max_bytes)
+    except (OSError, ValueError):
         # 日志装配失败不得阻断引擎启动; stdout 仍由 launchd 捕获。
         return None
     handler.setFormatter(_log_format)

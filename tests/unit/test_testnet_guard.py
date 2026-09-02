@@ -84,6 +84,46 @@ def test_bounded_context_is_stable_and_contains_no_secret() -> None:
     assert context.nonce == same.nonce
 
 
+@pytest.mark.parametrize(("task_id", "entrypoint"), [("", "apps.testnet_soak"), ("soak", "")])
+def test_guard_rejects_empty_authority_scope(task_id: str, entrypoint: str) -> None:
+    with pytest.raises(TestnetGuardError, match="task_id and entrypoint are required"):
+        TestnetEnvironmentGuard(
+            "https://demo-fapi.binance.com",
+            max_notional="10",
+            max_leverage="3",
+            max_account_exposure="25",
+            account_id="dedicated-testnet-account",
+            task_id=task_id,
+            entrypoint=entrypoint,
+        )
+
+
+def test_guard_binds_custom_soak_authority_scope() -> None:
+    guard = TestnetEnvironmentGuard(
+        "https://demo-fapi.binance.com",
+        max_notional="10",
+        max_leverage="3",
+        max_account_exposure="25",
+        account_id="dedicated-testnet-account",
+        task_id="testnet-soak-campaign",
+        entrypoint="apps.testnet_soak",
+    )
+    context = guard.build_write_context(
+        intent_id="intent-1",
+        trace_id="trace-1",
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        quantity="0.001",
+        notional="10",
+        leverage="3",
+    )
+
+    assert context.task_id == "testnet-soak-campaign"
+    assert context.entrypoint == "apps.testnet_soak"
+    assert guard.validate_context(context).allowed
+
+
 def test_valid_increase_passes_caps_and_unknown_endpoint_is_denied() -> None:
     guard = _guard()
     context = guard.build_write_context(

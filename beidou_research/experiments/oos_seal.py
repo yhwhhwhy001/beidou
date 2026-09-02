@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from .contracts import GENESIS_HASH, canonical_json
 
@@ -96,6 +98,18 @@ class OOSSeal:
     @property
     def digest(self) -> str:
         return self.seal_digest
+
+    @property
+    def governance_version(self) -> int:
+        return 1
+
+    @property
+    def promotion_scope(self) -> str:
+        return "LEGACY_RESEARCH_ONLY"
+
+    @property
+    def eligible_for_v2_promotion(self) -> bool:
+        return False
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -291,12 +305,36 @@ class OOSAccessReceipt:
     sequence: int
     audit_head: str
 
+    @property
+    def governance_version(self) -> int:
+        return 1
+
+    @property
+    def promotion_scope(self) -> str:
+        return "LEGACY_RESEARCH_ONLY"
+
+    @property
+    def eligible_for_v2_promotion(self) -> bool:
+        return False
+
 
 @dataclass(frozen=True)
 class OOSPromotionStatus:
     status: str
     reasons: tuple[str, ...]
     synthetic_economic_evidence: bool = False
+
+    @property
+    def governance_version(self) -> int:
+        return 1
+
+    @property
+    def promotion_scope(self) -> str:
+        return "LEGACY_RESEARCH_ONLY"
+
+    @property
+    def eligible_for_v2_promotion(self) -> bool:
+        return False
 
 
 class OOSSealStore:
@@ -307,8 +345,53 @@ class OOSSealStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.seal_path = self.root / "oos-seal.json"
         self.audit_path = self.root / "oos-access-audit.jsonl"
+        self.lock_path = self.root / ".oos-access.lock"
+
+    @contextmanager
+    def _lock(self, *, exclusive: bool) -> Iterator[None]:
+        descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def create(
+        self,
+        *,
+        boundary: OOSBoundary,
+        key: bytes,
+        audit_key: bytes,
+        lineage_digest: str,
+        run_id: str,
+        experiment_identity_digest: str,
+        checkpoint_digest: str,
+        sealed_at: str,
+        evaluation_not_before: str,
+    ) -> OOSSeal:
+        with self._lock(exclusive=True):
+            return self._create_unlocked(
+                boundary=boundary,
+                key=key,
+                audit_key=audit_key,
+                lineage_digest=lineage_digest,
+                run_id=run_id,
+                experiment_identity_digest=experiment_identity_digest,
+                checkpoint_digest=checkpoint_digest,
+                sealed_at=sealed_at,
+                evaluation_not_before=evaluation_not_before,
+            )
+
+    def _create_unlocked(
         self,
         *,
         boundary: OOSBoundary,
@@ -360,9 +443,14 @@ class OOSSealStore:
                 os.fsync(handle.fileno())
         except FileExistsError as exc:
             raise OOSSealNotVerifiable("IMMUTABLE_OOS_SEAL_ALREADY_EXISTS") from exc
+        self._fsync_directory(self.root)
         return seal
 
     def load_seal(self) -> OOSSeal:
+        with self._lock(exclusive=False):
+            return self._load_seal_unlocked()
+
+    def _load_seal_unlocked(self) -> OOSSeal:
         if not self.seal_path.is_file():
             raise OOSSealNotVerifiable("MISSING_OOS_SEAL")
         try:
@@ -378,6 +466,10 @@ class OOSSealStore:
         return seal
 
     def audit_events(self) -> tuple[OOSAccessEvent, ...]:
+        with self._lock(exclusive=False):
+            return self._audit_events_unlocked()
+
+    def _audit_events_unlocked(self) -> tuple[OOSAccessEvent, ...]:
         if not self.audit_path.exists():
             return ()
         try:
@@ -405,11 +497,14 @@ class OOSSealStore:
         return tuple(events)
 
     def _append(self, event: OOSAccessEvent) -> None:
+        created = not self.audit_path.exists()
         payload = (canonical_json(event.as_dict()) + "\n").encode("utf-8")
         with self.audit_path.open("ab") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+        if created:
+            self._fsync_directory(self.root)
 
     def access(
         self,
@@ -426,10 +521,40 @@ class OOSSealStore:
         candidate_evaluation_digest: str,
         purpose: str,
     ) -> OOSAccessReceipt:
-        persisted = self.load_seal()
+        with self._lock(exclusive=True):
+            return self._access_unlocked(
+                seal=seal,
+                boundary=boundary,
+                key=key,
+                audit_key=audit_key,
+                run_id=run_id,
+                experiment_identity_digest=experiment_identity_digest,
+                checkpoint_digest=checkpoint_digest,
+                accessed_at=accessed_at,
+                candidate_evaluation_complete=candidate_evaluation_complete,
+                candidate_evaluation_digest=candidate_evaluation_digest,
+                purpose=purpose,
+            )
+
+    def _access_unlocked(
+        self,
+        *,
+        seal: OOSSeal,
+        boundary: OOSBoundary,
+        key: bytes,
+        audit_key: bytes,
+        run_id: str,
+        experiment_identity_digest: str,
+        checkpoint_digest: str,
+        accessed_at: str,
+        candidate_evaluation_complete: bool,
+        candidate_evaluation_digest: str,
+        purpose: str,
+    ) -> OOSAccessReceipt:
+        persisted = self._load_seal_unlocked()
         if persisted != seal:
             raise OOSSealNotVerifiable("SUPPLIED_SEAL_DOES_NOT_MATCH_IMMUTABLE_SEAL")
-        events = self.audit_events()
+        events = self._audit_events_unlocked()
         reasons: list[str] = []
         try:
             if _utc(accessed_at) < _utc(seal.evaluation_not_before) or not candidate_evaluation_complete:
@@ -492,8 +617,28 @@ class OOSSealStore:
         audit_key: bytes,
         candidate_evaluation_digest: str,
     ) -> OOSPromotionStatus:
-        persisted = self.load_seal()
-        events = self.audit_events()
+        with self._lock(exclusive=False):
+            return self._promotion_status_unlocked(
+                seal=seal,
+                receipt=receipt,
+                boundary=boundary,
+                key=key,
+                audit_key=audit_key,
+                candidate_evaluation_digest=candidate_evaluation_digest,
+            )
+
+    def _promotion_status_unlocked(
+        self,
+        *,
+        seal: OOSSeal,
+        receipt: OOSAccessReceipt,
+        boundary: OOSBoundary,
+        key: bytes,
+        audit_key: bytes,
+        candidate_evaluation_digest: str,
+    ) -> OOSPromotionStatus:
+        persisted = self._load_seal_unlocked()
+        events = self._audit_events_unlocked()
         reasons: list[str] = []
         if persisted != seal or receipt.seal_digest != seal.digest:
             reasons.append("OOS_SEAL_RECEIPT_MISMATCH")
@@ -542,13 +687,14 @@ class OOSSealStore:
     def rollback_to_research_only(self, *, seal: OOSSeal, receipt: OOSAccessReceipt) -> dict[str, str | bool]:
         """Disable promotion without rewriting or discarding lineage/access evidence."""
 
-        persisted = self.load_seal()
-        events = self.audit_events()
-        if persisted != seal or not events or events[-1].event_hash != receipt.audit_head:
-            raise OOSAuditNotVerifiable("ROLLBACK_EVIDENCE_BINDING_MISMATCH")
-        return {
-            "status": "NON_PROMOTABLE_RESEARCH_ONLY",
-            "promotion_enabled": False,
-            "preserved_seal_digest": seal.digest,
-            "preserved_audit_head": events[-1].event_hash,
-        }
+        with self._lock(exclusive=False):
+            persisted = self._load_seal_unlocked()
+            events = self._audit_events_unlocked()
+            if persisted != seal or not events or events[-1].event_hash != receipt.audit_head:
+                raise OOSAuditNotVerifiable("ROLLBACK_EVIDENCE_BINDING_MISMATCH")
+            return {
+                "status": "NON_PROMOTABLE_RESEARCH_ONLY",
+                "promotion_enabled": False,
+                "preserved_seal_digest": seal.digest,
+                "preserved_audit_head": events[-1].event_hash,
+            }

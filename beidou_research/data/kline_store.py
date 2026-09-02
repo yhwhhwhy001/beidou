@@ -13,8 +13,20 @@ class KlineStore:
     def __init__(self, root: str | Path = ".beidou/data/klines") -> None:
         self._root = Path(root)
 
-    def _path(self, symbol: str, interval: str) -> Path:
+    def data_path(self, symbol: str, interval: str) -> Path:
+        """Return the canonical parquet path for one dataset."""
+
         return self._root / symbol / f"{interval}.parquet"
+
+    def manifest_path(self, symbol: str, interval: str) -> Path:
+        """Return the persisted provenance manifest beside its parquet."""
+
+        return self._root / symbol / f"{interval}.manifest.json"
+
+    def _path(self, symbol: str, interval: str) -> Path:
+        """Compatibility alias for older callers; new code uses ``data_path``."""
+
+        return self.data_path(symbol, interval)
 
     def append(self, symbol: str, interval: str, klines: list[dict]) -> int:
         if not klines:

@@ -8,6 +8,7 @@ there is no "latest" or default provenance path.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,6 +50,8 @@ _ARTIFACT_FIELDS = frozenset(
 )
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _AMBIGUOUS_PROVENANCE = re.compile(r"(?:^|[-_/])(latest|default|current)(?:$|[-_/])", re.IGNORECASE)
+_PAIRWISE_FEATURE_KIND = "BEIDOU_PAIRWISE_FEATURE_LINEAGE"
+_PAIRWISE_LABEL_KIND = "BEIDOU_PAIRWISE_LABEL_LINEAGE"
 
 
 class LineageNotVerifiableError(RuntimeError):
@@ -69,6 +72,114 @@ def _utc_timestamp(value: Any) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
         raise ValueError("timestamp must be UTC")
     return parsed
+
+
+def _pairwise_lineage_reasons(
+    *, root: Path, feature_artifact: LineageArtifact, label_artifact: LineageArtifact
+) -> tuple[bool, tuple[str, ...]]:
+    """Validate record-level feature/label availability when both sources opt in.
+
+    The original coarse artifact windows remain the fallback.  Pairwise files
+    are accepted only when every record is content-bound, uniquely paired, and
+    proves feature availability no later than decision time and label
+    availability strictly after it.
+    """
+
+    try:
+        feature_payload = json.loads((root / feature_artifact.source_path).read_text(encoding="utf-8"))
+        label_payload = json.loads((root / label_artifact.source_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False, ()
+    if not isinstance(feature_payload, Mapping) or not isinstance(label_payload, Mapping):
+        return False, ()
+    declared = (
+        feature_payload.get("kind") == _PAIRWISE_FEATURE_KIND or label_payload.get("kind") == _PAIRWISE_LABEL_KIND
+    )
+    if not declared:
+        return False, ()
+    reasons: list[str] = []
+    expected_top = {"schema_version", "kind", "lineage_id", "records", "records_digest"}
+    if set(feature_payload) != expected_top or feature_payload.get("kind") != _PAIRWISE_FEATURE_KIND:
+        reasons.append("PAIRWISE_FEATURE_FILE_INVALID")
+    if set(label_payload) != expected_top or label_payload.get("kind") != _PAIRWISE_LABEL_KIND:
+        reasons.append("PAIRWISE_LABEL_FILE_INVALID")
+    if feature_payload.get("schema_version") != "1.0" or label_payload.get("schema_version") != "1.0":
+        reasons.append("PAIRWISE_SCHEMA_VERSION_INVALID")
+    if not isinstance(feature_payload.get("lineage_id"), str) or feature_payload.get("lineage_id") != label_payload.get(
+        "lineage_id"
+    ):
+        reasons.append("PAIRWISE_LINEAGE_ID_MISMATCH")
+    feature_records = feature_payload.get("records")
+    label_records = label_payload.get("records")
+    if not isinstance(feature_records, list) or not isinstance(label_records, list):
+        return True, tuple(dict.fromkeys([*reasons, "PAIRWISE_RECORDS_INVALID"]))
+    if feature_payload.get("records_digest") != _digest(feature_records):
+        reasons.append("PAIRWISE_FEATURE_RECORDS_DIGEST_MISMATCH")
+    if label_payload.get("records_digest") != _digest(label_records):
+        reasons.append("PAIRWISE_LABEL_RECORDS_DIGEST_MISMATCH")
+    feature_fields = {
+        "record_id",
+        "symbol",
+        "decision_time",
+        "available_as_of",
+        "history_digest",
+        "feature_digest",
+        "policy_digest",
+    }
+    label_fields = {
+        "record_id",
+        "symbol",
+        "decision_time",
+        "available_as_of",
+        "label_end",
+        "label_digest",
+    }
+    features_by_id: dict[str, Mapping[str, Any]] = {}
+    labels_by_id: dict[str, Mapping[str, Any]] = {}
+    for record in feature_records:
+        if not isinstance(record, Mapping) or set(record) != feature_fields:
+            reasons.append("PAIRWISE_FEATURE_RECORD_INVALID")
+            continue
+        record_id = record.get("record_id")
+        if not isinstance(record_id, str) or _HEX64.fullmatch(record_id) is None or record_id in features_by_id:
+            reasons.append("PAIRWISE_FEATURE_RECORD_ID_INVALID")
+            continue
+        features_by_id[record_id] = record
+    for record in label_records:
+        if not isinstance(record, Mapping) or set(record) != label_fields:
+            reasons.append("PAIRWISE_LABEL_RECORD_INVALID")
+            continue
+        record_id = record.get("record_id")
+        if not isinstance(record_id, str) or _HEX64.fullmatch(record_id) is None or record_id in labels_by_id:
+            reasons.append("PAIRWISE_LABEL_RECORD_ID_INVALID")
+            continue
+        labels_by_id[record_id] = record
+    if not features_by_id or set(features_by_id) != set(labels_by_id):
+        reasons.append("PAIRWISE_RECORD_SET_MISMATCH")
+    for record_id in sorted(set(features_by_id) & set(labels_by_id)):
+        feature = features_by_id[record_id]
+        label = labels_by_id[record_id]
+        try:
+            feature_available = _utc_timestamp(feature["available_as_of"])
+            feature_decision = _utc_timestamp(feature["decision_time"])
+            label_decision = _utc_timestamp(label["decision_time"])
+            label_available = _utc_timestamp(label["available_as_of"])
+            label_end = _utc_timestamp(label["label_end"])
+        except (KeyError, TypeError, ValueError):
+            reasons.append("PAIRWISE_RECORD_TIMESTAMP_INVALID")
+            continue
+        if feature.get("symbol") != label.get("symbol") or feature_decision != label_decision:
+            reasons.append("PAIRWISE_RECORD_SCOPE_MISMATCH")
+        if feature_available > feature_decision:
+            reasons.append("PAIRWISE_FEATURE_AVAILABLE_AFTER_DECISION")
+        if label_available <= label_decision or label_available < label_end:
+            reasons.append("PAIRWISE_LABEL_AVAILABLE_TOO_EARLY")
+        for field in ("history_digest", "feature_digest", "policy_digest"):
+            if _HEX64.fullmatch(str(feature.get(field))) is None:
+                reasons.append(f"PAIRWISE_FEATURE_DIGEST_INVALID:{field}")
+        if _HEX64.fullmatch(str(label.get("label_digest"))) is None:
+            reasons.append("PAIRWISE_LABEL_DIGEST_INVALID")
+    return True, tuple(dict.fromkeys(reasons))
 
 
 @dataclass(frozen=True)
@@ -286,13 +397,21 @@ def inspect_lineage(
             reasons.append(f"INVALID_TIMESTAMP:{role}")
 
     if {"features", "labels"} <= set(artifacts):
-        try:
-            feature_end = _utc_timestamp(artifacts["features"].event_time_end)
-            label_start = _utc_timestamp(artifacts["labels"].event_time_start)
-            if feature_end >= label_start:
-                reasons.append("FEATURE_LABEL_WINDOW_LEAKAGE")
-        except ValueError:
-            pass
+        pairwise_declared, pairwise_reasons = _pairwise_lineage_reasons(
+            root=root_path,
+            feature_artifact=artifacts["features"],
+            label_artifact=artifacts["labels"],
+        )
+        if pairwise_declared:
+            reasons.extend(pairwise_reasons)
+        else:
+            try:
+                feature_end = _utc_timestamp(artifacts["features"].event_time_end)
+                label_start = _utc_timestamp(artifacts["labels"].event_time_start)
+                if feature_end >= label_start:
+                    reasons.append("FEATURE_LABEL_WINDOW_LEAKAGE")
+            except ValueError:
+                pass
 
     core_manifest = {key: value for key, value in payload.items() if key != "manifest_digest"}
     recomputed = _digest(core_manifest)

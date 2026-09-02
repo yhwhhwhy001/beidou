@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 CERT_DIR = Path("evidence/certification")
 LEGACY_CERTIFIER_MESSAGE = (
@@ -20,22 +21,17 @@ LEGACY_CERTIFIER_MESSAGE = (
 )
 
 
-def verify_prerequisites() -> bool:
-    """The old timer-only certifier cannot establish a production gate."""
-    raise RuntimeError(LEGACY_CERTIFIER_MESSAGE)
-
-
-def start_certification():
+def start_certification() -> NoReturn:
     """拒绝只靠计时器生成无人值守证书。"""
     raise RuntimeError(LEGACY_CERTIFIER_MESSAGE)
 
 
-def finalize_certification(cert_id: str | None = None):
+def finalize_certification(cert_id: str | None = None) -> NoReturn:
     """拒绝把计时器文件转换为 G7 证书。"""
     raise RuntimeError(LEGACY_CERTIFIER_MESSAGE)
 
 
-def show_status():
+def show_status() -> None:
     """只读显示旧目录状态；不把它解释为 G7 证书。"""
     manifest_path = CERT_DIR / "manifest.json"
     if not manifest_path.exists():

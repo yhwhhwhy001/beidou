@@ -48,6 +48,7 @@ def test_cli_help_is_side_effect_free(tmp_path: Path) -> None:
     assert "--max-leverage" in result.output
     assert "--close-after-verify" in result.output
     assert "--engage-kill-switch" in result.output
+    assert "--compact-traces" in result.output
     assert "--kill-switch-file" in result.output
     assert not (tmp_path / ".beidou").exists()
     assert not (tmp_path / "evidence").exists()
@@ -167,4 +168,37 @@ def test_cli_can_engage_durable_kill_switch_without_starting_runtime(monkeypatch
 
     assert result.exit_code == 0
     assert switch.exists()
+    assert called is False
+
+
+def test_cli_compacts_trace_journal_without_constructing_runtime(monkeypatch, tmp_path: Path) -> None:
+    called = False
+    captured: list[Path] = []
+
+    async def fake_run(_config: VerifierConfig) -> VerificationSummary:
+        nonlocal called
+        called = True
+        raise AssertionError("runtime must not start while compacting traces")
+
+    class Store:
+        def __init__(self, path: Path) -> None:
+            captured.append(Path(path))
+
+        @staticmethod
+        def compact() -> dict[str, object]:
+            return {"status": "COMPACTED", "trace_count": 2, "unresolved_count": 0}
+
+    monkeypatch.setattr("apps.testnet_verify.cli.run", fake_run)
+    monkeypatch.setattr("beidou_shared.decision_trace.DecisionTraceStore", Store)
+    trace_path = tmp_path / "trace.jsonl"
+
+    result = CliRunner().invoke(
+        main,
+        ["--compact-traces", "--trace-path", str(trace_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert '"status": "COMPACTED"' in result.output
+    assert captured == [trace_path]
     assert called is False

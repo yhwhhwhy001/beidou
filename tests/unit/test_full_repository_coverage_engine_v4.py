@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import builtins
-import logging
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -38,7 +37,11 @@ def test_payload_rows_rejects_untyped_containers_and_preserves_mapping_payloads(
 
 def test_attach_engine_file_log_failure_keeps_import_logging_non_blocking(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_module, "_log_handler", None)
-    monkeypatch.setattr(logging, "FileHandler", _raises(OSError("read-only evidence directory")))
+    monkeypatch.setattr(
+        engine_module,
+        "EvidenceArchiveRotatingFileHandler",
+        _raises(OSError("read-only evidence directory")),
+    )
 
     assert attach_engine_file_log("/not-writable/beidou.log") is None
     assert engine_module._log_handler is None

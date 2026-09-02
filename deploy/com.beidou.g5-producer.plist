@@ -14,7 +14,9 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Users/maguannan/beidou/deploy/beidou_launchd_wrapper.sh</string>
-        <string>/opt/homebrew/bin/beidou</string>
+        <string>/Users/maguannan/beidou/.venv/bin/python</string>
+        <string>-m</string>
+        <string>beidou_launcher</string>
         <string>g5-producer</string>
         <string>--mode</string>
         <string>testnet</string>

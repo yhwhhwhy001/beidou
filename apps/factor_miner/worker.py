@@ -36,8 +36,14 @@ def run_symbol_worker(payload: dict) -> dict:
             raise RuntimeError(f"SYMBOL_LOCAL_DATA_MISSING:{sym}/{payload['interval']}")
         frame = store.load(sym, payload["interval"])
         price_data = frame_to_price_data(frame)
-        manifest = DatasetManifest.compute(frame, sym, payload["interval"])
-        manifest_hash = DatasetManifest.hash_of(manifest)
+        manifest = DatasetManifest.read(store.manifest_path(sym, payload["interval"]))
+        if manifest is None:
+            raise RuntimeError(f"DATASET_NOT_ECONOMIC_RESEARCH_ELIGIBLE:{sym}/{payload['interval']}:MANIFEST_MISSING")
+        assessment = DatasetManifest.assess_economic_research(frame, manifest, sym, payload["interval"])
+        if not assessment.eligible:
+            reasons = ",".join(assessment.reasons)
+            raise RuntimeError(f"DATASET_NOT_ECONOMIC_RESEARCH_ELIGIBLE:{sym}/{payload['interval']}:{reasons}")
+        manifest_hash = assessment.manifest_hash
         source = "local"
     else:
         feed = MarketDataFeed()

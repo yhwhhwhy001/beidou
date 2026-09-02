@@ -18,8 +18,10 @@
     -->
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/beidou</string>
+        <string>/Users/maguannan/beidou/.venv/bin/beidou</string>
         <string>start</string>
+        <string>--mode</string>
+        <string>safety_only</string>
     </array>
 
     <key>WorkingDirectory</key>

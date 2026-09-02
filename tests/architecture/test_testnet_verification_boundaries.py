@@ -81,8 +81,11 @@ def test_frozen_modules_remain_importable(module: str) -> None:
 
 
 def test_legacy_entrypoint_is_not_cut_over_implicitly() -> None:
-    source = (ROOT / "beidou_launcher" / "cli.py").read_text(encoding="utf-8")
-    assert "apps.testnet_verify" not in source
+    launcher = ROOT / "beidou_launcher" / "cli.py"
+    imports = [imported for _line, imported in _import_names(launcher)]
+    assert not any(
+        imported == "apps.testnet_verify" or imported.startswith("apps.testnet_verify.") for imported in imports
+    )
 
 
 def test_verifier_does_not_reference_deprecated_sizing_helpers() -> None:

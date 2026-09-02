@@ -150,6 +150,11 @@ def test_run_symbol_worker_fetch_path_runs_full_pipeline(tmp_path, monkeypatch):
     result = item["result"]
     assert result.candidates_generated > 0
     assert result.candidates_evaluated > 0
+    assert result.candidates_passed == 0
+    assert all(
+        bundle.gate_decision == "FAIL" and "dataset_manifest_unbound" in bundle.failure_reasons
+        for bundle in result.evidence_bundles
+    )
     assert result.stopped_by_time_budget is False
     assert item["manifest_hash"] == ""  # API 路径无数据集清单
 
@@ -198,6 +203,11 @@ def test_echo_symbol_result_budget_hint(capsys):
 
 
 def _write_synthetic_store(data_root, symbols: tuple[str, ...]) -> None:
+    from beidou_research.data.dataset_manifest import (
+        CrossSourceValidation,
+        DatasetManifest,
+        MarketDataProvenance,
+    )
     from beidou_research.data.kline_store import KlineStore
 
     for sym in symbols:
@@ -214,7 +224,29 @@ def _write_synthetic_store(data_root, symbols: tuple[str, ...]) -> None:
             }
             for d in data
         ]
-        KlineStore(root=str(data_root)).append(sym, "1h", klines)
+        store = KlineStore(root=str(data_root))
+        store.append(sym, "1h", klines)
+        frame = store.load(sym, "1h")
+        manifest = DatasetManifest.compute(
+            frame,
+            sym,
+            "1h",
+            provenance=MarketDataProvenance.from_endpoint(
+                f"https://data.binance.vision/data/futures/um/monthly/klines/{sym}/1h/test-fixture.zip",
+                retrieved_at="2026-08-31T03:00:00Z",
+            ),
+            cross_source_validation=CrossSourceValidation(
+                status="PASS",
+                reference_endpoint="https://fapi.binance.com/fapi/v1/klines",
+                reference_source_class="EXCHANGE_PUBLIC_API",
+                checked_at="2026-08-31T03:10:00Z",
+                sample_scope="EXTREMA_AND_RANDOM",
+                sample_count=20,
+                max_close_deviation_bps=0.1,
+                evidence_sha256="a" * 64,
+            ),
+        )
+        DatasetManifest.write(store.manifest_path(sym, "1h"), manifest)
 
 
 def test_run_symbols_pool_spawns_worker_processes(tmp_path):

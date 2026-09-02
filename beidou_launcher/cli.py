@@ -129,6 +129,11 @@ def main(
         click.echo(message)
         raise SystemExit(0 if ok else 1)
 
+    if action == "start" and mode == "testnet":
+        raise click.ClickException(
+            "legacy Testnet startup is prohibited; use python -m apps.testnet_verify with explicit bounded confirmation"
+        )
+
     producer_only = action == "g5-producer"
     if producer_only:
         if mode != "testnet":

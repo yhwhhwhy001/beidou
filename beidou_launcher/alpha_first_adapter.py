@@ -12,13 +12,27 @@ import os
 from collections.abc import Sequence
 
 
-def start_authorized_execution(*, mode: str, symbols: Sequence[str]) -> int:
+def start_authorized_execution(
+    *,
+    mode: str,
+    symbols: Sequence[str],
+    port: int | None = None,
+    startup_timeout: float | None = None,
+    monitor_interval: float | None = None,
+    self_heal: bool | None = None,
+    max_restarts: int | None = None,
+) -> int:
     """Construct the legacy supervisor only after explicit authorization."""
 
     if os.environ.get("BEIDOU_EXECUTION_AUTHORIZATION") != "EXPLICIT_LOCAL_APPROVAL":
         raise PermissionError(
             "execution authorization is required; set BEIDOU_EXECUTION_AUTHORIZATION="
             "EXPLICIT_LOCAL_APPROVAL only for an explicitly approved runtime task"
+        )
+    if mode == "testnet":
+        raise PermissionError(
+            "legacy Testnet runtime is prohibited; use python -m apps.testnet_verify "
+            "with its bounded confirmation and safety gates"
         )
     if not symbols:
         raise ValueError("at least one explicit symbol is required")
@@ -29,8 +43,17 @@ def start_authorized_execution(*, mode: str, symbols: Sequence[str]) -> int:
 
     # Keep runtime activation explicit and delegated to the characterized
     # canonical entrypoint; no implicit fallback is provided by this facade.
-    legacy_main(
-        ["start", "--mode", mode, "--symbols", ",".join(symbols)],
-        standalone_mode=False,
-    )
+    arguments = ["start", "--mode", mode, "--symbols", ",".join(symbols)]
+    if port is not None:
+        arguments.extend(("--port", str(port)))
+    if startup_timeout is not None:
+        arguments.extend(("--startup-timeout", str(startup_timeout)))
+    if monitor_interval is not None:
+        arguments.extend(("--monitor-interval", str(monitor_interval)))
+    if self_heal is not None:
+        arguments.append("--self-heal" if self_heal else "--no-self-heal")
+    if max_restarts is not None:
+        arguments.extend(("--max-restarts", str(max_restarts)))
+
+    legacy_main(arguments, standalone_mode=False)
     return 0

@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+from apps.testnet_soak.config import SoakConfig
+from apps.testnet_soak.kernel import ExecutionProbeKernel
 from apps.testnet_verify.config import VerifierConfig
 from apps.testnet_verify.runtime import VerificationRuntime, VerificationSummary
 from beidou_data.trading_pool_lifecycle import PoolStatus, TradingPool
@@ -84,6 +86,18 @@ class FakeTestnetAdapter:
             },
             source="fake-account",
         )
+
+    async def request(
+        self, method: str, endpoint: str, *, params: dict[str, Any] | None = None, signed: bool = False
+    ) -> Result[list[dict[str, Any]]]:
+        del params
+        assert method == "GET"
+        assert endpoint == "/fapi/v1/openOrders"
+        assert signed is True
+        return Result.success([], source="fake-open-orders")
+
+    async def get_open_algo_orders(self) -> Result[list[Any]]:
+        return Result.success([], source="fake-open-algo-orders")
 
     async def get_ticker(self, symbol: str) -> Result[dict[str, Any]]:
         return Result.success(
@@ -332,6 +346,30 @@ class FakeTestnetAdapter:
         )
 
 
+class VenueEligibilityAdapter(FakeTestnetAdapter):
+    """Expose two symbols whose venue minimums straddle the configured cap."""
+
+    async def fetch_exchange_info(self) -> Result[dict[str, Any]]:
+        return Result.success(
+            {
+                "symbols": [
+                    {
+                        "symbol": symbol,
+                        "status": "TRADING",
+                        "contractType": "PERPETUAL",
+                        "quoteAsset": "USDT",
+                    }
+                    for symbol in ("BTCUSDT", "ETHUSDT")
+                ]
+            },
+            source="fake-exchange-info",
+        )
+
+    def get_rule_snapshot(self, symbol: str) -> InstrumentRuleSnapshot:
+        minimum = "50" if symbol == "BTCUSDT" else "5"
+        return replace(super().get_rule_snapshot(symbol), min_notional=minimum)
+
+
 def _config(tmp_path: Path, *, close_after_verify: bool = True) -> VerifierConfig:
     return VerifierConfig(
         api_key="test-key",
@@ -352,6 +390,83 @@ def _config(tmp_path: Path, *, close_after_verify: bool = True) -> VerifierConfi
         kill_switch_path=tmp_path / "KILL_SWITCH",
         evidence_dir=tmp_path / "evidence",
     )
+
+
+@pytest.mark.asyncio
+async def test_startup_skips_symbol_above_cap_and_selects_later_eligible_symbol(tmp_path: Path) -> None:
+    runtime = VerificationRuntime(_config(tmp_path), adapter=VenueEligibilityAdapter(recovery="none"))
+
+    startup = await runtime.startup()
+
+    assert startup["exchange_info"]["candidate_count"] == 1
+    assert startup["venue_eligibility"]["status"] == "ELIGIBLE"
+    assert startup["venue_eligibility"]["eligible_symbols"] == ["ETHUSDT"]
+    assert startup["venue_eligibility"]["rejected"] == [
+        {
+            "symbol": "BTCUSDT",
+            "reason": "MIN_NOTIONAL_EXCEEDS_MAX_NOTIONAL",
+            "venue_min_notional": "50",
+        }
+    ]
+    assert startup["pool"]["candidates"] == ["ETHUSDT"]
+    assert runtime.adapter.create_order_calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_ineligible_symbol_fails_closed_without_raising_cap_or_writing(tmp_path: Path) -> None:
+    config = replace(_config(tmp_path), allowed_symbols=("BTCUSDT",))
+    runtime = VerificationRuntime(config, adapter=VenueEligibilityAdapter(recovery="none"))
+
+    summary = await runtime.run_once()
+
+    assert summary.startup["venue_eligibility"]["status"] == "NO_ELIGIBLE_SYMBOL_UNDER_CAP"
+    assert summary.startup["venue_eligibility"]["max_notional"] == "25.0"
+    assert summary.startup["exchange_info"]["candidate_count"] == 0
+    assert summary.episodes == []
+    assert runtime.adapter.set_leverage_calls == 0
+    assert runtime.adapter.create_order_calls == []
+
+
+@pytest.mark.asyncio
+async def test_execution_probe_two_namespaces_use_existing_open_fill_and_reduce_only_close_path(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeTestnetAdapter(recovery="none")
+    soak = SoakConfig(
+        api_key="test-key",
+        api_secret="fixture-value",  # noqa: S106 - non-secret test fixture
+        account_id="dedicated-testnet-account",
+        episodes=2,
+        confirm_testnet=True,
+        cycle_interval_seconds=60,
+        trace_path=tmp_path / "soak-trace.jsonl",
+        pool_state_path=tmp_path / "soak-pool.json",
+        kill_switch_path=tmp_path / "KILL_SWITCH",
+        evidence_dir=tmp_path / "soak-evidence",
+    )
+    first_pool = TradingPool(max_instruments=1)
+    first_pool.add("BTCUSDT").min_observation_hours = 1.0
+    second_pool = TradingPool(max_instruments=1)
+    second_pool.add("BTCUSDT").min_observation_hours = 1.0
+    first = VerificationRuntime(
+        soak.verifier_config(), adapter=adapter, kernel=ExecutionProbeKernel(1), pool=first_pool
+    )
+    second = VerificationRuntime(
+        soak.verifier_config(), adapter=adapter, kernel=ExecutionProbeKernel(2), pool=second_pool
+    )
+
+    first_summary = await first.run_once(episode_identity_namespace="execution-probe-01")
+    first_reconciliation = await first.reconcile_flat_account()
+    second_summary = await second.run_once(episode_identity_namespace="execution-probe-02")
+    second_reconciliation = await second.reconcile_flat_account()
+
+    assert first_summary.status == second_summary.status == "EPISODE_COMPLETED"
+    assert first_reconciliation["status"] == second_reconciliation["status"] == "RECONCILED_FLAT"
+    assert set(first_summary.trace_ids).isdisjoint(second_summary.trace_ids)
+    assert len(adapter.create_order_calls) == 4
+    assert adapter.create_order_calls[1].endswith("-c")
+    assert adapter.create_order_calls[3].endswith("-c")
+    assert adapter.position == 0
 
 
 def test_manifest_real_write_is_scoped_to_the_current_run(tmp_path: Path) -> None:
@@ -399,6 +514,61 @@ def test_manifest_reports_kill_switch_as_write_authority_disabled(tmp_path: Path
 
     assert manifest["testnet_write_configured"] is True
     assert manifest["testnet_write_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_startup_enforces_reduced_max_instruments_on_restored_active_pool(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.pool_state_path.write_text(
+        json.dumps(
+            [
+                {"instrument_id": symbol, "status": "ACTIVE", "pool_version": 7}
+                for symbol in ("BTCUSDT", "ETHUSDT", "BCHUSDT", "XRPUSDT", "LTCUSDT")
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runtime = VerificationRuntime(config, adapter=FakeTestnetAdapter())
+
+    startup = await runtime.startup()
+
+    assert startup["exchange_info"]["candidate_count"] == 1
+    assert startup["pool"]["active_symbols"] == ["BTCUSDT"]
+    assert startup["pool"]["quarantined_symbols"] == ["BCHUSDT", "ETHUSDT", "LTCUSDT", "XRPUSDT"]
+    assert runtime.pool.active_count() == config.max_instruments
+    assert runtime.adapter.create_order_calls == []
+
+
+@pytest.mark.asyncio
+async def test_quarantined_flat_recovery_does_not_complete_active_no_action_campaign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    config.pool_state_path.write_text(
+        json.dumps(
+            [
+                {"instrument_id": symbol, "status": "ACTIVE", "pool_version": 7}
+                for symbol in ("BTCUSDT", "ETHUSDT", "BCHUSDT", "XRPUSDT", "LTCUSDT")
+            ]
+        ),
+        encoding="utf-8",
+    )
+    adapter = FakeTestnetAdapter()
+    runtime = VerificationRuntime(config, adapter=adapter)
+
+    async def active_no_action(symbol: str, snapshot: Any) -> dict[str, str]:
+        del symbol, snapshot
+        return {"status": TraceStatus.FAILED.value, "reason": "STRATEGY_NO_ACTION"}
+
+    monkeypatch.setattr(runtime, "_run_symbol", active_no_action)
+
+    summary = await runtime.run_once()
+
+    assert summary.startup["pool"]["active_symbols"] == ["BTCUSDT"]
+    assert [episode["reason"] for episode in summary.episodes[:-1]] == ["QUARANTINED_ALREADY_FLAT"] * 4
+    assert summary.episodes[-1]["reason"] == "STRATEGY_NO_ACTION"
+    assert summary.status == "NOT_VERIFIABLE"
+    assert adapter.create_order_calls == []
 
 
 @pytest.mark.asyncio
@@ -647,7 +817,7 @@ async def test_filled_primary_with_unknown_close_is_not_completed(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_quarantined_symbol_uses_reduce_only_exit_without_new_risk(tmp_path: Path) -> None:
+async def test_quarantined_symbol_uses_reduce_only_exit_without_completing_campaign(tmp_path: Path) -> None:
     adapter = FakeTestnetAdapter(recovery="direct")
     adapter.position = 0.01
     pool = TradingPool(max_instruments=1)
@@ -658,7 +828,8 @@ async def test_quarantined_symbol_uses_reduce_only_exit_without_new_risk(tmp_pat
 
     summary = await runtime.run_once()
 
-    assert summary.status == "EPISODE_COMPLETED"
+    assert summary.status == "NOT_VERIFIABLE"
+    assert summary.episodes[0]["status"] == TraceStatus.CLOSED.value
     assert adapter.set_leverage_calls == 0
     assert len(adapter.create_order_calls) == 1
     assert adapter.create_order_calls[0].endswith("-c")

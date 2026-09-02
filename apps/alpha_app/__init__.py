@@ -4,6 +4,6 @@ Importing this package constructs no launcher, safety, exchange, or network
 component.  Runtime compositions belong to later task-specific applications.
 """
 
-from .composition import BoundLocalData, OfflineAlphaApp, OfflineAlphaResult
+from .composition import BoundLocalData, OfflineAlphaApp, OfflineAlphaResult, StatefulOfflineAlphaResult
 
-__all__ = ["BoundLocalData", "OfflineAlphaApp", "OfflineAlphaResult"]
+__all__ = ["BoundLocalData", "OfflineAlphaApp", "OfflineAlphaResult", "StatefulOfflineAlphaResult"]

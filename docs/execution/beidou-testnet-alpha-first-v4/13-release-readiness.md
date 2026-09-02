@@ -43,3 +43,18 @@ chooses to remove it. Mainnet and production remain unauthorized.
 
 Binary G9 decision: `BLOCKED`. This document is not
 `GREEN_LIGHT_TO_SHIP`.
+
+## Execution-probe soak readiness slice
+
+Local code/test readiness: `READY_WITHIN_BOUNDS` for the current 30-episode,
+3600-second, 100/500 USDT, 3x, one-symbol execution-probe configuration.
+
+Runtime activation: `NOT_AUTHORIZED`. The global kill switch remains engaged
+and the current request explicitly stopped before real Testnet. GitHub CI and
+independent acceptance were outside this local-development phase and remain
+unpassed; no release claim is inferred from the local result.
+
+The authorized real campaign later validated 28 repeated submit/fill/
+reduce-only-close/reconcile cycles but stopped on `TIME_BUDGET_EXHAUSTED`
+before episodes 29-30. This is execution-path evidence, not a G9 release PASS;
+runtime activation remains unauthorized after the consumed campaign.

@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass, fields, is_dataclass
@@ -374,7 +375,10 @@ class VerificationRuntime:
             config.rest_url,
             max_notional=config.max_notional,
             max_leverage=config.max_leverage,
+            max_account_exposure=config.max_account_exposure,
             account_id=config.account_id,
+            task_id=config.task_id,
+            entrypoint=config.entrypoint,
             writes_enabled=config.confirm_testnet,
             kill_switch_path=config.kill_switch_path,
         )
@@ -410,6 +414,7 @@ class VerificationRuntime:
         self._observations: dict[str, MarketObservation] = {}
         self._startup_errors: list[dict[str, Any]] = []
         self._startup_facts: dict[str, Any] = {}
+        self._episode_identity_namespace = ""
 
     async def _create_order(
         self,
@@ -556,6 +561,74 @@ class VerificationRuntime:
             report["closed_trace_ids"].append(filled.trace_id)
         return report
 
+    def _venue_eligible_candidates(self, exchange_raw: object) -> tuple[list[str], dict[str, Any]]:
+        """Select symbols whose venue minimum fits the existing risk cap.
+
+        Eligibility can only remove symbols; it never raises ``max_notional``
+        or rounds an approved amount upward. Unknown or stale rules are
+        rejected before market-data work and before any write-capable path.
+        """
+
+        raw_symbols = exchange_raw.get("symbols") if isinstance(exchange_raw, dict) else None
+        discovery_limit = max(len(raw_symbols), 1) if isinstance(raw_symbols, list) else 1
+        discovered = discover_startup_candidates(
+            exchange_raw,
+            max_instruments=discovery_limit,
+            preserve_exchange_order=True,
+        )
+        allowlist = set(self.config.allowed_symbols)
+        candidates = [symbol for symbol in discovered if not allowlist or symbol in allowlist]
+        rejected: list[dict[str, str]] = []
+        if allowlist:
+            for symbol in sorted(allowlist - set(discovered)):
+                rejected.append({"symbol": symbol, "reason": "ALLOWED_SYMBOL_NOT_TRADING"})
+
+        cap = Decimal(str(self.config.max_notional))
+        eligible: list[str] = []
+        for symbol in candidates:
+            rule = self.adapter.get_rule_snapshot(symbol)
+            if not rule.is_known or rule.is_stale:
+                rejected.append({"symbol": symbol, "reason": "EXCHANGE_RULE_UNKNOWN_OR_STALE"})
+                continue
+            try:
+                venue_minimum = Decimal(rule.min_notional)
+            except (InvalidOperation, TypeError, ValueError):
+                rejected.append({"symbol": symbol, "reason": "EXCHANGE_MIN_NOTIONAL_UNKNOWN"})
+                continue
+            if not venue_minimum.is_finite() or venue_minimum <= 0:
+                rejected.append({"symbol": symbol, "reason": "EXCHANGE_MIN_NOTIONAL_UNKNOWN"})
+                continue
+            if venue_minimum > cap:
+                rejected.append(
+                    {
+                        "symbol": symbol,
+                        "reason": "MIN_NOTIONAL_EXCEEDS_MAX_NOTIONAL",
+                        "venue_min_notional": rule.min_notional,
+                    }
+                )
+                continue
+            eligible.append(symbol)
+            if len(eligible) >= self.config.max_instruments:
+                break
+
+        if eligible:
+            status = "ELIGIBLE"
+        elif candidates:
+            status = "NO_ELIGIBLE_SYMBOL_UNDER_CAP"
+        elif discovered and allowlist:
+            status = "NO_ALLOWED_SYMBOL_AVAILABLE"
+        elif isinstance(raw_symbols, list):
+            status = "NO_TRADING_CANDIDATES"
+        else:
+            status = "EXCHANGE_INFO_UNKNOWN"
+        return eligible, {
+            "status": status,
+            "max_notional": str(self.config.max_notional),
+            "allowed_symbols": list(self.config.allowed_symbols),
+            "eligible_symbols": list(eligible),
+            "rejected": rejected,
+        }
+
     async def startup(self) -> dict[str, Any]:
         """Read minimum venue facts and construct a dynamic pool."""
 
@@ -567,11 +640,19 @@ class VerificationRuntime:
         exchange_raw = exchange_result.data if exchange_result.is_success() else None
         if exchange_raw is not None:
             self.pool.record_source_hash(_stable_hash(exchange_raw))
-        candidates = discover_startup_candidates(
-            exchange_raw,
-            max_instruments=self.config.max_instruments,
-            preserve_exchange_order=True,
-        )
+        candidates, venue_eligibility = self._venue_eligible_candidates(exchange_raw)
+        bounded_universe = {symbol.upper() for symbol in candidates}
+        rejection_reasons = {
+            str(item.get("symbol", "")).upper(): str(item.get("reason", ""))
+            for item in venue_eligibility["rejected"]
+            if isinstance(item, dict)
+        }
+        for symbol in self.pool.active_instruments():
+            if symbol.upper() not in bounded_universe:
+                self.pool.quarantine(
+                    symbol,
+                    rejection_reasons.get(symbol.upper(), "OUTSIDE_BOUNDED_STARTUP_UNIVERSE"),
+                )
         for symbol in candidates:
             self.pool.add(symbol)
 
@@ -586,6 +667,7 @@ class VerificationRuntime:
                 "source_hash": _stable_hash(exchange_raw) if exchange_raw is not None else "",
                 "candidate_count": len(candidates),
             },
+            "venue_eligibility": venue_eligibility,
             "server_time": {
                 "status": "SUCCESS" if server_result.is_success() else "UNKNOWN",
                 "source_hash": _stable_hash(server_result.data) if server_result.is_success() else "",
@@ -791,7 +873,9 @@ class VerificationRuntime:
         # The exact pool version/hash is still persisted in DecisionTrace and
         # remains part of the authorization/evidence record.
         del snapshot
-        seed = _stable_hash({"symbol": symbol, "bar": bar_key})[:20]
+        seed = _stable_hash({"symbol": symbol, "bar": bar_key, "episode_namespace": self._episode_identity_namespace})[
+            :20
+        ]
         return f"tn-{seed}", f"intent-{seed}", f"bd-{seed}"
 
     def _base_trace(
@@ -829,7 +913,17 @@ class VerificationRuntime:
             portfolio=portfolio or {},
             sizing=sizing or {},
             exchange_rules_hash=rule.compute_hash() if rule is not None else "",
-            metadata={"runtime": "apps.testnet_verify", "config_hash": self.config.config_hash()},
+            metadata={
+                "runtime": self.config.entrypoint,
+                "task_id": self.config.task_id,
+                "config_hash": self.config.config_hash(),
+                "episode_identity_namespace": self._episode_identity_namespace,
+                **(
+                    {"evidence_class": "EXECUTION_PROBE", "alpha_evidence": False}
+                    if self.config.entrypoint == "apps.testnet_soak"
+                    else {}
+                ),
+            },
         )
 
     def _record_no_action(
@@ -1870,14 +1964,17 @@ class VerificationRuntime:
         self.trace_store.update(close_trace_id, TraceStatus.CLOSED, fees=fees, funding=funding, pnl=pnl)
         return result
 
-    async def run_once(self) -> VerificationSummary:
+    async def run_once(self, *, episode_identity_namespace: str = "") -> VerificationSummary:
+        if episode_identity_namespace and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", episode_identity_namespace):
+            raise ValueError("episode_identity_namespace must be a bounded lowercase identifier")
+        self._episode_identity_namespace = episode_identity_namespace
         startup = await self.startup()
         snapshot = self.pool.snapshot()
-        episodes: list[dict[str, Any]] = []
-        for symbol in snapshot.quarantined_symbols:
-            episodes.append(await self._run_quarantined_exit(symbol, snapshot))
-        for symbol in snapshot.active_symbols:
-            episodes.append(await self._run_symbol(symbol, snapshot))
+        quarantined_episodes = [
+            await self._run_quarantined_exit(symbol, snapshot) for symbol in snapshot.quarantined_symbols
+        ]
+        active_episodes = [await self._run_symbol(symbol, snapshot) for symbol in snapshot.active_symbols]
+        episodes = [*quarantined_episodes, *active_episodes]
         trace_ids: list[str] = []
         for item in episodes:
             if item.get("trace_ids"):
@@ -1890,7 +1987,7 @@ class VerificationRuntime:
                 if self.config.close_after_verify
                 else item.get("status") == TraceStatus.FILLED.value
             )
-            for item in episodes
+            for item in active_episodes
         ):
             status = "EPISODE_COMPLETED"
         else:
@@ -1908,6 +2005,63 @@ class VerificationRuntime:
         if str(manifest_path) != summary.manifest_path:
             summary.manifest_path = str(manifest_path)
         return summary
+
+    async def reconcile_flat_account(self) -> dict[str, Any]:
+        """Require fresh signed one-way, flat, order-free account truth.
+
+        This is the between-episode gate used by the bounded soak campaign.
+        Every malformed or unavailable venue fact remains UNKNOWN and blocks
+        the next episode.
+        """
+
+        mode_result = await self.adapter.get_position_mode()
+        account_result = await self.adapter.get_account_snapshot()
+        regular_result = await self.adapter.request("GET", Endpoint.OPEN_ORDERS, signed=True)
+        algo_result = await self.adapter.get_open_algo_orders()
+        if not all(result.is_success() for result in (mode_result, account_result, regular_result, algo_result)):
+            return {"status": "SIGNED_RECONCILIATION_UNKNOWN"}
+        if not isinstance(mode_result.data, dict) or mode_result.data.get("dualSidePosition") is not False:
+            return {
+                "status": "HEDGE_MODE" if isinstance(mode_result.data, dict) else "POSITION_MODE_UNKNOWN",
+                "position_mode": _jsonable(mode_result.data),
+            }
+        if (
+            not isinstance(account_result.data, dict)
+            or not isinstance(account_result.data.get("positions"), list)
+            or not isinstance(regular_result.data, list)
+            or not isinstance(algo_result.data, list)
+        ):
+            return {"status": "SIGNED_RECONCILIATION_UNKNOWN"}
+
+        recovery = self._reconcile_flat_filled_traces(account_result, mode_result)
+        nonzero_positions: list[dict[str, str]] = []
+        try:
+            for row in account_result.data["positions"]:
+                if not isinstance(row, dict) or not str(row.get("symbol", "")).strip():
+                    return {"status": "POSITION_STATE_UNKNOWN"}
+                amount = Decimal(str(row.get("positionAmt", "")))
+                if not amount.is_finite():
+                    return {"status": "POSITION_STATE_UNKNOWN"}
+                if amount != 0:
+                    nonzero_positions.append({"symbol": str(row["symbol"]).upper(), "position_amount": str(amount)})
+        except (InvalidOperation, TypeError, ValueError):
+            return {"status": "POSITION_STATE_UNKNOWN"}
+
+        report = {
+            "position_mode": "ONE_WAY",
+            "nonzero_positions": nonzero_positions,
+            "regular_open_order_count": len(regular_result.data),
+            "algo_open_order_count": len(algo_result.data),
+            "unresolved_trace_count": self.trace_store.unresolved_count,
+            "recovery": recovery,
+        }
+        if nonzero_positions:
+            return {"status": "RESIDUAL_POSITION", **report}
+        if regular_result.data or algo_result.data:
+            return {"status": "OPEN_ORDERS", **report}
+        if self.trace_store.unresolved_count:
+            return {"status": "UNRESOLVED_TRACES", **report}
+        return {"status": "RECONCILED_FLAT", **report}
 
     def _write_manifest(self, summary: VerificationSummary) -> Path:
         destination = self.config.evidence_dir / summary.run_id

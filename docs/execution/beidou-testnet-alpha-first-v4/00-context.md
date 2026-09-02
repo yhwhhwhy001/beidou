@@ -4,13 +4,15 @@
 
 - User request: implement the uploaded Beidou Testnet Alpha-First V4 package
   in `/Users/maguannan/beidou`.
-- Current authorized scope: repository implementation, local validation, and
-  the previously authorized bounded Testnet campaign. Mainnet and production
-  remain prohibited.
+- Current authorized scope: implementation and local offline validation of a
+  new bounded `EXECUTION_PROBE` soak runner. The prior campaign authorization
+  is consumed. Real Testnet writes, kill-switch clearing, Mainnet, production,
+  GitHub operations, commits and pushes are not authorized in this phase.
 - Incident boundary: an unbounded verifier was installed with launchd
   `KeepAlive` after the bounded campaign. It was disabled and stopped; the
   durable kill switch remains engaged. No new campaign is authorized while
-  current code/CI evidence is incomplete.
+  current code/local evidence is incomplete. The requested soak design remains
+  finite, foreground-only, single-symbol, and fail-closed.
 
 ## Instruction precedence
 

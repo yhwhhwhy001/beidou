@@ -77,6 +77,11 @@ def _optional_overrides(
     is_flag=True,
     help="Engage the durable Testnet kill switch and exit without starting the runtime.",
 )
+@click.option(
+    "--compact-traces",
+    is_flag=True,
+    help="Archive and compact the local DecisionTrace journal without network or runtime construction.",
+)
 @click.option("--evidence-dir", default=None, help="Evidence manifest output directory.")
 def main(
     rest_url: str | None,
@@ -93,6 +98,7 @@ def main(
     pool_state_path: str | None,
     kill_switch_file: str | None,
     engage_kill_switch: bool,
+    compact_traces: bool,
     evidence_dir: str | None,
 ) -> None:
     """Run the sole Beidou Testnet Verification composition root."""
@@ -118,6 +124,18 @@ def main(
         )
     except (TypeError, ValueError) as exc:
         raise click.ClickException(f"invalid Testnet verifier configuration: {exc}") from exc
+
+    if compact_traces:
+        if engage_kill_switch or confirm_testnet:
+            raise click.ClickException("--compact-traces cannot be combined with write-capable actions")
+        from beidou_shared.decision_trace import DecisionTraceStore
+
+        try:
+            report = DecisionTraceStore(config.trace_path).compact()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise click.ClickException(f"DecisionTrace compaction failed closed: {type(exc).__name__}: {exc}") from exc
+        click.echo(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return
 
     if engage_kill_switch:
         try:

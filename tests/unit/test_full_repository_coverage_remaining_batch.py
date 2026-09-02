@@ -898,13 +898,7 @@ def test_control_api_registry_routes_and_optional_fastapi_import(monkeypatch) ->
     fastapi.FastAPI = _FakeApp  # type: ignore[attr-defined]
     fastapi.HTTPException = _HTTPException  # type: ignore[attr-defined]
     fastapi.Request = object  # type: ignore[attr-defined]
-    cors = ModuleType("fastapi.middleware.cors")
-    cors.CORSMiddleware = object  # type: ignore[attr-defined]
-    middleware = ModuleType("fastapi.middleware")
-    middleware.cors = cors  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "fastapi", fastapi)
-    monkeypatch.setitem(sys.modules, "fastapi.middleware", middleware)
-    monkeypatch.setitem(sys.modules, "fastapi.middleware.cors", cors)
 
     api.readiness = lambda _checks=None: ReadinessResponse(True, {}, {})  # type: ignore[method-assign]
     api.wire_control_plane(SimpleNamespace(execute_action=lambda _action: None))

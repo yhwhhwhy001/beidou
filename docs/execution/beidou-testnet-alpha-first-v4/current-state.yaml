@@ -5,17 +5,24 @@ project:
   version: "codex/v4-incident-remediation"
   validated_code_sha: "490ee9f697a791520a74a801331ad78f7ff81e24"
   validated_pr_head_sha: "a55881efe87c3ac44ab7ed2c5d644d6e2caed02a"
-  environment: "local-and-binance-demo-read-only"
+  environment: "local-and-binance-demo-bounded-attempt"
+  working_tree_base_sha: "818518e8d6a839d014689f30ad66f44d794e4b60"
+  working_tree_code_diff_sha256: "d6a95c2fccc361129abb60e294e662afc0e2dc0875be6ef56ce9f217a1f75752"
 authority:
   code_changes: true
-  git_remote: true
+  git_remote: false
   deployment: false
   production_mutation: false
   trading_actions: false
   requested_testnet_campaign: true
-  testnet_campaign_gate_state: BLOCKED
+  bounded_testnet_action_authorized: true
+  bounded_testnet_action_consumed: true
+  soak_development_authorized: true
+  soak_local_validation_complete: true
+  soak_real_campaign_authorized: false
+  testnet_campaign_gate_state: REAL_FIXED_CADENCE_30_OF_30_PASS_AUTHORIZATION_CONSUMED
   external_messages: false
-active_phase: G8
+active_phase: LOCAL_REMEDIATION_VERIFIED_HOLD_ACCOUNT_UNKNOWN
 requirements:
   - AC-TN-001
   - AC-TN-002
@@ -35,28 +42,138 @@ requirements:
   - AC-TN-016
   - AC-TN-017
   - AC-TN-018
+  - AC-SOAK-001..015
 gates:
   G0: {progress: COMPLETE, decision: READY, evidence: ["00-context.md"], reason: null, updated_at: "2026-08-29"}
   G1: {progress: COMPLETE, decision: APPROVED, evidence: ["02-traceability.md"], reason: null, updated_at: "2026-08-29"}
   G2: {progress: COMPLETE, decision: APPROVED_WITH_CONDITIONS, evidence: ["08-code-review.md", "09-security-review.md"], reason: "independent review pending", updated_at: "2026-08-29"}
   G3: {progress: COMPLETE, decision: READY, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
   G4: {progress: COMPLETE, decision: PASS, evidence: ["06-implementation-log.md"], reason: null, updated_at: "2026-08-29"}
-  G5: {progress: COMPLETE, decision: RESOLVED, evidence: ["07-debugging-log.md"], reason: null, updated_at: "2026-08-29"}
+  G5: {progress: COMPLETE, decision: RESOLVED, evidence: ["07-debugging-log.md"], reason: "restored ACTIVE universe honors the bounded set and quarantined safety recovery cannot falsely complete an ACTIVE campaign", updated_at: "2026-08-30"}
   G6: {progress: COMPLETE, decision: PASS_WITH_CONDITIONS, evidence: ["08-code-review.md"], reason: "self-review complete; independent reviewer decision remains a G8 condition", updated_at: "2026-08-29"}
-  G7: {progress: COMPLETE, decision: PASS, evidence: ["05-test-strategy.md", "09-security-review.md"], reason: "clean detached verification passed for validated_pr_head_sha", updated_at: "2026-08-30"}
+  G7: {progress: COMPLETE, decision: PASS, evidence: ["05-test-strategy.md", "09-security-review.md", "18-soak-local-acceptance.md"], reason: "2026-09-01 stable working tree passed 4740 tests, 46455/46455 full coverage and Alpha 3497 statements/1070 branches at 100%", updated_at: "2026-09-01"}
   G8: {progress: BLOCKED, decision: BLOCKED, evidence: ["12-acceptance-report.md"], reason: "required GitHub CI failed to allocate runners and independent reviewer produced no decision", updated_at: "2026-08-30"}
   G9: {progress: BLOCKED, decision: BLOCKED, evidence: ["13-release-readiness.md"], reason: "AC-TN-017 and independent release gate remain blocked", updated_at: "2026-08-30"}
   G10: {progress: BLOCKED, decision: NOT_AUTHORIZED, evidence: [], reason: "Mainnet and production prohibited", updated_at: "2026-08-29"}
 blockers:
+  - "Fresh signed GET-only Demo reconciliation and public server-time GET timed out; current account state is UNKNOWN"
   - "GitHub Actions runner allocation blocked by billing/spending limits"
   - "Required GitHub CI has not passed for the remediation PR HEAD"
   - "Independent acceptance/release review has not passed"
   - "Independent Codex reviewer attempt ended at service usage limit without a review decision"
 residual_risks:
+  - "Current venue positions and orders cannot be confirmed while Demo connectivity is unavailable; historical flat evidence is stale"
+  - "Pytest completed with 146 test-process resource/deprecation warnings; no test or coverage failure resulted"
   - "Historical episode count was produced partly by an unauthorized KeepAlive loop"
+  - "The user-authorized 2026-08-30 attempt was NOT_VERIFIABLE and produced no order/fill/close evidence"
+  - "The restore-limit and campaign-status fixes are locally verified but uncommitted"
+  - "The reauthorized 2026-08-30 fixed-code attempt was NOT_VERIFIABLE and produced no order/fill/close evidence"
   - "Economic Truth E0-E6 remains NOT_EVALUATED"
+  - "Exact 30-round bounded Demo execution acceptance passed; this remains execution-probe evidence only"
+  - "The authorized bounded soak stopped before order construction because BTCUSDT minNotional 50 USDT exceeded both the 10 USDT order cap and 25 USDT account cap"
+  - "The historical pre-fix 100/500 USDT campaign validated 28 cycles before old post-episode timing exhausted its budget; the later fixed-cadence campaign resolved this at 30/30"
+bounded_soak_local:
+  decision: PASS_LOCAL_ONLY
+  mode: EXECUTION_PROBE
+  alpha_evidence: false
+  episodes: 30
+  max_duration_seconds: 3600
+  cycle_interval_seconds: 120
+  cycle_interval_semantics: START_TO_START
+  target_notional_usdt: 100
+  absolute_account_exposure_usdt: 500
+  max_leverage: 3
+  max_instruments: 1
+  local_actual_composition_result: "fixed cadence with 8-second cycles; 30 completed in 3488 seconds; 29 sleeps of 112 seconds; 30 opens; 30 reduce-only closes; 60 unique traces; final fake position 0; network calls 0; temporary kill switch engaged"
+  full_repository_gate: "4649 passed; 45895/45895 statements; 100%"
+  alpha_v3_gate: "4648 passed; 3497/3497 statements; 1070/1070 branches; 100%"
+  global_kill_switch: engaged
+  real_campaign: COMPLETED_30_OF_30_AUTHORIZATION_CONSUMED
+bounded_soak_real:
+  campaign_id: "20260830T104014Z-ea4fad98f2db"
+  decision: SAFE_STOP_PASS_EXECUTION_PATH_FAIL
+  stop_reason: EPISODE_NOT_COMPLETED
+  episode_1_reason: SIZING_BLOCKED
+  trace_id: "tn-8c66cd393c1e09b8d042"
+  sizing_reason: MIN_NOTIONAL_NOT_SATISFIED
+  venue_min_notional_usdt: 50
+  authorized_order_cap_usdt: 10
+  authorized_account_cap_usdt: 25
+  completed_episode_count: 0
+  real_testnet_write: false
+  real_testnet_write_attempted: false
+  real_testnet_write_outcome_unknown: false
+  post_reconciliation: "2026-08-30T10:43:16Z; signed GET only; writes disabled; ONE_WAY; flat; regular_orders=0; algo_orders=0; unresolved=0; kill_switch=engaged"
+  authorization_consumed: true
+  manifest: "evidence/testnet-soak/20260830T104014Z-ea4fad98f2db/campaign-manifest.json"
+bounded_soak_real_100_500:
+  campaign_id: "20260830T105901Z-eb1a3ebe4be7"
+  decision: EXECUTION_PATH_PASS_WITH_CONDITIONS_CAMPAIGN_28_OF_30
+  stop_reason: TIME_BUDGET_EXHAUSTED
+  elapsed_seconds: 3511.430735291997
+  requested_episode_count: 30
+  completed_episode_count: 28
+  trace_count: 56
+  target_notional_usdt: 100
+  absolute_account_exposure_usdt: 500
+  max_leverage: 3
+  real_testnet_write: true
+  real_testnet_write_attempted: true
+  real_testnet_write_outcome_unknown: false
+  post_reconciliation: "2026-08-30T11:58:28Z; signed GET only; writes disabled; ONE_WAY; flat; regular_orders=0; algo_orders=0; unresolved=0; kill_switch=engaged"
+  authorization_consumed: true
+  manifest: "evidence/testnet-soak/20260830T105901Z-eb1a3ebe4be7/campaign-manifest.json"
+bounded_soak_real_fixed_cadence:
+  campaign_id: "20260830T152343Z-e4e8149fa1d6"
+  source_bundle_sha256: "983f298ab9ed2fec8fdad23031104def95eba51ce5b68dceab0c6751c66cac44"
+  decision: PASS_EXACT_BOUNDED_DEMO_EXECUTION_PATH
+  stop_reason: ALL_EPISODES_RECONCILED_FLAT
+  elapsed_seconds: 3487.4605526250016
+  requested_episode_count: 30
+  completed_episode_count: 30
+  trace_count: 60
+  open_count: 30
+  reduce_only_close_count: 30
+  max_open_cum_quote_usdt: 94.881720
+  target_notional_usdt: 100
+  absolute_account_exposure_usdt: 500
+  max_leverage: 3
+  leverage_readbacks: [2]
+  cycle_interval_seconds: 120
+  cycle_interval_semantics: START_TO_START
+  real_testnet_write: true
+  real_testnet_write_attempted: true
+  real_testnet_write_outcome_unknown: false
+  post_reconciliation: "signed GET only; writes disabled; ONE_WAY; flat; regular_orders=0; algo_orders=0; unresolved=0; kill_switch=engaged; backup_absent; no_campaign_process"
+  authorization_consumed: true
+  evidence_class: EXECUTION_PROBE
+  alpha_evidence: false
+  economic_truth_e0_e6: NOT_EVALUATED
+  manifest_sha256: "245bb9e0ea10ccf767addb294882a318d7f3cdcdb7079cf798bcd56a98667b65"
+  manifest: "evidence/testnet-soak/20260830T152343Z-e4e8149fa1d6/campaign-manifest.json"
+testnet_attempt:
+  run_id: "20260830T064800Z-cbb95f8fe939"
+  decision: NOT_VERIFIABLE
+  real_testnet_write: false
+  real_testnet_write_attempted: false
+  real_testnet_write_outcome_unknown: false
+  unresolved_trace_count: 0
+  post_reconciliation: "ONE_WAY; flat; regular_orders=0; algo_orders=0; kill_switch=engaged"
+  manifest: "evidence/testnet-verification/20260830T064800Z-cbb95f8fe939/manifest.json"
+  management_waiver: "GitHub CI and independent acceptance waived for this reauthorized one Demo Testnet attempt only; authorization consumed; G8/G9 remain BLOCKED"
 github:
   pull_request: "https://github.com/yhwhhwhy001/beidou/pull/12"
   actions_run: "https://github.com/yhwhhwhy001/beidou/actions/runs/33252017084"
   actions_result: "FAILURE_BEFORE_STEPS_BILLING_OR_SPENDING_LIMIT"
-next_authorized_action: "Restore GitHub Actions runner eligibility and obtain an independent review, then rerun required PR jobs; do not merge, clear the kill switch, or start a campaign while G8/G9 are blocked."
+latest_local_validation:
+  observed_at: "2026-09-01T02:04:00+08:00"
+  source_test_registry_digest_sha256: "e439b83340a9ba033118a4f7fec1460313d745aefbfe369aca182679a0a7caa7"
+  full_repository: "4740 passed; 46455/46455 statements; 100%"
+  alpha_v3: "4740 passed; 3497/3497 statements; 1070/1070 branches; 100%"
+  static_governance_security: PASS
+  doctor_safety_only: PASS
+  services_loaded: false
+  trading_process_active: false
+  global_kill_switch: engaged
+  signed_demo_reconciliation: UNKNOWN_NETWORK_TIMEOUT
+next_authorized_action: "Keep the global kill switch engaged. When Demo connectivity is restored, repeat signed GET-only reconciliation before any readiness claim. No further Testnet write is authorized; preserve the completed 30/30 execution-probe evidence. G8/G9, E0-E6 and Mainnet remain blocked or prohibited; do not merge, push or use Mainnet."

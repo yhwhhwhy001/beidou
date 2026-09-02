@@ -62,3 +62,16 @@ G7 is green for the exact validated PR head. This candidate is not admitted
 until independent acceptance and required GitHub CI are current and green.
 The user's requested Testnet campaign is recorded but is not executable while
 the kill switch is engaged or any gate is unknown/blocked.
+
+## Bounded execution-probe soak local acceptance
+
+AC-SOAK-001 through AC-SOAK-015 are `PASS locally` against the current working
+tree. The offline acceptance run completed 30/30 episodes through the actual
+campaign/verifier composition with a fake exchange: 30 opens, 30 reduce-only
+closes, 60 unique traces, zero final position, 3480 simulated seconds, and a
+finally-engaged temporary kill switch. Full repository and Alpha V3 gates are
+both 100%; static, governance, package and security gates passed.
+
+This is not real-campaign acceptance. The global durable kill switch remains
+engaged, the write-registry status is `HARD_HOLD`, and no Testnet write was
+attempted. Real campaign decision: `PENDING_EXPLICIT_USER_AUTHORIZATION`.

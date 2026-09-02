@@ -95,11 +95,11 @@ verify:
 
 # 运行
 run-safety:
-	@echo "apps.safety_executor is retired (M00-F06); use: beidou start --mode testnet"
+	@echo "apps.safety_executor is retired (M00-F06); authorized local safety-only route: beidou execution start --mode safety_only --symbols SYMBOL"
 	@exit 2
 
 run-strategy:
-	@echo "apps.strategy_engine is retired (M00-F06); use: beidou start --mode paper"
+	@echo "apps.strategy_engine is retired (M00-F06); authorized local paper route: beidou execution start --mode paper --symbols SYMBOL"
 	@exit 2
 
 run-research:

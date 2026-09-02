@@ -483,16 +483,16 @@ def test_launchagent_template_is_direct_and_fail_closed() -> None:
     payload = plistlib.loads((ROOT / "deploy" / "com.beidou.autopilot.plist").read_bytes())
     arguments = payload["ProgramArguments"]
 
-    assert arguments[0] == "/opt/homebrew/bin/beidou"
+    assert arguments[0] == str(ROOT / ".venv" / "bin" / "beidou")
     # M22-F02: 模板不得携带 --no-self-heal（P0-01 教训:关闭自愈链导致
     # 部署后控制面卡 NO_NEW_RISK）;自愈默认开启。
-    assert arguments[1:] == ["start"]
+    assert arguments[1:] == ["start", "--mode", "safety_only"]
     assert "--no-self-heal" not in arguments
     assert "--self-heal" not in arguments
     assert "/bin/zsh" not in arguments
     assert "-c" not in arguments
     assert all("eval" not in item and "BEIDOU_" not in item for item in arguments)
-    assert "--mode" not in arguments
+    assert arguments[arguments.index("--mode") + 1] == "safety_only"
     assert "--symbols" not in arguments
     assert payload["KeepAlive"] is False
     assert payload["RunAtLoad"] is False

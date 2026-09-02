@@ -199,12 +199,7 @@ class AlphaForecast:
         total_cost = self.total_cost_bps
         if total_cost is None:
             return False
-        return math.isclose(
-            self.expected_return_after_cost,
-            self.expected_return - total_cost / 10000.0,
-            rel_tol=0.0,
-            abs_tol=1e-12,
-        )
+        return self.expected_return_after_cost == self.expected_return - total_cost / 10000.0
 
     @property
     def cost_breakdown(self) -> dict[str, float | str | None]:

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from beidou_research.data.dataset_manifest import DatasetManifest
+from beidou_exchange.binance_usdm.endpoints import Endpoint
+from beidou_research.data.dataset_manifest import (
+    DATASET_MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    MarketDataProvenance,
+)
 from beidou_research.data.kline_store import KlineStore
 
 
@@ -19,6 +24,59 @@ def _to_open_time_ms(value: Any) -> int:
     if isinstance(value, datetime):
         return int(value.timestamp() * 1000)
     return int(value)
+
+
+def _retrieved_at() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _feed_endpoint(feed: Any) -> str:
+    """Read a public endpoint fact without granting the feed any new capability."""
+
+    def exact_kline_endpoint(endpoint: str) -> str:
+        normalized = endpoint.rstrip("/")
+        candidate = f"{normalized}{Endpoint.KLINES}"
+        classified = MarketDataProvenance.from_endpoint(candidate, retrieved_at="")
+        if classified.source_class != "UNKNOWN":
+            return candidate
+        return endpoint
+
+    try:
+        public_endpoint = feed.rest_url
+    except AttributeError:
+        public_endpoint = ""
+    if isinstance(public_endpoint, str) and public_endpoint:
+        return exact_kline_endpoint(public_endpoint)
+
+    try:
+        private_endpoint = feed._rest_url
+    except AttributeError:
+        return ""
+    return exact_kline_endpoint(private_endpoint) if isinstance(private_endpoint, str) else ""
+
+
+def _safe_manifest_hash(manifest: dict[str, Any] | None) -> str:
+    if manifest is None:
+        return ""
+    try:
+        return DatasetManifest.hash_of(manifest)
+    except (TypeError, ValueError):
+        return ""
+
+
+def _existing_provenance(
+    store: KlineStore, symbol: str, interval: str
+) -> tuple[dict[str, Any] | None, MarketDataProvenance | None]:
+    manifest = DatasetManifest.read(store.manifest_path(symbol, interval))
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != DATASET_MANIFEST_SCHEMA_VERSION:
+        return manifest, None
+    raw = manifest.get("provenance")
+    if not isinstance(raw, dict):
+        return manifest, None
+    try:
+        return manifest, MarketDataProvenance.from_dict(raw)
+    except (TypeError, ValueError):
+        return manifest, None
 
 
 def backfill_symbol(
@@ -39,6 +97,48 @@ def backfill_symbol(
     返回 rows 为本次运行后数据集总行数（含既有数据），便于续传场景对齐 manifest。
     """
     errors: list[str] = []
+    endpoint = _feed_endpoint(feed)
+    incoming_provenance = MarketDataProvenance.from_endpoint(endpoint, retrieved_at=_retrieved_at())
+    existing_rows = store._count_existing(symbol, interval)
+    existing_manifest: dict[str, Any] | None = None
+    if existing_rows > 0:
+        existing_manifest, prior_provenance = _existing_provenance(store, symbol, interval)
+        if prior_provenance is None:
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "pages": 0,
+                "rows": existing_rows,
+                "manifest_hash": _safe_manifest_hash(existing_manifest),
+                "errors": ["DATASET_PROVENANCE_UNVERIFIABLE"],
+            }
+        assert existing_manifest is not None
+        existing_frame = store.load(symbol, interval)
+        content_reasons = DatasetManifest.content_verification_reasons(
+            existing_frame,
+            existing_manifest,
+            symbol,
+            interval,
+        )
+        if content_reasons:
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "pages": 0,
+                "rows": existing_rows,
+                "manifest_hash": _safe_manifest_hash(existing_manifest),
+                "errors": ["DATASET_CONTENT_MISMATCH"],
+                "data_integrity_reasons": list(content_reasons),
+            }
+        if prior_provenance.source_identity() != incoming_provenance.source_identity():
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "pages": 0,
+                "rows": existing_rows,
+                "manifest_hash": DatasetManifest.hash_of(existing_manifest),
+                "errors": ["DATASET_SOURCE_MISMATCH"],
+            }
     effective_start = store.last_open_time(symbol, interval) or start_ms
     pages = 0
     collected: list[dict[str, Any]] = []
@@ -73,10 +173,14 @@ def backfill_symbol(
     rows = store.append(symbol, interval, collected)
     manifest_hash = ""
     if rows > 0:
-        frame = store.load(symbol, interval)
-        manifest = DatasetManifest.compute(frame, symbol, interval)
+        if existing_manifest is not None and not collected:
+            manifest = existing_manifest
+        else:
+            frame = store.load(symbol, interval)
+            completed_provenance = MarketDataProvenance.from_endpoint(endpoint, retrieved_at=_retrieved_at())
+            manifest = DatasetManifest.compute(frame, symbol, interval, provenance=completed_provenance)
         manifest_hash = DatasetManifest.hash_of(manifest)
-        DatasetManifest.write(store._path(symbol, interval).with_name(f"{interval}.manifest.json"), manifest)
+        DatasetManifest.write(store.manifest_path(symbol, interval), manifest)
     return {
         "symbol": symbol,
         "interval": interval,

@@ -9,15 +9,18 @@ and venue HMAC material are rejected/redacted at the boundary.
 from __future__ import annotations
 
 import copy
+import fcntl
+import gzip
 import hashlib
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 
 class TraceStatus(str, Enum):
@@ -268,9 +271,13 @@ class DecisionTraceStore:
         self._lock = threading.RLock()
         self._records: dict[str, DecisionTrace] = {}
         self.corrupt_tail_lines = 0
+        self.loaded_event_count = 0
         self._load()
 
     def _load(self) -> None:
+        self._records.clear()
+        self.corrupt_tail_lines = 0
+        self.loaded_event_count = 0
         if not self.path.exists():
             return
         with self.path.open("r", encoding="utf-8") as handle:
@@ -291,34 +298,173 @@ class DecisionTraceStore:
                     self.corrupt_tail_lines += 1
                     continue
                 self._records[trace.trace_id] = trace
+                self.loaded_event_count += 1
 
-    def _append_snapshot(self, trace: DecisionTrace) -> None:
+    @contextmanager
+    def _exclusive_journal_lock(self) -> Iterator[None]:
+        """Serialize appends and compaction across local processes."""
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(f"{self.path.name}.lock")
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    @staticmethod
+    def _encoded_snapshot(trace: DecisionTrace) -> bytes:
         event = {
             "event": "TRACE_SNAPSHOT",
             "schema_version": "1.0",
             "written_at": datetime.now(timezone.utc).isoformat(),
             "trace": trace.to_dict(),
         }
-        encoded = (
+        return (
             json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False) + "\n"
         ).encode("utf-8")
-        descriptor = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
         try:
-            os.write(descriptor, encoded)
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        # Persist the directory entry as well when the platform supports it.
-        try:
-            directory = os.open(self.path.parent, os.O_RDONLY)
-        except OSError:
-            directory = -1
-        if directory >= 0:
+
+    def _append_snapshot(self, trace: DecisionTrace) -> None:
+        encoded = self._encoded_snapshot(trace)
+        with self._exclusive_journal_lock():
+            descriptor = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
-                os.fsync(directory)
+                os.write(descriptor, encoded)
+                os.fsync(descriptor)
             finally:
-                os.close(directory)
+                os.close(descriptor)
+            self._fsync_directory(self.path.parent)
+        self.loaded_event_count += 1
+
+    def compact(self) -> dict[str, Any]:
+        """Archive the complete journal and atomically retain latest snapshots.
+
+        The original byte stream is preserved as a verified gzip archive. The
+        active path is replaced only after a complete compacted journal has
+        been fsynced, while a hard link protects the original inode. No trace,
+        including unresolved recovery state, is discarded.
+        """
+
+        with self._lock, self._exclusive_journal_lock():
+            self._load()
+            trace_count = len(self._records)
+            unresolved_count = self.unresolved_count
+            if not self.path.exists() or self.path.stat().st_size == 0:
+                return {
+                    "status": "NO_JOURNAL",
+                    "trace_count": trace_count,
+                    "unresolved_count": unresolved_count,
+                }
+            if self.loaded_event_count <= trace_count and self.corrupt_tail_lines == 0:
+                return {
+                    "status": "NOT_NEEDED",
+                    "source_event_count": self.loaded_event_count,
+                    "active_event_count": trace_count,
+                    "trace_count": trace_count,
+                    "unresolved_count": unresolved_count,
+                }
+
+            compacted = b"".join(self._encoded_snapshot(self._records[key]) for key in sorted(self._records))
+            temporary = self.path.with_name(f".{self.path.name}.compact-{os.getpid()}.tmp")
+            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(descriptor, compacted)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
+            source_sha256 = self._file_sha256(self.path)
+            source_size = self.path.stat().st_size
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            archive_dir = self.path.parent / f"{self.path.stem}.archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archive_dir.chmod(0o700)
+            raw_archive = archive_dir / f"{self.path.stem}.{stamp}.{source_sha256[:16]}.jsonl"
+            os.link(self.path, raw_archive)
+            self._fsync_directory(archive_dir)
+            os.replace(temporary, self.path)
+            self._fsync_directory(self.path.parent)
+
+            compressed_archive = raw_archive.with_suffix(f"{raw_archive.suffix}.gz")
+            compressed_temporary = compressed_archive.with_suffix(f"{compressed_archive.suffix}.tmp")
+            compressed_descriptor = os.open(compressed_temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                with os.fdopen(compressed_descriptor, "wb") as destination:
+                    with (
+                        gzip.GzipFile(filename="", mode="wb", fileobj=destination, mtime=0) as compressor,
+                        raw_archive.open("rb") as source,
+                    ):
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            compressor.write(chunk)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+            except Exception:
+                compressed_temporary.unlink(missing_ok=True)
+                raise
+
+            digest = hashlib.sha256()
+            with gzip.open(compressed_temporary, "rb") as restored:
+                for chunk in iter(lambda: restored.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != source_sha256:
+                compressed_temporary.unlink(missing_ok=True)
+                raise OSError("compressed DecisionTrace archive failed hash verification")
+            os.replace(compressed_temporary, compressed_archive)
+            compressed_archive.chmod(0o400)
+            raw_archive.unlink()
+            self._fsync_directory(archive_dir)
+
+            compacted_sha256 = self._file_sha256(self.path)
+            report: dict[str, Any] = {
+                "status": "COMPACTED",
+                "compacted_at": datetime.now(timezone.utc).isoformat(),
+                "source_sha256": source_sha256,
+                "source_size_bytes": source_size,
+                "source_event_count": self.loaded_event_count,
+                "corrupt_tail_lines_archived": self.corrupt_tail_lines,
+                "archive_path": str(compressed_archive),
+                "archive_compression": "gzip",
+                "active_sha256": compacted_sha256,
+                "active_size_bytes": self.path.stat().st_size,
+                "active_event_count": trace_count,
+                "trace_count": trace_count,
+                "unresolved_count": unresolved_count,
+            }
+            manifest_path = archive_dir / "manifest.jsonl"
+            manifest_descriptor = os.open(manifest_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            try:
+                os.write(
+                    manifest_descriptor,
+                    (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
+                )
+                os.fsync(manifest_descriptor)
+            finally:
+                os.close(manifest_descriptor)
+            self._fsync_directory(archive_dir)
+            self.loaded_event_count = trace_count
+            self.corrupt_tail_lines = 0
+            return report
 
     def prepare(self, trace: DecisionTrace) -> DecisionTrace:
         """Durably create PREPARED before the first risk-increasing write."""

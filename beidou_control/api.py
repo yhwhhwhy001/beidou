@@ -302,7 +302,6 @@ def create_app(api: ControlPlaneAPI) -> Any | None:
             HTTPException,
             Request,
         )
-        from fastapi.middleware.cors import CORSMiddleware
     except ImportError:
         return None
 

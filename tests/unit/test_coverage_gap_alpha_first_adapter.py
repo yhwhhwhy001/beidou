@@ -17,3 +17,9 @@ def test_start_authorized_execution_requires_symbols(monkeypatch) -> None:
     monkeypatch.setenv("BEIDOU_EXECUTION_AUTHORIZATION", "EXPLICIT_LOCAL_APPROVAL")
     with pytest.raises(ValueError, match="at least one explicit symbol is required"):
         start_authorized_execution(mode="paper", symbols=[])
+
+
+def test_start_authorized_execution_rejects_testnet_legacy_runtime(monkeypatch) -> None:
+    monkeypatch.setenv("BEIDOU_EXECUTION_AUTHORIZATION", "EXPLICIT_LOCAL_APPROVAL")
+    with pytest.raises(PermissionError, match="apps.testnet_verify"):
+        start_authorized_execution(mode="testnet", symbols=["BTCUSDT"])

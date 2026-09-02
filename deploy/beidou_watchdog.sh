@@ -25,6 +25,13 @@
 
 set -uo pipefail
 
+# Legacy containment boundary: this watchdog can kickstart an execution
+# service, so installing or invoking the file is not authority to enable it.
+# The repository launchd template supplies no marker and has no schedule.
+if [ "${BEIDOU_LEGACY_WATCHDOG_AUTHORIZATION:-}" != "EXPLICIT_LOCAL_APPROVAL" ]; then
+  exit 0
+fi
+
 SERVICE="gui/501/com.beidou.autopilot"
 # 仓库根目录: 本脚本位于 <repo>/deploy/ 下, 上跳一级即仓库根。
 # 允许 BEIDOU_REPO 覆盖 (供测试使用)。解析结果必须通过标志文件校验 ——

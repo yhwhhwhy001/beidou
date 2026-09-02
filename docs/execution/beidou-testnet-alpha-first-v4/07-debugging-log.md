@@ -14,6 +14,8 @@
 | Clean candidate reached 99.98% instead of required 100% | coverage had implicitly depended on ignored local config/storage facts | detached XML identified 11 uncovered statements across config, preflight, and feed | make tests construct environment config, migration/journal failures, and valid clock offset explicitly |
 | Next clean candidate reached 99.99% | the accelerated EvidenceBridge stub returned an empty report and nearline lacked an unclosed-bar case | coverage report identified three engine statements | return deterministic applied/rejected stub facts and exercise the unclosed-bar guard |
 | CI Bandit command returned one low false positive | the `PASS` gate-status enum had a Ruff suppression but no Bandit-specific annotation | B105 at `economic_truth.py:47` | add scoped `nosec B105` with credential-boundary rationale |
+| Authorized `max_instruments=1` attempt restored five ACTIVE symbols | persisted ACTIVE entries were loaded before exchangeInfo discovery and only new activation enforced the configured cap | run `20260830T055549Z-cbb95f8fe939` reported candidate count 1 but five ACTIVE symbols; the regression failed with five ACTIVE before the fix | quarantine restored ACTIVE symbols outside the current bounded startup universe; preserve reduce-only exits for quarantined exposure |
+| Flat quarantined symbols falsely completed an ACTIVE no-action campaign | `run_once` aggregated `CLOSED` across both quarantined recovery and ACTIVE verification episodes | focused regression returned `EPISODE_COMPLETED` before the fix when the ACTIVE episode was `STRATEGY_NO_ACTION` | derive campaign completion only from ACTIVE episodes; retain quarantined reduce-only recovery as safety evidence |
 
-Unknowns remain fail-closed. No new campaign was used to diagnose or repair
-these defects.
+Unknowns remain fail-closed. The completion-status defect was reproduced and
+repaired locally before the separately reauthorized episode was started.

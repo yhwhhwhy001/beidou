@@ -185,6 +185,18 @@ def test_cli_start_requires_bounded_symbols_and_runs_supervisor(tmp_path, monkey
     assert runner.invoke(cli_module.main, ["start", "--symbols", "BTCUSDT"]).exit_code == 130
 
 
+def test_cli_normal_start_cannot_bypass_v4_testnet_entrypoint(tmp_path, monkeypatch) -> None:
+    _prepare_cli_root(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["start", "--mode", "testnet", "--symbols", "BTCUSDT"],
+    )
+
+    assert result.exit_code == 1
+    assert "apps.testnet_verify" in result.output
+
+
 def test_trading_pool_startup_resolution_uses_read_only_exchange_info(monkeypatch) -> None:
     import beidou_exchange.binance_usdm.adapter as adapter_module
     import beidou_exchange.binance_usdm.rest_client as rest_client_module

@@ -195,6 +195,110 @@ def test_known_feature_label_leakage_fails_closed(tmp_path: Path) -> None:
     assert "FEATURE_LABEL_WINDOW_LEAKAGE" in report.reasons
 
 
+def test_pairwise_feature_label_lineage_accepts_interleaved_causal_records(tmp_path: Path) -> None:
+    manifest, root = _lineage(tmp_path)
+    payload = manifest.as_dict()
+    record_id = "a" * 64
+    features = {
+        "schema_version": "1.0",
+        "kind": "BEIDOU_PAIRWISE_FEATURE_LINEAGE",
+        "lineage_id": "lineage-2024-01-01",
+        "records": [
+            {
+                "record_id": record_id,
+                "symbol": "BTCUSDT",
+                "decision_time": "2023-12-31T23:00:00Z",
+                "available_as_of": "2023-12-31T23:00:00Z",
+                "history_digest": "b" * 64,
+                "feature_digest": "c" * 64,
+                "policy_digest": "d" * 64,
+            }
+        ],
+    }
+    features["records_digest"] = hashlib.sha256(canonical_json(features["records"]).encode()).hexdigest()
+    labels = {
+        "schema_version": "1.0",
+        "kind": "BEIDOU_PAIRWISE_LABEL_LINEAGE",
+        "lineage_id": "lineage-2024-01-01",
+        "records": [
+            {
+                "record_id": record_id,
+                "symbol": "BTCUSDT",
+                "decision_time": "2023-12-31T23:00:00Z",
+                "available_as_of": "2024-01-01T00:00:00Z",
+                "label_end": "2023-12-31T23:59:59Z",
+                "label_digest": "e" * 64,
+            }
+        ],
+    }
+    labels["records_digest"] = hashlib.sha256(canonical_json(labels["records"]).encode()).hexdigest()
+    feature_path = root / payload["artifacts"]["features"]["source_path"]
+    label_path = root / payload["artifacts"]["labels"]["source_path"]
+    feature_path.write_text(json.dumps(features, sort_keys=True) + "\n")
+    label_path.write_text(json.dumps(labels, sort_keys=True) + "\n")
+    for role, path in (("features", feature_path), ("labels", label_path)):
+        payload["artifacts"][role]["content_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        _rehash_artifact(payload, role)
+
+    report = inspect_lineage(payload, root=root)
+
+    assert report.status == "VERIFIABLE"
+    assert "FEATURE_LABEL_WINDOW_LEAKAGE" not in report.reasons
+
+
+def test_pairwise_lineage_rejects_label_available_at_decision(tmp_path: Path) -> None:
+    manifest, root = _lineage(tmp_path)
+    payload = manifest.as_dict()
+    record_id = "a" * 64
+    feature_records = [
+        {
+            "record_id": record_id,
+            "symbol": "BTCUSDT",
+            "decision_time": "2023-12-31T23:00:00Z",
+            "available_as_of": "2023-12-31T23:00:00Z",
+            "history_digest": "b" * 64,
+            "feature_digest": "c" * 64,
+            "policy_digest": "d" * 64,
+        }
+    ]
+    label_records = [
+        {
+            "record_id": record_id,
+            "symbol": "BTCUSDT",
+            "decision_time": "2023-12-31T23:00:00Z",
+            "available_as_of": "2023-12-31T23:00:00Z",
+            "label_end": "2023-12-31T23:59:59Z",
+            "label_digest": "e" * 64,
+        }
+    ]
+    feature_value = {
+        "schema_version": "1.0",
+        "kind": "BEIDOU_PAIRWISE_FEATURE_LINEAGE",
+        "lineage_id": "lineage-2024-01-01",
+        "records": feature_records,
+        "records_digest": hashlib.sha256(canonical_json(feature_records).encode()).hexdigest(),
+    }
+    label_value = {
+        "schema_version": "1.0",
+        "kind": "BEIDOU_PAIRWISE_LABEL_LINEAGE",
+        "lineage_id": "lineage-2024-01-01",
+        "records": label_records,
+        "records_digest": hashlib.sha256(canonical_json(label_records).encode()).hexdigest(),
+    }
+    feature_path = root / payload["artifacts"]["features"]["source_path"]
+    label_path = root / payload["artifacts"]["labels"]["source_path"]
+    feature_path.write_text(json.dumps(feature_value, sort_keys=True) + "\n")
+    label_path.write_text(json.dumps(label_value, sort_keys=True) + "\n")
+    for role, path in (("features", feature_path), ("labels", label_path)):
+        payload["artifacts"][role]["content_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        _rehash_artifact(payload, role)
+
+    report = inspect_lineage(payload, root=root)
+
+    assert report.status == "NOT_VERIFIABLE"
+    assert "PAIRWISE_LABEL_AVAILABLE_TOO_EARLY" in report.reasons
+
+
 def test_late_revision_fails_closed_even_with_recomputed_manifest(tmp_path: Path) -> None:
     manifest, root = _lineage(tmp_path)
     payload = manifest.as_dict()

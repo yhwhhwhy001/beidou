@@ -26,6 +26,15 @@ def _full_pass_evidence() -> dict:
             "closed_bar_manifest_hash": "closed-bar-hash",
             "lineage_hash": "lineage-hash",
             "lookahead_audit": {"passed": True, "violations": 0},
+            "market_data_assessment": {
+                "status": "PASS",
+                "manifest_hash": "a" * 64,
+                "schema_version": "2.0",
+                "source_class": "OFFICIAL_PUBLIC_ARCHIVE",
+                "environment": "PUBLIC_READ_ONLY",
+                "intended_use": "ECONOMIC_RESEARCH",
+                "reasons": [],
+            },
         },
         "factor_sanity": {
             "non_constant": True,
@@ -94,6 +103,26 @@ def test_lookahead_audit_must_be_mapping() -> None:
     assessment = assess_economic_truth(evidence)
     assert assessment.results[0].status is GateStatus.FAIL
     assert "MALFORMED_LOOKAHEAD_AUDIT" in assessment.results[0].reasons
+
+
+def test_e0_requires_market_data_assessment() -> None:
+    evidence = _full_pass_evidence()
+    del evidence["data"]["market_data_assessment"]
+
+    assessment = assess_economic_truth(evidence)
+
+    assert assessment.results[0].status is GateStatus.NOT_EVALUATED
+    assert "MISSING_EVIDENCE:market_data_assessment" in assessment.results[0].reasons
+
+
+def test_e0_rejects_malformed_market_data_assessment() -> None:
+    evidence = _full_pass_evidence()
+    evidence["data"]["market_data_assessment"] = "PASS"
+
+    assessment = assess_economic_truth(evidence)
+
+    assert assessment.results[0].status is GateStatus.FAIL
+    assert "MARKET_DATA_ASSESSMENT_MALFORMED" in assessment.results[0].reasons
 
 
 def test_lookahead_violations_non_int_counts_as_one() -> None:

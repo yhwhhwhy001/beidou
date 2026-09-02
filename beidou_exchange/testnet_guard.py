@@ -147,6 +147,8 @@ class TestnetEnvironmentGuard:
         max_account_exposure: float | str | Decimal | None = None,
         account_id: str,
         owner_id: str = "testnet-verifier",
+        task_id: str = "testnet-verification",
+        entrypoint: str = "apps.testnet_verify",
         writes_enabled: bool = False,
         kill_switch_path: str | Path | None = None,
         context_ttl_seconds: float = 300.0,
@@ -168,6 +170,10 @@ class TestnetEnvironmentGuard:
         self.owner_id = str(owner_id or "").strip()
         if not self.owner_id:
             raise TestnetGuardError("owner_id is required")
+        self.task_id = str(task_id or "").strip()
+        self.entrypoint = str(entrypoint or "").strip()
+        if not self.task_id or not self.entrypoint:
+            raise TestnetGuardError("task_id and entrypoint are required")
         if type(writes_enabled) is not bool:
             raise TestnetGuardError("writes_enabled must be a boolean")
         self.writes_enabled = writes_enabled
@@ -302,8 +308,8 @@ class TestnetEnvironmentGuard:
         nonce_material = f"{self.account_id}|{clean_intent}|{clean_trace}|{self.owner_id}"
         nonce = hashlib.sha256(nonce_material.encode("utf-8")).hexdigest()[:32]
         return TerminalWriteContext(
-            task_id="testnet-verification",
-            entrypoint="apps.testnet_verify",
+            task_id=self.task_id,
+            entrypoint=self.entrypoint,
             owner_id=self.owner_id,
             generation=clean_trace,
             approval_id=f"local-testnet-confirmed:{clean_trace}",
@@ -348,9 +354,9 @@ class TestnetEnvironmentGuard:
     ) -> TerminalWriteDecision:
         """Validate context-level facts before request classification."""
 
-        if str(context.task_id).strip() != "testnet-verification":
+        if str(context.task_id).strip() != self.task_id:
             return TerminalWriteDecision(False, "TESTNET_TASK_MISMATCH")
-        if str(context.entrypoint).strip() != "apps.testnet_verify":
+        if str(context.entrypoint).strip() != self.entrypoint:
             return TerminalWriteDecision(False, "TESTNET_ENTRYPOINT_MISMATCH")
         if str(context.owner_id).strip() != self.owner_id:
             return TerminalWriteDecision(False, "TESTNET_OWNER_MISMATCH")

@@ -136,13 +136,7 @@ def test_control_plane_reference_app_registers_and_invokes_fail_closed_routes(mo
     fastapi.FastAPI = _FakeApp  # type: ignore[attr-defined]
     fastapi.HTTPException = _HTTPException  # type: ignore[attr-defined]
     fastapi.Request = object  # type: ignore[attr-defined]
-    cors = ModuleType("fastapi.middleware.cors")
-    cors.CORSMiddleware = object  # type: ignore[attr-defined]
-    middleware = ModuleType("fastapi.middleware")
-    middleware.cors = cors  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "fastapi", fastapi)
-    monkeypatch.setitem(sys.modules, "fastapi.middleware", middleware)
-    monkeypatch.setitem(sys.modules, "fastapi.middleware.cors", cors)
 
     api = ControlPlaneAPI()
     app = create_app(api)

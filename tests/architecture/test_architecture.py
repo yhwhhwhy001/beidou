@@ -656,6 +656,7 @@ def test_dev_bypass_is_not_available_to_testnet() -> None:
     root = ROOT
     source = (root / "beidou_bootstrap" / "dev.py").read_text(encoding="utf-8")
     supervisor = (root / "beidou_launcher" / "supervisor.py").read_text(encoding="utf-8")
+    assert "def _sync_opening_balance" not in source
     assert 'mode not in ("paper", "research", "testnet")' not in source
     assert 'self.mode in ("paper", "research", "testnet")' not in supervisor
     assert 'mode not in ("paper", "research")' in source
@@ -663,6 +664,7 @@ def test_dev_bypass_is_not_available_to_testnet() -> None:
 
 def test_startup_recovery_is_read_only_for_ambiguous_execution_facts() -> None:
     root = ROOT
+    assert not (root / "beidou_safety" / "recovery" / "exit_recovery.py").exists()
     source = (root / "beidou_core" / "engine.py").read_text(encoding="utf-8")
     run_start = source.index("    async def run(self) -> None:")
     run_end = source.index("\n    async def _shutdown", run_start)

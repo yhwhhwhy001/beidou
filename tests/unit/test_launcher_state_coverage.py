@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,6 +163,10 @@ def test_state_history_rotation_and_rotation_failure_are_observable(
     monkeypatch.setattr(Path, "stat", large_stat)
     writer.write(_report())
     assert len(writer.history_path.read_text(encoding="utf-8").splitlines()) <= 501
+    archives = list((writer.history_path.parent / "supervisor-history.jsonl.archive").glob("*.gz"))
+    assert len(archives) == 1
+    with gzip.open(archives[0], "rt", encoding="utf-8") as handle:
+        assert len(handle.read().splitlines()) == 600
 
     broken = EvidenceWriter(tmp_path / "broken")
     broken.history_path.parent.mkdir(parents=True, exist_ok=True)

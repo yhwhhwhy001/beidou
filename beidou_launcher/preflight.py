@@ -307,27 +307,80 @@ def _launchd_plist_drift(project_root: Path, installed_path: Path | None = None)
     evidence: dict[str, Any] = {"installed": False}
     if not template_path.is_file():
         return ["模板缺失: deploy/com.beidou.autopilot.plist"], evidence
-    with open(template_path, "rb") as f:
-        template = plistlib.load(f)
+    template_bytes = template_path.read_bytes()
+    template = plistlib.loads(template_bytes)
     resolved = installed_path or (Path.home() / "Library" / "LaunchAgents" / "com.beidou.autopilot.plist")
     if not resolved.is_file():
         evidence["note"] = "实装 plist 不存在（未部署）；无漂移可比"
         return [], evidence
     evidence["installed"] = True
-    with open(resolved, "rb") as f:
-        installed = plistlib.load(f)
+    installed_bytes = resolved.read_bytes()
+    installed = plistlib.loads(installed_bytes)
     drift: list[str] = []
+
+    governed_fields = (
+        "Label",
+        "ProgramArguments",
+        "WorkingDirectory",
+        "EnvironmentVariables",
+        "RunAtLoad",
+        "KeepAlive",
+        "ThrottleInterval",
+        "ExitTimeOut",
+        "StandardOutPath",
+        "StandardErrorPath",
+    )
+    missing_keys = sorted(key for key in governed_fields if key in template and key not in installed)
+    unexpected_keys = sorted(str(key) for key in installed.keys() - template.keys())
+
     t_ka, i_ka = template.get("KeepAlive"), installed.get("KeepAlive")
-    if i_ka is True and t_ka is not True:
-        drift.append("实装 KeepAlive=true：监督器终态退出码 5/6（LOCKED/FAILED）会被无限重启（崩溃-重启循环）")
+    if i_ka != t_ka:
+        if i_ka is True:
+            drift.append("实装 KeepAlive=true：会启用 automatic restart，并可能形成崩溃-重启循环")
+        elif isinstance(i_ka, dict):
+            drift.append("实装 KeepAlive 使用条件字典：会启用 automatic restart，与安全模板不一致")
+        else:
+            drift.append("KeepAlive 与安全模板不一致")
+
+    if installed.get("RunAtLoad") != template.get("RunAtLoad"):
+        drift.append("RunAtLoad 与安全模板不一致")
+
     t_thr, i_thr = template.get("ThrottleInterval"), installed.get("ThrottleInterval")
-    if i_thr is not None and t_thr is not None and int(i_thr) != int(t_thr):
+    if i_thr != t_thr:
         drift.append(f"ThrottleInterval 实装 {i_thr}s vs 模板 {t_thr}s")
+
+    for field in (
+        "Label",
+        "ProgramArguments",
+        "WorkingDirectory",
+        "EnvironmentVariables",
+        "ExitTimeOut",
+        "StandardOutPath",
+        "StandardErrorPath",
+    ):
+        if installed.get(field) != template.get(field):
+            drift.append(f"{field} 与安全模板不一致")
+
+    if missing_keys:
+        drift.append(f"实装缺少模板字段: {', '.join(missing_keys)}")
+    if unexpected_keys:
+        drift.append(f"实装包含模板外字段: {', '.join(unexpected_keys)}")
+
     args = " ".join(str(a) for a in (installed.get("ProgramArguments") or []))
     if "eval" in args and "zshrc" in args:
         drift.append("实装使用 shell eval 注入凭据（模板禁止：凭据应经 wrapper 从 .env 注入）")
     if "HTTPS_PROXY" not in args and template.get("EnvironmentVariables", {}).get("HTTPS_PROXY"):
         drift.append("模板配置代理但实装未携带代理环境（网络可达性可能受地域限制）")
+
+    template_payload_bytes = plistlib.dumps(template, fmt=plistlib.FMT_BINARY, sort_keys=True)
+    installed_payload_bytes = plistlib.dumps(installed, fmt=plistlib.FMT_BINARY, sort_keys=True)
+    evidence["payload_match"] = template == installed
+    evidence["template_sha256"] = hashlib.sha256(template_payload_bytes).hexdigest()
+    evidence["installed_sha256"] = hashlib.sha256(installed_payload_bytes).hexdigest()
+    evidence["template_file_sha256"] = hashlib.sha256(template_bytes).hexdigest()
+    evidence["installed_file_sha256"] = hashlib.sha256(installed_bytes).hexdigest()
+    evidence["missing_keys"] = missing_keys
+    evidence["unexpected_keys"] = unexpected_keys
     evidence["installed_keep_alive"] = str(i_ka)
     evidence["installed_throttle"] = str(i_thr)
     evidence["installed_has_eval"] = bool("eval" in args and "zshrc" in args)

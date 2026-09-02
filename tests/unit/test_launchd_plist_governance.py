@@ -13,6 +13,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from beidou_launcher.preflight import _launchd_plist_drift
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -21,6 +23,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 def _write_plist(path: Path, payload: dict) -> None:
     with open(path, "wb") as f:
         plistlib.dump(payload, f)
+
+
+def _template_payload() -> dict:
+    with open(ROOT / "deploy" / "com.beidou.autopilot.plist", "rb") as f:
+        return plistlib.load(f)
 
 
 def _installed_payload(*, keep_alive: object = True, throttle: int = 10, with_eval: bool = True) -> dict:
@@ -57,21 +64,65 @@ def test_no_installed_plist_is_not_drift(tmp_path: Path) -> None:
 
 def test_compliant_installed_plist_has_no_drift(tmp_path: Path) -> None:
     installed = tmp_path / "com.beidou.autopilot.plist"
-    _write_plist(
-        installed,
-        {
-            "Label": "com.beidou.autopilot",
-            "ProgramArguments": [
-                str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"),
-                "/opt/homebrew/bin/beidou",
-                "start",
-            ],
-            "KeepAlive": {"SuccessfulExit": False},
-            "ThrottleInterval": 30,
-        },
-    )
-    drift, _evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+    _write_plist(installed, _template_payload())
+    drift, evidence = _launchd_plist_drift(ROOT, installed_path=installed)
     assert drift == []
+    assert evidence["payload_match"] is True
+    assert evidence["template_sha256"] == evidence["installed_sha256"]
+
+
+def test_drift_detects_dictionary_keepalive_restart_semantics(tmp_path: Path) -> None:
+    installed = tmp_path / "com.beidou.autopilot.plist"
+    payload = _template_payload()
+    payload["KeepAlive"] = {"SuccessfulExit": False}
+    _write_plist(installed, payload)
+
+    drift, evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+
+    assert any("KeepAlive" in item and "automatic restart" in item for item in drift)
+    assert evidence["payload_match"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message_fragment"),
+    [
+        ("RunAtLoad", True, "RunAtLoad"),
+        ("ProgramArguments", ["/opt/homebrew/bin/beidou", "start", "--mode", "testnet"], "ProgramArguments"),
+        ("EnvironmentVariables", {"BEIDOU_ENV": "testnet", "PYTHONUNBUFFERED": "1"}, "EnvironmentVariables"),
+        ("WorkingDirectory", "/private/tmp/beidou", "WorkingDirectory"),
+        ("StandardOutPath", "/private/tmp/beidou.stdout.log", "StandardOutPath"),
+        ("StandardErrorPath", "/private/tmp/beidou.stderr.log", "StandardErrorPath"),
+        ("ExitTimeOut", 5, "ExitTimeOut"),
+    ],
+)
+def test_drift_detects_each_governed_field_change(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message_fragment: str,
+) -> None:
+    installed = tmp_path / "com.beidou.autopilot.plist"
+    payload = _template_payload()
+    payload[field] = value
+    _write_plist(installed, payload)
+
+    drift, _evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+
+    assert any(message_fragment in item for item in drift)
+
+
+def test_drift_detects_unexpected_top_level_keys_without_exposing_values(tmp_path: Path) -> None:
+    installed = tmp_path / "com.beidou.autopilot.plist"
+    payload = _template_payload()
+    payload["UnexpectedSecretProvider"] = "do-not-include-this-value"
+    _write_plist(installed, payload)
+
+    drift, evidence = _launchd_plist_drift(ROOT, installed_path=installed)
+
+    joined = " ".join(drift)
+    assert "UnexpectedSecretProvider" in joined
+    assert "do-not-include-this-value" not in joined
+    assert evidence["unexpected_keys"] == ["UnexpectedSecretProvider"]
 
 
 def _run_wrapper_with_exit(code: int) -> int:
@@ -151,3 +202,15 @@ def test_template_plist_uses_governed_restart_semantics() -> None:
     assert "eval" not in " ".join(str(a) for a in args), "模板不得 shell eval"
     wrapper = ROOT / "deploy" / "beidou_launchd_wrapper.sh"
     assert wrapper.is_file() and wrapper.stat().st_mode & 0o111, "wrapper 缺失或不可执行(实装使用)"
+
+
+def test_legacy_watchdog_template_has_no_automatic_schedule_and_requires_authorization() -> None:
+    with open(ROOT / "deploy" / "com.beidou.watchdog.plist", "rb") as f:
+        template = plistlib.load(f)
+    assert template.get("RunAtLoad") is False
+    assert "StartInterval" not in template
+
+    source = (ROOT / "deploy" / "beidou_watchdog.sh").read_text(encoding="utf-8")
+    gate = source.index("BEIDOU_LEGACY_WATCHDOG_AUTHORIZATION")
+    assert gate < source.index('mkdir -p "$STATE_DIR"')
+    assert gate < source.rindex("launchctl kickstart")

@@ -75,3 +75,32 @@ removal requires a separate operator decision after account reconciliation.
 Testnet VERIFIED is an execution-fact decision only. It is not alpha
 profitability, E0-E6 Economic Truth, production readiness, or live-money
 authorization.
+
+## 6. Bounded execution-probe soak (separate authorization required)
+
+Inspect the finite entrypoint locally without network access:
+
+```bash
+python -m apps.testnet_soak --help
+pytest tests/unit/test_testnet_soak.py \
+  tests/architecture/test_testnet_soak_boundaries.py -q
+```
+
+After local gates pass, stop. Do not clear the durable kill switch or invoke
+the following shape until a separate real-campaign authorization identifies
+the exact working tree and confirms a fresh signed flat-account preflight:
+
+```bash
+python -m apps.testnet_soak --confirm-testnet \
+  --episodes 30 --max-duration-seconds 3600 \
+  --cycle-interval-seconds 120 --target-notional 10 \
+  --absolute-notional-ceiling 25 --max-leverage 3 \
+  --symbol BTCUSDT
+```
+
+The process is foreground-only. It performs no automatic restart and no sleep
+after episode 30. Every episode must open/fill, reduce-only close, and pass a
+fresh signed flat/no-orders/unresolved-zero reconciliation. Any UNKNOWN or
+other non-CLOSED fact stops the campaign. The final campaign manifest must
+retain `execution_mode=EXECUTION_PROBE`, `alpha_evidence=false`, and
+`economic_truth_e0_e6=NOT_EVALUATED`.

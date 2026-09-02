@@ -51,7 +51,14 @@ def test_g5_producer_launchd_template_is_explicitly_held() -> None:
     path = ROOT / "deploy" / "com.beidou.g5-producer.plist"
     payload = plistlib.loads(path.read_bytes())
     assert payload["Label"] == "com.beidou.g5-producer"
-    assert payload["ProgramArguments"][2] == "g5-producer"
+    arguments = payload["ProgramArguments"]
+    assert arguments[:4] == [
+        str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"),
+        str(ROOT / ".venv" / "bin" / "python"),
+        "-m",
+        "beidou_launcher",
+    ]
+    assert arguments[4] == "g5-producer"
     assert payload["EnvironmentVariables"]["BEIDOU_ENV"] == "testnet"
     assert payload["EnvironmentVariables"]["BEIDOU_G5_PRODUCER"] == "1"
     assert payload["EnvironmentVariables"]["BEIDOU_TERMINAL_WRITE_HOLD"] == "hard"

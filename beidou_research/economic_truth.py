@@ -15,9 +15,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, cast
+
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_ECONOMIC_MARKET_DATA_SOURCES = frozenset({"OFFICIAL_PUBLIC_ARCHIVE", "EXCHANGE_PUBLIC_API"})
 
 
 class TruthGate(str, Enum):
@@ -124,7 +128,13 @@ def _finite_number(section: Mapping[str, Any], name: str) -> float | None:
 
 def _evaluate_e0(evidence: Mapping[str, Any] | None) -> GateResult:
     section = evidence.get("data") if isinstance(evidence, Mapping) else None
-    required = ("pit_manifest_hash", "closed_bar_manifest_hash", "lineage_hash", "lookahead_audit")
+    required = (
+        "pit_manifest_hash",
+        "closed_bar_manifest_hash",
+        "lineage_hash",
+        "lookahead_audit",
+        "market_data_assessment",
+    )
     missing = _require_fields(section, required)
     if missing:
         return GateResult(
@@ -134,6 +144,27 @@ def _evaluate_e0(evidence: Mapping[str, Any] | None) -> GateResult:
             _gate_evidence_hash(section),
         )
     section = cast(Mapping[str, Any], section)  # missing-evidence branch returned above
+    market_data = section["market_data_assessment"]
+    if not isinstance(market_data, Mapping):
+        return GateResult(
+            TruthGate.E0,
+            GateStatus.FAIL,
+            ("MARKET_DATA_ASSESSMENT_MALFORMED",),
+            _gate_evidence_hash(section),
+        )
+    market_data_reasons = market_data.get("reasons")
+    market_data_trusted = (
+        market_data.get("status") == "PASS"
+        and _HEX64.fullmatch(str(market_data.get("manifest_hash", ""))) is not None
+        and market_data.get("schema_version") == "2.0"
+        and market_data.get("source_class") in _ECONOMIC_MARKET_DATA_SOURCES
+        and market_data.get("environment") == "PUBLIC_READ_ONLY"
+        and market_data.get("intended_use") == "ECONOMIC_RESEARCH"
+        and isinstance(market_data_reasons, (list, tuple))
+        and len(market_data_reasons) == 0
+    )
+    if not market_data_trusted:
+        return GateResult(TruthGate.E0, GateStatus.FAIL, ("MARKET_DATA_NOT_TRUSTED",), _gate_evidence_hash(section))
     audit = section["lookahead_audit"]
     if not isinstance(audit, Mapping):
         return GateResult(TruthGate.E0, GateStatus.FAIL, ("MALFORMED_LOOKAHEAD_AUDIT",), _gate_evidence_hash(section))

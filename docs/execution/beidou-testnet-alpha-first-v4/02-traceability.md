@@ -17,3 +17,14 @@
 All AC-TN requirement-level decisions are recorded in
 `12-acceptance-report.md`. Historical Testnet facts are not promoted to a
 new bounded-campaign claim.
+
+## Bounded execution-probe soak extension
+
+| Requirement group | Planned implementation | Planned local evidence | Current status |
+|---|---|---|---|
+| AC-SOAK-001, 010, 011 | dedicated soak app; verifier namespace; explicit probe kernel/metadata | unit, integration and architecture tests | PASS locally |
+| AC-SOAK-002..007 | validated immutable bounds and one-symbol runtime composition | configuration/CLI tests | PASS locally |
+| AC-SOAK-008, 009, 013 | close/reconcile gate; immediate stop; finally-engaged kill switch | fake-adapter and fake-clock tests | PASS locally |
+| AC-SOAK-012 | explicit confirmation before runtime/network construction | CLI side-effect tests | PASS locally |
+| AC-SOAK-014 | campaign manifest separate from verifier run manifests | manifest tests and local acceptance artifact | PASS locally |
+| AC-SOAK-015 | no daemon/Mainnet/GitHub/real-Testnet activity | architecture scan and implementation log | PASS locally |

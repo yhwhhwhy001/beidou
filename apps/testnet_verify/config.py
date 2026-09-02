@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ class VerifierConfig:
     account_id: str = DEFAULT_TESTNET_ACCOUNT_ID
     max_notional: float = 25.0
     max_leverage: float = 3.0
+    max_account_exposure: float | None = None
     max_instruments: int = 5
     interval: str = "1m"
     kline_limit: int = 1500
@@ -29,6 +31,9 @@ class VerifierConfig:
     confirm_testnet: bool = False
     once: bool = False
     close_after_verify: bool = False
+    allowed_symbols: tuple[str, ...] = ()
+    task_id: str = "testnet-verification"
+    entrypoint: str = "apps.testnet_verify"
     trace_path: Path = Path(".beidou/testnet_verification/decision-trace.jsonl")
     pool_state_path: Path = Path(".beidou/testnet_verification/pool-state.json")
     kill_switch_path: Path = Path(".beidou/testnet_verification/KILL_SWITCH")
@@ -92,8 +97,21 @@ class VerifierConfig:
             or self.max_leverage <= 0
         ):
             raise ValueError("max_notional and max_leverage must be positive")
+        if self.max_account_exposure is not None and (
+            not isinstance(self.max_account_exposure, (int, float))
+            or isinstance(self.max_account_exposure, bool)
+            or not math.isfinite(float(self.max_account_exposure))
+            or self.max_account_exposure < self.max_notional
+        ):
+            raise ValueError("max_account_exposure must be finite and >= max_notional")
         if self.max_instruments <= 0 or self.max_instruments > 50:
             raise ValueError("max_instruments must be within 1..50")
+        if len(self.allowed_symbols) > self.max_instruments:
+            raise ValueError("allowed_symbols cannot exceed max_instruments")
+        if any(not re.fullmatch(r"[A-Z0-9]{2,24}", symbol) for symbol in self.allowed_symbols):
+            raise ValueError("allowed_symbols must contain canonical uppercase symbols")
+        if len(set(self.allowed_symbols)) != len(self.allowed_symbols):
+            raise ValueError("allowed_symbols must be unique")
         if self.kline_limit < 10 or self.kline_limit > 1500:
             raise ValueError("kline_limit must be within 10..1500")
         if self.interval not in {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}:
@@ -107,6 +125,8 @@ class VerifierConfig:
             raise ValueError("order_poll_interval_seconds must be within 0..30")
         if not str(self.account_id).strip() or str(self.account_id).upper() in {"UNKNOWN", "DEFAULT"}:
             raise ValueError("a non-default account_id is required")
+        if not self.task_id.strip() or not self.entrypoint.strip():
+            raise ValueError("task_id and entrypoint are required")
         if self.confirm_testnet and (
             not self.api_key or not self.api_secret or self.account_id == DEFAULT_TESTNET_ACCOUNT_ID
         ):
@@ -122,6 +142,7 @@ class VerifierConfig:
             "account_id": self.account_id,
             "max_notional": self.max_notional,
             "max_leverage": self.max_leverage,
+            "max_account_exposure": self.max_account_exposure,
             "max_instruments": self.max_instruments,
             "interval": self.interval,
             "kline_limit": self.kline_limit,
@@ -130,6 +151,9 @@ class VerifierConfig:
             "confirm_testnet": self.confirm_testnet,
             "once": self.once,
             "close_after_verify": self.close_after_verify,
+            "allowed_symbols": list(self.allowed_symbols),
+            "task_id": self.task_id,
+            "entrypoint": self.entrypoint,
             "trace_path": str(self.trace_path),
             "pool_state_path": str(self.pool_state_path),
             "kill_switch_path": str(self.kill_switch_path),

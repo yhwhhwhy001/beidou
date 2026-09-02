@@ -19,6 +19,15 @@ def _full_pass_evidence() -> dict:
             "closed_bar_manifest_hash": "closed-bar-hash",
             "lineage_hash": "lineage-hash",
             "lookahead_audit": {"passed": True, "violations": 0},
+            "market_data_assessment": {
+                "status": "PASS",
+                "manifest_hash": "a" * 64,
+                "schema_version": "2.0",
+                "source_class": "OFFICIAL_PUBLIC_ARCHIVE",
+                "environment": "PUBLIC_READ_ONLY",
+                "intended_use": "ECONOMIC_RESEARCH",
+                "reasons": [],
+            },
         },
         "factor_sanity": {
             "non_constant": True,
@@ -91,6 +100,24 @@ def test_lookahead_violation_fails_e0_and_blocks_later_gates() -> None:
     assert "PREREQUISITE_DATA_TRUSTED_FAIL" in assessment.results[1].reasons[0]
     for gate in (TruthGate.E2, TruthGate.E3, TruthGate.E4, TruthGate.E5, TruthGate.E6):
         assert statuses[gate] is GateStatus.NOT_EVALUATED
+
+
+def test_demo_market_data_assessment_fails_e0() -> None:
+    evidence = _full_pass_evidence()
+    evidence["data"]["market_data_assessment"] = {
+        "status": "FAIL",
+        "manifest_hash": "b" * 64,
+        "schema_version": "2.0",
+        "source_class": "EXCHANGE_DEMO_API",
+        "environment": "DEMO",
+        "intended_use": "EXECUTION_ONLY",
+        "reasons": ["SOURCE_NOT_RESEARCH_ELIGIBLE:EXCHANGE_DEMO_API"],
+    }
+
+    assessment = assess_economic_truth(evidence)
+
+    assert _statuses(assessment)[TruthGate.E0] is GateStatus.FAIL
+    assert "MARKET_DATA_NOT_TRUSTED" in assessment.results[0].reasons
 
 
 def test_after_cost_negative_fails_e4() -> None:

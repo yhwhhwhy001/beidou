@@ -19,6 +19,18 @@ class PromotableExperimentDecision:
     promotable: bool
     synthetic_economic_evidence: bool = False
 
+    @property
+    def governance_version(self) -> int:
+        return 1
+
+    @property
+    def promotion_scope(self) -> str:
+        return "LEGACY_RESEARCH_ONLY"
+
+    @property
+    def eligible_for_v2_promotion(self) -> bool:
+        return False
+
 
 def validate_promotable_experiment(
     *,
