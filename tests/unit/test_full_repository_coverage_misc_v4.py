@@ -747,10 +747,10 @@ def test_oos_remaining_storage_and_chain_edges(tmp_path: Path, monkeypatch: pyte
     race_store.seal_path.write_text("occupied", encoding="utf-8")
     original_exists = Path.exists
 
-    def hide_seal(path: Path) -> bool:
+    def hide_seal(path: Path, *, follow_symlinks: bool = True) -> bool:
         if path == race_store.seal_path:
             return False
-        return original_exists(path)
+        return original_exists(path, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(Path, "exists", hide_seal)
     with pytest.raises(oos.OOSSealNotVerifiable, match="IMMUTABLE_OOS_SEAL_ALREADY_EXISTS"):

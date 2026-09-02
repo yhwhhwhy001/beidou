@@ -155,10 +155,15 @@ def test_state_history_rotation_and_rotation_failure_are_observable(
     writer.history_path.write_text("old\n" * 600, encoding="utf-8")
     original_stat = Path.stat
 
-    def large_stat(path: Path):
-        if path == writer.history_path:
-            return SimpleNamespace(st_size=10 * 1024 * 1024 + 1)
-        return original_stat(path)
+    def large_stat(path: Path, *, follow_symlinks: bool = True):
+        real = original_stat(path, follow_symlinks=follow_symlinks)
+        if path != writer.history_path:
+            return real
+        # Override st_size only: Path.exists()/is_file() route through this
+        # same patched stat on some interpreters and need the other fields.
+        fields = {name: getattr(real, name) for name in dir(real) if name.startswith("st_")}
+        fields["st_size"] = 10 * 1024 * 1024 + 1
+        return SimpleNamespace(**fields)
 
     monkeypatch.setattr(Path, "stat", large_stat)
     writer.write(_report())
@@ -175,13 +180,16 @@ def test_state_history_rotation_and_rotation_failure_are_observable(
     def fail_stat():
         raise OSError("stat unavailable")
 
-    def conditional_stat(path: Path):
+    def conditional_stat(path: Path, *, follow_symlinks: bool = True):
         if path == broken.history_path:
             return fail_stat()
-        return original_stat(path)
+        return original_stat(path, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(Path, "stat", conditional_stat)
     broken.write(_report())
+    # Drop the patch before asserting: Path.exists() itself goes through
+    # Path.stat, so the surviving-file check has to use the real one.
+    monkeypatch.undo()
     assert broken.history_path.exists()
 
 

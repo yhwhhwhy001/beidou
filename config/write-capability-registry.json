@@ -868,7 +868,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "124395698b76a42c0300d3165d12d4abb2597e53a29901fd287153b70fe1486f",
+ "governance_digest": "901de113c17b18624d0680719cf5c561ca05ed33294901a1dce3ef7be25a7233",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -1086,7 +1086,7 @@
   "beidou_launcher/state.py": "5c595d36dd9eccfd99d7171f0b3a51ad52bd80654515f24cdebfa0b765449153",
   "beidou_launcher/supervisor.py": "c16de35b3c77be117d25d68337a8aa83782324ac16ee9e0816c5b91b6350b5b6",
   "beidou_launcher/testnet_exemptions.py": "357bc8ceb14c4605cba89e9ea08b36b1f7eb09c183e231249e61fa21cadef331",
-  "beidou_launcher/write_registry.py": "ee3c29f87883039f3d11f4300457da0d497f18f79130e6af16bfcb994d205df0",
+  "beidou_launcher/write_registry.py": "167b50757be8bec60dee3a73c74593d2e9ee1ebe40d4b7212cdd34b494f044b7",
   "beidou_lifecycle/__init__.py": "ffbcaaf02e7010bcef8cc1b91ef7d58684d13c8486cc30486c98c09b73fc71c8",
   "beidou_lifecycle/capability.py": "4e698a014a2e91266c6549ada56136899b0b5da613281386ff1123d17da0a542",
   "beidou_lifecycle/lifecycle.py": "6bc28cd0888804ad93821c9baeb5417178d091d172b481e24ebb94686c3e38e2",

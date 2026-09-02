@@ -464,7 +464,14 @@ def discover_governed_source_digests(root: Path) -> dict[str, str]:
     runtime_source_suffixes = {".cron", ".plist", ".py", ".sh", ".sql", ".toml", ".yaml", ".yml"}
     digests: dict[str, str] = {}
     for path in root.rglob("*"):
-        if not path.is_file() or _is_governed_source_skipped(path, root):
+        try:
+            if not path.is_file() or _is_governed_source_skipped(path, root):
+                continue
+        except OSError:
+            # Path.is_file() reaches the filesystem, and on some interpreters
+            # it propagates the error rather than swallowing it. One entry
+            # whose metadata cannot be read must not abort the whole scan;
+            # the unreadable-bytes case below is skipped the same way.
             continue
         relative = path.relative_to(root)
         relative_text = relative.as_posix()
