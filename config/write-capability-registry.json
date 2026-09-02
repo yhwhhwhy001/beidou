@@ -868,7 +868,7 @@
    "status": "HARD_HOLD"
   }
  ],
- "governance_digest": "635d856b6ec0f61e20d7174d84bfdc7a1783db2042fb501e169256d27805cb88",
+ "governance_digest": "124395698b76a42c0300d3165d12d4abb2597e53a29901fd287153b70fe1486f",
  "governed_source_digests": {
   ".github/workflows/ci.yml": "6b4d093a694a53f593b157f1daf129f04d0a8de1c56b483c33e094916c81a532",
   ".pre-commit-config.yaml": "d1620d53df4b6d7a3acfbacf77a8ddb574e4d8c2f06e9faccbb1a72bc8912159",
@@ -999,7 +999,7 @@
   "beidou_certification/g5_scenarios/protocol/stable_client_order_id.py": "8b9ce2a7a788b6ae6a22dd18730662cd9584ad5ad579cdfbaeddf49b6dd0fc67",
   "beidou_certification/g5_scenarios/restart/__init__.py": "05d868704edba365fbb414b960999fdb3849db22cfd3f0f11e64e261ff473232",
   "beidou_certification/g5_scenarios/restart/database_restart.py": "4624df3862590d62fd9abc62721758579b5200c261203d83357940a6ce121ee1",
-  "beidou_certification/g5_scenarios/restart/process_restart.py": "7fb762a82bdb9280a10a512b0f5c05879ad3c9bb841a76efa4a9bdf9abaf3325",
+  "beidou_certification/g5_scenarios/restart/process_restart.py": "9208c2491caeabcbe0021901a835e01f16e83f54000df90af6d06615d44f2237",
   "beidou_certification/g5_scenarios/restart/user_stream_reconnect.py": "41ae5e491052eb939a7df28a4831f66ec12eb4b476197ba3abc2e75a5b9de46b",
   "beidou_certification/g5_scenarios/runner.py": "7733b4596c2f3b4f6e6490d995a1fc9b7247e84c532422486d8a7ed465223c60",
   "beidou_certification/gate_verifier.py": "c60d147fa9494ab9eba5db946a6e9031f0522d6cd299552514dd97b193a12b14",
@@ -1300,7 +1300,7 @@
   "delivery.yaml": "35a720cf4bb7b024988f4c320faaaac5023ed55093d5ff239f54a3c754376a09",
   "delivery/schemas/evidence-manifest.schema.json": "2f5658e8a44e80130086cb8549a5f6cca6bc895bd93bcb62b6d3838b9409690c",
   "delivery/schemas/task-result.schema.json": "e6979fa38fdf1de71c7c47828b8a0fc48d74f2505106c196ca4d3c50863e4626",
-  "delivery/scripts/check_forbidden_patterns.py": "68dd25f57395a1d258275d83af4c4741cf28305c0c240716d8f4844b05e007eb",
+  "delivery/scripts/check_forbidden_patterns.py": "68675c84e92ec455b5f030d1e702438fb85bee8d586d3442b74498fee902f8f7",
   "delivery/scripts/collect_evidence.py": "6270f3758266e40c64e00a536037370c38ea00fc28e14d0fe749ea642e9b0e3f",
   "delivery/scripts/init_execution_branch.sh": "2e194e0999e790e049362133c6aae506e17338ae688818a34b6d24112c58589a",
   "delivery/scripts/preflight.sh": "440dd990572a22aaed8fc85ea7fab20b22b5efd1594a6256fb580a5ed56af4fc",

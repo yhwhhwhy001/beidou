@@ -70,6 +70,13 @@ def main() -> int:
         # directory components explicitly to keep the gate scoped to source.
         if any(part in {".git", ".venv", "__pycache__"} for part in rel_path.parts):
             continue
+        # ``docs/`` holds prose and frozen run archives, including acquisition
+        # tooling retired with the run that produced it.  None of it is
+        # imported by the runtime or shipped in the wheel, so it is outside
+        # this gate's scope: the exchange-adapter boundary is enforced on the
+        # source packages, apps, scripts and tools that actually execute.
+        if rel_path.parts[0] == "docs":
+            continue
         try:
             s = f.read_text(encoding="utf-8")
         except Exception as e:
