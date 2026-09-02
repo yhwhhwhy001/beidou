@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,17 +72,17 @@ def test_exchange_snapshot_probes_accept_readback_and_use_cached_fallback(tmp_pa
         return response
 
     supervisor.engine = SimpleNamespace(_api_async=api, _last_account={"totalWalletBalance": "90"})
-    supervisor._last_exchange_account_probe = -100.0
+    supervisor._last_exchange_account_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_exchange_account_snapshot())
     assert supervisor._exchange_account_snapshot["ok"] is True
     assert "account" in supervisor._exchange_account_snapshot
 
-    supervisor._last_exchange_account_probe = -100.0
+    supervisor._last_exchange_account_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_exchange_account_snapshot())
     assert supervisor._exchange_account_snapshot["source"] == "cached_fallback"
 
     supervisor.engine._last_account = None
-    supervisor._last_exchange_account_probe = -100.0
+    supervisor._last_exchange_account_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_exchange_account_snapshot())
     assert supervisor._exchange_account_snapshot["ok"] is False
     assert "RuntimeError" in supervisor._exchange_account_snapshot["error"]
@@ -104,24 +105,24 @@ def test_position_mode_and_algo_snapshots_preserve_unknown_and_record_changes(tm
         return response
 
     supervisor.engine = SimpleNamespace(_api_async=api)
-    supervisor._last_position_mode_probe = -100.0
+    supervisor._last_position_mode_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_position_mode())
     assert supervisor._position_mode_evidence is not None
     assert supervisor._position_mode_evidence.mode is AccountPositionMode.ONE_WAY
 
-    supervisor._last_position_mode_probe = -100.0
+    supervisor._last_position_mode_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_position_mode())
     assert supervisor._position_mode_evidence.mode is AccountPositionMode.HEDGE
 
-    supervisor._last_position_mode_probe = -100.0
+    supervisor._last_position_mode_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_position_mode())
     assert supervisor._position_mode_evidence.mode is AccountPositionMode.HEDGE
 
-    supervisor._last_exchange_algo_probe = -100.0
+    supervisor._last_exchange_algo_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_exchange_algo_snapshot(force=True))
     assert supervisor._exchange_algo_snapshot["ok"] is True
     assert supervisor._exchange_algo_snapshot["by_symbol"] == {"BTCUSDT": ["a1"]}
-    supervisor._last_exchange_algo_probe = -100.0
+    supervisor._last_exchange_algo_probe = time.monotonic() - 100_000.0
     asyncio.run(supervisor._refresh_exchange_algo_snapshot(force=True))
     assert supervisor._exchange_algo_snapshot["ok"] is False
 

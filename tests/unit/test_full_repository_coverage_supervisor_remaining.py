@@ -133,9 +133,9 @@ def test_snapshot_refresh_throttles_and_records_invalid_position_evidence(tmp_pa
         return {"invalid": True}
 
     supervisor.engine = SimpleNamespace(_api_async=invalid_api, _last_account=None)
-    supervisor._last_exchange_account_probe = -100.0
-    supervisor._last_position_mode_probe = -100.0
-    supervisor._last_exchange_algo_probe = -100.0
+    supervisor._last_exchange_account_probe = time.monotonic() - 100_000.0
+    supervisor._last_position_mode_probe = time.monotonic() - 100_000.0
+    supervisor._last_exchange_algo_probe = time.monotonic() - 100_000.0
     supervisor._position_mode_evidence = None
     asyncio.run(supervisor._refresh_exchange_account_snapshot())
     assert supervisor._exchange_account_snapshot["ok"] is False

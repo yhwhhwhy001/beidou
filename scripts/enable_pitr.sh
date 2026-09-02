@@ -19,6 +19,15 @@ fi
 mkdir -p "$ARCHIVE_DIR"
 chmod 700 "$ARCHIVE_DIR"
 
+# BSD sed 的原地编辑要求 -i 后跟一个独立的后缀参数(空串表示不备份),
+# GNU sed 则把后缀粘在 -i 上,拿到 '' 会当成脚本、进而把 -E 的表达式
+# 当文件名读 —— 两边形式不通用,按实现选。--version 只有 GNU 认。
+if sed --version >/dev/null 2>&1; then
+    sed_inplace() { sed -i "$@"; }
+else
+    sed_inplace() { sed -i '' "$@"; }
+fi
+
 set_conf() {
     local key="$1" value="$2"
     # M16-R2: macOS BSD sed -E 不支持 \s(实测静默 no-op 仍打印 OK)——
@@ -28,7 +37,7 @@ set_conf() {
     local escaped
     escaped=$(printf '%s' "$value" | sed 's/[&\\]/\\&/g')
     if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]*=" "$CONF"; then
-        sed -i '' -E "s|^([[:space:]]*)#?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${escaped}|" "$CONF"
+        sed_inplace -E "s|^([[:space:]]*)#?[[:space:]]*${key}[[:space:]]*=.*|${key} = ${escaped}|" "$CONF"
     else
         echo "${key} = ${value}" >> "$CONF"
     fi
