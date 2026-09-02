@@ -26,8 +26,14 @@ from beidou_research.portfolio import (
 )
 from beidou_research.validation.contracts import canonical_digest
 
+# 与 test_scientific_validation_semantics 的 BEIDOU_T07_METRIC_OWNER_POLICY
+# 对称:签名授权信封按设计存放在仓库之外,路径可用环境变量覆盖,默认仍是
+# 本机约定位置。POLICY_SHA256 会校验字节,所以覆盖只能指向同一份原件。
 POLICY_PATH = Path(
-    "/Users/maguannan/beidou-results/BD-AF-P0P3-V5-T00-acceptance/BD-AF-P3-T08-policy-draft/portfolio-owner-policy.json"
+    os.environ.get(
+        "BEIDOU_T08_PORTFOLIO_OWNER_POLICY",
+        "/Users/maguannan/beidou-results/BD-AF-P0P3-V5-T00-acceptance/BD-AF-P3-T08-policy-draft/portfolio-owner-policy.json",
+    )
 )
 POLICY_SHA256 = "fdbe1751800f6ea92daba31e489b99efa8f71c017f1a9ffb5f51e12ab2356698"
 POLICY_DIGEST = "deee8320e477b2e48ec82eeca50ac7358adc77eec62cfa3bd4b4e27055630363"
