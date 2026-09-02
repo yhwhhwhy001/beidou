@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -644,31 +646,41 @@ def test_double_worker_fencing_dry_run_not_verifiable_no_real_ops(tmp_path: Path
 
 
 def test_double_worker_fencing_fenced_pass(tmp_path: Path) -> None:
-    engine_lock_path = tmp_path / "beidou.pid"
-    engine_lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
-    scenario = DoubleWorkerFencingScenario(engine_lock_path=engine_lock_path, temp_lock_dir=tmp_path)
-    result = asyncio.run(scenario.run(_ctx(tmp_path)))
-    assert result.status == ScenarioStatus.PASS
-    evidence = result.evidence
-    assert evidence["verdict"] == "second_instance_fenced"
-    assert evidence["engine_pid"] == str(os.getpid())
-    assert evidence["probe_lock_acquired"] is True
-    assert evidence["notional_usdt"] == 0.0
-    steps = evidence["steps"]
+    # InstanceLock._pid_alive 用 `ps -p PID -o comm=` 确认这个 PID 确实属于
+    # 一个 beidou/python 进程。写 pytest 自己的 PID 只在 macOS 上碰巧成立
+    # (comm 是解释器全路径);Linux 的 comm 是 "pytest",判定会认为锁陈旧,
+    # 场景退化成 NOT_VERIFIABLE。起一个真的 python 子进程持锁,两个平台上
+    # 走的都是同一条真实存活判定。
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        engine_lock_path = tmp_path / "beidou.pid"
+        engine_lock_path.write_text(f"{holder.pid}\n", encoding="utf-8")
+        scenario = DoubleWorkerFencingScenario(engine_lock_path=engine_lock_path, temp_lock_dir=tmp_path)
+        result = asyncio.run(scenario.run(_ctx(tmp_path)))
+        assert result.status == ScenarioStatus.PASS
+        evidence = result.evidence
+        assert evidence["verdict"] == "second_instance_fenced"
+        assert evidence["engine_pid"] == str(holder.pid)
+        assert evidence["probe_lock_acquired"] is True
+        assert evidence["notional_usdt"] == 0.0
+        steps = evidence["steps"]
 
-    read = next(s for s in steps if s.get("action") == "engine_lock_read")
-    assert read["present"] is True and read["pid"] == str(os.getpid())
-    attempt = next(s for s in steps if s.get("action") == "engine_lock_acquire_attempt")
-    assert attempt["acquired"] is False and "已运行" in attempt["message"]
-    probe = next(s for s in steps if s.get("action") == "probe_lock_acquire")
-    assert probe["acquired"] is True
-    release = next(s for s in steps if s.get("action") == "probe_lock_release")
-    assert release["released"] is True
-    verdict = next(s for s in steps if s.get("action") == "verdict")
-    assert verdict["fenced"] is True and verdict["reason"] == "second_instance_fenced"
+        read = next(s for s in steps if s.get("action") == "engine_lock_read")
+        assert read["present"] is True and read["pid"] == str(holder.pid)
+        attempt = next(s for s in steps if s.get("action") == "engine_lock_acquire_attempt")
+        assert attempt["acquired"] is False and "已运行" in attempt["message"]
+        probe = next(s for s in steps if s.get("action") == "probe_lock_acquire")
+        assert probe["acquired"] is True
+        release = next(s for s in steps if s.get("action") == "probe_lock_release")
+        assert release["released"] is True
+        verdict = next(s for s in steps if s.get("action") == "verdict")
+        assert verdict["fenced"] is True and verdict["reason"] == "second_instance_fenced"
 
-    # acquire 失败不破坏引擎持有的锁文件
-    assert engine_lock_path.read_text(encoding="utf-8").strip() == str(os.getpid())
+        # acquire 失败不破坏引擎持有的锁文件
+        assert engine_lock_path.read_text(encoding="utf-8").strip() == str(holder.pid)
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
     # 临时探针锁已清理
     assert not (tmp_path / "probe.pid").exists()
 

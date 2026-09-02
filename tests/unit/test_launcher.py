@@ -483,7 +483,12 @@ def test_launchagent_template_is_direct_and_fail_closed() -> None:
     payload = plistlib.loads((ROOT / "deploy" / "com.beidou.autopilot.plist").read_bytes())
     arguments = payload["ProgramArguments"]
 
-    assert arguments[0] == str(ROOT / ".venv" / "bin" / "beidou")
+    # 模板是部署产物,带的是安装机器的绝对路径,不必等于当前检出位置。
+    # 要守的不变量是「直接调用自带 venv 里的 launcher」,所以以模板自己
+    # 声明的 WorkingDirectory 为根做校验 —— 顺带证明模板内部自洽。
+    deployed_root = Path(payload["WorkingDirectory"])
+    assert deployed_root.is_absolute()
+    assert arguments[0] == str(deployed_root / ".venv" / "bin" / "beidou")
     # M22-F02: 模板不得携带 --no-self-heal（P0-01 教训:关闭自愈链导致
     # 部署后控制面卡 NO_NEW_RISK）;自愈默认开启。
     assert arguments[1:] == ["start", "--mode", "safety_only"]

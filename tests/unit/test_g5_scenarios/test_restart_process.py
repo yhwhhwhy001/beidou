@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -396,7 +397,7 @@ def test_full_flow_process_restart_recovered(tmp_path: Path) -> None:
     sigkill_step = next(s for s in steps if s.get("action") == "sigkill")
     assert sigkill_step["pid"] == 4242
     kickstart_step = next(s for s in steps if s.get("action") == "kickstart")
-    assert kickstart_step["target"] == "gui/501/com.beidou.autopilot"
+    assert kickstart_step["target"] == f"gui/{os.getuid()}/com.beidou.autopilot"
 
     # 轮询行为真实(相对 t0 计时):20s 后新 PID+status 可达(第 5 次查询);
     # 再 40s 后 ready(第 9 次查询)。

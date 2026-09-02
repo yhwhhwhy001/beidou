@@ -52,9 +52,14 @@ def test_g5_producer_launchd_template_is_explicitly_held() -> None:
     payload = plistlib.loads(path.read_bytes())
     assert payload["Label"] == "com.beidou.g5-producer"
     arguments = payload["ProgramArguments"]
+    # 同 test_launcher: 以模板自己的 WorkingDirectory 为根,既保住
+    # 「wrapper → 自带 venv python → -m beidou_launcher」的结构断言,
+    # 又不把某一台机器的安装路径写进测试。
+    deployed_root = Path(payload["WorkingDirectory"])
+    assert deployed_root.is_absolute()
     assert arguments[:4] == [
-        str(ROOT / "deploy" / "beidou_launchd_wrapper.sh"),
-        str(ROOT / ".venv" / "bin" / "python"),
+        str(deployed_root / "deploy" / "beidou_launchd_wrapper.sh"),
+        str(deployed_root / ".venv" / "bin" / "python"),
         "-m",
         "beidou_launcher",
     ]

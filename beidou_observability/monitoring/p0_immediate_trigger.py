@@ -54,7 +54,7 @@ class P0ImmediateTriggerSystem:
     """BD-CV50: P0 即时触发系统。"""
 
     triggers: dict[str, ImmediateTrigger] = field(default_factory=dict)
-    _last_audit_cycle: float = 0.0
+    _last_audit_cycle: float | None = None  # None — 尚未审计过
     _audit_interval: float = 600.0  # 10 min — 仅低频全量审计
 
     def check_condition(self, condition_id: str, is_active: bool, message: str = "") -> TriggerStatus:
@@ -97,7 +97,11 @@ class P0ImmediateTriggerSystem:
     def should_audit(self) -> bool:
         """10-min audit cycle for full system review."""
         now = time.monotonic()
-        if now - self._last_audit_cycle >= self._audit_interval:
+        # time.monotonic() counts from host boot, so comparing it against a
+        # 0.0 default suppressed the very first audit for the first
+        # _audit_interval seconds of uptime — exactly the window after a
+        # restart. ``None`` means "never audited": that cycle fires at once.
+        if self._last_audit_cycle is None or now - self._last_audit_cycle >= self._audit_interval:
             self._last_audit_cycle = now
             return True
         return False

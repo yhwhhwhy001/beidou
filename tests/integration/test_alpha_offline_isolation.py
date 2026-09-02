@@ -17,6 +17,7 @@ def _offline_script() -> str:
     return r"""
 import builtins
 import json
+import socket
 import sys
 
 root = sys.argv[1]
@@ -24,16 +25,29 @@ sys.path.insert(0, root)
 forbidden_prefixes = (
     "beidou_launcher", "beidou_safety", "beidou_execution", "beidou_exchange", "beidou_core",
 )
-forbidden_network = ("socket", "ssl", "urllib", "httpx", "requests", "websockets")
+# socket/ssl/urllib 不能按模块名拒绝: 3.12 的 pathlib 在模块级 import
+# urllib.parse, email.utils 在模块级 import socket, pydantic 的导入链会把
+# 它们合法带进来 —— 一个连接都没开。按名字拒绝只能证明「某个名字没出现
+# 过」,还会随 Python 版本漂移。这里只拦「除联网外别无用途」的客户端库,
+# 真正的不变量交给下面的建连拦截: 证明没有出过网。
+forbidden_clients = ("httpx", "requests", "websockets", "aiohttp")
 original_import = builtins.__import__
 
 def deny(name, *args, **kwargs):
-    if name == forbidden_network or name.startswith(tuple(forbidden_network)):
+    if name.startswith(forbidden_clients):
         raise ImportError("NETWORK_IMPORT_DENIED:" + name)
-    if name == forbidden_prefixes or name.startswith(tuple(forbidden_prefixes)):
+    if name.startswith(forbidden_prefixes):
         raise ImportError("DOMAIN_IMPORT_DENIED:" + name)
     return original_import(name, *args, **kwargs)
 
+egress_attempts = []
+
+def block_egress(*args, **kwargs):
+    egress_attempts.append("NETWORK_EGRESS_ATTEMPTED")
+    raise AssertionError("NETWORK_EGRESS_ATTEMPTED")
+
+socket.socket = block_egress
+socket.create_connection = block_egress
 builtins.__import__ = deny
 from apps.alpha_app import BoundLocalData, OfflineAlphaApp
 from beidou_shared.contracts.experiment import DatasetRef
@@ -50,13 +64,14 @@ data = BoundLocalData(
 result = OfflineAlphaApp().evaluate(data)
 loaded_forbidden = sorted(
     name for name in sys.modules
-    if name.startswith(forbidden_prefixes) or name.startswith(forbidden_network)
+    if name.startswith(forbidden_prefixes) or name.startswith(forbidden_clients)
 )
 print(json.dumps({
     "row_count": result.row_count,
     "forecast_hash": result.target.forecast_hash,
     "target_weight": result.target.target_weight,
     "loaded_forbidden": loaded_forbidden,
+    "network_egress_attempts": egress_attempts,
 }, sort_keys=True))
 """
 
@@ -96,6 +111,7 @@ def test_alpha_composition_processes_bound_local_data_offline() -> None:
     assert transcript["row_count"] == 60
     assert isinstance(transcript["forecast_hash"], str) and transcript["forecast_hash"]
     assert transcript["loaded_forbidden"] == []
+    assert transcript["network_egress_attempts"] == []
 
 
 def test_alpha_composition_is_deterministic_for_same_bound_fixture() -> None:

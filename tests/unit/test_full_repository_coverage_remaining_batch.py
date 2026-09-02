@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -743,7 +744,7 @@ def test_process_restart_helpers_and_unreachable_poll_boundaries(monkeypatch, tm
     ran: list[list[str]] = []
     monkeypatch.setattr(process_module.subprocess, "run", lambda cmd, **_kwargs: ran.append(cmd))
     ProcessRestartScenario._kickstart_os()
-    assert ran and ran[0][-1] == "gui/501/com.beidou.autopilot"
+    assert ran and ran[0][-1] == f"gui/{os.getuid()}/com.beidou.autopilot"
 
     ctx = ScenarioContext(
         client=None,

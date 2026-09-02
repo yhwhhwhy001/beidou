@@ -32,7 +32,8 @@ if [ "${BEIDOU_LEGACY_WATCHDOG_AUTHORIZATION:-}" != "EXPLICIT_LOCAL_APPROVAL" ];
   exit 0
 fi
 
-SERVICE="gui/501/com.beidou.autopilot"
+# launchd 的 gui/<uid> 域按用户区分,uid 取当前用户而非写死。
+SERVICE="gui/$(id -u)/com.beidou.autopilot"
 # 仓库根目录: 本脚本位于 <repo>/deploy/ 下, 上跳一级即仓库根。
 # 允许 BEIDOU_REPO 覆盖 (供测试使用)。解析结果必须通过标志文件校验 ——
 # 脚本若被复制到别处运行, 相对定位会指向错误目录, 导致 git 检查恒失败、

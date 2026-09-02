@@ -45,6 +45,7 @@ from beidou_certification.g5_scenarios.engine.ack_loss import PG_DSN
 from beidou_certification.g5_scenarios.runner import SCENARIO_REGISTRY
 from beidou_launcher.g5_producer import (
     PRODUCER_ENVIRONMENT_MARKER,
+    launchd_target,
     producer_launchd_target,
     producer_process_pattern,
     producer_status_verdict,
@@ -58,8 +59,17 @@ _BASELINE_RECORD_ID = "default:BINANCE"
 _BASELINE_READ_SQL = "SELECT payload::text FROM v3_runtime_records WHERE record_type=%s AND record_id=%s"
 _UNKNOWN_OUTBOX_SQL = "SELECT message_id FROM v3_transactional_outbox WHERE status='UNKNOWN'"
 
-# launchd autopilot 运维约定(与 deploy/com.beidou.autopilot.plist 一致)
-_KICKSTART_TARGET = "gui/501/com.beidou.autopilot"
+# launchd autopilot 运维约定(与 deploy/com.beidou.autopilot.plist 一致)。
+# launchd 的 gui/<uid> 域是按用户的,uid 必须在调用时取,不能写死 ——
+# 写死会让这条运维路径只在某一台机器的某一个账号下成立。
+_AUTOPILOT_LABEL = "com.beidou.autopilot"
+
+
+def _kickstart_target() -> str:
+    """Return the per-user launchd target of the autopilot service."""
+
+    return launchd_target(_AUTOPILOT_LABEL)
+
 
 # /status 轮询约定(引擎 health server 见 beidou_core/health.py;9090 见
 # beidou_launcher/manifest.py HEALTH_PORT)
@@ -285,7 +295,7 @@ class ProcessRestartScenario(ScenarioBase):
         ``kickstart`` 语义。
         """
         producer_mode = os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1"
-        target = producer_launchd_target() if producer_mode else _KICKSTART_TARGET
+        target = producer_launchd_target() if producer_mode else _kickstart_target()
         command = ["/bin/launchctl", "kickstart"]
         if producer_mode:
             command.append("-k")
@@ -469,7 +479,7 @@ class ProcessRestartScenario(ScenarioBase):
             self._sigkill(old_pid)
             steps.append({"action": "sigkill", "pid": old_pid})
             target = (
-                producer_launchd_target() if os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1" else _KICKSTART_TARGET
+                producer_launchd_target() if os.environ.get(PRODUCER_ENVIRONMENT_MARKER) == "1" else _kickstart_target()
             )
             logger.info("process_restart: launchctl kickstart %s", target)
             self._kickstart()

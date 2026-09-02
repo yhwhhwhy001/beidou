@@ -107,7 +107,7 @@ class TestEnablePitrScript:
         pgdata.mkdir()
         conf = pgdata / "postgresql.conf"
         conf.write_text("#wal_level = replica\n#archive_mode = off\n#archive_timeout = 0\n#max_wal_size = 1GB\n")
-        script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
+        script = Path(__file__).resolve().parents[2] / "scripts" / "enable_pitr.sh"
         env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
         # 仓库内受控 PITR 脚本（非不可信输入）；绝对路径规避 S607
         proc = subprocess.run(  # noqa: S603
@@ -138,7 +138,7 @@ class TestEnablePitrScript:
         # 只读目录无法写 —— sed -i 失败但 grep 校验必须兜底非零退出
         conf.write_text("#archive_mode = off\n")
         conf.chmod(0o444)
-        script = Path("/Users/maguannan/beidou/scripts/enable_pitr.sh")
+        script = Path(__file__).resolve().parents[2] / "scripts" / "enable_pitr.sh"
         env = {"BEIDOU_PGDATA": str(pgdata), "PATH": "/usr/bin:/bin:/opt/homebrew/bin"}
         # 仓库内受控 PITR 脚本（非不可信输入）；绝对路径规避 S607
         proc = subprocess.run(  # noqa: S603
