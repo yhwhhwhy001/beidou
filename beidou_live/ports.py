@@ -95,6 +95,21 @@ class TargetSet(Protocol):
 
 
 class SignalModel(Protocol):
-    """Turns closed bars plus funding into target weights with per-strategy attribution."""
+    """Turns closed bars plus funding into target weights with per-strategy attribution.
 
-    def targets(self, bars: Mapping[str, pd.DataFrame], funding: Mapping[str, float]) -> TargetSet: ...
+    ``previous`` carries the last cycle's per-strategy targets so NO_ACTION can
+    hold a position across cycles (D-005) independently of the request window.
+    """
+
+    @property
+    def warmup_bars(self) -> int: ...
+
+    @property
+    def min_history_bars(self) -> int: ...
+
+    def targets(
+        self,
+        bars: Mapping[str, pd.DataFrame],
+        funding: Mapping[str, float],
+        previous: Mapping[str, Mapping[str, float]] | None = None,
+    ) -> TargetSet: ...

@@ -1,9 +1,10 @@
 """The bar-driven live loop.
 
 startup: rules -> one-way mode check -> cancel stale orders -> leverage -> snapshot
-cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> model targets -> venue snapshot
-         -> drawdown throttle -> exit overlay -> guards -> plan (participation cap) -> margin scaling
-         -> execute -> attribute income -> persist state/heartbeat
+cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> venue snapshot
+         -> income since last cycle (attribution; external cash flows re-baseline) -> probe stop rules
+         -> model targets (seeded with last cycle's) -> drawdown throttle -> exit overlay -> guards
+         -> plan (participation cap) -> margin scaling -> execute -> persist state/heartbeat
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.panel import interval_seconds
 from beidou_live.alerts import WebhookAlerts
-from beidou_live.attribution import attribute
+from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardParams, evaluate_guards
@@ -34,6 +35,10 @@ from beidou_live.scheduler import last_closed_bar_open_ms, wait_for_bar_close
 from beidou_live.state import LiveState, StateStore, utc_now_iso
 
 logger = logging.getLogger(__name__)
+
+# The public kline endpoint serves at most this many bars per request.  A model that needs more must fail loudly at
+# startup instead of trading on a silently truncated window (E-042: 817 bars for a 720-bar horizon).
+MAX_HISTORY_BARS = 1500
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,12 @@ class LiveEngine:
         return list(dict.fromkeys([*self.universe, *self.state.leaving]))
 
     async def startup(self) -> Snapshot:
+        if self.history_bars > MAX_HISTORY_BARS:
+            raise RuntimeError(
+                f"the model needs {self.history_bars} closed bars per cycle (min_history "
+                f"{getattr(self.model, 'min_history_bars', 0)} + warmup {getattr(self.model, 'warmup_bars', 0)}) "
+                f"but the market data port serves at most {MAX_HISTORY_BARS}"
+            )
         self.rules = await self.venue.rules()
         tradable = [symbol for symbol in self.universe if symbol in self.rules and self.rules[symbol].tradable]
         dropped = sorted(set(self.universe) - set(tradable))
@@ -134,6 +145,7 @@ class LiveEngine:
                 "universe": self.universe,
                 "leaving": list(self.state.leaving),
                 "leverage": dict(self.state.leverage_set),
+                "history_bars": self.history_bars,
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -189,13 +201,13 @@ class LiveEngine:
     # --- one bar ----------------------------------------------------------------
     @property
     def history_bars(self) -> int:
+        """Closed bars requested per cycle: the listing-age filter plus the model's warmup under its real params."""
         needed = int(getattr(self.model, "min_history_bars", 0)) + int(getattr(self.model, "warmup_bars", 0))
-        return min(1500, max(self.config.history_bars, needed))
+        return max(self.config.history_bars, needed)
 
     async def run_cycle(self, bar_open_ms: int) -> dict[str, Any]:
         config = self.config
         universe_update = await self._maybe_refresh_universe(bar_open_ms)
-        probes = await self._check_probes(bar_open_ms)
         managed = self.managed_symbols()
         bars = await self.market.closed_bars(managed, config.interval, self.history_bars)
         usable = {symbol: frame for symbol, frame in bars.items() if frame is not None and len(frame) >= 2}
@@ -205,11 +217,17 @@ class LiveEngine:
         mark = getattr(self.venue, "mark", None)
         if callable(mark):  # paper venue: marks follow the newest closed bar
             mark({symbol: float(frame["close"].iloc[-1]) for symbol, frame in usable.items()})
-        targets = self.model.targets(usable, funding)
-        latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         snapshot = await take_snapshot(self.venue, managed)
         self._roll_day(bar_open_ms, snapshot.equity)
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
+        flows = (
+            {"total": 0.0, "rows": 0, "by_type": {}, "rebaselined": False}
+            if config.dry_run
+            else await self._ingest_income(bar_open_ms, snapshot.equity)
+        )
+        probes = await self._check_probes(bar_open_ms)
+        targets = self.model.targets(usable, funding, previous=self.state.last_contributions)
+        latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         # exposure throttle (D-015): one scalar on the whole book, driven by venue equity vs its high-water mark
         hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
         self.state.equity_hwm = hwm
@@ -254,6 +272,7 @@ class LiveEngine:
             "universe": list(self.universe),
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
+            "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
             "exit_events": exit_events,
             "probes": probes,
@@ -303,8 +322,6 @@ class LiveEngine:
             reports.append(report)
             self.store.append_trade({"bar_open_ms": bar_open_ms, **report.to_dict()})
             record["orders"].append(report.to_dict())
-        if not config.dry_run:
-            await self._attribute(bar_open_ms)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions)
         return record
@@ -411,14 +428,46 @@ class LiveEngine:
                 out[symbol] = value
         return out
 
-    async def _attribute(self, bar_open_ms: int) -> None:
+    async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
+        """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
+
+        Trading income is attributed to the strategies that held the book at
+        the previous cycle (its bar is recorded on the row).  Deposits,
+        withdrawals and demo-account resets (E-044: a reset showed up as
+        TRANSFER rows with the positions simply gone) make equity
+        non-comparable, so they re-baseline the day-start equity and the
+        high-water mark and are flagged on the cycle record for the drift
+        check to skip.
+        """
         now = self.clock.now_ms()
         since = self.state.last_income_ms or now
         rows = await self.venue.income(since, now)
+        flows = external_flows(rows)
+        flows["rebaselined"] = False
         if rows and self.state.last_contributions:
             result = attribute(rows, self.state.last_contributions, self.config.strategy_weights)
-            self.store.append_attribution({"bar_open_ms": bar_open_ms, "since_ms": since, "until_ms": now, **result})
+            if result["by_symbol"]:
+                self.store.append_attribution(
+                    {"bar_open_ms": self.state.last_bar_ms or bar_open_ms, "since_ms": since, "until_ms": now, **result}
+                )
         self.state.last_income_ms = now
+        if flows["rows"] > 0:
+            flows["rebaselined"] = True
+            logger.warning(
+                "external cash flow %+.2f over %d row(s) %s since %s; day start and high-water mark re-based to %.2f",
+                flows["total"],
+                flows["rows"],
+                flows["by_type"],
+                datetime.fromtimestamp(since / 1000, tz=UTC).isoformat(timespec="seconds"),
+                equity,
+            )
+            self.state.day_start_equity = equity
+            self.state.equity_hwm = equity
+            await self.alerts.send(
+                f"beidou external cash flow {flows['total']:+.2f} USDT ({flows['rows']} rows {flows['by_type']}); "
+                f"equity re-based to {equity:.2f}"
+            )
+        return flows
 
     async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
         """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""
@@ -455,7 +504,12 @@ class LiveEngine:
     def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
-        self.state.last_contributions = {k: dict(v) for k, v in contributions.items()}
+        # per-strategy memory for the hold seed (D-005): symbols that left the managed set keep their last
+        # contribution, as the backtest's forward-fill does; strategies no longer in the model are dropped.
+        self.state.last_contributions = {
+            strategy: {**self.state.last_contributions.get(strategy, {}), **{s: float(v) for s, v in values.items()}}
+            for strategy, values in contributions.items()
+        }
         self.state.last_equity = float(record["equity"])
         self.state.cycles += 1
         self.store.save(self.state)
@@ -468,8 +522,10 @@ class LiveEngine:
                 "orders": len(record["orders"]),
                 "guard_reasons": record["guard_reasons"],
                 "exit_events": len(record.get("exit_events") or []),
+                "external_flows": (record.get("external_flows") or {}).get("total", 0.0),
                 "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
                 "universe_size": len(self.universe),
+                "history_bars": self.history_bars,
                 "probes": {str(p["book"]): str(p["status"]) for p in (record.get("probes") or [])},
                 "next_bar_close_ms": int(record["bar_open_ms"]) + 2 * self.config.interval_ms,
                 "dry_run": self.config.dry_run,

@@ -70,12 +70,20 @@ class ExitOverlay:
         return float(value) if pd.notna(value) else float("nan")
 
     def _reconcile(self, state: ExitState, position: Position | None, close: float, sigma: float) -> ExitState:
-        """Adopt the venue's position (direction + VWAP entry) as the reference; drop stale held state."""
+        """Adopt the venue's position as the truth for *direction*; the entry reference is fixed at first entry.
+
+        The venue's VWAP is adopted only when the direction changed or the
+        state has no entry yet (a restart into an existing position).  A
+        same-direction resize keeps the original entry and volatility unit,
+        exactly as ``apply_exits`` does in the backtest (E-047): re-anchoring
+        to the venue VWAP every cycle made the live take-profit reference
+        drift with every rebalance.
+        """
         held = 0 if position is None or position.qty == 0.0 else (1 if position.qty > 0 else -1)
         if held == 0:
             return replace(state, direction=0)
-        entry = position.entry_price if position is not None and position.entry_price > 0 else close
-        if state.direction != held or math.isnan(state.entry_price):
+        if state.direction != held or math.isnan(state.entry_price) or math.isnan(state.unit):
+            entry = position.entry_price if position is not None and position.entry_price > 0 else close
             unit = sigma if (not math.isnan(sigma) and sigma > 0) else self.params.min_unit
             return ExitState(
                 direction=held,
@@ -85,6 +93,5 @@ class ExitOverlay:
                 cooldown_until=state.cooldown_until,
                 cooldown_direction=state.cooldown_direction,
             )
-        extreme = state.extreme if not math.isnan(state.extreme) else entry
-        extreme = max(extreme, entry) if held > 0 else min(extreme, entry)
-        return replace(state, entry_price=entry, extreme=extreme)
+        extreme = state.extreme if not math.isnan(state.extreme) else state.entry_price
+        return replace(state, extreme=extreme)

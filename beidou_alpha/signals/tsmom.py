@@ -2,18 +2,27 @@
 
 score = clip( (0.40*momentum + 0.25*slope + 0.10*persistence*direction) / 0.75 , -1, 1 )
 
-momentum_h    = tanh(ret_h / max(vol, return_scale))
+momentum_h    = tanh(ret_h / max(vol, return_scale))            (momentum_mode "fixed", the validated form)
+              = tanh(ret_h / (return_scale * vol * sqrt(h)))     (momentum_mode "vol_scaled", a t-statistic form)
 slope_h       = tanh((ret_h / h) / slope_scale)
 momentum      = sum_h w_h * momentum_h / sum_h w_h   (likewise slope)
 persistence   = |mean_h sign(momentum_h)|,  direction = sign(momentum) (+1 when 0)
 
-``vol_window=None`` reproduces the legacy expanding population std exactly
-(used by the August 2026 parity test); a rolling window is the default for
-live use so old regimes do not dominate the scale forever.
+``vol`` is the std of *one-bar* simple returns (``vol_window=None`` reproduces
+the legacy expanding population std exactly, used by the August 2026 parity
+test).  Honest note (E-043): in "fixed" mode that per-bar std is always far
+below ``return_scale`` (0.5%-4% hourly vs 0.20), so ``max(vol, return_scale)``
+is simply ``return_scale``; the arithmetic is kept verbatim because it is what
+was validated, and ``vol_window`` then only sets the NaN warmup of the rolling
+std.  "vol_scaled" is the pre-registered alternative in which ``vol`` matters:
+``return_scale`` becomes the number of h-bar standard deviations that saturates
+the score.  At weekly horizons the slope term is nearly inert (mean |contribution|
+0.02 vs 0.32 for momentum); it is likewise kept for parity.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -42,6 +51,7 @@ class TsmomParams:
     crowding_window: int = 0
     crowding_cut: float = 0.7
     crowding_penalty: float = 0.5
+    momentum_mode: str = "fixed"  # fixed | vol_scaled (see module docstring)
 
     def __post_init__(self) -> None:
         if len(self.horizons) != len(self.horizon_weights) or not self.horizons:
@@ -56,6 +66,8 @@ class TsmomParams:
             raise ValueError("entry_threshold must be in (0, 1]")
         if self.crowding_window < 0 or not 0 < self.crowding_cut <= 1 or not 0 <= self.crowding_penalty <= 1:
             raise ValueError("invalid crowding parameters")
+        if self.momentum_mode not in {"fixed", "vol_scaled"}:
+            raise ValueError("momentum_mode must be 'fixed' or 'vol_scaled'")
 
     @classmethod
     def from_mapping(cls, params: Mapping[str, Any]) -> TsmomParams:
@@ -85,7 +97,11 @@ def tsmom_scores(close: pd.DataFrame, params: TsmomParams | None = None) -> pd.D
     valid = pd.DataFrame(True, index=close.index, columns=close.columns)
     for horizon, weight in zip(p.horizons, p.horizon_weights, strict=True):
         ret = returns(close, horizon)
-        momentum_h = _tanh(ret / denominator)
+        if p.momentum_mode == "vol_scaled":
+            scale = (vol * math.sqrt(horizon) * p.return_scale).clip(lower=1e-12)
+            momentum_h = _tanh(ret / scale)
+        else:
+            momentum_h = _tanh(ret / denominator)
         slope_h = _tanh((ret / horizon) / p.slope_scale)
         valid &= momentum_h.notna()
         momentum_sum = momentum_sum + momentum_h.fillna(0.0) * weight

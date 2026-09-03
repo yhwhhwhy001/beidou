@@ -262,15 +262,16 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 
 决定：**flow 空头小书不启用。** registry 规则（KILL-015：只有 PASS / WEAK_PASS 报告能启用）与本次信号级判定（FAIL，DSR p 0.81）一致；D-018 的书级 ACCEPT 记录在案，但一个本身不显著、且大部分是 tsmom 空头倾斜的小书不满足"独立"的前提。可重开条件（二选一）：(a) 实盘 tsmom 归因积累 ≥ 30 天后，把"卖出流条件下的空头侧倾斜"作为 tsmom 的一个修饰项（类似拥挤度过滤）单独预登记验证，每个配置计入 flow 账本；(b) 操作者明确接受"小书 = demo 上的有界实验"（3% 平均敞口、30 天 Sharpe < 0 即停）并在 registry 里以显式例外标注——这需要先实现 registry 的 book 机制（各书独立构建、按 fraction 求和、总书套上限；目前只有研究命令，模型与实盘未实现）。
 
-### 操作者决定：flow 空头小书作为探针书上线（D-019，2026-09-04）
+### 操作者决定：flow 空头小书作为探针书（D-019，2026-09-04；代码就绪，重启待定）
 
 操作者选择了第二条路：把 flow 空头小书作为 demo 上的**有界实验**（探针书）运行，目的只有一个——在真实的样本外积累证据。它不是被验证的策略；registry 里的 `verdict: ACCEPT` 是书级判定（D-018），信号级判定仍是 FAIL。实现与约束：
 
-- **book 机制**：registry 新增 `books:`（`flow_short: fraction 0.333333`）与策略的 `book` 字段。模型按书独立构建（各自波动率目标、不带再平衡带）、按 fraction 缩放后求和，再套主书的单币上限、gross 上限与再平衡带（`beidou_alpha/portfolio.py::combine_books`，与 `research book` 的算法同源）。只有主书时代码路径与之前逐位相同（`tests/alpha/test_books.py::test_single_main_book_path_is_unchanged`）。归因 contributions 带 book fraction，日报 `PnL by strategy` 按书拆分。
+- **book 机制**：registry 新增 `books:`（`flow_short: fraction 0.333333`）与策略的 `book` 字段。模型按书独立构建（各自波动率目标、不带再平衡带）、按 fraction 缩放后求和，再套主书的单币上限、gross 上限与再平衡带（`beidou_alpha/portfolio.py::combine_books`，与 `research book` 的算法同源）。只有主书时代码路径与之前逐位相同（`tests/alpha/test_books.py::test_single_main_book_path_is_unchanged`）。归因里书的 fraction 通过 `strategy_weights`（策略权重 × fraction）进入份额计算，contributions 保持未缩放的目标（也是下一周期 hold 的种子）；日报 `PnL by strategy` 按书拆分。
 - **显式例外**：`ACCEPT` 只在非主书且带 `probe` 块（`accepted_by`、`accepted_on`、`stop`）时被启动检查放行；启动时还核对引用的报告是 ACCEPT 的 book 报告、写的是这个 sleeve、且 fraction 与 registry 一致——KILL-015 的延伸，"例外"必须写在 registry 里而不是文档里。
 - **自动止损**（`beidou_live/probe.py`）：每个周期读 `attribution.jsonl`，sleeve 过去 30 天归因净 P&L ≤ −1% 权益即停书：状态持久化（`state.json.stopped_books`），重启后仍停；`cycles.jsonl`、心跳与日报可见；webhook 告警。阈值校准：sleeve 平均敞口约 3% 权益，30 天 P&L 标准差约 0.5% 权益，"亏了就停"会让一个 Sharpe 1 的 sleeve 在首月约 37% 概率被误停；−1% ≈ −2σ，停在"有害的证据"而不是噪声上。想用字面规则可把 `max_loss` 设为 0。
 - **复审**：`review_after_days: 90` → 自 2026-12-02 起日报的 `Probe books` 段标 REVIEW_DUE；届时按 M-009 用实盘归因决定去留，任何"调一调再看"都计入 flow 账本。
 - **上线前 dry-run**（2026-09-03 16:00Z bar，scratch 状态目录）：探针状态 OK、sleeve 当前无空头信号（tsmom 几乎全多头，`short_gate` 把顺势空头挡住）、0 笔订单。首批空头会出现在有卖出流且不处于强势趋势的币上。
+- **重启待定（操作者选择）**：第六轮会话同时发现 tsmom 的 registry 配置（`crowding_window: 0`）与其引用的证据（拥挤度 0.5 的 133239Z 报告）不一致，且时点 universe 上的 16 点网格重验 DSR p 0.40（FAIL）——tsmom 目前拿不到干净的证据指针。操作者决定先解决 tsmom 的证据问题，再在同一次重启里让探针书上线；在此之前实盘继续跑 13:37Z 加载的旧代码（tsmom 单策略）。
 
 ### 本轮结论
 
@@ -279,3 +280,44 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 - 交易所杠杆按 gross 上限与保证金上限自动推导为 5x，敞口不变；加仓单受可用保证金与 2% 参与率约束。
 - 退出层只启用止盈 6σ；止损、移动止损、回撤节流随代码交付、默认关闭，各有记录在案的否定证据。
 - flow 空头腿按 D-018 重验：书级 ACCEPT、信号级 FAIL（DSR p 0.81）、静态 universe 上为零、91% 与 tsmom 空头同向。操作者选择把它作为**探针书**上线（D-019：1/3 预算、30 天 −1% 自动止损、2026-12-02 复审）——它是为了产出样本外证据的有界实验，不是被验证的策略。下一步仍是让实盘归因积累 ≥ 14 天。
+
+## 2026-09-04 · 第六轮：alpha 模块复查——实盘与验证的两处静默偏差、账户重置、账本诚实化
+
+分析文档：`docs/analysis/2026-09-03-alpha-module-review.md`（deep-analysis L 级，Weak GO；证据 E-040 ～ E-053、KILL-027 ～ KILL-036）。
+
+### 发现（全部 E1，可复现脚本在分析文档末尾列出）
+
+1. **拥挤度修正在实盘从未生效（E-040）。** `AlphaModel.targets()` 构面板时不传资金费率历史，`MarketData` 端口只给最新一期费率，修正函数在 `funding is None` 时原样返回。用 mainnet 公共数据复现 13:00Z 周期：无 funding 路径算出的 targets 与 `state.json` 完全相等（最大差 0.0）；带 funding 时最新 bar 有 4/15 币会被缩仓。registry 引用的证据（133239Z，拥挤度 0.5）验证的是实盘从未跑过的配置。
+2. **请求窗口只有 817 根 bar（E-042）。** `warmup_bars` 按信号默认参数 5/20/50 计算（51），不是 registry 的 720（721）。后果是 D-005 的 hold 在实盘只能存活 96 根 bar。静态 14 币 2021-07 → 2026-09 回测：无界 hold Sharpe 1.477 / 净 +208% / 换手 318；实盘等效（hold ≤ 96）Sharpe 1.398 / 净 +190% / 换手 344，4.8% 的持仓币-bar 被误平；窗口 1500 时偏差恰为 0。
+3. **时点 universe 上拥挤度修正是负贡献（E-041）。** 全样本 Sharpe 1.641（开）vs 1.716（关），MDD −12.6% vs −13.5%；第四轮在静态 15 币上是 1.553 → 1.587。符号跨 universe 翻转，效应量级 ≈ 噪声。
+4. **demo 账户 14:04:56Z 被操作者手动重置（E-044）。** income 里两行 TRANSFER（+0.01、+5000 USDT），无平仓成交、无已实现盈亏，15 个仓位消失；账户为多资产保证金（USDT 5000 / USDC 5000 / BTC 0.01），空仓时权益也随 BTC 波动。循环在 15:00Z 对空账户重新建仓。
+5. **惰性参数（E-043）。** 小时收益率标准差 0.5%–4% 永远低于 `return_scale` 0.20，`vol_window` 只决定 NaN 预热；斜率项在周级 horizon 下均值 \|c\| 0.019（动量 0.317）。为了逐位复现已验证的数字，"fixed" 模式的算术原样保留，只加了预登记的 `momentum_mode: vol_scaled` 备选（默认关）。
+
+### 交付（代码，全部带测试：`tests/alpha/test_round6_hold_and_warmup.py`、`tests/live/test_round6_live_integrity.py`）
+
+- **P1** `SignalSpec.warmup_for(params)`：warmup 按 registry 参数算（周级 tsmom → 722），引擎请求 `max(history_bars, min_history + warmup)` = 1,442 根，超过 1,500 启动即拒绝（不再静默 `min(1500, …)`）。
+- **P4** hold 跨周期持久：`scores_to_targets(initial=…)` 用上一周期的 `state.last_contributions` 作种子，NO_ACTION 不再依赖请求窗口长度；`last_contributions` 按启用策略合并、离池币保留最后目标（与回测 ffill 同义）。
+- **P3** 每周期开始摄入 income：交易性收入按上一周期贡献归因；TRANSFER 类现金流重置 `day_start_equity` / `equity_hwm`，写入 `cycles.jsonl.external_flows` 与心跳，日报 drift 跳过该 bar，webhook 告警。
+- **P8** 退出层参考价固定为首次入场价，同向加减仓不再重锚到交易所 VWAP；只在方向改变或状态缺失时采用交易所入场价。
+- **P8b** 归因份额按 \|贡献\| 归一化，两策略对冲时不再爆炸（探针书的 fraction 经 `strategy_weights` 进入份额）。
+- **P7** `universe.yaml` 钉住集合改为 BTC/ETH，与时点表一致。`load_panel` 对缺少 K 线的池成员（如刚进池的 CYSUSDT）只告警不崩溃。
+- 同一会话里 registry 的 tsmom `crowding_window` 已置 0（随 D-019 提交 383ad60 一起进了历史）。
+
+### 账本与证据（如实记录）
+
+- 第二轮 16 网格补录进账本（run `tsmom-validation-20260903T175314Z`，静态 15 币、2021-07 起、min_train 8000）：DSR p 0.33，FAIL。这是账本补录，不是新候选；此前"43 个申报先验"里的 16 个从此由账本承担。
+- 并行的第七轮会话在**时点 universe** 跑了同样的 16 网格（`174552Z`）：WFO OOS 1.48，5 折全部选中 168/336/720，CPCV q05 1.09，PBO 0.001，成本 2× 1.35，但 **DSR p 0.40，FAIL**。133239Z 的 p 0.0002 来自退化的方差（账本里 5 条近乎相同的行，E[max SR] 0.17）；按网格真实离散度 E[max SR] 1.48 vs 候选 1.58。这正是第四轮"保留项 1"预言的结果。
+- 后果：tsmom 的 registry 参数（`crowding_window: 0`）与引用证据（133239Z，拥挤度 0.5）不一致，且在当前规则下任何 tsmom 重验都拿不到 PASS 的证据指针。KILL-027 的关闭路径二选一：(a) 把资金费率历史接入实盘面板、参数改回 0.5、沿用 133239Z；(b) 保留 0，等第七轮的 A/B 与阈值决定后出新证据。**操作者决定：在此问题解决前不重启实盘**；实盘继续跑 13:37Z 加载的旧代码，本轮修正与探针书在同一次重启里上线。
+- 池刷新口径：同一滞回下日刷新 11.8 vs 月刷新 7.3 次成员变更/月，钉住集合大小无影响；日口径时点表 209 个成员、69 个缺小时数据（1,876 / 35,933 成员-日）。共享的 `membership.parquet` **未重建**（第七轮在用月口径表）。
+
+### 未做 / 推迟
+
+- P5 止盈证据重跑：实盘书的构成随探针书改变，等重启决定后在届时的 registry 上重跑 `research overlay`（时点 + 静态双通过规则不变）。
+- P10（波动率估计 / 相对带）由第七轮会话承担；P12（`--min-tenure`）与 P11(ii)（`vol_scaled` 两点网格）预登记后再跑，每个配置计入 tsmom 账本；P9 被动执行等 mainnet。
+- 未启用交易所原生条件单（D-012 防火墙不变）。
+
+### 重启前必读
+
+- 重启后首个周期请求 1,442 根 bar（原 817）；心跳新增 `history_bars`、`external_flows`；`cycles.jsonl` 新增 `external_flows`（`rebaselined: true` = 该周期发生了非交易性现金流）。
+- `state.json.last_contributions` 现在是 hold 的种子：**不要手动清空**，否则等于把所有 NO_ACTION 仓位归零一次。
+- 账户再次在 UI 里重置后不需要任何操作：下一周期自动重建仓位并重置日起点 / 高水位，日报的 External cash flows 段显示金额。

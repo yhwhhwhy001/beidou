@@ -20,6 +20,9 @@ from beidou_alpha.portfolio import PortfolioParams, build_weights, combine_books
 from beidou_alpha.registry import MAIN_BOOK, Registry, StrategyEntry
 from beidou_alpha.signals import get_signal, scores_to_targets
 
+# strategy -> symbol -> the unscaled target recorded at the end of the previous live cycle (the D-005 hold seed, E-042)
+PreviousTargets = Mapping[str, Mapping[str, float]]
+
 
 @dataclass(frozen=True)
 class AlphaModel:
@@ -94,21 +97,43 @@ class AlphaModel:
 
     @property
     def warmup_bars(self) -> int:
-        signal_warmup = max(get_signal(entry.id).warmup_bars for entry in self.entries)
+        """Bars the model needs before its first decision, under the *registry* parameters.
+
+        Derived from each signal's actual params (a 720-bar horizon needs 721
+        bars), not from the signal defaults: the defaults once sized the live
+        request window at 817 bars for a weekly strategy (E-042).
+        """
+        signal_warmup = max(get_signal(entry.id).warmup_for(entry.params) for entry in self.entries)
         return max(signal_warmup, self.portfolio.covariance_halflife, self.portfolio.vol_halflife) + 1
 
     def strategy_scores(self, panel: Panel) -> dict[str, pd.DataFrame]:
         return {entry.id: get_signal(entry.id).compute(panel, entry.params) for entry in self.entries}
 
-    def strategy_targets(self, panel: Panel, membership: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    def strategy_targets(
+        self, panel: Panel, membership: pd.DataFrame | None = None, previous: PreviousTargets | None = None
+    ) -> dict[str, pd.DataFrame]:
+        """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle."""
         eligible = self.eligible(panel, membership)
         targets: dict[str, pd.DataFrame] = {}
         for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True):
-            held = scores_to_targets(scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action)
+            seed = self._seed(previous, entry)
+            held = scores_to_targets(
+                scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action, initial=seed
+            )
             if membership is not None:  # leaving the universe is an explicit exit, never a held position
                 held = held.mask(~eligible & held.notna(), 0.0)
             targets[entry.id] = held
         return targets
+
+    @staticmethod
+    def _seed(previous: PreviousTargets | None, entry: StrategyEntry) -> dict[str, float] | None:
+        """The targets ``entry`` held at the end of the previous live cycle (unscaled per-strategy targets)."""
+        if previous is None:
+            return None
+        recorded = previous.get(entry.id)
+        if not recorded:
+            return None
+        return {str(symbol): float(value) for symbol, value in recorded.items() if value is not None}
 
     def book_targets(self, per_strategy: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         """Per-book conviction: the ensemble of that book's strategies."""
@@ -147,22 +172,31 @@ class AlphaModel:
         return self.weights_from(self.strategy_targets(panel, membership), panel.close, panel.bars_per_year)
 
     def evaluate(
-        self, panel: Panel, membership: pd.DataFrame | None = None
+        self, panel: Panel, membership: pd.DataFrame | None = None, previous: PreviousTargets | None = None
     ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
-        per_strategy = self.strategy_targets(panel, membership)
+        per_strategy = self.strategy_targets(panel, membership, previous)
         combined = self.combined_targets(panel, per_strategy)
         weights = self.weights_from(per_strategy, panel.close, panel.bars_per_year)
         return weights, combined, per_strategy
 
-    def targets(self, bars: Mapping[str, pd.DataFrame], funding: Mapping[str, float]) -> TargetWeights:
-        """Live entry point: closed bars per symbol (+ latest funding, unused by tsmom) -> latest target weights.
+    def targets(
+        self,
+        bars: Mapping[str, pd.DataFrame],
+        funding: Mapping[str, float],
+        previous: PreviousTargets | None = None,
+    ) -> TargetWeights:
+        """Live entry point: closed bars per symbol -> latest target weights.
 
-        Contributions carry each strategy's target times its book fraction, so attribution shares
-        follow the capital each book actually deploys.
+        Contributions are unscaled per-strategy targets (the hold seed of the next cycle); a
+        book's fraction reaches attribution through ``LiveConfig.strategy_weights`` (D-019).
+        ``previous`` is the last cycle's contributions: a sub-threshold score keeps the held
+        target (D-005) even when the sub-threshold stretch is longer than the request window,
+        exactly as in a full-history backtest (E-042).  ``funding`` (latest rate per symbol) is
+        accepted for the port's sake; no enabled signal consumes it here, and a signal that
+        needs funding *history* must not be enabled without wiring it into the panel (KILL-027).
         """
         panel = Panel.from_frames(bars, interval=self.interval)
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
-        weights, combined, per_strategy = self.evaluate(panel)
-        scaled = {entry.id: per_strategy[entry.id] * self.fraction(entry.book) for entry in self.entries}
-        return snapshot(weights, combined, scaled)
+        weights, combined, per_strategy = self.evaluate(panel, previous=previous)
+        return snapshot(weights, combined, per_strategy)

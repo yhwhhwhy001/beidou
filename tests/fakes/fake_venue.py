@@ -197,5 +197,7 @@ class FakeVenue:
         return []
 
     async def income(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Rows are handed out once (the real endpoint is queried by a moving time cursor)."""
         self.calls.append("income")
-        return list(self.income_log)
+        rows, self.income_log = self.income_log, []
+        return rows

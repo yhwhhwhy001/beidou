@@ -46,3 +46,6 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 - 连续错误 ≥ 12 次进程退出，launchd 60s 后拉起；根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
 - `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。
 - `state.json` 的 `exit_states`（入场价/极值/冷却）、`equity_hwm`、`universe`、`leaving` 在重启后恢复；入场价以交易所为准。
+- `heartbeat.json` 的 `history_bars`（当前 1,442）与 `external_flows`；`cycles.jsonl` 的 `external_flows`（`rebaselined: true` = 该周期发生了非交易性现金流，日起点 / 高水位已重置，日报 drift 跳过该 bar）。
+- 账户在 demo UI 里被重置后不需要任何操作：下一周期自动重建仓位；`beidou report daily` 的 External cash flows 段显示金额。
+- `state.json.last_contributions` 是 NO_ACTION 的 hold 种子（D-020），不要手动删除；删除等于把所有未触发信号的仓位归零一次。
