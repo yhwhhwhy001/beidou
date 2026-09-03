@@ -1,7 +1,0 @@
-beidou_safety/risk/engine.py:502: error: Call to untyped function (unknown) in typed context  [no-untyped-call]
-beidou_safety/protection/engine.py:161: error: "ProtectionOrder" has no attribute "deactivate"  [attr-defined]
-beidou_bootstrap/dev.py:119: error: Need type annotation for "entry_ids"  [var-annotated]
-beidou_bootstrap/dev.py:120: error: Need type annotation for "filter_ids"  [var-annotated]
-beidou_bootstrap/dev.py:121: error: Need type annotation for "exit_ids"  [var-annotated]
-beidou_launcher/supervisor.py:701: error: Call to untyped function "tick" in typed context  [no-untyped-call]
-beidou_launcher/supervisor.py:1022: error: Item "None" of "Any | None" has no attribute "_control"  [union-attr]

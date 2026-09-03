@@ -1,1 +1,0 @@
-{"fixture_id":"NEG-007-DUPLICATE-JSON-KEY","kind":"duplicate_json_key","expected_error":"duplicate JSON key","payload":"{\"task_id\":\"first\",\"task_id\":\"spoofed\"}"}

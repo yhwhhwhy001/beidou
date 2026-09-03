@@ -1,0 +1,143 @@
+"""Shared value types.
+
+Only plain dataclasses, enums and exceptions live here.  Nothing in this
+module performs I/O or imports third-party packages, so every other package
+can depend on it without inheriting anything.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import Decimal
+from enum import StrEnum
+from typing import Any
+
+TERMINAL_ORDER_STATUSES: frozenset[str] = frozenset({"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"})
+
+
+class Side(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+    @property
+    def sign(self) -> int:
+        return 1 if self is Side.BUY else -1
+
+    @property
+    def opposite(self) -> Side:
+        return Side.SELL if self is Side.BUY else Side.BUY
+
+    @staticmethod
+    def for_delta(delta_qty: float) -> Side:
+        """Side that moves a position by ``delta_qty`` base units."""
+        return Side.BUY if delta_qty > 0 else Side.SELL
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentRules:
+    """Venue trading rules for one symbol (from exchangeInfo filters)."""
+
+    symbol: str
+    tick_size: Decimal
+    step_size: Decimal
+    min_qty: Decimal
+    min_notional: Decimal
+    status: str = "TRADING"
+    contract_type: str = "PERPETUAL"
+    quote_asset: str = "USDT"
+
+    @property
+    def tradable(self) -> bool:
+        return self.status == "TRADING" and self.contract_type == "PERPETUAL"
+
+
+@dataclass(frozen=True, slots=True)
+class Position:
+    """Signed position in base units; ``qty > 0`` is long."""
+
+    symbol: str
+    qty: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float = 0.0
+    leverage: int = 0
+
+    @property
+    def notional(self) -> float:
+        return self.qty * self.mark_price
+
+    @property
+    def is_flat(self) -> bool:
+        return self.qty == 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class AccountState:
+    """Account facts read from the venue in one signed query."""
+
+    wallet_balance: float
+    available_balance: float
+    equity: float
+    positions: dict[str, Position]
+    hedge_mode: bool = False
+    can_trade: bool = True
+
+    def gross_notional(self) -> float:
+        return sum(abs(position.notional) for position in self.positions.values())
+
+
+@dataclass(frozen=True, slots=True)
+class OrderRequest:
+    symbol: str
+    side: Side
+    quantity: Decimal
+    client_order_id: str
+    reduce_only: bool = False
+    order_type: str = "MARKET"
+
+    def __post_init__(self) -> None:
+        if not self.symbol:
+            raise ValueError("symbol is required")
+        if self.quantity <= 0:
+            raise ValueError("quantity must be positive")
+        if not self.client_order_id or len(self.client_order_id) > 36:
+            raise ValueError("client_order_id must be 1..36 characters")
+
+
+@dataclass(frozen=True, slots=True)
+class OrderAck:
+    symbol: str
+    client_order_id: str
+    order_id: str
+    side: Side
+    status: str
+    executed_qty: Decimal
+    avg_price: float
+    reduce_only: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in TERMINAL_ORDER_STATUSES
+
+    @property
+    def filled(self) -> bool:
+        return self.executed_qty > 0
+
+
+class VenueError(Exception):
+    """A venue call failed with a known outcome (nothing ambiguous happened)."""
+
+    def __init__(self, message: str, *, code: int | None = None, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+class OrderOutcomeUnknown(VenueError):
+    """A write was sent but its outcome is unknown (timeout after send, 5xx)."""
+
+    def __init__(self, message: str, *, client_order_id: str, symbol: str) -> None:
+        super().__init__(message, retryable=False)
+        self.client_order_id = client_order_id
+        self.symbol = symbol

@@ -1,8 +1,25 @@
-"""
-北斗共享内核 (Beidou Shared Kernel)
+"""Minimal kernel shared by every package: value types and config loading. No I/O at import time."""
 
-定义所有时钟层共用的核心类型、契约、事件封套和错误语义。
-任何跨层依赖必须通过此包中定义的版本化契约。
-"""
+from beidou_shared.types import (
+    TERMINAL_ORDER_STATUSES,
+    AccountState,
+    InstrumentRules,
+    OrderAck,
+    OrderOutcomeUnknown,
+    OrderRequest,
+    Position,
+    Side,
+    VenueError,
+)
 
-__version__ = "2.0.0"
+__all__ = [
+    "TERMINAL_ORDER_STATUSES",
+    "AccountState",
+    "InstrumentRules",
+    "OrderAck",
+    "OrderOutcomeUnknown",
+    "OrderRequest",
+    "Position",
+    "Side",
+    "VenueError",
+]

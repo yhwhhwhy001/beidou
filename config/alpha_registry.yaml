@@ -1,0 +1,18 @@
+# Strategies the live loop is allowed to run.  A strategy may only be enabled
+# when `evidence` points at a validation report produced by `beidou research validate`
+# and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
+version: 1
+ensemble:
+  method: zscore_mean          # equal-weight mean of per-strategy z-scored targets
+  turnover_penalty: 0.0
+strategies:
+  - id: tsmom
+    enabled: true
+    weight: 1.0
+    params:
+      horizons: [5, 20, 50]
+      horizon_weights: [0.2, 0.3, 0.5]
+      return_scale: 0.20
+      slope_scale: 0.01
+      entry_threshold: 0.20
+    evidence: null

@@ -1,9 +1,0 @@
-{
-  "closures_or_exclusions": [],
-  "expected_rows_per_symbol": 720,
-  "interval_seconds": 3600,
-  "kind": "CONTINUOUS_MARKET_CALENDAR",
-  "schedule": "24X7",
-  "schema_version": "1.0",
-  "timezone": "UTC"
-}

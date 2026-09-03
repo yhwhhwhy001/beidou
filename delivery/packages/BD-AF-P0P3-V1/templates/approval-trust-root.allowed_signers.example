@@ -1,4 +1,0 @@
-# Copy this template outside the repository and replace the placeholder with a human-controlled SSH public key.
-# The revised package manifest must bind the SHA-256 of the exact allowed_signers file.
-# Never place a private key in this package or repository.
-REQUIRED_HUMAN_IDENTITY ssh-ed25519 REQUIRED_PUBLIC_KEY_MATERIAL

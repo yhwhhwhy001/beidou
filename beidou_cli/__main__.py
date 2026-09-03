@@ -1,6 +1,3 @@
-"""Module entrypoint for the safe ``python -m beidou_cli`` facade."""
+from beidou_cli import main
 
-from . import main
-
-if __name__ == "__main__":
-    main()
+main()

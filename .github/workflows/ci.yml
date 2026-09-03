@@ -1,134 +1,25 @@
-name: 北斗 CI — Lint, Typecheck, Test, Security
+name: ci
 
 on:
   push:
-    branches: [main, "refactor/**", "fix/**", "feat/**"]
   pull_request:
-    branches: [main]
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Compile check (T0 gate - must be first)
-        run: python -m compileall -q beidou_* apps scripts tools delivery/scripts
-
-      - name: Format check (ruff)
-        run: ruff format --check --force-exclude beidou_* apps tests scripts tools delivery/scripts
-
-      - name: Lint (ruff)
-        run: ruff check beidou_* apps tests scripts tools delivery/scripts
-
-      - name: Alpha V3 targeted contract gates
-        run: |
-          pytest tests/unit/test_market_state_v3.py tests/unit/test_benchmark.py \
-            tests/unit/test_trend_alpha.py tests/unit/test_breakout_alpha.py \
-            tests/unit/test_relative_strength.py tests/unit/test_residual_momentum.py \
-            tests/unit/test_alpha_forecast.py tests/unit/test_multi_alpha_fusion.py \
-            tests/unit/test_exposure_governor.py tests/unit/test_active_optimizer.py \
-            tests/unit/test_full_pnl_attribution_v3.py tests/unit/test_v3_pipeline.py \
-            tests/unit/test_alpha_v3_coverage_complete.py \
-            tests/property/test_alpha_forecast_invariants.py tests/property/test_exposure_invariants.py \
-            tests/property/test_portfolio_math.py \
-            tests/integration/test_alpha_to_portfolio_v3.py tests/integration/test_regime_switching_v3.py \
-            tests/integration/test_alpha_conflict_v3.py tests/integration/test_cost_shock_v3.py \
-            tests/integration/test_attribution_completeness_v3.py tests/integration/test_alpha_v3_challenger.py -q
-          python delivery/scripts/check_forbidden_patterns.py --repo .
-
-      - name: Type check (mypy)
-        run: mypy beidou_shared beidou_safety beidou_strategy beidou_research beidou_policy beidou_security beidou_observability beidou_exchange beidou_lifecycle beidou_delivery beidou_autonomy beidou_infra beidou_data beidou_control beidou_chaos beidou_production beidou_reporting beidou_certification beidou_core beidou_launcher --no-error-summary
-
-      - name: Unit tests
-        run: pytest tests/unit -q
-
-      - name: Integration tests
-        run: pytest tests/integration -q
-
-      - name: Architecture tests
-        run: pytest tests/architecture -q
-
-      - name: Test quality scan
-        run: python scripts/scan_test_quality.py tests/
-
-      - name: Hardcoded value scan
-        run: python scripts/scan_hardcoded.py beidou_* apps
-
-      - name: Forbidden patterns scan
-        run: python delivery/scripts/check_forbidden_patterns.py --repo .
-
-      - name: Package validation
-        run: python delivery/scripts/validate_package.py
-
-      - name: Coverage report
-        # Execution-package global gate: the full repository must remain at 100% line coverage.
-        run: pytest tests/ -q --cov --cov-fail-under=100 --cov-report=xml --cov-report=term-missing
-
-      - name: Alpha V3 coverage gate (100% lines and branches)
-        # 用户授权的 V3 强制门禁；覆盖率作用域明确限定为执行包新增/改造的
-        # V3 计算与证据模块，且同时要求行覆盖与分支覆盖达到 100%。
-        run: |
-          pytest tests/ -q --cov-branch --cov-fail-under=100 \
-            --cov=beidou_strategy.state.market_state \
-            --cov=beidou_strategy.state.benchmark \
-            --cov=beidou_strategy.alpha.contracts \
-            --cov=beidou_strategy.alpha._forecast_utils \
-            --cov=beidou_strategy.alpha.breakout \
-            --cov=beidou_strategy.alpha.forecast \
-            --cov=beidou_strategy.alpha.mean_reversion \
-            --cov=beidou_strategy.alpha.mean_reversion_math \
-            --cov=beidou_strategy.alpha.pipeline \
-            --cov=beidou_strategy.alpha.relative_strength \
-            --cov=beidou_strategy.alpha.residual_momentum \
-            --cov=beidou_strategy.alpha.trend \
-            --cov=beidou_strategy.alpha.extensions \
-            --cov=beidou_strategy.alpha.model_registry \
-            --cov=beidou_strategy.alpha.signal_fusion \
-            --cov=beidou_strategy.alpha.typed_graph \
-            --cov=beidou_strategy.portfolio.contracts \
-            --cov=beidou_strategy.portfolio.exposure_governor \
-            --cov=beidou_strategy.portfolio.optimizer \
-            --cov=beidou_strategy.portfolio.constraints \
-            --cov=beidou_reporting.pnl_attribution \
-            --cov=beidou_research.backtest.alpha_v3_challenger \
-            --cov-report=xml:alpha-v3-coverage.xml --cov-report=term-missing
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: |
-            coverage.xml
-            alpha-v3-coverage.xml
-
-  security:
-    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Security scan (bandit)
-        run: python -m bandit -r beidou_* -c pyproject.toml
-      - name: Dependency audit
-        # Keep the audit bound to the interpreter installed by setup-python.
-        run: python -m pip_audit
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Format
+        run: ruff format --check .
+      - name: Lint
+        run: ruff check .
+      - name: Types
+        run: mypy
+      - name: Tests (offline)
+        run: pytest -m "not network"

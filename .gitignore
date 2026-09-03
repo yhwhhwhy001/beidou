@@ -1,79 +1,23 @@
-# Python
+# environments
+.venv/
 __pycache__/
 *.py[cod]
-*.egg-info/
-dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
 build/
-.eggs/
-*.egg
+dist/
+*.egg-info/
 
-# Virtualenv
-.venv/
-venv/
-.env
-*.env
-
-# Runtime state
-beidou_state.db
-beidou_state.db-shm
-beidou_state.db-wal
-beidou_monitor_state.json
-beidou_repair_log.jsonl
+# runtime state, data and reports (never commit)
 .beidou/
-evidence/bootstrap/*.json
-evidence/bootstrap/*.jsonl
-evidence/BD-00/startup_audit.json
-evidence/BD-01/control_state.json
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
+reports/
+*.log
+.env
+.env.*
 
 # OS
 .DS_Store
-Thumbs.db
-
-# Sensitive config (API keys)
-config/env.testnet.yaml
-config/env.*.yaml
-!config/env.template.yaml
-
-# Tools artifacts
-*.log
-*.pid
-
-# Coverage / pytest
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-coverage.xml
-
-# Runtime data
-*.db
-*.db-shm
-*.db-wal
-evidence/BD-01/rejections.jsonl
-evidence/factors/
-evidence/mining-runs/
-artifacts/evidence/
-config/policies/
-config/g5-testnet-plan.yaml
-evidence/BD-01/*.jsonl
-
-# Generated PnL reports
-artifacts/factor_pnl_report/
-
-# Worktree / SDD scratch (not part of the repo)
-.worktrees/
-.superpowers/
-
-# Runtime-written LOCKED snapshots (P3) must not dirty the git tree
-# -- preflight git_worktree P0 would then refuse engine start
-evidence/locked-*.json
-evidence/beidou_alerts.jsonl
-evidence/beidou_alerts.jsonl.delivery.jsonl

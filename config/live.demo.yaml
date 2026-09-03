@@ -1,0 +1,28 @@
+profile: demo
+venue:
+  rest_url: https://demo-fapi.binance.com          # allow-listed demo host; mainnet is refused by beidou_exchange.guard
+  api_key_env: BEIDOU_DEMO_API_KEY
+  api_secret_env: BEIDOU_DEMO_API_SECRET
+  recv_window_ms: 10000
+market_data:
+  rest_url: https://fapi.binance.com               # public, unauthenticated reads only (D-002)
+  interval: 1h
+  history_bars: 400
+universe: config/universe.yaml
+registry: config/alpha_registry.yaml
+costs: config/costs.yaml
+portfolio:
+  leverage: 2                 # leverage set on every traded symbol
+  vol_target: 0.15            # annualised portfolio volatility target
+  max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
+  max_weight: 0.15            # |weight| per symbol
+  no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
+guards:
+  daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
+  stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals
+  kill_switch_path: .beidou/live/KILL_SWITCH
+paths:
+  state_dir: .beidou/live
+  reports_dir: reports
+alerts:
+  webhook_url: ""             # optional; empty disables

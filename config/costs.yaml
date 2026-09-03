@@ -1,0 +1,5 @@
+# Cost model used by backtests and by the live attribution report.
+taker_fee_bps: 5.0        # Binance USDⓈ-M VIP0 taker 0.05%
+maker_fee_bps: 2.0
+slippage_bps: 2.0         # assumed adverse fill vs next open for market orders
+use_actual_funding: true  # backtests charge the historical funding rate on held exposure
