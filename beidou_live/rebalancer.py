@@ -1,0 +1,168 @@
+"""Target weights -> concrete orders against the venue's real positions.
+
+One order per symbol per bar, with a deterministic client id derived from
+the bar open time so a crash/restart inside a bar cannot double-submit.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from beidou_exchange.rules import meets_min_notional, quantize_qty
+from beidou_shared.types import InstrumentRules, Position, Side
+
+
+@dataclass(frozen=True)
+class RebalanceParams:
+    no_trade_band: float = 0.005
+    max_order_notional: float | None = None
+    tag: str = "bd"
+
+
+@dataclass(frozen=True)
+class PlannedOrder:
+    symbol: str
+    side: Side
+    quantity: Decimal
+    reduce_only: bool
+    client_order_id: str
+    target_weight: float
+    current_notional: float
+    target_notional: float
+    price: float
+
+    @property
+    def notional(self) -> float:
+        return float(self.quantity) * self.price
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "side": self.side.value,
+            "quantity": str(self.quantity),
+            "reduce_only": self.reduce_only,
+            "client_order_id": self.client_order_id,
+            "target_weight": self.target_weight,
+            "current_notional": self.current_notional,
+            "target_notional": self.target_notional,
+            "price": self.price,
+        }
+
+
+def client_order_id(tag: str, symbol: str, bar_open_ms: int, suffix: str = "") -> str:
+    identifier = f"{tag}-{int(bar_open_ms)}-{symbol}{suffix}"
+    if len(identifier) > 36:
+        raise ValueError("client order id exceeds 36 characters")
+    return identifier
+
+
+def plan_rebalance(
+    targets: Mapping[str, float],
+    *,
+    managed_symbols: Sequence[str],
+    equity: float,
+    positions: Mapping[str, Position],
+    prices: Mapping[str, float],
+    rules: Mapping[str, InstrumentRules],
+    bar_open_ms: int,
+    params: RebalanceParams,
+) -> tuple[list[PlannedOrder], list[dict[str, Any]]]:
+    orders: list[PlannedOrder] = []
+    skipped: list[dict[str, Any]] = []
+    if equity <= 0:
+        return [], [{"reason": "NON_POSITIVE_EQUITY", "equity": equity}]
+    for symbol in managed_symbols:
+        target_weight = float(targets.get(symbol, 0.0) or 0.0)
+        position = positions.get(symbol)
+        current_qty = position.qty if position is not None else 0.0
+        price = prices.get(symbol) or (position.mark_price if position is not None else None)
+        rule = rules.get(symbol)
+        if price is None or price <= 0:
+            skipped.append({"symbol": symbol, "reason": "NO_PRICE"})
+            continue
+        if rule is None or not rule.tradable:
+            skipped.append({"symbol": symbol, "reason": "NOT_TRADABLE"})
+            continue
+        target_notional = target_weight * equity
+        current_notional = current_qty * price
+        delta = target_notional - current_notional
+        if abs(delta) < params.no_trade_band * equity:
+            continue
+        closing = abs(target_notional) < 1e-9 and current_qty != 0.0
+        same_direction = current_qty != 0.0 and (target_notional > 0) == (current_qty > 0)
+        pure_reduction = same_direction and abs(target_notional) < abs(current_notional)
+        reduce_only = closing or pure_reduction
+        if closing:
+            quantity = quantize_qty(abs(current_qty), rule)
+            if quantity == 0:
+                quantity = Decimal(str(abs(current_qty)))
+        else:
+            quantity = quantize_qty(abs(delta) / price, rule)
+            if reduce_only:
+                quantity = min(quantity, quantize_qty(abs(current_qty), rule))
+        if quantity <= 0:
+            skipped.append({"symbol": symbol, "reason": "QUANTITY_ROUNDS_TO_ZERO", "delta_notional": delta})
+            continue
+        if (
+            params.max_order_notional is not None
+            and float(quantity) * price > params.max_order_notional
+            and not closing
+        ):
+            quantity = quantize_qty(params.max_order_notional / price, rule)
+            if quantity <= 0:
+                skipped.append({"symbol": symbol, "reason": "ORDER_CAP_BELOW_STEP"})
+                continue
+        if not reduce_only and not meets_min_notional(quantity, price, rule):
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": "MIN_NOTIONAL",
+                    "notional": float(quantity) * price,
+                    "min": str(rule.min_notional),
+                }
+            )
+            continue
+        orders.append(
+            PlannedOrder(
+                symbol=symbol,
+                side=Side.for_delta(delta),
+                quantity=quantity,
+                reduce_only=reduce_only,
+                client_order_id=client_order_id(params.tag, symbol, bar_open_ms),
+                target_weight=target_weight,
+                current_notional=current_notional,
+                target_notional=target_notional,
+                price=float(price),
+            )
+        )
+    return orders, skipped
+
+
+def flatten_orders(
+    positions: Mapping[str, Position], rules: Mapping[str, InstrumentRules], bar_open_ms: int, tag: str = "bdflat"
+) -> list[PlannedOrder]:
+    orders: list[PlannedOrder] = []
+    for symbol, position in positions.items():
+        if position.qty == 0.0:
+            continue
+        rule = rules.get(symbol)
+        quantity = quantize_qty(abs(position.qty), rule) if rule is not None else Decimal(str(abs(position.qty)))
+        if quantity <= 0:
+            quantity = Decimal(str(abs(position.qty)))
+        orders.append(
+            PlannedOrder(
+                symbol=symbol,
+                side=Side.SELL if position.qty > 0 else Side.BUY,
+                quantity=quantity,
+                reduce_only=True,
+                client_order_id=client_order_id(tag, symbol, bar_open_ms),
+                target_weight=0.0,
+                current_notional=position.notional,
+                target_notional=0.0,
+                price=position.mark_price,
+            )
+        )
+    return orders

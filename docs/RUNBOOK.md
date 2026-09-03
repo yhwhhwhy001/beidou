@@ -25,13 +25,25 @@ beidou research validate --strategy tsmom               # 写 reports/research/<
 
 ```bash
 export BEIDOU_DEMO_API_KEY=...; export BEIDOU_DEMO_API_SECRET=...
-beidou live run --profile config/live.demo.yaml --dry-run --cycles 3   # 只算不下单
-beidou live run --profile config/live.demo.yaml                        # 长驻
-beidou live status
-beidou live flatten --profile config/live.demo.yaml                    # 一键市价平仓
-touch .beidou/live/KILL_SWITCH                                          # 禁止新增风险（reduce-only 仍可用）
+beidou live run --profile config/live.demo.yaml --dry-run --immediate --cycles 1   # 只算不下单，立刻跑一根 bar
+beidou live run --profile config/live.demo.yaml --immediate                        # 长驻：先跑上一根闭合 bar，再按小时对齐
+beidou live run ... --allow-unvalidated                                            # registry 里的策略还没有验证报告时的显式放行
+beidou live status                                                                 # heartbeat.json + state.json
+beidou live kill-switch --engage | --release                                       # 禁止/恢复新增风险（reduce-only 仍可用）
+beidou live flatten --profile config/live.demo.yaml --yes                          # 一键市价平仓
+beidou report daily --date 2026-09-04                                              # 日报（权益、按策略/币种归因、成本、护栏事件）
 ```
+
+状态文件在 `.beidou/live/`：`state.json`（上一根 bar 的目标与贡献）、`trades.jsonl`（每笔订单，含 clientOrderId/目标权重）、`attribution.jsonl`（按策略归因）、`cycles.jsonl`、`heartbeat.json`。
 
 ## 无人值守（macOS launchd）
 
-见 `deploy/com.beidou.live.plist`；`launchctl load` 后进程崩溃 60s 内拉起，启动先对账不重复开仓。
+```bash
+mkdir -p ~/Library/Application\ Support/beidou
+printf 'export BEIDOU_DEMO_API_KEY=...\nexport BEIDOU_DEMO_API_SECRET=...\n' > ~/Library/Application\ Support/beidou/env.sh && chmod 600 ~/Library/Application\ Support/beidou/env.sh
+cp deploy/com.beidou.live.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist     # 启动；KeepAlive 在崩溃后 60s 拉起
+launchctl unload -w ~/Library/LaunchAgents/com.beidou.live.plist   # 停止
+```
+
+启动先对账（交易所仓位为唯一真值、撤销残留挂单、按 bar 派生的 clientOrderId 先查后下），因此重启不会重复开仓。日志在 `~/Library/Application Support/beidou/live.*.log`。让机器保持唤醒：`caffeinate -i` 或系统设置。
