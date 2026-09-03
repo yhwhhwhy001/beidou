@@ -40,3 +40,22 @@ tsmom 胜出参数：horizons 168/336/720、权重 0.2/0.3/0.5、return_scale 0.
 结论：周级时序动量是当前唯一通过全部门禁的策略，已写入 `config/alpha_registry.yaml`（evidence 指向 `reports/research/tsmom-validation-20260903T0619Z.json`）。flow 与 xsmom 有真实预测力但被多重检验（DSR）挡住——它们的网格更大且样本内最优 Sharpe 与试验分布的极值差距不够；下一步用更少、更有先验的参数（例如只保留 window 168/336）重新验证，并研究与 tsmom 的相关性/增量。
 
 注意（KILL-001 仍未关闭）：这是历史回测证据，不是实盘证据；tsmom 的 OOS 折 1（2021 下半年–2022 初）Sharpe 仅 0.18；实盘 demo 的按策略归因要与这里的年化预期（Sharpe ≈ 1.4–1.5、日波动 ≈ 15%/√365）持续对照。
+
+## 2026-09-03 · 第三轮：小先验网格重验 + 策略相关性
+
+DSR 对「试验数」敏感：第二轮 flow/xsmom 用 24/12 个组合被多重检验挡住。第三轮只保留有先验的 4 个组合（flow：window 168/336 × entry 0.2/0.3；xsmom：周级 horizon 固定 × score_scale 0.08/0.15 × entry 0.2/0.3）。这不是「调到通过为止」——组合数是事先按先验缩减的，且 xsmom 仍未通过。
+
+| 策略 | WFO OOS Sharpe | fold 一致性 | CPCV mean / q05 / 负比例 | DSR p | PBO | 成本 2× | 判定 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| flow（window 168，横截面去均值） | 1.07 | 0.80 | 1.16 / 0.24 / 0% | **0.048** | 0.27 | 1.04 | **PASS**（弱点：一个折 −0.81，时间四分之一段 −1.0） |
+| xsmom（168/336/720） | 0.72 | 0.80 | 0.70 / −0.01 / 13% | 0.12 | 0.05 | 0.46 | FAIL（接近 WEAK 线，等更多样本外数据） |
+
+**相关性与增量**（`beidou research correlate --strategies tsmom,flow`，2021-07 → 2026-09，15 币）：tsmom 与 flow 净收益相关性 **0.14**；单独 Sharpe 1.55 / 1.16；等权组合 **1.80**；边际 Sharpe tsmom +0.64、flow +0.25。两者同时启用。
+
+当前 `config/alpha_registry.yaml`：tsmom（周级）+ flow 启用并绑定验证报告；其余 5 个信号保持禁用。paper 模式双策略周期跑通，`state.json` 的 `last_contributions` 含两个策略，实盘归因可按策略拆分。
+
+### 下一步（研究）
+1. 用 demo 实盘 ≥14 天的按策略归因对照验证预期（`beidou report daily` 的 Drift 段；tsmom 期望年化 Sharpe ≈ 1.4，flow ≈ 1.1）。
+2. flow 的负折发生在哪个时段、是否与低波动/横盘 regime 相关（`regime_split_sharpes`）；考虑 flow 的波动率门。
+3. carry 改为横截面倾斜 + 排除新币后重验；meanrev 加最长持有期（12–24 bar）与更强趋势门。
+4. 每周固定一次 `data sync` + `validate`，避免在同一数据上反复挑参数。

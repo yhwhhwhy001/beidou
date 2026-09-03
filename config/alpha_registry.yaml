@@ -44,10 +44,16 @@ strategies:
     params: {window: 48, atr_window: 14, distance_scale: 2.0, entry_threshold: 0.20}
     evidence: null
   - id: flow
-    enabled: false
+    enabled: true
     weight: 1.0
-    params: {window: 24, scale: 0.05, cross_sectional: true, entry_threshold: 0.20}
-    evidence: null
+    # Validated 2026-09-03 with a 4-point prior grid on 15 symbols, 2021-07 -> 2026-09
+    # (walk-forward OOS Sharpe 1.07, CPCV mean 1.16 / q05 0.24, DSR p 0.048, PBO 0.27, cost x2 Sharpe 1.04).
+    # Weak spot: one negative walk-forward fold (-0.81); watch drift.
+    params: {window: 168, scale: 0.05, volume_window: 48, cross_sectional: true, entry_threshold: 0.20}
+    evidence:
+      report: reports/research/flow-validation-20260903T0627Z.json
+      sha256: 46f0c416524b41c146f7ee1e1957ff0b09a5fad3239bf7d7fb4ba112ece04aeb
+      verdict: PASS
   - id: residual
     enabled: false
     weight: 1.0

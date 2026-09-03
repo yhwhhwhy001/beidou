@@ -11,9 +11,11 @@ from typing import Any
 
 import click
 
+from beidou_alpha.panel import interval_seconds
 from beidou_cli import live, report
 from beidou_data.binance_public import PublicClient
 from beidou_live.alerts import WebhookAlerts
+from beidou_live.composition import load_registry
 from beidou_live.config import (
     build_market_data,
     build_model_from_profile,
@@ -26,7 +28,7 @@ from beidou_live.config import (
 )
 from beidou_live.engine import LiveEngine
 from beidou_live.paper import PaperVenue
-from beidou_live.reports import daily_markdown, daily_payload
+from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
 
@@ -121,12 +123,44 @@ def live_run(
 
 @live.command("status")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
-def live_status(profile: str) -> None:
+@click.option("--paper", is_flag=True, help="inspect the paper-mode state directory instead")
+@click.option(
+    "--check",
+    is_flag=True,
+    help="exit non-zero when the heartbeat is stale or the loop is erroring (cron/launchd alerts)",
+)
+@click.option("--max-age-seconds", default=None, type=float, help="staleness threshold (default: 2 x interval)")
+def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float | None) -> None:
     """Show heartbeat and state written by the running loop."""
-    store = build_store(load_profile(profile))
+    payload = load_profile(profile)
+    store = _store_for(payload, paper)
     heartbeat = store.read_heartbeat()
     state = store.load()
     click.echo(json.dumps({"heartbeat": heartbeat, "state": state.to_dict()}, indent=2, sort_keys=True, default=str))
+    if not check:
+        return
+    interval = str((payload.get("market_data", {}) or {}).get("interval", "1h"))
+    threshold = max_age_seconds if max_age_seconds is not None else 2.0 * interval_seconds(interval)
+    problems: list[str] = []
+    if heartbeat is None:
+        problems.append("no heartbeat")
+    else:
+        try:
+            age = (datetime.now(UTC) - datetime.fromisoformat(str(heartbeat.get("at")))).total_seconds()
+        except ValueError:
+            age = float("inf")
+        if age > threshold:
+            problems.append(f"heartbeat is {age:.0f}s old (> {threshold:.0f}s)")
+        if heartbeat.get("phase") == "ERROR" and int(heartbeat.get("consecutive_errors", 0)) >= 3:
+            problems.append(f"loop erroring: {heartbeat.get('error')}")
+    if problems:
+        raise click.ClickException("; ".join(problems))
+
+
+def _store_for(payload: dict[str, Any], paper: bool) -> StateStore:
+    if paper:
+        return StateStore(Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper"))
+    return build_store(payload)
 
 
 @live.command("flatten")
@@ -181,16 +215,22 @@ def live_kill_switch(profile: str, engage: bool) -> None:
 
 @report.command("daily")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
 @click.option("--date", "day", default=None, help="YYYY-MM-DD (default: today UTC)")
 @click.option(
     "--out", default=None, help="directory for the markdown/json report (default: profile paths.reports_dir/daily)"
 )
-def report_daily(profile: str, day: str | None, out: str | None) -> None:
-    """Render the daily attribution report from the live state files."""
+def report_daily(profile: str, paper: bool, day: str | None, out: str | None) -> None:
+    """Render the daily attribution report (with drift vs validation expectations) from the live state files."""
     payload = load_profile(profile)
-    store = build_store(payload)
+    store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
-    data = daily_payload(store, chosen)
+    evidence: dict[str, Any] = {}
+    for entry in load_registry(payload.get("registry", "config/alpha_registry.yaml")).enabled:
+        report_path = Path(str((entry.evidence or {}).get("report", "")))
+        if report_path.exists():
+            evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
+    data = daily_payload(store, chosen, expectations_from_evidence(evidence))
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
     directory.mkdir(parents=True, exist_ok=True)
