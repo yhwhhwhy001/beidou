@@ -33,6 +33,12 @@ from beidou_shared.config import load_yaml
 
 DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
     "tsmom": {"vol_window": [100, 200, 400], "entry_threshold": [0.15, 0.20, 0.30], "return_scale": [0.10, 0.20, 0.30]},
+    "xsmom": {"score_scale": [0.05, 0.08, 0.12], "entry_threshold": [0.15, 0.20, 0.30]},
+    "carry": {"window_bars": [24, 72, 168], "scale": [0.0003, 0.0005, 0.001], "entry_threshold": [0.15, 0.20, 0.30]},
+    "meanrev": {"window": [24, 48, 96], "z_entry": [1.5, 2.0, 2.5], "trend_gate_z": [1.5, 2.0, 3.0]},
+    "breakout": {"window": [24, 48, 96], "distance_scale": [1.0, 2.0, 3.0]},
+    "flow": {"window": [12, 24, 48], "scale": [0.03, 0.05, 0.10]},
+    "residual": {"scale": [0.03, 0.05, 0.10], "beta_window": [168, 336, 720]},
 }
 
 

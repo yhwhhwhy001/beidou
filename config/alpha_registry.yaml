@@ -16,3 +16,33 @@ strategies:
       slope_scale: 0.01
       entry_threshold: 0.20
     evidence: null
+  - id: xsmom
+    enabled: false
+    weight: 1.0
+    params: {horizons: [24, 72, 168], horizon_weights: [0.2, 0.3, 0.5], score_scale: 0.08, entry_threshold: 0.20}
+    evidence: null
+  - id: carry
+    enabled: false
+    weight: 1.0
+    params: {window_bars: 24, scale: 0.0005, cross_sectional: true, entry_threshold: 0.20}
+    evidence: null
+  - id: meanrev
+    enabled: false
+    weight: 1.0
+    params: {window: 48, z_entry: 1.5, z_exit: 0.5, z_max: 5.0, trend_gate_z: 2.0, entry_threshold: 0.20}
+    evidence: null
+  - id: breakout
+    enabled: false
+    weight: 1.0
+    params: {window: 48, atr_window: 14, distance_scale: 2.0, entry_threshold: 0.20}
+    evidence: null
+  - id: flow
+    enabled: false
+    weight: 1.0
+    params: {window: 24, scale: 0.05, cross_sectional: true, entry_threshold: 0.20}
+    evidence: null
+  - id: residual
+    enabled: false
+    weight: 1.0
+    params: {horizons: [24, 72, 168], beta_window: 336, scale: 0.05, benchmark: BTCUSDT, entry_threshold: 0.20}
+    evidence: null
