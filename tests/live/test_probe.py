@@ -43,6 +43,12 @@ def test_probe_status_windows_stop_and_review() -> None:
     dated = ProbeParams(book="b", strategy="flow", review_after_days=90, accepted_on="2025-06-01")
     review = probe_status(dated, _rows((NOW - DAY_MS, 5.0)), equity=10_000.0, now_ms=NOW)
     assert review["status"] == "REVIEW_DUE" and review["days_running"] > 90
+    # attribution earned under this strategy id before the acceptance date is not the probe's record
+    recent = ProbeParams(book="b", strategy="flow", accepted_on="2025-09-01")
+    mixed = _rows((NOW - 3 * DAY_MS, -900.0), (NOW - DAY_MS, -20.0))
+    before = probe_status(recent, mixed, equity=10_000.0, now_ms=NOW)
+    assert before["rows"] == 1 and before["pnl"] == -20.0 and not before["stop"]
+    assert before["days_running"] == pytest.approx(1.0 + 8 / 24)
     with pytest.raises(ValueError):
         ProbeParams("b", "flow", window_days=0)
     registry = parse_registry(

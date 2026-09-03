@@ -90,7 +90,9 @@ def probe_status(
     now_ms: int,
 ) -> dict[str, Any]:
     """Trailing-window attributed P&L of the probe's strategy and whether the stop / review rules fire."""
-    window_start = now_ms - params.window_days * DAY_MS
+    accepted_ms = _accepted_ms(params.accepted_on)
+    # rows before the acceptance belong to whatever ran under this strategy id before the probe (not its record)
+    window_start = max(now_ms - params.window_days * DAY_MS, accepted_ms or 0)
     pnl = 0.0
     rows_in_window = 0
     first_ms: int | None = None
@@ -98,6 +100,8 @@ def probe_status(
         stamp = _row_time_ms(row)
         by_strategy = row.get("by_strategy") or {}
         if stamp is None or params.strategy not in by_strategy:
+            continue
+        if accepted_ms is not None and stamp < accepted_ms:
             continue
         first_ms = stamp if first_ms is None else min(first_ms, stamp)
         if stamp < window_start or stamp > now_ms:
@@ -108,7 +112,7 @@ def probe_status(
             continue
         rows_in_window += 1
     pnl_pct = None if equity is None or equity <= 0 or rows_in_window == 0 else pnl / equity
-    start_ms = _accepted_ms(params.accepted_on) or first_ms
+    start_ms = accepted_ms or first_ms
     days_running = None if start_ms is None else max(0.0, (now_ms - start_ms) / DAY_MS)
     stop = pnl_pct is not None and pnl_pct <= -params.max_loss and pnl < 0
     review_due = days_running is not None and days_running >= params.review_after_days
