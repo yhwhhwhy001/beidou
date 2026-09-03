@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -347,3 +348,32 @@ def test_rebalance_relative_band_only_for_same_direction_resizes() -> None:
         params=params,
     )
     assert flip and flip[0].side is Side.SELL and not flip[0].reduce_only
+
+
+async def test_zero_avg_price_ack_is_requeried_for_the_settled_fill_price() -> None:
+    """A MARKET ack with avgPrice=0 must not leave the trade log priceless."""
+    venue = FakeVenue()
+    clock = FakeClock(0)
+    orders, _ = plan_rebalance(
+        {"BTCUSDT": 0.05},
+        managed_symbols=["BTCUSDT"],
+        equity=100_000.0,
+        positions={},
+        prices={"BTCUSDT": 60_000.0},
+        rules=DEFAULT_RULES,
+        bar_open_ms=11,
+        params=RebalanceParams(no_trade_band=0.0),
+    )
+    real_place = venue.place_order
+
+    async def place_without_price(request):  # type: ignore[no-untyped-def]
+        ack = await real_place(request)
+        stripped = replace(ack, avg_price=0.0)
+        venue.orders[request.client_order_id] = ack  # the venue itself still knows the price
+        return stripped
+
+    venue.place_order = place_without_price  # type: ignore[assignment]
+    report = await execute_order(venue, orders[0], clock)
+    assert report.status == "FILLED"
+    assert report.ack is not None and report.ack.avg_price == 60_000.0
+    assert any(call.startswith("query_order:") for call in venue.calls)

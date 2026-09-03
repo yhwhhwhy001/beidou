@@ -59,7 +59,23 @@ async def execute_order(
             final = await venue.query_order(order.symbol, order.client_order_id)
             ack = final or canceled or ack
     assert ack is not None
+    ack = await _resolve_fill_price(venue, order, ack)
     return ExecutionReport(order, _status_of(ack), ack)
+
+
+async def _resolve_fill_price(venue: Venue, order: PlannedOrder, ack: OrderAck) -> OrderAck:
+    """A MARKET ack can carry ``avgPrice=0`` even after filling; query once for the settled price.
+
+    Attribution and traded-notional accounting are only as good as the fill
+    price, so an ack that reports a fill without a price is re-read rather
+    than silently falling back to the decision-time mark.
+    """
+    if not ack.filled or ack.avg_price > 0:
+        return ack
+    settled = await venue.query_order(order.symbol, order.client_order_id)
+    if settled is not None and settled.avg_price > 0:
+        return settled
+    return ack
 
 
 async def _poll(

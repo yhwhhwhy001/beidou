@@ -1,8 +1,11 @@
 profile: demo
 venue:
   rest_url: https://demo-fapi.binance.com          # allow-listed demo host; mainnet is refused by beidou_exchange.guard
-  api_key_env: BEIDOU_DEMO_API_KEY
-  api_secret_env: BEIDOU_DEMO_API_SECRET
+  # Names of the environment variables holding the credentials (values never live in this repo).
+  # These are the operator's existing exports; verified 2026-09-03 against demo-fapi
+  # (canTrade=true, one-way mode, flat account).
+  api_key_env: BEIDOU_BINANCE_API_KEY
+  api_secret_env: BEIDOU_BINANCE_API_SECRET
   recv_window_ms: 10000
 market_data:
   rest_url: https://fapi.binance.com               # public, unauthenticated reads only (D-002)
@@ -27,4 +30,4 @@ paths:
   state_dir: .beidou/live
   reports_dir: reports
 alerts:
-  webhook_url: ""             # optional; empty disables
+  webhook_url: "${BEIDOU_ALERTS_WEBHOOK_URL:-}"   # expanded from the environment; empty disables
