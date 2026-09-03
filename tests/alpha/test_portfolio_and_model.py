@@ -96,3 +96,24 @@ def test_min_history_filter_blocks_new_listings(august_panel: Panel) -> None:
     targets = model.strategy_targets(august_panel)["tsmom"]
     assert targets.iloc[:299].isna().all().all()
     assert targets.iloc[300:].notna().any().any()
+
+
+def test_shipped_registry_is_loadable_and_uses_a_supported_ensemble() -> None:
+    from pathlib import Path
+
+    from beidou_alpha.ensemble import combine_targets
+    from beidou_shared.config import load_yaml
+
+    registry = parse_registry(load_yaml(Path(__file__).resolve().parents[2] / "config" / "alpha_registry.yaml"))
+    assert registry.enabled, "at least one strategy must be enabled"
+    index = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+    frame = pd.DataFrame({"X": [0.1, 0.2, 0.3]}, index=index)
+    combine_targets(
+        {entry.id: frame for entry in registry.enabled},
+        {entry.id: entry.weight for entry in registry.enabled},
+        method=registry.ensemble_method,
+    )
+    for entry in registry.strategies:
+        from beidou_alpha.signals import get_signal
+
+        get_signal(entry.id)

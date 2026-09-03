@@ -3,19 +3,26 @@
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
 version: 1
 ensemble:
-  method: zscore_mean          # equal-weight mean of per-strategy z-scored targets
+  method: mean                 # weighted mean of per-strategy targets (alternative: rolling_zscore)
   turnover_penalty: 0.0
 strategies:
   - id: tsmom
     enabled: true
     weight: 1.0
+    # Weekly-scale horizons: validated 2026-09-03 on 15 symbols, 2021-07 -> 2026-09
+    # (walk-forward OOS Sharpe 1.38, CPCV q05 1.20, DSR p 0.045, PBO 0.04, cost x2 Sharpe 1.29).
+    # The legacy 5/20/50-hour horizons FAILED validation (see docs/RESEARCH_LOG.md).
     params:
-      horizons: [5, 20, 50]
+      horizons: [168, 336, 720]
       horizon_weights: [0.2, 0.3, 0.5]
       return_scale: 0.20
       slope_scale: 0.01
       entry_threshold: 0.20
-    evidence: null
+      vol_window: 400
+    evidence:
+      report: reports/research/tsmom-validation-20260903T0619Z.json
+      sha256: 0233cc7bfa8db4d7d8cf82865d0a2a62799b38c25ae7dc3dd9a262e18a9cb6f7
+      verdict: PASS
   - id: xsmom
     enabled: false
     weight: 1.0

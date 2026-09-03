@@ -26,6 +26,7 @@ beidou research validate --strategy tsmom               # 写 reports/research/<
 ```bash
 export BEIDOU_DEMO_API_KEY=...; export BEIDOU_DEMO_API_SECRET=...
 beidou live run --profile config/live.demo.yaml --dry-run --immediate --cycles 1   # 只算不下单，立刻跑一根 bar
+beidou live run --profile config/live.demo.yaml --paper --immediate                # 无需密钥：mainnet 真实数据 + 进程内模拟成交（状态在 .beidou/paper/）
 beidou live run --profile config/live.demo.yaml --immediate                        # 长驻：先跑上一根闭合 bar，再按小时对齐
 beidou live run ... --allow-unvalidated                                            # registry 里的策略还没有验证报告时的显式放行
 beidou live status                                                                 # heartbeat.json + state.json

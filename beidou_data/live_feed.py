@@ -17,6 +17,10 @@ class PublicMarketData:
         self._client = client or AsyncPublicClient(base_url)
         self._semaphore = asyncio.Semaphore(concurrency)
 
+    @property
+    def base_url(self) -> str:
+        return self._client.base_url
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

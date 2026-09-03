@@ -7,10 +7,12 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import click
 
 from beidou_cli import live, report
+from beidou_data.binance_public import PublicClient
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.config import (
     build_market_data,
@@ -23,8 +25,17 @@ from beidou_live.config import (
     resolve_universe,
 )
 from beidou_live.engine import LiveEngine
+from beidou_live.paper import PaperVenue
 from beidou_live.reports import daily_markdown, daily_payload
 from beidou_live.scheduler import SystemClock
+from beidou_live.state import StateStore
+
+
+def _paper_venue(market_url: str, balance: float, state_path: Path) -> PaperVenue:
+    """Paper venue with mainnet trading rules (public exchangeInfo) and persistent simulated positions."""
+    with PublicClient(market_url) as public:
+        payload = public.exchange_info()
+    return PaperVenue.from_exchange_info(payload, balance=balance, state_path=state_path)
 
 
 def _logging(verbose: bool) -> None:
@@ -36,6 +47,10 @@ def _logging(verbose: bool) -> None:
 @live.command("run")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--dry-run", is_flag=True, help="compute targets and planned orders; never write to the venue")
+@click.option(
+    "--paper", is_flag=True, help="simulate fills in-process at mainnet marks; no credentials or exchange writes"
+)
+@click.option("--paper-balance", default=10_000.0, show_default=True)
 @click.option("--cycles", default=None, type=int, help="stop after N bar cycles (default: run forever)")
 @click.option(
     "--immediate", is_flag=True, help="run one cycle on the last closed bar right away, then follow the schedule"
@@ -47,6 +62,8 @@ def _logging(verbose: bool) -> None:
 def live_run(
     profile: str,
     dry_run: bool,
+    paper: bool,
+    paper_balance: float,
     cycles: int | None,
     immediate: bool,
     symbols: str,
@@ -62,32 +79,44 @@ def live_run(
     if problems:
         for problem in problems:
             click.echo(f"evidence: {problem}")
-        if not allow_unvalidated and not dry_run:
+        if not allow_unvalidated and not dry_run and not paper:
             raise click.ClickException(
                 "enabled strategies lack validation evidence; run `beidou research validate` or pass --allow-unvalidated"
             )
     universe = resolve_universe(payload, [s for s in symbols.split(",") if s.strip()] or None, data_root)
     config = live_config(payload, universe, registry, dry_run=dry_run)
-    store = build_store(payload)
-    venue = build_venue(payload, config.kill_switch_path)
+    if paper:
+        store = StateStore(Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper"))
+    else:
+        store = build_store(payload)
     market = build_market_data(payload)
+    venue: Any
+    if paper:
+        venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
+    else:
+        venue = build_venue(payload, config.kill_switch_path)
     alerts = WebhookAlerts(str((payload.get("alerts", {}) or {}).get("webhook_url", "")))
     engine = LiveEngine(
         config, model=model, market=market, venue=venue, clock=SystemClock(), store=store, alerts=alerts
     )
     click.echo(
-        f"universe={universe} interval={config.interval} leverage={config.leverage} dry_run={dry_run} kill_switch={config.kill_switch_path}"
+        f"universe={universe} interval={config.interval} leverage={config.leverage} dry_run={dry_run} paper={paper} "
+        f"kill_switch={config.kill_switch_path} state={store.directory}"
     )
 
     async def main() -> int:
         try:
             return await engine.run(cycles, immediate=immediate)
         finally:
-            await venue.aclose()
+            close = getattr(venue, "aclose", None)
+            if callable(close):
+                await close()
             await market.aclose()
 
     done = asyncio.run(main())
-    click.echo(f"completed {done} cycle(s)")
+    click.echo(f"completed {done} cycle(s) without error")
+    if cycles is not None and done < cycles:
+        raise click.ClickException(f"{cycles - done} of {cycles} cycle(s) failed; see {store.heartbeat_path}")
 
 
 @live.command("status")

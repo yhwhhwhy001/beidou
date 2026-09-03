@@ -12,9 +12,9 @@ build/
 dist/
 *.egg-info/
 
-# runtime state, data and reports (never commit)
+# runtime state and daily live reports (never commit); research validation reports ARE committed as registry evidence
 .beidou/
-reports/
+reports/daily/
 *.log
 .env
 .env.*

@@ -113,16 +113,22 @@ class LiveEngine:
         return snapshot
 
     async def run(self, cycles: int | None = None, *, immediate: bool = False) -> int:
+        """Run ``cycles`` bar cycles (forever when None).  Returns the number of cycles that completed without error."""
         await self.startup()
-        done = 0
+        attempted = succeeded = 0
         if immediate:
-            await self.guarded_cycle(last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms))
-            done += 1
-        while cycles is None or done < cycles:
+            attempted += 1
+            if (
+                await self.guarded_cycle(last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms))
+                is not None
+            ):
+                succeeded += 1
+        while cycles is None or attempted < cycles:
             bar = await wait_for_bar_close(self.clock, self.config.interval_ms, self.config.grace_seconds)
-            await self.guarded_cycle(bar)
-            done += 1
-        return done
+            attempted += 1
+            if await self.guarded_cycle(bar) is not None:
+                succeeded += 1
+        return succeeded
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
         try:
@@ -161,6 +167,9 @@ class LiveEngine:
         if not usable:
             raise RuntimeError("no closed bars returned for the universe")
         funding = await self.market.funding_rates(self.universe)
+        mark = getattr(self.venue, "mark", None)
+        if callable(mark):  # paper venue: marks follow the newest closed bar
+            mark({symbol: float(frame["close"].iloc[-1]) for symbol, frame in usable.items()})
         targets = self.model.targets(usable, funding)
         latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         snapshot = await take_snapshot(self.venue, self.universe)
