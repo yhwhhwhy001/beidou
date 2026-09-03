@@ -32,3 +32,4 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 - **D-015** 只有一个风险预算（波动率目标 + gross/单币上限）；自适应项只做乘在整本书上的标量（回撤节流）或下单层的约束（保证金、参与率），绝不叠加多个"比例"。
 - **D-016** 交易所杠杆 = `min(max_leverage, 档位上限, ceil(max_gross / margin_cap))`（默认 5x），只改变保证金效率，不改变敞口；下单前按可用保证金按比例缩小加仓单。
 - **D-017** 退出层与回撤节流的启用由预先登记的验收规则决定（`beidou research overlay`：OOS MDD 改善且 OOS Sharpe 损失 ≤ 0.10），不满足则默认关闭。
+- **D-018** 新策略作为独立小书加入（各书独立构建、按 fraction 求和、总书套主书上限）的验收由预登记规则决定（`beidou research book`）；书级 ACCEPT 不替代信号级 PASS。首个用例 flow 空头小书：书级 ACCEPT / 信号级 FAIL → 未启用；book 机制目前只有研究命令，registry / 模型 / 实盘尚未实现。

@@ -67,6 +67,10 @@ strategies:
     # 0.26) on the names that were actually top-15 at the time; the ranking IC is identical in both universes.  Three
     # pre-registered rescues all FAIL on pit: short-only (OOS 1.09, DSR p 0.26 at 46 trials), tenure >= 12 refreshes
     # (0.31), short-only + tenure (0.08).  Re-open only with new evidence on the pit universe.
+    # 2026-09-03 14:36Z (D-018, `research book`): short-only flow as a 1/3-budget sleeve next to tsmom on pit lifts the
+    # total book's OOS Sharpe 1.53 -> 1.68 (4/5 folds, MDD +0.7pp) and the pre-registered book rule says ACCEPT, but the
+    # sleeve itself FAILS (DSR p 0.81 at 48 trials), is worth nothing on the static universe (Sharpe 0.23) and 91% of its
+    # positions are names tsmom is already short (a short-side tilt, not an independent book).  Stays disabled.
     # Round 2 (2026-09-03 06:27Z): 4-point prior grid, walk-forward OOS Sharpe 1.07 with one negative fold.
     # Round 5 (2026-09-03 09:27Z): the losing stretch (2024-10 -> 2025-09, -8.6% in 2024-11 alone) was the SHORT leg
     # being squeezed in spot-led rallies (XRP/ADA/SUI); perp taker selling into a strong uptrend is hedging, not

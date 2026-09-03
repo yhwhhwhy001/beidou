@@ -179,3 +179,72 @@ def test_research_pit_universe_and_overlay_offline(tmp_path: Path, august_dir: P
     assert [row["kind"] for row in overlay["candidates"]] == ["exits", "exits", "exits", "throttle"]
     assert set(overlay["recommendation"]) == {"exits", "throttle"}
     assert "recommendation:" in result.output
+
+
+def test_research_book_offline(tmp_path: Path, august_dir: Path) -> None:
+    """research book writes the D-018 evidence report and charges the sleeve's standalone trial once."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "strategies:\n"
+        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50], horizon_weights: [0.2, 0.3, 0.5]}}\n"
+        "  - {id: xsmom, enabled: false, params: {horizons: [5, 20, 50], horizon_weights: [0.2, 0.3, 0.5]}}\n",
+        encoding="utf-8",
+    )
+    args = [
+        "research",
+        "book",
+        "--main",
+        "tsmom",
+        "--sleeve",
+        "xsmom",
+        "--sleeve-params",
+        '{"entry_threshold": 0.2}',
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--universe",
+        "static",
+        "--registry",
+        str(registry),
+        "--out",
+        str(out),
+        "--no-funding",
+        "--min-history",
+        "0",
+        "--folds",
+        "3",
+        "--min-train",
+        "300",
+        "--purge",
+        "5",
+        "--cpcv-groups",
+        "4",
+        "--prior-trials",
+        "3",
+    ]
+    runner = CliRunner()
+    result = runner.invoke(main, args)
+    assert result.exit_code == 0, result.output
+    report = json.loads(next(out.glob("book-tsmom-xsmom-*.json")).read_text())
+    assert report["book_verdict"] in {"ACCEPT", "REJECT"}
+    assert report["sleeve"]["params"]["entry_threshold"] == 0.2
+    decision = report["universes"]["static"]
+    assert set(decision["by_fraction"]) == {"0.3333", "0.2000", "0.5000"}
+    assert decision["sleeve_standalone"]["multiple_testing"]["n_trials"] == 4  # 3 declared + this one
+    assert decision["sleeve_standalone"]["verdict"] in {"PASS", "WEAK_PASS", "FAIL"}
+    assert "BOOK VERDICT" in result.output and "robustness universe not evaluated" in result.output
+    ledger = (out / "trials.jsonl").read_text().splitlines()
+    assert len(ledger) == 1 and json.loads(ledger[0])["strategy"] == "xsmom"
+    # an exact replay is not a second trial
+    result = runner.invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "exact replay" in result.output
+    assert len((out / "trials.jsonl").read_text().splitlines()) == 1
+    replay = json.loads(sorted(out.glob("book-tsmom-xsmom-*.json"))[-1].read_text())
+    assert replay["universes"]["static"]["sleeve_standalone"]["multiple_testing"]["n_trials"] == 4

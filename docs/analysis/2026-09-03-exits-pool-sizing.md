@@ -136,6 +136,7 @@ Engineering Pre-check：退出层的 Python 逐 bar 循环（45k bars × 15 币�
 | D-015 | 一个风险预算：波动率目标 + gross/单币上限。自适应项只做**乘在最终权重上的标量**（回撤节流）或**下单量层的约束**（保证金、参与率），绝不叠加多个"比例" | 八标量乘积 | E-035：叠加乘数是"自适应不自适应"的根因 | 高 |
 | D-016 | 交易所杠杆 = `min(max_leverage, bracket_max, ceil(max_gross / margin_cap))`，默认 `margin_cap 0.4 → 5x`；敞口仍由组合层决定 | 固定 2x | E-038 | 高 |
 | D-017 | 退出层与回撤节流的启用都由**预先登记的验收标准**决定（§10 T-X06/T-S05）；不满足则随代码交付、默认关闭、写负结果 | 直接启用 | 用户原则："先经济改进、再诚实验证；不通过就报负结果" | 高 |
+| D-018 | 新策略作为**独立小书**加入（各书独立波动率目标与上限，按 fraction 求和，总书套主书上限与再平衡带）的验收由预登记规则决定（`beidou research book`：ΔOOS Sharpe ≥ 0.10、OOS MDD 恶化 ≤ 1pp、≥ 3/5 折胜出、第二 universe ΔOOS ≥ 0、小书单独 CPCV 负比例 ≤ 10% 且成本 2× ≥ 0.5）；书级 ACCEPT 不产生 registry 判定，信号级仍须 PASS / WEAK_PASS（KILL-015） | 按相关性 / 边际 Sharpe 直接启用 | 用户原则同 D-017；首个用例 flow 空头小书（2026-09-03 14:36Z）：书级 ACCEPT、信号级 FAIL → 不启用 | 高 |
 
 灰度/回滚：每个层有独立开关；`--dry-run` 先看退出层的"本应平仓"记录一天；`git revert` 单 commit 可回滚。
 
@@ -158,6 +159,7 @@ Engineering Pre-check：退出层的 Python 逐 bar 循环（45k bars × 15 币�
 | KILL-024 | 新币进池即被交易，上市首月的异常路径污染信号（Risk Red Team） | D-014 | P2 | `min_history_bars=720` 对池成员同样生效 | CLOSED |
 | KILL-025 | 时点 universe 下 tsmom/flow 的证据显著下降（Evidence Prosecutor） | C-009 | P1 | 这是本轮的目的：若下降则更新 registry 证据；若某策略 FAIL 则停用 | ACCEPTED（合法产出） |
 | KILL-026 | 参与率上限在 10k 权益下永不触发，是死代码（Complexity Accountant） | D-015 | P2 | 保留但用测试证明其在大权益下生效；不在实盘证据里宣称价值 | ACCEPTED |
+| KILL-027 | "独立小书"只是主书的空头倾斜：flow 空头小书 91% 币-bar 与 tsmom 同向、净收益相关 0.29，静态 universe 上贡献为零（Evidence Prosecutor） | D-018 | P1 | 不启用；若重开，作为 tsmom 的修饰项预登记验证而不是第二本书 | ACCEPTED（不启用） |
 
 Pre-Mortem（30 天后失败的最可能原因）：① 退出层通过了回测门槛却在实盘频繁触发（demo 价格偏差 E-013 让"入场价"与 mainnet 收盘价不一致）→ M-005 监控触发频率与触发后 24/72h 的反事实收益；② 池刷新在某天把 5 个币换掉，换手激增 → M-006；③ 时点 universe 让 flow 失去空头对象（早年 universe 更小）→ 记录为负结果。
 

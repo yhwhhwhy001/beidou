@@ -6,7 +6,8 @@ import hashlib
 import itertools
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
+from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
@@ -39,7 +41,7 @@ from beidou_alpha.validation.metrics import (
 from beidou_alpha.validation.multiple_testing import multiple_testing_report
 from beidou_alpha.validation.stability import cost_stress, parameter_neighborhood, time_split_sharpes
 from beidou_alpha.validation.verdict import decide
-from beidou_alpha.validation.walk_forward import param_key, walk_forward_evaluate, walk_forward_folds
+from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import FundingStore, KlineStore
@@ -498,6 +500,7 @@ def research_validate(
 
 __all__ = [
     "research_backtest",
+    "research_book",
     "research_correlate",
     "research_diagnose",
     "research_list",
@@ -797,6 +800,580 @@ def research_overlay(
     for line in lines:
         click.echo(line)
     click.echo(f"recommendation: {json.dumps(recommendation)}")
+    click.echo(f"report: {path} sha256={digest}")
+
+
+# D-018: pre-registered acceptance for running a strategy as an independent sleeve (a "small book") next to the
+# main book.  Fixed before the first run and never widened after seeing results; every threshold is written into
+# the report.  Passing this rule is a *portfolio* decision; it does not create a registry verdict for the sleeve.
+BOOK_RULE: dict[str, float] = {
+    "min_delta_oos_sharpe": 0.10,  # total book OOS Sharpe minus main-only OOS Sharpe
+    "max_oos_mdd_worsening": 0.01,  # total OOS max drawdown may not be worse than main-only by more than 1pp
+    "min_fold_win_rate": 0.6,  # total beats main-only in >= 3 of 5 walk-forward folds
+    "max_cpcv_negative": 0.10,  # sleeve alone: share of CPCV paths with a negative Sharpe
+    "min_cost_x2_sharpe": 0.5,  # sleeve alone: Sharpe with doubled costs
+    "min_robustness_delta": 0.0,  # on the robustness universe the sleeve must not subtract OOS Sharpe
+}
+
+
+def _fold_metrics(net: pd.Series, fold_list: Sequence[Fold], bpy: float) -> dict[str, Any]:
+    oos = net.iloc[fold_list[0].test_start :]
+    return {
+        "full_sharpe": sharpe(net, bpy),
+        "full_mdd": max_drawdown(net),
+        "oos_sharpe": sharpe(oos, bpy),
+        "oos_return": compound(oos),
+        "oos_mdd": max_drawdown(oos),
+        "fold_sharpes": [sharpe(net.iloc[f.test_slice], bpy) for f in fold_list],
+    }
+
+
+def _combine_books(
+    main: pd.DataFrame, sleeve: pd.DataFrame, params: PortfolioParams
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Sum two books; the main book's per-symbol cap, gross cap and no-trade band then apply to the total."""
+    columns = main.columns.union(sleeve.columns)
+    a = main.reindex(columns=columns)
+    b = sleeve.reindex(columns=columns)
+    valid = a.notna().any(axis=1) | b.notna().any(axis=1)
+    raw = a.fillna(0.0) + b.fillna(0.0)
+    clipped = raw.clip(-params.max_weight, params.max_weight)
+    gross = clipped.abs().sum(axis=1)
+    factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
+    total = clipped.mul(factor, axis=0).where(valid, other=np.nan)
+    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
+        total = apply_no_trade_band(total, params.no_trade_band, params.no_trade_rel_band)
+    active = b.fillna(0.0) != 0.0
+    n_active = max(1, int(active.to_numpy().sum()))
+    binding = {
+        "symbol_cap_share": float(((raw.abs() > params.max_weight + 1e-12) & active).to_numpy().sum() / n_active),
+        "gross_cap_share": float((gross > params.max_gross + 1e-12).mean()),
+    }
+    return total, binding
+
+
+def _netting(main: pd.DataFrame, sleeve: pd.DataFrame) -> dict[str, float]:
+    """How much of the sleeve's exposure cancels or stacks on the main book (diagnostic)."""
+    columns = main.columns.union(sleeve.columns)
+    a = main.reindex(columns=columns).fillna(0.0)
+    b = sleeve.reindex(columns=columns).fillna(0.0)
+    active = b != 0.0
+    n_active = max(1, int(active.to_numpy().sum()))
+    opposing = int(((np.sign(a) == -np.sign(b)) & active & (a != 0.0)).to_numpy().sum())
+    same = int(((np.sign(a) == np.sign(b)) & active).to_numpy().sum())
+    cancelled = float((a.abs() + b.abs() - (a + b).abs()).to_numpy().sum())
+    sleeve_gross = max(float(b.abs().to_numpy().sum()), 1e-12)
+    return {
+        "sleeve_symbol_bars": float(n_active),
+        "opposing_main_share": opposing / n_active,
+        "same_direction_share": same / n_active,
+        "main_flat_share": 1.0 - (opposing + same) / n_active,
+        "cancelled_gross_share": cancelled / sleeve_gross,
+    }
+
+
+def _trial_signature(record: TrialRecord) -> tuple[str, str, str, int]:
+    return (record.param_key, record.range_start, record.range_end, record.symbols)
+
+
+def _standalone_block(
+    strategy: str,
+    params: Mapping[str, Any],
+    decision_weights: pd.DataFrame,
+    result: BacktestResult,
+    panel: Panel,
+    cost: CostModel,
+    fold_list: Sequence[Fold],
+    *,
+    purge: int,
+    cpcv_groups: int,
+    prior_trials: int,
+    ledger_path: Path,
+) -> tuple[dict[str, Any], TrialRecord]:
+    """The sleeve on its own, exactly as `research validate` would score a single configuration."""
+    bpy = panel.bars_per_year
+    net = result.portfolio_net
+    key = param_key(dict(params))
+    nets = {key: net}
+    wf = walk_forward_evaluate(nets, {key: dict(params)}, list(fold_list), bpy).summary(bpy)
+    cpcv = cpcv_evaluate(
+        nets, cpcv_splits(len(net), n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=purge), bpy
+    )
+    full = sharpe(net, bpy)
+    record = TrialRecord(
+        strategy=strategy,
+        param_key=key,
+        sharpe_annual=full,
+        bars_per_year=bpy,
+        recorded_at=datetime.now(UTC).isoformat(),
+        range_start=str(net.index[0]),
+        range_end=str(net.index[-1]),
+        symbols=len(panel.symbols),
+        run_id="",
+    )
+    records = (
+        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), strategy) if ledger_path.exists() else []
+    )
+    # an exact replay of a recorded configuration on the same data is one trial, not two
+    prior_records = [r for r in records if _trial_signature(r) != _trial_signature(record)]
+    pooled = dsr_inputs(
+        prior_records, {key: None if full is None else full / math.sqrt(bpy)}, bpy, manual_prior_trials=prior_trials
+    )
+    values = net.to_numpy(dtype=float)
+    mt = multiple_testing_report(
+        values,
+        values.reshape(-1, 1),
+        bars_per_year=bpy,
+        prior_trials=prior_trials,
+        pooled_n_trials=pooled["n_trials"],
+        pooled_sharpe_variance=pooled["sharpe_variance"] if pooled["pooled_sharpes"] >= 2 else None,
+    )
+    mt["ledger_trials"] = pooled["ledger_trials"]
+    mt["replayed_trial"] = len(prior_records) != len(records)
+    stress = cost_stress(
+        {
+            multiplier: run_backtest(
+                panel,
+                decision_weights,
+                CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
+            ).portfolio_net
+            for multiplier in (1.0, 1.5, 2.0)
+        },
+        bpy,
+    )
+    block: dict[str, Any] = {
+        "params": dict(params),
+        "full_sample": result.summary(),
+        "walk_forward": {k: v for k, v in wf.items() if k != "chosen_params"},
+        "cpcv": {k: v for k, v in cpcv.items() if k != "chosen"},
+        "multiple_testing": mt,
+        "cost_stress": stress,
+    }
+    verdict, reasons = decide(block)
+    block["verdict"] = verdict
+    block["reasons"] = reasons
+    return block, record
+
+
+def _evaluate_book(
+    universe_mode: str,
+    panel: Panel,
+    membership: pd.DataFrame | None,
+    main_entry: StrategyEntry,
+    sleeve_entry: StrategyEntry,
+    portfolio: PortfolioParams,
+    fractions: Sequence[float],
+    cost: CostModel,
+    *,
+    interval: str,
+    min_history: int,
+    folds: int,
+    min_train: int,
+    purge: int,
+    cpcv_groups: int,
+    prior_trials: int,
+    ledger_path: Path,
+) -> tuple[dict[str, Any], TrialRecord]:
+    """Main book alone vs main + fraction x sleeve on one universe; fractions[0] is the decision fraction."""
+    bpy = panel.bars_per_year
+    bare = replace(portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
+    main_model = AlphaModel(entries=(main_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
+    sleeve_model = AlphaModel(entries=(sleeve_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
+    w_main, _mc, _mp = main_model.evaluate(panel, membership)
+    w_sleeve, _sc, _sp = sleeve_model.evaluate(panel, membership)
+
+    def banded(weights: pd.DataFrame) -> pd.DataFrame:
+        if portfolio.no_trade_band > 0 or portfolio.no_trade_rel_band > 0:
+            return apply_no_trade_band(weights, portfolio.no_trade_band, portfolio.no_trade_rel_band)
+        return weights
+
+    main_result = run_backtest(panel, banded(w_main), cost)
+    sleeve_decision = banded(w_sleeve)
+    sleeve_result = run_backtest(panel, sleeve_decision, cost)
+    totals: dict[float, tuple[BacktestResult, dict[str, float]]] = {}
+    for fraction in fractions:
+        combined, binding = _combine_books(w_main, w_sleeve * fraction, portfolio)
+        totals[fraction] = (run_backtest(panel, combined, cost), binding)
+    index = main_result.portfolio_net.index
+    for total_result, _binding in totals.values():
+        index = index.intersection(total_result.portfolio_net.index)
+    index = index.intersection(sleeve_result.portfolio_net.index)
+    n_bars = len(index)
+    fold_list = walk_forward_folds(n_bars, folds, min_train=min(min_train, max(n_bars // 2, 2)), purge=purge)
+    main_net = main_result.portfolio_net.reindex(index).fillna(0.0)
+    sleeve_net = sleeve_result.portfolio_net.reindex(index).fillna(0.0)
+    main_metrics = _fold_metrics(main_net, fold_list, bpy)
+    standalone, record = _standalone_block(
+        sleeve_entry.id,
+        sleeve_entry.params,
+        sleeve_decision,
+        sleeve_result,
+        panel,
+        cost,
+        fold_list,
+        purge=purge,
+        cpcv_groups=cpcv_groups,
+        prior_trials=prior_trials,
+        ledger_path=ledger_path,
+    )
+    oos_start = fold_list[0].test_start
+    by_fraction: dict[str, dict[str, Any]] = {}
+    for fraction, (total_result, binding) in totals.items():
+        total_net = total_result.portfolio_net.reindex(index).fillna(0.0)
+        total_metrics = _fold_metrics(total_net, fold_list, bpy)
+        deltas = [
+            None if t is None or m is None else t - m
+            for t, m in zip(total_metrics["fold_sharpes"], main_metrics["fold_sharpes"], strict=True)
+        ]
+        wins = [d for d in deltas if d is not None]
+        main_oos, total_oos = main_metrics["oos_sharpe"], total_metrics["oos_sharpe"]
+        by_fraction[f"{fraction:.4f}"] = {
+            "fraction": fraction,
+            "total": {**total_metrics, "summary": total_result.summary()},
+            "cap_binding": binding,
+            "marginal": {
+                "delta_full_sharpe": (
+                    None
+                    if total_metrics["full_sharpe"] is None or main_metrics["full_sharpe"] is None
+                    else total_metrics["full_sharpe"] - main_metrics["full_sharpe"]
+                ),
+                "delta_oos_sharpe": None if total_oos is None or main_oos is None else total_oos - main_oos,
+                "oos_mdd_worsening": main_metrics["oos_mdd"] - total_metrics["oos_mdd"],
+                "delta_oos_return": total_metrics["oos_return"] - main_metrics["oos_return"],
+                "fold_deltas": deltas,
+                "fold_win_rate": float(np.mean([d > 0 for d in wins])) if wins else None,
+            },
+        }
+    sleeve_scaled = run_backtest(panel, banded(w_sleeve * fractions[0]), cost)
+    payload: dict[str, Any] = {
+        "universe_mode": universe_mode,
+        "symbols": panel.symbols,
+        "range": {"start": str(index[0]), "end": str(index[-1]), "bars": n_bars, "oos_start": str(index[oos_start])},
+        "main_only": {**main_metrics, "summary": main_result.summary()},
+        "sleeve_standalone": standalone,
+        "sleeve_scaled_summary": sleeve_scaled.summary(),
+        "correlation": {
+            "full": float(main_net.corr(sleeve_net)),
+            "oos": float(main_net.iloc[oos_start:].corr(sleeve_net.iloc[oos_start:])),
+        },
+        "netting": _netting(w_main, w_sleeve * fractions[0]),
+        "by_fraction": by_fraction,
+        "yearly_marginal": {
+            year: {"main": main_row["return"], "total": total_row["return"], "sleeve_alone": sleeve_row["return"]}
+            for (year, main_row), total_row, sleeve_row in zip(
+                yearly_breakdown(main_net, bpy).items(),
+                yearly_breakdown(totals[fractions[0]][0].portfolio_net.reindex(index).fillna(0.0), bpy).values(),
+                yearly_breakdown(sleeve_net * fractions[0], bpy).values(),
+                strict=True,
+            )
+        },
+    }
+    return payload, record
+
+
+def _record_trial(ledger_path: Path, record: TrialRecord) -> bool:
+    """Append a trial unless the identical configuration on the identical data is already in the ledger."""
+    existing = (
+        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), record.strategy)
+        if ledger_path.exists()
+        else []
+    )
+    if any(_trial_signature(r) == _trial_signature(record) for r in existing):
+        return False
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write(record.to_json() + "\n")
+    return True
+
+
+@research.command("book")
+@click.option("--main", "main_id", default="tsmom", show_default=True, help="main book strategy id (registry params)")
+@click.option("--sleeve", "sleeve_id", required=True, help="candidate sleeve strategy id")
+@click.option("--sleeve-params", default="", help="JSON overriding the sleeve's registry/default params")
+@click.option(
+    "--fraction",
+    default=1.0 / 3.0,
+    show_default=True,
+    type=float,
+    help="sleeve risk budget as a fraction of the main book's vol target and caps (one pre-registered value, no grid)",
+)
+@click.option(
+    "--sensitivity",
+    default="0.2,0.5",
+    show_default=True,
+    help="extra fractions reported for context only; never a decision input and never a ledger trial",
+)
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--symbols", default="", help="comma-separated; default = selected universe or all stored")
+@click.option("--interval", default="1h", show_default=True)
+@click.option("--from", "start", default=None, help="YYYY-MM-DD inclusive")
+@click.option("--to", "end", default=None, help="YYYY-MM-DD exclusive")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--registry", "registry_path", default="config/alpha_registry.yaml", show_default=True)
+@click.option("--costs", "costs_path", default="config/costs.yaml", show_default=True)
+@click.option("--funding/--no-funding", default=True, show_default=True)
+@click.option("--out", default="reports/research", show_default=True)
+@click.option("--min-history", default=None, type=int)
+@click.option("--universe", "universe_mode", type=click.Choice(list(UNIVERSE_MODES)), default="pit", show_default=True)
+@click.option(
+    "--robustness",
+    "robustness_mode",
+    type=click.Choice(["none", *UNIVERSE_MODES]),
+    default="none",
+    show_default=True,
+    help="second universe on which the sleeve must not subtract OOS Sharpe (D-018)",
+)
+@click.option("--folds", default=5, show_default=True)
+@click.option("--min-train", default=4000, show_default=True)
+@click.option("--purge", default=50, show_default=True)
+@click.option("--cpcv-groups", default=6, show_default=True)
+@click.option(
+    "--prior-trials",
+    default=0,
+    show_default=True,
+    help="sleeve configurations evaluated before the ledger existed (charged in the standalone DSR)",
+)
+def research_book(
+    main_id: str,
+    sleeve_id: str,
+    sleeve_params: str,
+    fraction: float,
+    sensitivity: str,
+    root: str,
+    symbols: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    profile: str,
+    registry_path: str,
+    costs_path: str,
+    funding: bool,
+    out: str,
+    min_history: int | None,
+    universe_mode: str,
+    robustness_mode: str,
+    folds: int,
+    min_train: int,
+    purge: int,
+    cpcv_groups: int,
+    prior_trials: int,
+) -> None:
+    """Evidence for running SLEEVE as an independent small book next to MAIN (D-018).
+
+    Books are summed (each with its own portfolio construction; the sleeve scaled by --fraction), then the
+    main book's caps and no-trade band apply to the total.  The report compares main-only with main+sleeve
+    out of sample and scores the sleeve on its own exactly like `research validate`.
+    """
+    if not 0 < fraction <= 1:
+        raise click.ClickException("--fraction must be in (0, 1]")
+    extra = [float(v) for v in sensitivity.split(",") if v.strip()]
+    fractions = [fraction, *[f for f in extra if f != fraction]]
+    profile_payload = load_yaml(profile)
+    portfolio = portfolio_params(profile_payload)
+    history = (
+        min_history
+        if min_history is not None
+        else int((profile_payload.get("portfolio", {}) or {}).get("min_history_bars", 720))
+    )
+    main_entry = _entry(main_id, registry_path, "")
+    sleeve_entry = _entry(sleeve_id, registry_path, sleeve_params)
+    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    ledger_path = Path(out) / "trials.jsonl"
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    panel = _load(root, chosen, interval, start, end, funding)
+    universes: list[tuple[str, Panel, pd.DataFrame | None]] = [
+        (universe_mode, panel, _membership(root, universe_mode, panel))
+    ]
+    if robustness_mode not in {"none", universe_mode}:
+        if robustness_mode == "static":
+            static = [s for s in read_universe(root) if s in panel.close.columns]
+            if not static:
+                raise click.ClickException("robustness universe 'static' needs a selected universe in the store")
+            universes.append(("static", panel.select(static), None))
+        else:
+            pit_panel = _load(root, _resolve_symbols(root, "", interval, "pit"), interval, start, end, funding)
+            universes.append(("pit", pit_panel, _membership(root, "pit", pit_panel)))
+    evaluated: dict[str, dict[str, Any]] = {}
+    records: list[TrialRecord] = []
+    for mode, mode_panel, membership in universes:
+        click.echo(
+            f"[{mode}] {main_id} + {fraction:.3f} x {sleeve_id} on {len(mode_panel.symbols)} symbols x "
+            f"{len(mode_panel.index)} bars"
+        )
+        payload, record = _evaluate_book(
+            mode,
+            mode_panel,
+            membership,
+            main_entry,
+            sleeve_entry,
+            portfolio,
+            fractions,
+            cost,
+            interval=interval,
+            min_history=history,
+            folds=folds,
+            min_train=min_train,
+            purge=purge,
+            cpcv_groups=cpcv_groups,
+            prior_trials=prior_trials,
+            ledger_path=ledger_path,
+        )
+        evaluated[mode] = payload
+        records.append(record)
+    decision = evaluated[universe_mode]
+    chosen_fraction = decision["by_fraction"][f"{fraction:.4f}"]
+    marginal = chosen_fraction["marginal"]
+    standalone = decision["sleeve_standalone"]
+    robustness = None if robustness_mode in {"none", universe_mode} else evaluated[robustness_mode]
+    robustness_delta = (
+        None if robustness is None else robustness["by_fraction"][f"{fraction:.4f}"]["marginal"]["delta_oos_sharpe"]
+    )
+    checks: dict[str, bool | None] = {
+        "delta_oos_sharpe": (
+            marginal["delta_oos_sharpe"] is not None
+            and marginal["delta_oos_sharpe"] >= BOOK_RULE["min_delta_oos_sharpe"]
+        ),
+        "oos_mdd_worsening": marginal["oos_mdd_worsening"] <= BOOK_RULE["max_oos_mdd_worsening"],
+        "fold_win_rate": (
+            marginal["fold_win_rate"] is not None and marginal["fold_win_rate"] >= BOOK_RULE["min_fold_win_rate"]
+        ),
+        "cpcv_negative": (
+            standalone["cpcv"]["fraction_negative"] is not None
+            and standalone["cpcv"]["fraction_negative"] <= BOOK_RULE["max_cpcv_negative"]
+        ),
+        "cost_x2_sharpe": (
+            standalone["cost_stress"]["x2"] is not None
+            and standalone["cost_stress"]["x2"] >= BOOK_RULE["min_cost_x2_sharpe"]
+        ),
+        "robustness_delta": (
+            None if robustness_delta is None else bool(robustness_delta >= BOOK_RULE["min_robustness_delta"])
+        ),
+    }
+    reasons = [name for name, ok in checks.items() if ok is False]
+    notes = ["robustness universe not evaluated"] if checks["robustness_delta"] is None else []
+    book_verdict = "ACCEPT" if not reasons else "REJECT"
+    report: dict[str, Any] = {
+        "kind": "book",
+        "main": {"strategy": main_id, "params": main_entry.params},
+        "sleeve": {"strategy": sleeve_id, "params": sleeve_entry.params},
+        "fraction": fraction,
+        "sensitivity_fractions": [f for f in fractions if f != fraction],
+        "combination": {
+            "rule": "total = main + fraction x sleeve (each book vol-targeted on its own), then the main book's "
+            "per-symbol cap, gross cap and no-trade band on the total",
+            "max_weight": portfolio.max_weight,
+            "max_gross": portfolio.max_gross,
+            "no_trade_band": portfolio.no_trade_band,
+            "no_trade_rel_band": portfolio.no_trade_rel_band,
+        },
+        "interval": interval,
+        "universe_mode": universe_mode,
+        "robustness_universe": None if robustness is None else robustness_mode,
+        "costs": cost.__dict__,
+        "folds": folds,
+        "min_train": min_train,
+        "purge": purge,
+        "prior_trials": prior_trials,
+        "universes": evaluated,
+        "rule": BOOK_RULE,
+        "checks": checks,
+        "book_verdict": book_verdict,
+        "reasons": reasons,
+        "notes": notes,
+        "sleeve_standalone_verdict": standalone["verdict"],
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    main_only = decision["main_only"]
+    total = chosen_fraction["total"]
+    sections: list[tuple[str, Any]] = [
+        ("Range", decision["range"]),
+        (
+            "Books",
+            {
+                "main": main_id,
+                "sleeve": sleeve_id,
+                "sleeve_params": json.dumps(sleeve_entry.params, sort_keys=True),
+                "fraction": fraction,
+                "universe": universe_mode,
+                "robustness_universe": report["robustness_universe"] or "none",
+            },
+        ),
+        ("Main book alone", {k: v for k, v in main_only.items() if k != "summary"}),
+        (
+            "Sleeve alone (as `research validate` would score it)",
+            {
+                "full_sharpe": standalone["full_sample"]["annualized_sharpe"],
+                "full_mdd": standalone["full_sample"]["max_drawdown"],
+                "average_absolute_exposure": standalone["full_sample"]["average_absolute_exposure"],
+                "oos_sharpe": standalone["walk_forward"]["oos_sharpe"],
+                "fold_sharpes": standalone["walk_forward"]["fold_sharpes"],
+                "cpcv_mean_q05_negative": [
+                    standalone["cpcv"]["oos_sharpe_mean"],
+                    standalone["cpcv"]["oos_sharpe_q05"],
+                    standalone["cpcv"]["fraction_negative"],
+                ],
+                "dsr_p_value": standalone["multiple_testing"]["dsr_p_value"],
+                "n_trials": standalone["multiple_testing"]["n_trials"],
+                "cost_x2_sharpe": standalone["cost_stress"]["x2"],
+                "standalone_verdict": standalone["verdict"],
+                "standalone_reasons": standalone["reasons"] or ["-"],
+            },
+        ),
+        ("Total book (main + fraction x sleeve)", {k: v for k, v in total.items() if k != "summary"}),
+        (
+            "Marginal",
+            {
+                **marginal,
+                "correlation_full": decision["correlation"]["full"],
+                "correlation_oos": decision["correlation"]["oos"],
+                "sleeve_scaled_exposure": decision["sleeve_scaled_summary"]["average_absolute_exposure"],
+            },
+        ),
+        ("Netting and caps", {**decision["netting"], **chosen_fraction["cap_binding"]}),
+        (
+            "Sensitivity (context only)",
+            {
+                key: {
+                    "delta_oos_sharpe": row["marginal"]["delta_oos_sharpe"],
+                    "oos_mdd_worsening": row["marginal"]["oos_mdd_worsening"],
+                    "fold_win_rate": row["marginal"]["fold_win_rate"],
+                }
+                for key, row in decision["by_fraction"].items()
+            },
+        ),
+        (
+            "Robustness universe",
+            {"universe": robustness_mode, "delta_oos_sharpe": robustness_delta}
+            if robustness is not None
+            else {"universe": "none"},
+        ),
+        ("Yearly returns (main / total / sleeve alone at fraction)", decision["yearly_marginal"]),
+        ("Rule (D-018)", BOOK_RULE),
+        ("Checks", checks),
+        ("Verdict", {"book_verdict": book_verdict, "reasons": reasons or ["-"], "notes": notes or ["-"]}),
+    ]
+    markdown = render_markdown(f"Book evidence: {main_id} + {fraction:.3f} x {sleeve_id} — {book_verdict}", sections)
+    path, digest = _write(out, f"book-{main_id}-{sleeve_id}-{_stamp()}", report, markdown)
+    for record in records:
+        recorded = _record_trial(ledger_path, replace(record, run_id=path.stem))
+        click.echo(
+            f"trials ledger: {sleeve_id} standalone on {record.symbols} symbols "
+            f"{'recorded' if recorded else 'already recorded (exact replay, not charged twice)'}"
+        )
+    click.echo(
+        f"main-only oos_sharpe={_fmt(main_only['oos_sharpe'])} oos_mdd={main_only['oos_mdd']:.3f} | "
+        f"total oos_sharpe={_fmt(total['oos_sharpe'])} oos_mdd={total['oos_mdd']:.3f} | "
+        f"delta={_fmt(marginal['delta_oos_sharpe'])} folds_won={_fmt(marginal['fold_win_rate'])}"
+    )
+    click.echo(
+        f"sleeve alone: oos_sharpe={_fmt(standalone['walk_forward']['oos_sharpe'])} "
+        f"dsr_p={_fmt(standalone['multiple_testing']['dsr_p_value'])} "
+        f"(n_trials {standalone['multiple_testing']['n_trials']}) verdict={standalone['verdict']}"
+    )
+    if robustness_delta is not None:
+        click.echo(f"robustness [{robustness_mode}] delta_oos_sharpe={_fmt(robustness_delta)}")
+    click.echo(f"checks: {json.dumps(checks)}")
+    click.echo(f"BOOK VERDICT: {book_verdict} {reasons if reasons else ''} {notes if notes else ''}")
     click.echo(f"report: {path} sha256={digest}")
 
 
