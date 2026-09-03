@@ -29,12 +29,13 @@ class PortfolioParams:
     max_gross: float = 2.0
     max_scalar: float = 3.0
     no_trade_band: float = 0.0
+    no_trade_rel_band: float = 0.0
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
             raise ValueError("portfolio parameters must be positive")
-        if self.no_trade_band < 0 or self.max_scalar <= 0:
-            raise ValueError("no_trade_band must be >= 0 and max_scalar > 0")
+        if self.no_trade_band < 0 or self.no_trade_rel_band < 0 or self.max_scalar <= 0:
+            raise ValueError("no-trade bands must be >= 0 and max_scalar > 0")
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> PortfolioParams:
@@ -75,13 +76,17 @@ def build_weights(
     factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
     weights = stage2.mul(factor, axis=0)
     weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)
-    if params.no_trade_band > 0:
-        weights = apply_no_trade_band(weights, params.no_trade_band)
+    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
+        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band)
     return weights
 
 
-def apply_no_trade_band(weights: pd.DataFrame, band: float) -> pd.DataFrame:
-    """Keep the previous weight when |Δw| < band (path dependent; exits to exactly zero are always allowed)."""
+def apply_no_trade_band(weights: pd.DataFrame, band: float, relative: float = 0.0) -> pd.DataFrame:
+    """Keep the previous weight when |Δw| < max(band, relative * |w_prev|).
+
+    Path dependent.  Exits to exactly zero, entries from zero and sign flips
+    are always executed; only same-direction resizing is suppressed.
+    """
     values = weights.to_numpy(dtype=float)
     out = np.empty_like(values)
     previous = np.zeros(values.shape[1])
@@ -91,7 +96,9 @@ def apply_no_trade_band(weights: pd.DataFrame, band: float) -> pd.DataFrame:
             out[t] = np.nan
             continue
         current = np.where(np.isnan(row), 0.0, row)
-        small = (np.abs(current - previous) < band) & ~((current == 0.0) & (previous != 0.0))
+        threshold = np.maximum(band, relative * np.abs(previous))
+        same_direction = (np.sign(current) == np.sign(previous)) & (current != 0.0) & (previous != 0.0)
+        small = (np.abs(current - previous) < threshold) & same_direction
         current = np.where(small, previous, current)
         out[t] = current
         previous = current

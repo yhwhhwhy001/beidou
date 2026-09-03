@@ -149,9 +149,14 @@ class LiveEngine:
         return record
 
     # --- one bar ----------------------------------------------------------------
+    @property
+    def history_bars(self) -> int:
+        needed = int(getattr(self.model, "min_history_bars", 0)) + int(getattr(self.model, "warmup_bars", 0))
+        return min(1500, max(self.config.history_bars, needed))
+
     async def run_cycle(self, bar_open_ms: int) -> dict[str, Any]:
         config = self.config
-        bars = await self.market.closed_bars(self.universe, config.interval, config.history_bars)
+        bars = await self.market.closed_bars(self.universe, config.interval, self.history_bars)
         usable = {symbol: frame for symbol, frame in bars.items() if frame is not None and len(frame) >= 2}
         if not usable:
             raise RuntimeError("no closed bars returned for the universe")

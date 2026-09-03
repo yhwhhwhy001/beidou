@@ -48,6 +48,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         leverage=int(portfolio.get("leverage", 2)),
         rebalance=RebalanceParams(
             no_trade_band=float(portfolio.get("no_trade_band", 0.005)),
+            no_trade_rel_band=float(portfolio.get("no_trade_rel_band", 0.0)),
             max_order_notional=(
                 float(portfolio["max_order_notional"]) if portfolio.get("max_order_notional") else None
             ),

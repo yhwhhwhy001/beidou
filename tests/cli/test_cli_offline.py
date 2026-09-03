@@ -48,6 +48,8 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             "--no-funding",
             "--params",
             '{"vol_window": 100}',
+            "--min-history",
+            "0",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -79,6 +81,8 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             "5",
             "--cpcv-groups",
             "4",
+            "--min-history",
+            "0",
         ],
     )
     assert result.exit_code == 0, result.output

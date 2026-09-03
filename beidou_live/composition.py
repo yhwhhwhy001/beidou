@@ -58,7 +58,8 @@ def cost_model(costs: Mapping[str, Any], *, use_funding: bool | None = None) -> 
 
 def build_model(registry: Registry, profile: Mapping[str, Any]) -> AlphaModel:
     interval = str((profile.get("market_data", {}) or {}).get("interval", "1h"))
-    return AlphaModel.from_registry(registry, portfolio_params(profile), interval)
+    min_history = int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720))
+    return AlphaModel.from_registry(registry, portfolio_params(profile), interval, min_history_bars=min_history)
 
 
 def read_universe(root: str | Path) -> list[str]:

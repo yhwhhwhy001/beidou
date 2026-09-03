@@ -21,14 +21,26 @@ class AlphaModel:
     interval: str
     ensemble_method: str = "mean"
     hold_on_no_action: bool = True
+    min_history_bars: int = 720
 
     @classmethod
-    def from_registry(cls, registry: Registry, portfolio: PortfolioParams, interval: str) -> AlphaModel:
+    def from_registry(
+        cls, registry: Registry, portfolio: PortfolioParams, interval: str, *, min_history_bars: int = 720
+    ) -> AlphaModel:
         if not registry.enabled:
             raise ValueError("registry has no enabled strategies")
         return cls(
-            entries=registry.enabled, portfolio=portfolio, interval=interval, ensemble_method=registry.ensemble_method
+            entries=registry.enabled,
+            portfolio=portfolio,
+            interval=interval,
+            ensemble_method=registry.ensemble_method,
+            min_history_bars=min_history_bars,
         )
+
+    def eligible(self, panel: Panel) -> pd.DataFrame:
+        """Symbols become tradable only after ``min_history_bars`` observed bars (new listings are excluded)."""
+        history = panel.close.notna().cumsum()
+        return history >= self.min_history_bars
 
     @property
     def warmup_bars(self) -> int:
@@ -39,8 +51,9 @@ class AlphaModel:
         return {entry.id: get_signal(entry.id).compute(panel, entry.params) for entry in self.entries}
 
     def strategy_targets(self, panel: Panel) -> dict[str, pd.DataFrame]:
+        eligible = self.eligible(panel)
         return {
-            entry.id: scores_to_targets(scores, entry.entry_threshold, hold=self.hold_on_no_action)
+            entry.id: scores_to_targets(scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action)
             for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True)
         }
 

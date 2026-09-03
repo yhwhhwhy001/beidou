@@ -73,3 +73,26 @@ def test_model_end_to_end_on_august(august_panel: Panel) -> None:
     assert target.as_of == august_panel.index[-1]
     assert set(target.weights) == set(august_panel.symbols)
     assert all(abs(value) <= 0.15 + 1e-9 for value in target.weights.values())
+
+
+def test_relative_band_suppresses_small_resizes_only() -> None:
+    index = pd.date_range("2024-01-01", periods=6, freq="h", tz="UTC")
+    weights = pd.DataFrame({"A": [0.10, 0.11, 0.14, -0.05, 0.0, 0.02]}, index=index)
+    banded = apply_no_trade_band(weights, 0.0, relative=0.25)
+    assert banded["A"].tolist() == [0.10, 0.10, 0.14, -0.05, 0.0, 0.02]
+
+
+def test_min_history_filter_blocks_new_listings(august_panel: Panel) -> None:
+    entry = StrategyEntry(
+        "tsmom",
+        params={**TsmomParams(vol_window=100).__dict__, "horizons": [5, 20, 50], "horizon_weights": [0.2, 0.3, 0.5]},
+    )
+    model = AlphaModel(
+        entries=(entry,),
+        portfolio=PortfolioParams(covariance_halflife=48, vol_halflife=24),
+        interval="1h",
+        min_history_bars=300,
+    )
+    targets = model.strategy_targets(august_panel)["tsmom"]
+    assert targets.iloc[:299].isna().all().all()
+    assert targets.iloc[300:].notna().any().any()

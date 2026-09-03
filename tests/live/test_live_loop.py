@@ -37,6 +37,7 @@ def _model() -> AlphaModel:
         entries=(entry,),
         portfolio=PortfolioParams(covariance_halflife=48, vol_halflife=24, max_weight=0.15, max_gross=0.6),
         interval="1h",
+        min_history_bars=0,
     )
 
 
@@ -306,3 +307,43 @@ def test_instrument_rules_tradable() -> None:
     assert InstrumentRules("X", Decimal("1"), Decimal("1"), Decimal("1"), Decimal("5")).tradable
     assert not InstrumentRules("X", Decimal("1"), Decimal("1"), Decimal("1"), Decimal("5"), status="BREAK").tradable
     assert isinstance(pd.Timestamp.now(tz="UTC"), pd.Timestamp)
+
+
+def test_rebalance_relative_band_only_for_same_direction_resizes() -> None:
+    rules = DEFAULT_RULES
+    prices = {"BTCUSDT": 60_000.0}
+    positions = {"BTCUSDT": Position("BTCUSDT", 0.1, 60_000.0, 60_000.0)}  # 6,000 notional
+    params = RebalanceParams(no_trade_band=0.0, no_trade_rel_band=0.25)
+    small, _ = plan_rebalance(
+        {"BTCUSDT": 0.07},
+        managed_symbols=["BTCUSDT"],
+        equity=100_000.0,
+        positions=positions,
+        prices=prices,
+        rules=rules,
+        bar_open_ms=1,
+        params=params,
+    )
+    assert small == []  # 7,000 vs 6,000 is a 17% resize -> suppressed
+    big, _ = plan_rebalance(
+        {"BTCUSDT": 0.09},
+        managed_symbols=["BTCUSDT"],
+        equity=100_000.0,
+        positions=positions,
+        prices=prices,
+        rules=rules,
+        bar_open_ms=1,
+        params=params,
+    )
+    assert big and big[0].side is Side.BUY
+    flip, _ = plan_rebalance(
+        {"BTCUSDT": -0.05},
+        managed_symbols=["BTCUSDT"],
+        equity=100_000.0,
+        positions=positions,
+        prices=prices,
+        rules=rules,
+        bar_open_ms=1,
+        params=params,
+    )
+    assert flip and flip[0].side is Side.SELL and not flip[0].reduce_only

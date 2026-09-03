@@ -18,6 +18,7 @@ from beidou_shared.types import InstrumentRules, Position, Side
 @dataclass(frozen=True)
 class RebalanceParams:
     no_trade_band: float = 0.005
+    no_trade_rel_band: float = 0.0
     max_order_notional: float | None = None
     tag: str = "bd"
 
@@ -89,7 +90,13 @@ def plan_rebalance(
         target_notional = target_weight * equity
         current_notional = current_qty * price
         delta = target_notional - current_notional
-        if abs(delta) < params.no_trade_band * equity:
+        same_direction_resize = (
+            current_qty != 0.0 and target_notional != 0.0 and (target_notional > 0) == (current_qty > 0)
+        )
+        threshold = params.no_trade_band * equity
+        if same_direction_resize:
+            threshold = max(threshold, params.no_trade_rel_band * abs(current_notional))
+        if abs(delta) < threshold:
             continue
         closing = abs(target_notional) < 1e-9 and current_qty != 0.0
         same_direction = current_qty != 0.0 and (target_notional > 0) == (current_qty > 0)

@@ -17,6 +17,8 @@ portfolio:
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
+  no_trade_rel_band: 0.25     # ...or smaller than 25% of the current position (same-direction resizes only)
+  min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 guards:
   daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
   stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals

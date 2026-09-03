@@ -20,8 +20,17 @@ from beidou_alpha.panel import Panel
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
+from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
-from beidou_alpha.validation.metrics import compound, sharpe, yearly_breakdown
+from beidou_alpha.validation.labels import forward_returns
+from beidou_alpha.validation.metrics import (
+    compound,
+    information_coefficient,
+    newey_west_tstat,
+    sharpe,
+    time_series_ic,
+    yearly_breakdown,
+)
 from beidou_alpha.validation.multiple_testing import multiple_testing_report
 from beidou_alpha.validation.stability import cost_stress, parameter_neighborhood, time_split_sharpes
 from beidou_alpha.validation.verdict import decide
@@ -32,13 +41,22 @@ from beidou_live.composition import cost_model, load_panel, load_registry, portf
 from beidou_shared.config import load_yaml
 
 DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
-    "tsmom": {"vol_window": [100, 200, 400], "entry_threshold": [0.15, 0.20, 0.30], "return_scale": [0.10, 0.20, 0.30]},
-    "xsmom": {"score_scale": [0.05, 0.08, 0.12], "entry_threshold": [0.15, 0.20, 0.30]},
+    "tsmom": {
+        "horizons": [[5, 20, 50], [24, 72, 168], [168, 336, 720], [336, 720, 1440]],
+        "entry_threshold": [0.20, 0.30],
+        "return_scale": [0.20, 0.30],
+        "vol_window": [400],
+    },
+    "xsmom": {
+        "horizons": [[24, 72, 168], [168, 336, 720], [336, 720, 1440]],
+        "score_scale": [0.08, 0.15],
+        "entry_threshold": [0.20, 0.30],
+    },
     "carry": {"window_bars": [24, 72, 168], "scale": [0.0003, 0.0005, 0.001], "entry_threshold": [0.15, 0.20, 0.30]},
     "meanrev": {"window": [24, 48, 96], "z_entry": [1.5, 2.0, 2.5], "trend_gate_z": [1.5, 2.0, 3.0]},
     "breakout": {"window": [24, 48, 96], "distance_scale": [1.0, 2.0, 3.0]},
-    "flow": {"window": [12, 24, 48], "scale": [0.03, 0.05, 0.10]},
-    "residual": {"scale": [0.03, 0.05, 0.10], "beta_window": [168, 336, 720]},
+    "flow": {"window": [24, 72, 168, 336], "scale": [0.03, 0.05, 0.10], "entry_threshold": [0.20, 0.30]},
+    "residual": {"horizons": [[24, 72, 168], [168, 336, 720]], "scale": [0.05, 0.10], "beta_window": [336, 720]},
 }
 
 
@@ -60,6 +78,12 @@ def _common_options(function: Any) -> Any:
             ),
             click.option("--funding/--no-funding", default=True, show_default=True),
             click.option("--out", default="reports/research", show_default=True),
+            click.option(
+                "--min-history",
+                default=None,
+                type=int,
+                help="bars a symbol must have before it is tradable (default: profile portfolio.min_history_bars)",
+            ),
         ]
     ):
         function = option(function)
@@ -86,8 +110,12 @@ def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
     return StrategyEntry(id=strategy, params=base)
 
 
-def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str) -> AlphaModel:
-    return AlphaModel(entries=(entry,), portfolio=portfolio_params(profile), interval=interval)
+def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str, min_history: int | None = None) -> AlphaModel:
+    if min_history is None:
+        min_history = int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720))
+    return AlphaModel(
+        entries=(entry,), portfolio=portfolio_params(profile), interval=interval, min_history_bars=min_history
+    )
 
 
 def _load(root: str, symbols: list[str], interval: str, start: str | None, end: str | None, funding: bool) -> Panel:
@@ -135,13 +163,14 @@ def research_backtest(
     execution: str,
     funding: bool,
     out: str,
+    min_history: int | None,
 ) -> None:
     """Backtest one strategy through the full portfolio pipeline and write a research report."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval)
     panel = _load(root, chosen, interval, start, end, funding)
-    model = _model(entry, profile_payload, interval)
+    model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     weights, _combined, _per = model.evaluate(panel)
     result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
@@ -235,6 +264,7 @@ def research_validate(
     execution: str,
     funding: bool,
     out: str,
+    min_history: int | None,
     grid: str,
     folds: int,
     min_train: int,
@@ -255,7 +285,7 @@ def research_validate(
     click.echo(f"evaluating {len(combos)} parameter sets on {len(panel.symbols)} symbols x {len(panel.index)} bars")
     for combo in combos:
         key = param_key(combo)
-        model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval)
+        model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel)
         result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
         results[key] = result
@@ -279,7 +309,7 @@ def research_validate(
     mt = multiple_testing_report(nets[best_key].to_numpy(dtype=float), matrix, bars_per_year=bpy)
 
     def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
-        model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval)
+        model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel)
         return sharpe(run_backtest(panel, weights, cost, execution=execution).portfolio_net, bpy)  # type: ignore[arg-type]
 
@@ -361,3 +391,57 @@ def research_validate(
 
 
 __all__ = ["research_backtest", "research_list", "research_validate"]
+
+
+@research.command("diagnose")
+@_common_options
+@click.option("--horizons", default="1,4,24,72,168", show_default=True, help="forward-return horizons (bars) for IC")
+def research_diagnose(
+    strategy: str,
+    params: str,
+    root: str,
+    symbols: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    profile: str,
+    registry_path: str,
+    costs_path: str,
+    execution: str,
+    funding: bool,
+    out: str,
+    min_history: int | None,
+    horizons: str,
+) -> None:
+    """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
+    del out, min_history  # diagnostics write nothing and look at raw signals
+    entry = _entry(strategy, registry_path, params)
+    chosen = _resolve_symbols(root, symbols, interval)
+    panel = _load(root, chosen, interval, start, end, funding)
+    scores = get_signal(strategy).compute(panel, entry.params)
+    coverage = float(scores.notna().mean().mean())
+    click.echo(f"{strategy} on {len(panel.symbols)} symbols x {len(panel.index)} bars; score coverage={coverage:.2f}")
+    click.echo("horizon | ts-IC mean (spearman, per-symbol avg) | xs-IC mean | NW t | NW p")
+    for horizon in [int(h) for h in horizons.split(",") if h.strip()]:
+        fwd = forward_returns(panel.close, horizon)
+        ts = [time_series_ic(scores[s], fwd[s]) for s in panel.symbols]
+        ts_values = [v for v in ts if v is not None]
+        xs = information_coefficient(scores, fwd)
+        nw = newey_west_tstat(xs, max_lags=horizon) if len(xs) > 10 else {"t_stat": None, "p_value": None}
+        ts_mean = sum(ts_values) / len(ts_values) if ts_values else float("nan")
+        click.echo(
+            f"{horizon:>7} | {ts_mean:+.4f} | {float(xs.mean()) if len(xs) else float('nan'):+.4f} | "
+            f"{_fmt(nw['t_stat'])} | {_fmt(nw['p_value'])}"
+        )
+    targets = scores_to_targets(scores, entry.entry_threshold, hold=True)
+    flips = int((targets.fillna(0.0).apply(np.sign).diff().abs() > 0).sum().sum())
+    click.echo(f"target flips: {flips} ({flips / max(1, targets.notna().sum().sum()):.4f} per symbol-bar)")
+    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    equal = targets / max(1, len(panel.symbols))
+    for label, model in (
+        ("signal-only equal-notional, zero cost", CostModel(0.0, 0.0, False)),
+        ("signal-only equal-notional, full cost", cost),
+    ):
+        summary = run_backtest(panel, equal, model, execution=execution).summary()  # type: ignore[arg-type]
+        click.echo(f"{label}: ")
+        _echo_summary(summary)

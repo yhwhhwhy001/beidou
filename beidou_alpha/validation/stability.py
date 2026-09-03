@@ -28,8 +28,11 @@ def parameter_neighborhood(
     """Evaluate ±perturb_pct around every numeric parameter; report the worst relative degradation."""
     base = evaluate(base_params)
     results: dict[str, dict[str, float | None]] = {}
-    keys = numeric_keys or tuple(
-        k for k, v in base_params.items() if isinstance(v, int | float) and not isinstance(v, bool)
+    candidates = numeric_keys or tuple(base_params)
+    keys = tuple(
+        k
+        for k in candidates
+        if isinstance(base_params.get(k), int | float) and not isinstance(base_params.get(k), bool)
     )
     for key in keys:
         value = base_params[key]
