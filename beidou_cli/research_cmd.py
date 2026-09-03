@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -266,12 +267,12 @@ def research_validate(
     cpcv = cpcv_evaluate(
         nets, cpcv_splits(n_bars, n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=purge), bpy
     )
-    full_sharpes = {key: sharpe(series, bpy) for key, series in nets.items()}
-    best_key = max(full_sharpes, key=lambda k: full_sharpes[k] if full_sharpes[k] is not None else -np.inf)
+    full_sharpes: dict[str, float] = {key: (sharpe(series, bpy) or -np.inf) for key, series in nets.items()}
+    best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
     mt = multiple_testing_report(nets[best_key].to_numpy(dtype=float), matrix, bars_per_year=bpy)
 
-    def evaluate_params(candidate: dict[str, Any]) -> float | None:
+    def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
         model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval)
         weights, _c, _p = model.evaluate(panel)
         return sharpe(run_backtest(panel, weights, cost, execution=execution).portfolio_net, bpy)  # type: ignore[arg-type]
