@@ -29,6 +29,7 @@ from beidou_research.validation.independent_oracle import (
     validate_scientific_evidence,
     write_acceptance_artifacts,
 )
+from tests.policy_envelope import require_policy_envelope
 
 POLICY_PATH = Path(
     os.environ.get(
@@ -374,6 +375,7 @@ def _gate_specific_outcomes(policy) -> dict[str, dict[str, Any]]:
 
 @pytest.fixture(scope="module")
 def policy():
+    require_policy_envelope(POLICY_PATH, "BEIDOU_T07_METRIC_OWNER_POLICY")
     return load_metric_owner_policy(POLICY_PATH)
 
 
