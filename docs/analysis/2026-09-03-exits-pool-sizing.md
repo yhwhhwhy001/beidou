@@ -137,6 +137,7 @@ Engineering Pre-check：退出层的 Python 逐 bar 循环（45k bars × 15 币�
 | D-016 | 交易所杠杆 = `min(max_leverage, bracket_max, ceil(max_gross / margin_cap))`，默认 `margin_cap 0.4 → 5x`；敞口仍由组合层决定 | 固定 2x | E-038 | 高 |
 | D-017 | 退出层与回撤节流的启用都由**预先登记的验收标准**决定（§10 T-X06/T-S05）；不满足则随代码交付、默认关闭、写负结果 | 直接启用 | 用户原则："先经济改进、再诚实验证；不通过就报负结果" | 高 |
 | D-018 | 新策略作为**独立小书**加入（各书独立波动率目标与上限，按 fraction 求和，总书套主书上限与再平衡带）的验收由预登记规则决定（`beidou research book`：ΔOOS Sharpe ≥ 0.10、OOS MDD 恶化 ≤ 1pp、≥ 3/5 折胜出、第二 universe ΔOOS ≥ 0、小书单独 CPCV 负比例 ≤ 10% 且成本 2× ≥ 0.5）；书级 ACCEPT 不产生 registry 判定，信号级仍须 PASS / WEAK_PASS（KILL-015） | 按相关性 / 边际 Sharpe 直接启用 | 用户原则同 D-017；首个用例 flow 空头小书（2026-09-03 14:36Z）：书级 ACCEPT、信号级 FAIL → 不启用 | 高 |
+| D-019 | **探针书**：操作者可把书级 ACCEPT 的 sleeve 作为有界实验上线——registry 必须写明 `book` + `probe`（接受人、日期、止损规则、复审天数），启动检查核对报告种类/对象/fraction；引擎按归因 P&L 自动停书并持久化；日报标复审 | 等实盘归因 ≥ 30 天再决定（路径 a） | 操作者 2026-09-04 明确选择路径 (b)；demo 资金、3% 平均敞口、自动止损让错误的代价有界，而样本外证据只有运行才能产生 | 高（`enabled: false` 或 `probe.stop`） |
 
 灰度/回滚：每个层有独立开关；`--dry-run` 先看退出层的"本应平仓"记录一天；`git revert` 单 commit 可回滚。
 
@@ -159,7 +160,8 @@ Engineering Pre-check：退出层的 Python 逐 bar 循环（45k bars × 15 币�
 | KILL-024 | 新币进池即被交易，上市首月的异常路径污染信号（Risk Red Team） | D-014 | P2 | `min_history_bars=720` 对池成员同样生效 | CLOSED |
 | KILL-025 | 时点 universe 下 tsmom/flow 的证据显著下降（Evidence Prosecutor） | C-009 | P1 | 这是本轮的目的：若下降则更新 registry 证据；若某策略 FAIL 则停用 | ACCEPTED（合法产出） |
 | KILL-026 | 参与率上限在 10k 权益下永不触发，是死代码（Complexity Accountant） | D-015 | P2 | 保留但用测试证明其在大权益下生效；不在实盘证据里宣称价值 | ACCEPTED |
-| KILL-027 | "独立小书"只是主书的空头倾斜：flow 空头小书 91% 币-bar 与 tsmom 同向、净收益相关 0.29，静态 universe 上贡献为零（Evidence Prosecutor） | D-018 | P1 | 不启用；若重开，作为 tsmom 的修饰项预登记验证而不是第二本书 | ACCEPTED（不启用） |
+| KILL-030 | "独立小书"只是主书的空头倾斜：flow 空头小书 91% 币-bar 与 tsmom 同向、净收益相关 0.29，静态 universe 上贡献为零（Evidence Prosecutor） | D-018 | P1 | 不启用；若重开，作为 tsmom 的修饰项预登记验证而不是第二本书 | ACCEPTED（不启用） |
+| KILL-031 | 探针书的止损校准不当：字面"亏了就停"把噪声当证据（Sharpe-1 的 sleeve 首月 ~37% 误停），阈值太松则把伤害当噪声（Risk Red Team） | D-019 | P2 | 30 天 −1% 权益 ≈ −2σ；90 天强制复审；阈值与理由写进 registry 注释 | MITIGATED |
 
 Pre-Mortem（30 天后失败的最可能原因）：① 退出层通过了回测门槛却在实盘频繁触发（demo 价格偏差 E-013 让"入场价"与 mainnet 收盘价不一致）→ M-005 监控触发频率与触发后 24/72h 的反事实收益；② 池刷新在某天把 5 个币换掉，换手激增 → M-006；③ 时点 universe 让 flow 失去空头对象（早年 universe 更小）→ 记录为负结果。
 
@@ -185,6 +187,7 @@ Inversion（怎样保证失败）：把止损做成 2% 固定百分比并在小�
 | DL-05 退出层 | `exit_step()` 纯步函数 + `apply_exits()` 向量化回测应用 + 实盘步进与状态持久化 + 证据报告 | `beidou_alpha/overlays/exits.py`、`beidou_live/exits.py`、`beidou_live/engine.py`、`beidou_cli/research_cmd.py` | T-X01 止损/止盈/移动止损各自在合成路径上恰好触发一次且在下一 bar 执行；T-X02 冷却期内同向不入场、反向入场；T-X03 hold 语义下不重复入场；T-X04 重启后入场价来自交易所、高水位恢复；T-X05 无前视（未来行打乱不改变过去决策）；T-X06 证据报告：8 个预登记设置在 tsmom+flow 组合 WFO 上的 OOS Sharpe/MDD 对照，启用规则按 D-017 | 实盘 `cycles.jsonl` 每次退出可追溯到 (symbol, rule, entry, price, vol) |
 | DL-06 交易池 | 日线同步；`point_in_time_membership()`；`refresh_live_universe()`；engine 日切刷新 + 受管集合；`--universe pit` | `beidou_data/pool.py`、`beidou_data/universe.py`、`beidou_live/engine.py`、`beidou_cli/data_cmd.py`、`research_cmd.py` | T-P01 滞回：排名 16–20 的老成员保留、21 退出、≤15 进入；T-P02 时点表因果：t 月成员只用 t 月前数据；T-P03 退出侧遍历仓位：被移出币有仓位时产生 reduce-only 单；T-P04 新币历史不足不交易；T-P05 刷新失败保留上一池；T-P06 覆盖率报告 | `universe.json` 含 `changed_at`、`entered`、`left`；`membership.parquet` 可复现 |
 | DL-07 sizing | `derive_leverage()`；`scale_orders_to_margin()`；`participation_cap()`；`drawdown_scalar()` | `beidou_live/leverage.py`、`beidou_live/rebalancer.py`、`beidou_alpha/overlays/exposure.py`、`beidou_exchange/binance_usdm/venue.py` | T-S01 杠杆 = min(max, bracket, ceil(gross/cap))；T-S02 保证金不足时只缩加仓单且按比例；T-S03 参与率截断；T-S04 节流标量单调、有下限、无前视；T-S05 节流证据报告（同 T-X06 的验收规则） | demo 上 `positionRisk.leverage` 全部等于推导值；30 天内 −2019 拒单 = 0 |
+| DL-08 探针书 | registry `books` / `book` / `probe`；`AlphaModel` 按书构建 + `combine_books`；`beidou_live/probe.py` 止损规则；引擎停书与持久化；日报探针段；`research book` 证据 | `beidou_alpha/registry.py`、`beidou_alpha/model.py`、`beidou_alpha/portfolio.py`、`beidou_live/probe.py`、`beidou_live/engine.py`、`beidou_live/reports.py`、`beidou_cli/research_cmd.py` | T-B01 单主书逐位不变；T-B02 两书求和后套上限与带、contributions 带 fraction；T-B03 ACCEPT 只在非主书 + probe 块放行且核对报告；T-B04 引擎按 30 天归因止损、重启仍停；T-B05 日报探针段 | `heartbeat.json.probes`、`cycles.jsonl.probes`、日报 `Probe books` |
 
 Source Trace：DL-05 ← E-030/032/033/039, C-008, D-012/017, KILL-016/021/022 ← M-005；DL-06 ← E-034/036/037, C-009, D-013/014, KILL-018/019/024/025 ← M-006；DL-07 ← E-035/038, C-010/011, D-015/016, KILL-020/026 ← M-007。
 
@@ -202,6 +205,7 @@ Owner（单人项目，全部为操作者本人；Agent 只交付代码与证据
 | M-006 | C-009 | 每月成员变更数；新进入币 vs 老成员的归因 P&L | 变更 > 5 币/月或换手成本 > 毛收益 20% | 60 天 | 加大滞回或改为周刷新 |
 | M-007 | C-010 | 保证金占用峰值；−2019 拒单数 | 占用 ≤ 50%；拒单 0 | 30 天 | 调整 margin_cap |
 | M-008 | C-012 | flow 空头腿实盘 Sharpe vs 多头腿 | 空头腿 30 天 Sharpe < −1 | 30 天 | 复查门槛或停用 flow 空头 |
+| M-009 | C-012 | flow 探针书 30 天归因净 P&L（% 权益）；90 天实盘 Sharpe vs 小书单独 OOS 1.09 | 30 天 ≤ −1% → 自动停书；90 天 Sharpe < 0 → 停用并写负结果 | 90 天（2026-12-02 复审） | 停用探针书；结果计入 flow 账本 |
 
 Post-Launch Review：M2+14 天的《策略有效性报告》增加"退出层/池刷新/杠杆推导"三节。
 

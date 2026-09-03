@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from beidou_live.composition import build_model, load_registry, read_universe, w
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
 from beidou_live.ports import UniverseUpdate
+from beidou_live.probe import probes_from_registry
 from beidou_live.rebalancer import RebalanceParams
 from beidou_live.state import StateStore
 from beidou_shared.config import env_secret, load_yaml
@@ -84,6 +86,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",
         liquidity_window=int(pool.get("liquidity_window", 24)),
+        probes=probes_from_registry(registry),
     )
 
 
@@ -117,12 +120,30 @@ def universe_sink(data_root: str | Path) -> Callable[[UniverseUpdate], None]:
 
 
 def registry_evidence_problems(registry: Registry) -> list[str]:
+    """KILL-015 at startup; a probe book (D-019) must also cite an ACCEPTed book report at the registry's fraction."""
+
     def sha256_of(path: str) -> str:
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+    def read_report(path: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     problems: list[str] = []
     for entry in registry.enabled:
-        problems.extend(evidence_problems(entry, exists=lambda p: Path(p).exists(), sha256_of=sha256_of))
+        fraction = registry.books[entry.book].fraction if entry.book in registry.books else None
+        problems.extend(
+            evidence_problems(
+                entry,
+                exists=lambda p: Path(p).exists(),
+                sha256_of=sha256_of,
+                read_report=read_report,
+                book_fraction=fraction,
+            )
+        )
     return problems
 
 

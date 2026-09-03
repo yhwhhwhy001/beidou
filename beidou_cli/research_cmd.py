@@ -21,7 +21,7 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
-from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band
+from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine_books
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
@@ -831,18 +831,12 @@ def _fold_metrics(net: pd.Series, fold_list: Sequence[Fold], bpy: float) -> dict
 def _combine_books(
     main: pd.DataFrame, sleeve: pd.DataFrame, params: PortfolioParams
 ) -> tuple[pd.DataFrame, dict[str, float]]:
-    """Sum two books; the main book's per-symbol cap, gross cap and no-trade band then apply to the total."""
+    """Sum two books (``combine_books``: the main book's caps and band on the total) plus cap-binding diagnostics."""
+    total = combine_books({"main": main, "sleeve": sleeve}, params)
     columns = main.columns.union(sleeve.columns)
-    a = main.reindex(columns=columns)
     b = sleeve.reindex(columns=columns)
-    valid = a.notna().any(axis=1) | b.notna().any(axis=1)
-    raw = a.fillna(0.0) + b.fillna(0.0)
-    clipped = raw.clip(-params.max_weight, params.max_weight)
-    gross = clipped.abs().sum(axis=1)
-    factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
-    total = clipped.mul(factor, axis=0).where(valid, other=np.nan)
-    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        total = apply_no_trade_band(total, params.no_trade_band, params.no_trade_rel_band)
+    raw = main.reindex(columns=columns).fillna(0.0) + b.fillna(0.0)
+    gross = raw.clip(-params.max_weight, params.max_weight).abs().sum(axis=1)
     active = b.fillna(0.0) != 0.0
     n_active = max(1, int(active.to_numpy().sum()))
     binding = {

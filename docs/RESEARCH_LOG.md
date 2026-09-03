@@ -262,10 +262,20 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 
 决定：**flow 空头小书不启用。** registry 规则（KILL-015：只有 PASS / WEAK_PASS 报告能启用）与本次信号级判定（FAIL，DSR p 0.81）一致；D-018 的书级 ACCEPT 记录在案，但一个本身不显著、且大部分是 tsmom 空头倾斜的小书不满足"独立"的前提。可重开条件（二选一）：(a) 实盘 tsmom 归因积累 ≥ 30 天后，把"卖出流条件下的空头侧倾斜"作为 tsmom 的一个修饰项（类似拥挤度过滤）单独预登记验证，每个配置计入 flow 账本；(b) 操作者明确接受"小书 = demo 上的有界实验"（3% 平均敞口、30 天 Sharpe < 0 即停）并在 registry 里以显式例外标注——这需要先实现 registry 的 book 机制（各书独立构建、按 fraction 求和、总书套上限；目前只有研究命令，模型与实盘未实现）。
 
+### 操作者决定：flow 空头小书作为探针书上线（D-019，2026-09-04）
+
+操作者选择了第二条路：把 flow 空头小书作为 demo 上的**有界实验**（探针书）运行，目的只有一个——在真实的样本外积累证据。它不是被验证的策略；registry 里的 `verdict: ACCEPT` 是书级判定（D-018），信号级判定仍是 FAIL。实现与约束：
+
+- **book 机制**：registry 新增 `books:`（`flow_short: fraction 0.333333`）与策略的 `book` 字段。模型按书独立构建（各自波动率目标、不带再平衡带）、按 fraction 缩放后求和，再套主书的单币上限、gross 上限与再平衡带（`beidou_alpha/portfolio.py::combine_books`，与 `research book` 的算法同源）。只有主书时代码路径与之前逐位相同（`tests/alpha/test_books.py::test_single_main_book_path_is_unchanged`）。归因 contributions 带 book fraction，日报 `PnL by strategy` 按书拆分。
+- **显式例外**：`ACCEPT` 只在非主书且带 `probe` 块（`accepted_by`、`accepted_on`、`stop`）时被启动检查放行；启动时还核对引用的报告是 ACCEPT 的 book 报告、写的是这个 sleeve、且 fraction 与 registry 一致——KILL-015 的延伸，"例外"必须写在 registry 里而不是文档里。
+- **自动止损**（`beidou_live/probe.py`）：每个周期读 `attribution.jsonl`，sleeve 过去 30 天归因净 P&L ≤ −1% 权益即停书：状态持久化（`state.json.stopped_books`），重启后仍停；`cycles.jsonl`、心跳与日报可见；webhook 告警。阈值校准：sleeve 平均敞口约 3% 权益，30 天 P&L 标准差约 0.5% 权益，"亏了就停"会让一个 Sharpe 1 的 sleeve 在首月约 37% 概率被误停；−1% ≈ −2σ，停在"有害的证据"而不是噪声上。想用字面规则可把 `max_loss` 设为 0。
+- **复审**：`review_after_days: 90` → 自 2026-12-02 起日报的 `Probe books` 段标 REVIEW_DUE；届时按 M-009 用实盘归因决定去留，任何"调一调再看"都计入 flow 账本。
+- **上线前 dry-run**（2026-09-03 16:00Z bar，scratch 状态目录）：探针状态 OK、sleeve 当前无空头信号（tsmom 几乎全多头，`short_gate` 把顺势空头挡住）、0 笔订单。首批空头会出现在有卖出流且不处于强势趋势的币上。
+
 ### 本轮结论
 
 - **flow 停用**，实盘 registry 只剩 tsmom（周级 + 拥挤度过滤；时点 universe OOS 1.53）。
 - 交易池：实盘每日按 30 日成交量重排（15/20 滞回），研究一律用时点成员表（`--universe pit`）。
 - 交易所杠杆按 gross 上限与保证金上限自动推导为 5x，敞口不变；加仓单受可用保证金与 2% 参与率约束。
 - 退出层只启用止盈 6σ；止损、移动止损、回撤节流随代码交付、默认关闭，各有记录在案的否定证据。
-- flow 空头腿作为独立小书已按 D-018 重验（见上节）：书级 ACCEPT、信号级 FAIL（DSR p 0.81）、静态 universe 上为零、91% 与 tsmom 空头同向——**不启用**。下一步仍是让实盘归因（tsmom 单策略 + 退出层）积累 ≥ 14 天。
+- flow 空头腿按 D-018 重验：书级 ACCEPT、信号级 FAIL（DSR p 0.81）、静态 universe 上为零、91% 与 tsmom 空头同向。操作者选择把它作为**探针书**上线（D-019：1/3 预算、30 天 −1% 自动止损、2026-12-02 复审）——它是为了产出样本外证据的有界实验，不是被验证的策略。下一步仍是让实盘归因积累 ≥ 14 天。

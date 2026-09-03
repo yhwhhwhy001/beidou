@@ -27,10 +27,11 @@ from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardParams, evaluate_guards
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
+from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, startup_reconcile, take_snapshot
 from beidou_live.scheduler import last_closed_bar_open_ms, wait_for_bar_close
-from beidou_live.state import LiveState, StateStore
+from beidou_live.state import LiveState, StateStore, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class LiveConfig:
     margin_buffer: float = 0.10
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
     liquidity_window: int = 24
+    probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
 
     @property
     def interval_ms(self) -> int:
@@ -92,6 +94,8 @@ class LiveEngine:
         self.universe: list[str] = persisted or list(config.universe)
         self.rules: dict[str, Any] = {}
         self.exits = ExitOverlay(config.exits, config.interval_ms)
+        if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
+            self.model = _without_books(self.model, list(self.state.stopped_books))
 
     # --- lifecycle ------------------------------------------------------------
     def managed_symbols(self) -> list[str]:
@@ -191,6 +195,7 @@ class LiveEngine:
     async def run_cycle(self, bar_open_ms: int) -> dict[str, Any]:
         config = self.config
         universe_update = await self._maybe_refresh_universe(bar_open_ms)
+        probes = await self._check_probes(bar_open_ms)
         managed = self.managed_symbols()
         bars = await self.market.closed_bars(managed, config.interval, self.history_bars)
         usable = {symbol: frame for symbol, frame in bars.items() if frame is not None and len(frame) >= 2}
@@ -251,6 +256,7 @@ class LiveEngine:
             "universe_update": universe_update,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
             "exit_events": exit_events,
+            "probes": probes,
             "targets": decision.targets,
             "orders": [],
             "skipped": [],
@@ -414,6 +420,38 @@ class LiveEngine:
             self.store.append_attribution({"bar_open_ms": bar_open_ms, "since_ms": since, "until_ms": now, **result})
         self.state.last_income_ms = now
 
+    async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
+        """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""
+        if not self.config.probes:
+            return []
+        rows = self.store.read_jsonl(self.store.attribution_path)
+        now = self.clock.now_ms()
+        statuses: list[dict[str, Any]] = []
+        for probe in self.config.probes:
+            stopped = self.state.stopped_books.get(probe.book)
+            if stopped is not None:
+                statuses.append({"book": probe.book, "strategy": probe.strategy, "status": "STOPPED", **stopped})
+                continue
+            status = probe_status(probe, rows, equity=self.state.last_equity, now_ms=now)
+            if status["stop"]:
+                reason = (
+                    f"trailing {probe.window_days}d attributed P&L {status['pnl']:.2f} "
+                    f"({status['pnl_pct']:.4f} of equity) <= -{probe.max_loss}"
+                )
+                self.state.stopped_books[probe.book] = {
+                    "at": utc_now_iso(),
+                    "bar_open_ms": bar_open_ms,
+                    "pnl": status["pnl"],
+                    "pnl_pct": status["pnl_pct"],
+                    "reason": reason,
+                }
+                self.model = _without_books(self.model, [probe.book])
+                status["status"] = "STOPPED"
+                logger.warning("probe book %s stopped: %s", probe.book, reason)
+                await self.alerts.send(f"beidou: probe book {probe.book} ({probe.strategy}) stopped - {reason}")
+            statuses.append(status)
+        return statuses
+
     def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
@@ -432,6 +470,7 @@ class LiveEngine:
                 "exit_events": len(record.get("exit_events") or []),
                 "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
                 "universe_size": len(self.universe),
+                "probes": {str(p["book"]): str(p["status"]) for p in (record.get("probes") or [])},
                 "next_bar_close_ms": int(record["bar_open_ms"]) + 2 * self.config.interval_ms,
                 "dry_run": self.config.dry_run,
             }
@@ -442,6 +481,15 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:
+    """Drop stopped probe books from a model that supports it (``AlphaModel.without_books``)."""
+    drop = getattr(model, "without_books", None)
+    if not books or not callable(drop):
+        return model
+    reduced: SignalModel = drop(list(books))
+    return reduced
 
 
 def _summarize(reports: Sequence[ExecutionReport], planned: Sequence[Any]) -> dict[str, Any]:

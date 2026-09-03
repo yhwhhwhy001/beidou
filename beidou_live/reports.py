@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
 
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import max_drawdown, sharpe
+from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.state import StateStore
 
 
@@ -25,15 +27,46 @@ def expectations_from_evidence(evidence_by_strategy: dict[str, dict[str, Any]]) 
     """What the validation reports promised: OOS Sharpe, full-sample Sharpe/MDD per strategy."""
     out: dict[str, Any] = {}
     for strategy, report in evidence_by_strategy.items():
-        wf = report.get("walk_forward", {}) or {}
-        full = report.get("full_sample", {}) or {}
+        verdict = report.get("verdict")
+        if str(report.get("kind", "")) == "book":  # a probe book (D-019): expectations are the sleeve's own numbers
+            universes = report.get("universes", {}) or {}
+            decision = universes.get(str(report.get("universe_mode", "")), {}) or {}
+            standalone = decision.get("sleeve_standalone", {}) or {}
+            wf = standalone.get("walk_forward", {}) or {}
+            full = standalone.get("full_sample", {}) or {}
+            verdict = f"{report.get('book_verdict')}/book (sleeve {standalone.get('verdict')})"
+        else:
+            wf = report.get("walk_forward", {}) or {}
+            full = report.get("full_sample", {}) or {}
         out[strategy] = {
             "oos_sharpe": wf.get("oos_sharpe"),
             "full_sample_sharpe": full.get("annualized_sharpe"),
             "full_sample_max_drawdown": full.get("max_drawdown"),
-            "verdict": report.get("verdict"),
+            "verdict": verdict,
         }
     return out
+
+
+def _day_end_ms(day: str) -> int:
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+    return int((start + timedelta(days=1)).timestamp() * 1000)
+
+
+def probe_rows(
+    store: StateStore, probes: Sequence[ProbeParams], *, equity: float | None, now_ms: int
+) -> list[dict[str, Any]]:
+    """Status of every probe book (D-019) from the attribution file and the persisted stop records."""
+    if not probes:
+        return []
+    attributions = store.read_jsonl(store.attribution_path)
+    stopped = store.load().stopped_books
+    rows: list[dict[str, Any]] = []
+    for probe in probes:
+        status = probe_status(probe, attributions, equity=equity, now_ms=now_ms)
+        if probe.book in stopped:
+            status = {**status, "status": "STOPPED", "stopped": stopped[probe.book]}
+        rows.append(status)
+    return rows
 
 
 def drift_check(
@@ -78,7 +111,9 @@ def drift_check(
     }
 
 
-def daily_payload(store: StateStore, day: str, expectations: dict[str, Any] | None = None) -> dict[str, Any]:
+def daily_payload(
+    store: StateStore, day: str, expectations: dict[str, Any] | None = None, probes: Sequence[ProbeParams] = ()
+) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
     attributions = [row for row in store.read_jsonl(store.attribution_path) if _day_of(row) == day]
@@ -119,6 +154,7 @@ def daily_payload(store: StateStore, day: str, expectations: dict[str, Any] | No
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "drift": drift_check(store, expectations or {}),
+        "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
     }
 
 
@@ -155,6 +191,19 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 or {"none": 0},
             ),
             ("Drift vs expectation", payload.get("drift") or {"none": 0}),
+            (
+                "Probe books (D-019)",
+                {
+                    str(row.get("book")): (
+                        f"{row.get('status')} strategy={row.get('strategy')} "
+                        f"pnl_{row.get('window_days')}d={_fmt_num(row.get('pnl'))} "
+                        f"({_fmt_pct(row.get('pnl_pct'))} of equity, stop at -{_fmt_pct(row.get('max_loss'))}) "
+                        f"days={_fmt_num(row.get('days_running'))}/{row.get('review_after_days')}"
+                    )
+                    for row in (payload.get("probes") or [])
+                }
+                or {"none": 0},
+            ),
             ("Last targets", payload["last_targets"] or {"none": 0}),
         ],
     )
@@ -162,3 +211,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
 
 def _fmt_num(value: Any) -> str:
     return "n/a" if value is None else f"{float(value):.2f}"
+
+
+def _fmt_pct(value: Any) -> str:
+    return "n/a" if value is None else f"{100.0 * float(value):.2f}%"

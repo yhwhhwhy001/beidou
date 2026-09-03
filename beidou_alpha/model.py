@@ -1,16 +1,23 @@
-"""The alpha model: registry entries -> per-strategy targets -> combined conviction -> portfolio weights."""
+"""The alpha model: registry entries -> per-strategy targets -> per-book conviction -> portfolio weights.
+
+Strategies belong to books.  The main book is built exactly as before (ensemble mean -> vol
+target -> caps -> no-trade band).  A non-main book (D-018/D-019) is built on its own, scaled
+by its fraction of the main risk budget and summed with the main book; the main book's caps
+and band then apply to the total (``combine_books``).  With only the main book present the
+code path is bit-for-bit the original one.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
 from beidou_alpha.ensemble import TargetWeights, combine_targets, snapshot
 from beidou_alpha.panel import Panel
-from beidou_alpha.portfolio import PortfolioParams, build_weights
-from beidou_alpha.registry import Registry, StrategyEntry
+from beidou_alpha.portfolio import PortfolioParams, build_weights, combine_books
+from beidou_alpha.registry import MAIN_BOOK, Registry, StrategyEntry
 from beidou_alpha.signals import get_signal, scores_to_targets
 
 
@@ -22,6 +29,15 @@ class AlphaModel:
     ensemble_method: str = "mean"
     hold_on_no_action: bool = True
     min_history_bars: int = 720
+    books: dict[str, float] = field(default_factory=dict)  # non-main book -> fraction of the main risk budget
+
+    def __post_init__(self) -> None:
+        for name, fraction in self.books.items():
+            if name == MAIN_BOOK or not 0 < fraction <= 1:
+                raise ValueError(f"book {name!r}: fraction must be in (0, 1] and the main book is implicit")
+        for entry in self.entries:
+            if entry.book != MAIN_BOOK and entry.book not in self.books:
+                raise ValueError(f"strategy {entry.id} refers to undeclared book {entry.book!r}")
 
     @classmethod
     def from_registry(
@@ -35,8 +51,36 @@ class AlphaModel:
             interval=interval,
             ensemble_method=registry.ensemble_method,
             min_history_bars=min_history_bars,
+            books={name: spec.fraction for name, spec in registry.books.items()},
         )
 
+    # --- books ----------------------------------------------------------------
+    @property
+    def book_names(self) -> tuple[str, ...]:
+        """Books in use, the main book first."""
+        names = [MAIN_BOOK] if any(entry.book == MAIN_BOOK for entry in self.entries) else []
+        for entry in self.entries:
+            if entry.book not in names:
+                names.append(entry.book)
+        return tuple(names)
+
+    def fraction(self, book: str) -> float:
+        return 1.0 if book == MAIN_BOOK else self.books[book]
+
+    def entries_of(self, book: str) -> tuple[StrategyEntry, ...]:
+        return tuple(entry for entry in self.entries if entry.book == book)
+
+    def without_books(self, names: Iterable[str]) -> AlphaModel:
+        """The same model with the given books (and their strategies) removed - a stopped probe (D-019)."""
+        dropped = set(names)
+        if MAIN_BOOK in dropped:
+            raise ValueError("the main book cannot be stopped")
+        entries = tuple(entry for entry in self.entries if entry.book not in dropped)
+        if not entries:
+            raise ValueError("stopping these books would leave no strategy")
+        return replace(self, entries=entries, books={k: v for k, v in self.books.items() if k not in dropped})
+
+    # --- targets --------------------------------------------------------------
     def eligible(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
         """Symbols become tradable only after ``min_history_bars`` observed bars (new listings are excluded).
 
@@ -66,32 +110,59 @@ class AlphaModel:
             targets[entry.id] = held
         return targets
 
+    def book_targets(self, per_strategy: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+        """Per-book conviction: the ensemble of that book's strategies."""
+        return {
+            book: combine_targets(
+                {entry.id: per_strategy[entry.id] for entry in self.entries_of(book)},
+                {entry.id: entry.weight for entry in self.entries_of(book)},
+                method=self.ensemble_method,
+            )
+            for book in self.book_names
+        }
+
     def combined_targets(self, panel: Panel, targets: Mapping[str, pd.DataFrame] | None = None) -> pd.DataFrame:
+        """Conviction of the main book (or of the only book when the main one is absent)."""
         per_strategy = dict(targets) if targets is not None else self.strategy_targets(panel)
-        return combine_targets(
-            per_strategy, {entry.id: entry.weight for entry in self.entries}, method=self.ensemble_method
-        )
+        return self.book_targets(per_strategy)[self.book_names[0]]
+
+    def book_weights(
+        self, per_strategy: Mapping[str, pd.DataFrame], close: pd.DataFrame, bars_per_year: float
+    ) -> dict[str, pd.DataFrame]:
+        """Each book vol-targeted on its own (no band) and scaled by its fraction."""
+        bare = replace(self.portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
+        return {
+            book: build_weights(conviction, close, bars_per_year, bare) * self.fraction(book)
+            for book, conviction in self.book_targets(per_strategy).items()
+        }
+
+    def weights_from(
+        self, per_strategy: Mapping[str, pd.DataFrame], close: pd.DataFrame, bars_per_year: float
+    ) -> pd.DataFrame:
+        if self.book_names == (MAIN_BOOK,):
+            return build_weights(self.book_targets(per_strategy)[MAIN_BOOK], close, bars_per_year, self.portfolio)
+        return combine_books(self.book_weights(per_strategy, close, bars_per_year), self.portfolio)
 
     def weights(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
-        return build_weights(
-            self.combined_targets(panel, self.strategy_targets(panel, membership)),
-            panel.close,
-            panel.bars_per_year,
-            self.portfolio,
-        )
+        return self.weights_from(self.strategy_targets(panel, membership), panel.close, panel.bars_per_year)
 
     def evaluate(
         self, panel: Panel, membership: pd.DataFrame | None = None
     ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
         per_strategy = self.strategy_targets(panel, membership)
         combined = self.combined_targets(panel, per_strategy)
-        weights = build_weights(combined, panel.close, panel.bars_per_year, self.portfolio)
+        weights = self.weights_from(per_strategy, panel.close, panel.bars_per_year)
         return weights, combined, per_strategy
 
     def targets(self, bars: Mapping[str, pd.DataFrame], funding: Mapping[str, float]) -> TargetWeights:
-        """Live entry point: closed bars per symbol (+ latest funding, unused by tsmom) -> latest target weights."""
+        """Live entry point: closed bars per symbol (+ latest funding, unused by tsmom) -> latest target weights.
+
+        Contributions carry each strategy's target times its book fraction, so attribution shares
+        follow the capital each book actually deploys.
+        """
         panel = Panel.from_frames(bars, interval=self.interval)
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
         weights, combined, per_strategy = self.evaluate(panel)
-        return snapshot(weights, combined, per_strategy)
+        scaled = {entry.id: per_strategy[entry.id] * self.fraction(entry.book) for entry in self.entries}
+        return snapshot(weights, combined, scaled)

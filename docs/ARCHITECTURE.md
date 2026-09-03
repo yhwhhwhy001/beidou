@@ -1,7 +1,7 @@
 # 北斗 V5 架构
 
 ```
-mainnet public data ──► beidou_data ──► beidou_alpha (features → signals → ensemble → portfolio → overlays) ──► target weights
+mainnet public data ──► beidou_data ──► beidou_alpha (features → signals → ensemble → books → portfolio → overlays) ──► target weights
         │                    │                                                                                       │
         │              pool (daily refresh / point-in-time membership)                                                │
 demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (scheduler → throttle → exits → guards → rebalancer → margin → execution → reconciler → reports)
@@ -32,4 +32,5 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 - **D-015** 只有一个风险预算（波动率目标 + gross/单币上限）；自适应项只做乘在整本书上的标量（回撤节流）或下单层的约束（保证金、参与率），绝不叠加多个"比例"。
 - **D-016** 交易所杠杆 = `min(max_leverage, 档位上限, ceil(max_gross / margin_cap))`（默认 5x），只改变保证金效率，不改变敞口；下单前按可用保证金按比例缩小加仓单。
 - **D-017** 退出层与回撤节流的启用由预先登记的验收规则决定（`beidou research overlay`：OOS MDD 改善且 OOS Sharpe 损失 ≤ 0.10），不满足则默认关闭。
-- **D-018** 新策略作为独立小书加入（各书独立构建、按 fraction 求和、总书套主书上限）的验收由预登记规则决定（`beidou research book`）；书级 ACCEPT 不替代信号级 PASS。首个用例 flow 空头小书：书级 ACCEPT / 信号级 FAIL → 未启用；book 机制目前只有研究命令，registry / 模型 / 实盘尚未实现。
+- **D-018** 新策略作为独立小书加入（各书独立构建、按 fraction 求和、总书套主书上限）的验收由预登记规则决定（`beidou research book`）；书级 ACCEPT 不替代信号级 PASS。首个用例 flow 空头小书：书级 ACCEPT / 信号级 FAIL；操作者按 D-019 把它作为探针书上线。
+- **D-019** 探针书：registry 的 `books:` 声明独立小书（`fraction` = 主书风险预算的比例），策略用 `book` 归属；模型按书独立构建、求和后套主书上限与带（`combine_books`），只有主书时路径逐位不变。`verdict: ACCEPT` 只在非主书且带显式 `probe` 块时被启动检查放行；`beidou_live/probe.py` 按 `attribution.jsonl` 的 30 天归因 P&L 自动停书并持久化，日报在复审日标 REVIEW_DUE。

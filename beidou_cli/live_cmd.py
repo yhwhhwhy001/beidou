@@ -30,6 +30,7 @@ from beidou_live.config import (
 )
 from beidou_live.engine import LiveEngine
 from beidou_live.paper import PaperVenue
+from beidou_live.probe import probes_from_registry
 from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
@@ -241,12 +242,13 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None) ->
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
     evidence: dict[str, Any] = {}
-    for entry in load_registry(payload.get("registry", "config/alpha_registry.yaml")).enabled:
+    for entry in registry.enabled:
         report_path = Path(str((entry.evidence or {}).get("report", "")))
         if report_path.exists():
             evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
-    data = daily_payload(store, chosen, expectations_from_evidence(evidence))
+    data = daily_payload(store, chosen, expectations_from_evidence(evidence), probes_from_registry(registry))
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
     directory.mkdir(parents=True, exist_ok=True)

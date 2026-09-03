@@ -4,6 +4,10 @@ Stage 1  w1 = target * vol_target / asset_vol         (each position sized to th
 Stage 2  w2 = w1 * vol_target / portfolio_vol(w1)      (EWMA covariance, causal)      scalar clipped
 Stage 3  |w| <= max_weight,  sum |w| <= max_gross
 Optionally a no-trade band suppresses tiny rebalances (path dependent, applied last).
+
+``combine_books`` (D-018/D-019) sums independently built books - each already vol-targeted
+and scaled by its fraction - and applies the per-symbol cap, the gross cap and the band to
+the total.
 """
 
 from __future__ import annotations
@@ -103,3 +107,32 @@ def apply_no_trade_band(weights: pd.DataFrame, band: float, relative: float = 0.
         out[t] = current
         previous = current
     return pd.DataFrame(out, index=weights.index, columns=weights.columns)
+
+
+def combine_books(books: Mapping[str, pd.DataFrame], params: PortfolioParams) -> pd.DataFrame:
+    """Sum independently built books, then the per-symbol cap, the gross cap and the no-trade band on the total.
+
+    Rows where every book is NaN (before the first decision) stay NaN; elsewhere a missing
+    book counts as flat.  With a single, already-capped book this is the identity (plus band).
+    """
+    if not books:
+        raise ValueError("no books to combine")
+    frames = list(books.values())
+    columns = frames[0].columns
+    index = frames[0].index
+    for frame in frames[1:]:
+        columns = columns.union(frame.columns)
+        index = index.union(frame.index)
+    aligned = [frame.reindex(index=index, columns=columns) for frame in frames]
+    valid = aligned[0].notna().any(axis=1)
+    total = aligned[0].fillna(0.0)
+    for frame in aligned[1:]:
+        valid = valid | frame.notna().any(axis=1)
+        total = total + frame.fillna(0.0)
+    clipped = total.clip(-params.max_weight, params.max_weight)
+    gross = clipped.abs().sum(axis=1)
+    factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
+    weights = clipped.mul(factor, axis=0).where(valid, other=np.nan)
+    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
+        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band)
+    return weights

@@ -28,6 +28,9 @@ class LiveState:
     universe: list[str] = field(default_factory=list)  # last refreshed universe (D-014)
     universe_day: str | None = None
     leaving: list[str] = field(default_factory=list)  # symbols that left the universe but still hold a position
+    stopped_books: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )  # probe books closed by their stop rule (D-019)
     consecutive_errors: int = 0
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)
