@@ -76,7 +76,8 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
             max_weight=float(portfolio.get("max_weight", 0.15)),
         ),
         kill_switch_path=Path(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH")),
-        strategy_weights={entry.id: entry.weight for entry in registry.enabled},
+        # a book's fraction enters attribution here; contributions stay unscaled targets (D-019)
+        strategy_weights={entry.id: entry.weight * registry.fraction(entry.book) for entry in registry.enabled},
         dry_run=dry_run,
         exits=exits,
         throttle=throttle,
