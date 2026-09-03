@@ -28,14 +28,22 @@ strategies:
       slope_scale: 0.01
       entry_threshold: 0.20
       vol_window: 400
-      crowding_window: 0
+      crowding_window: 0        # modifier off (the cut/penalty below are inert; kept so the params equal the report's best_params)
+      crowding_cut: 0.7
+      crowding_penalty: 0.5
     # 2026-09-03 round 5: re-validated on the point-in-time universe (146 symbols that were ever top-15 by 30-day
     # volume, monthly re-selection with the live hysteresis; D-013).  Survivorship-free result is unchanged:
     # walk-forward OOS Sharpe 1.53 (static 1.52), folds [1.22, 0.78, 2.04, 1.65, 1.94], CPCV q05 1.18, DSR p 0.0002
     # at 49 trials, cost x2 Sharpe 1.35, full-sample 1.64 / MDD -12.6%.
+    # 2026-09-04 D-020 (operator decision; docs/RESEARCH_LOG.md): the verdict is OOS-first and the DSR is informational.
+    # Evidence re-run as the crowding-off vs crowding-on control experiment on the point-in-time universe (same numbers
+    # as beidou-45's 175236Z): full-sample Sharpe 1.72 / MDD -13.5%, walk-forward OOS Sharpe 1.55 with Newey-West t 3.5
+    # over 44,995 OOS bars, folds [1.22, 0.49, 2.04, 1.65, 2.31], CPCV 1.65 / q05 1.26 / 0% negative, cost x2 1.43;
+    # DSR p 0.26 at 69 trials (reported, not a veto), PBO 0.55 at N=2 (informational).  The 133239Z report (crowding
+    # 0.5, DSR p 0.0002 from a degenerate pooled variance) is superseded; the modifier never ran live (E-040).
     evidence:
-      report: reports/research/tsmom-validation-20260903T133239Z.json
-      sha256: 0ff582c05fe832f9b431a19b8e29a9978afbdbab997cd9fa1758049ffa53c9c9
+      report: reports/research/tsmom-validation-20260903T181803Z.json
+      sha256: 382300429187cff0e829ff528b892a121589562f06e4dcd557d761886573cd8a
       verdict: PASS
   - id: xsmom
     enabled: false

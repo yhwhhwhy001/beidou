@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.validation.metrics import compound, max_drawdown, sharpe
+from beidou_alpha.validation.metrics import compound, max_drawdown, newey_west_tstat, sharpe
 
 
 @dataclass(frozen=True)
@@ -88,11 +88,16 @@ class WalkForwardResult:
 
     def summary(self, bars_per_year: float) -> dict[str, Any]:
         test_sharpes = [f.test_sharpe for f in self.folds if f.test_sharpe is not None]
+        # D-020: the OOS mean return's Newey-West t-statistic is the verdict's significance test
+        significance = newey_west_tstat(self.oos_returns)
         return {
             "folds": len(self.folds),
             "oos_sharpe": sharpe(self.oos_returns, bars_per_year),
             "oos_return": compound(self.oos_returns),
             "oos_max_drawdown": max_drawdown(self.oos_returns),
+            "oos_bars": len(self.oos_returns),
+            "oos_t_stat": significance["t_stat"],
+            "oos_t_lags": significance["lags"],
             "fold_sharpes": [f.test_sharpe for f in self.folds],
             "fold_consistency": (float(np.mean([s > 0 for s in test_sharpes])) if test_sharpes else None),
             "chosen_params": [f.chosen_params for f in self.folds],

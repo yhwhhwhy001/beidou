@@ -157,11 +157,37 @@ def test_ledger_pools_trials_and_verdict_ignores_pbo_for_tiny_grids() -> None:
     pooled = dsr_inputs(prior, {"new1": 1.5 / 8760**0.5, "new2": None}, 8760.0, manual_prior_trials=10)
     assert pooled["n_trials"] == 16 and pooled["pooled_sharpes"] == 5 and pooled["sharpe_variance"] > 0
     base = {
-        "walk_forward": {"oos_sharpe": 1.6, "fold_consistency": 1.0},
+        "walk_forward": {"oos_sharpe": 1.6, "oos_t_stat": 3.1, "fold_consistency": 1.0},
         "multiple_testing": {"dsr_p_value": 0.01, "pbo": 0.67, "grid_trials": 2},
+        "cpcv": {"fraction_negative": 0.0},
         "cost_stress": {"x2": 1.3},
     }
     assert decide(base)[0] == "PASS"
     wide = {**base, "multiple_testing": {**base["multiple_testing"], "grid_trials": 8}}
     verdict, reasons = decide(wide)
     assert verdict == "FAIL" and any("pbo" in r for r in reasons)
+
+
+def test_verdict_is_oos_first_and_dsr_is_informational() -> None:
+    """D-020: OOS Sharpe + Newey-West t decide; DSR is reported, never a veto; CPCV negative share is a gate."""
+    from beidou_alpha.validation.verdict import decide
+
+    base = {
+        "walk_forward": {"oos_sharpe": 1.5, "oos_t_stat": 3.0, "fold_consistency": 0.8},
+        "multiple_testing": {"dsr_p_value": 0.9, "pbo": None, "grid_trials": 1},
+        "cpcv": {"fraction_negative": 0.0},
+        "cost_stress": {"x2": 1.2},
+    }
+    assert decide(base) == ("PASS", [])  # DSR p 0.9 does not veto
+    weak = {**base, "walk_forward": {**base["walk_forward"], "oos_sharpe": 0.8, "oos_t_stat": 1.7}}
+    assert decide(weak)[0] == "WEAK_PASS"
+    weak_t = {**base, "walk_forward": {**base["walk_forward"], "oos_t_stat": 1.8}}
+    assert decide(weak_t)[0] == "WEAK_PASS"  # a high Sharpe over a short OOS window is not a strong pass
+    insignificant = {**base, "walk_forward": {**base["walk_forward"], "oos_t_stat": 1.2}}
+    verdict, reasons = decide(insignificant)
+    assert verdict == "FAIL" and any("oos_t_stat" in r for r in reasons)
+    legacy = {**base, "walk_forward": {"oos_sharpe": 1.5, "fold_consistency": 0.8}}
+    assert decide(legacy)[0] == "FAIL"  # a report without the t-statistic cannot pass
+    negative_paths = {**base, "cpcv": {"fraction_negative": 0.25}}
+    verdict, reasons = decide(negative_paths)
+    assert verdict == "FAIL" and any("fraction_negative" in r for r in reasons)
