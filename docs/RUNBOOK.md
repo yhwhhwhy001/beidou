@@ -26,7 +26,9 @@ beidou research correlate --strategies tsmom,flow       # 策略净收益相关�
 ## 实盘（demo）
 
 ```bash
-export BEIDOU_DEMO_API_KEY=...; export BEIDOU_DEMO_API_SECRET=...
+# 凭据来自环境变量（值不进仓库）。操作者已在 ~/.zshrc 中导出：
+#   BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_ALERTS_WEBHOOK_URL
+# 变量名在 config/live.demo.yaml 的 venue.api_key_env / api_secret_env 中配置。
 beidou live run --profile config/live.demo.yaml --dry-run --immediate --cycles 1   # 只算不下单，立刻跑一根 bar
 beidou live run --profile config/live.demo.yaml --paper --immediate                # 无需密钥：mainnet 真实数据 + 进程内模拟成交（状态在 .beidou/paper/）
 beidou live run --profile config/live.demo.yaml --immediate                        # 长驻：先跑上一根闭合 bar，再按小时对齐
@@ -42,8 +44,8 @@ beidou report daily [--paper] --date 2026-09-04                                 
 ## 无人值守（macOS launchd）
 
 ```bash
-mkdir -p ~/Library/Application\ Support/beidou
-printf 'export BEIDOU_DEMO_API_KEY=...\nexport BEIDOU_DEMO_API_SECRET=...\n' > ~/Library/Application\ Support/beidou/env.sh && chmod 600 ~/Library/Application\ Support/beidou/env.sh
+# run_live.sh 优先读取 ~/Library/Application Support/beidou/env.sh（chmod 600）；
+# 不存在时只 eval ~/.zshrc 里字面量的 `export BEIDOU_*=` 行，不复制密钥到第二个文件。
 cp deploy/com.beidou.live.plist ~/Library/LaunchAgents/
 launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist     # 启动；KeepAlive 在崩溃后 60s 拉起
 launchctl unload -w ~/Library/LaunchAgents/com.beidou.live.plist   # 停止
