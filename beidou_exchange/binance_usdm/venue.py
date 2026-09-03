@@ -109,6 +109,16 @@ class BinanceUsdmVenue:
         payload = await self._client.post("/fapi/v1/leverage", {"symbol": symbol, "leverage": int(leverage)})
         return int(_float(payload.get("leverage"), float(leverage)))
 
+    async def leverage_brackets(self) -> dict[str, int]:
+        """Maximum initial leverage of the smallest notional tier per symbol (``/fapi/v1/leverageBracket``)."""
+        payload = await self._client.get("/fapi/v1/leverageBracket", signed=True)
+        out: dict[str, int] = {}
+        for row in payload if isinstance(payload, list) else [payload]:
+            brackets = row.get("brackets") or []
+            if brackets:
+                out[str(row.get("symbol", ""))] = int(_float(brackets[0].get("initialLeverage"), 1.0))
+        return out
+
     async def place_order(self, request: OrderRequest) -> OrderAck:
         params: dict[str, Any] = {
             "symbol": request.symbol,

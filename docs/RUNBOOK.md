@@ -1,54 +1,41 @@
-# 运行手册
+# 运行手册（demo）
 
-## 安装
+## 日常命令
 
-```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
-```
+| 目的 | 命令 |
+| --- | --- |
+| 拉取/刷新研究数据并选 universe | `beidou data sync` |
+| 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
+| 重建时点成员表（研究用，先同步 878 个候选的日线） | `beidou data pool history [--sync-members]` |
+| 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy flow --universe pit --prior-trials N` |
+| 退出层 / 回撤节流证据 | `beidou research overlay --universe pit` |
+| 启动实盘（launchd 已托管） | `launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist`；手动：`deploy/run_live.sh` |
+| 状态 / 健康检查 | `beidou live status --check` |
+| 一键平仓 | `beidou live flatten --yes` |
+| 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
+| 日报 | `beidou report daily` |
 
-## 数据
+## 改了 registry / profile 之后
 
-```bash
-beidou data sync --universe config/universe.yaml        # 下载/增量更新 mainnet 1h K 线与资金费率到 .beidou/data/
-```
-
-## 研究
-
-```bash
-beidou research backtest --strategy tsmom --from 2022-01-01
-beidou research diagnose --strategy flow                # 信号级诊断：按前瞻期的 IC（Newey-West t）、翻转次数、纯信号回测
-beidou research validate --strategy tsmom               # 写 reports/research/<strategy>-validation-<date>.json 供 registry 引用
-beidou research correlate --strategies tsmom,flow       # 策略净收益相关性与边际 Sharpe
-```
-
-## 实盘（demo）
+实盘进程在启动时加载 registry、profile 与 universe；改动后必须重启：
 
 ```bash
-# 凭据来自环境变量（值不进仓库）。操作者已在 ~/.zshrc 中导出：
-#   BEIDOU_BINANCE_API_KEY / BEIDOU_BINANCE_API_SECRET / BEIDOU_ALERTS_WEBHOOK_URL
-# 变量名在 config/live.demo.yaml 的 venue.api_key_env / api_secret_env 中配置。
-beidou live run --profile config/live.demo.yaml --dry-run --immediate --cycles 1   # 只算不下单，立刻跑一根 bar
-beidou live run --profile config/live.demo.yaml --paper --immediate                # 无需密钥：mainnet 真实数据 + 进程内模拟成交（状态在 .beidou/paper/）
-beidou live run --profile config/live.demo.yaml --immediate                        # 长驻：先跑上一根闭合 bar，再按小时对齐
-beidou live run ... --allow-unvalidated                                            # registry 里的策略还没有验证报告时的显式放行
-beidou live status [--paper] [--check]                                             # heartbeat/state；--check 在心跳过期或连续报错时返回非零，可接 cron/launchd 告警
-beidou live kill-switch --engage | --release                                       # 禁止/恢复新增风险（reduce-only 仍可用）
-beidou live flatten --profile config/live.demo.yaml --yes                          # 一键市价平仓
-beidou report daily [--paper] --date 2026-09-04                                    # 日报（权益、按策略/币种归因、成本、护栏事件、实盘 vs 验证预期的 drift）
+launchctl kickstart -k gui/$(id -u)/com.beidou.live
 ```
 
-状态文件在 `.beidou/live/`：`state.json`（上一根 bar 的目标与贡献）、`trades.jsonl`（每笔订单，含 clientOrderId/目标权重）、`attribution.jsonl`（按策略归因）、`cycles.jsonl`、`heartbeat.json`。
+重启是幂等的（clientOrderId 按 bar 派生，先查后下）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
 
-## 无人值守（macOS launchd）
+## Profile 关键字段（`config/live.demo.yaml`）
 
-```bash
-# run_live.sh 优先读取 ~/Library/Application Support/beidou/env.sh（chmod 600）；
-# 不存在时只 eval ~/.zshrc 里字面量的 `export BEIDOU_*=` 行，不复制密钥到第二个文件。
-cp deploy/com.beidou.live.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist     # 启动；KeepAlive 在崩溃后 60s 拉起
-launchctl unload -w ~/Library/LaunchAgents/com.beidou.live.plist   # 停止
-```
+- `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（当前 5x）；写死整数则固定。
+- `portfolio.max_participation` —— 加仓单 ≤ 该比例 × 近 24 根 bar 平均报价成交量；`margin_buffer` —— 保证金不足时按比例缩小加仓单，保留这部分可用余额。
+- `pool.refresh: daily|never` —— 每日自动重排 universe；被移出的币会被 reduce-only 平掉，`cycles.jsonl` 的 `universe_update` 记录进出。
+- `exits` —— 止损 / 移动止损 / 止盈（单位 = 入场时日波动率），0 关闭；`cooldown_bars` 冷却期。
+- `drawdown_throttle` —— 权益回撤在 `start`→`stop` 之间把整本书线性缩到 `floor`。
 
-启动先对账（交易所仓位为唯一真值、撤销残留挂单、按 bar 派生的 clientOrderId 先查后下），因此重启不会重复开仓。日志在 `~/Library/Application Support/beidou/live.*.log`。让机器保持唤醒：`caffeinate -i` 或系统设置。
+## 排障
+
+- 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.err.log`。
+- 连续错误 ≥ 12 次进程退出，launchd 60s 后拉起；根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
+- `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。
+- `state.json` 的 `exit_states`（入场价/极值/冷却）、`equity_hwm`、`universe`、`leaving` 在重启后恢复；入场价以交易所为准。

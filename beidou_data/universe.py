@@ -1,4 +1,4 @@
-"""Universe selection: top-N liquid USDT perpetuals with rank hysteresis."""
+"""Universe selection: top-N liquid USDT perpetuals with rank hysteresis (pure; shared by research and live)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ class UniverseConfig:
     volume_lookback_days: int = 30
     interval: str = "1h"
     history_start: str = "2021-01"
+    refresh: str = "daily"  # live refresh cadence: daily | never
+    min_age_days: int = 30  # a symbol needs this much daily history before it can be ranked (D-013)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -37,6 +39,8 @@ class UniverseConfig:
             volume_lookback_days=int(payload.get("volume_lookback_days", 30)),
             interval=str(payload.get("interval", "1h")),
             history_start=str(payload.get("history_start", "2021-01")),
+            refresh=str(payload.get("refresh", "daily")),
+            min_age_days=int(payload.get("min_age_days", 30)),
         )
 
 
@@ -53,21 +57,48 @@ def eligible_symbols(rules: Mapping[str, InstrumentRules], config: UniverseConfi
     return sorted(chosen)
 
 
+def rank_with_hysteresis(
+    volume_by_symbol: Mapping[str, float],
+    eligible: Iterable[str],
+    previous: Iterable[str],
+    *,
+    enter_rank: int,
+    exit_rank: int,
+    top_n: int,
+    always_include: Iterable[str] = (),
+) -> list[str]:
+    """Rank ``eligible`` symbols by volume; enter at ``enter_rank``, leave only beyond ``exit_rank``.
+
+    ``always_include`` symbols are kept whenever they are eligible.  The result
+    is ordered by rank and capped at ``max(top_n, exit_rank) + len(always_include)``.
+    """
+    eligible_set = set(eligible)
+    ranked = sorted((s for s in eligible_set if s in volume_by_symbol), key=lambda s: -float(volume_by_symbol[s]))
+    rank = {symbol: position + 1 for position, symbol in enumerate(ranked)}
+    pinned = [s for s in always_include if s in eligible_set]
+    keep: set[str] = set(pinned)
+    previous_set = set(previous)
+    for symbol, position in rank.items():
+        if position <= enter_rank or (symbol in previous_set and position <= exit_rank):
+            keep.add(symbol)
+    ordered = sorted(keep, key=lambda s: rank.get(s, 10**6))
+    limit = max(top_n, exit_rank) + len(pinned)
+    return ordered[:limit]
+
+
 def select_universe(
     volume_by_symbol: Mapping[str, float],
     rules: Mapping[str, InstrumentRules],
     config: UniverseConfig,
     previous: Iterable[str] = (),
 ) -> list[str]:
-    """Rank eligible symbols by volume; enter at ``enter_rank``, leave only beyond ``exit_rank``."""
-    eligible = set(eligible_symbols(rules, config))
-    ranked = sorted((s for s in eligible if s in volume_by_symbol), key=lambda s: -float(volume_by_symbol[s]))
-    rank = {symbol: position + 1 for position, symbol in enumerate(ranked)}
-    keep: set[str] = {s for s in config.always_include if s in rules}
-    previous_set = set(previous)
-    for symbol, position in rank.items():
-        if position <= config.enter_rank or (symbol in previous_set and position <= config.exit_rank):
-            keep.add(symbol)
-    ordered = sorted(keep, key=lambda s: rank.get(s, 10**6))
-    limit = max(config.top_n, config.exit_rank) + len(config.always_include)
-    return ordered[:limit]
+    """Live/research selection against venue rules (tradable, quote asset, min notional)."""
+    return rank_with_hysteresis(
+        volume_by_symbol,
+        eligible_symbols(rules, config),
+        previous,
+        enter_rank=config.enter_rank,
+        exit_rank=config.exit_rank,
+        top_n=config.top_n,
+        always_include=config.always_include,
+    )

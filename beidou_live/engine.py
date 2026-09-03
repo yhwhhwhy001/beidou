@@ -1,25 +1,32 @@
 """The bar-driven live loop.
 
 startup: rules -> one-way mode check -> cancel stale orders -> leverage -> snapshot
-cycle:   closed bars (mainnet) -> model targets -> venue snapshot -> guards -> plan -> execute
-         -> attribute income -> persist state/heartbeat
+cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> model targets -> venue snapshot
+         -> drawdown throttle -> exit overlay -> guards -> plan (participation cap) -> margin scaling
+         -> execute -> attribute income -> persist state/heartbeat
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
+from beidou_alpha.overlays.exits import ExitParams
+from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.panel import interval_seconds
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute
 from beidou_live.execution import ExecutionReport, execute_order
+from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardParams, evaluate_guards
-from beidou_live.ports import Clock, MarketData, SignalModel, Venue
+from beidou_live.leverage import derive_leverage, scale_orders_to_margin
+from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, startup_reconcile, take_snapshot
 from beidou_live.scheduler import last_closed_bar_open_ms, wait_for_bar_close
@@ -43,6 +50,14 @@ class LiveConfig:
     grace_seconds: float = 5.0
     max_consecutive_errors: int = 12
     dry_run: bool = False
+    exits: ExitParams = field(default_factory=ExitParams)
+    throttle: DrawdownThrottleParams = field(default_factory=DrawdownThrottleParams)
+    leverage_mode: str = "fixed"  # fixed | auto (D-016)
+    margin_cap: float = 0.40
+    max_leverage: int = 5
+    margin_buffer: float = 0.10
+    universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
+    liquidity_window: int = 24
 
     @property
     def interval_ms(self) -> int:
@@ -60,6 +75,8 @@ class LiveEngine:
         clock: Clock,
         store: StateStore,
         alerts: WebhookAlerts | None = None,
+        pool: UniverseProvider | None = None,
+        universe_sink: Callable[[UniverseUpdate], None] | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -68,11 +85,19 @@ class LiveEngine:
         self.clock = clock
         self.store = store
         self.alerts = alerts or WebhookAlerts("")
+        self.pool = pool
+        self.universe_sink = universe_sink
         self.state: LiveState = store.load()
-        self.universe: list[str] = list(config.universe)
+        persisted = list(self.state.universe) if config.universe_refresh else []
+        self.universe: list[str] = persisted or list(config.universe)
         self.rules: dict[str, Any] = {}
+        self.exits = ExitOverlay(config.exits, config.interval_ms)
 
     # --- lifecycle ------------------------------------------------------------
+    def managed_symbols(self) -> list[str]:
+        """The universe plus symbols that left it but still hold a position (D-014: exits follow positions)."""
+        return list(dict.fromkeys([*self.universe, *self.state.leaving]))
+
     async def startup(self) -> Snapshot:
         self.rules = await self.venue.rules()
         tradable = [symbol for symbol in self.universe if symbol in self.rules and self.rules[symbol].tradable]
@@ -85,23 +110,26 @@ class LiveEngine:
         hedge_probe = getattr(self.venue, "hedge_mode", None)
         if callable(hedge_probe) and await hedge_probe():
             raise RuntimeError("account is in hedge (dual-side) position mode; switch to one-way mode first")
-        snapshot = await startup_reconcile(self.venue, self.universe, cancel_stale_orders=not self.config.dry_run)
+        snapshot = await startup_reconcile(
+            self.venue, self.managed_symbols(), cancel_stale_orders=not self.config.dry_run
+        )
         if not snapshot.account.can_trade:
             raise RuntimeError("venue reports canTrade=false for this account")
+        self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
         if not self.config.dry_run:
-            for symbol in self.universe:
-                if self.state.leverage_set.get(symbol) != self.config.leverage:
-                    applied = await self.venue.set_leverage(symbol, self.config.leverage)
-                    self.state.leverage_set[symbol] = int(applied)
+            await self._ensure_leverage(self.managed_symbols())
         self._roll_day(self.clock.now_ms(), snapshot.equity)
         if self.state.last_income_ms is None:
             self.state.last_income_ms = self.clock.now_ms()
+        self.state.equity_hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
         self.store.save(self.state)
         self.store.heartbeat(
             {
                 "phase": "STARTED",
                 "equity": snapshot.equity,
                 "universe": self.universe,
+                "leaving": list(self.state.leaving),
+                "leverage": dict(self.state.leverage_set),
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -162,20 +190,44 @@ class LiveEngine:
 
     async def run_cycle(self, bar_open_ms: int) -> dict[str, Any]:
         config = self.config
-        bars = await self.market.closed_bars(self.universe, config.interval, self.history_bars)
+        universe_update = await self._maybe_refresh_universe(bar_open_ms)
+        managed = self.managed_symbols()
+        bars = await self.market.closed_bars(managed, config.interval, self.history_bars)
         usable = {symbol: frame for symbol, frame in bars.items() if frame is not None and len(frame) >= 2}
         if not usable:
             raise RuntimeError("no closed bars returned for the universe")
-        funding = await self.market.funding_rates(self.universe)
+        funding = await self.market.funding_rates(managed)
         mark = getattr(self.venue, "mark", None)
         if callable(mark):  # paper venue: marks follow the newest closed bar
             mark({symbol: float(frame["close"].iloc[-1]) for symbol, frame in usable.items()})
         targets = self.model.targets(usable, funding)
         latest_bar_ms = int(targets.as_of.timestamp() * 1000)
-        snapshot = await take_snapshot(self.venue, self.universe)
+        snapshot = await take_snapshot(self.venue, managed)
         self._roll_day(bar_open_ms, snapshot.equity)
+        self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
+        # exposure throttle (D-015): one scalar on the whole book, driven by venue equity vs its high-water mark
+        hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
+        self.state.equity_hwm = hwm
+        drawdown = 0.0 if hwm <= 0 else max(0.0, 1.0 - snapshot.equity / hwm)
+        scalar = drawdown_scalar(drawdown, config.throttle)
+        raw = {symbol: float(weight) for symbol, weight in targets.weights.items()}
+        for symbol in managed:
+            raw.setdefault(symbol, 0.0)
+        for symbol in self.state.leaving:  # left the universe: only the exit remains
+            raw[symbol] = 0.0
+        throttled = {symbol: weight * scalar for symbol, weight in raw.items()}
+        # exit overlay (D-012): venue positions are the reference, state persists across restarts
+        adjusted, exit_states, exit_events = self.exits.apply(
+            throttled,
+            positions=snapshot.positions,
+            bars=usable,
+            states=self.state.exit_states,
+            bar_open_ms=bar_open_ms,
+        )
+        if self.exits.enabled:
+            self.state.exit_states = {**self.state.exit_states, **exit_states}
         decision = evaluate_guards(
-            targets.weights,
+            adjusted,
             current_weights=snapshot.weights(),
             kill_switch=config.kill_switch_path.exists(),
             equity=snapshot.equity,
@@ -194,6 +246,11 @@ class LiveEngine:
             "guard_reasons": list(decision.reasons),
             "skip": decision.skip_cycle,
             "dry_run": config.dry_run,
+            "universe": list(self.universe),
+            "leaving": list(self.state.leaving),
+            "universe_update": universe_update,
+            "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
+            "exit_events": exit_events,
             "targets": decision.targets,
             "orders": [],
             "skipped": [],
@@ -201,16 +258,29 @@ class LiveEngine:
         if decision.skip_cycle:
             self._finish_cycle(record, targets.contributions)
             return record
+        liquidity = self._liquidity(usable) if config.rebalance.max_participation > 0 else None
         orders, skipped = plan_rebalance(
             decision.targets,
-            managed_symbols=self.universe,
+            managed_symbols=managed,
             equity=snapshot.equity,
             positions=snapshot.positions,
             prices=snapshot.prices,
             rules=self.rules,
             bar_open_ms=bar_open_ms,
             params=config.rebalance,
+            liquidity=liquidity,
         )
+        if orders:
+            orders, margin = scale_orders_to_margin(
+                orders,
+                snapshot.account.available_balance,
+                self.state.leverage_set,
+                self.rules,
+                buffer=config.margin_buffer,
+                default_leverage=config.leverage,
+            )
+            record["margin"] = margin
+            skipped.extend(margin.get("dropped", []))
         record["skipped"] = skipped
         reports: list[ExecutionReport] = []
         for order in orders:
@@ -236,7 +306,7 @@ class LiveEngine:
     async def flatten(self) -> list[ExecutionReport]:
         """Close every managed position with reduce-only market orders (``beidou live flatten``)."""
         self.rules = await self.venue.rules()
-        snapshot = await take_snapshot(self.venue, self.universe)
+        snapshot = await take_snapshot(self.venue, self.managed_symbols())
         reports: list[ExecutionReport] = []
         for order in flatten_orders(
             {**snapshot.positions, **snapshot.foreign_positions}, self.rules, self.clock.now_ms()
@@ -253,6 +323,78 @@ class LiveEngine:
         return reports
 
     # --- helpers ----------------------------------------------------------------
+    async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
+        """Once per UTC day: re-rank through the pool; what leaves is flattened, what enters waits for history."""
+        if not self.config.universe_refresh or self.pool is None:
+            return None
+        day = datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
+        if self.state.universe_day == day:
+            return None
+        try:
+            update = await self.pool.select(self.universe, self.rules)
+        except Exception as exc:  # keep trading the previous universe (T-P05)
+            logger.warning("universe refresh failed (%s); keeping %s", exc, self.universe)
+            return {"error": f"{type(exc).__name__}: {exc}", "universe": list(self.universe)}
+        fresh = [symbol for symbol in update.symbols if symbol in self.rules and self.rules[symbol].tradable]
+        if not fresh:
+            logger.warning("universe refresh returned no tradable symbols; keeping %s", self.universe)
+            return {"error": "EMPTY_UNIVERSE", "universe": list(self.universe)}
+        left = [symbol for symbol in self.universe if symbol not in fresh]
+        entered = [symbol for symbol in fresh if symbol not in self.universe]
+        self.universe = fresh
+        self.state.universe = list(fresh)
+        self.state.universe_day = day
+        self.state.leaving = list(dict.fromkeys([*self.state.leaving, *left]))
+        if entered and not self.config.dry_run:
+            await self._ensure_leverage(entered)
+        if self.universe_sink is not None:
+            try:
+                self.universe_sink(update)
+            except Exception as exc:  # persistence of the selection is best effort
+                logger.warning("could not persist universe update: %s", exc)
+        if entered or left:
+            logger.info("universe refreshed: entered=%s left=%s", entered, left)
+            await self.alerts.send(f"beidou universe refresh: entered={entered} left={left}")
+        return {**update.to_dict(), "entered": entered, "left": left, "day": day}
+
+    async def _leverage_targets(self, symbols: Sequence[str]) -> dict[str, int]:
+        if self.config.leverage_mode != "auto":
+            return dict.fromkeys(symbols, self.config.leverage)
+        brackets: Mapping[str, int] = {}
+        probe = getattr(self.venue, "leverage_brackets", None)
+        if callable(probe):
+            try:
+                brackets = await probe()
+            except Exception as exc:
+                logger.warning("leverage brackets unavailable (%s); using policy caps only", exc)
+        return {
+            symbol: derive_leverage(
+                self.config.guards.max_gross, self.config.margin_cap, self.config.max_leverage, brackets.get(symbol)
+            )
+            for symbol in symbols
+        }
+
+    async def _ensure_leverage(self, symbols: Sequence[str]) -> None:
+        wanted = await self._leverage_targets(symbols)
+        for symbol in symbols:
+            if self.state.leverage_set.get(symbol) != wanted[symbol]:
+                applied = await self.venue.set_leverage(symbol, wanted[symbol])
+                self.state.leverage_set[symbol] = int(applied)
+
+    def _liquidity(self, bars: Mapping[str, pd.DataFrame]) -> dict[str, float]:
+        """Average quote volume per bar over the trailing window (falls back to volume x close)."""
+        out: dict[str, float] = {}
+        window = max(1, self.config.liquidity_window)
+        for symbol, frame in bars.items():
+            tail = frame.tail(window)
+            if "quote_volume" in tail.columns:
+                value = float(tail["quote_volume"].astype(float).mean())
+            else:
+                value = float((tail["volume"].astype(float) * tail["close"].astype(float)).mean())
+            if value > 0:
+                out[symbol] = value
+        return out
+
     async def _attribute(self, bar_open_ms: int) -> None:
         now = self.clock.now_ms()
         since = self.state.last_income_ms or now
@@ -277,6 +419,9 @@ class LiveEngine:
                 "equity": record["equity"],
                 "orders": len(record["orders"]),
                 "guard_reasons": record["guard_reasons"],
+                "exit_events": len(record.get("exit_events") or []),
+                "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
+                "universe_size": len(self.universe),
                 "next_bar_close_ms": int(record["bar_open_ms"]) + 2 * self.config.interval_ms,
                 "dry_run": self.config.dry_run,
             }

@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from beidou_alpha.model import AlphaModel
+from beidou_alpha.overlays.exits import ExitParams
+from beidou_alpha.overlays.exposure import DrawdownThrottleParams
+from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry, evidence_problems
 from beidou_data.live_feed import PublicMarketData
+from beidou_data.pool import LivePool
+from beidou_data.universe import UniverseConfig
 from beidou_exchange.binance_usdm.rest_client import BinanceRestClient
 from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
 from beidou_exchange.guard import WriteGuard
-from beidou_live.composition import build_model, load_registry, read_universe
+from beidou_live.composition import build_model, load_registry, read_universe, write_universe
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
+from beidou_live.ports import UniverseUpdate
 from beidou_live.rebalancer import RebalanceParams
 from beidou_live.state import StateStore
 from beidou_shared.config import env_secret, load_yaml
@@ -41,17 +47,25 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
     portfolio = profile.get("portfolio", {}) or {}
     guards = profile.get("guards", {}) or {}
     market = profile.get("market_data", {}) or {}
+    pool = profile.get("pool", {}) or {}
+    interval = str(market.get("interval", "1h"))
+    leverage_raw = portfolio.get("leverage", 2)
+    leverage_mode = "auto" if str(leverage_raw).lower() == "auto" else "fixed"
+    bars_per_day = max(1, 86_400 // interval_seconds(interval))
+    exits = ExitParams.from_mapping({**(profile.get("exits", {}) or {}), "bars_per_day": bars_per_day})
+    throttle = DrawdownThrottleParams.from_mapping(profile.get("drawdown_throttle", {}) or {})
     return LiveConfig(
-        interval=str(market.get("interval", "1h")),
+        interval=interval,
         history_bars=int(market.get("history_bars", 400)),
         universe=tuple(universe),
-        leverage=int(portfolio.get("leverage", 2)),
+        leverage=2 if leverage_mode == "auto" else int(leverage_raw),
         rebalance=RebalanceParams(
             no_trade_band=float(portfolio.get("no_trade_band", 0.005)),
             no_trade_rel_band=float(portfolio.get("no_trade_rel_band", 0.0)),
             max_order_notional=(
                 float(portfolio["max_order_notional"]) if portfolio.get("max_order_notional") else None
             ),
+            max_participation=float(portfolio.get("max_participation", 0.0)),
         ),
         guards=GuardParams(
             daily_loss_pause=float(guards.get("daily_loss_pause", -0.05)),
@@ -62,7 +76,44 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         kill_switch_path=Path(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH")),
         strategy_weights={entry.id: entry.weight for entry in registry.enabled},
         dry_run=dry_run,
+        exits=exits,
+        throttle=throttle,
+        leverage_mode=leverage_mode,
+        margin_cap=float(portfolio.get("margin_cap", 0.40)),
+        max_leverage=int(portfolio.get("max_leverage", 5)),
+        margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
+        universe_refresh=str(pool.get("refresh", "never")).lower() != "never",
+        liquidity_window=int(pool.get("liquidity_window", 24)),
     )
+
+
+def build_pool(profile: dict[str, Any], market: PublicMarketData) -> LivePool | None:
+    """Daily universe refresh over the same public client as the market data feed (None when disabled)."""
+    pool = profile.get("pool", {}) or {}
+    if str(pool.get("refresh", "never")).lower() == "never":
+        return None
+    config = UniverseConfig.from_mapping(load_yaml(profile.get("universe", "config/universe.yaml")))
+    return LivePool(market.client, config, candidates=int(pool.get("candidates", 0)))
+
+
+def universe_sink(data_root: str | Path) -> Callable[[UniverseUpdate], None]:
+    """Persist a refreshed selection to ``universe.json`` so restarts and research see the same pool."""
+
+    def write(update: UniverseUpdate) -> None:
+        payload = update.to_dict()
+        write_universe(
+            data_root,
+            list(update.symbols),
+            {
+                "selected_at_ms": update.at_ms,
+                "entered": list(update.entered),
+                "left": list(update.left),
+                "volume_30d": dict(payload.get("volumes", {}) or {}),
+                "source": "live-refresh",
+            },
+        )
+
+    return write
 
 
 def registry_evidence_problems(registry: Registry) -> list[str]:

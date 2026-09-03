@@ -57,6 +57,30 @@ class Venue(Protocol):
     async def income(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]: ...
 
 
+class UniverseUpdate(Protocol):
+    """Result of a universe refresh (structural; see ``beidou_data.pool.UniverseUpdate``)."""
+
+    @property
+    def symbols(self) -> tuple[str, ...]: ...
+
+    @property
+    def entered(self) -> tuple[str, ...]: ...
+
+    @property
+    def left(self) -> tuple[str, ...]: ...
+
+    @property
+    def at_ms(self) -> int: ...
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+
+class UniverseProvider(Protocol):
+    """Re-ranks the tradable universe (daily); the engine flattens what leaves (D-014)."""
+
+    async def select(self, previous: Sequence[str], rules: Mapping[str, InstrumentRules]) -> UniverseUpdate: ...
+
+
 class TargetSet(Protocol):
     """Output contract of a signal model (structural; see ``beidou_alpha.ensemble.TargetWeights``)."""
 

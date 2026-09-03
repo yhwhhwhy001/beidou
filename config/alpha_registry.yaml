@@ -57,13 +57,28 @@ strategies:
   - id: flow
     enabled: true
     weight: 1.0
-    # Validated 2026-09-03 with a 4-point prior grid on 15 symbols, 2021-07 -> 2026-09
-    # (walk-forward OOS Sharpe 1.07, CPCV mean 1.16 / q05 0.24, DSR p 0.048, PBO 0.27, cost x2 Sharpe 1.04).
-    # Weak spot: one negative walk-forward fold (-0.81); watch drift.
-    params: {window: 168, scale: 0.05, volume_window: 48, cross_sectional: true, entry_threshold: 0.20}
+    # Round 2 (2026-09-03 06:27Z): 4-point prior grid, walk-forward OOS Sharpe 1.07 with one negative fold.
+    # Round 5 (2026-09-03 09:27Z): the losing stretch (2024-10 -> 2025-09, -8.6% in 2024-11 alone) was the SHORT leg
+    # being squeezed in spot-led rallies (XRP/ADA/SUI); perp taker selling into a strong uptrend is hedging, not
+    # information.  `short_gate` drops shorts while weekly momentum >= 0.3 (longs are never gated: the symmetric gate
+    # destroyed the 2022 bear folds).  Grid {short_gate: [0, 0.3, 0.5]} with 39 pre-ledger flow trials charged
+    # (28 earlier rounds + 11 round-5 diagnostics): walk-forward OOS Sharpe 1.40, every fold positive and no fold chose
+    # the un-gated control, CPCV mean 1.66 / q05 1.29 / 0% negative, DSR p 0.007 at 42 trials, cost x2 Sharpe 1.58,
+    # full-sample MDD -12% (was -26%).  PBO 0.57 is informational at N=3.  See docs/RESEARCH_LOG.md round 5.
+    params:
+      window: 168
+      scale: 0.05
+      volume_window: 48
+      cross_sectional: true
+      entry_threshold: 0.20
+      short_gate: 0.3
+      gate_horizons: [168, 336, 720]
+      gate_weights: [0.2, 0.3, 0.5]
+      gate_return_scale: 0.20
+      gate_vol_window: 400
     evidence:
-      report: reports/research/flow-validation-20260903T0627Z.json
-      sha256: 46f0c416524b41c146f7ee1e1957ff0b09a5fad3239bf7d7fb4ba112ece04aeb
+      report: reports/research/flow-validation-20260903T0927Z.json
+      sha256: b56d6b89759896485e566749136646a35c699824df7031235c3c6e7d35ba7c0d
       verdict: PASS
   - id: residual
     enabled: false

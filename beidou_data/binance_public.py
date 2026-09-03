@@ -240,3 +240,8 @@ class AsyncPublicClient:
         payload = await self.get("/fapi/v1/premiumIndex")
         assert isinstance(payload, list)
         return payload
+
+    async def ticker_24h(self) -> list[dict[str, Any]]:
+        payload = await self.get("/fapi/v1/ticker/24hr")
+        assert isinstance(payload, list)
+        return payload

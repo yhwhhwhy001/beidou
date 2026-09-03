@@ -19,12 +19,14 @@ from beidou_live.composition import load_registry
 from beidou_live.config import (
     build_market_data,
     build_model_from_profile,
+    build_pool,
     build_store,
     build_venue,
     live_config,
     load_profile,
     registry_evidence_problems,
     resolve_universe,
+    universe_sink,
 )
 from beidou_live.engine import LiveEngine
 from beidou_live.paper import PaperVenue
@@ -101,11 +103,22 @@ def live_run(
     else:
         venue = build_venue(payload, config.kill_switch_path)
     alerts = WebhookAlerts(str((payload.get("alerts", {}) or {}).get("webhook_url", "")))
+    pool = build_pool(payload, market)
     engine = LiveEngine(
-        config, model=model, market=market, venue=venue, clock=SystemClock(), store=store, alerts=alerts
+        config,
+        model=model,
+        market=market,
+        venue=venue,
+        clock=SystemClock(),
+        store=store,
+        alerts=alerts,
+        pool=pool,
+        universe_sink=universe_sink(data_root) if pool is not None else None,
     )
+    leverage = "auto" if config.leverage_mode == "auto" else str(config.leverage)
     click.echo(
-        f"universe={universe} interval={config.interval} leverage={config.leverage} dry_run={dry_run} paper={paper} "
+        f"universe={engine.universe} interval={config.interval} leverage={leverage} pool_refresh={pool is not None} "
+        f"exits={config.exits.enabled} throttle={config.throttle.enabled} dry_run={dry_run} paper={paper} "
         f"kill_switch={config.kill_switch_path} state={store.directory}"
     )
 

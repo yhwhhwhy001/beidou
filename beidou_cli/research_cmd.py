@@ -17,7 +17,9 @@ import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.model import AlphaModel
-from beidou_alpha.panel import Panel
+from beidou_alpha.overlays.exits import ExitParams, apply_exits
+from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
+from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
@@ -28,6 +30,7 @@ from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger
 from beidou_alpha.validation.metrics import (
     compound,
     information_coefficient,
+    max_drawdown,
     newey_west_tstat,
     sharpe,
     time_series_ic,
@@ -38,8 +41,9 @@ from beidou_alpha.validation.stability import cost_stress, parameter_neighborhoo
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
+from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars
 from beidou_data.store import FundingStore, KlineStore
-from beidou_live.composition import cost_model, load_panel, load_registry, portfolio_params, read_universe
+from beidou_live.composition import build_model, cost_model, load_panel, load_registry, portfolio_params, read_universe
 from beidou_shared.config import load_yaml
 
 DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
@@ -57,6 +61,14 @@ DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
     "flow": {"window": [24, 72, 168, 336], "scale": [0.03, 0.05, 0.10], "entry_threshold": [0.20, 0.30]},
     "residual": {"horizons": [[24, 72, 168], [168, 336, 720]], "scale": [0.05, 0.10], "beta_window": [336, 720]},
 }
+# D-017 pre-registered overlay grids: evaluated once on the registry ensemble, never widened after seeing results.
+DEFAULT_EXIT_GRID: dict[str, list[Any]] = {
+    "stop_loss": [0.0, 2.5, 4.0],
+    "trailing_stop": [0.0, 4.0],
+    "take_profit": [0.0, 6.0],
+}
+DEFAULT_THROTTLE_GRID: dict[str, list[Any]] = {"start": [0.05], "stop": [0.20], "floor": [0.25]}
+UNIVERSE_MODES = ("static", "pit")
 
 
 def _common_options(function: Any) -> Any:
@@ -83,17 +95,50 @@ def _common_options(function: Any) -> Any:
                 type=int,
                 help="bars a symbol must have before it is tradable (default: profile portfolio.min_history_bars)",
             ),
+            click.option(
+                "--universe",
+                "universe_mode",
+                type=click.Choice(list(UNIVERSE_MODES)),
+                default="static",
+                show_default=True,
+                help="static = universe.json/all stored; pit = point-in-time membership from `beidou data pool history`",
+            ),
         ]
     ):
         function = option(function)
     return function
 
 
-def _resolve_symbols(root: str, symbols: str, interval: str) -> list[str]:
+def _membership_table(root: str) -> pd.DataFrame:
+    path = Path(root) / MEMBERSHIP_FILE
+    if not path.exists():
+        raise click.ClickException(f"{path} is missing; run `beidou data pool history` first")
+    table = pd.read_parquet(path)
+    index = pd.DatetimeIndex(table.index)
+    table.index = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
+    return table.astype(bool)
+
+
+def _resolve_symbols(root: str, symbols: str, interval: str, universe_mode: str = "static") -> list[str]:
     if symbols:
         return [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if universe_mode == "pit":
+        table = _membership_table(root)
+        union = [str(s) for s in table.columns[table.any(axis=0)]]
+        stored = set(KlineStore(root).symbols(interval))
+        missing = sorted(set(union) - stored)
+        if missing:
+            click.echo(f"pit universe: {len(missing)} member symbols have no {interval} klines yet: {missing[:10]}...")
+        return [s for s in union if s in stored]
     universe = read_universe(root)
     return universe or KlineStore(root).symbols(interval)
+
+
+def _membership(root: str, universe_mode: str, panel: Panel) -> pd.DataFrame | None:
+    """Bars x symbols boolean mask for ``--universe pit``; ``None`` keeps the static behaviour."""
+    if universe_mode != "pit":
+        return None
+    return membership_at_bars(_membership_table(root), panel.index)
 
 
 def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
@@ -163,15 +208,17 @@ def research_backtest(
     funding: bool,
     out: str,
     min_history: int | None,
+    universe_mode: str,
 ) -> None:
     """Backtest one strategy through the full portfolio pipeline and write a research report."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params)
-    chosen = _resolve_symbols(root, symbols, interval)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
-    weights, _combined, _per = model.evaluate(panel)
+    weights, _combined, _per = model.evaluate(panel, membership)
     result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
@@ -181,6 +228,7 @@ def research_backtest(
         "params": entry.params,
         "portfolio": model.portfolio.__dict__,
         "interval": interval,
+        "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "range": {"start": str(result.weights.index[0]), "end": str(result.weights.index[-1]), "bars": summary["bars"]},
         "costs": cost.__dict__,
@@ -270,6 +318,7 @@ def research_validate(
     funding: bool,
     out: str,
     min_history: int | None,
+    universe_mode: str,
     grid: str,
     folds: int,
     min_train: int,
@@ -280,8 +329,9 @@ def research_validate(
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params)
-    chosen = _resolve_symbols(root, symbols, interval)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     combos = _grid(strategy, grid, entry.params)
     bpy = panel.bars_per_year
@@ -292,7 +342,7 @@ def research_validate(
     for combo in combos:
         key = param_key(combo)
         model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
-        weights, _c, _p = model.evaluate(panel)
+        weights, _c, _p = model.evaluate(panel, membership)
         result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
         results[key] = result
         nets[key] = result.portfolio_net
@@ -335,7 +385,7 @@ def research_validate(
 
     def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
         model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
-        weights, _c, _p = model.evaluate(panel)
+        weights, _c, _p = model.evaluate(panel, membership)
         return sharpe(run_backtest(panel, weights, cost, execution=execution).portfolio_net, bpy)  # type: ignore[arg-type]
 
     neighbourhood = parameter_neighborhood(
@@ -358,6 +408,7 @@ def research_validate(
         "kind": "validation",
         "strategy": strategy,
         "interval": interval,
+        "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
@@ -435,7 +486,14 @@ def research_validate(
     click.echo(f"    evidence: {{report: {path}, sha256: {digest}, verdict: {verdict}}}")
 
 
-__all__ = ["research_backtest", "research_list", "research_validate"]
+__all__ = [
+    "research_backtest",
+    "research_correlate",
+    "research_diagnose",
+    "research_list",
+    "research_overlay",
+    "research_validate",
+]
 
 
 @research.command("diagnose")
@@ -456,16 +514,20 @@ def research_diagnose(
     funding: bool,
     out: str,
     min_history: int | None,
+    universe_mode: str,
     horizons: str,
 ) -> None:
     """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
     del out  # diagnostics write nothing
     entry = _entry(strategy, registry_path, params)
-    chosen = _resolve_symbols(root, symbols, interval)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     if min_history is None:
         min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
     eligible = panel.close.notna().cumsum() >= min_history
+    membership = _membership(root, universe_mode, panel)
+    if membership is not None:
+        eligible &= membership
     scores = get_signal(strategy).compute(panel, entry.params).where(eligible)
     coverage = float(scores.notna().mean().mean())
     click.echo(f"{strategy} on {len(panel.symbols)} symbols x {len(panel.index)} bars; score coverage={coverage:.2f}")
@@ -507,6 +569,7 @@ def research_diagnose(
 @click.option("--costs", "costs_path", default="config/costs.yaml", show_default=True)
 @click.option("--funding/--no-funding", default=True, show_default=True)
 @click.option("--out", default="reports/research", show_default=True)
+@click.option("--universe", "universe_mode", type=click.Choice(list(UNIVERSE_MODES)), default="static")
 def research_correlate(
     strategies: str,
     root: str,
@@ -519,17 +582,19 @@ def research_correlate(
     costs_path: str,
     funding: bool,
     out: str,
+    universe_mode: str,
 ) -> None:
     """Correlation of strategy net-return streams and the marginal Sharpe of each strategy in an equal-weight mix."""
     ids = [s.strip() for s in strategies.split(",") if s.strip()]
     profile_payload = load_yaml(profile)
-    chosen = _resolve_symbols(root, symbols, interval)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     nets: dict[str, pd.Series] = {}
     for strategy in ids:
         entry = _entry(strategy, registry_path, "")
-        weights, _c, _p = _model(entry, profile_payload, interval).evaluate(panel)
+        weights, _c, _p = _model(entry, profile_payload, interval).evaluate(panel, membership)
         nets[strategy] = run_backtest(panel, weights, cost).portfolio_net
     frame = pd.DataFrame(nets).dropna(how="all").fillna(0.0)
     bpy = panel.bars_per_year
@@ -544,6 +609,7 @@ def research_correlate(
     report: dict[str, Any] = {
         "kind": "correlation",
         "strategies": ids,
+        "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "range": {"start": str(frame.index[0]), "end": str(frame.index[-1]), "bars": len(frame)},
         "correlation": corr.round(4).to_dict(),
@@ -565,3 +631,164 @@ def research_correlate(
     path, digest = _write(out, f"correlate-{'-'.join(ids)}-{_stamp()}", report, markdown)
     click.echo(markdown)
     click.echo(f"report: {path} sha256={digest}")
+
+
+def _overlay_metrics(result: BacktestResult, folds: int, min_train: int, bars_per_year: float) -> dict[str, Any]:
+    net = result.portfolio_net
+    n = len(net)
+    fold_list = walk_forward_folds(n, folds, min_train=min(min_train, max(n // 2, 2)))
+    oos = net.iloc[fold_list[0].test_start :]
+    return {
+        "full_sharpe": sharpe(net, bars_per_year),
+        "full_mdd": max_drawdown(net),
+        "oos_sharpe": sharpe(oos, bars_per_year),
+        "oos_mdd": max_drawdown(oos),
+        "oos_return": compound(oos),
+        "fold_sharpes": [sharpe(net.iloc[f.test_slice], bars_per_year) for f in fold_list],
+        "turnover_units": float(result.turnover.sum()),
+        "average_absolute_exposure": float(result.weights.abs().sum(axis=1).mean()),
+    }
+
+
+@research.command("overlay")
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--symbols", default="", help="comma-separated; default = selected universe or all stored")
+@click.option("--interval", default="1h", show_default=True)
+@click.option("--from", "start", default=None, help="YYYY-MM-DD inclusive")
+@click.option("--to", "end", default=None, help="YYYY-MM-DD exclusive")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--registry", "registry_path", default="config/alpha_registry.yaml", show_default=True)
+@click.option("--costs", "costs_path", default="config/costs.yaml", show_default=True)
+@click.option("--funding/--no-funding", default=True, show_default=True)
+@click.option("--out", default="reports/research", show_default=True)
+@click.option("--min-history", default=None, type=int)
+@click.option("--universe", "universe_mode", type=click.Choice(list(UNIVERSE_MODES)), default="static")
+@click.option("--exits-grid", default="", help="JSON {param: [values...]} (default: the pre-registered grid)")
+@click.option("--throttle-grid", default="", help="JSON {param: [values...]} (default: the pre-registered grid)")
+@click.option("--folds", default=5, show_default=True)
+@click.option("--min-train", default=4000, show_default=True)
+@click.option(
+    "--max-sharpe-loss",
+    default=0.10,
+    show_default=True,
+    help="D-017: a candidate qualifies only if OOS max drawdown improves and OOS Sharpe loses at most this much",
+)
+def research_overlay(
+    root: str,
+    symbols: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    profile: str,
+    registry_path: str,
+    costs_path: str,
+    funding: bool,
+    out: str,
+    min_history: int | None,
+    universe_mode: str,
+    exits_grid: str,
+    throttle_grid: str,
+    folds: int,
+    min_train: int,
+    max_sharpe_loss: float,
+) -> None:
+    """Evidence for the exit overlay and the drawdown throttle on the registry ensemble (D-012/D-015/D-017)."""
+    profile_payload = load_yaml(profile)
+    registry = load_registry(registry_path)
+    model = build_model(registry, profile_payload)
+    if min_history is not None:
+        model = AlphaModel(
+            entries=model.entries,
+            portfolio=model.portfolio,
+            interval=model.interval,
+            ensemble_method=model.ensemble_method,
+            min_history_bars=min_history,
+        )
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel)
+    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    bpy = panel.bars_per_year
+    weights, _combined, _per = model.evaluate(panel, membership)
+    base = run_backtest(panel, weights, cost)
+    baseline = _overlay_metrics(base, folds, min_train, bpy)
+    bars_per_day = max(1, 86_400 // interval_seconds(interval))
+    exit_combos = _grid("exits", exits_grid, {}) if exits_grid else _grid_of(DEFAULT_EXIT_GRID)
+    throttle_combos = _grid("throttle", throttle_grid, {}) if throttle_grid else _grid_of(DEFAULT_THROTTLE_GRID)
+    rows: list[dict[str, Any]] = []
+    click.echo(
+        f"ensemble {[e.id for e in model.entries]} on {len(panel.symbols)} symbols x {len(panel.index)} bars; "
+        f"baseline oos_sharpe={_fmt(baseline['oos_sharpe'])} oos_mdd={baseline['oos_mdd']:.3f}"
+    )
+    for combo in exit_combos:
+        params = ExitParams.from_mapping({**combo, "bars_per_day": bars_per_day})
+        if not params.enabled:
+            continue
+        overlay = apply_exits(weights, panel.close, params)
+        metrics = _overlay_metrics(run_backtest(panel, overlay.weights, cost), folds, min_train, bpy)
+        rows.append({"kind": "exits", "params": combo, **metrics, "events": overlay.summary()})
+    for combo in throttle_combos:
+        throttle = DrawdownThrottleParams.from_mapping({**combo, "enabled": True})
+        scaled, scalars = apply_drawdown_throttle(weights, base.portfolio_net.reindex(weights.index), throttle)
+        metrics = _overlay_metrics(run_backtest(panel, scaled, cost), folds, min_train, bpy)
+        rows.append({"kind": "throttle", "params": combo, **metrics, "mean_scalar": float(scalars.mean())})
+
+    def qualifies(row: dict[str, Any]) -> bool:
+        if row["oos_sharpe"] is None or baseline["oos_sharpe"] is None:
+            return False
+        return bool(
+            row["oos_mdd"] > baseline["oos_mdd"] and row["oos_sharpe"] >= baseline["oos_sharpe"] - max_sharpe_loss
+        )
+
+    recommendation: dict[str, Any] = {}
+    for kind in ("exits", "throttle"):
+        qualified = [row for row in rows if row["kind"] == kind and qualifies(row)]
+        best = max(qualified, key=lambda row: float(row["oos_sharpe"])) if qualified else None
+        recommendation[kind] = {
+            "enable": best is not None,
+            "params": None if best is None else best["params"],
+            "qualified": len(qualified),
+            "tested": sum(1 for row in rows if row["kind"] == kind),
+            "rule": f"oos_mdd improves and oos_sharpe >= baseline - {max_sharpe_loss}; tie-break: highest oos_sharpe",
+        }
+    report: dict[str, Any] = {
+        "kind": "overlay",
+        "strategies": [e.id for e in model.entries],
+        "interval": interval,
+        "universe_mode": universe_mode,
+        "symbols": panel.symbols,
+        "range": {"start": str(base.weights.index[0]), "end": str(base.weights.index[-1]), "bars": len(base.weights)},
+        "costs": cost.__dict__,
+        "folds": folds,
+        "min_train": min_train,
+        "baseline": baseline,
+        "candidates": rows,
+        "recommendation": recommendation,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    lines = [
+        f"{row['kind']} {json.dumps(row['params'])}: oos_sharpe={_fmt(row['oos_sharpe'])} "
+        f"oos_mdd={row['oos_mdd']:.3f} full_sharpe={_fmt(row['full_sharpe'])} full_mdd={row['full_mdd']:.3f} "
+        f"folds={[round(x, 2) if x is not None else None for x in row['fold_sharpes']]} "
+        f"{'QUALIFIES' if qualifies(row) else '-'}"
+        for row in rows
+    ]
+    markdown = render_markdown(
+        "Overlay evidence: " + ", ".join(report["strategies"]),
+        [
+            ("Range", report["range"]),
+            ("Baseline (no overlay)", {k: v for k, v in baseline.items() if k != "fold_sharpes"}),
+            ("Candidates", lines),
+            ("Recommendation (D-017)", {k: json.dumps(v) for k, v in recommendation.items()}),
+        ],
+    )
+    path, digest = _write(out, f"overlay-{_stamp()}", report, markdown)
+    for line in lines:
+        click.echo(line)
+    click.echo(f"recommendation: {json.dumps(recommendation)}")
+    click.echo(f"report: {path} sha256={digest}")
+
+
+def _grid_of(grid: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
+    keys = sorted(grid)
+    return [dict(zip(keys, values, strict=True)) for values in itertools.product(*(grid[key] for key in keys))]

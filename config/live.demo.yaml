@@ -15,13 +15,32 @@ universe: config/universe.yaml
 registry: config/alpha_registry.yaml
 costs: config/costs.yaml
 portfolio:
-  leverage: 2                 # leverage set on every traded symbol
+  leverage: auto              # per-symbol exchange leverage = min(max_leverage, bracket max, ceil(max_gross / margin_cap)) (D-016)
+  margin_cap: 0.40            # initial margin at the gross cap stays below 40% of equity (was 100% at a fixed 2x)
+  max_leverage: 5
+  margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)
+  max_participation: 0.02     # a risk-adding order <= 2% of the symbol's average hourly quote volume (T-S03)
   vol_target: 0.15            # annualised portfolio volatility target
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
   no_trade_rel_band: 0.25     # ...or smaller than 25% of the current position (same-direction resizes only)
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
+pool:
+  refresh: daily              # re-rank the universe once per UTC day with the hysteresis in universe.yaml (D-014); never = static
+  candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
+  liquidity_window: 24        # bars averaged for the participation cap
+exits:                        # bar-close exit overlay in daily-vol units (D-012).  Enabled only by `beidou research overlay`
+  stop_loss: 0.0              #   evidence (D-017): 0 disables each rule.
+  trailing_stop: 0.0
+  take_profit: 0.0
+  cooldown_bars: 24
+  vol_halflife: 48
+drawdown_throttle:            # scale the whole book down between `start` and `stop` drawdown from the equity high-water mark
+  enabled: false
+  start: 0.05
+  stop: 0.20
+  floor: 0.25
 guards:
   daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
   stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals

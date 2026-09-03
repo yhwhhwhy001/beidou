@@ -1,0 +1,251 @@
+"""Trading pool: point-in-time membership for research and a daily refresh for the live loop (D-013, D-014).
+
+Research side.  ``point_in_time_membership`` rebuilds "the top-N by trailing
+quote volume *as it stood at the time*" from daily klines of every symbol
+that ever had an archive, so backtests do not trade 2021 with the 2026
+universe.  Live side.  ``LivePool`` re-ranks candidates once a day with the
+same hysteresis; the engine flattens what leaves and lets ``min_history_bars``
+keep new listings untraded until they have a month of bars.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+import pandas as pd
+
+from beidou_data.archive import ArchiveClient, Month, month_range
+from beidou_data.binance_public import AsyncPublicClient, PublicClient, drop_unclosed
+from beidou_data.store import KlineStore
+from beidou_data.universe import UniverseConfig, eligible_symbols, rank_with_hysteresis
+from beidou_shared.types import InstrumentRules
+
+DAILY = "1d"
+DAY_MS = 86_400_000
+MEMBERSHIP_FILE = "membership.parquet"
+
+
+# --- research: daily data and point-in-time membership --------------------------------------------
+
+
+@dataclass
+class DailySyncReport:
+    symbol: str
+    rows: int = 0
+    source: str = "cached"
+    error: str = ""
+
+
+def sync_daily(
+    symbol: str,
+    *,
+    store: KlineStore,
+    public: PublicClient,
+    archive: ArchiveClient | None,
+    now_ms: int,
+    start_ms: int,
+    listed: bool,
+    max_age_days: int = 2,
+) -> DailySyncReport:
+    """Daily klines: REST for symbols the venue still lists, monthly archives for delisted ones."""
+    report = DailySyncReport(symbol)
+    last = store.last_open_time(symbol, DAILY) if store.exists(symbol, DAILY) else None
+    if last is not None and last >= now_ms - max_age_days * DAY_MS:
+        report.rows = store.count(symbol, DAILY)
+        return report
+    try:
+        if listed:
+            frame = drop_unclosed(public.klines_range(symbol, DAILY, (last + 1) if last else start_ms, now_ms), now_ms)
+            report.source = "rest"
+        else:
+            if archive is None:
+                raise RuntimeError("archive client required for delisted symbols")
+            first = Month.of_ms(last + 1) if last else Month.of_ms(start_ms)
+            pieces = [archive.fetch_month(symbol, DAILY, month) for month in month_range(first, Month.of_ms(now_ms))]
+            frames = [piece for piece in pieces if piece is not None and not piece.empty]
+            frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+            report.source = "archive"
+    except Exception as exc:  # network / parsing: report, never raise out of a bulk sync
+        report.error = f"{type(exc).__name__}: {exc}"
+        return report
+    if not frame.empty:
+        store.append(symbol, DAILY, frame)
+    report.rows = store.count(symbol, DAILY)
+    return report
+
+
+def daily_quote_volume(store: KlineStore, symbols: Iterable[str]) -> pd.DataFrame:
+    """Wide frame (UTC day x symbol) of daily quote volume; NaN where the symbol has no bar."""
+    columns: dict[str, pd.Series] = {}
+    for symbol in symbols:
+        if not store.exists(symbol, DAILY):
+            continue
+        frame = store.load(symbol, DAILY)
+        if frame.empty:
+            continue
+        index = pd.DatetimeIndex(pd.to_datetime(frame["open_time"].to_numpy(), unit="ms", utc=True)).normalize()
+        series = pd.Series(frame["quote_volume"].to_numpy(dtype=float), index=index)
+        columns[symbol] = series[~series.index.duplicated(keep="last")]
+    if not columns:
+        return pd.DataFrame()
+    return pd.DataFrame(columns).sort_index()
+
+
+def point_in_time_membership(
+    quote_volume: pd.DataFrame,
+    config: UniverseConfig,
+    *,
+    eligible: Iterable[str] | None = None,
+    refresh: str = "MS",
+    start: str | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Boolean frame (refresh date x symbol): members chosen at each refresh from data strictly before it.
+
+    A symbol is rankable once it has ``config.min_age_days`` daily bars; its
+    score is the trailing ``config.volume_lookback_days`` quote volume.  The
+    same enter/exit hysteresis as the live pool is applied against the
+    previous refresh's members, so membership churn in backtests matches what
+    the live loop would have done.
+    """
+    if quote_volume.empty:
+        raise ValueError("no daily quote volume supplied")
+    days = pd.DatetimeIndex(quote_volume.index)
+    first = pd.Timestamp(start, tz="UTC") if start is not None else days[0] + pd.Timedelta(days=config.min_age_days)
+    dates = pd.date_range(first.normalize(), days[-1], freq=refresh, tz="UTC")
+    if len(dates) == 0 or dates[0] > first:
+        dates = pd.DatetimeIndex([first.normalize(), *dates]) if len(dates) else pd.DatetimeIndex([first.normalize()])
+    universe = list(quote_volume.columns)
+    eligible_set = set(universe if eligible is None else eligible)
+    rows: list[list[bool]] = []
+    previous: list[str] = []
+    observed = quote_volume.notna().cumsum()
+    for date in dates:
+        before = quote_volume.loc[: date - pd.Timedelta(nanoseconds=1)]
+        if before.empty:
+            rows.append([False] * len(universe))
+            continue
+        age = observed.loc[: date - pd.Timedelta(nanoseconds=1)].iloc[-1]
+        window = before.iloc[-config.volume_lookback_days :]
+        volumes = {s: float(window[s].fillna(0.0).sum()) for s in universe if age[s] >= config.min_age_days}
+        members = rank_with_hysteresis(
+            volumes,
+            eligible_set & set(volumes),
+            previous,
+            enter_rank=config.enter_rank,
+            exit_rank=config.exit_rank,
+            top_n=config.top_n,
+            always_include=config.always_include,
+        )
+        previous = members
+        chosen = set(members)
+        rows.append([s in chosen for s in universe])
+    return pd.DataFrame(rows, index=dates, columns=universe, dtype=bool)
+
+
+def membership_at_bars(membership: pd.DataFrame, bar_index: pd.DatetimeIndex) -> pd.DataFrame:
+    """Forward-fill refresh-date membership onto bar timestamps; bars before the first refresh are out."""
+    if membership.empty:
+        return pd.DataFrame(False, index=bar_index, columns=[])
+    aligned = membership.reindex(membership.index.union(bar_index)).ffill().reindex(bar_index)
+    return aligned.fillna(False).astype(bool)
+
+
+def membership_summary(membership: pd.DataFrame) -> dict[str, Any]:
+    if membership.empty:
+        return {"refreshes": 0, "union": [], "mean_size": 0.0, "changes_per_refresh": 0.0}
+    sizes = membership.sum(axis=1)
+    diffs = membership.astype(int).diff().abs().sum(axis=1).iloc[1:]
+    return {
+        "refreshes": len(membership),
+        "union": sorted(membership.columns[membership.any(axis=0)]),
+        "mean_size": float(sizes.mean()),
+        "changes_per_refresh": float(diffs.mean()) if len(diffs) else 0.0,
+        "first": str(membership.index[0]),
+        "last": str(membership.index[-1]),
+    }
+
+
+# --- live: daily refresh --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UniverseUpdate:
+    symbols: tuple[str, ...]
+    entered: tuple[str, ...]
+    left: tuple[str, ...]
+    at_ms: int
+    volumes: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "symbols": list(self.symbols),
+            "entered": list(self.entered),
+            "left": list(self.left),
+            "at_ms": self.at_ms,
+            "volumes": dict(self.volumes),
+        }
+
+
+def refresh_selection(
+    volume_by_symbol: Mapping[str, float],
+    rules: Mapping[str, InstrumentRules],
+    config: UniverseConfig,
+    previous: Sequence[str],
+    at_ms: int,
+) -> UniverseUpdate:
+    selected = rank_with_hysteresis(
+        volume_by_symbol,
+        eligible_symbols(rules, config),
+        previous,
+        enter_rank=config.enter_rank,
+        exit_rank=config.exit_rank,
+        top_n=config.top_n,
+        always_include=config.always_include,
+    )
+    before, after = set(previous), set(selected)
+    return UniverseUpdate(
+        symbols=tuple(selected),
+        entered=tuple(sorted(after - before)),
+        left=tuple(sorted(before - after)),
+        at_ms=at_ms,
+        volumes={s: float(v) for s, v in volume_by_symbol.items() if s in after},
+    )
+
+
+class LivePool:
+    """Daily universe refresh from mainnet public data (implements ``beidou_live.ports.UniverseProvider``)."""
+
+    def __init__(
+        self, client: AsyncPublicClient, config: UniverseConfig, *, candidates: int = 0, concurrency: int = 4
+    ) -> None:
+        self._client = client
+        self.config = config
+        self._candidates = candidates or 3 * config.top_n
+        self._semaphore = asyncio.Semaphore(concurrency)
+
+    async def _volume(self, symbol: str, days: int, now_ms: int) -> tuple[str, float]:
+        async with self._semaphore:
+            frame = await self._client.klines(symbol, DAILY, days + 1)
+        closed = drop_unclosed(frame, now_ms)
+        if closed.empty:
+            return symbol, 0.0
+        return symbol, float(closed["quote_volume"].tail(days).sum())
+
+    async def select(self, previous: Sequence[str], rules: Mapping[str, InstrumentRules]) -> UniverseUpdate:
+        now_ms = await self._client.server_time_ms()
+        eligible = set(eligible_symbols(rules, self.config))
+        tickers = await self._client.ticker_24h()
+        by_24h = sorted(
+            ((str(row.get("symbol", "")), float(row.get("quoteVolume", 0.0) or 0.0)) for row in tickers),
+            key=lambda item: -item[1],
+        )
+        shortlist = [symbol for symbol, _ in by_24h if symbol in eligible][: self._candidates]
+        candidates = list(dict.fromkeys([*self.config.always_include, *previous, *shortlist]))
+        candidates = [symbol for symbol in candidates if symbol in eligible]
+        days = self.config.volume_lookback_days
+        results = await asyncio.gather(*(self._volume(symbol, days, now_ms) for symbol in candidates))
+        volumes = dict(results)
+        return refresh_selection(volumes, rules, self.config, previous, now_ms)

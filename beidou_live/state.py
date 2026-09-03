@@ -23,6 +23,11 @@ class LiveState:
     day_start_equity: float | None = None
     last_income_ms: int | None = None
     leverage_set: dict[str, int] = field(default_factory=dict)
+    exit_states: dict[str, dict[str, Any]] = field(default_factory=dict)  # per-symbol exit overlay state (D-012)
+    equity_hwm: float | None = None  # high-water mark for the drawdown throttle (D-015)
+    universe: list[str] = field(default_factory=list)  # last refreshed universe (D-014)
+    universe_day: str | None = None
+    leaving: list[str] = field(default_factory=list)  # symbols that left the universe but still hold a position
     consecutive_errors: int = 0
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)

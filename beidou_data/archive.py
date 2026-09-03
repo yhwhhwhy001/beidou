@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import zipfile
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -13,6 +15,7 @@ import pandas as pd
 from beidou_data.binance_public import klines_to_frame
 
 ARCHIVE_BASE_URL = "https://data.binance.vision"
+ARCHIVE_LISTING_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 
 
 class ChecksumMismatch(RuntimeError):
@@ -105,6 +108,23 @@ class ArchiveClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    def list_symbols(self, market: str = "futures/um", listing_url: str = ARCHIVE_LISTING_URL) -> list[str]:
+        """Every symbol with a monthly kline archive (includes delisted ones; the survivorship-free candidate set)."""
+        prefix = f"data/{market}/monthly/klines/"
+        found: list[str] = []
+        marker = ""
+        for _ in range(50):
+            url = f"{listing_url}?delimiter=/&prefix={quote(prefix)}" + (f"&marker={quote(marker)}" if marker else "")
+            response = self._client.get(url)
+            response.raise_for_status()
+            text = response.text
+            page = re.findall(rf"<Prefix>{re.escape(prefix)}([^<]+)/</Prefix>", text)
+            found.extend(page)
+            if "<IsTruncated>true</IsTruncated>" not in text or not page:
+                break
+            marker = f"{prefix}{page[-1]}/"
+        return sorted(set(found))
 
     def fetch_month(self, symbol: str, interval: str, month: Month) -> pd.DataFrame | None:
         """Return the verified month frame, or ``None`` when the archive has no file for that month (404)."""

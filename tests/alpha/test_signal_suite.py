@@ -219,3 +219,53 @@ def test_tsmom_crowding_modifier_shrinks_only_crowded_same_direction_scores() ->
     assert last["B"] == 0.5 and last["C"] == 0.5 and last["D"] == 0.5
     assert apply_crowding_modifier(score, funding, TsmomParams()).equals(score)  # disabled by default
     assert apply_crowding_modifier(score, None, params).equals(score)  # no funding -> untouched
+
+
+def test_flow_short_gate_drops_only_shorts_against_strong_uptrends() -> None:
+    """Round 5: perp taker selling into a spot-led rally is not informed flow; longs into downtrends are untouched."""
+    from beidou_alpha.signals.flow import FlowParams, flow_scores
+
+    n_bars = 400
+    index = pd.date_range("2024-01-01", periods=n_bars, freq="h", tz="UTC")
+    open_time = ((index - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(milliseconds=1)).to_numpy()
+    rng = np.random.default_rng(3)
+
+    def frame(drift: float, taker_share: float) -> pd.DataFrame:
+        close = 100.0 * np.exp(np.cumsum(rng.normal(drift, 0.002, size=n_bars)))
+        open_ = np.concatenate(([close[0]], close[:-1]))
+        volume = np.full(n_bars, 100.0)
+        return pd.DataFrame(
+            {
+                "open_time": open_time,
+                "open": open_,
+                "high": np.maximum(open_, close),
+                "low": np.minimum(open_, close),
+                "close": close,
+                "volume": volume,
+                "quote_volume": volume * close,
+                "trades": 10,
+                "taker_buy_base": volume * taker_share,
+                "taker_buy_quote": volume * close * taker_share,
+            }
+        )
+
+    # UP: strong uptrend with net taker selling; DOWN: strong downtrend with net taker buying.
+    panel = Panel.from_frames({"UP": frame(0.004, 0.35), "DOWN": frame(-0.004, 0.65)}, "1h")
+    base = FlowParams(window=24, volume_window=48, cross_sectional=True)
+    gated = FlowParams(
+        window=24,
+        volume_window=48,
+        cross_sectional=True,
+        short_gate=0.3,
+        gate_horizons=(24, 48, 96),
+        gate_weights=(0.2, 0.3, 0.5),
+        gate_vol_window=100,
+    )
+    raw = flow_scores(panel, base).iloc[-100:]
+    out = flow_scores(panel, gated).iloc[-100:]
+    assert (raw["UP"] < 0).all() and (raw["DOWN"] > 0).all()
+    assert (out["UP"] == 0.0).all()  # short blocked -> explicit exit
+    pd.testing.assert_series_equal(out["DOWN"], raw["DOWN"])  # the long leg is not gated
+    assert gated.warmup_bars == 97 and base.warmup_bars == 49
+    with pytest.raises(ValueError):
+        FlowParams(short_gate=1.5)

@@ -21,6 +21,10 @@ class PublicMarketData:
     def base_url(self) -> str:
         return self._client.base_url
 
+    @property
+    def client(self) -> AsyncPublicClient:
+        return self._client
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

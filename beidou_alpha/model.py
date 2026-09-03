@@ -37,10 +37,16 @@ class AlphaModel:
             min_history_bars=min_history_bars,
         )
 
-    def eligible(self, panel: Panel) -> pd.DataFrame:
-        """Symbols become tradable only after ``min_history_bars`` observed bars (new listings are excluded)."""
-        history = panel.close.notna().cumsum()
-        return history >= self.min_history_bars
+    def eligible(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
+        """Symbols become tradable only after ``min_history_bars`` observed bars (new listings are excluded).
+
+        ``membership`` (bool, bars x symbols) restricts trading to the point-in-time universe (D-013).
+        """
+        history = panel.close.notna().cumsum() >= self.min_history_bars
+        if membership is None:
+            return history
+        member = membership.reindex(index=panel.index, columns=panel.close.columns).fillna(False).astype(bool)
+        return history & member
 
     @property
     def warmup_bars(self) -> int:
@@ -50,12 +56,15 @@ class AlphaModel:
     def strategy_scores(self, panel: Panel) -> dict[str, pd.DataFrame]:
         return {entry.id: get_signal(entry.id).compute(panel, entry.params) for entry in self.entries}
 
-    def strategy_targets(self, panel: Panel) -> dict[str, pd.DataFrame]:
-        eligible = self.eligible(panel)
-        return {
-            entry.id: scores_to_targets(scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action)
-            for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True)
-        }
+    def strategy_targets(self, panel: Panel, membership: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+        eligible = self.eligible(panel, membership)
+        targets: dict[str, pd.DataFrame] = {}
+        for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True):
+            held = scores_to_targets(scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action)
+            if membership is not None:  # leaving the universe is an explicit exit, never a held position
+                held = held.mask(~eligible & held.notna(), 0.0)
+            targets[entry.id] = held
+        return targets
 
     def combined_targets(self, panel: Panel, targets: Mapping[str, pd.DataFrame] | None = None) -> pd.DataFrame:
         per_strategy = dict(targets) if targets is not None else self.strategy_targets(panel)
@@ -63,11 +72,18 @@ class AlphaModel:
             per_strategy, {entry.id: entry.weight for entry in self.entries}, method=self.ensemble_method
         )
 
-    def weights(self, panel: Panel) -> pd.DataFrame:
-        return build_weights(self.combined_targets(panel), panel.close, panel.bars_per_year, self.portfolio)
+    def weights(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
+        return build_weights(
+            self.combined_targets(panel, self.strategy_targets(panel, membership)),
+            panel.close,
+            panel.bars_per_year,
+            self.portfolio,
+        )
 
-    def evaluate(self, panel: Panel) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
-        per_strategy = self.strategy_targets(panel)
+    def evaluate(
+        self, panel: Panel, membership: pd.DataFrame | None = None
+    ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
+        per_strategy = self.strategy_targets(panel, membership)
         combined = self.combined_targets(panel, per_strategy)
         weights = build_weights(combined, panel.close, panel.bars_per_year, self.portfolio)
         return weights, combined, per_strategy

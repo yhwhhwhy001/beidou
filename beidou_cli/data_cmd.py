@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
+from dataclasses import replace
+from pathlib import Path
 
 import click
+import pandas as pd
 
 from beidou_cli import data
 from beidou_data.archive import ArchiveClient, Month
-from beidou_data.binance_public import PublicClient
+from beidou_data.binance_public import AsyncPublicClient, PublicClient
+from beidou_data.pool import (
+    MEMBERSHIP_FILE,
+    LivePool,
+    daily_quote_volume,
+    membership_summary,
+    point_in_time_membership,
+    sync_daily,
+)
 from beidou_data.store import FundingStore, KlineStore
 from beidou_data.sync import sync_funding, sync_klines
 from beidou_data.universe import UniverseConfig, eligible_symbols, select_universe
@@ -113,4 +126,173 @@ def data_status(root: str, interval: str) -> None:
     click.echo(f"universe: {', '.join(universe) if universe else '<not selected>'}")
 
 
-__all__ = ["data_status", "data_sync"]
+@data.group("pool")
+def data_pool() -> None:
+    """Trading pool: live refresh with hysteresis, and the point-in-time membership table for research."""
+
+
+@data_pool.command("refresh")
+@click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--market-url", default="https://fapi.binance.com", show_default=True, help="volumes (mainnet)")
+@click.option(
+    "--venue-url", default="https://demo-fapi.binance.com", show_default=True, help="exchangeInfo for tradability"
+)
+@click.option("--candidates", default=45, show_default=True)
+def pool_refresh(universe_path: str, root: str, market_url: str, venue_url: str, candidates: int) -> None:
+    """Re-rank the live universe (30-day mainnet quote volume, enter/exit hysteresis) and write universe.json."""
+    config = UniverseConfig.from_mapping(load_yaml(universe_path))
+    with PublicClient(venue_url) as venue_public:
+        rules = parse_exchange_info(venue_public.exchange_info())
+    previous = read_universe(root)
+
+    async def run() -> object:
+        client = AsyncPublicClient(market_url)
+        try:
+            return await LivePool(client, config, candidates=candidates).select(previous, rules)
+        finally:
+            await client.aclose()
+
+    update = asyncio.run(run())
+    payload = update.to_dict()  # type: ignore[attr-defined]
+    path = write_universe(
+        root,
+        payload["symbols"],
+        {
+            "selected_at_ms": payload["at_ms"],
+            "entered": payload["entered"],
+            "left": payload["left"],
+            "volume_30d": payload["volumes"],
+            "source": "pool-refresh",
+        },
+    )
+    click.echo(f"universe ({len(payload['symbols'])}): {', '.join(payload['symbols'])}")
+    click.echo(f"entered: {payload['entered'] or '-'}  left: {payload['left'] or '-'}")
+    click.echo(f"written {path}")
+
+
+@data_pool.command("history")
+@click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--market-url", default="https://fapi.binance.com", show_default=True)
+@click.option("--start", default=None, help="first month YYYY-MM (default from universe.yaml)")
+@click.option("--refresh", default="MS", show_default=True, help="pandas offset alias of the re-selection dates")
+@click.option("--sync/--no-sync", default=True, show_default=True, help="refresh daily klines for every candidate")
+@click.option(
+    "--sync-members/--no-sync-members",
+    default=False,
+    show_default=True,
+    help="also download hourly klines + funding for every symbol that was ever a member",
+)
+@click.option(
+    "--always-include",
+    default="BTCUSDT,ETHUSDT",
+    show_default=True,
+    help="pins for the historical selection (never import today's preferences into 2021)",
+)
+def pool_history(
+    universe_path: str,
+    root: str,
+    market_url: str,
+    start: str | None,
+    refresh: str,
+    sync: bool,
+    sync_members: bool,
+    always_include: str,
+) -> None:
+    """Rebuild point-in-time membership from daily quote volume of every USDT perpetual that ever had an archive."""
+    base = UniverseConfig.from_mapping(load_yaml(universe_path))
+    pins = tuple(s.strip().upper() for s in always_include.split(",") if s.strip())
+    config = replace(base, always_include=pins)
+    history_start = Month.parse(start or config.history_start)
+    store = KlineStore(root)
+    with PublicClient(market_url) as public, ArchiveClient() as archive:
+        now_ms = public.server_time_ms()
+        rules = parse_exchange_info(public.exchange_info())
+        listed = {symbol for symbol, rule in rules.items() if rule.quote_asset == config.quote_asset}
+        archived = {s for s in archive.list_symbols() if s.endswith(config.quote_asset)}
+        candidates = sorted(listed | archived)
+        click.echo(f"candidates: {len(candidates)} ({len(listed)} listed, {len(archived - listed)} archive-only)")
+        if sync:
+            started = time.monotonic()
+            errors = 0
+            for index, symbol in enumerate(candidates, start=1):
+                report = sync_daily(
+                    symbol,
+                    store=store,
+                    public=public,
+                    archive=archive,
+                    now_ms=now_ms,
+                    start_ms=history_start.start_ms(),
+                    listed=symbol in listed,
+                )
+                if report.error:
+                    errors += 1
+                    click.echo(f"    ! {symbol}: {report.error}")
+                if index % 50 == 0:
+                    click.echo(f"  daily sync {index}/{len(candidates)} ({time.monotonic() - started:.0f}s)")
+            click.echo(f"daily sync done: {len(candidates)} symbols, {errors} errors")
+        eligible = {
+            s
+            for s in candidates
+            if s not in rules
+            or (
+                rules[s].contract_type == "PERPETUAL"
+                and rules[s].quote_asset == config.quote_asset
+                and (float(rules[s].min_notional) <= config.max_min_notional_usdt or s in pins)
+            )
+        }
+        eligible -= set(config.exclude)
+        volume = daily_quote_volume(store, candidates)
+        if volume.empty:
+            raise click.ClickException("no daily klines stored; run with --sync")
+        volume = volume.loc[pd.Timestamp(history_start.start_ms(), unit="ms", tz="UTC") :]
+        membership = point_in_time_membership(volume, config, eligible=eligible, refresh=refresh)
+        table_path = Path(root) / MEMBERSHIP_FILE
+        membership.to_parquet(table_path)
+        summary = membership_summary(membership)
+        summary["coverage"] = {
+            "symbols_with_daily_data": int(volume.notna().any(axis=0).sum()),
+            "symbol_days": int(volume.notna().sum().sum()),
+            "eligible": len(eligible),
+        }
+        (Path(root) / "membership.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+        click.echo(
+            f"membership: {summary['refreshes']} refreshes {summary['first']} -> {summary['last']}, "
+            f"mean size {summary['mean_size']:.1f}, {summary['changes_per_refresh']:.2f} changes/refresh, "
+            f"union {len(summary['union'])} symbols"
+        )
+        by_year = membership.groupby(pd.DatetimeIndex(membership.index).year).apply(
+            lambda block: sorted(block.columns[block.any()])
+        )
+        for year, members in by_year.items():
+            click.echo(f"  {year}: {len(members)} distinct members")
+        click.echo(f"written {table_path}")
+        if sync_members:
+            funding_store = FundingStore(root)
+            members = list(summary["union"])
+            for index, symbol in enumerate(members, start=1):
+                member = sync_klines(
+                    symbol,
+                    config.interval,
+                    history_start=history_start,
+                    store=store,
+                    archive=archive,
+                    public=public,
+                    now_ms=now_ms,
+                )
+                sync_funding(
+                    symbol,
+                    history_start=history_start,
+                    store=funding_store,
+                    public=public,
+                    now_ms=now_ms,
+                    report=member,
+                )
+                status = "OK" if not member.errors else f"ERRORS={len(member.errors)}"
+                click.echo(
+                    f"[{index}/{len(members)}] {symbol}: rows={member.total_rows} funding={member.funding_rows} {status}"
+                )
+
+
+__all__ = ["data_status", "data_sync", "pool_history", "pool_refresh"]

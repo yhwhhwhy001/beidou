@@ -20,6 +20,7 @@ class RebalanceParams:
     no_trade_band: float = 0.005
     no_trade_rel_band: float = 0.0
     max_order_notional: float | None = None
+    max_participation: float = 0.0  # cap on a risk-adding order: fraction of the symbol's average hourly quote volume
     tag: str = "bd"
 
 
@@ -34,6 +35,7 @@ class PlannedOrder:
     current_notional: float
     target_notional: float
     price: float
+    note: str = ""
 
     @property
     def notional(self) -> float:
@@ -50,6 +52,7 @@ class PlannedOrder:
             "current_notional": self.current_notional,
             "target_notional": self.target_notional,
             "price": self.price,
+            "note": self.note,
         }
 
 
@@ -70,7 +73,9 @@ def plan_rebalance(
     rules: Mapping[str, InstrumentRules],
     bar_open_ms: int,
     params: RebalanceParams,
+    liquidity: Mapping[str, float] | None = None,
 ) -> tuple[list[PlannedOrder], list[dict[str, Any]]]:
+    """``liquidity``: average hourly quote volume per symbol, used with ``params.max_participation`` (T-S03)."""
     orders: list[PlannedOrder] = []
     skipped: list[dict[str, Any]] = []
     if equity <= 0:
@@ -122,6 +127,18 @@ def plan_rebalance(
             if quantity <= 0:
                 skipped.append({"symbol": symbol, "reason": "ORDER_CAP_BELOW_STEP"})
                 continue
+        note = ""
+        cap = (liquidity or {}).get(symbol)
+        if params.max_participation > 0 and cap is not None and cap > 0 and not closing:
+            allowed = params.max_participation * float(cap)
+            if float(quantity) * price > allowed:
+                quantity = quantize_qty(allowed / price, rule)
+                note = "PARTICIPATION_CAPPED"
+                if quantity <= 0:
+                    skipped.append(
+                        {"symbol": symbol, "reason": "PARTICIPATION_CAP_BELOW_STEP", "cap_notional": allowed}
+                    )
+                    continue
         if not reduce_only and not meets_min_notional(quantity, price, rule):
             skipped.append(
                 {
@@ -143,6 +160,7 @@ def plan_rebalance(
                 current_notional=current_notional,
                 target_notional=target_notional,
                 price=float(price),
+                note=note,
             )
         )
     return orders, skipped
