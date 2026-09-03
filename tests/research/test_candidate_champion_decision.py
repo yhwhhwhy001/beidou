@@ -25,6 +25,7 @@ from beidou_research.portfolio import (
     write_decision_artifacts,
 )
 from beidou_research.validation.contracts import canonical_digest
+from tests.policy_envelope import require_policy_envelope
 
 # 与 test_scientific_validation_semantics 的 BEIDOU_T07_METRIC_OWNER_POLICY
 # 对称:签名授权信封按设计存放在仓库之外,路径可用环境变量覆盖,默认仍是
@@ -253,6 +254,7 @@ def _baseline_evidence() -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def policy():
+    require_policy_envelope(POLICY_PATH, "BEIDOU_T08_PORTFOLIO_OWNER_POLICY")
     return load_portfolio_owner_policy(POLICY_PATH)
 
 

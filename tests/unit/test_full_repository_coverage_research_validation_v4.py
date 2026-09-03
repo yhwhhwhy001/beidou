@@ -25,6 +25,7 @@ from beidou_research.validation.contracts import ContractNotVerifiable, MetricOw
 from beidou_shared.contracts.alpha_execution import AlphaTarget, ExecutionFact, ExecutionStatus, OrderIntent
 from beidou_shared.contracts.experiment import DatasetRef, ExperimentRunRef
 from beidou_shared.types import InstrumentId, SchemaVersion, StrategyId, VenueId
+from tests.policy_envelope import require_policy_envelope
 from tests.research.test_candidate_champion_decision import (
     POLICY_PATH as PORTFOLIO_POLICY_PATH,
 )
@@ -47,11 +48,13 @@ from tests.research.test_scientific_validation_semantics import (
 
 @pytest.fixture(scope="module")
 def metric_policy() -> MetricOwnerPolicy:
+    require_policy_envelope(VALIDATION_POLICY_PATH, "BEIDOU_T07_METRIC_OWNER_POLICY")
     return validation_contracts.load_metric_owner_policy(VALIDATION_POLICY_PATH)
 
 
 @pytest.fixture(scope="module")
 def owner_policy() -> PortfolioOwnerPolicy:
+    require_policy_envelope(PORTFOLIO_POLICY_PATH, "BEIDOU_T08_PORTFOLIO_OWNER_POLICY")
     return portfolio_contracts.load_portfolio_owner_policy(PORTFOLIO_POLICY_PATH)
 
 
@@ -62,10 +65,12 @@ def _metric_policy_with(policy: MetricOwnerPolicy, mutate: Any) -> MetricOwnerPo
 
 
 def _owner_policy_document() -> dict[str, Any]:
+    require_policy_envelope(PORTFOLIO_POLICY_PATH, "BEIDOU_T08_PORTFOLIO_OWNER_POLICY")
     return json.loads(PORTFOLIO_POLICY_PATH.read_text(encoding="utf-8"))
 
 
 def _metric_policy_document() -> dict[str, Any]:
+    require_policy_envelope(VALIDATION_POLICY_PATH, "BEIDOU_T07_METRIC_OWNER_POLICY")
     return json.loads(VALIDATION_POLICY_PATH.read_text(encoding="utf-8"))
 
 
