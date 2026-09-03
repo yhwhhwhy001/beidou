@@ -1,0 +1,69 @@
+"""Combine per-strategy targets into one conviction frame; snapshot the latest row for live use."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+
+@dataclass(frozen=True)
+class TargetWeights:
+    """Latest-bar output of the alpha model (structurally matches ``beidou_live.ports.TargetSet``)."""
+
+    as_of: pd.Timestamp
+    weights: dict[str, float]
+    contributions: dict[str, dict[str, float]] = field(default_factory=dict)
+    combined: dict[str, float] = field(default_factory=dict)
+
+
+def combine_targets(
+    targets_by_strategy: Mapping[str, pd.DataFrame],
+    strategy_weights: Mapping[str, float],
+    *,
+    method: str = "mean",
+    zscore_window: int = 500,
+) -> pd.DataFrame:
+    """Weighted mean of per-strategy targets; strategies without a value at a bar are excluded from that bar."""
+    if not targets_by_strategy:
+        raise ValueError("no strategy targets to combine")
+    if method not in {"mean", "rolling_zscore"}:
+        raise ValueError(f"unknown ensemble method {method!r}")
+    numerator: pd.DataFrame | None = None
+    denominator: pd.DataFrame | None = None
+    for strategy, frame in targets_by_strategy.items():
+        weight = float(strategy_weights.get(strategy, 1.0))
+        if weight <= 0:
+            continue
+        values = frame
+        if method == "rolling_zscore":
+            rolling = frame.rolling(zscore_window, min_periods=max(20, zscore_window // 5))
+            std = rolling.std(ddof=0)
+            values = ((frame - rolling.mean()) / std.where(std > 0)).clip(-3.0, 3.0) / 3.0
+        present = values.notna().astype(float) * weight
+        contribution = values.fillna(0.0) * weight
+        numerator = contribution if numerator is None else numerator.add(contribution, fill_value=0.0)
+        denominator = present if denominator is None else denominator.add(present, fill_value=0.0)
+    if numerator is None or denominator is None:
+        raise ValueError("all strategy weights are zero")
+    return (numerator / denominator.where(denominator > 0)).clip(-1.0, 1.0)
+
+
+def snapshot(
+    weights: pd.DataFrame,
+    combined: pd.DataFrame,
+    targets_by_strategy: Mapping[str, pd.DataFrame],
+) -> TargetWeights:
+    """Latest row of the model outputs with NaN treated as flat."""
+    as_of = pd.Timestamp(weights.index[-1])
+    last_weights = weights.iloc[-1].fillna(0.0)
+    return TargetWeights(
+        as_of=as_of,
+        weights={str(symbol): float(value) for symbol, value in last_weights.items()},
+        contributions={
+            strategy: {str(symbol): float(value) for symbol, value in frame.iloc[-1].fillna(0.0).items()}
+            for strategy, frame in targets_by_strategy.items()
+        },
+        combined={str(symbol): float(value) for symbol, value in combined.iloc[-1].fillna(0.0).items()},
+    )

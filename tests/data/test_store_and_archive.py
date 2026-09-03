@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import io
+import zipfile
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from beidou_data.archive import ChecksumMismatch, Month, month_range, parse_checksum, verify_zip, zip_to_frame
+from beidou_data.binance_public import drop_unclosed, klines_to_frame
+from beidou_data.store import FundingStore, KlineStore, funding_per_bar
+from beidou_data.universe import UniverseConfig, select_universe
+from beidou_shared.binance_rules import parse_exchange_info
+from beidou_shared.types import InstrumentRules
+
+
+def _rows(start_ms: int, n: int, step_ms: int = 3_600_000) -> list[list[object]]:
+    return [
+        [
+            start_ms + i * step_ms,
+            "100",
+            "101",
+            "99",
+            "100.5",
+            "10",
+            start_ms + (i + 1) * step_ms - 1,
+            "1000",
+            5,
+            "6",
+            "600",
+            "0",
+        ]
+        for i in range(n)
+    ]
+
+
+def test_klines_to_frame_normalises_microsecond_timestamps() -> None:
+    frame = klines_to_frame(
+        [[1_700_000_000_000_000, "1", "2", "0.5", "1.5", "3", 1_700_000_003_599_999, "4", 1, "1", "1", "0"]]
+    )
+    assert int(frame["open_time"].iloc[0]) == 1_700_000_000_000
+    assert frame["close"].dtype == float
+
+
+def test_drop_unclosed_removes_in_progress_bar() -> None:
+    frame = klines_to_frame(_rows(0, 3))
+    kept = drop_unclosed(frame, now_ms=2 * 3_600_000 - 1)
+    assert len(kept) == 1
+
+
+def test_store_merges_and_dedupes(tmp_path: Path) -> None:
+    store = KlineStore(tmp_path)
+    first = klines_to_frame(_rows(0, 5))
+    second = klines_to_frame(_rows(3 * 3_600_000, 5))
+    assert store.append("BTCUSDT", "1h", first) == 5
+    assert store.append("BTCUSDT", "1h", second) == 8
+    loaded = store.load("BTCUSDT", "1h")
+    assert loaded["open_time"].is_monotonic_increasing and loaded["open_time"].is_unique
+    assert store.last_open_time("BTCUSDT", "1h") == 7 * 3_600_000
+    assert store.symbols("1h") == ["BTCUSDT"]
+
+
+def test_funding_store_and_per_bar_alignment(tmp_path: Path) -> None:
+    store = FundingStore(tmp_path)
+    frame = pd.DataFrame(
+        {"funding_time": [8 * 3_600_000, 16 * 3_600_000], "funding_rate": [0.0001, -0.0002], "mark_price": [1.0, 1.0]}
+    )
+    store.append("BTCUSDT", frame)
+    bars = pd.date_range("1970-01-01", periods=24, freq="h", tz="UTC")
+    per_bar = funding_per_bar(store.load("BTCUSDT"), bars)
+    assert per_bar.iloc[8] == pytest.approx(0.0001)
+    assert per_bar.iloc[16] == pytest.approx(-0.0002)
+    assert per_bar.abs().sum() == pytest.approx(0.0003)
+
+
+def test_archive_checksum_and_zip_parsing() -> None:
+    csv = "open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore\n"
+    csv += "1700000000000,1,2,0.5,1.5,3,1700003599999,4,1,1,1,0\n"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("BTCUSDT-1h-2023-11.csv", csv)
+    payload = buffer.getvalue()
+    frame = zip_to_frame(payload)
+    assert len(frame) == 1 and int(frame["open_time"].iloc[0]) == 1700000000000
+    import hashlib
+
+    digest = hashlib.sha256(payload).hexdigest()
+    assert parse_checksum(f"{digest}  BTCUSDT-1h-2023-11.zip\n") == digest
+    verify_zip(payload, digest)
+    with pytest.raises(ChecksumMismatch):
+        verify_zip(payload, "0" * 64)
+    assert [str(m) for m in month_range(Month(2023, 11), Month(2024, 2))] == ["2023-11", "2023-12", "2024-01"]
+
+
+def test_universe_hysteresis_and_filters() -> None:
+    rules = {
+        **{
+            f"S{i}USDT": InstrumentRules(
+                f"S{i}USDT", *(__import__("decimal").Decimal(x) for x in ("0.1", "0.1", "0.1", "5"))
+            )
+            for i in range(30)
+        },
+        "BIGUSDT": InstrumentRules("BIGUSDT", *(__import__("decimal").Decimal(x) for x in ("0.1", "0.1", "0.1", "50"))),
+        "XBUSD": InstrumentRules(
+            "XBUSD", *(__import__("decimal").Decimal(x) for x in ("0.1", "0.1", "0.1", "5")), quote_asset="BUSD"
+        ),
+    }
+    volume = {f"S{i}USDT": 1000.0 - i for i in range(30)}
+    volume["BIGUSDT"] = 5000.0
+    volume["XBUSD"] = 9000.0
+    config = UniverseConfig(
+        top_n=15, enter_rank=15, exit_rank=20, always_include=("S29USDT",), max_min_notional_usdt=20
+    )
+    chosen = select_universe(volume, rules, config)
+    assert "BIGUSDT" not in chosen and "XBUSD" not in chosen
+    assert "S29USDT" in chosen
+    assert chosen[:15] == [f"S{i}USDT" for i in range(15)]
+    # S16 is rank 17: not entering fresh, but retained when previously held
+    assert "S16USDT" not in chosen
+    assert "S16USDT" in select_universe(volume, rules, config, previous=["S16USDT"])
+    assert "S25USDT" not in select_universe(volume, rules, config, previous=["S25USDT"])  # beyond exit_rank
+
+
+def test_parse_exchange_info() -> None:
+    payload = {
+        "symbols": [
+            {
+                "symbol": "BTCUSDT",
+                "status": "TRADING",
+                "contractType": "PERPETUAL",
+                "quoteAsset": "USDT",
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "100"},
+                ],
+            }
+        ]
+    }
+    rules = parse_exchange_info(payload)
+    assert str(rules["BTCUSDT"].min_notional) == "100" and rules["BTCUSDT"].tradable

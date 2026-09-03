@@ -1,0 +1,231 @@
+"""Return and forecast-quality metrics.  Pure numpy/pandas."""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Literal
+
+import numpy as np
+import pandas as pd
+
+CorrMethod = Literal["pearson", "kendall", "spearman"]
+
+
+def compound(returns: pd.Series | np.ndarray) -> float:
+    values = np.asarray(returns, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return 0.0
+    if np.any(values <= -1.0):
+        return -1.0
+    return float(np.prod(1.0 + values) - 1.0)
+
+
+def sharpe(returns: pd.Series | np.ndarray, bars_per_year: float, ddof: int = 1) -> float | None:
+    values = np.asarray(returns, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        return None
+    std = float(np.std(values, ddof=ddof))
+    if std <= 0:
+        return None
+    return float(np.mean(values) / std * math.sqrt(bars_per_year))
+
+
+def max_drawdown(returns: pd.Series | np.ndarray) -> float:
+    values = np.asarray(returns, dtype=float)
+    values = np.where(np.isfinite(values), values, 0.0)
+    equity = np.cumprod(1.0 + values)
+    peak = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
+    drawdown = equity / peak - 1.0
+    return float(drawdown.min()) if drawdown.size else 0.0
+
+
+def hit_rate(returns: pd.Series | np.ndarray) -> float | None:
+    values = np.asarray(returns, dtype=float)
+    active = values[np.isfinite(values) & (values != 0.0)]
+    if active.size == 0:
+        return None
+    return float(np.mean(active > 0))
+
+
+def turnover_units(weights: pd.DataFrame | pd.Series) -> float:
+    """Sum over time of |w_t - w_{t-1}| (per symbol summed); the legacy 'turnover units'."""
+    frame = weights.to_frame() if isinstance(weights, pd.Series) else weights
+    filled = frame.fillna(0.0)
+    delta = filled.diff()
+    delta.iloc[0] = filled.iloc[0]
+    return float(delta.abs().sum().sum())
+
+
+def summarize_returns(
+    gross: pd.Series, net: pd.Series, weights: pd.DataFrame | pd.Series, bars_per_year: float
+) -> dict[str, Any]:
+    frame = weights.to_frame() if isinstance(weights, pd.Series) else weights
+    exposure = frame.fillna(0.0).abs().sum(axis=1)
+    return {
+        "bars": int(net.shape[0]),
+        "gross_return": compound(gross),
+        "net_return": compound(net),
+        "annualized_sharpe": sharpe(net, bars_per_year),
+        "annualized_sharpe_gross": sharpe(gross, bars_per_year),
+        "max_drawdown": max_drawdown(net),
+        "average_absolute_exposure": float(exposure.mean()) if len(exposure) else 0.0,
+        "turnover_units": turnover_units(frame),
+        "nonzero_target_bars": int((exposure > 1e-12).sum()),
+        "hit_rate": hit_rate(net),
+        "cost_share_of_gross": _cost_share(gross, net),
+    }
+
+
+def _cost_share(gross: pd.Series, net: pd.Series) -> float | None:
+    gross_sum = float(gross.sum())
+    if gross_sum <= 0:
+        return None
+    return float((gross.sum() - net.sum()) / gross_sum)
+
+
+# --- forecast quality -----------------------------------------------------
+
+
+def correlation(x: np.ndarray, y: np.ndarray, method: CorrMethod = "spearman") -> float | None:
+    """Pearson/Spearman correlation without scipy (pandas needs scipy for rank methods)."""
+    a = np.asarray(x, dtype=float)
+    b = np.asarray(y, dtype=float)
+    mask = np.isfinite(a) & np.isfinite(b)
+    if int(mask.sum()) < 3:
+        return None
+    a, b = a[mask], b[mask]
+    if method == "spearman":
+        a = pd.Series(a).rank(method="average").to_numpy(dtype=float)
+        b = pd.Series(b).rank(method="average").to_numpy(dtype=float)
+    elif method != "pearson":
+        raise ValueError("only pearson and spearman are supported")
+    if a.std() == 0 or b.std() == 0:
+        return None
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def information_coefficient(
+    scores: pd.DataFrame, forward_returns: pd.DataFrame, method: CorrMethod = "spearman"
+) -> pd.Series:
+    """Per-bar cross-sectional IC between scores and forward returns (needs >= 3 symbols per bar)."""
+    aligned_scores, aligned_returns = scores.align(forward_returns, join="inner")
+    score_values = aligned_scores.to_numpy(dtype=float)
+    return_values = aligned_returns.to_numpy(dtype=float)
+    ics: list[float] = []
+    stamps: list[pd.Timestamp] = []
+    for row in range(score_values.shape[0]):
+        mask = np.isfinite(score_values[row]) & np.isfinite(return_values[row])
+        if int(mask.sum()) < 3:
+            continue
+        value = correlation(score_values[row][mask], return_values[row][mask], method)
+        if value is not None:
+            ics.append(value)
+            stamps.append(pd.Timestamp(aligned_scores.index[row]))
+    return pd.Series(ics, index=pd.DatetimeIndex(stamps), dtype=float)
+
+
+def time_series_ic(scores: pd.Series, forward_returns: pd.Series, method: CorrMethod = "spearman") -> float | None:
+    """IC of one symbol's score with its own forward return (time-series correlation)."""
+    aligned = pd.concat([scores, forward_returns], axis=1, join="inner").dropna()
+    if len(aligned) < 3:
+        return None
+    return correlation(aligned.iloc[:, 0].to_numpy(dtype=float), aligned.iloc[:, 1].to_numpy(dtype=float), method)
+
+
+def icir(ic_series: pd.Series) -> dict[str, float | None]:
+    values = ic_series.dropna()
+    if len(values) < 2:
+        return {"ic_mean": None, "ic_std": None, "icir": None, "n": len(values)}
+    mean = float(values.mean())
+    std = float(values.std(ddof=1))
+    return {"ic_mean": mean, "ic_std": std, "icir": mean / std if std > 0 else None, "n": len(values)}
+
+
+def newey_west_tstat(series: pd.Series | np.ndarray, max_lags: int | None = None) -> dict[str, float | None]:
+    """t-statistic of the mean with Newey-West (Bartlett) HAC variance; the fix for overlapping labels (D-011)."""
+    values = np.asarray(series, dtype=float)
+    values = values[np.isfinite(values)]
+    n = values.size
+    if n < 3:
+        return {"mean": None, "t_stat": None, "p_value": None, "lags": None}
+    lags = int(max_lags) if max_lags is not None else int(np.floor(4 * (n / 100.0) ** (2.0 / 9.0)))
+    lags = max(0, min(lags, n - 2))
+    centered = values - values.mean()
+    variance = float(np.dot(centered, centered)) / n
+    for lag in range(1, lags + 1):
+        weight = 1.0 - lag / (lags + 1.0)
+        variance += 2.0 * weight * float(np.dot(centered[lag:], centered[:-lag])) / n
+    if variance <= 0:
+        return {"mean": float(values.mean()), "t_stat": None, "p_value": None, "lags": lags}
+    t_stat = float(values.mean() / math.sqrt(variance / n))
+    p_value = 2.0 * (1.0 - normal_cdf(abs(t_stat)))
+    return {"mean": float(values.mean()), "t_stat": t_stat, "p_value": p_value, "lags": lags}
+
+
+def normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def normal_ppf(p: float) -> float:
+    """Inverse standard normal CDF (Acklam's rational approximation, |error| < 1.2e-9)."""
+    if not 0.0 < p < 1.0:
+        raise ValueError("p must be in (0, 1)")
+    a = (
+        -3.969683028665376e01,
+        2.209460984245205e02,
+        -2.759285104469687e02,
+        1.383577518672690e02,
+        -3.066479806614716e01,
+        2.506628277459239e00,
+    )
+    b = (
+        -5.447609879822406e01,
+        1.615858368580409e02,
+        -1.556989798598866e02,
+        6.680131188771972e01,
+        -1.328068155288572e01,
+    )
+    c = (
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e00,
+        -2.549732539343734e00,
+        4.374664141464968e00,
+        2.938163982698783e00,
+    )
+    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00, 3.754408661907416e00)
+    p_low = 0.02425
+    if p < p_low:
+        q = math.sqrt(-2.0 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+        )
+    if p > 1.0 - p_low:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+        )
+    q = p - 0.5
+    r = q * q
+    return (
+        (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5])
+        * q
+        / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+    )
+
+
+def yearly_breakdown(net: pd.Series, bars_per_year: float) -> dict[str, dict[str, Any]]:
+    """Compound return, Sharpe and drawdown per calendar year."""
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(net.index, pd.DatetimeIndex):
+        return out
+    for year, block in net.groupby(net.index.year):
+        out[str(year)] = {
+            "bars": len(block),
+            "return": compound(block),
+            "sharpe": sharpe(block, bars_per_year),
+            "max_drawdown": max_drawdown(block),
+        }
+    return out

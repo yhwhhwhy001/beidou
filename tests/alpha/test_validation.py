@@ -1,0 +1,128 @@
+"""T-A04 / T-A06: validation machinery behaves; overlapping labels are handled honestly."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from beidou_alpha.validation.cpcv import cpcv_splits
+from beidou_alpha.validation.labels import forward_returns, non_overlapping
+from beidou_alpha.validation.metrics import information_coefficient, newey_west_tstat, normal_cdf, normal_ppf
+from beidou_alpha.validation.multiple_testing import (
+    benjamini_hochberg,
+    deflated_sharpe_ratio,
+    holm,
+    probability_of_backtest_overfitting,
+    sharpe_per_period,
+)
+from beidou_alpha.validation.walk_forward import walk_forward_evaluate, walk_forward_folds
+
+
+def test_walk_forward_folds_purge_and_cover() -> None:
+    folds = walk_forward_folds(1000, 5, min_train=500, purge=10)
+    assert [f.test_start for f in folds] == [500, 600, 700, 800, 900]
+    assert folds[-1].test_end == 1000
+    for fold in folds:
+        assert fold.train_end == fold.test_start - 10
+        assert fold.train_start == 0
+    rolling = walk_forward_folds(1000, 4, min_train=400, purge=5, expanding=False, train_window=300)
+    assert all(f.train_end - f.train_start <= 300 and f.train_end == f.test_start - 5 for f in rolling)
+
+
+def test_cpcv_splits_exclude_purge_and_embargo() -> None:
+    splits = cpcv_splits(600, n_groups=6, n_test_groups=2, purge=5, embargo=3)
+    assert len(splits) == 15
+    for split in splits:
+        assert not set(split.train_index) & set(split.test_index)
+        for start in (split.test_index[0],):
+            assert all(index not in split.train_index for index in range(max(0, start - 5), start))
+
+
+def test_walk_forward_picks_params_on_train_only() -> None:
+    index = pd.date_range("2024-01-01", periods=1000, freq="h", tz="UTC")
+    rng = np.random.default_rng(1)
+    good = pd.Series(rng.normal(0.0005, 0.01, 1000), index=index)
+    bad = pd.Series(rng.normal(-0.0005, 0.01, 1000), index=index)
+    folds = walk_forward_folds(1000, 4, min_train=400, purge=4)
+    result = walk_forward_evaluate({"good": good, "bad": bad}, {"good": {"p": 1}, "bad": {"p": 2}}, folds, 8760.0)
+    assert all(outcome.chosen_params == {"p": 1} for outcome in result.folds)
+    assert len(result.oos_returns) == 600
+
+
+def test_normal_helpers() -> None:
+    assert math.isclose(normal_cdf(normal_ppf(0.975)), 0.975, abs_tol=1e-7)
+    assert math.isclose(normal_ppf(0.5), 0.0, abs_tol=1e-9)
+
+
+def test_bh_and_holm_are_monotone_and_known_values() -> None:
+    p = [0.03, 0.04, 0.049]
+    assert holm(p) == pytest.approx([0.09, 0.09, 0.09])
+    assert all(value <= 1.0 for value in benjamini_hochberg([0.01, 0.2, 0.03, 0.5]))
+    adjusted = benjamini_hochberg([0.001, 0.002, 0.5])
+    assert adjusted[0] <= adjusted[1] <= adjusted[2]
+
+
+def test_dsr_haircuts_the_best_of_many_random_strategies() -> None:
+    rng = np.random.default_rng(3)
+    n_obs, n_trials = 2000, 100
+    matrix = rng.normal(0.0, 0.01, size=(n_obs, n_trials))
+    sharpes = [sharpe_per_period(matrix[:, j]) or 0.0 for j in range(n_trials)]
+    best = int(np.argmax(sharpes))
+    naive_z = sharpes[best] * math.sqrt(n_obs - 1)
+    assert normal_cdf(naive_z) > 0.95  # the lucky draw looks significant on its own
+    dsr = deflated_sharpe_ratio(
+        sharpes[best], n_trials=n_trials, sharpe_variance=float(np.var(sharpes, ddof=1)), n_obs=n_obs
+    )
+    assert dsr.benchmark_sharpe > 0
+    assert dsr.p_value > 0.05
+
+
+def test_pbo_is_high_for_noise_and_low_for_a_true_edge() -> None:
+    rng = np.random.default_rng(5)
+    noise = rng.normal(0.0, 0.01, size=(1600, 12))
+    assert 0.2 <= probability_of_backtest_overfitting(noise, n_subsets=8).pbo <= 0.8
+    edge = noise.copy()
+    edge[:, 3] += 0.003
+    assert probability_of_backtest_overfitting(edge, n_subsets=8).pbo <= 0.1
+
+
+def _random_walk_panel(seed: int, n_symbols: int = 12, n_bars: int = 1500) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    index = pd.date_range("2023-01-01", periods=n_bars, freq="h", tz="UTC")
+    steps = rng.normal(0.0, 0.01, size=(n_bars, n_symbols))
+    prices = 100.0 * np.exp(np.cumsum(steps, axis=0))
+    return pd.DataFrame(prices, index=index, columns=[f"S{i}" for i in range(n_symbols)])
+
+
+def _persistent_noise_scores(close: pd.DataFrame, seed: int, phi: float = 0.95) -> pd.DataFrame:
+    rng = np.random.default_rng(seed + 1000)
+    shocks = rng.normal(0.0, 1.0, size=close.shape)
+    values = np.zeros_like(shocks)
+    for t in range(1, shocks.shape[0]):
+        values[t] = phi * values[t - 1] + shocks[t]
+    return pd.DataFrame(values, index=close.index, columns=close.columns)
+
+
+def test_overlapping_labels_inflate_naive_t_but_not_newey_west_or_non_overlapping() -> None:
+    """T-A06: persistent noise scores vs 4-bar labels must not look significant (D-011)."""
+    horizon = 4
+    naive_rejections = nw_rejections = sparse_rejections = 0
+    seeds = range(30)
+    for seed in seeds:
+        close = _random_walk_panel(seed)
+        scores = _persistent_noise_scores(close, seed)
+        ic = information_coefficient(scores, forward_returns(close, horizon)).dropna()
+        naive_t = float(ic.mean() / ic.std(ddof=1) * math.sqrt(len(ic)))
+        naive_rejections += abs(naive_t) > 1.96
+        nw = newey_west_tstat(ic, max_lags=horizon)
+        nw_rejections += nw["p_value"] is not None and nw["p_value"] < 0.05
+        sparse = non_overlapping(ic, horizon)
+        sparse_t = float(sparse.mean() / sparse.std(ddof=1) * math.sqrt(len(sparse)))
+        sparse_rejections += abs(sparse_t) > 1.96
+    n = len(seeds)
+    assert naive_rejections / n > nw_rejections / n or naive_rejections / n <= 0.15
+    assert nw_rejections / n <= 0.2
+    assert sparse_rejections / n <= 0.2
