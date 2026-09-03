@@ -171,16 +171,27 @@ def multiple_testing_report(
     trial_returns_matrix: np.ndarray,
     *,
     bars_per_year: float,
+    prior_trials: int = 0,
+    pooled_n_trials: int | None = None,
+    pooled_sharpe_variance: float | None = None,
 ) -> dict[str, Any]:
-    """DSR for the chosen candidate against all trials, plus PBO over the trial matrix."""
+    """DSR for the chosen candidate against all trials, plus PBO over the trial matrix.
+
+    ``prior_trials`` counts configurations of the same strategy that were
+    already evaluated in earlier rounds on the same data.  They belong in the
+    DSR denominator: a pass obtained by shrinking the grid after seeing the
+    results is exactly the selection bias DSR exists to expose.
+    """
     trial_sharpes = [sharpe_per_period(trial_returns_matrix[:, j]) for j in range(trial_returns_matrix.shape[1])]
     finite = [s for s in trial_sharpes if s is not None]
-    sharpe_variance = float(np.var(finite, ddof=1)) if len(finite) >= 2 else 0.0
+    grid_variance = float(np.var(finite, ddof=1)) if len(finite) >= 2 else 0.0
+    sharpe_variance = pooled_sharpe_variance if pooled_sharpe_variance is not None else grid_variance
+    n_trials = pooled_n_trials if pooled_n_trials is not None else (len(finite) or 1) + max(0, int(prior_trials))
     candidate_sharpe = sharpe_per_period(candidate_returns)
     skew, kurt = moments(candidate_returns)
     dsr = deflated_sharpe_ratio(
         candidate_sharpe or 0.0,
-        n_trials=len(finite) or 1,
+        n_trials=max(1, int(n_trials)),
         sharpe_variance=sharpe_variance,
         n_obs=int(np.isfinite(candidate_returns).sum()),
         skewness=skew,
@@ -188,7 +199,10 @@ def multiple_testing_report(
     )
     pbo = probability_of_backtest_overfitting(trial_returns_matrix) if trial_returns_matrix.shape[1] >= 2 else None
     return {
-        "n_trials": len(finite),
+        "n_trials": max(1, int(n_trials)),
+        "grid_trials": len(finite),
+        "prior_trials": max(0, int(prior_trials)),
+        "sharpe_variance_period": sharpe_variance,
         "candidate_sharpe_annual": None if candidate_sharpe is None else candidate_sharpe * math.sqrt(bars_per_year),
         "expected_max_sharpe_annual": dsr.benchmark_sharpe * math.sqrt(bars_per_year),
         "dsr": dsr.dsr,

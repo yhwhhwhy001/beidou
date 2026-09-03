@@ -44,6 +44,9 @@ def _logging(verbose: bool) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    if not verbose:
+        # one line per request (14 kline pulls a cycle) is noise in an unattended log; errors still surface
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @live.command("run")

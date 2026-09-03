@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.labels import forward_returns
+from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger
 from beidou_alpha.validation.metrics import (
     compound,
     information_coefficient,
@@ -47,12 +49,9 @@ DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
         "return_scale": [0.20, 0.30],
         "vol_window": [400],
     },
-    "xsmom": {
-        "horizons": [[24, 72, 168], [168, 336, 720], [336, 720, 1440]],
-        "score_scale": [0.08, 0.15],
-        "entry_threshold": [0.20, 0.30],
-    },
-    "carry": {"window_bars": [24, 72, 168], "scale": [0.0003, 0.0005, 0.001], "entry_threshold": [0.15, 0.20, 0.30]},
+    # Prior-driven small grids: every extra trial costs DSR power; do not widen these to "find" a pass.
+    "xsmom": {"skip_bars": [24, 48], "z_scale": [1.0, 1.5], "entry_threshold": [0.20, 0.30]},
+    "carry": {"window_bars": [72, 168], "entry_threshold": [0.20, 0.30]},
     "meanrev": {"window": [24, 48, 96], "z_entry": [1.5, 2.0, 2.5], "trend_gate_z": [1.5, 2.0, 3.0]},
     "breakout": {"window": [24, 48, 96], "distance_scale": [1.0, 2.0, 3.0]},
     "flow": {"window": [24, 72, 168, 336], "scale": [0.03, 0.05, 0.10], "entry_threshold": [0.20, 0.30]},
@@ -250,6 +249,12 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
 @click.option("--min-train", default=4000, show_default=True, help="bars before the first test fold")
 @click.option("--purge", default=50, show_default=True)
 @click.option("--cpcv-groups", default=6, show_default=True)
+@click.option(
+    "--prior-trials",
+    default=0,
+    show_default=True,
+    help="configurations of this strategy already tried in earlier rounds (added to the DSR denominator)",
+)
 def research_validate(
     strategy: str,
     params: str,
@@ -270,6 +275,7 @@ def research_validate(
     min_train: int,
     purge: int,
     cpcv_groups: int,
+    prior_trials: int,
 ) -> None:
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
@@ -303,10 +309,29 @@ def research_validate(
     cpcv = cpcv_evaluate(
         nets, cpcv_splits(n_bars, n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=purge), bpy
     )
-    full_sharpes: dict[str, float] = {key: (sharpe(series, bpy) or -np.inf) for key, series in nets.items()}
+    full_sharpes_raw: dict[str, float | None] = {key: sharpe(series, bpy) for key, series in nets.items()}
+    full_sharpes: dict[str, float] = {
+        key: (value if value is not None else -np.inf) for key, value in full_sharpes_raw.items()
+    }
     best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
-    mt = multiple_testing_report(nets[best_key].to_numpy(dtype=float), matrix, bars_per_year=bpy)
+    ledger_path = Path(out) / "trials.jsonl"
+    prior_records = (
+        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), strategy) if ledger_path.exists() else []
+    )
+    period_sharpes = {
+        key: (None if value is None else value / math.sqrt(bpy)) for key, value in full_sharpes_raw.items()
+    }
+    pooled = dsr_inputs(prior_records, period_sharpes, bpy, manual_prior_trials=prior_trials)
+    mt = multiple_testing_report(
+        nets[best_key].to_numpy(dtype=float),
+        matrix,
+        bars_per_year=bpy,
+        prior_trials=prior_trials,
+        pooled_n_trials=pooled["n_trials"],
+        pooled_sharpe_variance=pooled["sharpe_variance"] if pooled["pooled_sharpes"] >= 2 else None,
+    )
+    mt["ledger_trials"] = pooled["ledger_trials"]
 
     def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
         model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
@@ -374,6 +399,26 @@ def research_validate(
         ],
     )
     path, digest = _write(out, f"{strategy}-validation-{_stamp()}", report, markdown)
+    stamp = datetime.now(UTC).isoformat()
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        for key in nets:
+            handle.write(
+                TrialRecord(
+                    strategy=strategy,
+                    param_key=key,
+                    sharpe_annual=full_sharpes_raw[key],
+                    bars_per_year=bpy,
+                    recorded_at=stamp,
+                    range_start=str(common_index[0]),
+                    range_end=str(common_index[-1]),
+                    symbols=len(panel.symbols),
+                    run_id=path.stem,
+                ).to_json()
+                + "\n"
+            )
+    click.echo(
+        f"trials ledger: {ledger_path} (+{len(nets)}; {pooled['ledger_trials']} already in ledger, {prior_trials} declared pre-ledger)"
+    )
     click.echo(f"best params: {params_by_key[best_key]}")
     click.echo(
         f"walk-forward OOS sharpe={_fmt(wf_summary['oos_sharpe'])} return={wf_summary['oos_return']:.4f} consistency={_fmt(wf_summary['fold_consistency'])}"
@@ -414,11 +459,14 @@ def research_diagnose(
     horizons: str,
 ) -> None:
     """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
-    del out, min_history  # diagnostics write nothing and look at raw signals
+    del out  # diagnostics write nothing
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval)
     panel = _load(root, chosen, interval, start, end, funding)
-    scores = get_signal(strategy).compute(panel, entry.params)
+    if min_history is None:
+        min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
+    eligible = panel.close.notna().cumsum() >= min_history
+    scores = get_signal(strategy).compute(panel, entry.params).where(eligible)
     coverage = float(scores.notna().mean().mean())
     click.echo(f"{strategy} on {len(panel.symbols)} symbols x {len(panel.index)} bars; score coverage={coverage:.2f}")
     click.echo("horizon | ts-IC mean (spearman, per-symbol avg) | xs-IC mean | NW t | NW p")

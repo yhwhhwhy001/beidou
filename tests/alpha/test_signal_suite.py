@@ -119,8 +119,11 @@ def test_meanrev_trades_against_dislocation_and_exits() -> None:
 def test_xsmom_ranks_relative_winners() -> None:
     index = pd.date_range("2024-01-01", periods=400, freq="h", tz="UTC")
     trend = np.exp(np.linspace(0, 0.5, 400))
-    close = pd.DataFrame({"UP": 100 * trend, "FLAT": np.full(400, 100.0), "DOWN": 100 / trend}, index=index)
-    scores = xsmom_scores(close, XsmomParams(horizons=(24, 72, 168), horizon_weights=(0.2, 0.3, 0.5)))
+    wiggle = 1.0 + 0.001 * np.sin(np.arange(400))  # a truly constant series has zero vol and no risk-adjusted score
+    close = pd.DataFrame({"UP": 100 * trend, "FLAT": 100.0 * wiggle, "DOWN": 100 / trend}, index=index)
+    scores = xsmom_scores(
+        close, XsmomParams(horizons=(24, 72, 168), horizon_weights=(0.2, 0.3, 0.5), skip_bars=0, vol_window=100)
+    )
     last = scores.iloc[-1]
     assert last["UP"] > last["FLAT"] > last["DOWN"]
     assert last["UP"] > 0 > last["DOWN"]
@@ -142,3 +145,77 @@ def test_explicit_zero_exit_semantics() -> None:
     held = scores_to_targets(scores, 0.2)
     assert held["A"].tolist()[1:] == [0.5, 0.5, 0.0, 0.0]
     assert np.isnan(held["A"].iloc[0])
+
+
+def test_xsmom_skip_bars_ignores_the_most_recent_returns() -> None:
+    """With skip_bars=k the latest score must not depend on the last k bars (1-24h is reversal)."""
+    rng = np.random.default_rng(11)
+    index = pd.date_range("2024-01-01", periods=1200, freq="h", tz="UTC")
+    base = pd.DataFrame(
+        100 * np.exp(np.cumsum(rng.normal(0, 0.01, (1200, 5)), axis=0)), index=index, columns=list("ABCDE")
+    )
+    params = XsmomParams(horizons=(168, 336), horizon_weights=(0.4, 0.6), skip_bars=24, vol_window=200)
+    reference = xsmom_scores(base, params).iloc[-1]
+    shocked = base.copy()
+    shocked.iloc[-24:] *= rng.uniform(0.7, 1.3, size=(24, 5))  # rewrite the last 24 bars only
+    assert np.allclose(xsmom_scores(shocked, params).iloc[-1].to_numpy(), reference.to_numpy(), equal_nan=True)
+    exposed = xsmom_scores(
+        shocked, XsmomParams(horizons=(168, 336), horizon_weights=(0.4, 0.6), skip_bars=0, vol_window=200)
+    ).iloc[-1]
+    assert not np.allclose(exposed.to_numpy(), reference.to_numpy(), equal_nan=True)
+
+
+def test_xsmom_risk_adjustment_favours_the_calmer_winner() -> None:
+    rng = np.random.default_rng(12)
+    index = pd.date_range("2024-01-01", periods=1500, freq="h", tz="UTC")
+    n = len(index)
+    drift = 0.0004
+    calm = 100 * np.exp(np.cumsum(drift + rng.normal(0, 0.003, n)))
+    wild = 100 * np.exp(np.cumsum(drift + rng.normal(0, 0.03, n)))
+    flat = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    close = pd.DataFrame({"CALM": calm, "WILD": wild, "FLAT": flat, "F2": flat * 1.01, "F3": flat * 0.99}, index=index)
+    scores = xsmom_scores(
+        close, XsmomParams(horizons=(168, 336), horizon_weights=(0.4, 0.6), skip_bars=24, vol_window=200)
+    )
+    tail = scores.iloc[-200:].mean()
+    assert tail["CALM"] > 0
+    assert abs(tail["CALM"]) > abs(tail["WILD"]) * 0.5  # the calm winner is at least as convincing
+
+
+def test_carry_rank_mode_is_immune_to_one_extreme_name() -> None:
+    from beidou_alpha.signals.carry import CarryParams, carry_scores
+
+    index = pd.date_range("2024-01-01", periods=240, freq="h", tz="UTC")
+    columns = pd.Index(["A", "B", "C", "D", "E", "MEME"])
+    funding = pd.DataFrame(0.0, index=index, columns=columns)
+    settle = funding.index[::8]
+    # C settles at a tiny but non-zero rate: an all-zero window is indistinguishable from "no funding data"
+    funding.loc[settle, ["A", "B", "C", "D", "E"]] = [[0.0001, 0.00005, 0.000001, -0.00005, -0.0001]] * len(settle)
+    funding.loc[settle, "MEME"] = 0.02  # absurd: 2% per settlement
+    scores = carry_scores(funding, index, columns, CarryParams(window_bars=72, mode="rank"))
+    last = scores.iloc[-1]
+    assert last["MEME"] == -1.0 and last["E"] == 1.0
+    assert last["A"] < last["B"] < last["C"] < last["D"]
+    assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
+    level = carry_scores(funding, index, columns, CarryParams(window_bars=72, mode="level", winsor_pct=0.10))
+    assert level.iloc[-1]["A"] < 0 < level.iloc[-1]["E"]  # median-centred: the outlier cannot flip A's sign
+    assert level.iloc[-1]["MEME"] <= level.iloc[-1]["A"]  # still the most negative name
+
+
+def test_tsmom_crowding_modifier_shrinks_only_crowded_same_direction_scores() -> None:
+    from beidou_alpha.signals.tsmom import TsmomParams, apply_crowding_modifier
+
+    index = pd.date_range("2024-01-01", periods=100, freq="h", tz="UTC")
+    columns = pd.Index(["A", "B", "C", "D", "E"])
+    score = pd.DataFrame(0.5, index=index, columns=columns)
+    score["E"] = -0.5
+    funding = pd.DataFrame(0.0, index=index, columns=columns)
+    funding.loc[funding.index[::8], :] = [[0.001, 0.0001, 0.00005, -0.00005, -0.001]] * len(funding.index[::8])
+    params = TsmomParams(crowding_window=72, crowding_cut=0.7, crowding_penalty=0.5)
+    out = apply_crowding_modifier(score, funding, params)
+    last = out.iloc[-1]
+    assert last["A"] == 0.25  # crowded long (highest funding, long score) -> halved
+    assert last["E"] == -0.25  # crowded short (most negative funding, short score) -> halved
+    assert last["B"] == 0.5 and last["C"] == 0.5 and last["D"] == 0.5
+    assert apply_crowding_modifier(score, funding, TsmomParams()).equals(score)  # disabled by default
+    assert apply_crowding_modifier(score, None, params).equals(score)  # no funding -> untouched

@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import realized_vol, returns
+from beidou_alpha.features import cross_sectional_rank, realized_vol, returns
 from beidou_alpha.panel import Panel
 
 
@@ -36,6 +36,12 @@ class TsmomParams:
     slope_scale: float = 0.01
     entry_threshold: float = 0.20
     vol_window: int | None = 200
+    # Optional funding-crowding modifier (carry's only plausible role after it failed standalone):
+    # when a symbol's trailing funding sits in the extreme cross-sectional rank on the *same* side as the
+    # momentum score, the position is crowded and the score is shrunk by ``crowding_penalty``.
+    crowding_window: int = 0
+    crowding_cut: float = 0.7
+    crowding_penalty: float = 0.5
 
     def __post_init__(self) -> None:
         if len(self.horizons) != len(self.horizon_weights) or not self.horizons:
@@ -48,6 +54,8 @@ class TsmomParams:
             raise ValueError("scales must be positive")
         if not 0 < self.entry_threshold <= 1:
             raise ValueError("entry_threshold must be in (0, 1]")
+        if self.crowding_window < 0 or not 0 < self.crowding_cut <= 1 or not 0 <= self.crowding_penalty <= 1:
+            raise ValueError("invalid crowding parameters")
 
     @classmethod
     def from_mapping(cls, params: Mapping[str, Any]) -> TsmomParams:
@@ -94,5 +102,19 @@ def tsmom_scores(close: pd.DataFrame, params: TsmomParams | None = None) -> pd.D
     return score.clip(-1.0, 1.0).where(valid)
 
 
+def apply_crowding_modifier(score: pd.DataFrame, funding: pd.DataFrame | None, p: TsmomParams) -> pd.DataFrame:
+    """Shrink same-direction scores where trailing funding is in the extreme cross-sectional rank."""
+    if p.crowding_window <= 0 or funding is None or p.crowding_penalty <= 0:
+        return score
+    aligned = funding.reindex(index=score.index, columns=score.columns)
+    trailing = aligned.rolling(p.crowding_window, min_periods=p.crowding_window).sum()
+    observed = aligned.abs().rolling(p.crowding_window, min_periods=p.crowding_window).sum() > 0
+    rank = cross_sectional_rank(trailing.where(observed)).fillna(0.0)
+    crowded_long = (score > 0) & (rank >= p.crowding_cut)
+    crowded_short = (score < 0) & (rank <= -p.crowding_cut)
+    return score.mask(crowded_long | crowded_short, score * (1.0 - p.crowding_penalty))
+
+
 def compute(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
-    return tsmom_scores(panel.close, TsmomParams.from_mapping(params))
+    p = TsmomParams.from_mapping(params)
+    return apply_crowding_modifier(tsmom_scores(panel.close, p), panel.funding, p)

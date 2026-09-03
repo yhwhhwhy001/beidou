@@ -126,3 +126,42 @@ def test_overlapping_labels_inflate_naive_t_but_not_newey_west_or_non_overlappin
     assert naive_rejections / n > nw_rejections / n or naive_rejections / n <= 0.15
     assert nw_rejections / n <= 0.2
     assert sparse_rejections / n <= 0.2
+
+
+def test_prior_trials_make_dsr_stricter() -> None:
+    from beidou_alpha.validation.multiple_testing import multiple_testing_report
+
+    rng = np.random.default_rng(9)
+    matrix = rng.normal(0.0002, 0.01, size=(3000, 4))
+    candidate = matrix[:, int(np.argmax(matrix.mean(axis=0)))]
+    fresh = multiple_testing_report(candidate, matrix, bars_per_year=8760.0)
+    burdened = multiple_testing_report(candidate, matrix, bars_per_year=8760.0, prior_trials=30)
+    assert burdened["n_trials"] == 34 and burdened["prior_trials"] == 30 and fresh["n_trials"] == 4
+    assert burdened["dsr_p_value"] >= fresh["dsr_p_value"]
+    assert burdened["expected_max_sharpe_annual"] > fresh["expected_max_sharpe_annual"]
+
+
+def test_ledger_pools_trials_and_verdict_ignores_pbo_for_tiny_grids() -> None:
+    from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger
+    from beidou_alpha.validation.verdict import decide
+
+    older = [
+        TrialRecord("s", f"k{i}", s, 8760.0, "t", "a", "b", 15, "run0") for i, s in enumerate((0.2, 1.0, -0.3, 0.7))
+    ]
+    lines = [r.to_json() for r in older] + [
+        TrialRecord("other", "z", 2.0, 8760.0, "t", "a", "b", 15, "run0").to_json(),
+        "garbage",
+    ]
+    prior = parse_ledger(lines, "s")
+    assert len(prior) == 4
+    pooled = dsr_inputs(prior, {"new1": 1.5 / 8760**0.5, "new2": None}, 8760.0, manual_prior_trials=10)
+    assert pooled["n_trials"] == 16 and pooled["pooled_sharpes"] == 5 and pooled["sharpe_variance"] > 0
+    base = {
+        "walk_forward": {"oos_sharpe": 1.6, "fold_consistency": 1.0},
+        "multiple_testing": {"dsr_p_value": 0.01, "pbo": 0.67, "grid_trials": 2},
+        "cost_stress": {"x2": 1.3},
+    }
+    assert decide(base)[0] == "PASS"
+    wide = {**base, "multiple_testing": {**base["multiple_testing"], "grid_trials": 8}}
+    verdict, reasons = decide(wide)
+    assert verdict == "FAIL" and any("pbo" in r for r in reasons)

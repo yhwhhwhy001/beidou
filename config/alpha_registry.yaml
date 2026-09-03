@@ -12,6 +12,11 @@ strategies:
     # Weekly-scale horizons: validated 2026-09-03 on 15 symbols, 2021-07 -> 2026-09
     # (walk-forward OOS Sharpe 1.38, CPCV q05 1.20, DSR p 0.045, PBO 0.04, cost x2 Sharpe 1.29).
     # The legacy 5/20/50-hour horizons FAILED validation (see docs/RESEARCH_LOG.md).
+    # 2026-09-03 round 4: funding-crowding modifier enabled (carry's information used as a filter, never as a
+    # standalone book).  Control vs treatment, 43 pre-ledger trials charged: walk-forward OOS Sharpe 1.61 vs 1.38,
+    # every fold positive and every fold chose the modifier, CPCV q05 1.14, cost x2 Sharpe 1.32.  Caveats recorded in
+    # docs/RESEARCH_LOG.md: PBO 0.67 (informational at N=2) and the DSR variance came from a 2-point grid.
+    # The modifier only shrinks same-direction positions in crowded names; it never adds risk.
     params:
       horizons: [168, 336, 720]
       horizon_weights: [0.2, 0.3, 0.5]
@@ -19,19 +24,25 @@ strategies:
       slope_scale: 0.01
       entry_threshold: 0.20
       vol_window: 400
+      crowding_window: 72
+      crowding_cut: 0.7
+      crowding_penalty: 0.5
     evidence:
-      report: reports/research/tsmom-validation-20260903T0619Z.json
-      sha256: 0233cc7bfa8db4d7d8cf82865d0a2a62799b38c25ae7dc3dd9a262e18a9cb6f7
+      report: reports/research/tsmom-validation-20260903T0846Z.json
+      sha256: f174f91782bd703edeee245a4171ca89e2c6bd68dcc3db02b649e0852551ff44
       verdict: PASS
   - id: xsmom
     enabled: false
     weight: 1.0
-    params: {horizons: [24, 72, 168], horizon_weights: [0.2, 0.3, 0.5], score_scale: 0.08, entry_threshold: 0.20}
+    # Best honest configuration so far (raw returns, no skip): WFO OOS Sharpe 0.72, CPCV 0.70/-0.01, PBO 0.05,
+    # but DSR p 0.12 with 4 trials and far worse once the ~26 cumulative xsmom trials are charged. Stays disabled.
+    # Risk-adjusted / skip-24 variants validated worse in the full pipeline (OOS 0.20 / 0.51). See docs/RESEARCH_LOG.md.
+    params: {horizons: [168, 336, 720], horizon_weights: [0.2, 0.3, 0.5], skip_bars: 0, risk_adjusted: false, score_scale: 0.15, entry_threshold: 0.30}
     evidence: null
   - id: carry
     enabled: false
     weight: 1.0
-    params: {window_bars: 24, scale: 0.0005, cross_sectional: true, entry_threshold: 0.20}
+    params: {window_bars: 72, mode: rank, entry_threshold: 0.20}
     evidence: null
   - id: meanrev
     enabled: false

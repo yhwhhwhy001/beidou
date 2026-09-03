@@ -1,15 +1,25 @@
-"""Cross-sectional momentum / relative strength (vectorised port of ``RelativeStrengthAlpha``).
+"""Cross-sectional momentum / relative strength (vectorised port of ``RelativeStrengthAlpha``, hardened).
 
-relative = sum_h w_h * tanh((r_asset,h - r_bench,h) / score_scale) / sum_h w_h
-rank     = cross-sectional rank of (r_asset,H - r_bench,H) at the primary (last) horizon, in [-1, 1]
+Two measured facts shape this version (see docs/RESEARCH_LOG.md):
+
+* 1-24h returns are *reversal* at hourly resolution, so the lookback skips the
+  most recent ``skip_bars`` bars: r_h = close[t-skip] / close[t-skip-h] - 1
+  (the classic "12-1" construction of Jegadeesh & Titman / Asness).
+* Cross-sectional vol dispersion is enormous, so with ``risk_adjusted`` the
+  excess return is divided by the symbol's trailing vol * sqrt(h) before it is
+  scored; the ranking then compares t-statistics rather than raw moves.
+
+relative = sum_h w_h * tanh(x_h / scale) / sum_h w_h,   x_h = excess (raw) or excess / (vol * sqrt(h)) (risk adjusted)
+rank     = cross-sectional rank of x_H at the primary (last) horizon, in [-1, 1]
 score    = clip(0.75 * relative + 0.25 * rank, -1, 1)
 
-The benchmark is the equal-weight cross-sectional mean, so the signal is
+The benchmark is the equal-weight cross-sectional mean, so the book is
 market-neutral by construction.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -17,15 +27,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import apply_numpy, cross_sectional_rank, returns
+from beidou_alpha.features import apply_numpy, cross_sectional_rank, realized_vol
 from beidou_alpha.panel import Panel
 
 
 @dataclass(frozen=True)
 class XsmomParams:
-    horizons: tuple[int, ...] = (24, 72, 168)
+    horizons: tuple[int, ...] = (168, 336, 720)
     horizon_weights: tuple[float, ...] = (0.2, 0.3, 0.5)
-    score_scale: float = 0.08
+    skip_bars: int = 24
+    risk_adjusted: bool = True
+    score_scale: float = 0.15  # raw-return mode: excess return per unit of tanh
+    z_scale: float = 1.5  # risk-adjusted mode: excess t-statistic per unit of tanh
+    vol_window: int = 336
     relative_weight: float = 0.75
     rank_weight: float = 0.25
     entry_threshold: float = 0.20
@@ -34,8 +48,10 @@ class XsmomParams:
     def __post_init__(self) -> None:
         if len(self.horizons) != len(self.horizon_weights) or not self.horizons:
             raise ValueError("horizons and horizon_weights must align")
-        if self.score_scale <= 0 or sum(self.horizon_weights) <= 0:
+        if self.score_scale <= 0 or self.z_scale <= 0 or sum(self.horizon_weights) <= 0:
             raise ValueError("scales must be positive")
+        if self.skip_bars < 0 or self.vol_window < 10:
+            raise ValueError("skip_bars must be >= 0 and vol_window >= 10")
         if not 0 < self.entry_threshold <= 1:
             raise ValueError("entry_threshold must be in (0, 1]")
 
@@ -49,7 +65,12 @@ class XsmomParams:
 
     @property
     def warmup_bars(self) -> int:
-        return max(self.horizons) + 1
+        return max(max(self.horizons) + self.skip_bars, self.vol_window) + 1
+
+
+def skipped_returns(close: pd.DataFrame, horizon: int, skip: int) -> pd.DataFrame:
+    """Return over ``horizon`` bars ending ``skip`` bars ago: close[t-skip] / close[t-skip-horizon] - 1."""
+    return close.shift(skip) / close.shift(skip + horizon) - 1.0
 
 
 def xsmom_scores(close: pd.DataFrame, params: XsmomParams | None = None) -> pd.DataFrame:
@@ -57,17 +78,24 @@ def xsmom_scores(close: pd.DataFrame, params: XsmomParams | None = None) -> pd.D
     weight_total = float(sum(p.horizon_weights))
     relative = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     valid = pd.DataFrame(True, index=close.index, columns=close.columns)
-    excess_primary: pd.DataFrame | None = None
+    vol = realized_vol(close, p.vol_window, ddof=0).shift(p.skip_bars) if p.risk_adjusted else None
+    signal_primary: pd.DataFrame | None = None
     for horizon, weight in zip(p.horizons, p.horizon_weights, strict=True):
-        ret = returns(close, horizon)
-        benchmark = ret.mean(axis=1)
-        excess = ret.sub(benchmark, axis=0)
-        valid &= excess.notna()
-        relative = relative + apply_numpy(excess / p.score_scale, np.tanh).fillna(0.0) * weight
-        excess_primary = excess
-    assert excess_primary is not None
+        ret = skipped_returns(close, horizon, p.skip_bars)
+        excess = ret.sub(ret.mean(axis=1), axis=0)
+        if vol is not None:
+            denominator = (vol * math.sqrt(horizon)).where(vol > 0)
+            x = excess / denominator
+            scale = p.z_scale
+        else:
+            x = excess
+            scale = p.score_scale
+        valid &= x.notna()
+        relative = relative + apply_numpy(x / scale, np.tanh).fillna(0.0) * weight
+        signal_primary = x
+    assert signal_primary is not None
     relative = relative / weight_total
-    rank = cross_sectional_rank(excess_primary)
+    rank = cross_sectional_rank(signal_primary)
     enough = close.notna().sum(axis=1) >= p.min_symbols
     score = (p.relative_weight * relative + p.rank_weight * rank.fillna(0.0)) / (p.relative_weight + p.rank_weight)
     return score.clip(-1.0, 1.0).where(valid).where(enough, other=np.nan)
