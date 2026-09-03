@@ -100,3 +100,82 @@ def test_data_status_offline(tmp_path: Path, august_dir: Path) -> None:
     result = CliRunner().invoke(main, ["data", "status", "--root", str(root)])
     assert result.exit_code == 0
     assert "BTCUSDT" in result.output
+
+
+def test_research_pit_universe_and_overlay_offline(tmp_path: Path, august_dir: Path) -> None:
+    """--universe pit reads the membership table; research overlay writes the D-017 evidence report."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    index = pd.DatetimeIndex(pd.read_parquet(august_dir / "BTCUSDT" / "1h.parquet")["open_time"], name="open_time")
+    stamps = pd.to_datetime(index.to_numpy(), unit="ms", utc=True)
+    membership = pd.DataFrame(
+        [[True, True, True, False], [True, True, False, True]],
+        index=pd.DatetimeIndex([stamps[0], stamps[len(stamps) // 2]]),
+        columns=list(SYMBOLS),
+    )
+    membership.to_parquet(root / "membership.parquet")
+    out = tmp_path / "reports"
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "research",
+            "backtest",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--universe",
+            "pit",
+            "--out",
+            str(out),
+            "--no-funding",
+            "--params",
+            '{"vol_window": 100, "horizons": [5, 20, 50]}',
+            "--min-history",
+            "0",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(next(out.glob("tsmom-backtest-*.json")).read_text())
+    assert payload["universe_mode"] == "pit" and set(payload["symbols"]) == set(SYMBOLS)
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "strategies:\n"
+        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50], horizon_weights: [0.2, 0.3, 0.5]}}\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        main,
+        [
+            "research",
+            "overlay",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            str(registry),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--min-history",
+            "0",
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--exits-grid",
+            '{"stop_loss": [0.0, 2.0], "take_profit": [0.0, 4.0]}',
+            "--throttle-grid",
+            '{"start": [0.02], "stop": [0.10], "floor": [0.5]}',
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    overlay = json.loads(next(out.glob("overlay-*.json")).read_text())
+    assert overlay["baseline"]["oos_sharpe"] is not None
+    assert [row["kind"] for row in overlay["candidates"]] == ["exits", "exits", "exits", "throttle"]
+    assert set(overlay["recommendation"]) == {"exits", "throttle"}
+    assert "recommendation:" in result.output

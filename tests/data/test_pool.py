@@ -7,7 +7,13 @@ from decimal import Decimal
 import numpy as np
 import pandas as pd
 
-from beidou_data.pool import membership_at_bars, membership_summary, point_in_time_membership, refresh_selection
+from beidou_data.pool import (
+    membership_at_bars,
+    membership_summary,
+    point_in_time_membership,
+    refresh_selection,
+    tenure_mask,
+)
 from beidou_data.universe import UniverseConfig, rank_with_hysteresis
 from beidou_shared.types import InstrumentRules
 
@@ -55,3 +61,12 @@ def test_point_in_time_membership_is_causal_and_respects_listing_age() -> None:
     assert at_bars.loc["2024-04-02 00:00", "C"]
     summary = membership_summary(membership)
     assert summary["refreshes"] == len(membership) and "C" in summary["union"]
+
+
+def test_tenure_mask_is_causal_and_cumulative() -> None:
+    index = pd.date_range("2024-01-01", periods=4, freq="MS", tz="UTC")
+    membership = pd.DataFrame({"A": [True, True, True, True], "B": [False, True, False, True]}, index=index)
+    established = tenure_mask(membership, 2)
+    assert established["A"].tolist() == [False, True, True, True]
+    assert established["B"].tolist() == [False, False, False, True]  # second selection counts even after a gap
+    pd.testing.assert_frame_equal(tenure_mask(membership, 1), membership)

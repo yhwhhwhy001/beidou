@@ -224,3 +224,21 @@ async def test_engine_refreshes_universe_daily_and_flattens_what_leaves(august_p
         pool=FakePool([]),
     )
     assert fresh.universe == [s for s in SYMBOLS if s != "SOLUSDT"]
+
+
+async def test_leverage_refusal_does_not_stop_startup(august_panel: Panel, tmp_path: Path) -> None:
+    """A venue that refuses the derived leverage for one symbol keeps the old setting; the loop still starts."""
+    world = _world(august_panel, tmp_path, leverage_mode="auto", margin_cap=0.4)
+    engine, venue = world["engine"], world["venue"]
+    original = venue.set_leverage
+
+    async def refuse(symbol: str, leverage: int) -> int:
+        if symbol == "ETHUSDT":
+            raise RuntimeError("Leverage 5 is not valid for this symbol (-4028)")
+        return await original(symbol, leverage)
+
+    venue.set_leverage = refuse  # type: ignore[method-assign]
+    await engine.startup()
+    assert engine.state.leverage_set.get("BTCUSDT") == 5 and "ETHUSDT" not in engine.state.leverage_set
+    record = await engine.run_cycle(world["market"].bar_open_ms(world["cursor"] - 1))
+    assert not record["skip"]

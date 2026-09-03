@@ -7,7 +7,7 @@
 | 拉取/刷新研究数据并选 universe | `beidou data sync` |
 | 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
 | 重建时点成员表（研究用，先同步 878 个候选的日线） | `beidou data pool history [--sync-members]` |
-| 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy flow --universe pit --prior-trials N` |
+| 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy tsmom --universe pit --prior-trials N`（`--min-tenure K` 只交易已入池 ≥K 次的老牌币） |
 | 退出层 / 回撤节流证据 | `beidou research overlay --universe pit` |
 | 启动实盘（launchd 已托管） | `launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist`；手动：`deploy/run_live.sh` |
 | 状态 / 健康检查 | `beidou live status --check` |

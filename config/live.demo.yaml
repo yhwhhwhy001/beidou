@@ -30,13 +30,21 @@ pool:
   refresh: daily              # re-rank the universe once per UTC day with the hysteresis in universe.yaml (D-014); never = static
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap
-exits:                        # bar-close exit overlay in daily-vol units (D-012).  Enabled only by `beidou research overlay`
-  stop_loss: 0.0              #   evidence (D-017): 0 disables each rule.
+exits:                        # bar-close exit overlay in daily-vol units (D-012); 0 disables a rule.
+  # `beidou research overlay` 2026-09-03 (tsmom+flow): take_profit 6 sigma_1d is the only setting that meets the D-017
+  # rule on BOTH the point-in-time universe (OOS Sharpe 1.55 -> 1.54, OOS MDD -16.7% -> -16.3%) and the static one
+  # (1.77 -> 1.73, -10.7% -> -10.4%).  stop_loss 4 + take_profit 6 also qualifies on both (runner-up, -0.05 Sharpe,
+  # +0.7pp MDD on pit); every trailing-stop setting hurts on the static universe.  All effects are noise-sized; the
+  # overlay is "harmless", not "helpful" - see docs/RESEARCH_LOG.md round 5.
+  stop_loss: 0.0
   trailing_stop: 0.0
-  take_profit: 0.0
+  take_profit: 6.0
   cooldown_bars: 24
   vol_halflife: 48
 drawdown_throttle:            # scale the whole book down between `start` and `stop` drawdown from the equity high-water mark
+  # Overlay evidence 2026-09-03: on the point-in-time universe OOS Sharpe 1.55 -> 1.45 (exactly the -0.10 limit) for
+  # OOS MDD -16.7% -> -14.8%, and fold 2 (2022-11 -> 2023-11, the recovery) turns negative: the classic whipsaw of a
+  # drawdown throttle.  Boundary case, left disabled (D-017).
   enabled: false
   start: 0.05
   stop: 0.20

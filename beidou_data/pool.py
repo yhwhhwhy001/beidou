@@ -153,6 +153,19 @@ def membership_at_bars(membership: pd.DataFrame, bar_index: pd.DatetimeIndex) ->
     return aligned.fillna(False).astype(bool)
 
 
+def tenure_mask(membership: pd.DataFrame, min_refreshes: int) -> pd.DataFrame:
+    """Members with at least ``min_refreshes`` cumulative refreshes of membership as of each row (causal).
+
+    An "established names" universe: a symbol must have been selected that
+    many times before (this refresh included) to be tradable.
+    """
+    members = membership.astype(bool)
+    if min_refreshes <= 1:
+        return members
+    tenure = members.astype(int).cumsum(axis=0)
+    return members & (tenure >= min_refreshes)
+
+
 def membership_summary(membership: pd.DataFrame) -> dict[str, Any]:
     if membership.empty:
         return {"refreshes": 0, "union": [], "mean_size": 0.0, "changes_per_refresh": 0.0}

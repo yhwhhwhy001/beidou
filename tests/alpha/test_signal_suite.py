@@ -269,3 +269,13 @@ def test_flow_short_gate_drops_only_shorts_against_strong_uptrends() -> None:
     assert gated.warmup_bars == 97 and base.warmup_bars == 49
     with pytest.raises(ValueError):
         FlowParams(short_gate=1.5)
+
+
+def test_flow_short_only_drops_longs_but_keeps_buy_signals_as_exits() -> None:
+    from beidou_alpha.signals.flow import FlowParams, flow_scores
+
+    panel = _synthetic_panel(seed=11, n_symbols=4)
+    both = flow_scores(panel, FlowParams(window=24))
+    short_only = flow_scores(panel, FlowParams(window=24, long_side=False))
+    assert (short_only.where(both > 0) == 0.0).sum().sum() == (both > 0).sum().sum()  # longs -> explicit exit
+    pd.testing.assert_frame_equal(short_only.where(both <= 0), both.where(both <= 0))

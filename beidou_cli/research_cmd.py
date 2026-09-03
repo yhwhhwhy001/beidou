@@ -41,7 +41,7 @@ from beidou_alpha.validation.stability import cost_stress, parameter_neighborhoo
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
-from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars
+from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import FundingStore, KlineStore
 from beidou_live.composition import build_model, cost_model, load_panel, load_registry, portfolio_params, read_universe
 from beidou_shared.config import load_yaml
@@ -103,6 +103,12 @@ def _common_options(function: Any) -> Any:
                 show_default=True,
                 help="static = universe.json/all stored; pit = point-in-time membership from `beidou data pool history`",
             ),
+            click.option(
+                "--min-tenure",
+                default=0,
+                show_default=True,
+                help="pit only: refreshes of prior membership a symbol needs before it is tradable (established names)",
+            ),
         ]
     ):
         function = option(function)
@@ -134,11 +140,11 @@ def _resolve_symbols(root: str, symbols: str, interval: str, universe_mode: str 
     return universe or KlineStore(root).symbols(interval)
 
 
-def _membership(root: str, universe_mode: str, panel: Panel) -> pd.DataFrame | None:
+def _membership(root: str, universe_mode: str, panel: Panel, min_tenure: int = 0) -> pd.DataFrame | None:
     """Bars x symbols boolean mask for ``--universe pit``; ``None`` keeps the static behaviour."""
     if universe_mode != "pit":
         return None
-    return membership_at_bars(_membership_table(root), panel.index)
+    return membership_at_bars(tenure_mask(_membership_table(root), min_tenure), panel.index)
 
 
 def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
@@ -180,7 +186,8 @@ def _write(out: str, name: str, payload: dict[str, Any], markdown: str) -> tuple
 
 
 def _stamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%MZ")
+    # seconds resolution: two runs inside the same minute must never overwrite each other's evidence
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 @research.command("list")
@@ -209,13 +216,14 @@ def research_backtest(
     out: str,
     min_history: int | None,
     universe_mode: str,
+    min_tenure: int,
 ) -> None:
     """Backtest one strategy through the full portfolio pipeline and write a research report."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
-    membership = _membership(root, universe_mode, panel)
+    membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     weights, _combined, _per = model.evaluate(panel, membership)
@@ -319,6 +327,7 @@ def research_validate(
     out: str,
     min_history: int | None,
     universe_mode: str,
+    min_tenure: int,
     grid: str,
     folds: int,
     min_train: int,
@@ -331,7 +340,7 @@ def research_validate(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
-    membership = _membership(root, universe_mode, panel)
+    membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     combos = _grid(strategy, grid, entry.params)
     bpy = panel.bars_per_year
@@ -409,6 +418,7 @@ def research_validate(
         "strategy": strategy,
         "interval": interval,
         "universe_mode": universe_mode,
+        "min_tenure": min_tenure,
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
@@ -515,6 +525,7 @@ def research_diagnose(
     out: str,
     min_history: int | None,
     universe_mode: str,
+    min_tenure: int,
     horizons: str,
 ) -> None:
     """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
@@ -525,7 +536,7 @@ def research_diagnose(
     if min_history is None:
         min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
     eligible = panel.close.notna().cumsum() >= min_history
-    membership = _membership(root, universe_mode, panel)
+    membership = _membership(root, universe_mode, panel, min_tenure)
     if membership is not None:
         eligible &= membership
     scores = get_signal(strategy).compute(panel, entry.params).where(eligible)

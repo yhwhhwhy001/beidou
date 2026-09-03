@@ -39,6 +39,7 @@ class FlowParams:
     cross_sectional: bool = True
     entry_threshold: float = 0.20
     short_gate: float = 0.0  # 0 disables; shorts are dropped while momentum >= short_gate
+    long_side: bool = True  # False = short-only book (the long leg's static-universe evidence was survivorship)
     gate_horizons: tuple[int, ...] = (168, 336, 720)
     gate_weights: tuple[float, ...] = (0.2, 0.3, 0.5)
     gate_return_scale: float = 0.20
@@ -87,7 +88,10 @@ def flow_scores(panel: Panel, params: FlowParams | None = None) -> pd.DataFrame:
         imbalance = imbalance.sub(imbalance.mean(axis=1), axis=0)
     expansion = volume_ratio(panel.volume, p.volume_window).clip(upper=1.0).fillna(1.0)
     score = apply_numpy(imbalance / p.scale, np.tanh) * expansion
-    return apply_short_gate(score.clip(-1.0, 1.0).where(imbalance.notna()), panel.close, p)
+    score = apply_short_gate(score.clip(-1.0, 1.0).where(imbalance.notna()), panel.close, p)
+    if not p.long_side:
+        score = score.mask(score > 0, 0.0)  # a buy signal closes a short but never opens a long
+    return score
 
 
 def apply_short_gate(score: pd.DataFrame, close: pd.DataFrame, p: FlowParams) -> pd.DataFrame:

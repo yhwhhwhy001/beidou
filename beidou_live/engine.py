@@ -375,11 +375,21 @@ class LiveEngine:
         }
 
     async def _ensure_leverage(self, symbols: Sequence[str]) -> None:
+        """Set the derived leverage where it differs; a venue refusal keeps the old setting and never stops the loop."""
         wanted = await self._leverage_targets(symbols)
         for symbol in symbols:
-            if self.state.leverage_set.get(symbol) != wanted[symbol]:
+            if self.state.leverage_set.get(symbol) == wanted[symbol]:
+                continue
+            try:
                 applied = await self.venue.set_leverage(symbol, wanted[symbol])
-                self.state.leverage_set[symbol] = int(applied)
+            except (
+                Exception
+            ) as exc:  # e.g. -4028 invalid leverage for this symbol: margin math falls back to config.leverage
+                logger.warning(
+                    "leverage %sx refused for %s (%s); keeping the venue setting", wanted[symbol], symbol, exc
+                )
+                continue
+            self.state.leverage_set[symbol] = int(applied)
 
     def _liquidity(self, bars: Mapping[str, pd.DataFrame]) -> dict[str, float]:
         """Average quote volume per bar over the trailing window (falls back to volume x close)."""
