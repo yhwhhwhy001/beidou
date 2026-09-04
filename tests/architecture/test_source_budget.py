@@ -167,10 +167,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The +21 in beidou_cli is `research backtest --guards/--no-guards`, on by default: a report that does
 # not say whether the guards were replayed cannot be compared with one that does, and the evidence for
 # the vol-target change has to be a report rather than a scratch script.
+# Fourteenth raise, 2026-09-04, with the sentence the rule requires: +20 in beidou_cli so a mined
+# candidate is addressable by its hash across commands.  Enumeration is deterministic and touches no
+# data, so `mined_<hash>` re-derives rather than persists - which also means a hash that no longer
+# enumerates is reported as gone instead of quietly resolving to a stale definition.  It earned its
+# lines immediately: it is what let `research correlate` answer the only question that could have
+# rescued the search's best candidate, and the answer was no (correlation 0.47 with tsmom, marginal
+# Sharpe -0.08).  Twenty lines to close a line of enquiry is the right trade.
 CEILING = {
     "beidou_alpha": 4_736,
     "beidou_live": 3_819,
-    "beidou_cli": 2_542,
+    "beidou_cli": 2_562,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

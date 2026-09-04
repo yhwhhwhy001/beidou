@@ -154,6 +154,24 @@ def _membership(root: str, universe_mode: str, panel: Panel, min_tenure: int = 0
     return membership_at_bars(tenure_mask(_membership_table(root), min_tenure), panel.index)
 
 
+def _resolve_mined(strategy: str) -> None:
+    """Make a ``mined_<hash>`` id addressable in this process by re-deriving it from the search.
+
+    This is what the canonical hash is for.  Enumeration is deterministic and touches no data, so a
+    candidate does not need persisting to be referred to across commands - and re-deriving rather than
+    storing means a hash that no longer enumerates is reported as gone instead of silently resolving to
+    a stale definition.
+    """
+    if not strategy.startswith("mined_"):
+        return
+    wanted = strategy.removeprefix("mined_")
+    for candidate in enumerate_candidates().candidates:
+        if candidate.hash == wanted:
+            register_signal(to_signal(candidate))
+            return
+    raise click.ClickException(f"no candidate hashes to {wanted} in the current search space")
+
+
 def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
     get_signal(strategy)
     base: dict[str, Any] = dict(SIGNALS[strategy].default_params)
@@ -729,6 +747,8 @@ def research_correlate(
 ) -> None:
     """Correlation of strategy net-return streams and the marginal Sharpe of each strategy in an equal-weight mix."""
     ids = [s.strip() for s in strategies.split(",") if s.strip()]
+    for name in ids:
+        _resolve_mined(name)  # a mined candidate is addressable by its hash, like any other id
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
