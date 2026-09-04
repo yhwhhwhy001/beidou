@@ -345,3 +345,15 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 2. **报告头条的 OOS 是"逐折择优"的混合口径。** 181803Z 每折选中的 `crowding_window` 是 [72, 0, 72, 72, 0]，其中三折跑的是 registry **不运行**的拥挤度修正。独立复算：registry 实际配置（拥挤度关闭）单独的走前 OOS Sharpe **1.6450**、t **3.7333**、各折 [1.47, 0.49, 2.24, 1.71, 2.31] 全正；开启臂 1.5291 / 3.4798；混合 1.5445 / 3.5027。方向是保守的（实际运行的臂更好），`best_params` 也仍等于 registry 参数，所以证据门有效；但读报告时不要把 1.54 当成实盘配置的成绩。
 
 **对现有 registry 的影响。** tsmom 用"拥挤度关闭 vs 开启"的两点对照（与 175236Z 同一实验，registry 参数 `crowding_window: 0` 即对照臂）在时点 universe 上重验，按新规则判定后更新证据指针；flow 只做空本轮**不**重验，仍以探针书身份运行（它在新规则下也可能达到 t ≥ 2，但它的跨轮选择次数最多，样本外证据只能由实盘产生）。实现：`beidou_alpha/validation/walk_forward.py`（`oos_t_stat` / `oos_t_lags` / `oos_bars`）、`beidou_alpha/validation/verdict.py`。
+
+### 第六轮补充（round 6b，2026-09-04）：把 KILL-027 的机制关掉，并给实盘装上可复现性监控
+
+第六轮修的是 KILL-027 的**实例**（拥挤度修正被静默跳过）；本次修的是**机制**——让"实盘跑了没被验证的配置"这件事无法再悄悄发生。
+
+- **信号声明自己的输入需求。** `SignalSpec.needs_funding(params)`：tsmom 只在拥挤度修正真正打开时（window > 0 且 penalty > 0）声明，carry 恒为真。声明为真而没拿到资金费率历史时，`AlphaModel.targets` 直接报错；行情端口不提供 `funding_history` 时 `LiveEngine.startup` 拒绝启动。也就是说，把 `crowding_window` 改回 72 现在要么正确运行、要么明确失败，不会再有第三种结果。
+- **实盘面板 == 研究面板。** 新增 `MarketData.funding_history(symbols, start_ms)`，取与 K 线同一窗口的结算费率，由 `Panel.from_frames` 按 bar 对齐——与研究侧 `load_panel` 完全相同的语义。测试直接断言：拥挤度打开的配置下，实盘路径与研究路径的逐策略目标**逐位相等**，且该 panel 上修正确实在起作用（否则这个相等没有意义）。
+- **一个地方构造周期输入。** `beidou_live/inputs.py` 被引擎和验证器共用，离线复现不会与它所复现的周期发生实现漂移。资金费率历史只在模型需要时才取（额外请求数为 0，除非有信号声明）。
+- **M-011 `beidou live verify`。** 用公共数据 + `state.json` 离线重算上一周期的 contributions 并逐币比对。contributions 必须相等；targets 的差异只是提示（退出层 / 节流 / 护栏在模型之后动作）。**对运行中的循环实测（bar 2026-09-04T01:00Z）：tsmom 与 flow_short 两本书的最大差异均为 0.0**，1,442 根 bar、15 个币。这是第一条"实盘输出可被独立复现"的证据。
+- **一处报告缺陷**（并行会话发现，本会话在 `cycles.jsonl` 上复核）：`gross_before` 读的是账户报文里的 positions 数组，而该 venue 不返回它，于是满仓的账本在日志里恒显示 gross 0.0。改为按 `positionRisk` 求和（`Snapshot.gross_notional`）。只影响报告，没有护栏读它。
+
+决策编号：本会话第六轮的"请求窗口 + hold 种子"与并行会话的"OOS 优先判定"撞号，前者改为 **D-022**，本次新规则为 **D-023**。
