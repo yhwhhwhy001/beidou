@@ -74,3 +74,43 @@ def apply_drawdown_throttle(
         scalars[t] = scalar
     series = pd.Series(scalars, index=weights.index)
     return weights.mul(series, axis=0), series
+
+
+@dataclass(frozen=True)
+class BookGuardParams:
+    """The two guards that bind the *book* rather than a symbol (D-004), as one shared definition.
+
+    ``beidou_live.guards.evaluate_guards`` and the backtest replay both call the primitives below, so
+    the two cannot drift.  That is the whole point of putting them here: at ``vol_target 0.15`` neither
+    guard was reachable - 5.6 years of the shipped book produced a worst UTC day of -3.5% against a -5%
+    pause, and gross never crossed 2.0 - so a divergence between what the backtest scored and what the
+    loop would actually do was invisible.  Raising the vol target makes both reachable (measured at
+    ``vol_target 0.30``: about one pause a year and 0.72% of bars capped), which is KILL-027's shape and
+    the reason this had to move before the target did.
+    """
+
+    max_weight: float = 0.15
+    max_gross: float = 2.0
+    daily_loss_pause: float = -0.05
+
+    def __post_init__(self) -> None:
+        if self.max_weight <= 0 or self.max_gross <= 0:
+            raise ValueError("max_weight and max_gross must be positive")
+        if self.daily_loss_pause > 0:
+            raise ValueError("daily_loss_pause is a negative return threshold")
+
+
+def clamp_book(values: np.ndarray, max_weight: float, max_gross: float) -> tuple[np.ndarray, bool]:
+    """Per-symbol cap then the gross cap.  Returns the row and whether the gross cap bound."""
+    clamped = np.clip(np.nan_to_num(values, nan=0.0), -max_weight, max_weight)
+    gross = float(np.abs(clamped).sum())
+    if max_gross > 0 and gross > max_gross:
+        return clamped * (max_gross / gross), True
+    return clamped, False
+
+
+def hold_or_reduce(target: np.ndarray, current: np.ndarray) -> np.ndarray:
+    """Only moves toward zero: same sign and smaller magnitude, or flat.  Never adds risk."""
+    same_sign = (np.sign(target) == np.sign(current)) & (current != 0.0) & (target != 0.0)
+    smaller = np.abs(target) < np.abs(current)
+    return np.where(same_sign, np.where(smaller, target, current), 0.0)

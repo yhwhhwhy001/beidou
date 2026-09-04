@@ -1,9 +1,19 @@
-"""Minimal guards that protect the validity of the experiment (D-004).  They never add risk."""
+"""Minimal guards that protect the validity of the experiment (D-004).  They never add risk.
+
+The two guards that bind the whole book - the per-symbol cap plus the gross cap, and the daily-loss
+pause - are defined once in ``beidou_alpha.overlays.exposure`` and called from here, so the backtest
+replay and this loop cannot drift.  Only the cycle-level policy lives here: what makes a cycle skip,
+what turns ``allow_increase`` off, and what gets recorded as a reason.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+
+import numpy as np
+
+from beidou_alpha.overlays.exposure import clamp_book, hold_or_reduce
 
 
 @dataclass(frozen=True)
@@ -45,23 +55,13 @@ def evaluate_guards(
     if day_start_equity and equity > 0 and equity / day_start_equity - 1.0 < params.daily_loss_pause:
         decision.allow_increase = False
         decision.reasons.append("DAILY_LOSS_PAUSE")
-    clamped = {
-        symbol: max(-params.max_weight, min(params.max_weight, float(weight)))
-        for symbol, weight in decision.targets.items()
-    }
-    gross = sum(abs(weight) for weight in clamped.values())
-    if gross > params.max_gross > 0:
-        factor = params.max_gross / gross
-        clamped = {symbol: weight * factor for symbol, weight in clamped.items()}
+    symbols = list(decision.targets)
+    values = np.array([float(decision.targets[symbol]) for symbol in symbols], dtype=float)
+    capped, gross_capped = clamp_book(values, params.max_weight, params.max_gross)
+    if gross_capped:
         decision.reasons.append("GROSS_CAPPED")
     if not decision.allow_increase:
-        clamped = {symbol: _no_increase(weight, current_weights.get(symbol, 0.0)) for symbol, weight in clamped.items()}
-    decision.targets = clamped
+        held = np.array([float(current_weights.get(symbol, 0.0)) for symbol in symbols], dtype=float)
+        capped = hold_or_reduce(capped, held)
+    decision.targets = dict(zip(symbols, (float(value) for value in capped), strict=True))
     return decision
-
-
-def _no_increase(target: float, current: float) -> float:
-    """Only allow moves toward zero: same sign and smaller magnitude, or flat."""
-    if current == 0.0 or target == 0.0 or (target > 0) != (current > 0):
-        return 0.0
-    return target if abs(target) < abs(current) else current

@@ -208,7 +208,12 @@ strategies:
         book rule's robustness leg cannot validate this sleeve - its edge is in names that left the pool and
         the static universe keeps only survivors - and the leg failed because the main book got better, not
         because the sleeve got worse.  The control is the P&L stop, not the backtest verdict.
-      stop: {window_days: 30, max_loss: 0.01}
+      # 2026-09-04: 0.01 -> 0.02, moved with `vol_target` 0.15 -> 0.30 to PRESERVE this rule, not to relax
+      # it.  The threshold is a fraction of equity, but the probe's attributed P&L scales with the book's
+      # size, so doubling the vol target would have halved the effective distance to this stop and quietly
+      # made D-019 stricter than the operator registered.  Scaling it keeps the sleeve's stop where it was
+      # in the units that matter.  Recorded as a decision because a pre-registered rule was touched.
+      stop: {window_days: 30, max_loss: 0.02}
       review_after_days: 30
   - id: residual
     enabled: false
