@@ -68,6 +68,17 @@ strategies:
     # five folds positive, CPCV q05 1.23, 0% negative paths, cost x2 1.47.  Live arbiter: M-010 income attribution
     # over 30 days, plus a turnover check - if turnover does not fall by roughly a quarter, live and backtest
     # execution semantics have diverged again (that is how KILL-027 was found).
+    # 2026-09-04 05:22Z: re-validated again after the research membership moved from MONTHLY to DAILY
+    # re-selection (operator decision), which is the cadence the live pool has always used - the backtest now
+    # trades the universe the loop would actually have held.  The rebuild replaced membership.parquet, so every
+    # earlier `--universe pit` number became unreproducible; 041838Z below is kept for the band comparison but
+    # is no longer the evidence.  Same single-configuration protocol: OOS Sharpe 1.6436 against 1.7140 on the
+    # monthly table, Newey-West t 3.77, folds [1.47, 0.78, 2.32, 1.05, 2.58], consistency 1.00, CPCV 1.72
+    # / q05 1.41 / 0% negative, cost x2 1.54, full sample 1.7160 / MDD -12.1%,
+    # turnover 226.  204 symbols ever in the pool against 146 monthly, 0.36 membership changes
+    # per daily refresh against 6.68 per monthly one.  The strategy survives the higher-churn, more honest
+    # universe at a cost of 0.07 OOS Sharpe, which is the size of the survivorship-adjacent bias the
+    # monthly cadence was carrying.  DSR p 0.26 reported, not a veto (D-020).
     # 2026-09-04 04:18Z: re-validated under the ADOPTED construction (no_trade_rel_band 0.40, P10 cell B).  The
     # previous pointer (020459Z) was measured at band 0.25, so after the adoption the strategy-layer evidence no
     # longer described the construction that runs - the D-026 gap, closed by re-running rather than by noting it.
@@ -82,8 +93,8 @@ strategies:
     # t 3.13 and PBO 0.015, and its full-sample best_params equal the params above.  Its headline is lower because
     # folds 0-2 select entry_threshold/return_scale 0.3 there; a fold-selected mixture is not this configuration.
     evidence:
-      report: reports/research/tsmom-validation-20260904T041838Z.json
-      sha256: 2287bf140a0e7d2523fb1f1688dd705aa6e175f1d1b6894417cbb36a3a6f82eb
+      report: reports/research/tsmom-validation-20260904T052215Z.json
+      sha256: 0d84c3decab08202d76f6402ec9d06e832dd6a1e128047e32fa22fbe9e5f5244
       verdict: PASS
   - id: xsmom
     enabled: false
