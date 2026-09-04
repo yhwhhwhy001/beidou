@@ -21,3 +21,6 @@ reports/daily/
 
 # OS
 .DS_Store
+
+# agent worktrees and session scratch (a parallel session lives here)
+.claude/
