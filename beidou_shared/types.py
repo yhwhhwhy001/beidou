@@ -81,6 +81,9 @@ class AccountState:
     positions: dict[str, Position]
     hedge_mode: bool = False
     can_trade: bool = True
+    # False when the venue's margin arithmetic is self-inconsistent, so ``available_balance`` cannot be
+    # trusted and a caller holding the real positions must compute the margin headroom itself.
+    margin_fields_reliable: bool = True
 
     def gross_notional(self) -> float:
         return sum(abs(position.notional) for position in self.positions.values())

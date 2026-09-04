@@ -82,13 +82,22 @@ class BinanceUsdmVenue:
             position = parse_position(row)
             if position is not None:
                 positions[position.symbol] = position
+        equity = _float(payload.get("totalMarginBalance"))
+        initial_margin = _float(payload.get("totalInitialMargin"))
+        # Observed on demo-fapi 2026-09-04: totalInitialMargin comes back as 92233720368.54775807, which is
+        # int64 max scaled by 1e8 - an overflow sentinel, not a number.  The venue then derives
+        # availableBalance and maxWithdrawAmount as 0 from it, which would make the margin scaler drop every
+        # risk-adding order while the account is in fact 95% free.  Maintenance margin and margin balance stay
+        # sane, so the corruption is detectable: initial margin can never exceed the margin balance.
+        reliable = equity <= 0 or initial_margin <= equity
         return AccountState(
             wallet_balance=_float(payload.get("totalWalletBalance")),
             available_balance=_float(payload.get("availableBalance")),
-            equity=_float(payload.get("totalMarginBalance")),
+            equity=equity,
             positions=positions,
             hedge_mode=False,
             can_trade=bool(payload.get("canTrade", True)),
+            margin_fields_reliable=reliable,
         )
 
     async def positions(self) -> dict[str, Position]:

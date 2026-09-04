@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +26,26 @@ class Snapshot:
         if self.account.equity <= 0:
             return {}
         return {symbol: position.notional / self.account.equity for symbol, position in self.positions.items()}
+
+    def available_margin(self, leverage_by_symbol: Mapping[str, int] | None = None, default_leverage: int = 1) -> float:
+        """Margin headroom for new risk, from the venue when its arithmetic holds and from us when it does not.
+
+        The venue's ``availableBalance`` is authoritative while the account payload is internally
+        consistent.  When it is not (D-027: demo-fapi returned an int64 overflow as totalInitialMargin and
+        then derived availableBalance 0 from it), trusting it would scale every risk-adding order to zero and
+        silently turn the loop into a reduce-only book.  The fallback subtracts the initial margin the
+        positions actually consume, at the leverage the loop set, and never reports more than the equity.
+        """
+        if self.account.margin_fields_reliable:
+            return self.account.available_balance
+        levered = 0.0
+        for symbol, position in self.positions.items():
+            leverage = (leverage_by_symbol or {}).get(symbol) or position.leverage or default_leverage
+            levered += abs(position.notional) / max(int(leverage), 1)
+        for symbol, position in self.foreign_positions.items():
+            leverage = (leverage_by_symbol or {}).get(symbol) or position.leverage or default_leverage
+            levered += abs(position.notional) / max(int(leverage), 1)
+        return max(0.0, self.equity - levered)
 
     def gross_notional(self) -> float:
         """Sum of |notional| over the managed positions, from ``positionRisk`` — the loop's only position truth.

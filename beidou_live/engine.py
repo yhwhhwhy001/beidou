@@ -301,6 +301,7 @@ class LiveEngine:
             "as_of_ms": latest_bar_ms,
             "equity": snapshot.equity,
             "gross_before": snapshot.gross_notional(),
+            "margin_fields_reliable": snapshot.account.margin_fields_reliable,
             "guard_reasons": list(decision.reasons),
             "skip": decision.skip_cycle,
             "dry_run": config.dry_run,
@@ -337,7 +338,7 @@ class LiveEngine:
         if orders:
             orders, margin = scale_orders_to_margin(
                 orders,
-                snapshot.account.available_balance,
+                snapshot.available_margin(self.state.leverage_set, config.leverage),
                 self.state.leverage_set,
                 self.rules,
                 buffer=config.margin_buffer,
