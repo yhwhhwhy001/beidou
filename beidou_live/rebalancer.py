@@ -102,6 +102,28 @@ def plan_rebalance(
         if same_direction_resize:
             threshold = max(threshold, params.no_trade_rel_band * abs(current_notional))
         if abs(delta) < threshold:
+            # The most common outcome of a cycle used to be the only one that left no trace: a bare
+            # `continue`.  So a symbol the band can never let in read exactly like a symbol that did not
+            # need trading - CYSUSDT carried a -41 USDT target against a 54 USDT absolute band for a full
+            # day, was scored every cycle, ordered never, and no report could name it.  The two blocked
+            # cases are separated from the ordinary suppressed resize because they are structural, not
+            # transient: no price path clears the band while the target stays this small.  Flat and
+            # wanting flat is neither, and stays silent so `leaving` symbols cannot flood the log.
+            if current_qty != 0.0 or target_notional != 0.0:
+                skipped.append(
+                    {
+                        "symbol": symbol,
+                        "reason": (
+                            "BAND_BLOCKS_ENTRY"
+                            if current_qty == 0.0
+                            else "BAND_BLOCKS_EXIT"
+                            if abs(target_notional) < 1e-9
+                            else "NO_TRADE_BAND"
+                        ),
+                        "delta_notional": delta,
+                        "threshold": threshold,
+                    }
+                )
             continue
         closing = abs(target_notional) < 1e-9 and current_qty != 0.0
         same_direction = current_qty != 0.0 and (target_notional > 0) == (current_qty > 0)

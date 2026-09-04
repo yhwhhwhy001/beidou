@@ -263,3 +263,94 @@ def test_per_order_notional_cap_limits_a_single_order(august_panel: Panel) -> No
         params=RebalanceParams(no_trade_band=0.0, max_order_notional=float(Decimal("0.00001") * 50_000)),
     )
     assert dropped == [] and skipped and skipped[0]["reason"] == "ORDER_CAP_BELOW_STEP"
+
+
+async def test_startup_re_asserts_leverage_that_the_record_already_claims(august_panel: Panel, tmp_path: Path) -> None:
+    """The venue never reports its leverage back, so the record must not be allowed to skip the POST.
+
+    Reproduces the 2026-09-04 case: the loop believed it had set 5x on every symbol, the demo account
+    was reset back to the venue default underneath it, and because `state.leverage_set` still agreed
+    with the derived value nothing was ever re-sent.
+    """
+    world = _world(august_panel, tmp_path, leverage_mode="auto", margin_cap=0.4)
+    engine, venue = world["engine"], world["venue"]
+    await engine.startup()
+    assert engine.state.leverage_set["BTCUSDT"] == 5
+
+    venue.leverage.clear()  # the venue forgot; nothing in its API can tell the loop that
+    venue.calls.clear()
+    revived = LiveEngine(
+        engine.config,
+        model=_model(),
+        market=world["market"],
+        venue=venue,
+        clock=world["clock"],
+        store=StateStore(tmp_path / "live"),  # the record survives the restart and still says 5
+    )
+    assert revived.state.leverage_set["BTCUSDT"] == 5, "the cache is what used to suppress the POST"
+    await revived.startup()
+    assert venue.leverage["BTCUSDT"] == 5, "startup must put the venue back where the record says it is"
+    assert sum(1 for call in venue.calls if call.startswith("set_leverage:")) == len(SYMBOLS)
+
+
+def test_the_no_trade_band_records_what_it_suppressed(august_panel: Panel) -> None:
+    """The band's three outcomes have to be distinguishable; before this they were one silent `continue`.
+
+    CYSUSDT is the case that motivated it: a -41 USDT target against a 54 USDT absolute band, scored
+    every cycle for a day, ordered never, and named by no instrument in the system.
+    """
+    from beidou_live.rebalancer import RebalanceParams, plan_rebalance
+    from beidou_shared.types import Position
+    from tests.fakes.fake_venue import DEFAULT_RULES
+
+    equity = 10_000.0
+    price = 100.0
+    rules = {symbol: DEFAULT_RULES[symbol] for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT")}
+    prices = dict.fromkeys(rules, price)
+    held = {
+        # a resize far too small to cross the band, and a position too small to be closed through it
+        "ETHUSDT": Position("ETHUSDT", qty=10.0, entry_price=price, mark_price=price, unrealized_pnl=0.0),
+        "SOLUSDT": Position("SOLUSDT", qty=0.3, entry_price=price, mark_price=price, unrealized_pnl=0.0),
+    }
+    orders, skipped = plan_rebalance(
+        {"BTCUSDT": 0.002, "ETHUSDT": 0.1001, "SOLUSDT": 0.0, "BNBUSDT": 0.0},
+        managed_symbols=sorted(rules),
+        equity=equity,
+        positions=held,
+        prices=prices,
+        rules=rules,
+        bar_open_ms=0,
+        params=RebalanceParams(no_trade_band=0.005),
+    )
+    assert orders == [], "every symbol here is inside the band"
+    by_symbol = {row["symbol"]: row["reason"] for row in skipped}
+    assert by_symbol == {
+        "BTCUSDT": "BAND_BLOCKS_ENTRY",  # 20 USDT wanted against a 50 USDT band: unreachable from flat
+        "ETHUSDT": "NO_TRADE_BAND",  # an ordinary suppressed resize
+        "SOLUSDT": "BAND_BLOCKS_EXIT",  # 30 USDT held, wants zero, cannot get there
+    }, "BNBUSDT is flat and wants flat, which is not a gap and must stay silent"
+    assert all(abs(row["delta_notional"]) < row["threshold"] for row in skipped)
+
+
+def test_the_daily_report_names_the_symbols_the_band_blocked(tmp_path: Path) -> None:
+    """T-L07's rule applied to the planner: an outcome that is not in the report did not happen."""
+    from beidou_live.reports import plan_gaps
+
+    store = StateStore(tmp_path / "live")
+    for bar in ("2026-09-04T06:00:00+00:00", "2026-09-04T07:00:00+00:00"):
+        store.append_cycle(
+            {
+                "bar": bar,
+                "bar_open_ms": 1_788_501_600_000,
+                "equity": 10_000.0,
+                "skipped": [
+                    {"symbol": "CYSUSDT", "reason": "BAND_BLOCKS_ENTRY", "delta_notional": -41.4, "threshold": 53.9},
+                    {"symbol": "BTCUSDT", "reason": "NO_TRADE_BAND", "delta_notional": 6.0, "threshold": 145.9},
+                ],
+            }
+        )
+    gaps = plan_gaps(store, "2026-09-04")
+    assert gaps["blocked_entry"] == ["CYSUSDT"], "the stuck symbol is named once, not once per cycle"
+    assert gaps["blocked_exit"] == []
+    assert gaps["band_held"] == 2, "the suppressed resizes are counted: P10 cell B's turnover falsifier"
+    assert gaps["by_reason"] == {"BAND_BLOCKS_ENTRY": 2, "NO_TRADE_BAND": 2}

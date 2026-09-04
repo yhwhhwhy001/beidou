@@ -158,7 +158,7 @@ class LiveEngine:
             raise RuntimeError("venue reports canTrade=false for this account")
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
         if not self.config.dry_run:
-            await self._ensure_leverage(self.managed_symbols())
+            await self._ensure_leverage(self.managed_symbols(), reassert=True)
         self._roll_day(self.clock.now_ms(), snapshot.equity)
         if self.state.last_income_ms is None:
             self.state.last_income_ms = self.clock.now_ms()
@@ -491,11 +491,23 @@ class LiveEngine:
             for symbol in symbols
         }
 
-    async def _ensure_leverage(self, symbols: Sequence[str]) -> None:
-        """Set the derived leverage where it differs; a venue refusal keeps the old setting and never stops the loop."""
+    async def _ensure_leverage(self, symbols: Sequence[str], *, reassert: bool = False) -> None:
+        """Set the derived leverage on the venue; a refusal keeps the old setting and never stops the loop.
+
+        ``state.leverage_set`` records what this loop last SENT, never what the venue holds.  Every
+        endpoint that could report the setting back reads 0 or null on demo-fapi - positionRisk v2 and
+        v3, the /fapi/v2/account rows, /fapi/v1/symbolConfig, all four checked 2026-09-04 - so a drift
+        this loop did not cause is invisible here, and skipping the POST because the *record* already
+        matches makes that cache authoritative over the venue.  It is not: an account reset takes the
+        venue's setting back to its default and leaves the record untouched, and that reset is a thing
+        this account does - on 2026-09-04 fifteen positions vanished between two cycles with no order
+        from this loop, after which the leverage the record claimed was never re-sent.  ``reassert``
+        posts unconditionally; startup does, because the POST is idempotent, costs one weight unit per
+        symbol, and is the only channel that can make the venue agree with the record.
+        """
         wanted = await self._leverage_targets(symbols)
         for symbol in symbols:
-            if self.state.leverage_set.get(symbol) == wanted[symbol]:
+            if not reassert and self.state.leverage_set.get(symbol) == wanted[symbol]:
                 continue
             try:
                 applied = await self.venue.set_leverage(symbol, wanted[symbol])
