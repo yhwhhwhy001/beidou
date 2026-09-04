@@ -1,0 +1,229 @@
+"""P13's pre-registered monitoring: is the book still inside the risk budget it was sized for?
+
+`vol_target` was set to 0.30 against a declared 50% drawdown budget, from a bootstrap whose q95 sits at
+-43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it preserves within-week autocorrelation and
+destroys the multi-month regime structure real bear markets have — it is optimistic by construction, and
+the de-escalation ladder below is what covers the gap.  The thresholds were written before the change
+went live and are not up for renegotiation when they fire; what is deliberately NOT automated is the
+acting, because rewriting live position sizing from a cron job is a different risk than measuring it.
+
+Every metric here refuses to read zero when it cannot be computed (the failure this project keeps
+finding): a window with too few bars, or one straddling a construction change, reports `enforced: false`
+with the reason rather than a number that looks like a pass.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import pairwise
+from typing import Any
+
+DAY_MS = 86_400_000
+
+
+@dataclass(frozen=True)
+class RiskBudgetParams:
+    deescalate_at: float = 0.35  # drawdown from the high-water mark -> step vol_target down
+    rollback_at: float = 0.50  # -> all the way back
+    deescalate_to: float = 0.225
+    rollback_to: float = 0.15
+    vol_band: tuple[float, float] = (0.26, 0.38)
+    vol_window_days: int = 30
+    min_vol_bars: int = 240  # ten days of hourly cycles before the vol estimate says anything
+    max_slippage_bps: float = 10.0
+    slippage_window_days: int = 30
+    min_slippage_fills: int = 30
+    guard_window_days: int = 90
+    bars_per_year: float = 8760.0
+
+    def __post_init__(self) -> None:
+        if not 0 < self.deescalate_at < self.rollback_at < 1:
+            raise ValueError("need 0 < deescalate_at < rollback_at < 1")
+        if not 0 < self.vol_band[0] < self.vol_band[1]:
+            raise ValueError("vol_band must be an increasing positive pair")
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> RiskBudgetParams:
+        known = {key: payload[key] for key in cls.__dataclass_fields__ if key in payload}
+        if "vol_band" in known:
+            low, high = known["vol_band"]
+            known["vol_band"] = (float(low), float(high))
+        return cls(**known)
+
+
+def _latest_ms(rows: Sequence[Mapping[str, Any]]) -> int:
+    return int(rows[-1].get("bar_open_ms") or 0) if rows else 0
+
+
+def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
+    """Drawdown from the high-water mark, with the mark reset at every re-baselined cycle.
+
+    Re-basing matters on this venue: the demo account resets, and a reset shows up as a TRANSFER row
+    rather than as a loss.  Carrying a pre-reset peak forward would report a drawdown nobody suffered.
+    Note the direction of the remaining error honestly: the mark is NOT reset on a construction change,
+    so a drawdown that began under the old vol target still counts here.  That is deliberate — the budget
+    is the operator's capital, not this construction's track record — but it does mean the ladder can
+    fire on a loss the current book did not cause.
+    """
+    peak = drawdown = 0.0
+    equity = None
+    baseline_at: str | None = None
+    bars = 0
+    for row in rows:
+        value = row.get("equity")
+        if not isinstance(value, int | float) or value <= 0:
+            continue
+        if (row.get("external_flows") or {}).get("rebaselined"):
+            peak = float(value)
+            baseline_at = str(row.get("at") or "")
+        equity = float(value)
+        bars += 1
+        if baseline_at is None:
+            baseline_at = str(row.get("at") or "")
+        peak = max(peak, equity)
+        drawdown = max(drawdown, 0.0 if peak <= 0 else 1.0 - equity / peak)
+    action: str | None = None
+    if drawdown >= params.rollback_at:
+        action = f"vol_target -> {params.rollback_to}"
+    elif drawdown >= params.deescalate_at:
+        action = f"vol_target -> {params.deescalate_to}"
+    return {
+        "value": drawdown,
+        "equity": equity,
+        "peak": peak or None,
+        "baseline_at": baseline_at,
+        "bars": bars,
+        "deescalate_at": params.deescalate_at,
+        "rollback_at": params.rollback_at,
+        "action": action,
+    }
+
+
+def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
+    """Annualised volatility of the live equity path, enforced only on a single-construction window."""
+    cutoff = _latest_ms(rows) - params.vol_window_days * DAY_MS
+    window = [row for row in rows if int(row.get("bar_open_ms") or 0) >= cutoff]
+    equities = [float(row["equity"]) for row in window if isinstance(row.get("equity"), int | float)]
+    constructions = {str(row.get("construction")) for row in window if row.get("construction")}
+    returns = [b / a - 1.0 for a, b in pairwise(equities) if a > 0]
+    reason = None
+    if len(returns) < params.min_vol_bars:
+        reason = f"{len(returns)} bars, needs {params.min_vol_bars}"
+    elif len(constructions) > 1:
+        reason = f"{len(constructions)} constructions in the window"
+    if reason is not None:
+        return {"value": None, "band": list(params.vol_band), "bars": len(returns), "enforced": False, "why": reason}
+    mean = sum(returns) / len(returns)
+    variance = sum((r - mean) ** 2 for r in returns) / max(1, len(returns) - 1)
+    annual = math.sqrt(variance * params.bars_per_year)
+    low, high = params.vol_band
+    return {
+        "value": annual,
+        "band": [low, high],
+        "bars": len(returns),
+        "enforced": True,
+        "inside": low <= annual <= high,
+    }
+
+
+def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, *, latest_ms: int) -> dict[str, Any]:
+    """Notional-weighted adverse fill vs the decision-time reference price, against the model's assumption."""
+    cutoff = latest_ms - params.slippage_window_days * DAY_MS
+    weighted = notional = 0.0
+    fills = 0
+    for row in trades:
+        if int(row.get("bar_open_ms") or 0) < cutoff or row.get("flatten"):
+            continue
+        reference, filled = row.get("price"), row.get("avg_price")
+        quantity = row.get("executed_qty")
+        if not reference or not filled or not quantity:
+            continue
+        try:
+            reference, filled, quantity = float(reference), float(filled), float(quantity)
+        except (TypeError, ValueError):
+            continue
+        if reference <= 0 or filled <= 0 or quantity <= 0:
+            continue
+        sign = 1.0 if str(row.get("side", "")).upper() == "BUY" else -1.0
+        adverse = sign * (filled - reference) / reference * 10_000.0
+        size = filled * quantity
+        weighted += adverse * size
+        notional += size
+        fills += 1
+    if fills < params.min_slippage_fills or notional <= 0:
+        return {
+            "value": None,
+            "limit": params.max_slippage_bps,
+            "fills": fills,
+            "enforced": False,
+            "why": f"{fills} fills, needs {params.min_slippage_fills}",
+        }
+    value = weighted / notional
+    return {
+        "value": value,
+        "limit": params.max_slippage_bps,
+        "fills": fills,
+        "notional": notional,
+        "enforced": True,
+        "inside": value <= params.max_slippage_bps,
+    }
+
+
+def guard_firings(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
+    """How often the two formerly dormant guards actually fire (M-003).
+
+    Reported, never enforced here: the pre-registered test is against the backtest's own frequency, and
+    that number lives in a research report rather than in the live state files.  A count that says
+    nothing about its comparator is still worth having, because at vol_target 0.15 both were zero.
+    """
+    cutoff = _latest_ms(rows) - params.guard_window_days * DAY_MS
+    window = [row for row in rows if int(row.get("bar_open_ms") or 0) >= cutoff]
+    counts = {"DAILY_LOSS_PAUSE": 0, "GROSS_CAPPED": 0}
+    for row in window:
+        for reason in row.get("guard_reasons") or []:
+            if reason in counts:
+                counts[reason] += 1
+    return {
+        "daily_loss_pause_bars": counts["DAILY_LOSS_PAUSE"],
+        "gross_capped_bars": counts["GROSS_CAPPED"],
+        "bars": len(window),
+        "window_days": params.guard_window_days,
+    }
+
+
+def risk_budget_status(
+    rows: Sequence[Mapping[str, Any]], trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams
+) -> dict[str, Any]:
+    """The whole P13 monitoring block, with an ALERT only where a threshold is both breached and enforced."""
+    drawdown = drawdown_state(rows, params)
+    volatility = realised_vol(rows, params)
+    slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows))
+    guards = guard_firings(rows, params)
+    reasons: list[str] = []
+    if drawdown["action"]:
+        reasons.append(f"drawdown {drawdown['value']:.1%} from the high-water mark: {drawdown['action']}")
+    if volatility["enforced"] and not volatility["inside"]:
+        low, high = volatility["band"]
+        reasons.append(f"realised vol {volatility['value']:.1%} outside the {low:.0%}-{high:.0%} band")
+    if slippage["enforced"] and not slippage["inside"]:
+        reasons.append(f"slippage {slippage['value']:.1f} bps above the {slippage['limit']:.0f} bps assumption")
+    return {
+        "status": "ALERT" if reasons else "OK",
+        "reasons": reasons,
+        "drawdown": drawdown,
+        "realised_vol": volatility,
+        "slippage": slippage,
+        "guards": guards,
+    }
+
+
+__all__ = [
+    "RiskBudgetParams",
+    "drawdown_state",
+    "guard_firings",
+    "realised_vol",
+    "risk_budget_status",
+    "slippage_bps",
+]

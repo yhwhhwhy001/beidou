@@ -16,6 +16,7 @@ from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import max_drawdown, sharpe
 from beidou_data.store import KlineStore
 from beidou_live.probe import ProbeParams, probe_status
+from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
 from beidou_live.state import StateStore
 
 
@@ -458,8 +459,38 @@ def drift_check(
     }
 
 
+def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """One readable line per metric; a metric that could not be computed says why instead of showing 0."""
+    if not block:
+        return {"none": 0}
+    drawdown = block.get("drawdown") or {}
+    volatility = block.get("realised_vol") or {}
+    slippage = block.get("slippage") or {}
+    guards = block.get("guards") or {}
+
+    def number(metric: Mapping[str, Any], fmt: str) -> str:
+        if metric.get("value") is None:
+            return f"not enforced ({metric.get('why', 'no reason recorded')})"
+        return fmt.format(metric["value"])
+
+    return {
+        "status": block.get("status"),
+        "drawdown": f"{drawdown.get('value', 0.0):.2%} of the {drawdown.get('rollback_at', 0.0):.0%} budget"
+        + (f" -> {drawdown['action']}" if drawdown.get("action") else ""),
+        "realised vol": number(volatility, "{:.1%}") + f" band {volatility.get('band')}",
+        "slippage": number(slippage, "{:.2f} bps") + f" limit {slippage.get('limit')} bps",
+        "guards": f"pause {guards.get('daily_loss_pause_bars')} / capped {guards.get('gross_capped_bars')} bars"
+        f" in {guards.get('window_days')}d",
+        "reasons": block.get("reasons") or [],
+    }
+
+
 def daily_payload(
-    store: StateStore, day: str, expectations: dict[str, Any] | None = None, probes: Sequence[ProbeParams] = ()
+    store: StateStore,
+    day: str,
+    expectations: dict[str, Any] | None = None,
+    probes: Sequence[ProbeParams] = (),
+    risk_budget: RiskBudgetParams | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -526,6 +557,9 @@ def daily_payload(
         "guard_events": {event: guard_events.count(event) for event in set(guard_events)},
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
+        "risk_budget": risk_budget_status(
+            _cycles(store), store.read_jsonl(store.trades_path), risk_budget or RiskBudgetParams()
+        ),
         "drift": drift_check(store, expectations or {}),
         "evidence_window": window,
         "income_drift": income_drift(
@@ -727,6 +761,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            ("Risk budget (P13)", _risk_budget_lines(payload.get("risk_budget") or {})),
             ("Drift vs expectation (equity)", payload.get("drift") or {"none": 0}),
             (
                 "Evidence window (D-026 construction)",

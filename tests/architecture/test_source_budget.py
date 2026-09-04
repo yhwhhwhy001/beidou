@@ -174,10 +174,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # lines immediately: it is what let `research correlate` answer the only question that could have
 # rescued the search's best candidate, and the answer was no (correlation 0.47 with tsmom, marginal
 # Sharpe -0.08).  Twenty lines to close a line of enquiry is the right trade.
+# Fourteenth raise, 2026-09-04, with the sentence the rule requires: +264 in beidou_live and +12 in
+# beidou_cli for P13's monitoring - the drawdown ladder, the realised-vol band, the slippage check against
+# the cost model's 7 bps, and the counts for the two guards that were dormant until this week.  The lines
+# are worth it for one reason: the vol target was raised on a bootstrap that resamples WEEKLY blocks, so it
+# preserves within-week autocorrelation and destroys the multi-month regime structure real bear markets
+# have.  It is optimistic by construction and the ladder is what covers that gap; a pre-registered
+# threshold nothing measures is the failure this whole file exists to make visible.  Most of the addition
+# is the refusal to answer: a window with too few bars, or one straddling a construction change, reports
+# `enforced: false` with the reason rather than a number that reads like a pass - the same shape as the
+# three instruments that were printing zero in the fifth raise above.  Also deliberate, and the reason
+# there is no automation here to pay for: this alerts, it does not trade.  Rewriting live position sizing
+# from a cron job is a different risk from measuring it, and the ladder removes the discretion about WHAT
+# to do, not the step of a human doing it.  Non-alpha growth again, against the 90% target, and this one
+# has no excuse except that an unmeasured risk budget is worse.
 CEILING = {
     "beidou_alpha": 4_736,
-    "beidou_live": 3_819,
-    "beidou_cli": 2_562,
+    "beidou_live": 4_083,
+    "beidou_cli": 2_574,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

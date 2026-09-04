@@ -42,6 +42,7 @@ from beidou_live.reports import (
     weekly_markdown,
     weekly_payload,
 )
+from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
 from beidou_live.verify import cycle_clock, last_cycle, last_recorded_as_of_ms, verify_live_targets
@@ -379,7 +380,13 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         report_path = Path(str((entry.evidence or {}).get("report", "")))
         if report_path.exists():
             evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
-    data = daily_payload(store, chosen, expectations_from_evidence(evidence), probes_from_registry(registry))
+    data = daily_payload(
+        store,
+        chosen,
+        expectations_from_evidence(evidence),
+        probes_from_registry(registry),
+        RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}),
+    )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
     directory.mkdir(parents=True, exist_ok=True)
@@ -399,6 +406,11 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
                 if row.get("z") is not None and row["z"] < -2.0
             ]
             alerts.append(f"{name} drift ALERT: {'; '.join(str(d) for d in detail)}")
+    budget = data.get("risk_budget") or {}
+    if str(budget.get("status")) == "ALERT":
+        # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
+        # rather than that something looks off.  It alerts; a human still runs the one-line change.
+        alerts.append("risk budget ALERT: " + "; ".join(str(r) for r in budget.get("reasons") or []))
     window = data.get("evidence_window") or {}
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them

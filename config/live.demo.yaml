@@ -156,6 +156,21 @@ drawdown_throttle:            # scale the whole book down between `start` and `s
   start: 0.05
   stop: 0.20
   floor: 0.25
+risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered before the change went live;
+  # a breach alerts through `report daily --check` and the hourly job, it does not trade.  Acting is left
+  # explicit on purpose: rewriting live position sizing from a cron job is a different risk from measuring
+  # it, and the ladder below removes the discretion about WHAT to do, not the step of doing it.
+  deescalate_at: 0.35         # drawdown from the high-water mark -> vol_target 0.225
+  rollback_at: 0.50           # -> vol_target 0.15, the declared budget
+  deescalate_to: 0.225
+  rollback_to: 0.15
+  vol_band: [0.26, 0.38]      # 30-day realised annualised vol; 0.30 target +/- 20%
+  vol_window_days: 30
+  min_vol_bars: 240           # ten days of hourly cycles before this estimate is allowed to say anything
+  max_slippage_bps: 10.0      # against the cost model's 7 bps; above this, the impact model owed before
+  slippage_window_days: 30    # real capital (KILL-A) is owed sooner
+  min_slippage_fills: 30
+  guard_window_days: 90       # DAILY_LOSS_PAUSE / GROSS_CAPPED counts; reported, not enforced (M-003)
 guards:
   daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
   stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals
