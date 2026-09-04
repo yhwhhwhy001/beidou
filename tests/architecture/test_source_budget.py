@@ -138,8 +138,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # and the D-020/D-028 verdict judge it unchanged.  Most of beidou_data's addition is the manifest's stated
 # limit - it detects replacement and drift, not in-place corruption of individual bars - which is the part
 # that stops a later reader from trusting it for something it does not do.
+# Twelfth raise, 2026-09-04, with the sentence the rule requires: +146 in beidou_alpha for four more
+# expression families and the two nodes they need.  The first search could only express momentum - with no
+# product node there was no way to write a minus sign - so it offered 93 candidates that were all the same
+# shape, and its best was 0.7 Sharpe below the book already running.  `Mul` (dimensionless x dimensionless
+# only) buys reversal and gating; `RangePosition` is the only family that reads high and low.  The
+# distinction being paid for here is structural, not parametric: a fourth scale on an existing family
+# would raise `declared_trials`, and so the DSR bar anything promoted must clear, without adding a
+# hypothesis.  Alpha-package growth that buys hypothesis space is the one kind this file should welcome.
 CEILING = {
-    "beidou_alpha": 4_472,
+    "beidou_alpha": 4_618,
     "beidou_live": 3_788,
     "beidou_cli": 2_522,
     "beidou_data": 1_258,

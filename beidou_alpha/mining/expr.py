@@ -458,3 +458,81 @@ class Sum(Expr):
 
     def describe(self) -> str:
         return " + ".join(f"{w:g}*{e}" for w, e in self.terms)
+
+
+@dataclass(frozen=True)
+class Mul(Expr):
+    """Product of two dimensionless nodes.  Commutative, so canonicalisation sorts the operands.
+
+    Restricted to RATIO x RATIO on purpose.  Dimensionless times dimensionless is dimensionless, which is
+    the only product that stays interpretable; a price times a volume is the kind of term a search will
+    happily fit and nobody can read.  Two shapes become expressible through it that the first search could
+    not express at all: negation (``Mul(Const(-1), x)``, i.e. mean reversion) and gating (a forecast scaled
+    by a regime measure).
+    """
+
+    KIND: ClassVar[str] = "mul"
+    left: Expr
+    right: Expr
+
+    def __post_init__(self) -> None:
+        for side in (self.left, self.right):
+            if side.dim is not Dim.RATIO:
+                raise ExprError(f"mul needs dimensionless operands, got {side.dim.value}")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RATIO
+
+    def children(self) -> tuple[Expr, ...]:
+        return (self.left, self.right)
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        return self.left.evaluate(panel) * self.right.evaluate(panel)
+
+    def canonical(self) -> Expr:
+        left, right = self.left.canonical(), self.right.canonical()
+        if isinstance(left, Const) and isinstance(right, Const):
+            return Const(left.value * right.value)
+        for a, b in ((left, right), (right, left)):
+            if isinstance(a, Const) and a.value == 0.0:
+                return Const(0.0)
+            if isinstance(a, Const) and a.value == 1.0:
+                return b
+        ordered = sorted((left, right), key=lambda node: node.canonical_hash())
+        return Mul(ordered[0], ordered[1])
+
+    def describe(self) -> str:
+        return f"({self.left} * {self.right})"
+
+
+@dataclass(frozen=True)
+class RangePosition(Expr):
+    """Where the close sits inside its trailing Donchian range, centred so 0 is mid-range.
+
+    ``2*(close - lower)/(upper - lower) - 1``, over the *previous* ``window`` bars (``features.donchian``
+    shifts before rolling), so it is causal.  This is the only family that reads high and low, which is
+    why it earns a node rather than another parameter on an existing one.
+    """
+
+    KIND: ClassVar[str] = "rangepos"
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.window < 2:
+            raise ExprError("range window must be at least two bars")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RATIO
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        upper, lower = features.donchian(panel.high, panel.low, self.window)
+        span = upper - lower
+        return ((panel.close - lower) / span.where(span > 0)) * 2.0 - 1.0
+
+    def lookback(self) -> int:
+        return self.window + 1
+
+    def describe(self) -> str:
+        return f"rangepos({self.window})"

@@ -18,18 +18,22 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import product
+from itertools import combinations, product
 from typing import Any
 
 import pandas as pd
 
 from beidou_alpha.mining.expr import (
+    Const,
     CrossSectional,
     Expr,
     ExprError,
+    Mul,
+    RangePosition,
     Ratio,
     Ret,
     Squash,
+    Sum,
     TakerBuy,
     Vol,
     VolumeRatio,
@@ -104,6 +108,54 @@ def _flow_family(windows: Sequence[int], scales: Sequence[float]) -> Iterator[Ex
         yield Squash(VolumeRatio(window), scale)
 
 
+def _reversal_family(horizons: Sequence[int], windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
+    """The negated z-score.  The first search could not express reversal at all: with no product node
+    there was no way to write a minus sign, so every candidate it offered was a momentum shape."""
+    for horizon, window, scale in product(horizons, windows, scales):
+        yield Squash(Mul(Const(-1.0), ZScore(Ret(horizon), window)), scale)
+
+
+def _range_family(windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
+    """Position inside the trailing Donchian range - the only family that reads high and low."""
+    for window in windows:
+        yield CrossSectional(RangePosition(window), "rank")  # scale-free: ranking discards the magnitude
+        for scale in scales:
+            yield Squash(RangePosition(window), scale)
+
+
+def _regime_family(
+    horizons: Sequence[int],
+    vol_windows: Sequence[int],
+    long_windows: Sequence[int],
+    scales: Sequence[float],
+    momentum_window: int,
+) -> Iterator[Expr]:
+    """Momentum gated by a volatility-regime ratio: short-window vol over long-window vol.
+
+    Both legs are RETURN, so the ratio is dimensionless and the product stays dimensionless.  This is the
+    interaction shape - "trade the forecast harder when vol is expanding" - that a sum cannot express.
+
+    The momentum leg's denominator must differ from the regime numerator, and that is not a detail.  The
+    first version of this family reused the same window for both, so every candidate it emitted was
+    ``(ret/vol_a) * (vol_a/vol_b)``, which cancels algebraically to ``ret/vol_b``: 75 of 255 candidates
+    were plain momentum wearing an interaction's clothes, and the run showed it - three of them scored
+    0.817, 0.817, 0.818, differing only in where their warmup NaNs fell.  The canonicaliser cannot catch
+    this; it folds structural identities, not algebraic ones over division.  So the family excludes the
+    cancelling combination itself.
+    """
+    for horizon, short, long, scale in product(horizons, vol_windows, long_windows, scales):
+        if short >= long or short == momentum_window:
+            continue
+        yield Squash(Mul(Ratio(Ret(horizon), Vol(momentum_window)), Ratio(Vol(short), Vol(long))), scale)
+
+
+def _multi_horizon_family(horizons: Sequence[int], vol_window: int, scales: Sequence[float]) -> Iterator[Expr]:
+    """Equal-weighted sums of two momentum legs: the shape tsmom actually runs, reachable by search."""
+    for (fast, slow), scale in product(combinations(horizons, 2), scales):
+        legs = ((0.5, Ratio(Ret(fast), Vol(vol_window))), (0.5, Ratio(Ret(slow), Vol(vol_window))))
+        yield Squash(Sum(legs), scale)
+
+
 def enumerate_candidates(
     *,
     horizons: Sequence[int] = (24, 72, 168, 336, 720),
@@ -111,6 +163,8 @@ def enumerate_candidates(
     scales: Sequence[float] = (0.5, 1.0, 2.0),
     z_windows: Sequence[int] = (72, 168, 336),
     flow_windows: Sequence[int] = (4, 12, 24),
+    range_windows: Sequence[int] = (24, 72, 168),
+    regime_long_windows: Sequence[int] = (400, 720),
     max_complexity: int = 8,
     max_lookback: int = 1400,
 ) -> SearchResult:
@@ -118,6 +172,12 @@ def enumerate_candidates(
 
     ``max_lookback`` defaults just under the venue's 1,500-bar request ceiling (E-042): a signal whose
     warmup exceeds what the live loop can fetch is not a candidate, it is a bug waiting for a restart.
+
+    The families are structural shapes, not parameter values, and that distinction is the point.  Adding
+    a fourth scale to an existing family would raise ``declared_trials`` - and so the DSR bar anything
+    promoted has to clear - without adding a hypothesis.  Each family here says something the others
+    cannot: reversal needs a minus sign, the range family is the only reader of high and low, the regime
+    family is the only interaction, and the multi-horizon family is the only sum.
     """
     seen: dict[str, Candidate] = {}
     rejected = {"malformed": 0, "duplicate": 0, "too_complex": 0, "too_long": 0}
@@ -126,6 +186,10 @@ def enumerate_candidates(
         _momentum_family(horizons, vol_windows, scales),
         _normalised_family(horizons, z_windows, (False, True)),
         _flow_family(flow_windows, scales),
+        _reversal_family(horizons, z_windows, scales),
+        _range_family(range_windows, scales),
+        _regime_family(horizons, vol_windows, regime_long_windows, scales, vol_windows[0]),
+        _multi_horizon_family(horizons, vol_windows[0], scales),
     )
     for family in families:
         while True:
