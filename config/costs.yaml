@@ -3,3 +3,6 @@ taker_fee_bps: 5.0        # Binance USDⓈ-M VIP0 taker 0.05%
 maker_fee_bps: 2.0
 slippage_bps: 2.0         # assumed adverse fill vs next open for market orders
 use_actual_funding: true  # backtests charge the historical funding rate on held exposure
+# D-034 (2026-09-04): a settlement is charged to the bar that CONTAINS it.  Until that fix the match
+# was on an exact timestamp and Binance stamps `fundingTime` 1-47 ms past the hour, so 43.7% of the
+# archive was charged as zero.  Every report produced before it under-charges funding by about half.

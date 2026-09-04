@@ -167,21 +167,45 @@ class AlphaModel:
         }
 
     def weights_from(
-        self, per_strategy: Mapping[str, pd.DataFrame], close: pd.DataFrame, bars_per_year: float
+        self,
+        per_strategy: Mapping[str, pd.DataFrame],
+        close: pd.DataFrame,
+        bars_per_year: float,
+        *,
+        band: bool = True,
     ) -> pd.DataFrame:
+        """``band=False`` returns the weights the book actually wants, with no no-trade band applied (D-033).
+
+        The band's rule is "keep the previous weight unless the change is big enough", and the two
+        halves of the system disagree about what *previous* means.  In a backtest the model's own
+        output is the position, so ``apply_no_trade_band`` is the position recursion and belongs
+        here.  Live, the position is the venue's, and ``plan_rebalance`` applies the identical rule
+        against it - so applying the band here as well suppresses the change twice, against a
+        reference that is not the book.  Worse, the live path rebuilds this path-dependent recursion
+        from scratch over a request window that slides by one bar every cycle, so the latch point is
+        an artefact of the window: measured on the shipped book, 1,442 bars against 1,443 moved one
+        symbol's weight by 14% of itself, and the model layer carried 20% more turnover over 200
+        bars than the continuous path the evidence was measured on.
+        """
+        portfolio = self.portfolio if band else replace(self.portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
         if self.book_names == (MAIN_BOOK,):
-            return build_weights(self.book_targets(per_strategy)[MAIN_BOOK], close, bars_per_year, self.portfolio)
-        return combine_books(self.book_weights(per_strategy, close, bars_per_year), self.portfolio)
+            return build_weights(self.book_targets(per_strategy)[MAIN_BOOK], close, bars_per_year, portfolio)
+        return combine_books(self.book_weights(per_strategy, close, bars_per_year), portfolio)
 
     def weights(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
         return self.weights_from(self.strategy_targets(panel, membership), panel.close, panel.bars_per_year)
 
     def evaluate(
-        self, panel: Panel, membership: pd.DataFrame | None = None, previous: PreviousTargets | None = None
+        self,
+        panel: Panel,
+        membership: pd.DataFrame | None = None,
+        previous: PreviousTargets | None = None,
+        *,
+        band: bool = True,
     ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
         per_strategy = self.strategy_targets(panel, membership, previous)
         combined = self.combined_targets(panel, per_strategy)
-        weights = self.weights_from(per_strategy, panel.close, panel.bars_per_year)
+        weights = self.weights_from(per_strategy, panel.close, panel.bars_per_year, band=band)
         return weights, combined, per_strategy
 
     def targets(
@@ -201,6 +225,9 @@ class AlphaModel:
         accepted for the port's sake and unused; ``funding_history`` (settled rates per symbol,
         indexed by settlement time) becomes ``panel.funding`` exactly as ``load_panel`` builds
         it for research, and is mandatory whenever an enabled signal reads it (KILL-027).
+
+        The weights are *unbanded* (D-033): live, the no-trade band is the rebalancer's, applied
+        against the venue's real position, which is the reference a backtest's band already has.
         """
         if self.needs_funding and funding_history is None:
             raise ValueError(
@@ -210,5 +237,5 @@ class AlphaModel:
         panel = Panel.from_frames(bars, interval=self.interval, funding=funding_history)
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
-        weights, combined, per_strategy = self.evaluate(panel, previous=previous)
+        weights, combined, per_strategy = self.evaluate(panel, previous=previous, band=False)
         return snapshot(weights, combined, per_strategy)

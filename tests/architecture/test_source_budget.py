@@ -114,11 +114,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # where the ordinary count doubles as P10 cell B's registered turnover falsifier.  Non-alpha growth again,
 # and again buying observability rather than signal; the honest note is that both of these were found by
 # looking at the live account rather than by any test, which is what the instrumentation is for.
+# Tenth raise, 2026-09-04, with the sentence the rule requires: +95 in beidou_alpha and +10 in
+# beidou_data for a strategy/factor audit that found three silent divergences between what runs and what
+# the evidence describes.  The one that cost money was the funding alignment: `funding_per_bar` and
+# `Panel.from_frames` matched a settlement to a bar by equality, Binance stamps `fundingTime` 1-47 ms
+# past the hour, and 43.7% of the 1,010,914-row archive was therefore filled with zero - every
+# `use_actual_funding` backtest under-charged funding by about half (the shipped book reads 1.5809 with
+# the drop and 1.5477 without), and the share lost differed by year, so folds were not even biased
+# alike.  The second was the no-trade band, applied both in the model and in the rebalancer while only
+# the rebalancer has the reference the rule means; the model's copy was rebuilt each cycle over a
+# sliding window, which made a weight a function of where that window began.  The third was warmup
+# declarations that ignored chained rolling windows.  Nearly all of the addition is docstring: each of
+# the three reads like a tidy-up that a later simplification would happily undo, and the reason it is
+# wrong has to sit next to the code, not in this file.  Alpha growth that buys no signal, which the
+# alpha-share target rightly keeps counting against us.
 CEILING = {
-    "beidou_alpha": 3_683,
+    "beidou_alpha": 3_778,
     "beidou_live": 3_788,
     "beidou_cli": 2_419,
-    "beidou_data": 1_082,
+    "beidou_data": 1_092,
     "beidou_exchange": 539,
     "beidou_shared": 280,
 }

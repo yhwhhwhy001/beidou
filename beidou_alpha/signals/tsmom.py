@@ -38,7 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import cross_sectional_rank, realized_vol, returns
+from beidou_alpha.features import cross_sectional_rank, realized_vol, realized_vol_warmup, returns
 from beidou_alpha.panel import Panel
 
 
@@ -90,7 +90,14 @@ class TsmomParams:
 
     @property
     def warmup_bars(self) -> int:
-        return max(self.horizons) + 1
+        """Both terms bind: the longest return needs its horizon, and every score divides by ``realized_vol``.
+
+        Reporting only the horizon understated the 5/20/50 defaults by 50 bars (declared 51, first
+        non-NaN score at 101 under ``vol_window`` 200).  The weekly configuration that runs live is
+        unaffected - 721 dominates the 201 its ``vol_window`` 400 needs - but D-022 sizes the live
+        request window from this number, so a shorter horizon would have silently shortened it.
+        """
+        return max(max(self.horizons) + 1, realized_vol_warmup(self.vol_window))
 
     @property
     def uses_funding(self) -> bool:

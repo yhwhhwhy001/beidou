@@ -23,12 +23,26 @@ def log_returns(close: pd.DataFrame, horizon: int = 1) -> pd.DataFrame:
     return apply_numpy(close / close.shift(horizon), np.log)
 
 
+def _realized_vol_min_periods(window: int) -> int:
+    return max(2, window // 2)
+
+
 def realized_vol(close: pd.DataFrame, window: int | None = 48, ddof: int = 0) -> pd.DataFrame:
     """Std of 1-bar simple returns; ``window=None`` uses an expanding window (legacy TrendAlpha convention)."""
     simple = close.pct_change()
     if window is None:
         return simple.expanding().std(ddof=ddof)
-    return simple.rolling(window, min_periods=max(2, window // 2)).std(ddof=ddof)
+    return simple.rolling(window, min_periods=_realized_vol_min_periods(window)).std(ddof=ddof)
+
+
+def realized_vol_warmup(window: int | None) -> int:
+    """Close bars before ``realized_vol`` is non-NaN: it rolls over *returns*, so one bar more than its min_periods.
+
+    A signal that divides by this vol is NaN until it resolves, so this belongs in that signal's declared
+    warmup.  ``TsmomParams.warmup_bars`` used to report only ``max(horizons) + 1`` and understated the
+    default configuration by 50 bars; the live request window is sized from that number (D-022).
+    """
+    return 2 if window is None else _realized_vol_min_periods(window) + 1
 
 
 def ewm_vol(close: pd.DataFrame, halflife: int = 24) -> pd.DataFrame:
@@ -73,6 +87,11 @@ def robust_zscore(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     median = rolling.median()
     mad = (frame - median).abs().rolling(window, min_periods=window).median() * 1.4826
     return (frame - median) / mad.where(mad > 0)
+
+
+def robust_zscore_warmup(window: int) -> int:
+    """Bars before ``robust_zscore`` is non-NaN: the MAD rolls over a deviation that is itself rolling."""
+    return 2 * window - 1
 
 
 def cross_sectional_rank(frame: pd.DataFrame) -> pd.DataFrame:

@@ -75,6 +75,41 @@ def test_funding_store_and_per_bar_alignment(tmp_path: Path) -> None:
     assert per_bar.abs().sum() == pytest.approx(0.0003)
 
 
+def test_funding_per_bar_keeps_settlements_stamped_past_the_bar_open(tmp_path: Path) -> None:
+    """Binance stamps ``fundingTime`` 1-47 ms late; matching bar opens exactly dropped 43.7% of the archive."""
+    store = FundingStore(tmp_path)
+    store.append(
+        "BTCUSDT",
+        pd.DataFrame(
+            {
+                "funding_time": [8 * 3_600_000 + 5, 16 * 3_600_000 + 47, 16 * 3_600_000 + 1_800_000],
+                "funding_rate": [0.0001, -0.0002, -0.0003],
+                "mark_price": [1.0, 1.0, 1.0],
+            }
+        ),
+    )
+    bars = pd.date_range("1970-01-01", periods=24, freq="h", tz="UTC")
+    per_bar = funding_per_bar(store.load("BTCUSDT"), bars)
+    assert per_bar.iloc[8] == pytest.approx(0.0001)
+    assert per_bar.iloc[16] == pytest.approx(-0.0005)  # both settlements inside bar 16 are summed
+    assert per_bar.abs().sum() == pytest.approx(0.0006)
+
+
+def test_funding_per_bar_uses_the_grid_the_bar_index_defines(tmp_path: Path) -> None:
+    """A 4h panel must bin a 08:05-stamped settlement into the 08:00 bar, not into an hour that has no bar."""
+    store = FundingStore(tmp_path)
+    store.append(
+        "BTCUSDT",
+        pd.DataFrame(
+            {"funding_time": [9 * 3_600_000 + 5], "funding_rate": [0.0004], "mark_price": [1.0]},
+        ),
+    )
+    bars = pd.date_range("1970-01-01", periods=12, freq="4h", tz="UTC")
+    per_bar = funding_per_bar(store.load("BTCUSDT"), bars)
+    assert per_bar.loc[pd.Timestamp("1970-01-01 08:00", tz="UTC")] == pytest.approx(0.0004)
+    assert per_bar.abs().sum() == pytest.approx(0.0004)
+
+
 def test_archive_checksum_and_zip_parsing() -> None:
     csv = "open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore\n"
     csv += "1700000000000,1,2,0.5,1.5,3,1700003599999,4,1,1,1,0\n"

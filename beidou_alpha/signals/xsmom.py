@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import apply_numpy, cross_sectional_rank, realized_vol
+from beidou_alpha.features import apply_numpy, cross_sectional_rank, realized_vol, realized_vol_warmup
 from beidou_alpha.panel import Panel
 
 
@@ -65,7 +65,16 @@ class XsmomParams:
 
     @property
     def warmup_bars(self) -> int:
-        return max(max(self.horizons) + self.skip_bars, self.vol_window) + 1
+        """The skipped lookback, and - in risk-adjusted mode - the trailing vol that is also shifted by the skip.
+
+        The old form compared the horizon term against ``vol_window`` itself, which happens to be
+        conservative for every configuration that has been run but is not so in general: the vol needs
+        only half its window, yet it is shifted by ``skip_bars``, which the comparison ignored.
+        """
+        base = max(self.horizons) + self.skip_bars + 1
+        if not self.risk_adjusted:
+            return base
+        return max(base, realized_vol_warmup(self.vol_window) + self.skip_bars)
 
 
 def skipped_returns(close: pd.DataFrame, horizon: int, skip: int) -> pd.DataFrame:

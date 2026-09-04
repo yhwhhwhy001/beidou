@@ -129,13 +129,30 @@ class FundingStore:
         return int(column.max()) if len(column) else None
 
 
+def bar_freq(bar_index: pd.DatetimeIndex) -> str:
+    """The grid a bar index defines, as a pandas offset alias.  Gaps are whole multiples, so the smallest gap is it."""
+    if len(bar_index) < 2:
+        raise ValueError("a bar index needs at least two bars to define its own grid")
+    step = pd.DatetimeIndex(bar_index).to_series().diff().dropna().min()
+    if pd.isna(step) or step <= pd.Timedelta(0):
+        raise ValueError("bar index is not strictly increasing")
+    return f"{int(pd.Timedelta(step).total_seconds())}s"
+
+
 def funding_per_bar(funding: pd.DataFrame, bar_index: pd.DatetimeIndex) -> pd.Series:
-    """Map settled funding rates onto bars: the bar whose open_time equals the settlement time carries the rate."""
+    """Map settled funding rates onto bars: the bar that *contains* the settlement carries the rate.
+
+    This used to require the settlement time to equal a bar's open time.  Binance stamps
+    ``fundingTime`` one to forty-seven milliseconds past the hour, so that equality silently dropped
+    43.7% of the archive's 1,010,914 settlements onto zero and every backtest with
+    ``use_actual_funding`` under-charged funding by roughly half (2026-09-04 audit).  Settlements
+    that share a bar are summed, which is what a symbol on a schedule finer than the bar needs.
+    """
     series = pd.Series(0.0, index=bar_index, dtype=float)
     if funding.empty:
         return series
-    times = pd.to_datetime(funding["funding_time"].astype("int64"), unit="ms", utc=True)
-    settled = pd.Series(funding["funding_rate"].astype(float).to_numpy(), index=pd.DatetimeIndex(times))
-    settled = settled.groupby(level=0).sum()
+    stamps = pd.DatetimeIndex(pd.to_datetime(funding["funding_time"].astype("int64"), unit="ms", utc=True))
+    settled = pd.Series(funding["funding_rate"].astype(float).to_numpy(), index=stamps)
+    settled = settled.groupby(stamps.floor(bar_freq(bar_index))).sum()
     aligned = settled.reindex(bar_index).fillna(0.0)
     return aligned.astype(float)

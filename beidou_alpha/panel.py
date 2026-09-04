@@ -47,6 +47,32 @@ def bars_per_year(interval: str) -> float:
     return 365.0 * 86400.0 / interval_seconds(interval)
 
 
+def bar_freq(interval: str) -> str:
+    """The pandas offset alias for one bar.  Binance's own aliases are not pandas' (``1m`` is a month there)."""
+    return f"{interval_seconds(interval)}s"
+
+
+def align_funding_to_bars(funding: pd.DataFrame, index: pd.DatetimeIndex, interval: str) -> pd.DataFrame:
+    """Sum settled rates into the bar that *contains* them, never onto an exact timestamp match.
+
+    Binance stamps ``fundingTime`` one to forty-seven milliseconds past the hour, and does so
+    unevenly over time (34% of BTCUSDT's 2021 settlements land exactly on the hour against 85% of
+    its 2024 ones).  Matching a settlement to a bar open by equality therefore dropped 43.7% of the
+    441,678-row archive onto a silent zero: backtests with ``use_actual_funding`` charged about half
+    the funding they should have, and the share missing differed from fold to fold.  Flooring onto
+    the bar grid is the alignment the field was always documented to have.
+
+    Two settlements inside one bar are summed, which is the same rule ``funding_per_bar`` applies
+    when a symbol's schedule is finer than the bar.
+    """
+    if not isinstance(funding.index, pd.DatetimeIndex):
+        raise ValueError("funding must be indexed by settlement time (a DatetimeIndex), not by position")
+    stamps = funding.index
+    stamps = stamps.tz_localize("UTC") if stamps.tz is None else stamps.tz_convert("UTC")
+    binned = funding.set_axis(stamps.floor(bar_freq(interval)), axis=0)
+    return binned.groupby(level=0).sum().reindex(index)
+
+
 def to_utc_index(frame: pd.DataFrame) -> pd.DataFrame:
     """Return a copy indexed by tz-aware UTC ``open_time`` (accepts ms ints or datetimes)."""
     if isinstance(frame.index, pd.DatetimeIndex) and "open_time" not in frame.columns:
@@ -103,11 +129,12 @@ class Panel:
                 )
             else:
                 wide[field] = None
-        index = wide["close"].index if wide["close"] is not None else None
+        index = pd.DatetimeIndex(wide["close"].index) if wide["close"] is not None else None
         funding_frame: pd.DataFrame | None = None
         if funding is not None and index is not None:
             funding_frame = funding if isinstance(funding, pd.DataFrame) else pd.DataFrame(dict(funding))
-            funding_frame = funding_frame.reindex(index).reindex(columns=list(normalized)).fillna(0.0).astype(float)
+            funding_frame = align_funding_to_bars(funding_frame, index, interval)
+            funding_frame = funding_frame.reindex(columns=list(normalized)).fillna(0.0).astype(float)
         assert wide["open"] is not None and wide["high"] is not None and wide["low"] is not None
         assert wide["close"] is not None and wide["volume"] is not None
         return cls(

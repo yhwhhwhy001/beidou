@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import realized_vol, returns, robust_zscore
+from beidou_alpha.features import realized_vol, realized_vol_warmup, returns, robust_zscore, robust_zscore_warmup
 from beidou_alpha.panel import Panel
 
 
@@ -43,7 +43,13 @@ class MeanrevParams:
 
     @property
     def warmup_bars(self) -> int:
-        return max(self.window, self.vol_window) + 1
+        """The z-score dominates: its MAD is a rolling median of a rolling deviation, so it needs two windows.
+
+        ``max(window, vol_window) + 1`` reported 49 for the defaults while the first non-NaN score is at
+        bar 95.  The trend gate's own inputs (an h-bar return and ``realized_vol``) are cheaper but are
+        kept explicit so a future parameter change cannot make one of them the binding term unnoticed.
+        """
+        return max(robust_zscore_warmup(self.window), self.window + 1, realized_vol_warmup(self.vol_window))
 
 
 def meanrev_scores(close: pd.DataFrame, params: MeanrevParams | None = None) -> pd.DataFrame:

@@ -38,11 +38,45 @@ def _frames(panel: Panel) -> dict[str, pd.DataFrame]:
 def test_warmup_follows_registry_params_not_signal_defaults() -> None:
     weekly = AlphaModel(entries=(StrategyEntry("tsmom", params=WEEKLY),), portfolio=PortfolioParams(), interval="1h")
     hourly = AlphaModel(entries=(StrategyEntry("tsmom", params=HOURLY),), portfolio=PortfolioParams(), interval="1h")
-    assert get_signal("tsmom").warmup_for(WEEKLY) == 721 and get_signal("tsmom").warmup_for(HOURLY) == 51
+    assert get_signal("tsmom").warmup_for(WEEKLY) == 721 and get_signal("tsmom").warmup_for(HOURLY) == 101
     assert weekly.warmup_bars == 722  # a 720-bar horizon, plus one bar for the first decision
-    assert hourly.warmup_bars == 97  # the covariance half-life dominates the 5/20/50 defaults
+    assert hourly.warmup_bars == 102  # 5/20/50 horizons, but vol_window 200 needs 101 bars before any score
     shipped = build_model(load_registry(ROOT / "config/alpha_registry.yaml"), load_yaml(ROOT / "config/live.demo.yaml"))
-    assert shipped.warmup_bars >= 722  # the live window is sized from this number (E-042)
+    assert shipped.warmup_bars == 722  # the live window is sized from this number (E-042); 721 still dominates
+
+
+@pytest.mark.parametrize(
+    ("signal_id", "params"),
+    [
+        ("tsmom", {}),  # vol_window 200 binds, not the 5/20/50 horizons
+        ("tsmom", {"vol_window": None}),  # the expanding legacy std is defined from the first return
+        ("tsmom", {**WEEKLY, "vol_window": 400}),  # what runs live: the horizon binds
+        ("meanrev", {}),  # the MAD is a rolling median of a rolling deviation: two windows less one
+        ("meanrev", {"window": 30, "vol_window": 300}),  # ...unless vol_window is made the binding term
+        ("xsmom", {}),
+        ("xsmom", {"horizons": (10,), "horizon_weights": (1.0,), "vol_window": 20, "skip_bars": 24}),
+        ("carry", {}),
+        ("breakout", {}),
+        ("flow", {}),
+        ("residual", {}),
+    ],
+)
+def test_declared_warmup_covers_the_first_bar_the_signal_can_actually_score(
+    signal_id: str, params: dict[str, object]
+) -> None:
+    """The live request window is sized from ``warmup_for`` (D-022), so under-declaring shortens it silently.
+
+    Chained rolling windows were the gap: ``realized_vol`` needs half its window *of returns* and
+    ``robust_zscore``'s MAD rolls over an already-rolling deviation, so tsmom declared 51 bars against a
+    first score at 101 and meanrev declared 49 against 95.
+    """
+    spec = get_signal(signal_id)
+    panel = _synthetic_panel(seed=11, n_symbols=6, n_bars=1600, with_funding=True)
+    scores = spec.compute(panel, {**spec.default_params, **params})
+    scored = scores.notna().any(axis=1).to_numpy()
+    assert scored.any(), "pick a panel long enough for this configuration to produce a score"
+    first_scoreable_bar = int(scored.argmax()) + 1
+    assert spec.warmup_for({**spec.default_params, **params}) >= first_scoreable_bar
 
 
 def test_hold_seed_keeps_the_previous_target_through_a_sub_threshold_window() -> None:
@@ -79,11 +113,16 @@ def test_live_targets_hold_previous_strategy_targets(august_panel: Panel) -> Non
 
 
 def test_shipped_registry_live_path_matches_research_path() -> None:
-    """KILL-027 guard: the live path (no funding frame) must produce the research path's targets and weights."""
+    """KILL-027 guard: the live path (no funding frame) must produce the research path's targets and weights.
+
+    Weights are compared against the research construction with its no-trade band switched off,
+    because that band is the *position* recursion and live gets it from the rebalancer instead
+    (D-033).  Everything else - conviction, vol targeting, caps, book fractions - must be identical.
+    """
     registry = load_registry(ROOT / "config/alpha_registry.yaml")
     model = build_model(registry, load_yaml(ROOT / "config/live.demo.yaml"))
     panel = _synthetic_panel(seed=3, n_symbols=6, n_bars=1600, with_funding=True)
-    weights, _combined, per_strategy = model.evaluate(panel)
+    weights, _combined, per_strategy = model.evaluate(panel, band=False)
     live = model.targets(_frames(panel), {})
     assert live.as_of == panel.index[-1]
     for strategy, frame in per_strategy.items():
@@ -96,6 +135,35 @@ def test_shipped_registry_live_path_matches_research_path() -> None:
     last = weights.iloc[-1].fillna(0.0)
     for symbol in panel.symbols:
         assert live.weights[symbol] == pytest.approx(float(last[symbol]), abs=1e-12)
+    banded = model.weights_from(per_strategy, panel.close, panel.bars_per_year)
+    assert not np.allclose(banded.iloc[-1].fillna(0.0), last), "pick a panel where the band actually binds"
+
+
+def test_live_weights_do_not_depend_on_the_length_of_the_request_window() -> None:
+    """D-033: the model's output must be a function of the data, not of where the request window starts.
+
+    ``apply_no_trade_band`` is a path-dependent recursion.  The live loop rebuilds it from scratch every
+    cycle over a window that slides by one bar, so while it ran there the latch point was an artefact of
+    the window: on the shipped book 1,442 bars against 1,443 moved one symbol's weight by 14% of itself,
+    and nothing downstream could tell that apart from a real change of view.
+    """
+    model = build_model(load_registry(ROOT / "config/alpha_registry.yaml"), load_yaml(ROOT / "config/live.demo.yaml"))
+    panel = _synthetic_panel(seed=5, n_symbols=6, n_bars=1800, with_funding=True)
+    frames = _frames(panel)
+
+    def live(n: int) -> dict[str, float]:
+        return model.targets({symbol: frame.iloc[-n:] for symbol, frame in frames.items()}, {}).weights
+
+    def gap(left: dict[str, float], right: dict[str, float]) -> float:
+        return max(abs(left[symbol] - right[symbol]) for symbol in panel.symbols)
+
+    base = live(1000)
+    # One more bar of history is exactly what every cycle's slide amounts to; it must change nothing.
+    # With the band still in the model this same step moved a weight by 1.4e-3 (2.2% of itself).
+    assert gap(base, live(1001)) < 1e-8
+    # Over 500 extra bars only the EWMA vol burn-in remains: smooth, shrinking, and far under the
+    # rebalancer's 0.005-of-equity band.  It was 4.2e-3 with the band in the model.
+    assert gap(base, live(1500)) < 1e-4
 
 
 def test_tsmom_vol_scaled_mode_penalises_the_noisier_path_with_the_same_return() -> None:

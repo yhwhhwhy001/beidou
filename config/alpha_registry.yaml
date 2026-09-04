@@ -92,6 +92,11 @@ strategies:
     # The harder test also passes: the default 16-point grid at this band (040252Z, n=87 trials) gives OOS 1.376 with
     # t 3.13 and PBO 0.015, and its full-sample best_params equal the params above.  Its headline is lower because
     # folds 0-2 select entry_threshold/return_scale 0.3 there; a fold-selected mixture is not this configuration.
+    # 2026-09-04 audit (D-034): the numbers above were produced while 43.7% of settled funding was being
+    # dropped by an exact-timestamp alignment, so every one of them under-charges funding - indicatively
+    # -0.03 of full-sample Sharpe on this book.  The startup gate compares the report's digest and params,
+    # not the data underneath it, so the loop still starts; whether to re-run this evidence or annotate it
+    # is an open operator decision recorded in docs/RESEARCH_LOG.md.
     evidence:
       report: reports/research/tsmom-validation-20260904T052215Z.json
       sha256: 0d84c3decab08202d76f6402ec9d06e832dd6a1e128047e32fa22fbe9e5f5244
