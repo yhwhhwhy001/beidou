@@ -49,11 +49,14 @@ portfolio:
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
   # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.
-  # The research membership table on disk is still MONTHLY (69 refreshes, 146 members), not daily.  An earlier
-  # version of this comment claimed it had been rebuilt at the live cadence; it had not, and the audit caught the
-  # claim rather than the data.  The measured difference is 2.73% of symbol-bars, and matching it needs hourly
-  # history for 63 more symbols plus a re-run of every piece of evidence, so it is carried as a priced residual in
-  # the KILL-018 family rather than silently assumed away.  Every validation to date used the monthly table.
+  # The research membership table now matches this cadence: rebuilt 2026-09-04 13:20 as DAILY - 2,042 refreshes
+  # from 2021-01-31 to 2026-09-03, mean size 17.58, union 211 symbols, 0.36 changes per refresh.  This comment
+  # previously said the table was still monthly (69 refreshes, 146 members), which is no longer true; it is
+  # corrected rather than deleted, because the audit's finding was a comment that had run ahead of the data, and
+  # the same mistake in reverse would be just as misleading.  What is NOT yet closed is the hourly half: 205 of
+  # the 211 union members have 1h bars, and six do not (ALLOUSDT, BLESSUSDT, ENSOUSDT, REUSDT, SKYAIUSDT,
+  # SYNUSDT), so an hourly panel still drops six names that were members at some point.  Evidence produced
+  # before the rebuild used the monthly table and does not become comparable just because the table changed.
   refresh: daily
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap
