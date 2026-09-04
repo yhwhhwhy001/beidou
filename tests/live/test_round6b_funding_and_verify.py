@@ -392,3 +392,26 @@ async def test_a_port_without_a_clock_probe_is_not_an_error(august_panel: Panel,
     record = await engine.run_cycle(market.bar_open_ms(399))
     assert record["clock"] == {"skew_ms": None, "beyond_tolerance": False}
     assert not record["skip"]
+
+
+async def test_a_recovered_cycle_clears_the_error_streak_on_disk(august_panel: Panel, tmp_path: Path) -> None:
+    """A restart must not load a phantom error streak from a cycle that in fact succeeded."""
+    market = FakeMarketData(august_panel, cursor=400)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    store = StateStore(tmp_path / "live")
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=store,
+        alerts=RecordingAlerts(),
+    )
+    await engine.startup()
+    market.fail_next = 1
+    assert await engine.guarded_cycle(market.bar_open_ms(399)) is None
+    assert store.load().consecutive_errors == 1  # the failure is persisted, as it must be
+    assert await engine.guarded_cycle(market.bar_open_ms(399)) is not None
+    assert engine.state.consecutive_errors == 0
+    assert store.load().consecutive_errors == 0, "the recovery must reach disk, not just memory"

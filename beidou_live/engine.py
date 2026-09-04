@@ -556,6 +556,10 @@ class LiveEngine:
         return statuses
 
     def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
+        # Reaching here means the cycle completed (a guard skip is a completed cycle too), so the error streak
+        # is over.  It has to be cleared *before* the save: clearing it in ``guarded_cycle`` afterwards left the
+        # stale count on disk until the next cycle wrote, and a restart in that window loaded a phantom error.
+        self.state.consecutive_errors = 0
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
         # per-strategy memory for the hold seed (D-005): symbols that left the managed set keep their last
