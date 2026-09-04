@@ -333,7 +333,11 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     "--holdout-months",
     default=0,
     show_default=True,
-    help="reserve the last N months (KILL-006): they are cut before folds are built and never seen by this run",
+    help=(
+        "reserve the last N months (KILL-006): cut before folds are built and never seen by this run. "
+        "Deliberately unused as of 2026-09-04: the operator chose the live demo run as the out-of-sample "
+        "test instead of a reserved tail; see docs/RESEARCH_LOG.md"
+    ),
 )
 def research_validate(
     strategy: str,

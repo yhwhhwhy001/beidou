@@ -8,7 +8,8 @@ budget was breached without anyone noticing: the audit found non-alpha at 6,761 
 This test does not enforce the plan's numbers, because meeting them today would mean deleting tested code
 the operator asked for, which is a worse outcome than carrying the debt.  It ratchets instead: today's
 measurement is the ceiling, so the breach cannot grow while the operator decides whether to re-price the
-budget or spend effort shrinking it.  That decision is theirs and is recorded as open in the research log.
+budget or spend effort shrinking it.  Decided 2026-09-04: the operator carries the breach for now and
+revisits it as long-term work, so this test's job is to hold the line rather than to force a cleanup.
 """
 
 from __future__ import annotations
