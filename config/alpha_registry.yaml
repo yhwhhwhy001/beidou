@@ -92,14 +92,26 @@ strategies:
     # The harder test also passes: the default 16-point grid at this band (040252Z, n=87 trials) gives OOS 1.376 with
     # t 3.13 and PBO 0.015, and its full-sample best_params equal the params above.  Its headline is lower because
     # folds 0-2 select entry_threshold/return_scale 0.3 there; a fold-selected mixture is not this configuration.
-    # 2026-09-04 audit (D-034): the numbers above were produced while 43.7% of settled funding was being
-    # dropped by an exact-timestamp alignment, so every one of them under-charges funding - indicatively
-    # -0.03 of full-sample Sharpe on this book.  The startup gate compares the report's digest and params,
-    # not the data underneath it, so the loop still starts; whether to re-run this evidence or annotate it
-    # is an open operator decision recorded in docs/RESEARCH_LOG.md.
+    # 2026-09-04 13:14Z: RE-RUN under the corrected funding alignment (D-034).  The 052215Z report cited here
+    # before was computed while 43.7% of settled funding was being dropped by an exact-timestamp match, so it
+    # under-charged the funding this book pays.  Same protocol, so the two are like for like: pit universe,
+    # single configuration, 5 folds, min_train 4000, purge 50, cpcv 6, 30 declared pre-ledger trials.
+    # Verdict is unchanged - PASS with no failing gate - and the strategy-layer numbers move as follows:
+    # walk-forward OOS Sharpe 1.6436 -> 1.6496 with Newey-West t 3.78 over 45,014 OOS bars, folds
+    # [1.42, 0.79, 2.33, 1.07, 2.63], consistency 1.00, CPCV 1.6984 / q05 1.3889 / 0% negative,
+    # cost x2 1.5234, full sample 1.6972 / MDD -11.90%, turnover 225.6, cost share of gross 9.28% -> 9.78%.
+    # DSR p 0.2852 at 91 trials, reported not a veto (D-020); OOS clears the D-028 deflated threshold 1.0972.
+    # The full-sample move of -0.0188 is decomposed rather than asserted (2x2 diagnostic, no trials spent,
+    # `research validate` run once): funding fix -0.0083, CYSUSDT entering the pit universe -0.0096, two
+    # extra bars -0.0010.  The control cell reproduces the superseded report to 0.0010, which is what makes
+    # the decomposition trustworthy.  CYSUSDT is the name the pool comment already flagged as traded live
+    # while research had no klines for it; `beidou data sync` has since filled it in, so the pit universe is
+    # 205 symbols against 204.  Note the ledger charged the superseded run as a distinct trial (90 -> 91)
+    # because its range end differs by two bars, so the open question of whether a re-run after a data
+    # correction is the same trial did not have to be answered here - it was charged the conservative way.
     evidence:
-      report: reports/research/tsmom-validation-20260904T052215Z.json
-      sha256: 0d84c3decab08202d76f6402ec9d06e832dd6a1e128047e32fa22fbe9e5f5244
+      report: reports/research/tsmom-validation-20260904T131421Z.json
+      sha256: 881a7147bceab6538e22a812abd3ef374fa1c3545bb1cd20d2662d8485a5316e
       verdict: PASS
   - id: xsmom
     enabled: false
